@@ -1,0 +1,8 @@
+target
+.git
+appflowy-src
+.env
+.env.*
+!.env.example
+*.log
+

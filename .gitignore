@@ -1,0 +1,23 @@
+/target/
+/.env
+/.env.*
+!.env.example
+*.log
+*.tmp
+
+# Local reference checkout of AppFlowy (not part of this project)
+/appflowy-src/
+
+# Flutter / Dart build + tooling artifacts
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+
+# IDE/editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store

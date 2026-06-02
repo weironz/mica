@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mica-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mica
+      POSTGRES_PASSWORD: mica
+      POSTGRES_DB: mica
+    ports:
+      - "5432:5432"
+    volumes:
+      - mica-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mica -d mica"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mica-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      HTTP_ADDR: 0.0.0.0:8080
+      DATABASE_URL: postgres://mica:mica@postgres:5432/mica
+      DATABASE_MAX_CONNECTIONS: 10
+      JWT_SECRET: change-me-in-development
+      ACCESS_TOKEN_TTL_SECONDS: 86400
+      RUST_LOG: mica_api_server=debug,mica_app_core=debug,mica_infra=debug,tower_http=debug
+    ports:
+      - "8080:8080"
+
+volumes:
+  mica-postgres-data:

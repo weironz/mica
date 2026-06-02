@@ -1,0 +1,1099 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocumentSnapshotPayload {
+  pub schema_version: i32,
+  pub root_block_id: String,
+  pub blocks: Vec<Block>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Block {
+  pub id: String,
+  #[serde(rename = "type")]
+  pub kind: String,
+  #[serde(default)]
+  pub text: String,
+  /// Block-specific attributes (image `url`, heading `level`, todo `checked`).
+  /// Defaults to `null` and is omitted from output when empty for compactness.
+  #[serde(default, skip_serializing_if = "Value::is_null")]
+  pub data: Value,
+  #[serde(default)]
+  pub children: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DocumentOperation {
+  InsertBlock {
+    block: Block,
+    parent_id: String,
+    index: Option<usize>,
+  },
+  UpdateBlock {
+    block_id: String,
+    kind: Option<String>,
+    text: Option<String>,
+    #[serde(default)]
+    data: Option<Value>,
+  },
+  DeleteBlock {
+    block_id: String,
+  },
+  MoveBlock {
+    block_id: String,
+    parent_id: String,
+    index: Option<usize>,
+  },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DocumentOperationError {
+  #[error("unsupported document schema version: {0}")]
+  UnsupportedSchemaVersion(i32),
+
+  #[error("block not found: {0}")]
+  BlockNotFound(String),
+
+  #[error("block already exists: {0}")]
+  BlockAlreadyExists(String),
+
+  #[error("root block cannot be deleted or moved")]
+  CannotMoveRoot,
+
+  #[error("parent block cannot be a descendant of the moved block")]
+  ParentIsDescendant,
+
+  #[error("block type is required")]
+  EmptyBlockType,
+}
+
+pub type DocumentOperationResult<T> = Result<T, DocumentOperationError>;
+
+pub fn apply_operations(
+  mut snapshot: DocumentSnapshotPayload,
+  operations: &[DocumentOperation],
+) -> DocumentOperationResult<DocumentSnapshotPayload> {
+  if snapshot.schema_version != 1 {
+    return Err(DocumentOperationError::UnsupportedSchemaVersion(
+      snapshot.schema_version,
+    ));
+  }
+
+  for operation in operations {
+    apply_operation(&mut snapshot, operation)?;
+  }
+
+  Ok(snapshot)
+}
+
+pub fn payload_from_value(value: Value) -> DocumentOperationResult<DocumentSnapshotPayload> {
+  let payload = serde_json::from_value::<DocumentSnapshotPayload>(value)
+    .map_err(|_| DocumentOperationError::UnsupportedSchemaVersion(0))?;
+  if payload.schema_version != 1 {
+    return Err(DocumentOperationError::UnsupportedSchemaVersion(
+      payload.schema_version,
+    ));
+  }
+
+  Ok(payload)
+}
+
+pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
+  if snapshot.schema_version != 1 {
+    return Err(DocumentOperationError::UnsupportedSchemaVersion(
+      snapshot.schema_version,
+    ));
+  }
+
+  let mut lines = Vec::new();
+  let root_index = block_index(snapshot, &snapshot.root_block_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(snapshot.root_block_id.clone()))?;
+  let root = &snapshot.blocks[root_index];
+  if !root.text.trim().is_empty() {
+    append_markdown_block_content(root, 0, &mut lines);
+  }
+
+  append_markdown_children(snapshot, &snapshot.root_block_id, 0, &mut lines)?;
+
+  while lines.last().is_some_and(|line: &String| line.is_empty()) {
+    lines.pop();
+  }
+
+  Ok(lines.join("\n"))
+}
+
+pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
+  if snapshot.schema_version != 1 {
+    return Err(DocumentOperationError::UnsupportedSchemaVersion(
+      snapshot.schema_version,
+    ));
+  }
+
+  let mut html = String::new();
+  let root_index = block_index(snapshot, &snapshot.root_block_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(snapshot.root_block_id.clone()))?;
+  let root = &snapshot.blocks[root_index];
+  if !root.text.trim().is_empty() {
+    html.push_str(&format!("<p>{}</p>\n", escape_html(root.text.trim())));
+  }
+
+  append_html_children(snapshot, &snapshot.root_block_id, &mut html)?;
+
+  Ok(html.trim_end().to_string())
+}
+
+/// Parse Markdown into a flat document snapshot. Each line maps to a top-level
+/// block; structural nesting beyond fenced code is intentionally out of scope
+/// for the MVP importer.
+pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotPayload {
+  let raw_lines: Vec<&str> = markdown.lines().collect();
+  let mut blocks: Vec<Block> = Vec::new();
+  let mut root_children: Vec<String> = Vec::new();
+
+  let mut index = 0;
+  while index < raw_lines.len() {
+    let line = raw_lines[index].trim_end();
+    let content = line.trim_start();
+
+    if content.is_empty() {
+      index += 1;
+      continue;
+    }
+
+    if let Some(language) = content.strip_prefix("```") {
+      let language = language.trim().to_string();
+      let mut code_lines = Vec::new();
+      index += 1;
+      while index < raw_lines.len() {
+        if raw_lines[index].trim_start().starts_with("```") {
+          index += 1;
+          break;
+        }
+        code_lines.push(raw_lines[index].to_string());
+        index += 1;
+      }
+      let data = if language.is_empty() {
+        Value::Null
+      } else {
+        json!({ "language": language })
+      };
+      push_block(
+        &mut blocks,
+        &mut root_children,
+        "code_block",
+        code_lines.join("\n"),
+        data,
+      );
+      continue;
+    }
+
+    let (kind, text, data) = classify_markdown_line(content);
+    push_block(&mut blocks, &mut root_children, kind, text, data);
+    index += 1;
+  }
+
+  let root = Block {
+    id: root_block_id.to_string(),
+    kind: "paragraph".to_string(),
+    text: String::new(),
+    data: Value::Null,
+    children: root_children,
+  };
+  let mut all_blocks = Vec::with_capacity(blocks.len() + 1);
+  all_blocks.push(root);
+  all_blocks.extend(blocks);
+
+  DocumentSnapshotPayload {
+    schema_version: 1,
+    root_block_id: root_block_id.to_string(),
+    blocks: all_blocks,
+  }
+}
+
+/// Map a single non-empty, non-fence Markdown line to a `(kind, text, data)`
+/// triple for block construction.
+fn classify_markdown_line(content: &str) -> (&'static str, String, Value) {
+  if let Some(level) = heading_prefix_level(content) {
+    let text = content[level..].trim_start().to_string();
+    return ("heading", text, json!({ "level": level }));
+  }
+  if let Some(rest) = content.strip_prefix("- [ ] ") {
+    return ("todo", rest.to_string(), json!({ "checked": false }));
+  }
+  if let Some(rest) = content
+    .strip_prefix("- [x] ")
+    .or_else(|| content.strip_prefix("- [X] "))
+  {
+    return ("todo", rest.to_string(), json!({ "checked": true }));
+  }
+  if let Some(image) = parse_markdown_image(content) {
+    return ("image", image.0, json!({ "url": image.1 }));
+  }
+  if let Some(rest) = content
+    .strip_prefix("- ")
+    .or_else(|| content.strip_prefix("* "))
+  {
+    return ("bulleted_list", rest.to_string(), Value::Null);
+  }
+  if let Some(rest) = numbered_list_rest(content) {
+    return ("numbered_list", rest.to_string(), Value::Null);
+  }
+  if let Some(rest) = content.strip_prefix("> ") {
+    return ("quote", rest.to_string(), Value::Null);
+  }
+
+  ("paragraph", content.to_string(), Value::Null)
+}
+
+fn push_block(
+  blocks: &mut Vec<Block>,
+  root_children: &mut Vec<String>,
+  kind: &str,
+  text: String,
+  data: Value,
+) {
+  let id = format!("block_{}", Uuid::new_v4().simple());
+  root_children.push(id.clone());
+  blocks.push(Block {
+    id,
+    kind: kind.to_string(),
+    text,
+    data,
+    children: Vec::new(),
+  });
+}
+
+fn heading_prefix_level(content: &str) -> Option<usize> {
+  let hashes = content.chars().take_while(|&c| c == '#').count();
+  if (1..=6).contains(&hashes) && content[hashes..].starts_with(' ') {
+    Some(hashes)
+  } else {
+    None
+  }
+}
+
+fn numbered_list_rest(content: &str) -> Option<&str> {
+  let digits_end = content.find(|c: char| !c.is_ascii_digit())?;
+  if digits_end == 0 {
+    return None;
+  }
+  content[digits_end..].strip_prefix(". ")
+}
+
+/// Parse a line that is exactly `![alt](url)` into `(alt, url)`.
+fn parse_markdown_image(content: &str) -> Option<(String, String)> {
+  let rest = content.strip_prefix("![")?;
+  let alt_end = rest.find("](")?;
+  let alt = &rest[..alt_end];
+  let after = &rest[alt_end + 2..];
+  let url = after.strip_suffix(')')?;
+  Some((alt.to_string(), url.to_string()))
+}
+
+fn append_html_children(
+  snapshot: &DocumentSnapshotPayload,
+  parent_id: &str,
+  out: &mut String,
+) -> DocumentOperationResult<()> {
+  let parent_index = block_index(snapshot, parent_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
+  let child_ids = snapshot.blocks[parent_index].children.clone();
+
+  let mut index = 0;
+  while index < child_ids.len() {
+    let child = block_for(snapshot, &child_ids[index])?;
+    match list_tag_for(&child.kind) {
+      // Group a run of same-kind list items into a single <ul>/<ol>.
+      Some(tag) => {
+        out.push_str(&format!("<{tag}>\n"));
+        while index < child_ids.len() {
+          let item = block_for(snapshot, &child_ids[index])?;
+          if list_tag_for(&item.kind) != Some(tag) {
+            break;
+          }
+          out.push_str(&format!("<li>{}", escape_html(item.text.trim())));
+          if !item.children.is_empty() {
+            out.push('\n');
+            append_html_children(snapshot, &item.id, out)?;
+          }
+          out.push_str("</li>\n");
+          index += 1;
+        }
+        out.push_str(&format!("</{tag}>\n"));
+      }
+      None => {
+        append_html_block(snapshot, child, out)?;
+        index += 1;
+      }
+    }
+  }
+
+  Ok(())
+}
+
+fn append_html_block(
+  snapshot: &DocumentSnapshotPayload,
+  block: &Block,
+  out: &mut String,
+) -> DocumentOperationResult<()> {
+  let text = escape_html(block.text.trim());
+  match block.kind.as_str() {
+    "heading" => {
+      let level = heading_level(block, 0);
+      out.push_str(&format!("<h{level}>{text}</h{level}>\n"));
+      append_html_children(snapshot, &block.id, out)?;
+    }
+    "todo" => {
+      let checked = if block_data_bool(block, "checked") {
+        " checked"
+      } else {
+        ""
+      };
+      out.push_str(&format!(
+        "<div class=\"todo\"><input type=\"checkbox\" disabled{checked}> {text}</div>\n"
+      ));
+      append_html_children(snapshot, &block.id, out)?;
+    }
+    "quote" => {
+      out.push_str(&format!("<blockquote>{text}</blockquote>\n"));
+      append_html_children(snapshot, &block.id, out)?;
+    }
+    "code_block" | "code" => {
+      out.push_str(&format!(
+        "<pre><code>{}</code></pre>\n",
+        escape_html(&block.text)
+      ));
+      append_html_children(snapshot, &block.id, out)?;
+    }
+    "image" => {
+      let url = escape_html(block_data_str(block, "url").unwrap_or_default());
+      let alt = escape_html(if block.text.trim().is_empty() {
+        "image"
+      } else {
+        block.text.trim()
+      });
+      out.push_str(&format!("<img src=\"{url}\" alt=\"{alt}\">\n"));
+    }
+    _ => {
+      if !text.is_empty() {
+        out.push_str(&format!("<p>{text}</p>\n"));
+      }
+      append_html_children(snapshot, &block.id, out)?;
+    }
+  }
+
+  Ok(())
+}
+
+fn block_for<'a>(
+  snapshot: &'a DocumentSnapshotPayload,
+  block_id: &str,
+) -> DocumentOperationResult<&'a Block> {
+  let index = block_index(snapshot, block_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
+  Ok(&snapshot.blocks[index])
+}
+
+fn list_tag_for(kind: &str) -> Option<&'static str> {
+  match kind {
+    "bulleted_list" | "bullet_list" => Some("ul"),
+    "numbered_list" | "number_list" => Some("ol"),
+    _ => None,
+  }
+}
+
+fn escape_html(input: &str) -> String {
+  let mut out = String::with_capacity(input.len());
+  for ch in input.chars() {
+    match ch {
+      '&' => out.push_str("&amp;"),
+      '<' => out.push_str("&lt;"),
+      '>' => out.push_str("&gt;"),
+      '"' => out.push_str("&quot;"),
+      '\'' => out.push_str("&#39;"),
+      other => out.push(other),
+    }
+  }
+  out
+}
+
+fn apply_operation(
+  snapshot: &mut DocumentSnapshotPayload,
+  operation: &DocumentOperation,
+) -> DocumentOperationResult<()> {
+  match operation {
+    DocumentOperation::InsertBlock {
+      block,
+      parent_id,
+      index,
+    } => insert_block(snapshot, block.clone(), parent_id, *index),
+    DocumentOperation::UpdateBlock {
+      block_id,
+      kind,
+      text,
+      data,
+    } => update_block(
+      snapshot,
+      block_id,
+      kind.as_deref(),
+      text.as_deref(),
+      data.as_ref(),
+    ),
+    DocumentOperation::DeleteBlock { block_id } => delete_block(snapshot, block_id),
+    DocumentOperation::MoveBlock {
+      block_id,
+      parent_id,
+      index,
+    } => move_block(snapshot, block_id, parent_id, *index),
+  }
+}
+
+fn append_markdown_children(
+  snapshot: &DocumentSnapshotPayload,
+  parent_id: &str,
+  depth: usize,
+  lines: &mut Vec<String>,
+) -> DocumentOperationResult<()> {
+  let parent_index = block_index(snapshot, parent_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
+  let child_ids = snapshot.blocks[parent_index].children.clone();
+
+  for child_id in child_ids {
+    let child_index = block_index(snapshot, &child_id)
+      .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
+    append_markdown_block(snapshot, &snapshot.blocks[child_index], depth, lines)?;
+  }
+
+  Ok(())
+}
+
+fn append_markdown_block(
+  snapshot: &DocumentSnapshotPayload,
+  block: &Block,
+  depth: usize,
+  lines: &mut Vec<String>,
+) -> DocumentOperationResult<()> {
+  match block.kind.as_str() {
+    "heading" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth, lines)?;
+    }
+    "todo" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth + 1, lines)?;
+    }
+    "bulleted_list" | "bullet_list" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth + 1, lines)?;
+    }
+    "numbered_list" | "number_list" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth + 1, lines)?;
+    }
+    "quote" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth, lines)?;
+    }
+    "code_block" | "code" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth, lines)?;
+    }
+    "image" => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth, lines)?;
+    }
+    _ => {
+      append_markdown_block_content(block, depth, lines);
+      append_markdown_children(snapshot, &block.id, depth, lines)?;
+    }
+  }
+
+  Ok(())
+}
+
+fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<String>) {
+  let indent = "  ".repeat(depth);
+  let text = block.text.trim_end();
+  match block.kind.as_str() {
+    "heading" => {
+      let level = heading_level(block, depth);
+      lines.push(format!("{} {}", "#".repeat(level), text));
+      lines.push(String::new());
+    }
+    "todo" => {
+      let marker = if block_data_bool(block, "checked") {
+        "x"
+      } else {
+        " "
+      };
+      lines.push(format!("{indent}- [{marker}] {text}"));
+    }
+    "bulleted_list" | "bullet_list" => lines.push(format!("{indent}- {text}")),
+    "numbered_list" | "number_list" => lines.push(format!("{indent}1. {text}")),
+    "quote" => {
+      lines.push(format!("> {text}"));
+      lines.push(String::new());
+    }
+    "code_block" | "code" => {
+      let language = block_data_str(block, "language").unwrap_or("");
+      lines.push(format!("```{language}"));
+      lines.extend(block.text.lines().map(str::to_string));
+      lines.push("```".to_string());
+      lines.push(String::new());
+    }
+    "image" => {
+      let url = block_data_str(block, "url").unwrap_or_default();
+      let alt = if text.is_empty() { "image" } else { text };
+      lines.push(format!("![{alt}]({url})"));
+      lines.push(String::new());
+    }
+    _ => {
+      if !text.is_empty() {
+        lines.push(format!("{indent}{text}"));
+        lines.push(String::new());
+      }
+    }
+  }
+}
+
+fn heading_level(block: &Block, depth: usize) -> usize {
+  block
+    .data
+    .get("level")
+    .and_then(Value::as_u64)
+    .map(|level| level as usize)
+    .unwrap_or(depth + 1)
+    .clamp(1, 6)
+}
+
+fn block_data_str<'a>(block: &'a Block, key: &str) -> Option<&'a str> {
+  block.data.get(key).and_then(Value::as_str)
+}
+
+fn block_data_bool(block: &Block, key: &str) -> bool {
+  block
+    .data
+    .get(key)
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+}
+
+fn insert_block(
+  snapshot: &mut DocumentSnapshotPayload,
+  block: Block,
+  parent_id: &str,
+  index: Option<usize>,
+) -> DocumentOperationResult<()> {
+  validate_block(&block)?;
+
+  if block_index(snapshot, &block.id).is_some() {
+    return Err(DocumentOperationError::BlockAlreadyExists(block.id));
+  }
+
+  let parent_index = block_index(snapshot, parent_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
+  let block_id = block.id.clone();
+  snapshot.blocks.push(block);
+  insert_child(&mut snapshot.blocks[parent_index].children, block_id, index);
+  Ok(())
+}
+
+fn update_block(
+  snapshot: &mut DocumentSnapshotPayload,
+  block_id: &str,
+  kind: Option<&str>,
+  text: Option<&str>,
+  data: Option<&Value>,
+) -> DocumentOperationResult<()> {
+  let index = block_index(snapshot, block_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
+
+  if let Some(kind) = kind {
+    let kind = kind.trim();
+    if kind.is_empty() {
+      return Err(DocumentOperationError::EmptyBlockType);
+    }
+    snapshot.blocks[index].kind = kind.to_string();
+  }
+
+  if let Some(text) = text {
+    snapshot.blocks[index].text = text.to_string();
+  }
+
+  if let Some(data) = data {
+    snapshot.blocks[index].data = data.clone();
+  }
+
+  Ok(())
+}
+
+fn delete_block(
+  snapshot: &mut DocumentSnapshotPayload,
+  block_id: &str,
+) -> DocumentOperationResult<()> {
+  if block_id == snapshot.root_block_id {
+    return Err(DocumentOperationError::CannotMoveRoot);
+  }
+
+  block_index(snapshot, block_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
+
+  let mut delete_ids = vec![block_id.to_string()];
+  let mut cursor = 0;
+  while cursor < delete_ids.len() {
+    let current_id = delete_ids[cursor].clone();
+    if let Some(index) = block_index(snapshot, &current_id) {
+      delete_ids.extend(snapshot.blocks[index].children.iter().cloned());
+    }
+    cursor += 1;
+  }
+
+  for block in &mut snapshot.blocks {
+    block
+      .children
+      .retain(|child_id| !delete_ids.contains(child_id));
+  }
+
+  snapshot
+    .blocks
+    .retain(|block| !delete_ids.contains(&block.id));
+
+  Ok(())
+}
+
+fn move_block(
+  snapshot: &mut DocumentSnapshotPayload,
+  block_id: &str,
+  parent_id: &str,
+  index: Option<usize>,
+) -> DocumentOperationResult<()> {
+  if block_id == snapshot.root_block_id {
+    return Err(DocumentOperationError::CannotMoveRoot);
+  }
+
+  block_index(snapshot, block_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
+  let parent_index = block_index(snapshot, parent_id)
+    .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
+
+  if is_descendant(snapshot, parent_id, block_id) {
+    return Err(DocumentOperationError::ParentIsDescendant);
+  }
+
+  for block in &mut snapshot.blocks {
+    block.children.retain(|child_id| child_id != block_id);
+  }
+
+  insert_child(
+    &mut snapshot.blocks[parent_index].children,
+    block_id.to_string(),
+    index,
+  );
+
+  Ok(())
+}
+
+fn validate_block(block: &Block) -> DocumentOperationResult<()> {
+  if block.kind.trim().is_empty() {
+    return Err(DocumentOperationError::EmptyBlockType);
+  }
+
+  Ok(())
+}
+
+fn insert_child(children: &mut Vec<String>, block_id: String, index: Option<usize>) {
+  let index = index.unwrap_or(children.len()).min(children.len());
+  children.insert(index, block_id);
+}
+
+fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option<usize> {
+  snapshot
+    .blocks
+    .iter()
+    .position(|block| block.id == block_id)
+}
+
+fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_id: &str) -> bool {
+  let Some(index) = block_index(snapshot, parent_id) else {
+    return false;
+  };
+
+  for child_id in &snapshot.blocks[index].children {
+    if child_id == block_id || is_descendant(snapshot, block_id, child_id) {
+      return true;
+    }
+  }
+
+  false
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn insert_block_adds_child_at_index() {
+    let snapshot = sample_snapshot();
+    let updated = apply_operations(
+      snapshot,
+      &[DocumentOperation::InsertBlock {
+        parent_id: "root".to_string(),
+        index: Some(0),
+        block: Block {
+          id: "new".to_string(),
+          kind: "paragraph".to_string(),
+          text: "hello".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+      }],
+    )
+    .expect("operation should apply");
+
+    let root = updated
+      .blocks
+      .iter()
+      .find(|block| block.id == "root")
+      .unwrap();
+    assert_eq!(root.children, vec!["new", "a"]);
+    assert!(updated.blocks.iter().any(|block| block.id == "new"));
+  }
+
+  #[test]
+  fn update_block_changes_text_and_kind() {
+    let snapshot = sample_snapshot();
+    let updated = apply_operations(
+      snapshot,
+      &[DocumentOperation::UpdateBlock {
+        block_id: "a".to_string(),
+        kind: Some("heading".to_string()),
+        text: Some("Title".to_string()),
+        data: None,
+      }],
+    )
+    .expect("operation should apply");
+
+    let block = updated.blocks.iter().find(|block| block.id == "a").unwrap();
+    assert_eq!(block.kind, "heading");
+    assert_eq!(block.text, "Title");
+  }
+
+  #[test]
+  fn delete_block_removes_descendants() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["a"]),
+        block("a", vec!["b"]),
+        block("b", vec![]),
+      ],
+    };
+
+    let updated = apply_operations(
+      snapshot,
+      &[DocumentOperation::DeleteBlock {
+        block_id: "a".to_string(),
+      }],
+    )
+    .expect("operation should apply");
+
+    assert_eq!(updated.blocks.len(), 1);
+    assert_eq!(updated.blocks[0].children, Vec::<String>::new());
+  }
+
+  #[test]
+  fn move_block_rejects_cycle() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["a"]),
+        block("a", vec!["b"]),
+        block("b", vec![]),
+      ],
+    };
+
+    let error = apply_operations(
+      snapshot,
+      &[DocumentOperation::MoveBlock {
+        block_id: "a".to_string(),
+        parent_id: "b".to_string(),
+        index: None,
+      }],
+    )
+    .expect_err("cycle should be rejected");
+
+    assert!(matches!(error, DocumentOperationError::ParentIsDescendant));
+  }
+
+  #[test]
+  fn move_block_reorders_siblings() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["a", "b", "c"]),
+        block("a", vec![]),
+        block("b", vec![]),
+        block("c", vec![]),
+      ],
+    };
+
+    let updated = apply_operations(
+      snapshot,
+      &[DocumentOperation::MoveBlock {
+        block_id: "c".to_string(),
+        parent_id: "root".to_string(),
+        index: Some(0),
+      }],
+    )
+    .expect("operation should apply");
+
+    let root = updated
+      .blocks
+      .iter()
+      .find(|block| block.id == "root")
+      .unwrap();
+    assert_eq!(root.children, vec!["c", "a", "b"]);
+  }
+
+  #[test]
+  fn export_markdown_renders_basic_blocks() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["heading", "paragraph", "list"]),
+        Block {
+          id: "heading".to_string(),
+          kind: "heading".to_string(),
+          text: "Title".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+        Block {
+          id: "paragraph".to_string(),
+          kind: "paragraph".to_string(),
+          text: "Body".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+        Block {
+          id: "list".to_string(),
+          kind: "bulleted_list".to_string(),
+          text: "Item".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+      ],
+    };
+
+    let markdown = export_markdown(&snapshot).expect("markdown should export");
+
+    assert_eq!(markdown, "# Title\n\nBody\n\n- Item");
+  }
+
+  #[test]
+  fn export_markdown_includes_root_text() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![Block {
+        id: "root".to_string(),
+        kind: "paragraph".to_string(),
+        text: "Root text".to_string(),
+        data: Value::Null,
+        children: vec![],
+      }],
+    };
+
+    let markdown = export_markdown(&snapshot).expect("markdown should export");
+
+    assert_eq!(markdown, "Root text");
+  }
+
+  fn sample_snapshot() -> DocumentSnapshotPayload {
+    DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![block("root", vec!["a"]), block("a", vec![])],
+    }
+  }
+
+  fn block(id: &str, children: Vec<&str>) -> Block {
+    Block {
+      id: id.to_string(),
+      kind: "paragraph".to_string(),
+      text: String::new(),
+      data: Value::Null,
+      children: children.into_iter().map(str::to_string).collect(),
+    }
+  }
+
+  #[test]
+  fn import_markdown_parses_basic_blocks() {
+    let snapshot = import_markdown("# Title\n\nBody\n\n- one\n- two", "root");
+
+    let root = snapshot
+      .blocks
+      .iter()
+      .find(|block| block.id == "root")
+      .unwrap();
+    assert_eq!(root.children.len(), 4);
+
+    let kinds: Vec<&str> = root
+      .children
+      .iter()
+      .map(|id| {
+        snapshot
+          .blocks
+          .iter()
+          .find(|block| &block.id == id)
+          .unwrap()
+          .kind
+          .as_str()
+      })
+      .collect();
+    assert_eq!(
+      kinds,
+      vec!["heading", "paragraph", "bulleted_list", "bulleted_list"]
+    );
+  }
+
+  #[test]
+  fn import_export_markdown_is_idempotent() {
+    let source = "# Title\n\nBody\n\n- Item\n\n1. First\n\n> Quote\n\n- [x] Done";
+    let once = export_markdown(&import_markdown(source, "root")).expect("first export");
+    let twice = export_markdown(&import_markdown(&once, "root")).expect("second export");
+    assert_eq!(once, twice);
+    // A re-imported export preserves the original block kinds in order.
+    let kinds: Vec<String> = {
+      let snapshot = import_markdown(&once, "root");
+      let root = snapshot
+        .blocks
+        .iter()
+        .find(|block| block.id == "root")
+        .unwrap();
+      root
+        .children
+        .iter()
+        .map(|id| {
+          snapshot
+            .blocks
+            .iter()
+            .find(|block| &block.id == id)
+            .unwrap()
+            .kind
+            .clone()
+        })
+        .collect()
+    };
+    assert_eq!(
+      kinds,
+      vec![
+        "heading",
+        "paragraph",
+        "bulleted_list",
+        "numbered_list",
+        "quote",
+        "todo"
+      ]
+    );
+  }
+
+  #[test]
+  fn import_markdown_parses_image() {
+    let snapshot = import_markdown("![alt text](https://example.com/a.png)", "root");
+    let image = snapshot
+      .blocks
+      .iter()
+      .find(|block| block.kind == "image")
+      .expect("image block exists");
+    assert_eq!(image.text, "alt text");
+    assert_eq!(image.data["url"], "https://example.com/a.png");
+  }
+
+  #[test]
+  fn export_markdown_renders_image() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["img"]),
+        Block {
+          id: "img".to_string(),
+          kind: "image".to_string(),
+          text: "cat".to_string(),
+          data: json!({ "url": "https://example.com/cat.png" }),
+          children: vec![],
+        },
+      ],
+    };
+
+    let markdown = export_markdown(&snapshot).expect("markdown should export");
+    assert_eq!(markdown, "![cat](https://example.com/cat.png)");
+  }
+
+  #[test]
+  fn export_html_renders_headings_and_lists() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["h", "a", "b"]),
+        Block {
+          id: "h".to_string(),
+          kind: "heading".to_string(),
+          text: "Title".to_string(),
+          data: json!({ "level": 2 }),
+          children: vec![],
+        },
+        Block {
+          id: "a".to_string(),
+          kind: "bulleted_list".to_string(),
+          text: "one".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+        Block {
+          id: "b".to_string(),
+          kind: "bulleted_list".to_string(),
+          text: "two".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+      ],
+    };
+
+    let html = export_html(&snapshot).expect("html should export");
+    assert_eq!(
+      html,
+      "<h2>Title</h2>\n<ul>\n<li>one</li>\n<li>two</li>\n</ul>"
+    );
+  }
+
+  #[test]
+  fn export_html_escapes_text() {
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["p"]),
+        Block {
+          id: "p".to_string(),
+          kind: "paragraph".to_string(),
+          text: "a < b & c".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+      ],
+    };
+
+    let html = export_html(&snapshot).expect("html should export");
+    assert_eq!(html, "<p>a &lt; b &amp; c</p>");
+  }
+}

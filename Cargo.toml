@@ -1,0 +1,33 @@
+[workspace]
+members = [
+  "crates/api-server",
+  "crates/app-core",
+  "crates/infra",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1.0"
+argon2 = "0.5"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["json", "tokio", "http1", "http2", "ws"] }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+hmac = "0.12"
+jsonwebtoken = "9.3"
+rand_core = { version = "0.6", features = ["std"] }
+sha2 = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "chrono", "uuid", "json", "migrate"] }
+thiserror = "2.0"
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.11", features = ["serde", "v4", "v7"] }
