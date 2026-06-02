@@ -1,5 +1,9 @@
 # Editor Design Principles
 
+This is the UX north star. The full capability spec for the in-house editor —
+selection model, all operations, tables, images/void nodes, clipboard, undo,
+Markdown compatibility — lives in [Editor Engine Design](editor-engine.md).
+
 ## Core Principle
 
 The document model is block-based, but the editing surface must not look or feel

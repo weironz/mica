@@ -18,6 +18,7 @@ See:
 
 - [Architecture](docs/architecture.md)
 - [Editor Design Principles](docs/editor.md)
+- [Editor Engine Design](docs/editor-engine.md)
 - [Sync and API Draft](docs/sync-and-api.md)
 - [MVP Plan](docs/mvp-plan.md)
 

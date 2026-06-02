@@ -1,0 +1,333 @@
+# Editor Engine Design
+
+In-house editor engine for Mica. We build this ourselves rather than depend on a
+third-party editor (`appflowy_editor`, `super_editor`, Quill, …). The backend
+block model and sync are reused unchanged; this engine is a new client layer.
+
+**It is built into Mica, not a separate project.** Unlike AppFlowy, which ships
+its editor as a standalone reusable package (`appflowy_editor`), our engine is an
+internal module of the existing Flutter app — no new repo, no new pub package, no
+new dependency. It lives under `clients/mica_flutter/lib/editor/` (e.g.
+`document.dart`, `selection.dart`, `input/`, `commands/`, `render/`, `markdown/`),
+extracted out of today's single `main.dart` and called directly by the app UI.
+Extracting it into a package later remains possible but is explicitly not a goal.
+
+Read alongside [Editor Design Principles](editor.md) (the UX north star: the page
+is block-based underneath but feels like one continuous document — Typora/Word,
+no block chrome at rest). This document is the engineering spec: the full list of
+capabilities to implement.
+
+## Dependencies & layering
+
+"Editor" and "rendering engine" are not two separate products — they are two
+layers of the *same* in-house editor. What we own vs. what the platform provides:
+
+| Layer | What it does | Owner | Third-party? |
+| --- | --- | --- | --- |
+| Pixel rendering engine | Rasterization, low-level text layout (draw to screen) | **Flutter** (Skia / Impeller) | Platform — not reimplemented |
+| Editor view layer | Per-node layout, caret + selection painting, hit-testing | **Mica (in-house)** — `lib/editor/render/` | No |
+| Editor core | Document model, selection, input, commands, transactions | **Mica (in-house)** — `lib/editor/` | No |
+
+Dependency policy:
+
+- **No third-party editor library** (no `appflowy_editor` / `super_editor` /
+  `quill`). The current MVP is built on Flutter's built-in `TextField`; the
+  engine will instead use Flutter's lower-level primitives (`RenderObject`,
+  `TextPainter`, `TextInput`) — still the framework, not an external package.
+- The whole app deliberately depends only on **Flutter** plus two Dart-team
+  packages: `http` and `web_socket_channel`. Both are removable in favor of
+  `dart:io` / `dart:html` built-ins if we ever want a zero-package client; the
+  benefit is small, so they stay for now.
+- Scope of the "no external dependency" principle: **do not adopt heavyweight,
+  framework-level ready-made solutions** (a third-party editor core, a CRDT
+  framework, etc.). It does **not** mean avoiding Flutter itself or basic
+  building-block libraries. Rewriting the pixel renderer or replacing Flutter is
+  out of scope unless explicitly decided otherwise.
+
+## Why a single editing surface
+
+The current MVP renders one Flutter `TextField` per block. Each `TextField` owns
+its own selection, focus, gesture recognizer, and OS/IME input connection, and
+Flutter has no API for a selection spanning multiple editable widgets. That makes
+cross-block drag selection, unified caret movement, multi-block copy/paste, and
+document-wide undo impossible.
+
+The engine replaces N text fields with **one editing surface**: a single focus, a
+single input connection, one document-wide selection model, and custom rendering
+of each node. Nodes render themselves but do not own selection — the engine owns
+caret, selection painting, input, and commands across the whole document.
+
+## Document & selection model
+
+### Document tree
+
+- A document is an ordered tree of **nodes**. Each node has: `id`, `type`,
+  `attributes` (map; e.g. heading level, todo checked, image url, code language),
+  optional **inline content** (rich text), and ordered `children`.
+- Two structural families:
+  - **Text nodes** — carry editable inline content (paragraph, heading, list
+    item, quote, todo, callout title, table cell, …).
+  - **Void / atomic nodes** — no text caret inside (image, file, divider,
+    embed/bookmark, equation, …). Selected and manipulated as a unit.
+- Maps to the backend block model (see Sync integration). The engine's in-memory
+  document is the source of truth while editing; it is serialized to blocks.
+
+### Inline content (rich text)
+
+- A text node's content is a sequence of **runs**: `{ text, marks }`, where marks
+  are inline styles: bold, italic, underline, strikethrough, inline code, link
+  (href), and later color/highlight. (Delta-style.)
+- This is required for "fully Markdown compatible" inline formatting; see the
+  storage decision in Open Questions.
+
+### Positions and selection
+
+- A **position** is `(nodePath, offset)` for text nodes, or a **node anchor** for
+  void nodes (before/on/after the node).
+- A **selection** is a range `(anchor, focus)` that may span:
+  - within a single text node,
+  - across sibling and nested text nodes (multi-block),
+  - across/over void nodes (image fully inside the range is included as a unit),
+  - **table cells** (rectangular cell range — see Tables).
+- Selection states to support: collapsed caret, ranged text selection,
+  single void-node selected, multi-node selection, table-cell-range selection,
+  and "whole node" selection (e.g. a code block selected as a unit).
+- The engine paints caret and selection highlight itself across all node types.
+
+## Block / node types
+
+Each type must define: how it renders, how the caret enters/leaves it, what
+Enter/Backspace/Delete do, how it is selected, and how it (de)serializes to
+Markdown and to backend blocks.
+
+### Text nodes (have inline content)
+
+- Paragraph
+- Heading 1–6 (`attributes.level`)
+- Bulleted list item
+- Numbered list item (ordinal computed by position)
+- To-do / checkbox (`attributes.checked`)
+- Quote / blockquote
+- Code block (`attributes.language`; plain text content, no inline marks; Enter
+  inserts a newline, does not split)
+- Callout (icon/color attribute + inline content) — later
+- Toggle / collapsible heading (has children, collapsible) — later
+
+### Void / atomic nodes (no inner text caret)
+
+- Divider / horizontal rule
+- Image (`attributes.url`, `fileId`, `width`, `alt`, `caption?`) — backed by the
+  files API
+- File / attachment (`fileId`, name, size)
+- Embed / bookmark (url, preview) — later
+- Equation / math (latex) — later
+
+### Container nodes (have child nodes)
+
+- Document root
+- List grouping (logical; rendering groups consecutive list items)
+- **Table** (see dedicated section)
+- Columns / column layout — later
+- Toggle children — later
+
+## Tables (first-class, plan for it now)
+
+Tables are the hardest case for selection/deletion; design the model to support
+them even if implemented later.
+
+- **Structure:** `table` node → `table_row` children → `table_cell` children;
+  each cell is a container of text nodes (usually one paragraph). Column count,
+  column widths, and header row/column flags live in `table.attributes`.
+- **Caret & navigation:** caret lives inside a cell's text. `Tab` / `Shift+Tab`
+  move to next/previous cell (creating a new row when tabbing past the last
+  cell, like Word). `Arrow` keys move within a cell, then to the adjacent cell
+  on the same visual row/column.
+- **Selection:**
+  - Text selection within one cell behaves normally.
+  - Dragging across cells selects a **rectangular cell range** (not raw text);
+    rendered as highlighted cells.
+  - Selecting the whole table (e.g. via the table's drag handle / clicking its
+    corner) selects the table node as a unit.
+- **Deletion semantics (explicit):**
+  - Delete/Backspace with a **text selection inside a cell** → deletes text only;
+    never collapses the cell structure.
+  - Delete with a **cell-range selection** → clears the contents of those cells,
+    leaving the cells in place (Word/Notion behavior).
+  - **Delete row / delete column** are explicit commands (toolbar/handle/menu),
+    not a side effect of text deletion.
+  - Deleting the **whole-table selection** removes the entire table node.
+  - Backspace at the very start of the first cell does **not** merge the table
+    into the previous block; it is a no-op (prevents accidental structure loss).
+- **Editing:** insert/delete row above/below, insert/delete column left/right,
+  toggle header row/column, set column width (drag), merge/split cells (later).
+- **Markdown:** GitHub-Flavored Markdown pipe tables on export/import. Rich
+  inline marks inside cells must round-trip; cell content that can't be
+  expressed in GFM (block content inside a cell) is a documented limitation.
+
+## Selection & deletion semantics (general)
+
+The recurring problem the engine must get right for every node type:
+
+- **Atomic/void node selected + Delete/Backspace** → remove the whole node
+  (e.g. selected image is deleted in one keystroke). Typing with a void node
+  selected replaces it with a paragraph containing the typed text.
+- **Caret immediately before/after a void node** → Backspace/Delete selects the
+  void node first (one press to select, second to delete), or deletes it
+  directly per a chosen convention; define and keep it consistent.
+- **Arrow keys across a void node** → the caret treats it as a single stop; it
+  cannot land "inside."
+- **Ranged selection spanning text + void + text** → Delete removes the whole
+  range, including void nodes, and merges the surrounding text nodes.
+- **Select-all** → selects the whole document; Delete clears to a single empty
+  paragraph (never zero nodes).
+- **Multi-node selection + convert/format** → applies to all fully-covered text
+  nodes (e.g. make 3 paragraphs into bullets).
+- The document is **never empty**: deleting everything leaves one empty paragraph.
+
+## Editing operations
+
+- Insert character / text at caret (with IME composition).
+- Insert block; **split** a text node at the caret (Enter); **merge** with
+  previous (Backspace at start) / next (Delete at end).
+- Enter behavior per type: paragraph → new paragraph; list item → next item;
+  empty list item → exit list to paragraph; code block → newline; heading → new
+  paragraph below.
+- Convert block type (turn-into) for caret block or all selected text nodes.
+- Indent / outdent (`Tab` / `Shift+Tab`) for nestable lists/toggles (and table
+  cell movement where applicable).
+- Move block up / down; drag-and-drop reorder (with drop indicator).
+- Delete: character, word, selection (see semantics above), whole block.
+- Markdown **input rules** (auto-format while typing): `# `, `## `…, `- `, `* `,
+  `1. `, `> `, `- [ ] `, ` ``` `, `---` (divider), `|...|` (table) at line start;
+  inline rules `**b**`, `*i*`, `` `code` ``, `[text](url)`, `~~s~~`.
+- Slash command (`/`) menu to insert any block type at the caret.
+- Inline formatting commands: bold, italic, underline, strike, code, link
+  (add/edit/remove), clear formatting.
+
+## Text input & IME
+
+- Implement a `TextInputClient` (or `DeltaTextInputClient`) so composition/IME
+  (Chinese/Japanese/Korean, autocorrect, predictive) works on web, desktop, and
+  mobile. The engine, not a `TextField`, owns the single input connection.
+- Map incoming text edits/deltas to document transactions at the current
+  selection.
+
+## Keyboard
+
+- Caret movement: Left/Right (char), Up/Down (visual line, crossing blocks),
+  Home/End (line), Ctrl/Cmd+Left/Right (word), Ctrl/Cmd+Up/Down or Ctrl+Home/End
+  (document start/end).
+- Selection: Shift + all of the above; Ctrl/Cmd+A select-all (cell → table →
+  document escalation).
+- Editing: Enter, Shift+Enter (soft break), Backspace/Delete (+ word variants),
+  Tab/Shift+Tab.
+- Formatting: Ctrl/Cmd+B/I/U, Ctrl/Cmd+E (code), Ctrl/Cmd+K (link),
+  Ctrl/Cmd+Shift+S (strike).
+- History: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z (or Ctrl+Y).
+- Clipboard: Ctrl/Cmd+C/X/V.
+- All bindings must respect platform modifiers (Cmd on macOS, Ctrl elsewhere).
+
+## Pointer & touch
+
+- Click to place caret (hit-test screen → document position).
+- Click-drag to select across blocks; auto-scroll near viewport edges.
+- Double-click selects word; triple-click selects block/paragraph.
+- Drag across table cells → rectangular cell selection.
+- Click a void node selects it.
+- Hover reveals the block handle (drag-reorder + block menu) per editor.md.
+- Touch: long-press to select word + selection handles; caret handle for
+  repositioning. (Web is the priority surface; keep touch viable.)
+
+## Clipboard
+
+- **Copy/Cut** produces three flavors: internal rich format (lossless, for
+  in-app paste), Markdown, and plain text; (HTML optional for external apps).
+- **Paste:** prefer internal format; else parse Markdown/HTML into nodes; else
+  plain text (split on blank lines into paragraphs). Paste replaces the current
+  selection. Paste of an image → upload via files API, insert image node.
+- Cut = copy + delete-selection.
+
+## Undo / redo
+
+- All mutations go through **transactions** (a list of reversible operations +
+  selection before/after). Undo/redo restores document **and** selection.
+- Coalesce consecutive typing into one undo step; structural ops are discrete.
+- Interaction with remote sync: remote-applied changes must not be undoable by
+  the local user (only the local user's own actions are on their undo stack).
+
+## Markdown compatibility (hard requirement)
+
+- Block-level and inline Markdown must round-trip: import file → document →
+  export file is stable (idempotent), and matches what the backend's Markdown
+  importer/exporter produces.
+- Inline marks (bold/italic/code/strike/link) must survive round-trips.
+- GFM tables, task lists, fenced code (with language), images, dividers.
+- Keep the backend `export/markdown`, `export/html`, and `import/markdown`
+  authoritative; the client engine's Markdown must agree with them (shared test
+  fixtures).
+
+## Backend & sync integration
+
+- The engine edits an in-memory document; each transaction is translated to the
+  existing backend block operations (`insert_block`, `update_block`,
+  `delete_block`, `move_block`) and sent through the same REST/WebSocket path
+  (see [Sync and API Draft](sync-and-api.md)). No new op types unless required.
+- Void nodes serialize to blocks with `type` + `data` (image → `data.url`/
+  `fileId`; table → row/cell child blocks). Images/files reference the files API
+  records.
+- Inline rich text requires a richer per-block text representation than today's
+  plain string — see Open Questions.
+- Remote updates reconcile into the live document **without** disturbing the
+  local caret/selection or the node currently being edited (already the rule in
+  the MVP; the engine must preserve it at position granularity, mapping remote
+  block changes to document positions).
+- Real concurrent-editing convergence (CRDT/OT) stays deferred per the MVP plan;
+  the model should not preclude adding it later.
+
+## Rendering & performance
+
+- Custom caret + selection painting layered over node widgets/render objects.
+- Virtualize long documents (build only visible nodes) while keeping selection
+  and caret math correct off-screen.
+- Smooth caret, selection that follows wrapping, correct hit-testing with mixed
+  font sizes (headings) and inline marks.
+
+## Accessibility & i18n
+
+- Screen-reader semantics for nodes and selection; keyboard-only operability.
+- RTL text and bidi; correct caret movement in mixed-direction text.
+
+## Non-goals (for now)
+
+- Infinite canvas / freeform layout.
+- Real-time character-level CRDT merge (deferred).
+- Comments/suggestions mode (post-MVP).
+
+## Open questions / decisions needed
+
+1. **Inline rich text storage.** To persist bold/italic/links while staying
+   Markdown-compatible, either (a) extend the backend block to store a rich
+   inline representation (delta/runs) and keep Markdown as import/export, or
+   (b) store Markdown markers inside the block's plain `text`. (a) is cleaner for
+   structured editing; (b) avoids backend changes. **Decision needed.**
+2. **Void-node deletion convention** — one-press delete vs select-then-delete
+   when the caret is adjacent to a void node.
+3. **Table scope for v1** — basic rows/cols + cell selection first; defer merge/
+   split cells, column resize, header styling.
+4. **Build order** — see Milestones.
+
+## Milestones
+
+1. **Core surface:** single input connection + document model + caret across
+   text nodes; replace the N-`TextField` editor for paragraph/heading/list/
+   todo/quote/code. Cross-block arrow nav as a true unified caret.
+2. **Selection:** mouse drag + Shift-key ranged selection across blocks;
+   select-all; delete-selection; copy/cut/paste (internal + Markdown + plain).
+3. **Markdown input rules + slash menu** on the new surface; inline marks
+   (bold/italic/code/link) with the chosen storage from Open Question 1.
+4. **Undo/redo** via transactions.
+5. **Void nodes:** divider, image (files API), with the selection/deletion
+   semantics above.
+6. **Tables:** structure, cell navigation/selection, row/col commands, GFM
+   round-trip.
+7. **Polish:** drag-reorder, virtualization, accessibility, RTL, touch.
