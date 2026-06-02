@@ -72,13 +72,44 @@ caret, selection painting, input, and commands across the whole document.
 - Maps to the backend block model (see Sync integration). The engine's in-memory
   document is the source of truth while editing; it is serialized to blocks.
 
-### Inline content (rich text)
+### Inline content (rich text) — DECIDED: marks over plain text
 
-- A text node's content is a sequence of **runs**: `{ text, marks }`, where marks
-  are inline styles: bold, italic, underline, strikethrough, inline code, link
-  (href), and later color/highlight. (Delta-style.)
-- This is required for "fully Markdown compatible" inline formatting; see the
-  storage decision in Open Questions.
+A text node's inline content is **plain text plus structured marks**, not raw
+Markdown and not embedded markup. Marks are inline-style ranges over the text:
+bold, italic, underline, strikethrough, inline code, link (href), and later
+color/highlight.
+
+**Storage decision (resolves Open Question 1).** Keep the backend block's `text`
+as a clean plain string (unchanged), and store formatting additively in
+`data.marks` as ranges, e.g.:
+
+```json
+{ "id": "…", "type": "paragraph", "text": "hello world",
+  "data": { "marks": [ { "start": 6, "end": 11, "type": "bold" },
+                       { "start": 0, "end": 5, "type": "link", "href": "https://…" } ] } }
+```
+
+Rationale:
+
+- Matches the established architecture: internal state is a structured block
+  model; **Markdown is import/export only**, never the stored representation
+  (see [architecture.md](architecture.md)). This is also how ProseMirror / Quill
+  / AppFlowy / Google Docs work internally.
+- `text` stays plain, so search, plain-text display, and existing Markdown export
+  for unformatted text are unaffected; formatting is purely additive in `data`.
+- Clean HTML export (`<strong>` etc.) and a natural anchor for future
+  range-based features (comments, highlight colors). Storing Markdown markers in
+  `text` (the rejected option) leaks markup into the plain field, complicates
+  HTML export, and is ambiguous to round-trip.
+
+Cost (accepted): mark offsets must be shifted/recomputed as text is inserted or
+deleted; this is a standard, well-understood approach (e.g. Yjs uses text +
+marks). The editor's in-memory model may use runs (`{text, marks}`) for
+convenience and serialize to/from the `text` + `data.marks` form on load/save.
+
+The backend Markdown and HTML exporters/importers are extended to apply and
+parse these marks; an unformatted block (no `data.marks`) behaves exactly as
+today.
 
 ### Positions and selection
 
@@ -303,18 +334,20 @@ The recurring problem the engine must get right for every node type:
 - Real-time character-level CRDT merge (deferred).
 - Comments/suggestions mode (post-MVP).
 
+## Decisions
+
+1. **Inline rich text storage — DECIDED.** Plain `text` stays clean; formatting
+   is stored additively as ranges in `data.marks`; Markdown is import/export
+   only. See "Inline content (rich text)" above for the rationale and shape.
+   (Rejected: storing Markdown markers inside `text`.)
+
 ## Open questions / decisions needed
 
-1. **Inline rich text storage.** To persist bold/italic/links while staying
-   Markdown-compatible, either (a) extend the backend block to store a rich
-   inline representation (delta/runs) and keep Markdown as import/export, or
-   (b) store Markdown markers inside the block's plain `text`. (a) is cleaner for
-   structured editing; (b) avoids backend changes. **Decision needed.**
-2. **Void-node deletion convention** — one-press delete vs select-then-delete
+1. **Void-node deletion convention** — one-press delete vs select-then-delete
    when the caret is adjacent to a void node.
-3. **Table scope for v1** — basic rows/cols + cell selection first; defer merge/
+2. **Table scope for v1** — basic rows/cols + cell selection first; defer merge/
    split cells, column resize, header styling.
-4. **Build order** — see Milestones.
+3. **Build order** — see Milestones.
 
 ## Milestones
 
