@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
 import 'editor/editor.dart';
+import 'editor/image_actions.dart';
 import 'upload/sha256.dart';
 
 /// Dev convenience: when true, the app signs in automatically on startup so you
@@ -517,6 +518,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       throw const ApiException('Open a page first.');
     }
     return _api.exportMarkdown(
+      session.accessToken,
+      workspace.id,
+      bootstrap.document.id,
+    );
+  }
+
+  Future<Uint8List> _exportPageZip() async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    final bootstrap = _selectedBootstrap;
+    if (bootstrap == null) {
+      throw const ApiException('Open a page first.');
+    }
+    return _api.exportDocumentZip(
       session.accessToken,
       workspace.id,
       bootstrap.document.id,
@@ -1244,6 +1259,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onSearch: _searchWorkspace,
                 onOpenSearchResult: _openViewById,
                 onExportPageMarkdown: _exportPageMarkdown,
+                onExportPageZip: _exportPageZip,
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
@@ -1480,6 +1496,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onSearch,
     required this.onOpenSearchResult,
     required this.onExportPageMarkdown,
+    required this.onExportPageZip,
     required this.onExportWorkspaceMarkdown,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
@@ -1563,6 +1580,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<List<SearchResult>> Function(String query) onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
   final Future<String> Function() onExportPageMarkdown;
+  final Future<Uint8List> Function() onExportPageZip;
   final Future<String> Function() onExportWorkspaceMarkdown;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
@@ -1665,6 +1683,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     const PopupMenuItem(
                       value: 'page',
                       child: Text('Export current page'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'page-zip',
+                      child: Text('Download page as ZIP (with images)'),
                     ),
                     const PopupMenuItem(
                       value: 'workspace',
@@ -2442,6 +2464,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   Future<void> _onExport(String kind) async {
+    if (kind == 'page-zip') {
+      try {
+        final bytes = await widget.onExportPageZip();
+        downloadImage(bytes, 'page.zip', 'application/zip');
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Export failed: $error')),
+          );
+        }
+      }
+      return;
+    }
     final (title, future) = switch (kind) {
       'page' => ('Export current page', widget.onExportPageMarkdown()),
       'workspace' => ('Export workspace', widget.onExportWorkspaceMarkdown()),
@@ -4732,6 +4767,24 @@ class ApiClient {
       token: token,
     );
     return UploadedFile.fromResponse(complete);
+  }
+
+  /// Download a page as a portable ZIP (markdown + bundled image assets).
+  Future<Uint8List> exportDocumentZip(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    final response = await http.get(
+      _baseUri.replace(
+        path: '/api/workspaces/$workspaceId/documents/$documentId/export.zip',
+      ),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('export failed (HTTP ${response.statusCode})');
+    }
+    return response.bodyBytes;
   }
 
   /// Re-host a remote image by URL (server-side fetch + store), avoiding dead

@@ -1,13 +1,17 @@
+use std::collections::BTreeMap;
+
 use axum::{
   Json,
   extract::{Path, Query, State},
-  http::HeaderMap,
+  http::{HeaderMap, header},
+  response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentOperation, export_html, export_markdown, import_markdown, payload_from_value,
+    DocumentOperation, export_html, export_markdown, export_markdown_with_assets, import_markdown,
+    payload_from_value,
   },
   store::{self, DocumentRecord, SnapshotRecord, UpdateRecord},
 };
@@ -18,6 +22,7 @@ use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
 use crate::routes::ws;
+use crate::zip::{ZipEntry, build_zip};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentRequest {
@@ -666,6 +671,141 @@ pub async fn export_document_markdown(
     export_markdown(&payload).map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
   Ok(Json(MarkdownExportResponse { markdown }))
+}
+
+/// `GET /api/workspaces/{workspace_id}/documents/{document_id}/export.zip`
+///
+/// A portable ZIP: `document.md` with Mica images rewritten to `assets/<name>`
+/// plus the image bytes under `assets/` (external image links are kept as-is).
+pub async fn export_document_zip(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Response> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+
+  let snapshot = store::latest_snapshot(&state.db, document_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  let payload = payload_from_value(snapshot.payload)
+    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
+
+  let mut entries = Vec::new();
+  let assets = collect_assets(&state, workspace_id, &payload.blocks, &mut entries).await?;
+  let markdown = export_markdown_with_assets(&payload, &assets)
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+  entries.insert(
+    0,
+    ZipEntry {
+      name: "document.md".to_string(),
+      data: markdown.into_bytes(),
+    },
+  );
+
+  Ok(zip_response(build_zip(&entries), "document.zip"))
+}
+
+/// Gather image assets referenced by [blocks]: fetch each Mica image's bytes,
+/// push them into [entries] under `assets/`, and return a `file_id → assets/path`
+/// map for the Markdown rewrite. External (url) images are left untouched.
+async fn collect_assets(
+  state: &AppState,
+  workspace_id: Uuid,
+  blocks: &[mica_app_core::documents::Block],
+  entries: &mut Vec<ZipEntry>,
+) -> ApiResult<BTreeMap<String, String>> {
+  // file_id -> original name, in document order.
+  let mut wanted: Vec<(String, String)> = Vec::new();
+  for block in blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let file_id = block.data.get("file_id").and_then(|v| v.as_str());
+    if let Some(id) = file_id {
+      if !wanted.iter().any(|(w, _)| w == id) {
+        let name = block
+          .data
+          .get("name")
+          .and_then(|v| v.as_str())
+          .unwrap_or("image")
+          .to_string();
+        wanted.push((id.to_string(), name));
+      }
+    }
+  }
+  if wanted.is_empty() {
+    return Ok(BTreeMap::new());
+  }
+
+  let storage = state
+    .storage
+    .clone()
+    .ok_or_else(|| ApiError::Unavailable("file storage is not configured".to_string()))?;
+  let ids: Vec<Uuid> = wanted
+    .iter()
+    .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+    .collect();
+  let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
+  let by_id: std::collections::HashMap<String, &store::FileRecord> =
+    records.iter().map(|r| (r.id.to_string(), r)).collect();
+
+  let client = reqwest::Client::new();
+  let mut map = BTreeMap::new();
+  let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+  for (file_id, name) in wanted {
+    let Some(record) = by_id.get(&file_id) else {
+      continue;
+    };
+    let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+      Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(_) => continue,
+      },
+      _ => continue,
+    };
+    let asset = unique_asset_name(&name, &mut used);
+    entries.push(ZipEntry {
+      name: format!("assets/{asset}"),
+      data: bytes,
+    });
+    map.insert(file_id, format!("assets/{asset}"));
+  }
+  Ok(map)
+}
+
+/// Make a unique `assets/` filename, appending `-1`, `-2`… on collision.
+fn unique_asset_name(name: &str, used: &mut std::collections::HashSet<String>) -> String {
+  if used.insert(name.to_string()) {
+    return name.to_string();
+  }
+  let (stem, ext) = match name.rsplit_once('.') {
+    Some((s, e)) => (s.to_string(), format!(".{e}")),
+    None => (name.to_string(), String::new()),
+  };
+  let mut n = 1;
+  loop {
+    let candidate = format!("{stem}-{n}{ext}");
+    if used.insert(candidate.clone()) {
+      return candidate;
+    }
+    n += 1;
+  }
+}
+
+fn zip_response(bytes: Vec<u8>, filename: &str) -> Response {
+  (
+    [
+      (header::CONTENT_TYPE, "application/zip".to_string()),
+      (
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{filename}\""),
+      ),
+    ],
+    bytes,
+  )
+    .into_response()
 }
 
 /// `GET /api/workspaces/{workspace_id}/export/markdown` — the whole workspace as

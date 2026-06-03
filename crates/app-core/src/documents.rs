@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -102,6 +104,16 @@ pub fn payload_from_value(value: Value) -> DocumentOperationResult<DocumentSnaps
 }
 
 pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
+  export_markdown_with_assets(snapshot, &BTreeMap::new())
+}
+
+/// Like [export_markdown] but rewrites each image block whose `file_id` is in
+/// [images] to that asset path (e.g. `assets/photo.png`) — used for ZIP export
+/// where image bytes are bundled alongside the Markdown.
+pub fn export_markdown_with_assets(
+  snapshot: &DocumentSnapshotPayload,
+  images: &BTreeMap<String, String>,
+) -> DocumentOperationResult<String> {
   if snapshot.schema_version != 1 {
     return Err(DocumentOperationError::UnsupportedSchemaVersion(
       snapshot.schema_version,
@@ -113,10 +125,10 @@ pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationR
     .ok_or_else(|| DocumentOperationError::BlockNotFound(snapshot.root_block_id.clone()))?;
   let root = &snapshot.blocks[root_index];
   if !root.text.trim().is_empty() {
-    append_markdown_block_content(root, 0, &mut lines);
+    append_markdown_block_content(root, 0, &mut lines, images);
   }
 
-  append_markdown_children(snapshot, &snapshot.root_block_id, 0, &mut lines)?;
+  append_markdown_children(snapshot, &snapshot.root_block_id, 0, &mut lines, images)?;
 
   while lines.last().is_some_and(|line: &String| line.is_empty()) {
     lines.pop();
@@ -540,6 +552,7 @@ fn append_markdown_children(
   parent_id: &str,
   depth: usize,
   lines: &mut Vec<String>,
+  images: &BTreeMap<String, String>,
 ) -> DocumentOperationResult<()> {
   let parent_index = block_index(snapshot, parent_id)
     .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
@@ -548,7 +561,7 @@ fn append_markdown_children(
   for child_id in child_ids {
     let child_index = block_index(snapshot, &child_id)
       .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
-    append_markdown_block(snapshot, &snapshot.blocks[child_index], depth, lines)?;
+    append_markdown_block(snapshot, &snapshot.blocks[child_index], depth, lines, images)?;
   }
 
   Ok(())
@@ -559,46 +572,52 @@ fn append_markdown_block(
   block: &Block,
   depth: usize,
   lines: &mut Vec<String>,
+  images: &BTreeMap<String, String>,
 ) -> DocumentOperationResult<()> {
   match block.kind.as_str() {
     "heading" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
     }
     "todo" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth + 1, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth + 1, lines, images)?;
     }
     "bulleted_list" | "bullet_list" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth + 1, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth + 1, lines, images)?;
     }
     "numbered_list" | "number_list" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth + 1, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth + 1, lines, images)?;
     }
     "quote" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
     }
     "code_block" | "code" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
     }
     "image" => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
     }
     _ => {
-      append_markdown_block_content(block, depth, lines);
-      append_markdown_children(snapshot, &block.id, depth, lines)?;
+      append_markdown_block_content(block, depth, lines, images);
+      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
     }
   }
 
   Ok(())
 }
 
-fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<String>) {
+fn append_markdown_block_content(
+  block: &Block,
+  depth: usize,
+  lines: &mut Vec<String>,
+  images: &BTreeMap<String, String>,
+) {
   let indent = "  ".repeat(depth);
   let text = block.text.trim_end();
   // Inline marks (bold/italic/code/strike/link) rendered back to Markdown.
@@ -632,13 +651,17 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
       lines.push(String::new());
     }
     "image" => {
-      // Uploaded images store a `file_id` + original `name` (object keys are
-      // content hashes); fall back to a raw `url` for external images. Emit the
-      // filename so exported images stay distinguishable.
-      let target = block_data_str(block, "name")
-        .filter(|s| !s.is_empty())
-        .or_else(|| block_data_str(block, "url"))
-        .unwrap_or_default();
+      // Prefer a bundled asset path (ZIP export) for an uploaded image; else
+      // fall back to its original filename, then a raw external `url`.
+      let asset = block_data_str(block, "file_id").and_then(|id| images.get(id));
+      let target: String = match asset {
+        Some(path) => path.clone(),
+        None => block_data_str(block, "name")
+          .filter(|s| !s.is_empty())
+          .or_else(|| block_data_str(block, "url"))
+          .unwrap_or_default()
+          .to_string(),
+      };
       let alt = if text.is_empty() { "image" } else { text };
       lines.push(format!("![{alt}]({target})"));
       lines.push(String::new());

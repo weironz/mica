@@ -109,6 +109,10 @@ pub fn api_router() -> Router<AppState> {
       get(documents::export_document_markdown),
     )
     .route(
+      "/workspaces/{workspace_id}/documents/{document_id}/export.zip",
+      get(documents::export_document_zip),
+    )
+    .route(
       "/workspaces/{workspace_id}/documents/{document_id}/export/html",
       get(documents::export_document_html),
     )
