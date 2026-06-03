@@ -2810,8 +2810,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
+        onImportWorkspace: _importWorkspaceFile,
       ),
     );
+  }
+
+  /// Pick a Markdown file and import it as a new workspace (from global settings).
+  Future<void> _importWorkspaceFile() async {
+    final picked = await pickTextFile();
+    if (picked == null || !mounted) return;
+    Navigator.of(context).pop(); // close settings before the import flow runs
+    await widget.onAiNewWorkspace(picked.text);
   }
 
   void _openAiDialog() {
@@ -3535,6 +3544,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.reHostImages,
     required this.onReHostImagesChanged,
     required this.onAppearanceChanged,
+    required this.onImportWorkspace,
   });
 
   final String userName;
@@ -3555,6 +3565,7 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(bool value) onReHostImagesChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
+  final Future<void> Function() onImportWorkspace;
 
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
@@ -3966,14 +3977,46 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
+  List<Widget> _dataSection(BuildContext context) => [
+    _sectionTitle(context, Icons.import_export, 'Data', const Color(0xFF0EA5E9)),
+    const SizedBox(height: 12),
+    const Text(
+      'Import a Markdown file as a new workspace.',
+      style: TextStyle(color: Color(0xFF64748B)),
+    ),
+    const SizedBox(height: 12),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: () => widget.onImportWorkspace(),
+        icon: const Icon(Icons.upload_file_outlined, size: 18),
+        label: const Text('Import workspace (Markdown)'),
+      ),
+    ),
+    const SizedBox(height: 16),
+    Text(
+      'Tip: export a single page or a whole workspace from the page menu (▾) '
+      'or a workspace’s ⋯ menu.',
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+        color: const Color(0xFF94A3B8),
+      ),
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    const titles = ['Appearance', 'AI provider', 'Account'];
-    const icons = [Icons.tune, Icons.auto_awesome, Icons.person_outline];
+    const titles = ['Appearance', 'AI provider', 'Account', 'Data'];
+    const icons = [
+      Icons.tune,
+      Icons.auto_awesome,
+      Icons.person_outline,
+      Icons.import_export,
+    ];
     final sections = [
       _appearanceSection(context),
       _aiSection(context),
       _accountSection(context),
+      _dataSection(context),
     ];
     return AlertDialog(
       title: const Row(
