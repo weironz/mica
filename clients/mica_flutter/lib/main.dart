@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'editor/clipboard_copy.dart';
 import 'editor/editor.dart';
 import 'upload/sha256.dart';
 
@@ -2960,7 +2961,7 @@ class _ExportDialog extends StatelessWidget {
         ),
         FilledButton.icon(
           onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: markdown));
+            await copyTextToClipboard(markdown);
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Copied to clipboard')),

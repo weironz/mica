@@ -1199,7 +1199,7 @@ class RenderDocument extends RenderBox {
     final paint = Paint()..color = EditorTheme.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
       final l = _layouts[i];
-      if (l.kind == 'divider' || l.kind == 'image') {
+      if (l.kind == 'divider' || l.kind == 'image' || l.kind == 'table') {
         // Highlight the whole atomic node when it falls inside a multi-node
         // selection (images highlight just their painted rect).
         if (i != start.node || i != end.node) {

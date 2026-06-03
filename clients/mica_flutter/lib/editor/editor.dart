@@ -10,6 +10,7 @@ import 'controller.dart';
 import 'highlight.dart';
 import 'markdown.dart';
 import 'marks.dart';
+import 'clipboard_copy.dart';
 import 'image_actions.dart';
 import 'model.dart';
 import 'open_url.dart';
@@ -542,16 +543,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (accel && key == LogicalKeyboardKey.keyC) {
       final text = _controller.selectionText();
       if (text.isEmpty) return KeyEventResult.ignored;
-      Clipboard.setData(ClipboardData(text: text));
+      copyTextToClipboard(text).then((_) {
+        if (mounted) _focus.requestFocus();
+      });
       return KeyEventResult.handled;
     }
 
     if (accel && key == LogicalKeyboardKey.keyX) {
       final text = _controller.selectionText();
       if (text.isEmpty) return KeyEventResult.ignored;
-      Clipboard.setData(ClipboardData(text: text));
-      _controller.deleteSelection();
-      _syncImeFromSelection();
+      copyTextToClipboard(text).then((_) {
+        if (!mounted) return;
+        _focus.requestFocus();
+        _controller.deleteSelection();
+        _syncImeFromSelection();
+      });
       return KeyEventResult.handled;
     }
 
@@ -1188,7 +1194,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.setTableAlign(node, selected!);
       case 'copy':
         final table = TableData.fromBlock(_controller.nodes[node].data);
-        await Clipboard.setData(ClipboardData(text: tableToMarkdown(table)));
+        await copyTextToClipboard(tableToMarkdown(table));
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1265,7 +1271,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _copyCode(int nodeIndex) {
     final nodes = _controller.nodes;
     if (nodeIndex < 0 || nodeIndex >= nodes.length) return;
-    Clipboard.setData(ClipboardData(text: nodes[nodeIndex].text));
+    copyTextToClipboard(nodes[nodeIndex].text);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
