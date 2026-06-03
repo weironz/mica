@@ -1593,6 +1593,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   bool _draggingTree = false;
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
+  bool _workspaceSettingsOpen = false;
   final EditorScrollHook _scrollHook = EditorScrollHook();
 
   @override
@@ -1728,7 +1729,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ],
             ),
             const SizedBox(height: 16),
-            Text('Workspace', style: Theme.of(context).textTheme.titleMedium),
+            Row(
+              children: [
+                Text('Workspace',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Workspace settings',
+                  visualDensity: VisualDensity.compact,
+                  isSelected: _workspaceSettingsOpen,
+                  onPressed: widget.selectedWorkspace == null
+                      ? null
+                      : () => setState(
+                          () => _workspaceSettingsOpen = !_workspaceSettingsOpen),
+                  icon: const Icon(Icons.tune, size: 20),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
             _WorkspaceSelector(
               workspaces: widget.workspaces,
@@ -1738,6 +1755,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onDelete: _confirmDeleteWorkspace,
               onCreate: _promptCreateWorkspace,
             ),
+            if (_workspaceSettingsOpen) _workspaceSettings(context),
             if (widget.message != null) ...[
               const SizedBox(height: 12),
               ErrorBanner(widget.message!),
@@ -2186,49 +2204,36 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// The current page's heading outline (table of contents). Tapping an entry
-  /// scrolls the editor to that heading. Empty when the page has no headings.
-  List<Widget> _pageOutline(BuildContext context) {
+  /// Tappable outline entries for the current page's headings (no section
+  /// header). Tapping scrolls the editor to that heading.
+  List<Widget> _pageOutlineItems(BuildContext context) {
     final blocks = widget.selectedBootstrap?.childBlocks ?? const [];
-    final headings = [
-      for (final b in blocks)
-        if (b.kind == 'heading' && b.text.trim().isNotEmpty) b,
-    ];
-    if (headings.isEmpty) return const [];
     return [
-      Row(
-        children: [
-          const Icon(Icons.toc, size: 18),
-          const SizedBox(width: 8),
-          Text('Outline', style: Theme.of(context).textTheme.titleLarge),
-        ],
-      ),
-      const SizedBox(height: 8),
-      for (final b in headings)
-        InkWell(
-          onTap: () => _scrollHook.scrollToBlock(b.id),
-          borderRadius: BorderRadius.circular(6),
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: 4.0 + 14 * ((_headingLevel(b) - 1).clamp(0, 5)),
-              top: 5,
-              bottom: 5,
-              right: 4,
-            ),
-            child: Text(
-              b.text.trim(),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: _headingLevel(b) <= 1 ? 14 : 13,
-                fontWeight:
-                    _headingLevel(b) <= 1 ? FontWeight.w600 : FontWeight.w400,
-                color: const Color(0xFF334155),
+      for (final b in blocks)
+        if (b.kind == 'heading' && b.text.trim().isNotEmpty)
+          InkWell(
+            onTap: () => _scrollHook.scrollToBlock(b.id),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: 4.0 + 14 * ((_headingLevel(b) - 1).clamp(0, 5)),
+                top: 5,
+                bottom: 5,
+                right: 4,
+              ),
+              child: Text(
+                b.text.trim(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: _headingLevel(b) <= 1 ? 14 : 13,
+                  fontWeight:
+                      _headingLevel(b) <= 1 ? FontWeight.w600 : FontWeight.w400,
+                  color: const Color(0xFF334155),
+                ),
               ),
             ),
           ),
-        ),
-      const Divider(height: 32),
     ];
   }
 
@@ -2239,90 +2244,107 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return 1;
   }
 
+  /// Right panel — the current page's outline (table of contents).
   Widget _workspaceTools(BuildContext context) {
-    final workspace = widget.selectedWorkspace;
-    if (workspace == null) {
-      return const ColoredBox(
-        color: Colors.white,
-        child: EmptyState(
-          icon: Icons.workspaces,
-          title: 'Workspace',
-          detail: 'Select a workspace.',
-        ),
-      );
-    }
-
-    if (_rename.text.isEmpty) {
-      _rename.text = workspace.name;
-    }
-
-    final canManage = matchesManageRole(workspace.role);
-
+    final outline = _pageOutlineItems(context);
     return ColoredBox(
       color: Colors.white,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ..._pageOutline(context),
-            Text('Workspace', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 12),
-            DetailRow(label: 'Role', value: workspace.role),
-            DetailRow(label: 'ID', value: workspace.id),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _rename,
-              decoration: const InputDecoration(
-                labelText: 'Rename workspace',
-                prefixIcon: Icon(Icons.edit),
-                border: OutlineInputBorder(),
+      child: outline.isEmpty
+          ? const EmptyState(
+              icon: Icons.toc,
+              title: 'Outline',
+              detail: 'Headings in this page appear here.',
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.toc, size: 18),
+                      const SizedBox(width: 8),
+                      Text('Outline',
+                          style: Theme.of(context).textTheme.titleLarge),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ...outline,
+                ],
               ),
             ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: () =>
-                  widget.onRenameWorkspace(workspace, _rename.text),
-              icon: const Icon(Icons.save),
-              label: const Text('Save'),
+    );
+  }
+
+  /// Inline workspace settings (rename + members), shown in the left panel when
+  /// its gear is toggled — kept in the tree so member edits refresh live.
+  Widget _workspaceSettings(BuildContext context) {
+    final workspace = widget.selectedWorkspace;
+    if (workspace == null) return const SizedBox.shrink();
+    if (_rename.text.isEmpty) _rename.text = workspace.name;
+    final canManage = matchesManageRole(workspace.role);
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DetailRow(label: 'Role', value: workspace.role),
+          DetailRow(label: 'ID', value: workspace.id),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _rename,
+            decoration: const InputDecoration(
+              labelText: 'Rename workspace',
+              prefixIcon: Icon(Icons.edit),
+              border: OutlineInputBorder(),
+              isDense: true,
             ),
-            const SizedBox(height: 28),
-            Row(
-              children: [
-                const Icon(Icons.group),
-                const SizedBox(width: 10),
-                Text('Members', style: Theme.of(context).textTheme.titleLarge),
-              ],
-            ),
-            const SizedBox(height: 14),
-            if (canManage) _compactAddMemberForm(),
-            if (canManage) const SizedBox(height: 16),
-            if (widget.members.isEmpty)
-              const EmptyState(
-                icon: Icons.group,
-                title: 'No members loaded',
-                detail: 'Members appear here after the workspace is selected.',
-              )
-            else
-              Column(
-                children: widget.members
-                    .map(
-                      (member) => Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: MemberListItem(
-                          member: member,
-                          canManage: canManage,
-                          canRemove: member.role != 'owner',
-                          onRoleChanged: (role) =>
-                              widget.onUpdateMember(member, role),
-                          onRemove: () => widget.onRemoveMember(member),
-                        ),
+          ),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: () => widget.onRenameWorkspace(workspace, _rename.text),
+            icon: const Icon(Icons.save, size: 18),
+            label: const Text('Save'),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Icon(Icons.group, size: 18),
+              const SizedBox(width: 8),
+              Text('Members', style: Theme.of(context).textTheme.titleMedium),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (canManage) _compactAddMemberForm(),
+          if (canManage) const SizedBox(height: 14),
+          if (widget.members.isEmpty)
+            const Text('No members loaded.',
+                style: TextStyle(color: Color(0xFF94A3B8)))
+          else
+            Column(
+              children: widget.members
+                  .map(
+                    (member) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: MemberListItem(
+                        member: member,
+                        canManage: canManage,
+                        canRemove: member.role != 'owner',
+                        onRoleChanged: (role) =>
+                            widget.onUpdateMember(member, role),
+                        onRemove: () => widget.onRemoveMember(member),
                       ),
-                    )
-                    .toList(),
-              ),
-          ],
-        ),
+                    ),
+                  )
+                  .toList(),
+            ),
+        ],
       ),
     );
   }
