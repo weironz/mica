@@ -190,6 +190,37 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
+    // GFM pipe table: a `|`-row followed by a `| --- |` separator.
+    if content.contains('|')
+      && index + 1 < raw_lines.len()
+      && is_table_separator(raw_lines[index + 1].trim())
+    {
+      let mut rows: Vec<Vec<String>> = vec![split_table_row(content)];
+      index += 2;
+      while index < raw_lines.len() {
+        let row = raw_lines[index].trim();
+        if row.is_empty() || !row.contains('|') {
+          break;
+        }
+        rows.push(split_table_row(row));
+        index += 1;
+      }
+      let width = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+      for row in rows.iter_mut() {
+        while row.len() < width {
+          row.push(String::new());
+        }
+      }
+      push_block(
+        &mut blocks,
+        &mut root_children,
+        "table",
+        String::new(),
+        json!({ "rows": rows, "header": true }),
+      );
+      continue;
+    }
+
     let (kind, text, data) = classify_markdown_line(content);
     push_block(&mut blocks, &mut root_children, kind, text, data);
     index += 1;
@@ -211,6 +242,37 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     root_block_id: root_block_id.to_string(),
     blocks: all_blocks,
   }
+}
+
+fn is_table_separator(line: &str) -> bool {
+  let cells = split_table_row(line);
+  !cells.is_empty()
+    && cells.iter().all(|cell| {
+      let t = cell.trim();
+      !t.is_empty() && t.contains('-') && t.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
+    })
+}
+
+fn split_table_row(line: &str) -> Vec<String> {
+  let mut s = line.trim();
+  s = s.strip_prefix('|').unwrap_or(s);
+  s = s.strip_suffix('|').unwrap_or(s);
+  let mut cells = Vec::new();
+  let mut buffer = String::new();
+  let mut chars = s.chars().peekable();
+  while let Some(ch) = chars.next() {
+    if ch == '\\' && chars.peek() == Some(&'|') {
+      buffer.push('|');
+      chars.next();
+    } else if ch == '|' {
+      cells.push(buffer.trim().to_string());
+      buffer.clear();
+    } else {
+      buffer.push(ch);
+    }
+  }
+  cells.push(buffer.trim().to_string());
+  cells
 }
 
 /// Map a single non-empty, non-fence Markdown line to a `(kind, text, data)`
@@ -550,6 +612,9 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
       lines.push(format!("![{alt}]({url})"));
       lines.push(String::new());
     }
+    "table" => {
+      append_table_markdown(block, lines);
+    }
     _ => {
       if !text.is_empty() {
         lines.push(format!("{indent}{text}"));
@@ -557,6 +622,48 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
       }
     }
   }
+}
+
+fn append_table_markdown(block: &Block, lines: &mut Vec<String>) {
+  let Some(rows) = block.data.get("rows").and_then(Value::as_array) else {
+    return;
+  };
+  let grid: Vec<Vec<String>> = rows
+    .iter()
+    .filter_map(|row| {
+      row.as_array().map(|cells| {
+        cells
+          .iter()
+          .map(|cell| {
+            cell
+              .as_str()
+              .unwrap_or("")
+              .replace('|', "\\|")
+              .replace('\n', " ")
+              .trim()
+              .to_string()
+          })
+          .collect()
+      })
+    })
+    .collect();
+  if grid.is_empty() {
+    return;
+  }
+  let cols = grid.iter().map(Vec::len).max().unwrap_or(0).max(1);
+  let row_line = |cells: &[String]| -> String {
+    let mut padded = cells.to_vec();
+    while padded.len() < cols {
+      padded.push(String::new());
+    }
+    format!("| {} |", padded.join(" | "))
+  };
+  lines.push(row_line(&grid[0]));
+  lines.push(format!("| {} |", vec!["---"; cols].join(" | ")));
+  for row in grid.iter().skip(1) {
+    lines.push(row_line(row));
+  }
+  lines.push(String::new());
 }
 
 fn heading_level(block: &Block, depth: usize) -> usize {

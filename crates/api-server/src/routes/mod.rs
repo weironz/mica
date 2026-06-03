@@ -1,9 +1,11 @@
 use axum::{
   Router,
-  routing::{get, patch, post},
+  routing::{delete, get, patch, post},
 };
 use mica_app_core::AppState;
 
+mod ai;
+mod ai_ws;
 mod auth;
 mod documents;
 mod files;
@@ -14,10 +16,12 @@ pub mod ws;
 
 /// Top-level WebSocket routes, mounted outside the `/api` prefix.
 pub fn ws_router() -> Router<AppState> {
-  Router::new().route(
-    "/ws/workspaces/{workspace_id}/documents/{document_id}",
-    get(ws::document_socket),
-  )
+  Router::new()
+    .route(
+      "/ws/workspaces/{workspace_id}/documents/{document_id}",
+      get(ws::document_socket),
+    )
+    .route("/ws/ai", get(ai_ws::ai_socket))
 }
 
 pub fn api_router() -> Router<AppState> {
@@ -26,14 +30,27 @@ pub fn api_router() -> Router<AppState> {
     .route("/ready", get(health::ready))
     .route("/auth/register", post(auth::register))
     .route("/auth/login", post(auth::login))
-    .route("/auth/me", get(auth::me))
+    .route("/auth/me", get(auth::me).patch(auth::update_me))
+    .route("/auth/password", post(auth::change_password))
+    .route("/export/markdown", get(documents::export_all_markdown))
+    .route(
+      "/workspaces/{workspace_id}/export/markdown",
+      get(documents::export_workspace_markdown),
+    )
+    .route("/ai/complete", post(ai::complete))
+    .route(
+      "/ai/settings",
+      get(ai::get_settings).patch(ai::update_settings),
+    )
     .route(
       "/workspaces",
       get(workspaces::list).post(workspaces::create),
     )
     .route(
       "/workspaces/{workspace_id}",
-      get(workspaces::get).patch(workspaces::update),
+      get(workspaces::get)
+        .patch(workspaces::update)
+        .delete(workspaces::delete),
     )
     .route(
       "/workspaces/{workspace_id}/members",
@@ -48,12 +65,28 @@ pub fn api_router() -> Router<AppState> {
       get(documents::list_views),
     )
     .route(
+      "/workspaces/{workspace_id}/search",
+      get(documents::search_workspace),
+    )
+    .route(
       "/workspaces/{workspace_id}/views/{view_id}",
       patch(documents::update_view).delete(documents::delete_view),
     )
     .route(
       "/workspaces/{workspace_id}/views/{view_id}/move",
       post(documents::move_view),
+    )
+    .route(
+      "/workspaces/{workspace_id}/views/{view_id}/restore",
+      post(documents::restore_view),
+    )
+    .route(
+      "/workspaces/{workspace_id}/trash",
+      get(documents::list_trash),
+    )
+    .route(
+      "/workspaces/{workspace_id}/trash/{view_id}",
+      delete(documents::purge_view),
     )
     .route(
       "/workspaces/{workspace_id}/documents",

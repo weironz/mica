@@ -5,7 +5,7 @@ use argon2::{
 use axum::{
   Json,
   extract::State,
-  http::{HeaderMap, header::AUTHORIZATION},
+  http::{HeaderMap, StatusCode, header::AUTHORIZATION},
 };
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
@@ -132,6 +132,89 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
   Ok(Json(MeResponse {
     user: UserResponse::from(user),
   }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMeRequest {
+  display_name: String,
+}
+
+/// `PATCH /api/auth/me` — update the signed-in user's display name.
+pub async fn update_me(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Json(payload): Json<UpdateMeRequest>,
+) -> ApiResult<Json<MeResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  let display_name = normalize_display_name(&payload.display_name)?;
+
+  let user = sqlx::query_as::<_, UserRow>(
+    r#"
+      UPDATE users
+      SET display_name = $1, updated_at = now()
+      WHERE id = $2
+      RETURNING id, email, display_name, password_hash, created_at
+    "#,
+  )
+  .bind(display_name)
+  .bind(user_id)
+  .fetch_optional(&state.db)
+  .await?
+  .ok_or(ApiError::Unauthorized)?;
+
+  Ok(Json(MeResponse {
+    user: UserResponse::from(user),
+  }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+  current_password: String,
+  new_password: String,
+}
+
+/// `POST /api/auth/password` — change the signed-in user's password.
+pub async fn change_password(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Json(payload): Json<ChangePasswordRequest>,
+) -> ApiResult<StatusCode> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+
+  if payload.new_password.len() < 8 {
+    return Err(ApiError::BadRequest(
+      "new password must be at least 8 characters".to_string(),
+    ));
+  }
+
+  let user = sqlx::query_as::<_, UserRow>(
+    r#"
+      SELECT id, email, display_name, password_hash, created_at
+      FROM users
+      WHERE id = $1
+    "#,
+  )
+  .bind(user_id)
+  .fetch_optional(&state.db)
+  .await?
+  .ok_or(ApiError::Unauthorized)?;
+
+  verify_password(&payload.current_password, &user.password_hash)?;
+  let password_hash = hash_password(&payload.new_password)?;
+
+  sqlx::query(
+    r#"
+      UPDATE users
+      SET password_hash = $1, updated_at = now()
+      WHERE id = $2
+    "#,
+  )
+  .bind(password_hash)
+  .bind(user_id)
+  .execute(&state.db)
+  .await?;
+
+  Ok(StatusCode::NO_CONTENT)
 }
 
 fn auth_response(state: &AppState, user: UserRow) -> ApiResult<AuthResponse> {

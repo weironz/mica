@@ -1,6 +1,6 @@
 use axum::{
   Json,
-  extract::{Path, State},
+  extract::{Path, Query, State},
   http::HeaderMap,
 };
 use chrono::{DateTime, Utc};
@@ -115,6 +115,92 @@ pub async fn list_views(
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
 
   Ok(Json(ViewListResponse { views }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchQuery {
+  q: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResult {
+  view_id: Uuid,
+  object_id: Uuid,
+  name: String,
+  snippet: String,
+  title_match: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchResponse {
+  results: Vec<SearchResult>,
+}
+
+/// `GET /api/workspaces/{workspace_id}/search?q=...` — find pages whose title or
+/// body text contains the query (case-insensitive), with a short snippet.
+pub async fn search_workspace(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Query(query): Query<SearchQuery>,
+) -> ApiResult<Json<SearchResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+
+  let needle = query.q.trim().to_lowercase();
+  if needle.is_empty() {
+    return Ok(Json(SearchResponse { results: vec![] }));
+  }
+
+  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+  let mut results = Vec::new();
+  for view in views {
+    if view.object_type != "document" {
+      continue;
+    }
+    let title_match = view.name.to_lowercase().contains(&needle);
+
+    let mut snippet = String::new();
+    if let Some(snapshot) = store::latest_snapshot(&state.db, view.object_id).await? {
+      if let Ok(payload) = payload_from_value(snapshot.payload) {
+        for block in &payload.blocks {
+          if let Some(found) = snippet_for(&block.text, &needle) {
+            snippet = found;
+            break;
+          }
+        }
+      }
+    }
+
+    if title_match || !snippet.is_empty() {
+      results.push(SearchResult {
+        view_id: view.id,
+        object_id: view.object_id,
+        name: view.name,
+        snippet,
+        title_match,
+      });
+    }
+    if results.len() >= 50 {
+      break;
+    }
+  }
+
+  Ok(Json(SearchResponse { results }))
+}
+
+/// First ~160 chars of a block that contains the query, or `None`.
+fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {
+  if !text.to_lowercase().contains(needle_lower) {
+    return None;
+  }
+  let trimmed = text.trim();
+  let snippet: String = trimmed.chars().take(160).collect();
+  if trimmed.chars().count() > 160 {
+    Some(format!("{snippet}…"))
+  } else {
+    Some(snippet)
+  }
 }
 
 pub async fn create_document(
@@ -324,11 +410,19 @@ pub async fn delete_view(
   let user_id = user_id_from_headers(&state, &headers)?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
+  // Soft-delete (move to the recycle bin) the page and its whole subtree.
   let result = sqlx::query(
     r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
       UPDATE views
       SET is_deleted = true, updated_at = now()
-      WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+      WHERE id IN (SELECT id FROM subtree)
+        AND workspace_id = $2
+        AND is_deleted = false
     "#,
   )
   .bind(view_id)
@@ -341,6 +435,107 @@ pub async fn delete_view(
   }
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
+
+  Ok(Json(ViewListResponse { views }))
+}
+
+pub async fn list_trash(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Json<ViewListResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+
+  let views = fetch_deleted_workspace_views(&state.db, workspace_id).await?;
+
+  Ok(Json(ViewListResponse { views }))
+}
+
+pub async fn restore_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<ViewListResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+
+  // Restore the page and the subtree that was deleted with it.
+  let result = sqlx::query(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
+      UPDATE views
+      SET is_deleted = false, updated_at = now()
+      WHERE id IN (SELECT id FROM subtree)
+        AND workspace_id = $2
+        AND is_deleted = true
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .execute(&state.db)
+  .await?;
+
+  if result.rows_affected() == 0 {
+    return Err(ApiError::NotFound);
+  }
+
+  // If the restored page's parent is no longer an active view, lift it to the
+  // top level so it does not become an orphan.
+  sqlx::query(
+    r#"
+      UPDATE views
+      SET parent_view_id = NULL, updated_at = now()
+      WHERE id = $1 AND workspace_id = $2 AND parent_view_id IS NOT NULL
+        AND parent_view_id NOT IN (
+          SELECT id FROM views WHERE workspace_id = $2 AND is_deleted = false
+        )
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .execute(&state.db)
+  .await?;
+
+  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+
+  Ok(Json(ViewListResponse { views }))
+}
+
+pub async fn purge_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<ViewListResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+
+  // Permanently remove the page and its subtree from the recycle bin.
+  let result = sqlx::query(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
+      DELETE FROM views
+      WHERE id IN (SELECT id FROM subtree) AND workspace_id = $2
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .execute(&state.db)
+  .await?;
+
+  if result.rows_affected() == 0 {
+    return Err(ApiError::NotFound);
+  }
+
+  let views = fetch_deleted_workspace_views(&state.db, workspace_id).await?;
 
   Ok(Json(ViewListResponse { views }))
 }
@@ -473,6 +668,115 @@ pub async fn export_document_markdown(
   Ok(Json(MarkdownExportResponse { markdown }))
 }
 
+/// `GET /api/workspaces/{workspace_id}/export/markdown` — the whole workspace as
+/// one clean Markdown document, pages in tree order (title heading depth follows
+/// the page tree).
+pub async fn export_workspace_markdown(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Json<MarkdownExportResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let markdown = workspace_markdown(&state.db, workspace_id, 1).await?;
+  Ok(Json(MarkdownExportResponse { markdown }))
+}
+
+/// `GET /api/export/markdown` — every workspace the user belongs to, each as a
+/// top-level section, concatenated into one Markdown document.
+pub async fn export_all_markdown(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> ApiResult<Json<MarkdownExportResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  let workspaces = sqlx::query_as::<_, (Uuid, String)>(
+    r#"
+      SELECT w.id, w.name
+      FROM workspaces w
+      JOIN workspace_members m ON m.workspace_id = w.id
+      WHERE m.user_id = $1
+      ORDER BY w.created_at ASC
+    "#,
+  )
+  .bind(user_id)
+  .fetch_all(&state.db)
+  .await?;
+
+  let mut out = String::new();
+  for (id, name) in workspaces {
+    out.push_str(&format!("# {name}\n\n"));
+    let body = workspace_markdown(&state.db, id, 2).await?;
+    if !body.is_empty() {
+      out.push_str(&body);
+      out.push_str("\n\n");
+    }
+    out.push_str("---\n\n");
+  }
+
+  Ok(Json(MarkdownExportResponse {
+    markdown: out.trim().to_string(),
+  }))
+}
+
+/// Render every document page of a workspace into one Markdown string, in
+/// page-tree order. `base_level` is the heading level of top-level pages.
+async fn workspace_markdown(
+  db: &PgPool,
+  workspace_id: Uuid,
+  base_level: usize,
+) -> ApiResult<String> {
+  let views = fetch_workspace_views(db, workspace_id).await?;
+
+  let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
+    std::collections::HashMap::new();
+  for view in &views {
+    by_parent.entry(view.parent_view_id).or_default().push(view);
+  }
+
+  let mut ordered: Vec<(&View, usize)> = Vec::new();
+  collect_view_order(&by_parent, None, 0, &mut ordered);
+
+  let mut out = String::new();
+  for (view, depth) in ordered {
+    if view.object_type != "document" {
+      continue;
+    }
+    let level = (base_level + depth).min(6);
+    out.push_str(&"#".repeat(level));
+    out.push(' ');
+    out.push_str(&view.name);
+    out.push_str("\n\n");
+
+    if let Some(snapshot) = store::latest_snapshot(db, view.object_id).await? {
+      if let Ok(payload) = payload_from_value(snapshot.payload) {
+        if let Ok(markdown) = export_markdown(&payload) {
+          let body = markdown.trim();
+          if !body.is_empty() {
+            out.push_str(body);
+            out.push_str("\n\n");
+          }
+        }
+      }
+    }
+  }
+
+  Ok(out.trim().to_string())
+}
+
+fn collect_view_order<'a>(
+  by_parent: &std::collections::HashMap<Option<Uuid>, Vec<&'a View>>,
+  parent: Option<Uuid>,
+  depth: usize,
+  out: &mut Vec<(&'a View, usize)>,
+) {
+  if let Some(children) = by_parent.get(&parent) {
+    for child in children {
+      out.push((child, depth));
+      collect_view_order(by_parent, Some(child.id), depth + 1, out);
+    }
+  }
+}
+
 pub async fn export_document_html(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -511,6 +815,33 @@ async fn fetch_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec
       FROM views
       WHERE workspace_id = $1 AND is_deleted = false
       ORDER BY parent_view_id NULLS FIRST, position ASC
+    "#,
+  )
+  .bind(workspace_id)
+  .fetch_all(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+async fn fetch_deleted_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec<View>> {
+  sqlx::query_as::<_, View>(
+    r#"
+      SELECT
+        id,
+        workspace_id,
+        parent_view_id,
+        object_id,
+        object_type::text AS object_type,
+        name,
+        icon,
+        position,
+        is_deleted,
+        created_by,
+        created_at,
+        updated_at
+      FROM views
+      WHERE workspace_id = $1 AND is_deleted = true
+      ORDER BY updated_at DESC
     "#,
   )
   .bind(workspace_id)

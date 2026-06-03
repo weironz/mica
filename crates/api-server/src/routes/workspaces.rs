@@ -1,7 +1,7 @@
 use axum::{
   Json,
   extract::{Path, State},
-  http::HeaderMap,
+  http::{HeaderMap, StatusCode},
 };
 use chrono::{DateTime, Utc};
 use mica_app_core::AppState;
@@ -191,6 +191,30 @@ pub async fn update(
     .ok_or(ApiError::NotFound)?;
 
   Ok(Json(WorkspaceResponse { workspace }))
+}
+
+pub async fn delete(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+
+  // Only the owner may delete a workspace; the cascade removes its members,
+  // views, documents, and history.
+  let role = workspace_role(&state.db, workspace_id, user_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  if role != "owner" {
+    return Err(ApiError::Forbidden);
+  }
+
+  sqlx::query("DELETE FROM workspaces WHERE id = $1")
+    .bind(workspace_id)
+    .execute(&state.db)
+    .await?;
+
+  Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn list_members(
