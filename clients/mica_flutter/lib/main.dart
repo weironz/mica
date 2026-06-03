@@ -1803,6 +1803,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return PopupMenuButton<String>(
       tooltip: 'Account',
       position: PopupMenuPosition.under,
+      // Match the sidebar content width (280 panel − 16 padding each side).
+      constraints: const BoxConstraints(minWidth: 248, maxWidth: 248),
       onSelected: (value) {
         switch (value) {
           case 'settings':
@@ -3431,6 +3433,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   final _model = TextEditingController();
   final _apiKey = TextEditingController();
   _AiPreset _preset = _AiPreset.deepseek;
+  int _tab = 0; // 0 Appearance, 1 AI provider, 2 Account
   bool _loading = true;
   bool _saving = false;
   bool _hasKey = false;
@@ -3618,99 +3621,78 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Row(
-        children: [
-          Icon(Icons.settings_outlined, size: 22),
-          SizedBox(width: 8),
-          Text('Settings'),
-        ],
+  Widget _sectionTitle(BuildContext context, IconData icon, String label, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Text(label, style: Theme.of(context).textTheme.titleMedium),
+      ],
+    );
+  }
+
+  List<Widget> _appearanceSection(BuildContext context) => [
+    _sectionTitle(context, Icons.tune, 'Appearance', const Color(0xFF2563EB)),
+    const SizedBox(height: 12),
+    _sliderRow(
+      label: 'Page width',
+      value: _pageWidth,
+      min: 640,
+      max: 1440,
+      display: '${_pageWidth.round()} px',
+      onChanged: (value) {
+        setState(() => _pageWidth = value);
+        _applyAppearance();
+      },
+    ),
+    _sliderRow(
+      label: 'Font size',
+      value: _fontScale,
+      min: 0.85,
+      max: 1.4,
+      display: '${(_fontScale * 100).round()}%',
+      onChanged: (value) {
+        setState(() => _fontScale = value);
+        _applyAppearance();
+      },
+    ),
+    const SizedBox(height: 4),
+    Row(
+      children: [
+        const SizedBox(width: 90, child: Text('Font')),
+        Expanded(
+          child: Wrap(
+            spacing: 8,
+            children: [
+              _fontChip('System', null),
+              _fontChip('Serif', 'serif'),
+              _fontChip('Mono', 'monospace'),
+            ],
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
+    SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: _reHostImages,
+      title: const Text('Re-host network images'),
+      subtitle: const Text(
+        'Pasted image links are saved into Mica storage. Off: keep '
+        'them as standard external Markdown links.',
       ),
-      content: SizedBox(
-        width: 480,
-        child: _loading
-            ? const SizedBox(
-                height: 120,
-                child: Center(child: CircularProgressIndicator()),
-              )
-            : SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.tune, size: 18, color: Color(0xFF2563EB)),
-                        const SizedBox(width: 8),
-                        Text('Appearance', style: Theme.of(context).textTheme.titleMedium),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    _sliderRow(
-                      label: 'Page width',
-                      value: _pageWidth,
-                      min: 640,
-                      max: 1440,
-                      display: '${_pageWidth.round()} px',
-                      onChanged: (value) {
-                        setState(() => _pageWidth = value);
-                        _applyAppearance();
-                      },
-                    ),
-                    _sliderRow(
-                      label: 'Font size',
-                      value: _fontScale,
-                      min: 0.85,
-                      max: 1.4,
-                      display: '${(_fontScale * 100).round()}%',
-                      onChanged: (value) {
-                        setState(() => _fontScale = value);
-                        _applyAppearance();
-                      },
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const SizedBox(width: 90, child: Text('Font')),
-                        Expanded(
-                          child: Wrap(
-                            spacing: 8,
-                            children: [
-                              _fontChip('System', null),
-                              _fontChip('Serif', 'serif'),
-                              _fontChip('Mono', 'monospace'),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      value: _reHostImages,
-                      title: const Text('Re-host network images'),
-                      subtitle: const Text(
-                        'Pasted image links are saved into Mica storage. Off: keep '
-                        'them as standard external Markdown links.',
-                      ),
-                      onChanged: (value) {
-                        setState(() => _reHostImages = value);
-                        widget.onReHostImagesChanged(value);
-                      },
-                    ),
-                    const Divider(height: 28),
-                    Row(
-                      children: [
-                        const Icon(Icons.auto_awesome, size: 18, color: Color(0xFF7C3AED)),
-                        const SizedBox(width: 8),
-                        Text('AI provider', style: Theme.of(context).textTheme.titleMedium),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<_AiPreset>(
+      onChanged: (value) {
+        setState(() => _reHostImages = value);
+        widget.onReHostImagesChanged(value);
+      },
+    ),
+  ];
+
+  List<Widget> _aiSection(BuildContext context) => [
+    _sectionTitle(context, Icons.auto_awesome, 'AI provider', const Color(0xFF7C3AED)),
+    const SizedBox(height: 12),
+    DropdownButtonFormField<_AiPreset>(
                       initialValue: _preset,
                       decoration: const InputDecoration(
                         labelText: 'Provider',
@@ -3771,91 +3753,141 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                         color: const Color(0xFF64748B),
                       ),
                     ),
-                    const Divider(height: 28),
-                    Row(
+    if (_error != null) ...[
+      const SizedBox(height: 12),
+      ErrorBanner(_error!),
+    ],
+    if (_saved != null) ...[
+      const SizedBox(height: 12),
+      Row(
+        children: [
+          const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+          const SizedBox(width: 6),
+          Text(_saved!),
+        ],
+      ),
+    ],
+  ];
+
+  List<Widget> _accountSection(BuildContext context) => [
+    _sectionTitle(context, Icons.person_outline, 'Account', const Color(0xFF2563EB)),
+    const SizedBox(height: 4),
+    Text(
+      widget.userEmail,
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+        color: const Color(0xFF64748B),
+      ),
+    ),
+    const SizedBox(height: 12),
+    TextField(
+      controller: _name,
+      enabled: !_accountBusy,
+      decoration: const InputDecoration(
+        labelText: 'Display name',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 8),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: _accountBusy ? null : _saveProfile,
+        icon: const Icon(Icons.save, size: 16),
+        label: const Text('Save name'),
+      ),
+    ),
+    const SizedBox(height: 16),
+    TextField(
+      controller: _curPass,
+      enabled: !_accountBusy,
+      obscureText: true,
+      decoration: const InputDecoration(
+        labelText: 'Current password',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 8),
+    TextField(
+      controller: _newPass,
+      enabled: !_accountBusy,
+      obscureText: true,
+      decoration: const InputDecoration(
+        labelText: 'New password (min 8 chars)',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 8),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: _accountBusy ? null : _changeAccountPassword,
+        icon: const Icon(Icons.lock_outline, size: 16),
+        label: const Text('Change password'),
+      ),
+    ),
+    if (_accountMsg != null) ...[
+      const SizedBox(height: 10),
+      Text(
+        _accountMsg!,
+        style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+      ),
+    ],
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    const titles = ['Appearance', 'AI provider', 'Account'];
+    const icons = [Icons.tune, Icons.auto_awesome, Icons.person_outline];
+    final sections = [
+      _appearanceSection(context),
+      _aiSection(context),
+      _accountSection(context),
+    ];
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.settings_outlined, size: 22),
+          SizedBox(width: 8),
+          Text('Settings'),
+        ],
+      ),
+      contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+      content: SizedBox(
+        width: 720,
+        height: 460,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: 180,
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
                       children: [
-                        const Icon(Icons.person_outline, size: 18, color: Color(0xFF2563EB)),
-                        const SizedBox(width: 8),
-                        Text('Account', style: Theme.of(context).textTheme.titleMedium),
+                        for (var i = 0; i < titles.length; i++)
+                          ListTile(
+                            dense: true,
+                            selected: _tab == i,
+                            leading: Icon(icons[i], size: 20),
+                            title: Text(titles[i]),
+                            onTap: () => setState(() => _tab = i),
+                          ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      widget.userEmail,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF64748B),
+                  ),
+                  const VerticalDivider(width: 1),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: sections[_tab],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _name,
-                      enabled: !_accountBusy,
-                      decoration: const InputDecoration(
-                        labelText: 'Display name',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        onPressed: _accountBusy ? null : _saveProfile,
-                        icon: const Icon(Icons.save, size: 16),
-                        label: const Text('Save name'),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _curPass,
-                      enabled: !_accountBusy,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Current password',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _newPass,
-                      enabled: !_accountBusy,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'New password (min 8 chars)',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        onPressed: _accountBusy ? null : _changeAccountPassword,
-                        icon: const Icon(Icons.lock_outline, size: 16),
-                        label: const Text('Change password'),
-                      ),
-                    ),
-                    if (_accountMsg != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        _accountMsg!,
-                        style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
-                      ),
-                    ],
-                    if (_error != null) ...[
-                      const SizedBox(height: 12),
-                      ErrorBanner(_error!),
-                    ],
-                    if (_saved != null) ...[
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
-                          const SizedBox(width: 6),
-                          Text(_saved!),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
+                  ),
+                ],
               ),
       ),
       actions: [
