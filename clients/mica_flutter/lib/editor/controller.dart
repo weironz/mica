@@ -40,6 +40,19 @@ class EditorController extends ChangeNotifier {
   Future<void> _chain = Future.value();
   int _idCounter = 0;
 
+  // --- Undo / redo -----------------------------------------------------------
+  // Snapshot history. Every committed change (the single `_send` choke point)
+  // pushes the prior document onto [_undoStack] and clears [_redoStack].
+  // [_present] mirrors the current committed document so a snapshot is captured
+  // without re-walking the live nodes. Undo/redo restore a snapshot and emit the
+  // block-op diff to bring the backend along. `_restoring` suppresses recording
+  // while a restore is in flight.
+  final List<_DocSnapshot> _undoStack = [];
+  final List<_DocSnapshot> _redoStack = [];
+  late _DocSnapshot _present = _snapshot();
+  bool _restoring = false;
+  static const int _maxHistory = 200;
+
   // ---------------------------------------------------------------------------
   // Loading & remote reconciliation
   // ---------------------------------------------------------------------------
@@ -50,6 +63,9 @@ class EditorController extends ChangeNotifier {
       ..clear()
       ..addAll(next.map((n) => n.copy()));
     _clampSelection();
+    _undoStack.clear();
+    _redoStack.clear();
+    _present = _snapshot();
     notifyListeners();
   }
 
@@ -79,6 +95,9 @@ class EditorController extends ChangeNotifier {
       ..clear()
       ..addAll(next);
     _remapSelection(focusedId);
+    // The server snapshot is the new committed baseline; keep `_present` aligned
+    // so the next change records a correct "before" state. History is preserved.
+    _present = _snapshot();
     notifyListeners();
   }
 
@@ -1065,9 +1084,124 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> _send(List<DocOp> ops) {
+    // Record the pre-change document before this committed mutation, unless we
+    // are mid-restore (undo/redo emit their own diff ops through here).
+    if (!_restoring) _recordHistory();
     final done = _chain.then((_) => onOps(ops)).catchError((_) {});
     _chain = done;
     return done;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Undo / redo
+  // ---------------------------------------------------------------------------
+
+  bool get canUndo => _undoStack.isNotEmpty || _dirty.isNotEmpty;
+  bool get canRedo => _redoStack.isNotEmpty;
+
+  /// Push the prior committed state and adopt the just-applied one as current.
+  void _recordHistory() {
+    _undoStack.add(_present);
+    if (_undoStack.length > _maxHistory) _undoStack.removeAt(0);
+    _redoStack.clear();
+    _present = _snapshot();
+  }
+
+  _DocSnapshot _snapshot() => _DocSnapshot(
+    nodes: [for (final n in nodes) n.copy()],
+    selection: selection,
+  );
+
+  void undo() {
+    // Commit any *pending* debounced typing first so its burst is its own undo
+    // step (and restorable via redo), then step back. A non-null timer means
+    // there are uncommitted edits; ids that linger in `_dirty` after a flush are
+    // merely in-flight (already recorded) and must not be re-sent here.
+    if (_saveTimer != null) flushPending();
+    if (_undoStack.isEmpty) return;
+    final target = _undoStack.removeLast();
+    _redoStack.add(_present);
+    _restore(target);
+  }
+
+  void redo() {
+    if (_redoStack.isEmpty) return;
+    final target = _redoStack.removeLast();
+    _undoStack.add(_present);
+    _restore(target);
+  }
+
+  /// Replace the live document with [target] and send the block-op diff so the
+  /// backend follows. Does not touch the history stacks (the caller did).
+  void _restore(_DocSnapshot target) {
+    _restoring = true;
+    final ops = _diffOps(nodes, target.nodes);
+    nodes
+      ..clear()
+      ..addAll(target.nodes.map((n) => n.copy()));
+    selection = target.selection;
+    _clampSelection();
+    // The initial-load baseline may have no selection; keep a caret so editing
+    // can resume immediately after undoing all the way back.
+    if (selection == null && nodes.isNotEmpty) {
+      selection = DocSelection.collapsed(const DocPosition(0, 0));
+    }
+    _dirty.clear();
+    if (ops.isNotEmpty) _send(ops);
+    _present = _snapshot();
+    _restoring = false;
+    notifyListeners();
+  }
+
+  /// Block-op diff transforming the [from] document into [to]. The editor never
+  /// reorders existing blocks, so deletes + position-indexed inserts + content
+  /// updates fully reconstruct order (no `move_block` needed).
+  List<DocOp> _diffOps(List<EditorNode> from, List<EditorNode> to) {
+    final fromById = {for (final n in from) n.id: n};
+    final toIds = {for (final n in to) n.id};
+    final ops = <DocOp>[];
+    for (final n in from) {
+      if (!toIds.contains(n.id)) {
+        ops.add({'type': 'delete_block', 'block_id': n.id});
+      }
+    }
+    for (var index = 0; index < to.length; index++) {
+      final n = to[index];
+      final old = fromById[n.id];
+      if (old == null) {
+        ops.add(_insertOp(n, index));
+      } else if (old.kind != n.kind ||
+          old.text != n.text ||
+          !_jsonEq(old.data, n.data)) {
+        ops.add({
+          'type': 'update_block',
+          'block_id': n.id,
+          'kind': n.kind,
+          'text': n.text,
+          'data': n.data,
+        });
+      }
+    }
+    return ops;
+  }
+
+  static bool _jsonEq(Object? a, Object? b) {
+    if (identical(a, b)) return true;
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final key in a.keys) {
+        if (!b.containsKey(key) || !_jsonEq(a[key], b[key])) return false;
+      }
+      return true;
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_jsonEq(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
   }
 
   String _genId() =>
@@ -1078,6 +1212,14 @@ class EditorController extends ChangeNotifier {
     _saveTimer?.cancel();
     super.dispose();
   }
+}
+
+/// An immutable point-in-time copy of the document for the undo/redo stacks.
+class _DocSnapshot {
+  _DocSnapshot({required this.nodes, required this.selection});
+
+  final List<EditorNode> nodes; // deep-copied; never mutated in place
+  final DocSelection? selection; // DocSelection/DocPosition are immutable
 }
 
 extension _FirstOrNull<E> on Iterable<E> {

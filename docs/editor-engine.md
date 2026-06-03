@@ -379,7 +379,14 @@ The recurring problem the engine must get right for every node type:
    (`controller._applyInlineRule`), preserving nested marks. Paste/AI/import run
    `parseInline`; copy/export round-trip via `inlineToMarkdown` (client) and the
    Rust mirror in `crates/app-core/src/documents.rs`.
-4. **Undo/redo** via transactions.
+4. **Undo/redo — DONE.** Snapshot history in `EditorController`: every committed
+   change (the single `_send` choke point) pushes the prior document onto the
+   undo stack and clears redo; `undo`/`redo` restore a snapshot and emit the
+   block-op diff (`_diffOps`) so the backend follows — no `move_block` since the
+   editor never reorders existing blocks. A debounced typing burst coalesces into
+   one step (undo flushes pending first). Bound to Ctrl/Cmd+Z and
+   Ctrl/Cmd+Shift+Z / Ctrl+Y in `editor._onKey`. *Pending:* toolbar buttons
+   (state is controller-private; keyboard-only for now).
 5. **Void nodes:** divider, image (files API), with the selection/deletion
    semantics above.
 6. **Tables:** structure, cell navigation/selection, row/col commands, GFM

@@ -434,6 +434,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
     }
 
+    // Undo / redo: Ctrl/Cmd+Z, and Ctrl/Cmd+Shift+Z or Ctrl+Y to redo.
+    if (accel && key == LogicalKeyboardKey.keyZ) {
+      if (shift) {
+        _controller.redo();
+      } else {
+        _controller.undo();
+      }
+      _syncImeFromSelection(force: true);
+      return KeyEventResult.handled;
+    }
+    if (accel && key == LogicalKeyboardKey.keyY) {
+      _controller.redo();
+      _syncImeFromSelection(force: true);
+      return KeyEventResult.handled;
+    }
+
     if (accel && key == LogicalKeyboardKey.keyA) {
       _selectAll();
       return KeyEventResult.handled;
