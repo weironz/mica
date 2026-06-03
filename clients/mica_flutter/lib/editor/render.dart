@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -164,6 +166,10 @@ class _NodeLayout {
   Rect? addRowBar;
   Rect? tableHandle; // top-left block handle
   Rect? tableDelete; // top-right delete icon
+
+  // Image layout (kind == 'image'): the destination rect (local) the decoded
+  // image (or its placeholder) is painted into.
+  Rect? imageDst;
 }
 
 /// One laid-out table cell.
@@ -236,6 +242,25 @@ class RenderDocument extends RenderBox {
   /// Per-code-block horizontal scroll offset, keyed by node id. Code blocks do
   /// not wrap; long lines scroll left/right within the block.
   final Map<String, double> _codeScroll = {};
+
+  /// Decoded images keyed by `file_id`, painted directly onto the canvas. The
+  /// host (`MicaEditor`) populates this as images load and calls [setImages].
+  Map<String, ui.Image> _images = {};
+  set images(Map<String, ui.Image> value) {
+    _images = value;
+    markNeedsLayout();
+  }
+
+  /// `file_id`s that failed to load — painted as a broken-image placeholder.
+  Set<String> _imageErrors = {};
+  set imageErrors(Set<String> value) {
+    _imageErrors = value;
+    markNeedsPaint();
+  }
+
+  /// Called during layout when an image node's bytes aren't decoded yet, so the
+  /// host can fetch + decode them. Must not synchronously mutate layout.
+  void Function(String fileId)? onRequestImage;
 
   /// `nodeId:offset` of the caret at the last layout. Auto-scroll-to-caret only
   /// runs when this changes (a real caret move), so caret blink / unrelated
@@ -347,6 +372,14 @@ class RenderDocument extends RenderBox {
           ..textTop = y
           ..textHeight = _dividerHeight
           ..boxHeight = _dividerHeight;
+        _layouts.add(layout);
+        y += layout.boxHeight;
+        prevKind = node.kind;
+        continue;
+      }
+
+      if (node.kind == 'image') {
+        final layout = _layoutImage(node, y, maxWidth);
         _layouts.add(layout);
         y += layout.boxHeight;
         prevKind = node.kind;
@@ -492,6 +525,54 @@ class RenderDocument extends RenderBox {
 
   // Vertical box reserved for a divider (horizontal rule centered within it).
   static const double _dividerHeight = 26;
+
+  // Image placeholder size (before the real image decodes) and vertical gap.
+  static const double _imagePlaceholderH = 180;
+  static const double _imageGap = 6;
+
+  _NodeLayout _layoutImage(EditorNode node, double top, double maxWidth) {
+    final fileId = node.data['file_id'] as String?;
+    final img = fileId == null ? null : _images[fileId];
+    if (img == null && fileId != null && !_imageErrors.contains(fileId)) {
+      onRequestImage?.call(fileId);
+    }
+
+    final maxW = maxWidth.clamp(1.0, double.infinity);
+    final align = switch (node.data['align']) {
+      'center' => 1,
+      'right' => 2,
+      _ => 0,
+    };
+    final requested = (node.data['width'] as num?)?.toDouble();
+
+    double w, h;
+    if (img != null) {
+      final natW = img.width.toDouble();
+      final natH = img.height.toDouble();
+      w = (requested ?? natW).clamp(40.0, maxW);
+      h = w * (natH / (natW == 0 ? 1 : natW));
+    } else {
+      w = (requested ?? 320).clamp(40.0, maxW);
+      h = _imagePlaceholderH;
+    }
+
+    final left = switch (align) {
+      1 => (maxW - w) / 2,
+      2 => maxW - w,
+      _ => 0.0,
+    };
+
+    final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+      ..kind = 'image'
+      ..nodeId = node.id
+      ..contentLeft = left
+      ..boxTop = top
+      ..textTop = top
+      ..textHeight = h
+      ..boxHeight = h + _imageGap
+      ..imageDst = Rect.fromLTWH(left, top, w, h);
+    return layout;
+  }
 
   _NodeLayout _layoutTable(EditorNode node, double top, double maxWidth) {
     final table = TableData.fromBlock(node.data);
@@ -872,6 +953,10 @@ class RenderDocument extends RenderBox {
       );
       return;
     }
+    if (l.kind == 'image') {
+      _paintImage(canvas, offset, l);
+      return;
+    }
     final origin = offset + Offset(l.contentLeft, l.textTop);
 
     switch (l.kind) {
@@ -943,6 +1028,58 @@ class RenderDocument extends RenderBox {
     }
   }
 
+  void _paintImage(Canvas canvas, Offset offset, _NodeLayout l) {
+    final dst = l.imageDst;
+    if (dst == null) return;
+    final r = dst.shift(offset);
+    final rr = RRect.fromRectAndRadius(r, const Radius.circular(6));
+    final fileId = _imageFileId(l);
+    final decoded = fileId == null ? null : _images[fileId];
+    if (decoded != null) {
+      canvas.save();
+      canvas.clipRRect(rr);
+      paintImage(
+        canvas: canvas,
+        rect: r,
+        image: decoded,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+      );
+      canvas.restore();
+      return;
+    }
+    // Placeholder: rounded fill + centered icon (broken on error, else image).
+    canvas.drawRRect(rr, Paint()..color = EditorTheme.codeBg);
+    final isError = fileId != null && _imageErrors.contains(fileId);
+    final icon = isError ? Icons.broken_image_outlined : Icons.image_outlined;
+    final glyph = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: 28,
+          color: EditorTheme.faint,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    glyph.paint(
+      canvas,
+      r.center - Offset(glyph.width / 2, glyph.height / 2),
+    );
+    glyph.dispose();
+  }
+
+  String? _imageFileId(_NodeLayout l) {
+    if (l.kind != 'image') return null;
+    final node = _nodes.firstWhere(
+      (n) => n.id == l.nodeId,
+      orElse: () => EditorNode(id: '', kind: 'paragraph', text: ''),
+    );
+    return node.data['file_id'] as String?;
+  }
+
   void _paintSelection(Canvas canvas, Offset offset) {
     final sel = _selection;
     if (sel == null || sel.isCollapsed) return;
@@ -951,13 +1088,14 @@ class RenderDocument extends RenderBox {
     final paint = Paint()..color = EditorTheme.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
       final l = _layouts[i];
-      if (l.kind == 'divider') {
-        // Highlight the whole rule when it falls inside a multi-node selection.
+      if (l.kind == 'divider' || l.kind == 'image') {
+        // Highlight the whole atomic node when it falls inside a multi-node
+        // selection (images highlight just their painted rect).
         if (i != start.node || i != end.node) {
-          canvas.drawRect(
-            Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight),
-            paint,
-          );
+          final box = l.kind == 'image' && l.imageDst != null
+              ? l.imageDst!.shift(offset)
+              : Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight);
+          canvas.drawRect(box, paint);
         }
         continue;
       }
@@ -1349,6 +1487,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
     required this.showCaret,
     required this.caretOn,
     required this.appearance,
+    this.images = const {},
+    this.imageErrors = const {},
+    this.onRequestImage,
     super.key,
   });
 
@@ -1357,6 +1498,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final bool showCaret;
   final bool caretOn;
   final EditorAppearance appearance;
+  final Map<String, ui.Image> images;
+  final Set<String> imageErrors;
+  final void Function(String fileId)? onRequestImage;
 
   @override
   RenderDocument createRenderObject(BuildContext context) => RenderDocument(
@@ -1365,7 +1509,10 @@ class DocumentSurface extends LeafRenderObjectWidget {
     showCaret: showCaret,
     caretOn: caretOn,
     appearance: appearance,
-  );
+  )
+    ..onRequestImage = onRequestImage
+    ..imageErrors = imageErrors
+    ..images = images;
 
   @override
   void updateRenderObject(BuildContext context, RenderDocument renderObject) {
@@ -1374,6 +1521,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..selection = selection
       ..showCaret = showCaret
       ..caretOn = caretOn
-      ..appearance = appearance;
+      ..appearance = appearance
+      ..onRequestImage = onRequestImage
+      ..imageErrors = imageErrors
+      ..images = images;
   }
 }

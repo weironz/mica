@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'markdown.dart';
 import 'marks.dart';
 import 'model.dart';
 import 'open_url.dart';
+import 'pick_image.dart';
 import 'render.dart';
 import 'rich_paste.dart';
 import 'table.dart';
@@ -35,6 +37,8 @@ class MicaEditor extends StatefulWidget {
     required this.canEdit,
     required this.onApplyOperations,
     this.onAiStream,
+    this.onUploadImage,
+    this.onLoadImageBytes,
     this.appearance = const EditorAppearance(),
     super.key,
   });
@@ -54,6 +58,18 @@ class MicaEditor extends StatefulWidget {
   /// Streams Markdown from a prompt for the in-editor "Ask AI" command (deltas
   /// shown live). When null, the AI slash entry is hidden.
   final Stream<String> Function(String prompt, {String? system})? onAiStream;
+
+  /// Upload image bytes, returning the new `(file_id, name)`. When null, image
+  /// insertion is disabled.
+  final Future<({String fileId, String name})?> Function(
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  )? onUploadImage;
+
+  /// Resolve an image `file_id` to its bytes (the host resolves a fresh signed
+  /// URL and fetches it). Used to paint image nodes on the canvas.
+  final Future<Uint8List?> Function(String fileId)? onLoadImageBytes;
 
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
@@ -78,6 +94,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   VoidCallback? _cellFocusListener;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
+
+  // Decoded images keyed by file_id, painted on the canvas by RenderDocument.
+  final Map<String, ui.Image> _imageCache = {};
+  final Set<String> _imageErrors = {};
+  final Set<String> _imageLoading = {};
   // Active table column resize: node, right-column index, start x, start weights.
   ({int node, int col, double startX, List<double> weights, double avail})?
   _colResize;
@@ -132,6 +153,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _cellEntry = null;
     _markBar?.remove();
     _markBar = null;
+    for (final img in _imageCache.values) {
+      img.dispose();
+    }
+    _imageCache.clear();
     setRichPasteHandler(null);
     _blink?.cancel();
     _conn?.close();
@@ -885,6 +910,41 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     });
   }
 
+  /// Lazily fetch + decode an image for [fileId] (called from layout). Repaints
+  /// when the image is ready or fails. No-op if already cached/loading/errored.
+  void _requestImage(String fileId) {
+    if (_imageCache.containsKey(fileId) ||
+        _imageLoading.contains(fileId) ||
+        _imageErrors.contains(fileId)) {
+      return;
+    }
+    final load = widget.onLoadImageBytes;
+    if (load == null) return;
+    _imageLoading.add(fileId);
+    load(fileId).then((bytes) async {
+      if (!mounted) return;
+      if (bytes == null) {
+        _imageLoading.remove(fileId);
+        setState(() => _imageErrors.add(fileId));
+        return;
+      }
+      try {
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        if (!mounted) {
+          frame.image.dispose();
+          return;
+        }
+        _imageLoading.remove(fileId);
+        setState(() => _imageCache[fileId] = frame.image);
+      } catch (_) {
+        if (!mounted) return;
+        _imageLoading.remove(fileId);
+        setState(() => _imageErrors.add(fileId));
+      }
+    });
+  }
+
   /// The href of a link mark covering [pos], or null if none.
   String? _linkAt(DocPosition pos) {
     if (pos.node < 0 || pos.node >= _controller.nodes.length) return null;
@@ -1361,12 +1421,49 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _syncImeFromSelection(force: true);
       return;
     }
+    if (opt.kind == 'image') {
+      // Clear the "/..." text, then pick + upload a file and insert the block.
+      _controller.applySlashCommand(_slashStart, caret, 'paragraph', {});
+      _closeSlash();
+      _syncImeFromSelection(force: true);
+      _pickAndInsertImage();
+      return;
+    }
     final data = opt.kind == 'table'
         ? TableData.empty().toBlockData()
         : opt.data;
     _controller.applySlashCommand(_slashStart, caret, opt.kind, data);
     _closeSlash();
     _syncImeFromSelection(force: true);
+  }
+
+  /// Pick an image file, upload it, and insert an image block at the caret.
+  Future<void> _pickAndInsertImage() async {
+    final upload = widget.onUploadImage;
+    if (upload == null) return;
+    final picked = await pickImage();
+    if (picked == null || !mounted) return;
+    final result = await upload(picked.bytes, picked.name, picked.mime);
+    if (result == null || !mounted) return;
+    // Decode straightaway so the image paints without a resolve round-trip.
+    _primeImage(result.fileId, picked.bytes);
+    _controller.insertImage(fileId: result.fileId, name: result.name);
+    _syncImeFromSelection(force: true);
+  }
+
+  /// Seed the canvas image cache with freshly-uploaded bytes (skip the fetch).
+  void _primeImage(String fileId, Uint8List bytes) {
+    if (_imageCache.containsKey(fileId)) return;
+    ui.instantiateImageCodec(bytes).then((codec) => codec.getNextFrame()).then((
+      frame,
+    ) {
+      if (!mounted) {
+        frame.image.dispose();
+        return;
+      }
+      _imageErrors.remove(fileId);
+      setState(() => _imageCache[fileId] = frame.image);
+    }).catchError((_) {});
   }
 
   Future<void> _runInlineAi() async {
@@ -1461,6 +1558,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               showCaret: _focus.hasFocus && widget.canEdit,
               caretOn: _caretOn,
               appearance: widget.appearance,
+              images: _imageCache,
+              imageErrors: _imageErrors,
+              onRequestImage: _requestImage,
             ),
           ),
         ),
@@ -1672,4 +1772,5 @@ const List<_SlashOption> _slashOptions = [
   _SlashOption('Code', Icons.code, 'code_block'),
   _SlashOption('Table', Icons.grid_on, 'table'),
   _SlashOption('Divider', Icons.horizontal_rule, 'divider'),
+  _SlashOption('Image', Icons.image_outlined, 'image'),
 ];

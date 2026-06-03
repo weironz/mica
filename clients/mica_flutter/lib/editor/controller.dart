@@ -1083,6 +1083,59 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(afterIndex, 0));
   }
 
+  /// Insert an image block (atomic) at the caret, carrying its `file_id` and
+  /// original `name` (+ optional `alt`). Like [insertDivider], an empty focused
+  /// paragraph becomes the image; otherwise it is inserted after the focused
+  /// node, and a trailing paragraph is ensured for the caret.
+  void insertImage({
+    required String fileId,
+    required String name,
+    String alt = '',
+    String? align,
+  }) {
+    final sel = selection;
+    if (sel == null) return;
+    final i = sel.focus.node;
+    if (i >= nodes.length) return;
+    final data = <String, dynamic>{
+      'file_id': fileId,
+      'name': name,
+      'align': ?align,
+    };
+    final node = nodes[i];
+    final ops = <DocOp>[];
+    int imageIndex;
+    if (node.text.isEmpty && node.kind == 'paragraph') {
+      node
+        ..kind = 'image'
+        ..text = alt
+        ..data = data;
+      _dirty.remove(node.id);
+      ops.add({
+        'type': 'update_block',
+        'block_id': node.id,
+        'kind': 'image',
+        'text': alt,
+        'data': data,
+      });
+      imageIndex = i;
+    } else {
+      final created = EditorNode(id: _genId(), kind: 'image', text: alt, data: data);
+      nodes.insert(i + 1, created);
+      ops.add(_insertOp(created, i + 1));
+      imageIndex = i + 1;
+    }
+
+    final afterIndex = imageIndex + 1;
+    if (afterIndex >= nodes.length || nodes[afterIndex].isAtomic) {
+      final p = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+      nodes.insert(afterIndex, p);
+      ops.add(_insertOp(p, afterIndex));
+    }
+    _sendNow(ops);
+    collapseTo(DocPosition(afterIndex, 0));
+  }
+
   /// Append an empty paragraph after the last node and move the caret into it.
   /// Used as the downward escape from a trailing code block.
   void addParagraphAfterLast() {

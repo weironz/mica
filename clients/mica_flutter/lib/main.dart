@@ -890,6 +890,52 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Upload image bytes for the editor, returning the new file id + name.
+  Future<({String fileId, String name})?> _uploadEditorImage(
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  ) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null) return null;
+    try {
+      final file = await _api.uploadImage(
+        session.accessToken,
+        workspace.id,
+        fileName: fileName,
+        mimeType: mimeType,
+        bytes: bytes,
+      );
+      return (fileId: file.id, name: file.name);
+    } catch (error) {
+      if (mounted) setState(() => _message = error.toString());
+      return null;
+    }
+  }
+
+  /// Resolve an image file id to a fresh signed URL and fetch its bytes (so the
+  /// editor can decode + paint it on the canvas).
+  Future<Uint8List?> _loadEditorImageBytes(String fileId) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null) return null;
+    try {
+      final urls = await _api.resolveFiles(
+        session.accessToken,
+        workspace.id,
+        [fileId],
+      );
+      final url = urls[fileId];
+      if (url == null) return null;
+      final resp = await http.get(Uri.parse(url));
+      if (resp.statusCode != 200) return null;
+      return resp.bodyBytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _exportSelectedMarkdown() {
     return _run(() async {
       final session = _requireSession();
@@ -1121,6 +1167,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onDeleteBlock: _deleteBlock,
                 onMoveBlock: _moveBlock,
                 onApplyOperations: _applyEditorOperations,
+                onUploadImage: _uploadEditorImage,
+                onLoadImageBytes: _loadEditorImageBytes,
                 onAiStream: _aiStream,
                 onAiNewPage: _aiNewPageFromMarkdown,
                 onAiCurrentPage: _selectedBootstrap == null
@@ -1358,6 +1406,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteBlock,
     required this.onMoveBlock,
     required this.onApplyOperations,
+    required this.onUploadImage,
+    required this.onLoadImageBytes,
     required this.onAiStream,
     required this.onAiNewPage,
     required this.onAiCurrentPage,
@@ -1421,6 +1471,13 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(DocumentBlock block, int targetIndex) onMoveBlock;
   final Future<void> Function(List<Map<String, dynamic>> operations)
   onApplyOperations;
+  final Future<({String fileId, String name})?> Function(
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  )
+  onUploadImage;
+  final Future<Uint8List?> Function(String fileId) onLoadImageBytes;
   final Stream<String> Function(String prompt, {String? system}) onAiStream;
   final Future<void> Function(String markdown) onAiNewPage;
   final Future<void> Function(String markdown)? onAiCurrentPage;
@@ -1990,6 +2047,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       version: bootstrap.snapshot.versionSeq,
                       canEdit: canEdit,
                       onApplyOperations: widget.onApplyOperations,
+                      onUploadImage: widget.onUploadImage,
+                      onLoadImageBytes: widget.onLoadImageBytes,
                       onAiStream: widget.onAiStream,
                       appearance: widget.appearance,
                     ),
