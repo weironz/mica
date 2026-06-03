@@ -1605,7 +1605,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // intercept ordinary taps on the page rows.
   bool _draggingTree = false;
   WorkspaceRole _memberRole = WorkspaceRole.editor;
-  bool _toolsExpanded = true;
+  bool _toolsExpanded = false;
+  final EditorScrollHook _scrollHook = EditorScrollHook();
 
   @override
   void didUpdateWidget(covariant WorkspaceView oldWidget) {
@@ -2135,6 +2136,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onResolveImageUrls: widget.onResolveImageUrls,
                       onAiStream: widget.onAiStream,
                       reHostImages: widget.reHostImages,
+                      scrollHook: _scrollHook,
                       appearance: widget.appearance,
                     ),
                 ),
@@ -2165,6 +2167,59 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
+  /// The current page's heading outline (table of contents). Tapping an entry
+  /// scrolls the editor to that heading. Empty when the page has no headings.
+  List<Widget> _pageOutline(BuildContext context) {
+    final blocks = widget.selectedBootstrap?.childBlocks ?? const [];
+    final headings = [
+      for (final b in blocks)
+        if (b.kind == 'heading' && b.text.trim().isNotEmpty) b,
+    ];
+    if (headings.isEmpty) return const [];
+    return [
+      Row(
+        children: [
+          const Icon(Icons.toc, size: 18),
+          const SizedBox(width: 8),
+          Text('Outline', style: Theme.of(context).textTheme.titleLarge),
+        ],
+      ),
+      const SizedBox(height: 8),
+      for (final b in headings)
+        InkWell(
+          onTap: () => _scrollHook.scrollToBlock(b.id),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 4.0 + 14 * ((_headingLevel(b) - 1).clamp(0, 5)),
+              top: 5,
+              bottom: 5,
+              right: 4,
+            ),
+            child: Text(
+              b.text.trim(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: _headingLevel(b) <= 1 ? 14 : 13,
+                fontWeight:
+                    _headingLevel(b) <= 1 ? FontWeight.w600 : FontWeight.w400,
+                color: const Color(0xFF334155),
+              ),
+            ),
+          ),
+        ),
+      const Divider(height: 32),
+    ];
+  }
+
+  int _headingLevel(DocumentBlock b) {
+    final level = b.data['level'];
+    if (level is int) return level.clamp(1, 6);
+    if (level is num) return level.toInt().clamp(1, 6);
+    return 1;
+  }
+
   Widget _workspaceTools(BuildContext context) {
     final workspace = widget.selectedWorkspace;
     if (workspace == null) {
@@ -2191,6 +2246,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            ..._pageOutline(context),
             Text('Workspace', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
             DetailRow(label: 'Role', value: workspace.role),

@@ -31,6 +31,13 @@ export 'render.dart' show EditorAppearance;
 /// works), one document-wide selection, and renders every node itself through
 /// [DocumentSurface]. The caret travels the document as if it were one
 /// continuous page — no block chrome, Word/Typora feel (see docs/editor.md).
+/// Lets a host (e.g. the page outline) ask the editor to scroll a block into
+/// view. The editor wires its scroll implementation into [_scroll] on init.
+class EditorScrollHook {
+  void Function(String blockId)? _scroll;
+  void scrollToBlock(String blockId) => _scroll?.call(blockId);
+}
+
 class MicaEditor extends StatefulWidget {
   const MicaEditor({
     required this.rootBlockId,
@@ -45,6 +52,7 @@ class MicaEditor extends StatefulWidget {
     this.onResolveImageUrls,
     this.reHostImages = true,
     this.focusNode,
+    this.scrollHook,
     this.appearance = const EditorAppearance(),
     super.key,
   });
@@ -94,6 +102,9 @@ class MicaEditor extends StatefulWidget {
   /// Optional external focus node so the host can move focus into the editor
   /// (e.g. pressing Enter in the page title jumps to the first body line).
   final FocusNode? focusNode;
+
+  /// Optional hook the page outline uses to scroll a heading block into view.
+  final EditorScrollHook? scrollHook;
 
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
@@ -155,7 +166,30 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.load(widget.nodes);
     _controller.addListener(_onControllerChanged);
     _focus.addListener(_onFocusChange);
+    widget.scrollHook?._scroll = _scrollToBlock;
     _ensureNotEmptyDeferred();
+  }
+
+  /// Scroll the surrounding page so the block [blockId] is near the top.
+  void _scrollToBlock(String blockId) {
+    final r = _render;
+    if (r == null) return;
+    final top = r.nodeBoxTop(blockId);
+    if (top == null) return;
+    final scrollable = Scrollable.maybeOf(context);
+    if (scrollable == null) return;
+    final box = scrollable.context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final globalY = r.localToGlobal(Offset(0, top)).dy;
+    final viewTop = box.localToGlobal(Offset.zero).dy;
+    final pos = scrollable.position;
+    final target = (pos.pixels + (globalY - viewTop) - 16)
+        .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    pos.animateTo(
+      target,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
   @override

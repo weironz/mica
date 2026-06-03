@@ -1601,6 +1601,14 @@ class RenderDocument extends RenderBox {
     return DocPosition(pos.node, lb.end);
   }
 
+  /// Local top y of the node with [nodeId], or null if absent (for scroll-to).
+  double? nodeBoxTop(String nodeId) {
+    for (final l in _layouts) {
+      if (l.nodeId == nodeId) return l.boxTop;
+    }
+    return null;
+  }
+
   /// Node index of the image whose painted rect contains [local], or null.
   int? imageAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
