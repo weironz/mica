@@ -73,6 +73,7 @@ pub struct FileRecord {
   pub workspace_id: Uuid,
   pub uploaded_by: Uuid,
   pub object_key: String,
+  pub original_name: String,
   pub mime_type: String,
   pub byte_size: i64,
   pub created_at: DateTime<Utc>,
@@ -536,19 +537,25 @@ pub async fn insert_file(
   workspace_id: Uuid,
   uploaded_by: Uuid,
   object_key: &str,
+  original_name: &str,
   mime_type: &str,
   byte_size: i64,
 ) -> ApiResult<FileRecord> {
+  // Object keys are content-addressed (sha256), so re-uploading identical bytes
+  // hits the UNIQUE(object_key) constraint. Treat that as dedup: return the
+  // existing row rather than failing. The no-op SET lets us use RETURNING.
   sqlx::query_as::<_, FileRecord>(
     r#"
-      INSERT INTO files (workspace_id, uploaded_by, object_key, mime_type, byte_size)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, workspace_id, uploaded_by, object_key, mime_type, byte_size, created_at
+      INSERT INTO files (workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (object_key) DO UPDATE SET object_key = EXCLUDED.object_key
+      RETURNING id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
     "#,
   )
   .bind(workspace_id)
   .bind(uploaded_by)
   .bind(object_key)
+  .bind(original_name)
   .bind(mime_type)
   .bind(byte_size)
   .fetch_one(db)
@@ -563,7 +570,7 @@ pub async fn fetch_file(
 ) -> ApiResult<Option<FileRecord>> {
   sqlx::query_as::<_, FileRecord>(
     r#"
-      SELECT id, workspace_id, uploaded_by, object_key, mime_type, byte_size, created_at
+      SELECT id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
       FROM files
       WHERE id = $1 AND workspace_id = $2
     "#,
@@ -571,6 +578,27 @@ pub async fn fetch_file(
   .bind(file_id)
   .bind(workspace_id)
   .fetch_optional(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// Fetch many files at once (for resolving image blocks on document load).
+/// Silently skips ids that are absent or belong to another workspace.
+pub async fn fetch_files(
+  db: &PgPool,
+  workspace_id: Uuid,
+  file_ids: &[Uuid],
+) -> ApiResult<Vec<FileRecord>> {
+  sqlx::query_as::<_, FileRecord>(
+    r#"
+      SELECT id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
+      FROM files
+      WHERE workspace_id = $1 AND id = ANY($2)
+    "#,
+  )
+  .bind(workspace_id)
+  .bind(file_ids)
+  .fetch_all(db)
   .await
   .map_err(ApiError::from)
 }

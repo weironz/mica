@@ -62,11 +62,10 @@ services:
       JWT_SECRET: change-me-in-development
       ACCESS_TOKEN_TTL_SECONDS: 86400
       RUST_LOG: mica_api_server=debug,mica_app_core=debug,mica_infra=debug,tower_http=debug
-      # The backend makes NO network calls to S3 — it only signs presigned URLs
-      # that the BROWSER fetches. So both the upload (PUT) endpoint and the
-      # download (GET) base must be signed against the browser-reachable host.
+      # The backend only SIGNS presigned URLs (no network calls to S3); sign
+      # against the browser-reachable host. The bucket is private, so leave
+      # S3_PUBLIC_BASE_URL unset → download_url returns a presigned (signed) GET.
       S3_ENDPOINT: http://192.168.73.6:9000
-      S3_PUBLIC_BASE_URL: http://192.168.73.6:9000
       S3_REGION: us-east-1
       S3_BUCKET: mica
       S3_ACCESS_KEY: rustfsadmin

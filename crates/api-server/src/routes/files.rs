@@ -19,11 +19,16 @@ pub struct PresignRequest {
   file_name: String,
   mime_type: String,
   byte_size: i64,
+  /// Lowercase hex sha256 of the file bytes (client-computed). Used as the
+  /// content-addressed object key so identical uploads dedup.
+  content_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CompleteRequest {
   object_key: String,
+  /// Original upload filename, preserved for export (object keys are hashes).
+  file_name: String,
   mime_type: String,
   byte_size: i64,
 }
@@ -43,6 +48,16 @@ pub struct FileResponse {
   download_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResolveRequest {
+  ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolveResponse {
+  files: Vec<FileResponse>,
+}
+
 /// `POST /api/workspaces/{workspace_id}/files/presign`
 ///
 /// Issues a presigned upload URL the client uses to PUT the object directly to
@@ -60,7 +75,7 @@ pub async fn presign(
   validate_mime(&payload.mime_type)?;
   validate_byte_size(payload.byte_size, storage.max_upload_bytes)?;
 
-  let object_key = build_object_key(workspace_id, &payload.file_name);
+  let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
   let upload = storage.presign_put(&object_key);
 
   Ok(Json(PresignResponse {
@@ -95,6 +110,7 @@ pub async fn complete(
     workspace_id,
     user_id,
     &payload.object_key,
+    &sanitize_file_name(&payload.file_name),
     &payload.mime_type,
     payload.byte_size,
   )
@@ -102,6 +118,33 @@ pub async fn complete(
   let download_url = storage.download_url(&file.object_key);
 
   Ok(Json(FileResponse { file, download_url }))
+}
+
+/// `POST /api/workspaces/{workspace_id}/files/resolve`
+///
+/// Resolve many file ids to fresh download URLs at once. Image blocks store only
+/// a `file_id`, so the client calls this on document load to obtain displayable
+/// (and never-stale) URLs. Unknown ids are silently dropped.
+pub async fn resolve(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<ResolveRequest>,
+) -> ApiResult<Json<ResolveResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let storage = storage(&state)?;
+
+  let records = store::fetch_files(&state.db, workspace_id, &payload.ids).await?;
+  let files = records
+    .into_iter()
+    .map(|file| {
+      let download_url = storage.download_url(&file.object_key);
+      FileResponse { file, download_url }
+    })
+    .collect();
+
+  Ok(Json(ResolveResponse { files }))
 }
 
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}`
@@ -170,12 +213,32 @@ fn validate_byte_size(byte_size: i64, max_upload_bytes: i64) -> ApiResult<()> {
   Ok(())
 }
 
-fn build_object_key(workspace_id: Uuid, file_name: &str) -> String {
-  format!(
-    "workspaces/{workspace_id}/{}/{}",
-    Uuid::new_v4().simple(),
-    sanitize_file_name(file_name)
-  )
+/// Content-addressed object key: `workspaces/{ws}/{sha256}.{ext}`. Identical
+/// bytes (same hash) map to the same key, giving free per-workspace dedup. The
+/// original filename is preserved separately (in the file row) for export.
+fn build_object_key(workspace_id: Uuid, content_hash: &str, file_name: &str) -> ApiResult<String> {
+  let hash = content_hash.trim().to_ascii_lowercase();
+  if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+    return Err(ApiError::BadRequest(
+      "content_hash must be a hex sha256".to_string(),
+    ));
+  }
+  let ext = file_extension(file_name);
+  let name = match ext {
+    Some(ext) => format!("{hash}.{ext}"),
+    None => hash,
+  };
+  Ok(format!("workspaces/{workspace_id}/{name}"))
+}
+
+/// Lowercase alphanumeric extension of [file_name], or None.
+fn file_extension(file_name: &str) -> Option<String> {
+  let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+  let ext = base.rsplit_once('.')?.1;
+  if ext.is_empty() || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+    return None;
+  }
+  Some(ext.to_ascii_lowercase())
 }
 
 /// Confirm a client-provided object key belongs to this workspace, blocking
@@ -219,11 +282,22 @@ mod tests {
   use super::*;
 
   #[test]
-  fn object_key_is_scoped_to_workspace() {
+  fn object_key_is_content_addressed_and_scoped() {
     let workspace_id = Uuid::from_u128(42);
-    let key = build_object_key(workspace_id, "photo.png");
-    assert!(key.starts_with(&format!("workspaces/{workspace_id}/")));
-    assert!(key.ends_with("/photo.png"));
+    let hash = "a".repeat(64);
+    let key = build_object_key(workspace_id, &hash, "photo.PNG").unwrap();
+    assert_eq!(key, format!("workspaces/{workspace_id}/{hash}.png"));
+
+    // Same bytes (hash) → same key regardless of original filename → dedup.
+    let key2 = build_object_key(workspace_id, &hash, "other-name.png").unwrap();
+    assert_eq!(key, key2);
+
+    // A bad hash is rejected.
+    assert!(build_object_key(workspace_id, "not-a-hash", "x.png").is_err());
+
+    // No extension is fine.
+    let key3 = build_object_key(workspace_id, &hash, "noext").unwrap();
+    assert_eq!(key3, format!("workspaces/{workspace_id}/{hash}"));
   }
 
   #[test]

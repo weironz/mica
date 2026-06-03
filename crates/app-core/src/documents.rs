@@ -632,9 +632,15 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
       lines.push(String::new());
     }
     "image" => {
-      let url = block_data_str(block, "url").unwrap_or_default();
+      // Uploaded images store a `file_id` + original `name` (object keys are
+      // content hashes); fall back to a raw `url` for external images. Emit the
+      // filename so exported images stay distinguishable.
+      let target = block_data_str(block, "name")
+        .filter(|s| !s.is_empty())
+        .or_else(|| block_data_str(block, "url"))
+        .unwrap_or_default();
       let alt = if text.is_empty() { "image" } else { text };
-      lines.push(format!("![{alt}]({url})"));
+      lines.push(format!("![{alt}]({target})"));
       lines.push(String::new());
     }
     "table" => {
