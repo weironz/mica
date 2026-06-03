@@ -546,9 +546,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.exportWorkspaceMarkdown(session.accessToken, workspace.id);
   }
 
-  Future<String> _exportWorkspaceMarkdownById(String workspaceId) async {
+  Future<Uint8List> _exportWorkspaceZip(String workspaceId) async {
     final session = _requireSession();
-    return _api.exportWorkspaceMarkdown(session.accessToken, workspaceId);
+    return _api.exportWorkspaceZip(session.accessToken, workspaceId);
   }
 
   Future<String> _exportAllMarkdown() async {
@@ -1279,7 +1279,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onExportPageZip: _exportPageZip,
                 onImportMarkdown: _importMarkdownAsPage,
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
-                onExportWorkspaceById: _exportWorkspaceMarkdownById,
+                onExportWorkspaceZip: _exportWorkspaceZip,
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
                 onAddMember: _addWorkspaceMember,
@@ -1521,7 +1521,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportPageZip,
     required this.onImportMarkdown,
     required this.onExportWorkspaceMarkdown,
-    required this.onExportWorkspaceById,
+    required this.onExportWorkspaceZip,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
@@ -1610,7 +1610,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<Uint8List> Function() onExportPageZip;
   final Future<void> Function(String fileName, String markdown) onImportMarkdown;
   final Future<String> Function() onExportWorkspaceMarkdown;
-  final Future<String> Function(String workspaceId) onExportWorkspaceById;
+  final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
@@ -2726,16 +2726,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     await widget.onImportMarkdown(picked.name, picked.text);
   }
 
-  /// Download a whole workspace as one Markdown file (from its dropdown menu).
+  /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
   Future<void> _exportWorkspaceFile(Workspace workspace) async {
     try {
-      final markdown = await widget.onExportWorkspaceById(workspace.id);
+      final bytes = await widget.onExportWorkspaceZip(workspace.id);
       final name = workspace.name.trim().isEmpty ? 'workspace' : workspace.name.trim();
-      downloadImage(
-        Uint8List.fromList(utf8.encode(markdown)),
-        '$name.md',
-        'text/markdown',
-      );
+      downloadImage(bytes, '$name.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2992,8 +2988,8 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.download_outlined),
-                  title: Text('Export Markdown'),
+                  leading: Icon(Icons.folder_zip_outlined),
+                  title: Text('Export (ZIP)'),
                 ),
               ),
               PopupMenuItem(
@@ -5161,6 +5157,18 @@ class ApiClient {
       _baseUri.replace(
         path: '/api/workspaces/$workspaceId/documents/$documentId/export.zip',
       ),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('export failed (HTTP ${response.statusCode})');
+    }
+    return response.bodyBytes;
+  }
+
+  /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
+  Future<Uint8List> exportWorkspaceZip(String token, String workspaceId) async {
+    final response = await http.get(
+      _baseUri.replace(path: '/api/workspaces/$workspaceId/export.zip'),
       headers: {'authorization': 'Bearer $token'},
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {

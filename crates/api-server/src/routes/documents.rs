@@ -794,6 +794,192 @@ fn unique_asset_name(name: &str, used: &mut std::collections::HashSet<String>) -
   }
 }
 
+/// `GET /api/workspaces/{workspace_id}/export.zip`
+///
+/// The whole workspace as a Markdown ZIP, organised by the page tree: each page
+/// is `<ancestors…>/<page>.md`, a page with children also names a folder, and
+/// images are de-duplicated under a root `assets/` folder (referenced with the
+/// right relative `../` depth).
+pub async fn export_workspace_zip(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Response> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+
+  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+  let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
+    std::collections::HashMap::new();
+  for v in &views {
+    by_parent.entry(v.parent_view_id).or_default().push(v);
+  }
+  for list in by_parent.values_mut() {
+    list.sort_by(|a, b| a.position.cmp(&b.position));
+  }
+  let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
+  collect_page_paths(&by_parent, None, &Vec::new(), &mut pages);
+
+  let storage = state.storage.clone();
+  let client = reqwest::Client::new();
+  let mut entries: Vec<ZipEntry> = Vec::new();
+  let mut asset_by_object: std::collections::HashMap<String, String> =
+    std::collections::HashMap::new();
+  let mut used_assets: std::collections::HashSet<String> = std::collections::HashSet::new();
+  let mut used_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+  for (view, folder, base) in pages {
+    if view.object_type != "document" {
+      continue;
+    }
+    let Some(snapshot) = store::latest_snapshot(&state.db, view.object_id).await? else {
+      continue;
+    };
+    let Ok(payload) = payload_from_value(snapshot.payload) else {
+      continue;
+    };
+
+    // Image assets used by this page (de-duplicated globally by object key).
+    let rel = "../".repeat(folder.len());
+    let mut images: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(storage) = &storage {
+      let mut wanted: Vec<(String, String)> = Vec::new();
+      for b in &payload.blocks {
+        if b.kind != "image" {
+          continue;
+        }
+        if let Some(id) = b.data.get("file_id").and_then(|v| v.as_str()) {
+          if !wanted.iter().any(|(w, _)| w == id) {
+            let name = b
+              .data
+              .get("name")
+              .and_then(|v| v.as_str())
+              .unwrap_or("image")
+              .to_string();
+            wanted.push((id.to_string(), name));
+          }
+        }
+      }
+      if !wanted.is_empty() {
+        let ids: Vec<Uuid> = wanted
+          .iter()
+          .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+          .collect();
+        let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
+        let by_id: std::collections::HashMap<String, &store::FileRecord> =
+          records.iter().map(|r| (r.id.to_string(), r)).collect();
+        for (file_id, name) in &wanted {
+          let Some(record) = by_id.get(file_id) else {
+            continue;
+          };
+          let asset = if let Some(existing) = asset_by_object.get(&record.object_key) {
+            existing.clone()
+          } else {
+            let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+              Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(b) => b.to_vec(),
+                Err(_) => continue,
+              },
+              _ => continue,
+            };
+            let a = unique_asset_name(name, &mut used_assets);
+            entries.push(ZipEntry {
+              name: format!("assets/{a}"),
+              data: bytes,
+            });
+            asset_by_object.insert(record.object_key.clone(), a.clone());
+            a
+          };
+          images.insert(file_id.clone(), format!("{rel}assets/{asset}"));
+        }
+      }
+    }
+
+    let body = export_markdown_with_assets(&payload, &images)
+      .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let mut path = String::new();
+    for seg in &folder {
+      path.push_str(seg);
+      path.push('/');
+    }
+    path.push_str(&base);
+    path.push_str(".md");
+    path = unique_zip_path(path, &mut used_paths);
+    let content = format!("# {}\n\n{}", view.name, body);
+    entries.push(ZipEntry {
+      name: path,
+      data: content.into_bytes(),
+    });
+  }
+
+  if entries.is_empty() {
+    entries.push(ZipEntry {
+      name: "README.md".to_string(),
+      data: b"(empty workspace)".to_vec(),
+    });
+  }
+  Ok(zip_response(build_zip(&entries), "workspace.zip"))
+}
+
+/// Flatten the page tree into `(view, ancestor-folder segments, unique base)`,
+/// in tree order, giving each page a name unique among its siblings.
+fn collect_page_paths<'a>(
+  by_parent: &std::collections::HashMap<Option<Uuid>, Vec<&'a View>>,
+  parent: Option<Uuid>,
+  folder: &[String],
+  out: &mut Vec<(&'a View, Vec<String>, String)>,
+) {
+  let Some(children) = by_parent.get(&parent) else {
+    return;
+  };
+  let mut used = std::collections::HashSet::new();
+  for child in children {
+    let base = unique_zip_path(safe_segment(&child.name), &mut used);
+    out.push((child, folder.to_vec(), base.clone()));
+    let mut sub = folder.to_vec();
+    sub.push(base);
+    collect_page_paths(by_parent, Some(child.id), &sub, out);
+  }
+}
+
+/// A path segment safe for a filename: keep letters/digits of any script plus
+/// `-_.`, collapse other runs to `_`; never empty.
+fn safe_segment(name: &str) -> String {
+  let mut out = String::new();
+  let mut prev_us = false;
+  for ch in name.chars() {
+    if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+      out.push(ch);
+      prev_us = ch == '_';
+    } else if !prev_us {
+      out.push('_');
+      prev_us = true;
+    }
+  }
+  let tidy = out.trim_matches('_').to_string();
+  if tidy.is_empty() { "untitled".to_string() } else { tidy }
+}
+
+/// Make [candidate] unique within [used], appending `-2`, `-3`… before any
+/// `.md` extension on collision. Inserts the result into [used].
+fn unique_zip_path(candidate: String, used: &mut std::collections::HashSet<String>) -> String {
+  if used.insert(candidate.clone()) {
+    return candidate;
+  }
+  let (stem, ext) = match candidate.strip_suffix(".md") {
+    Some(s) => (s.to_string(), ".md"),
+    None => (candidate.clone(), ""),
+  };
+  let mut n = 2;
+  loop {
+    let next = format!("{stem}-{n}{ext}");
+    if used.insert(next.clone()) {
+      return next;
+    }
+    n += 1;
+  }
+}
+
 fn zip_response(bytes: Vec<u8>, filename: &str) -> Response {
   (
     [

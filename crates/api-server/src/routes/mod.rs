@@ -34,6 +34,10 @@ pub fn api_router() -> Router<AppState> {
     .route("/auth/password", post(auth::change_password))
     .route("/export/markdown", get(documents::export_all_markdown))
     .route(
+      "/workspaces/{workspace_id}/export.zip",
+      get(documents::export_workspace_zip),
+    )
+    .route(
       "/workspaces/{workspace_id}/export/markdown",
       get(documents::export_workspace_markdown),
     )
