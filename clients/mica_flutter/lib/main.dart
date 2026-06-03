@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'editor/clipboard_copy.dart';
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
+import 'widgets/mica_logo.dart';
 import 'upload/sha256.dart';
 
 /// Dev convenience: when true, the app signs in automatically on startup so you
@@ -1659,6 +1660,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             // App header — top-left, grouped with the sidebar (no global AppBar).
             Row(
               children: [
+                const MicaLogo(size: 24),
+                const SizedBox(width: 8),
                 const Text(
                   'Mica',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
