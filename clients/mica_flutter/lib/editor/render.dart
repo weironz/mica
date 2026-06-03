@@ -554,10 +554,11 @@ class RenderDocument extends RenderBox {
   static const double _imageGap = 6;
 
   _NodeLayout _layoutImage(EditorNode node, double top, double maxWidth) {
-    final fileId = node.data['file_id'] as String?;
-    final img = fileId == null ? null : _images[fileId];
-    if (img == null && fileId != null && !_imageErrors.contains(fileId)) {
-      onRequestImage?.call(fileId);
+    // Images are keyed by file_id (uploaded) or url (external markdown image).
+    final key = (node.data['file_id'] ?? node.data['url']) as String?;
+    final img = key == null ? null : _images[key];
+    if (img == null && key != null && !_imageErrors.contains(key)) {
+      onRequestImage?.call(key);
     }
 
     final maxW = maxWidth.clamp(1.0, double.infinity);
@@ -1073,8 +1074,8 @@ class RenderDocument extends RenderBox {
     if (dst == null) return;
     final r = dst.shift(offset);
     final rr = RRect.fromRectAndRadius(r, const Radius.circular(6));
-    final fileId = _imageFileId(l);
-    final decoded = fileId == null ? null : _images[fileId];
+    final key = _imageKey(l);
+    final decoded = key == null ? null : _images[key];
     if (decoded != null) {
       canvas.save();
       canvas.clipRRect(rr);
@@ -1090,7 +1091,7 @@ class RenderDocument extends RenderBox {
     }
     // Placeholder: rounded fill + centered icon (broken on error, else image).
     canvas.drawRRect(rr, Paint()..color = EditorTheme.codeBg);
-    final isError = fileId != null && _imageErrors.contains(fileId);
+    final isError = key != null && _imageErrors.contains(key);
     final icon = isError ? Icons.broken_image_outlined : Icons.image_outlined;
     final glyph = TextPainter(
       text: TextSpan(
@@ -1157,13 +1158,13 @@ class RenderDocument extends RenderBox {
     }
   }
 
-  String? _imageFileId(_NodeLayout l) {
+  String? _imageKey(_NodeLayout l) {
     if (l.kind != 'image') return null;
     final node = _nodes.firstWhere(
       (n) => n.id == l.nodeId,
       orElse: () => EditorNode(id: '', kind: 'paragraph', text: ''),
     );
-    return node.data['file_id'] as String?;
+    return (node.data['file_id'] ?? node.data['url']) as String?;
   }
 
   void _paintSelection(Canvas canvas, Offset offset) {

@@ -454,6 +454,11 @@ class EditorController extends ChangeNotifier {
       if (node.kind == 'table') {
         return tableToMarkdown(TableData.fromBlock(node.data));
       }
+      if (node.kind == 'image') {
+        final target = (node.data['name'] ?? node.data['url'] ?? '') as String;
+        return '![${node.text}]($target)';
+      }
+      if (node.kind == 'divider') return '---';
       final len = node.text.length;
       final a = from.clamp(0, len);
       final b = to.clamp(0, len);

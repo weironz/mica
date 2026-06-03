@@ -1519,8 +1519,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// already on the canvas, so reuse them).
   void _openImageViewer(int node) {
     if (node < 0 || node >= _controller.nodes.length) return;
-    final fileId = _controller.nodes[node].data['file_id'] as String?;
-    final image = fileId == null ? null : _imageCache[fileId];
+    final data = _controller.nodes[node].data;
+    final key = (data['file_id'] ?? data['url']) as String?;
+    final image = key == null ? null : _imageCache[key];
     if (image == null) return;
     showDialog<void>(
       context: context,

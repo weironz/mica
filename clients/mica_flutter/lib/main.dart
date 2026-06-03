@@ -934,19 +934,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Resolve an image file id to a fresh signed URL and fetch its bytes (so the
-  /// editor can decode + paint it on the canvas).
-  Future<Uint8List?> _loadEditorImageBytes(String fileId) async {
+  /// Fetch an image's bytes for the canvas. The key is either an external URL
+  /// (markdown image) — fetched directly — or a file id, resolved to a fresh
+  /// signed URL first.
+  Future<Uint8List?> _loadEditorImageBytes(String key) async {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return null;
     try {
-      final urls = await _api.resolveFiles(
-        session.accessToken,
-        workspace.id,
-        [fileId],
-      );
-      final url = urls[fileId];
+      String? url;
+      if (key.startsWith('http://') || key.startsWith('https://')) {
+        url = key;
+      } else {
+        final urls = await _api.resolveFiles(
+          session.accessToken,
+          workspace.id,
+          [key],
+        );
+        url = urls[key];
+      }
       if (url == null) return null;
       final resp = await http.get(Uri.parse(url));
       if (resp.statusCode != 200) return null;

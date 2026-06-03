@@ -32,6 +32,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   final numbered = RegExp(r'^\d+\.\s+(.*)$');
   final quote = RegExp(r'^>\s?(.*)$');
   final divider = RegExp(r'^(-{3,}|\*{3,}|_{3,})$');
+  final image = RegExp(r'^!\[([^\]]*)\]\(([^)\s]+)\)$');
 
   var i = 0;
   while (i < lines.length) {
@@ -72,6 +73,19 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     // A horizontal rule (`---`, `***`, `___`) becomes a divider block.
     if (divider.hasMatch(line)) {
       result.add((kind: 'divider', text: '', data: {}));
+      i++;
+      continue;
+    }
+
+    // A standalone image: ![alt](url). The url is kept as an external source;
+    // the editor renders it and (when wired) can re-host it to avoid dead links.
+    final img = image.firstMatch(line);
+    if (img != null) {
+      result.add((
+        kind: 'image',
+        text: img.group(1)!.trim(),
+        data: {'url': img.group(2)!.trim()},
+      ));
       i++;
       continue;
     }
