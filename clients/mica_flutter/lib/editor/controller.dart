@@ -1141,6 +1141,22 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(afterIndex, 0));
   }
 
+  /// Replace an image's external `url` with our own `file_id` + `name` (after
+  /// re-hosting). Looked up by node id since indices may have shifted. No-op if
+  /// the node is gone or already has this file_id.
+  void setImageSource(String nodeId, {required String fileId, required String name}) {
+    final node = nodes.where((n) => n.id == nodeId).firstOrNull;
+    if (node == null || node.kind != 'image') return;
+    if (node.data['file_id'] == fileId) return;
+    final data = {...node.data, 'file_id': fileId, 'name': name}..remove('url');
+    node.data = data;
+    _dirty.remove(node.id);
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Set an image block's alignment (`left`/`center`/`right`).
   void setImageAlign(int index, String align) {
     if (index < 0 || index >= nodes.length) return;

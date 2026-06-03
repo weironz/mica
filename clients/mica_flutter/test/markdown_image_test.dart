@@ -35,4 +35,18 @@ void main() {
     );
     expect(c.selectionText(), contains('![cat](https://x.io/cat.png)'));
   });
+
+  test('setImageSource swaps an external url for our file_id', () {
+    final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
+    c.load([
+      EditorNode(id: 'b', kind: 'image', text: 'cat', data: {
+        'url': 'https://x.io/cat.png',
+      }),
+    ]);
+    c.setImageSource('b', fileId: 'file-123', name: 'cat.png');
+    final data = c.nodes.single.data;
+    expect(data['file_id'], 'file-123');
+    expect(data['name'], 'cat.png');
+    expect(data.containsKey('url'), isFalse);
+  });
 }

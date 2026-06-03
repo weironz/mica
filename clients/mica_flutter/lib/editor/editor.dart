@@ -257,6 +257,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (markdown.trim().isEmpty) return false;
     if (rich || markdown.contains('\n')) {
       _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
+      _rehostExternalImages();
       _syncImeFromSelection(force: true);
       return true;
     }
@@ -278,6 +279,26 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (result == null || !mounted) return;
     _controller.insertImage(fileId: result.fileId, name: result.name);
     _syncImeFromSelection(force: true);
+  }
+
+  /// Re-host any image blocks that still reference an external `url` (e.g. from
+  /// pasted/AI Markdown) into our own storage, so they render on the canvas and
+  /// can't rot. Runs in the background; each conversion repaints when done.
+  void _rehostExternalImages() {
+    final import = widget.onImportImageUrl;
+    if (import == null) return;
+    for (final node in [..._controller.nodes]) {
+      if (node.kind != 'image') continue;
+      final url = node.data['url'] as String?;
+      if (node.data['file_id'] != null || url == null || !url.startsWith('http')) {
+        continue;
+      }
+      final id = node.id;
+      import(url).then((result) {
+        if (result == null || !mounted) return;
+        _controller.setImageSource(id, fileId: result.fileId, name: result.name);
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -375,6 +396,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         !shift &&
         ('\n'.allMatches(text).length >= 2 || text.contains('\n\n'))) {
       _controller.replaceFocusedWithBlocks(markdownToBlocks(text));
+      _rehostExternalImages();
       _lastSentIme = _imeValue();
       _syncImeFromSelection(force: true);
       return;
@@ -1598,6 +1620,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
     if (markdown == null || markdown.trim().isEmpty) return;
     _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
+    _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }
 

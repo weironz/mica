@@ -554,11 +554,13 @@ class RenderDocument extends RenderBox {
   static const double _imageGap = 6;
 
   _NodeLayout _layoutImage(EditorNode node, double top, double maxWidth) {
-    // Images are keyed by file_id (uploaded) or url (external markdown image).
-    final key = (node.data['file_id'] ?? node.data['url']) as String?;
-    final img = key == null ? null : _images[key];
-    if (img == null && key != null && !_imageErrors.contains(key)) {
-      onRequestImage?.call(key);
+    // Uploaded images load by file_id (our CORS-enabled storage). External
+    // url-only images are re-hosted into file_ids by the editor, so we don't
+    // CORS-fetch them here — they show a placeholder until re-hosting completes.
+    final fileId = node.data['file_id'] as String?;
+    final img = fileId == null ? null : _images[fileId];
+    if (img == null && fileId != null && !_imageErrors.contains(fileId)) {
+      onRequestImage?.call(fileId);
     }
 
     final maxW = maxWidth.clamp(1.0, double.infinity);
