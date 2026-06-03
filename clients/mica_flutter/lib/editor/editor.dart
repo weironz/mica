@@ -96,6 +96,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   bool _caretOn = true;
   DocPosition? _dragAnchor;
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
+  int? _imageResize; // image node index whose width is being dragged
+  double? _imageResizeWidth; // last previewed width during an image resize
   OverlayEntry? _cellEntry; // active table cell editor
   VoidCallback? _cellFocusListener;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
@@ -753,6 +755,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _copyCode(copyNode);
       return;
     }
+    // Image hover toolbar (expand / align / delete).
+    final imageAction = r.imageActionAt(local);
+    if (imageAction != null) {
+      _onImageAction(imageAction.node, imageAction.action);
+      return;
+    }
     final wrapNode = r.codeWrapAt(local);
     if (wrapNode != null) {
       _controller.toggleCodeWrap(wrapNode);
@@ -1231,7 +1239,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   MouseCursor _cursorFor(RenderDocument r, Offset local) {
-    if (r.tableColBorderAt(local) != null) {
+    if (r.tableColBorderAt(local) != null || r.imageResizeAt(local) != null) {
       return SystemMouseCursors.resizeLeftRight;
     }
     final clickable = r.codeLanguageAt(local) != null ||
@@ -1242,7 +1250,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         r.tableDeleteAt(local) != null ||
         r.tableRowHandleAt(local) != null ||
         r.tableColHandleAt(local) != null ||
-        r.tableAddAt(local) != null;
+        r.tableAddAt(local) != null ||
+        r.imageActionAt(local) != null;
     return clickable ? SystemMouseCursors.click : SystemMouseCursors.text;
   }
 
@@ -1296,6 +1305,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
       return;
     }
+    // Dragging an image's right-edge handle resizes it.
+    final imageResize = r.imageResizeAt(local);
+    if (imageResize != null) {
+      _imageResize = imageResize;
+      _imageResizeWidth = r.imageWidthFor(imageResize, local.dx);
+      return;
+    }
     // Dragging the horizontal scrollbar scrolls the code, not selects text.
     final bar = r.scrollbarAt(local);
     if (bar != null) {
@@ -1330,6 +1346,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _controller.previewTableColumnWidths(resize.node, weights);
       return;
     }
+    if (_imageResize != null) {
+      final w = r.imageWidthFor(_imageResize!, local.dx);
+      _imageResizeWidth = w;
+      _controller.previewImageWidth(_imageResize!, w);
+      return;
+    }
     if (_scrollbarDrag != null) {
       r.setCodeScrollByTrackX(_scrollbarDrag!, local.dx);
       return;
@@ -1351,6 +1373,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPanEnd(DragEndDetails d) {
+    if (_imageResize != null) {
+      if (_imageResizeWidth != null) {
+        _controller.setImageWidth(_imageResize!, _imageResizeWidth!);
+      }
+      _imageResize = null;
+      _imageResizeWidth = null;
+      return;
+    }
     final resize = _colResize;
     if (resize != null) {
       // Persist the final widths once (preview was local-only).
@@ -1469,6 +1499,53 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.applySlashCommand(_slashStart, caret, opt.kind, data);
     _closeSlash();
     _syncImeFromSelection(force: true);
+  }
+
+  void _onImageAction(int node, String action) {
+    switch (action) {
+      case 'expand':
+        _openImageViewer(node);
+      case 'left':
+      case 'center':
+      case 'right':
+        _controller.setImageAlign(node, action);
+      case 'delete':
+        _controller.deleteNode(node);
+        _syncImeFromSelection(force: true);
+    }
+  }
+
+  /// Show a fullscreen, zoom/pan viewer for the image (its decoded bytes are
+  /// already on the canvas, so reuse them).
+  void _openImageViewer(int node) {
+    if (node < 0 || node >= _controller.nodes.length) return;
+    final fileId = _controller.nodes[node].data['file_id'] as String?;
+    final image = fileId == null ? null : _imageCache[fileId];
+    if (image == null) return;
+    showDialog<void>(
+      context: context,
+      barrierColor: const Color(0xCC000000),
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(24),
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              maxScale: 6,
+              child: Center(child: RawImage(image: image)),
+            ),
+            Positioned(
+              top: 0,
+              right: 0,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Pick an image file, upload it, and insert an image block at the caret.

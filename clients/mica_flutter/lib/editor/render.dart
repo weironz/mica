@@ -168,9 +168,21 @@ class _NodeLayout {
   Rect? tableDelete; // top-right delete icon
 
   // Image layout (kind == 'image'): the destination rect (local) the decoded
-  // image (or its placeholder) is painted into.
+  // image (or its placeholder) is painted into, plus hover affordances.
   Rect? imageDst;
+  Rect? imageBar; // hover toolbar background
+  List<Rect> imageButtons = const []; // toolbar buttons (see _imageActions)
+  Rect? imageResize; // right-edge resize handle
 }
+
+/// Toolbar actions for an image, in painted order.
+const List<String> _imageActions = [
+  'expand',
+  'left',
+  'center',
+  'right',
+  'delete',
+];
 
 /// One laid-out table cell.
 class _TableCell {
@@ -271,6 +283,9 @@ class RenderDocument extends RenderBox {
   int? _hoverCode;
   _CodeIcon _hoverIcon = _CodeIcon.none;
 
+  // Image hover state (toolbar + resize handle only show when hovering).
+  int? _hoverImage;
+
   // The table cell currently being edited inline (its underlying painted text is
   // hidden so it doesn't ghost behind the overlay field).
   ({int node, int row, int col})? _editingCell;
@@ -284,9 +299,16 @@ class RenderDocument extends RenderBox {
   void setHover(Offset? local) {
     int? node;
     var icon = _CodeIcon.none;
+    int? image;
     if (local != null) {
       for (var i = 0; i < _layouts.length; i++) {
         final l = _layouts[i];
+        if (l.kind == 'image') {
+          if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) {
+            image = i;
+          }
+          continue;
+        }
         if (l.kind != 'code_block' && l.kind != 'table') continue;
         if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) {
           node = i;
@@ -301,9 +323,10 @@ class RenderDocument extends RenderBox {
         }
       }
     }
-    if (node != _hoverCode || icon != _hoverIcon) {
+    if (node != _hoverCode || icon != _hoverIcon || image != _hoverImage) {
       _hoverCode = node;
       _hoverIcon = icon;
+      _hoverImage = image;
       markNeedsPaint();
     }
   }
@@ -562,6 +585,17 @@ class RenderDocument extends RenderBox {
       _ => 0.0,
     };
 
+    // Hover toolbar (top-right inside the image) + right-edge resize handle.
+    const btn = 26.0, pad = 4.0;
+    final barW = _imageActions.length * btn + pad * 2;
+    final barH = btn + pad * 2;
+    final barLeft = (left + w - barW - 6).clamp(left + 2, left + w);
+    final barTop = top + 6;
+    final buttons = [
+      for (var k = 0; k < _imageActions.length; k++)
+        Rect.fromLTWH(barLeft + pad + k * btn, barTop + pad, btn, btn),
+    ];
+
     final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
       ..kind = 'image'
       ..nodeId = node.id
@@ -570,7 +604,10 @@ class RenderDocument extends RenderBox {
       ..textTop = top
       ..textHeight = h
       ..boxHeight = h + _imageGap
-      ..imageDst = Rect.fromLTWH(left, top, w, h);
+      ..imageDst = Rect.fromLTWH(left, top, w, h)
+      ..imageBar = Rect.fromLTWH(barLeft, barTop, barW, barH)
+      ..imageButtons = buttons
+      ..imageResize = Rect.fromLTWH(left + w - 5, top + h / 2 - 18, 10, 36);
     return layout;
   }
 
@@ -695,6 +732,9 @@ class RenderDocument extends RenderBox {
     _paintSelection(canvas, offset);
     for (var i = 0; i < _layouts.length; i++) {
       _paintNode(canvas, offset, i);
+    }
+    for (var i = 0; i < _layouts.length; i++) {
+      if (_layouts[i].kind == 'image') _paintImageOverlay(canvas, offset, _layouts[i], i);
     }
     _paintScrollbars(canvas, offset);
     _paintCaret(canvas, offset);
@@ -1069,6 +1109,52 @@ class RenderDocument extends RenderBox {
       r.center - Offset(glyph.width / 2, glyph.height / 2),
     );
     glyph.dispose();
+  }
+
+  void _paintImageOverlay(Canvas canvas, Offset offset, _NodeLayout l, int i) {
+    if (_hoverImage != i) return;
+    final bar = l.imageBar;
+    final resize = l.imageResize;
+    if (resize != null) {
+      final rr = resize.shift(offset).deflate(2);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rr, const Radius.circular(3)),
+        Paint()..color = const Color(0xCC1E293B),
+      );
+    }
+    if (bar == null) return;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bar.shift(offset), const Radius.circular(7)),
+      Paint()..color = const Color(0xF21E293B),
+    );
+    const icons = {
+      'expand': Icons.open_in_full,
+      'left': Icons.format_align_left,
+      'center': Icons.format_align_center,
+      'right': Icons.format_align_right,
+      'delete': Icons.delete_outline,
+    };
+    for (var k = 0; k < l.imageButtons.length; k++) {
+      final action = _imageActions[k];
+      final rect = l.imageButtons[k].shift(offset);
+      final color = action == 'delete'
+          ? const Color(0xFFFCA5A5)
+          : const Color(0xFFE2E8F0);
+      final glyph = TextPainter(
+        text: TextSpan(
+          text: String.fromCharCode(icons[action]!.codePoint),
+          style: TextStyle(
+            fontFamily: icons[action]!.fontFamily,
+            package: icons[action]!.fontPackage,
+            fontSize: 16,
+            color: color,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      glyph.paint(canvas, rect.center - Offset(glyph.width / 2, glyph.height / 2));
+      glyph.dispose();
+    }
   }
 
   String? _imageFileId(_NodeLayout l) {
@@ -1456,6 +1542,45 @@ class RenderDocument extends RenderBox {
     final l = _layouts[pos.node];
     final lb = l.painter.getLineBoundary(TextPosition(offset: pos.offset));
     return DocPosition(pos.node, lb.end);
+  }
+
+  /// Node index of the image whose painted rect contains [local], or null.
+  int? imageAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      if (l.kind == 'image' && (l.imageDst?.contains(local) ?? false)) return i;
+    }
+    return null;
+  }
+
+  /// Toolbar action under [local] for the hovered image, or null. Gated on hover
+  /// so the (invisible) bar can't be triggered when not shown.
+  ({int node, String action})? imageActionAt(Offset local) {
+    final i = _hoverImage;
+    if (i == null || i >= _layouts.length) return null;
+    final l = _layouts[i];
+    for (var k = 0; k < l.imageButtons.length; k++) {
+      if (l.imageButtons[k].contains(local)) {
+        return (node: i, action: _imageActions[k]);
+      }
+    }
+    return null;
+  }
+
+  /// Image node whose right-edge resize handle is under [local] (hover-gated).
+  int? imageResizeAt(Offset local) {
+    final i = _hoverImage;
+    if (i == null || i >= _layouts.length) return null;
+    return (_layouts[i].imageResize?.contains(local) ?? false) ? i : null;
+  }
+
+  /// Width the image at [index] would take if its right edge were dragged to
+  /// local x [dx] (clamped to a sane range within the content width).
+  double imageWidthFor(int index, double dx) {
+    if (index < 0 || index >= _layouts.length) return 0;
+    final l = _layouts[index];
+    final left = l.contentLeft;
+    return (dx - left).clamp(40.0, size.width);
   }
 
   /// Node index whose checkbox contains [local], or null.

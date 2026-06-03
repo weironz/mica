@@ -1136,6 +1136,39 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(afterIndex, 0));
   }
 
+  /// Set an image block's alignment (`left`/`center`/`right`).
+  void setImageAlign(int index, String align) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'image') return;
+    node.data = {...node.data, 'align': align};
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
+  /// Live preview of an image's display width during a drag (no op sent).
+  void previewImageWidth(int index, double width) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'image') return;
+    node.data = {...node.data, 'width': width};
+    notifyListeners();
+  }
+
+  /// Commit an image's display width.
+  void setImageWidth(int index, double width) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'image') return;
+    node.data = {...node.data, 'width': width};
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Append an empty paragraph after the last node and move the caret into it.
   /// Used as the downward escape from a trailing code block.
   void addParagraphAfterLast() {
