@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -27,6 +28,9 @@ const String kDevPassword = String.fromEnvironment(
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Suppress the browser's native right-click menu so the editor can show its
+  // own (e.g. image actions) on web.
+  if (kIsWeb) BrowserContextMenu.disableContextMenu();
   _warmUpFonts();
   runApp(const MicaApp());
 }

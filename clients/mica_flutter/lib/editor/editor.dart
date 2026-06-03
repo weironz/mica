@@ -10,6 +10,7 @@ import 'controller.dart';
 import 'highlight.dart';
 import 'markdown.dart';
 import 'marks.dart';
+import 'image_actions.dart';
 import 'model.dart';
 import 'open_url.dart';
 import 'pick_image.dart';
@@ -1547,6 +1548,116 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _syncImeFromSelection(force: true);
   }
 
+  /// Right-click on an image → context menu (copy / download / delete).
+  void _onSecondaryTapDown(TapDownDetails d) {
+    if (!widget.canEdit) return;
+    final r = _render;
+    if (r == null) return;
+    final node = r.imageAt(r.globalToLocal(d.globalPosition));
+    if (node == null) return;
+    _focus.requestFocus();
+    _controller.collapseTo(DocPosition(node, 0)); // select the block
+    _showImageMenu(node, d.globalPosition);
+  }
+
+  Future<void> _showImageMenu(int node, Offset globalPosition) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        overlay.size.width - globalPosition.dx,
+        overlay.size.height - globalPosition.dy,
+      ),
+      items: const [
+        PopupMenuItem(value: 'copy', child: Text('Copy image')),
+        PopupMenuItem(value: 'download', child: Text('Download')),
+        PopupMenuItem(value: 'delete', child: Text('Delete')),
+      ],
+    );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'copy':
+        await _copyImage(node);
+      case 'download':
+        await _downloadImage(node);
+      case 'delete':
+        _controller.deleteNode(node);
+        _syncImeFromSelection(force: true);
+    }
+  }
+
+  /// Bytes + filename for an image node (re-fetched via the host loader).
+  Future<({Uint8List bytes, String name, String mime})?> _imageData(int node) async {
+    if (node < 0 || node >= _controller.nodes.length) return null;
+    final data = _controller.nodes[node].data;
+    final key = (data['file_id'] ?? data['url']) as String?;
+    if (key == null) return null;
+    final bytes = await widget.onLoadImageBytes?.call(key);
+    if (bytes == null) return null;
+    final name = (data['name'] as String?)?.trim();
+    final fallback = 'image.${_extFromName(name) ?? 'png'}';
+    return (
+      bytes: bytes,
+      name: (name == null || name.isEmpty) ? fallback : name,
+      mime: _mimeFromName(name),
+    );
+  }
+
+  Future<void> _copyImage(int node) async {
+    final data = await _imageData(node);
+    if (data == null || !mounted) {
+      _toast('Could not load the image');
+      return;
+    }
+    final ok = await copyImageToClipboard(data.bytes, data.mime);
+    if (!mounted) return;
+    _toast(ok ? 'Image copied' : 'Copy needs HTTPS — use Download instead');
+  }
+
+  Future<void> _downloadImage(int node) async {
+    final data = await _imageData(node);
+    if (data == null || !mounted) {
+      _toast('Could not load the image');
+      return;
+    }
+    downloadImage(data.bytes, data.name, data.mime);
+  }
+
+  void _toast(String message) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  String? _extFromName(String? name) {
+    if (name == null) return null;
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || dot == name.length - 1) return null;
+    return name.substring(dot + 1).toLowerCase();
+  }
+
+  String _mimeFromName(String? name) {
+    switch (_extFromName(name)) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'svg':
+        return 'image/svg+xml';
+      case 'bmp':
+        return 'image/bmp';
+      default:
+        return 'image/png';
+    }
+  }
+
   void _onImageAction(int node, String action) {
     switch (action) {
       case 'expand':
@@ -1718,6 +1829,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: _onTapDown,
+            onSecondaryTapDown: _onSecondaryTapDown,
             onPanStart: _onPanStart,
             onPanUpdate: _onPanUpdate,
             onPanEnd: _onPanEnd,
