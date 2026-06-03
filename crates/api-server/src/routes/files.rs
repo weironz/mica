@@ -117,7 +117,7 @@ pub async fn complete(
     workspace_id,
     user_id,
     &payload.object_key,
-    &sanitize_file_name(&payload.file_name),
+    &base_name(&payload.file_name),
     &payload.mime_type,
     payload.byte_size,
   )
@@ -245,7 +245,7 @@ pub async fn import_url(
     )));
   }
 
-  let original_name = sanitize_file_name(&url_file_name(url, ext.as_deref()));
+  let original_name = base_name(&url_file_name(url, ext.as_deref()));
   let file = store::insert_file(
     &state.db,
     workspace_id,
@@ -411,26 +411,16 @@ fn ensure_key_in_workspace(workspace_id: Uuid, object_key: &str) -> ApiResult<()
   Ok(())
 }
 
-/// Reduce a client file name to a safe basename: strip any path and keep only
-/// alphanumerics plus `-`, `_`, and `.`.
-fn sanitize_file_name(name: &str) -> String {
-  let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
-  let cleaned: String = base
-    .chars()
-    .map(|ch| {
-      if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-        ch
-      } else {
-        '_'
-      }
-    })
-    .collect();
-  let trimmed = cleaned.trim_matches('.').to_string();
-
-  if trimmed.is_empty() {
+/// The basename of a client/URL file name (strip any directory components),
+/// preserving the original characters — spaces, parentheses, CJK, etc. This is
+/// display/export metadata (`original_name`), NOT a storage path: object keys
+/// are content-addressed hashes, so the raw name is safe to keep.
+fn base_name(name: &str) -> String {
+  let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+  if base.is_empty() {
     "file".to_string()
   } else {
-    trimmed
+    base.to_string()
   }
 }
 
@@ -458,10 +448,12 @@ mod tests {
   }
 
   #[test]
-  fn sanitize_strips_path_and_unsafe_chars() {
-    assert_eq!(sanitize_file_name("../../etc/passwd"), "passwd");
-    assert_eq!(sanitize_file_name("my file (1).PNG"), "my_file__1_.PNG");
-    assert_eq!(sanitize_file_name("..."), "file");
+  fn base_name_strips_path_but_preserves_characters() {
+    assert_eq!(base_name("../../etc/passwd"), "passwd");
+    // Spaces, parentheses, and unicode (CJK) are kept verbatim.
+    assert_eq!(base_name("my file (1).PNG"), "my file (1).PNG");
+    assert_eq!(base_name("photos/我的照片.png"), "我的照片.png");
+    assert_eq!(base_name("  "), "file");
   }
 
   #[test]
