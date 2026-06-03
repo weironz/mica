@@ -572,6 +572,30 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return KeyEventResult.handled;
     }
 
+    // When a whole atomic block (image/divider/table) is the caret stop: delete
+    // removes it; arrows step off it to the adjacent node.
+    final atomic = sel.isCollapsed && sel.focus.node < _controller.nodes.length
+        ? _controller.nodes[sel.focus.node]
+        : null;
+    if (atomic != null && atomic.isAtomic) {
+      if (key == LogicalKeyboardKey.backspace ||
+          key == LogicalKeyboardKey.delete) {
+        _controller.deleteNode(sel.focus.node);
+        _syncImeFromSelection(force: true);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowUp ||
+          key == LogicalKeyboardKey.arrowLeft) {
+        _moveVertical(-1, shift);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowDown ||
+          key == LogicalKeyboardKey.arrowRight) {
+        _moveVertical(1, shift);
+        return KeyEventResult.handled;
+      }
+    }
+
     // A ranged selection (possibly across blocks) is deleted as a unit — the
     // OS input only knows the focused node, so we must do it ourselves.
     if ((key == LogicalKeyboardKey.backspace ||

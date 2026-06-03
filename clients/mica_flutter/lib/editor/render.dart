@@ -739,8 +739,30 @@ class RenderDocument extends RenderBox {
     for (var i = 0; i < _layouts.length; i++) {
       if (_layouts[i].kind == 'image') _paintImageOverlay(canvas, offset, _layouts[i], i);
     }
+    _paintAtomicSelection(canvas, offset);
     _paintScrollbars(canvas, offset);
     _paintCaret(canvas, offset);
+  }
+
+  /// When the caret rests on an atomic node (image/divider/table) it has no
+  /// inline caret; show the block as selected instead.
+  void _paintAtomicSelection(Canvas canvas, Offset offset) {
+    final sel = _selection;
+    if (sel == null || !sel.isCollapsed || !_isAtomicNode(sel.focus.node)) return;
+    if (sel.focus.node >= _layouts.length) return;
+    final l = _layouts[sel.focus.node];
+    final box = (l.kind == 'image' && l.imageDst != null)
+        ? l.imageDst!.shift(offset)
+        : Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight);
+    final rr = RRect.fromRectAndRadius(box.inflate(2), const Radius.circular(6));
+    canvas.drawRRect(rr, Paint()..color = EditorTheme.selection);
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = EditorTheme.caret
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
   }
 
   void _paintBlockBackgrounds(Canvas canvas, Offset offset) {
@@ -1506,31 +1528,46 @@ class RenderDocument extends RenderBox {
   /// last line. The explicit step is what lets the caret cross the larger gap
   /// above a heading instead of getting trapped on it.
   DocPosition? positionAbove(DocPosition pos, double? goalX) {
+    // An atomic node (image/divider/table) is a whole-block caret stop; from it,
+    // step straight to the node above.
+    if (_isAtomicNode(pos.node)) {
+      return _stepToNode(pos.node - 1, goalX, fromBottom: true) ?? pos;
+    }
     final rect = caretRectFor(pos);
     if (rect == null) return null;
     final x = goalX ?? rect.left;
     final probe = positionAt(Offset(x, rect.top - rect.height * 0.5));
-    if (probe != pos) return probe;
-    if (pos.node > 0) {
-      final prev = _layouts[pos.node - 1];
-      return positionAt(Offset(x, prev.textTop + prev.textHeight - 1));
-    }
-    return const DocPosition(0, 0);
+    if (probe != pos && probe.node == pos.node) return probe; // moved up a line
+    return _stepToNode(pos.node - 1, x, fromBottom: true) ?? const DocPosition(0, 0);
   }
 
   /// Position one visual line below [pos], tracking [goalX] (a local x).
   DocPosition? positionBelow(DocPosition pos, double? goalX) {
+    if (_isAtomicNode(pos.node)) {
+      return _stepToNode(pos.node + 1, goalX, fromBottom: false) ?? pos;
+    }
     final rect = caretRectFor(pos);
     if (rect == null) return null;
     final x = goalX ?? rect.left;
     final probe = positionAt(Offset(x, rect.bottom + rect.height * 0.5));
-    if (probe != pos) return probe;
-    if (pos.node < _layouts.length - 1) {
-      final next = _layouts[pos.node + 1];
-      return positionAt(Offset(x, next.textTop + 1));
-    }
+    if (probe != pos && probe.node == pos.node) return probe; // moved down a line
     final last = _layouts.length - 1;
-    return DocPosition(last, _nodes[last].text.length);
+    return _stepToNode(pos.node + 1, x, fromBottom: false) ??
+        DocPosition(last, _nodes[last].text.length);
+  }
+
+  bool _isAtomicNode(int index) =>
+      index >= 0 && index < _nodes.length && _nodes[index].isAtomic;
+
+  /// Land the caret on node [index] when crossing a node boundary: an atomic
+  /// node becomes a whole-block stop (offset 0); a text node gets the line
+  /// nearest goal-x ([fromBottom] picks its last vs first line).
+  DocPosition? _stepToNode(int index, double? x, {required bool fromBottom}) {
+    if (index < 0 || index >= _layouts.length) return null;
+    if (_isAtomicNode(index)) return DocPosition(index, 0);
+    final l = _layouts[index];
+    final y = fromBottom ? l.textTop + l.textHeight - 1 : l.textTop + 1;
+    return positionAt(Offset(x ?? 0, y));
   }
 
   /// Start of the visual line containing [pos].
