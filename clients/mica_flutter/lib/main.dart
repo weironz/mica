@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'editor/editor.dart';
+
 /// Dev convenience: when true, the app signs in automatically on startup so you
 /// don't have to log in on every reload. Turn it off for a real login screen:
 /// `flutter run --dart-define=MICA_DEV_AUTOLOGIN=false`.
@@ -23,7 +25,42 @@ const String kDevPassword = String.fromEnvironment(
 );
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  _warmUpFonts();
   runApp(const MicaApp());
+}
+
+/// Flutter Web doesn't bundle CJK fonts — the engine downloads a Noto fallback
+/// on first use, which makes the custom-painted editor briefly show ".notdef"
+/// boxes. Kick that download off at startup (during login/loading) so the font
+/// is cached before any document renders.
+void _warmUpFonts() {
+  const samples = [
+    '中文字体预热示例 ABCabc 0123 ，。！',
+    '繁體字預熱 測試',
+  ];
+  for (final text in samples) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: const TextStyle(fontSize: 16)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    painter.dispose();
+  }
+  // Also warm the icon font used by the editor's painted toolbars.
+  for (final icon in [Icons.content_copy, Icons.wrap_text, Icons.add]) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: 16,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    painter.dispose();
+  }
 }
 
 class MicaApp extends StatelessWidget {
@@ -41,6 +78,9 @@ class MicaApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: const Color(0xFFF8FAFC),
         useMaterial3: true,
+        // Bundled CJK fallback so Chinese text never waits on an on-demand
+        // web-font download (which flashed ".notdef" boxes).
+        fontFamilyFallback: const ['CJKFallback'],
       ),
       home: const WorkspaceShell(),
     );
@@ -67,6 +107,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String? _selectedMarkdown;
   String? _message;
   bool _isBusy = false;
+
+  // Editor appearance (in-memory; applied live to the editor).
+  EditorAppearance _appearance = const EditorAppearance();
+  double _pageWidth = 1160;
 
   DocumentSyncClient? _sync;
   List<PresenceUser> _presence = const [];
@@ -299,6 +343,31 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  Future<void> _deleteWorkspace(Workspace workspace) {
+    return _run(() async {
+      final session = _requireSession();
+      await _api.deleteWorkspace(session.accessToken, workspace.id);
+      final remaining = _workspaces
+          .where((item) => item.id != workspace.id)
+          .toList();
+      final wasSelected = _selectedWorkspace?.id == workspace.id;
+      setState(() {
+        _workspaces = remaining;
+        _viewsByWorkspace = {..._viewsByWorkspace}..remove(workspace.id);
+        if (wasSelected) {
+          _selectedWorkspace = remaining.isNotEmpty ? remaining.first : null;
+          _selectedView = null;
+          _selectedBootstrap = null;
+          _selectedMarkdown = null;
+        }
+      });
+      if (wasSelected && _selectedWorkspace != null) {
+        await _loadSelectedWorkspaceMembers();
+        await _loadSelectedWorkspaceViews();
+      }
+    });
+  }
+
   Future<void> _selectWorkspace(Workspace workspace) {
     return _run(() async {
       setState(() {
@@ -343,6 +412,265 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _createChildDocument(DocumentView parent, String name) {
     return _createDocument(name, parentViewId: parent.id);
+  }
+
+  /// Persist a new sibling order: assign evenly spaced, zero-padded positions to
+  /// [orderedSiblings] (all sharing [parentViewId]) and push the ones that
+  /// changed. Ordering is per-parent, so renumbering one group is self-contained.
+  Future<void> _reorderViews(
+    String? parentViewId,
+    List<DocumentView> orderedSiblings,
+  ) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      String pad(int n) => n.toString().padLeft(10, '0');
+
+      final moved = <DocumentView>[];
+      for (var i = 0; i < orderedSiblings.length; i++) {
+        final desired = pad((i + 1) * 10);
+        final view = orderedSiblings[i];
+        if (view.position != desired || view.parentViewId != parentViewId) {
+          moved.add(
+            await _api.moveView(
+              session.accessToken,
+              workspace.id,
+              view.id,
+              parentViewId: parentViewId,
+              position: desired,
+            ),
+          );
+        }
+      }
+      if (moved.isEmpty) {
+        return;
+      }
+      setState(() {
+        final views = [
+          ...?_viewsByWorkspace[workspace.id],
+        ];
+        for (final m in moved) {
+          final idx = views.indexWhere((v) => v.id == m.id);
+          if (idx >= 0) {
+            views[idx] = m;
+          }
+        }
+        _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+      });
+    });
+  }
+
+  Future<List<DocumentView>> _loadTrash() async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    return _api.listTrash(session.accessToken, workspace.id);
+  }
+
+  Future<void> _restoreView(DocumentView view) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final views = await _api.restoreView(
+        session.accessToken,
+        workspace.id,
+        view.id,
+      );
+      setState(() {
+        _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+      });
+    });
+  }
+
+  Future<void> _purgeView(DocumentView view) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      await _api.purgeView(session.accessToken, workspace.id, view.id);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI
+  // ---------------------------------------------------------------------------
+
+  Stream<String> _aiStream(String prompt, {String? system}) {
+    final session = _session;
+    if (session == null) {
+      return Stream<String>.error(const ApiException('Not signed in.'));
+    }
+    return _api.aiStream(session.accessToken, prompt, system: system);
+  }
+
+  Future<String> _exportPageMarkdown() async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    final bootstrap = _selectedBootstrap;
+    if (bootstrap == null) {
+      throw const ApiException('Open a page first.');
+    }
+    return _api.exportMarkdown(
+      session.accessToken,
+      workspace.id,
+      bootstrap.document.id,
+    );
+  }
+
+  Future<String> _exportWorkspaceMarkdown() async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    return _api.exportWorkspaceMarkdown(session.accessToken, workspace.id);
+  }
+
+  Future<String> _exportAllMarkdown() async {
+    final session = _requireSession();
+    return _api.exportAllMarkdown(session.accessToken);
+  }
+
+  Future<List<SearchResult>> _searchWorkspace(String query) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null) return const [];
+    return _api.searchWorkspace(session.accessToken, workspace.id, query);
+  }
+
+  Future<void> _openViewById(String viewId) async {
+    final workspace = _selectedWorkspace;
+    if (workspace == null) return;
+    final views = _viewsByWorkspace[workspace.id] ?? const [];
+    final view = views.where((v) => v.id == viewId).firstOrNull;
+    if (view != null) {
+      await _selectView(view);
+    }
+  }
+
+  Future<void> _updateProfile(String displayName) async {
+    final session = _requireSession();
+    final user = await _api.updateMe(session.accessToken, displayName);
+    if (mounted) {
+      setState(() {
+        _session = AuthSession(accessToken: session.accessToken, user: user);
+      });
+    }
+  }
+
+  Future<void> _changePassword(String current, String next) async {
+    final session = _requireSession();
+    await _api.changePassword(session.accessToken, current, next);
+  }
+
+  Future<Map<String, dynamic>> _loadAiSettings() async {
+    final session = _requireSession();
+    return _api.getAiSettings(session.accessToken);
+  }
+
+  Future<void> _saveAiSettings({
+    required String provider,
+    required String baseUrl,
+    required String model,
+    String? apiKey,
+  }) async {
+    final session = _requireSession();
+    await _api.updateAiSettings(
+      session.accessToken,
+      provider: provider,
+      baseUrl: baseUrl,
+      model: model,
+      apiKey: apiKey,
+    );
+  }
+
+  String _titleFromMarkdown(String markdown, String fallback) {
+    for (final line in markdown.split('\n')) {
+      final trimmed = line.trim();
+      final heading = RegExp(r'^#{1,6}\s+(.*)$').firstMatch(trimmed);
+      if (heading != null && heading.group(1)!.trim().isNotEmpty) {
+        return heading.group(1)!.trim();
+      }
+      if (trimmed.isNotEmpty) {
+        return trimmed.length > 60 ? trimmed.substring(0, 60) : trimmed;
+      }
+    }
+    return fallback;
+  }
+
+  Future<void> _aiNewPageFromMarkdown(String markdown) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final title = _titleFromMarkdown(markdown, 'Untitled');
+      final bootstrap = await _api.importMarkdown(
+        session.accessToken,
+        workspace.id,
+        title,
+        markdown,
+      );
+      setState(() {
+        final views = _viewsByWorkspace[workspace.id] ?? const [];
+        _viewsByWorkspace = {
+          ..._viewsByWorkspace,
+          workspace.id: [...views, bootstrap.view],
+        };
+        _selectedView = bootstrap.view;
+        _selectedBootstrap = bootstrap;
+        _selectedMarkdown = null;
+      });
+    });
+  }
+
+  Future<void> _aiCurrentFromMarkdown(String markdown) {
+    return _run(() async {
+      final bootstrap = _selectedBootstrap;
+      if (bootstrap == null) {
+        throw const ApiException('Open a page first.');
+      }
+      final specs = markdownToBlocks(markdown);
+      final root = bootstrap.document.rootBlockId;
+      var index = bootstrap.childBlocks.length;
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      final ops = <Map<String, dynamic>>[];
+      for (var i = 0; i < specs.length; i++) {
+        ops.add({
+          'type': 'insert_block',
+          'parent_id': root,
+          'index': index,
+          'block': {
+            'id': 'block_${stamp}_$i',
+            'type': specs[i].kind,
+            'text': specs[i].text,
+            'data': specs[i].data,
+            'children': <String>[],
+          },
+        });
+        index++;
+      }
+      await _applyEditorOperations(ops);
+    });
+  }
+
+  Future<void> _aiNewWorkspaceFromMarkdown(String markdown) {
+    return _run(() async {
+      final session = _requireSession();
+      final title = _titleFromMarkdown(markdown, 'AI workspace');
+      final workspace = await _api.createWorkspace(session.accessToken, title);
+      final bootstrap = await _api.importMarkdown(
+        session.accessToken,
+        workspace.id,
+        title,
+        markdown,
+      );
+      setState(() {
+        _workspaces = [..._workspaces, workspace];
+        _selectedWorkspace = workspace;
+        _viewsByWorkspace = {
+          ..._viewsByWorkspace,
+          workspace.id: [bootstrap.view],
+        };
+        _selectedView = bootstrap.view;
+        _selectedBootstrap = bootstrap;
+        _selectedMarkdown = null;
+      });
+      await _loadSelectedWorkspaceMembers();
+    });
   }
 
   Future<void> _selectView(DocumentView view) {
@@ -776,8 +1104,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onSelectWorkspace: _selectWorkspace,
                 onCreateWorkspace: _createWorkspace,
                 onRenameWorkspace: _renameWorkspace,
+                onDeleteWorkspace: _deleteWorkspace,
                 onCreateDocument: _createDocument,
                 onCreateChildDocument: _createChildDocument,
+                onReorderViews: _reorderViews,
+                onLoadTrash: _loadTrash,
+                onRestoreView: _restoreView,
+                onPurgeView: _purgeView,
                 onSelectView: _selectView,
                 onRenameView: _renameView,
                 onDeleteView: _deleteView,
@@ -787,6 +1120,31 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onDeleteBlock: _deleteBlock,
                 onMoveBlock: _moveBlock,
                 onApplyOperations: _applyEditorOperations,
+                onAiStream: _aiStream,
+                onAiNewPage: _aiNewPageFromMarkdown,
+                onAiCurrentPage: _selectedBootstrap == null
+                    ? null
+                    : _aiCurrentFromMarkdown,
+                onAiNewWorkspace: _aiNewWorkspaceFromMarkdown,
+                onLoadAiSettings: _loadAiSettings,
+                onSaveAiSettings: _saveAiSettings,
+                userName: _session?.user.displayName ?? '',
+                userEmail: _session?.user.email ?? '',
+                onUpdateProfile: _updateProfile,
+                onChangePassword: _changePassword,
+                appearance: _appearance,
+                pageWidth: _pageWidth,
+                onAppearanceChanged: (appearance, pageWidth) {
+                  setState(() {
+                    _appearance = appearance;
+                    _pageWidth = pageWidth;
+                  });
+                },
+                onSearch: _searchWorkspace,
+                onOpenSearchResult: _openViewById,
+                onExportPageMarkdown: _exportPageMarkdown,
+                onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
+                onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
                 onAddMember: _addWorkspaceMember,
                 onUpdateMember: _updateWorkspaceMember,
@@ -983,8 +1341,13 @@ class WorkspaceView extends StatefulWidget {
     required this.onSelectWorkspace,
     required this.onCreateWorkspace,
     required this.onRenameWorkspace,
+    required this.onDeleteWorkspace,
     required this.onCreateDocument,
     required this.onCreateChildDocument,
+    required this.onReorderViews,
+    required this.onLoadTrash,
+    required this.onRestoreView,
+    required this.onPurgeView,
     required this.onSelectView,
     required this.onRenameView,
     required this.onDeleteView,
@@ -994,6 +1357,24 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteBlock,
     required this.onMoveBlock,
     required this.onApplyOperations,
+    required this.onAiStream,
+    required this.onAiNewPage,
+    required this.onAiCurrentPage,
+    required this.onAiNewWorkspace,
+    required this.onLoadAiSettings,
+    required this.onSaveAiSettings,
+    required this.userName,
+    required this.userEmail,
+    required this.onUpdateProfile,
+    required this.onChangePassword,
+    required this.appearance,
+    required this.pageWidth,
+    required this.onAppearanceChanged,
+    required this.onSearch,
+    required this.onOpenSearchResult,
+    required this.onExportPageMarkdown,
+    required this.onExportWorkspaceMarkdown,
+    required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
     required this.onUpdateMember,
@@ -1015,9 +1396,15 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String name) onCreateWorkspace;
   final Future<void> Function(Workspace workspace, String name)
   onRenameWorkspace;
+  final Future<void> Function(Workspace workspace) onDeleteWorkspace;
   final Future<void> Function(String name) onCreateDocument;
   final Future<void> Function(DocumentView parent, String name)
   onCreateChildDocument;
+  final Future<void> Function(String? parentViewId, List<DocumentView> ordered)
+  onReorderViews;
+  final Future<List<DocumentView>> Function() onLoadTrash;
+  final Future<void> Function(DocumentView view) onRestoreView;
+  final Future<void> Function(DocumentView view) onPurgeView;
   final Future<void> Function(DocumentView view) onSelectView;
   final Future<void> Function(DocumentView view, String name) onRenameView;
   final Future<void> Function(DocumentView view) onDeleteView;
@@ -1033,6 +1420,31 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(DocumentBlock block, int targetIndex) onMoveBlock;
   final Future<void> Function(List<Map<String, dynamic>> operations)
   onApplyOperations;
+  final Stream<String> Function(String prompt, {String? system}) onAiStream;
+  final Future<void> Function(String markdown) onAiNewPage;
+  final Future<void> Function(String markdown)? onAiCurrentPage;
+  final Future<void> Function(String markdown) onAiNewWorkspace;
+  final Future<Map<String, dynamic>> Function() onLoadAiSettings;
+  final Future<void> Function({
+    required String provider,
+    required String baseUrl,
+    required String model,
+    String? apiKey,
+  })
+  onSaveAiSettings;
+  final String userName;
+  final String userEmail;
+  final Future<void> Function(String displayName) onUpdateProfile;
+  final Future<void> Function(String current, String next) onChangePassword;
+  final EditorAppearance appearance;
+  final double pageWidth;
+  final void Function(EditorAppearance appearance, double pageWidth)
+  onAppearanceChanged;
+  final Future<List<SearchResult>> Function(String query) onSearch;
+  final Future<void> Function(String viewId) onOpenSearchResult;
+  final Future<String> Function() onExportPageMarkdown;
+  final Future<String> Function() onExportWorkspaceMarkdown;
+  final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
   final Future<void> Function(WorkspaceMember member, WorkspaceRole role)
@@ -1049,6 +1461,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final _pageTitle = TextEditingController();
   Timer? _pageTitleSaveTimer;
   final Set<String> _collapsedViewIds = {};
+  // True only while a page is being dragged in the tree. The drop zones overlay
+  // each row, so they are mounted only during a drag — otherwise they would
+  // intercept ordinary taps on the page rows.
+  bool _draggingTree = false;
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = true;
 
@@ -1111,62 +1527,53 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: _openAiDialog,
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: const Text('Ask AI'),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                PopupMenuButton<String>(
+                  tooltip: 'Export',
+                  icon: const Icon(Icons.download_outlined),
+                  onSelected: _onExport,
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'page',
+                      child: Text('Export current page'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'workspace',
+                      child: Text('Export workspace'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'all',
+                      child: Text('Export all workspaces'),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  tooltip: 'Settings',
+                  onPressed: _openSettings,
+                  icon: const Icon(Icons.settings_outlined),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
             Text('Workspace', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 10),
-            if (widget.workspaces.isEmpty)
-              const EmptyState(
-                icon: Icons.workspaces,
-                title: 'No workspaces',
-                detail: 'Create one below.',
-              )
-            else
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      isExpanded: true,
-                      initialValue: widget.selectedWorkspace?.id,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        prefixIcon: Icon(Icons.workspaces_outline, size: 20),
-                      ),
-                      items: widget.workspaces
-                          .map(
-                            (workspace) => DropdownMenuItem(
-                              value: workspace.id,
-                              child: Text(
-                                workspace.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (id) {
-                        if (id == null) {
-                          return;
-                        }
-                        final workspace = widget.workspaces
-                            .where((item) => item.id == id)
-                            .firstOrNull;
-                        if (workspace != null &&
-                            workspace.id != widget.selectedWorkspace?.id) {
-                          widget.onSelectWorkspace(workspace);
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filledTonal(
-                    tooltip: 'New workspace',
-                    onPressed: _promptCreateWorkspace,
-                    icon: const Icon(Icons.add),
-                  ),
-                ],
-              ),
+            _WorkspaceSelector(
+              workspaces: widget.workspaces,
+              selected: widget.selectedWorkspace,
+              onSelect: widget.onSelectWorkspace,
+              onRename: _promptRenameWorkspace,
+              onDelete: _confirmDeleteWorkspace,
+              onCreate: _promptCreateWorkspace,
+            ),
             if (widget.message != null) ...[
               const SizedBox(height: 12),
               ErrorBanner(widget.message!),
@@ -1178,7 +1585,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 const SizedBox(width: 8),
                 Text('Pages', style: Theme.of(context).textTheme.titleMedium),
                 const Spacer(),
-                if (canEdit)
+                IconButton(
+                  tooltip: 'Search',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.selectedWorkspace == null
+                      ? null
+                      : _openSearch,
+                  icon: const Icon(Icons.search),
+                ),
+                if (canEdit) ...[
+                  IconButton(
+                    tooltip: 'Recycle bin',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _openRecycleBin,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
                   IconButton(
                     tooltip: 'New page',
                     visualDensity: VisualDensity.compact,
@@ -1187,6 +1608,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     },
                     icon: const Icon(Icons.note_add_outlined),
                   ),
+                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -1215,27 +1637,179 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
 
     return ListView(
-      children: _visibleDocumentTree()
-          .map(
-            (item) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: DocumentListItem(
-                view: item.view,
-                depth: item.depth,
-                hasChildren: item.hasChildren,
-                isCollapsed: _collapsedViewIds.contains(item.view.id),
-                isSelected: item.view.id == widget.selectedView?.id,
-                canEdit: canEdit,
-                onToggle: () => _toggleViewCollapse(item.view),
-                onPressed: () => widget.onSelectView(item.view),
-                onCreateChild: () => _promptCreateChildDocument(item.view),
-                onRename: () => _promptRenameDocument(item.view),
-                onDelete: () => _confirmDeleteDocument(item.view),
-              ),
-            ),
-          )
-          .toList(),
+      children: _visibleDocumentTree().map((item) {
+        final row = DocumentListItem(
+          view: item.view,
+          depth: item.depth,
+          hasChildren: item.hasChildren,
+          isCollapsed: _collapsedViewIds.contains(item.view.id),
+          isSelected: item.view.id == widget.selectedView?.id,
+          canEdit: canEdit,
+          onToggle: () => _toggleViewCollapse(item.view),
+          onPressed: () => widget.onSelectView(item.view),
+          onCreateChild: () {
+            setState(() => _collapsedViewIds.remove(item.view.id));
+            widget.onCreateChildDocument(item.view, 'Untitled');
+          },
+          onRename: () => _promptRenameDocument(item.view),
+          onDelete: () => widget.onDeleteView(item.view),
+        );
+        if (!canEdit) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: row,
+          );
+        }
+        return _draggableTreeRow(item.view, row);
+      }).toList(),
     );
+  }
+
+  /// Wrap a page row so it can be dragged to reorder among its siblings (its
+  /// subtree follows, since children render under their parent). Long-press to
+  /// start dragging; the top/bottom half of each sibling row is a drop slot
+  /// (insert before / after).
+  Widget _draggableTreeRow(DocumentView view, Widget row) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: LongPressDraggable<DocumentView>(
+        data: view,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        onDragStarted: () => setState(() => _draggingTree = true),
+        onDragEnd: (_) => setState(() => _draggingTree = false),
+        onDraggableCanceled: (_, _) => setState(() => _draggingTree = false),
+        onDragCompleted: () => setState(() => _draggingTree = false),
+        feedback: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            constraints: const BoxConstraints(maxWidth: 260),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.description_outlined,
+                  size: 18,
+                  color: Color(0xFF2563EB),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(view.name, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ),
+          ),
+        ),
+        childWhenDragging: Opacity(opacity: 0.4, child: row),
+        child: Stack(
+          children: [
+            row,
+            // Drop zones exist only during a drag, so they never block taps.
+            if (_draggingTree)
+              Positioned.fill(
+                child: Column(
+                  children: [
+                    Expanded(flex: 3, child: _dropSlot(view, _DropMode.before)),
+                    Expanded(flex: 4, child: _dropSlot(view, _DropMode.into)),
+                    Expanded(flex: 3, child: _dropSlot(view, _DropMode.after)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dropSlot(DocumentView target, _DropMode mode) {
+    return DragTarget<DocumentView>(
+      // The whole zone must be droppable; DragTarget defaults to deferToChild,
+      // which would limit the hit area to the thin indicator. These overlays
+      // only exist during a drag, so opaque is safe (no taps to intercept).
+      hitTestBehavior: HitTestBehavior.opaque,
+      onWillAcceptWithDetails: (details) =>
+          !_isSelfOrDescendant(target.id, details.data.id),
+      onAcceptWithDetails: (details) => _handleDrop(details.data, target, mode),
+      builder: (context, candidate, rejected) {
+        final active = candidate.isNotEmpty;
+        if (mode == _DropMode.into) {
+          // Nesting: highlight the whole target row.
+          return Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: active ? const Color(0xFF2563EB) : Colors.transparent,
+                width: 2,
+              ),
+              color: active ? const Color(0x142563EB) : Colors.transparent,
+            ),
+          );
+        }
+        return Align(
+          alignment: mode == _DropMode.before
+              ? Alignment.topCenter
+              : Alignment.bottomCenter,
+          child: Container(
+            height: 2,
+            color: active ? const Color(0xFF2563EB) : Colors.transparent,
+          ),
+        );
+      },
+    );
+  }
+
+  /// True when [candidateId] is [rootId] itself or anywhere inside its subtree —
+  /// dropping there would create a cycle, so it must be rejected.
+  bool _isSelfOrDescendant(String candidateId, String rootId) {
+    if (candidateId == rootId) {
+      return true;
+    }
+    final parents = {for (final v in widget.views) v.id: v.parentViewId};
+    String? cursor = candidateId;
+    final seen = <String>{};
+    while (cursor != null && seen.add(cursor)) {
+      final parent = parents[cursor];
+      if (parent == rootId) {
+        return true;
+      }
+      cursor = parent;
+    }
+    return false;
+  }
+
+  void _handleDrop(DocumentView dragged, DocumentView target, _DropMode mode) {
+    if (mode == _DropMode.into) {
+      final children =
+          widget.views
+              .where((v) => v.parentViewId == target.id && v.id != dragged.id)
+              .toList()
+            ..sort((a, b) => a.position.compareTo(b.position));
+      children.add(dragged);
+      setState(() => _collapsedViewIds.remove(target.id)); // reveal new child
+      widget.onReorderViews(target.id, children);
+      return;
+    }
+
+    final parentId = target.parentViewId;
+    final siblings =
+        widget.views
+            .where((v) => v.parentViewId == parentId && v.id != dragged.id)
+            .toList()
+          ..sort((a, b) => a.position.compareTo(b.position));
+    final targetIndex = siblings.indexWhere((v) => v.id == target.id);
+    if (targetIndex < 0) {
+      return;
+    }
+    siblings.insert(
+      mode == _DropMode.before ? targetIndex : targetIndex + 1,
+      dragged,
+    );
+    widget.onReorderViews(parentId, siblings);
   }
 
   List<({DocumentView view, int depth, bool hasChildren})>
@@ -1268,7 +1842,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
 
     appendChildren(null, 0);
+    // Surface genuine orphans (parent missing) at the top level. A node that is
+    // unvisited only because an ancestor is collapsed must stay hidden — not be
+    // dumped at depth 0 (which made new children of a collapsed parent appear as
+    // siblings of it).
+    final viewIds = {for (final view in widget.views) view.id};
     for (final view in widget.views) {
+      if (visited.contains(view.id)) {
+        continue;
+      }
+      final parentId = view.parentViewId;
+      if (parentId != null && viewIds.contains(parentId)) {
+        continue; // hidden under a collapsed ancestor
+      }
       if (visited.add(view.id)) {
         final hasChildren = (childrenByParent[view.id] ?? const []).isNotEmpty;
         ordered.add((view: view, depth: 0, hasChildren: hasChildren));
@@ -1326,7 +1912,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1160),
+            constraints: BoxConstraints(maxWidth: widget.pageWidth),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1381,22 +1967,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 DecoratedBox(
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 20,
+                      horizontal: 32,
+                      vertical: 28,
                     ),
-                    child: BlockEditor(
+                    child: MicaEditor(
                       key: ValueKey(bootstrap.document.id),
-                      documentId: bootstrap.document.id,
                       rootBlockId: bootstrap.document.rootBlockId,
-                      blocks: bootstrap.childBlocks,
+                      nodes: [
+                        for (final b in bootstrap.childBlocks)
+                          EditorNode(
+                            id: b.id,
+                            kind: b.kind,
+                            text: b.text,
+                            data: Map<String, dynamic>.from(b.data),
+                          ),
+                      ],
                       version: bootstrap.snapshot.versionSeq,
                       canEdit: canEdit,
                       onApplyOperations: widget.onApplyOperations,
+                      onAiStream: widget.onAiStream,
+                      appearance: widget.appearance,
                     ),
                   ),
                 ),
@@ -1599,6 +2193,44 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
+  Future<void> _promptRenameWorkspace(Workspace workspace) async {
+    final controller = TextEditingController(text: workspace.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename workspace'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Workspace name',
+              border: OutlineInputBorder(),
+            ),
+            onSubmitted: (value) => Navigator.of(context).pop(value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              icon: const Icon(Icons.save),
+              label: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isNotEmpty && trimmed != workspace.name) {
+      await widget.onRenameWorkspace(workspace, trimmed);
+    }
+  }
+
   Future<void> _promptRenameDocument(DocumentView view) async {
     final controller = TextEditingController(text: view.name);
     final name = await showDialog<String>(
@@ -1638,58 +2270,25 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     await widget.onRenameView(view, name);
   }
 
-  Future<void> _promptCreateChildDocument(DocumentView parent) async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Create child page'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Page name',
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (value) => Navigator.of(context).pop(value),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              icon: const Icon(Icons.add),
-              label: const Text('Create'),
-            ),
-          ],
-        );
-      },
-    );
-    controller.dispose();
-
-    if (name == null) {
-      return;
-    }
-
-    await widget.onCreateChildDocument(parent, name);
-  }
-
-  Future<void> _confirmDeleteDocument(DocumentView view) async {
+  Future<void> _confirmDeleteWorkspace(Workspace workspace) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Delete page'),
-          content: Text(view.name, overflow: TextOverflow.ellipsis),
+          title: const Text('Delete workspace'),
+          content: Text(
+            'Delete "${workspace.name}" and all of its pages? '
+            'This cannot be undone.',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
               child: const Text('Cancel'),
             ),
             FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+              ),
               onPressed: () => Navigator.of(context).pop(true),
               icon: const Icon(Icons.delete_outline),
               label: const Text('Delete'),
@@ -1703,7 +2302,263 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       return;
     }
 
-    await widget.onDeleteView(view);
+    await widget.onDeleteWorkspace(workspace);
+  }
+
+  void _openRecycleBin() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _RecycleBinDialog(
+        onLoad: widget.onLoadTrash,
+        onRestore: widget.onRestoreView,
+        onPurge: widget.onPurgeView,
+      ),
+    );
+  }
+
+  Future<void> _onExport(String kind) async {
+    final (title, future) = switch (kind) {
+      'page' => ('Export current page', widget.onExportPageMarkdown()),
+      'workspace' => ('Export workspace', widget.onExportWorkspaceMarkdown()),
+      _ => ('Export all workspaces', widget.onExportAllMarkdown()),
+    };
+    String markdown;
+    try {
+      markdown = await future;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export failed: $error')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _ExportDialog(title: title, markdown: markdown),
+    );
+  }
+
+  void _openSearch() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _SearchDialog(
+        onSearch: widget.onSearch,
+        onOpen: (viewId) {
+          Navigator.of(context).pop();
+          widget.onOpenSearchResult(viewId);
+        },
+      ),
+    );
+  }
+
+  void _openSettings() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _SettingsDialog(
+        onLoadAiSettings: widget.onLoadAiSettings,
+        onSaveAiSettings: widget.onSaveAiSettings,
+        userName: widget.userName,
+        userEmail: widget.userEmail,
+        onUpdateProfile: widget.onUpdateProfile,
+        onChangePassword: widget.onChangePassword,
+        appearance: widget.appearance,
+        pageWidth: widget.pageWidth,
+        onAppearanceChanged: widget.onAppearanceChanged,
+      ),
+    );
+  }
+
+  void _openAiDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _AiDialog(
+        canEdit: matchesEditRole(widget.selectedWorkspace?.role),
+        hasWorkspace: widget.selectedWorkspace != null,
+        onStream: widget.onAiStream,
+        onNewPage: widget.onAiNewPage,
+        onCurrentPage: widget.onAiCurrentPage,
+        onNewWorkspace: widget.onAiNewWorkspace,
+      ),
+    );
+  }
+}
+
+/// Workspace switcher. The anchor button shows the current workspace; the menu
+/// lists every workspace (each row selects it and carries inline rename/delete
+/// actions) and ends with a "New workspace" row.
+class _WorkspaceSelector extends StatefulWidget {
+  const _WorkspaceSelector({
+    required this.workspaces,
+    required this.selected,
+    required this.onSelect,
+    required this.onRename,
+    required this.onDelete,
+    required this.onCreate,
+  });
+
+  final List<Workspace> workspaces;
+  final Workspace? selected;
+  final Future<void> Function(Workspace workspace) onSelect;
+  final void Function(Workspace workspace) onRename;
+  final void Function(Workspace workspace) onDelete;
+  final VoidCallback onCreate;
+
+  @override
+  State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
+}
+
+class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
+  final MenuController _menu = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    return MenuAnchor(
+      controller: _menu,
+      style: const MenuStyle(
+        minimumSize: WidgetStatePropertyAll(Size(300, 0)),
+        padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
+      ),
+      menuChildren: [
+        for (final workspace in widget.workspaces) _row(workspace),
+        if (widget.workspaces.isNotEmpty) const Divider(height: 8),
+        _createRow(),
+      ],
+      builder: (context, controller, child) {
+        final label = widget.selected?.name ?? 'Select workspace';
+        return SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              alignment: Alignment.centerLeft,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            onPressed: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.workspaces_outline,
+                  size: 20,
+                  color: Color(0xFF475569),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Color(0xFF0F172A)),
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_down, color: Color(0xFF475569)),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _row(Workspace workspace) {
+    final selected = workspace.id == widget.selected?.id;
+    return SizedBox(
+      width: 320,
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                _menu.close();
+                widget.onSelect(workspace);
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      selected ? Icons.check : Icons.workspaces_outline,
+                      size: 18,
+                      color: selected
+                          ? const Color(0xFF2563EB)
+                          : const Color(0xFF94A3B8),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        workspace.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                          color: const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Rename',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            onPressed: () {
+              _menu.close();
+              widget.onRename(workspace);
+            },
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            visualDensity: VisualDensity.compact,
+            color: const Color(0xFFDC2626),
+            icon: const Icon(Icons.delete_outline, size: 18),
+            onPressed: () {
+              _menu.close();
+              widget.onDelete(workspace);
+            },
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
+
+  Widget _createRow() {
+    return SizedBox(
+      width: 320,
+      child: InkWell(
+        onTap: () {
+          _menu.close();
+          widget.onCreate();
+        },
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.add, size: 18, color: Color(0xFF2563EB)),
+              SizedBox(width: 10),
+              Text(
+                'New workspace',
+                style: TextStyle(
+                  color: Color(0xFF2563EB),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1969,6 +2824,1088 @@ class BlockListItem extends StatelessWidget {
   }
 }
 
+/// Where a dragged page lands relative to the row it is dropped on: as the
+/// sibling before it, nested as its child, or the sibling after it.
+enum _DropMode { before, into, after }
+
+/// Shows exported Markdown in a selectable box with a one-tap copy.
+class _ExportDialog extends StatelessWidget {
+  const _ExportDialog({required this.title, required this.markdown});
+
+  final String title;
+  final String markdown;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 560,
+        height: 460,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              markdown.isEmpty ? '(empty)' : markdown,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.5),
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        FilledButton.icon(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: markdown));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard')),
+              );
+            }
+          },
+          icon: const Icon(Icons.copy, size: 18),
+          label: const Text('Copy'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Workspace search: type to find pages by title or body text; click to open.
+class _SearchDialog extends StatefulWidget {
+  const _SearchDialog({required this.onSearch, required this.onOpen});
+
+  final Future<List<SearchResult>> Function(String query) onSearch;
+  final void Function(String viewId) onOpen;
+
+  @override
+  State<_SearchDialog> createState() => _SearchDialogState();
+}
+
+class _SearchDialogState extends State<_SearchDialog> {
+  final _query = TextEditingController();
+  Timer? _debounce;
+  bool _loading = false;
+  List<SearchResult> _results = const [];
+  String _lastQuery = '';
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _query.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 280), () => _run(value));
+  }
+
+  Future<void> _run(String value) async {
+    final query = value.trim();
+    if (query.isEmpty) {
+      setState(() {
+        _results = const [];
+        _loading = false;
+      });
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final results = await widget.onSearch(query);
+      if (!mounted || _query.text.trim() != query) return;
+      setState(() {
+        _results = results;
+        _lastQuery = query;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Search pages'),
+      content: SizedBox(
+        width: 480,
+        height: 420,
+        child: Column(
+          children: [
+            TextField(
+              controller: _query,
+              autofocus: true,
+              onChanged: _onChanged,
+              decoration: InputDecoration(
+                hintText: 'Search titles and content…',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _loading
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : null,
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(child: _buildResults(context)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildResults(BuildContext context) {
+    if (_query.text.trim().isEmpty) {
+      return const EmptyState(
+        icon: Icons.search,
+        title: 'Search this workspace',
+        detail: 'Find pages by title or content.',
+      );
+    }
+    if (!_loading && _results.isEmpty) {
+      return EmptyState(
+        icon: Icons.search_off,
+        title: 'No matches',
+        detail: 'Nothing found for "$_lastQuery".',
+      );
+    }
+    return ListView.separated(
+      itemCount: _results.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, i) {
+        final result = _results[i];
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          leading: const Icon(Icons.description_outlined, size: 18),
+          title: Text(result.name, overflow: TextOverflow.ellipsis),
+          subtitle: result.snippet.isEmpty
+              ? (result.titleMatch ? const Text('Title match') : null)
+              : Text(result.snippet, maxLines: 2, overflow: TextOverflow.ellipsis),
+          onTap: () => widget.onOpen(result.viewId),
+        );
+      },
+    );
+  }
+}
+
+/// System prompt for AI that should produce a whole document with a title line.
+const String kAiDocSystem =
+    'You are a writing assistant inside a Markdown document editor. Respond with '
+    'clean GitHub-Flavored Markdown only — no preamble or commentary. Begin the '
+    'document with a single level-1 heading (a "# Title" line).';
+
+enum _AiTarget { newPage, currentPage, newWorkspace }
+
+/// Preset AI providers. Each maps to a backend provider dialect (openai/anthropic)
+/// plus default base URL + model; "Local / Custom" lets the user point at any
+/// OpenAI-compatible server (Ollama, LM Studio, vLLM, …).
+enum _AiPreset { deepseek, openai, anthropic, custom }
+
+extension _AiPresetInfo on _AiPreset {
+  String get label => switch (this) {
+    _AiPreset.deepseek => 'DeepSeek',
+    _AiPreset.openai => 'OpenAI',
+    _AiPreset.anthropic => 'Anthropic (Claude)',
+    _AiPreset.custom => 'Local / Custom',
+  };
+
+  String get provider =>
+      this == _AiPreset.anthropic ? 'anthropic' : 'openai';
+
+  String get baseUrl => switch (this) {
+    _AiPreset.deepseek => 'https://api.deepseek.com',
+    _AiPreset.openai => 'https://api.openai.com/v1',
+    _AiPreset.anthropic => 'https://api.anthropic.com',
+    _AiPreset.custom => 'http://localhost:11434/v1',
+  };
+
+  String get model => switch (this) {
+    _AiPreset.deepseek => 'deepseek-chat',
+    _AiPreset.openai => 'gpt-4o-mini',
+    _AiPreset.anthropic => 'claude-sonnet-4-6',
+    _AiPreset.custom => '',
+  };
+}
+
+/// Settings dialog. Currently hosts the AI provider configuration; appearance and
+/// account sections will slot in alongside it.
+class _SettingsDialog extends StatefulWidget {
+  const _SettingsDialog({
+    required this.onLoadAiSettings,
+    required this.onSaveAiSettings,
+    required this.userName,
+    required this.userEmail,
+    required this.onUpdateProfile,
+    required this.onChangePassword,
+    required this.appearance,
+    required this.pageWidth,
+    required this.onAppearanceChanged,
+  });
+
+  final String userName;
+  final String userEmail;
+  final Future<void> Function(String displayName) onUpdateProfile;
+  final Future<void> Function(String current, String next) onChangePassword;
+  final Future<Map<String, dynamic>> Function() onLoadAiSettings;
+  final Future<void> Function({
+    required String provider,
+    required String baseUrl,
+    required String model,
+    String? apiKey,
+  })
+  onSaveAiSettings;
+  final EditorAppearance appearance;
+  final double pageWidth;
+  final void Function(EditorAppearance appearance, double pageWidth)
+  onAppearanceChanged;
+
+  @override
+  State<_SettingsDialog> createState() => _SettingsDialogState();
+}
+
+class _SettingsDialogState extends State<_SettingsDialog> {
+  final _baseUrl = TextEditingController();
+  final _model = TextEditingController();
+  final _apiKey = TextEditingController();
+  _AiPreset _preset = _AiPreset.deepseek;
+  bool _loading = true;
+  bool _saving = false;
+  bool _hasKey = false;
+  String? _error;
+  String? _saved;
+
+  late final _name = TextEditingController(text: widget.userName);
+  final _curPass = TextEditingController();
+  final _newPass = TextEditingController();
+  bool _accountBusy = false;
+  String? _accountMsg;
+
+  late double _fontScale = widget.appearance.fontScale;
+  late String? _fontFamily = widget.appearance.fontFamily;
+  late double _pageWidth = widget.pageWidth;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _applyAppearance() {
+    widget.onAppearanceChanged(
+      EditorAppearance(fontScale: _fontScale, fontFamily: _fontFamily),
+      _pageWidth,
+    );
+  }
+
+  Widget _sliderRow({
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required String display,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Row(
+      children: [
+        SizedBox(width: 90, child: Text(label)),
+        Expanded(
+          child: Slider(value: value, min: min, max: max, onChanged: onChanged),
+        ),
+        SizedBox(
+          width: 56,
+          child: Text(
+            display,
+            textAlign: TextAlign.right,
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _fontChip(String label, String? family) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: _fontFamily == family,
+      onSelected: (_) {
+        setState(() => _fontFamily = family);
+        _applyAppearance();
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _baseUrl.dispose();
+    _model.dispose();
+    _apiKey.dispose();
+    _name.dispose();
+    _curPass.dispose();
+    _newPass.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveProfile() async {
+    setState(() {
+      _accountBusy = true;
+      _accountMsg = null;
+    });
+    try {
+      await widget.onUpdateProfile(_name.text.trim());
+      if (mounted) setState(() => _accountMsg = 'Profile saved');
+    } catch (error) {
+      if (mounted) setState(() => _accountMsg = error.toString());
+    } finally {
+      if (mounted) setState(() => _accountBusy = false);
+    }
+  }
+
+  Future<void> _changeAccountPassword() async {
+    if (_newPass.text.length < 8) {
+      setState(() => _accountMsg = 'New password must be at least 8 characters');
+      return;
+    }
+    setState(() {
+      _accountBusy = true;
+      _accountMsg = null;
+    });
+    try {
+      await widget.onChangePassword(_curPass.text, _newPass.text);
+      if (mounted) {
+        setState(() {
+          _accountMsg = 'Password changed';
+          _curPass.clear();
+          _newPass.clear();
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _accountMsg = error.toString());
+    } finally {
+      if (mounted) setState(() => _accountBusy = false);
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final settings = await widget.onLoadAiSettings();
+      if (!mounted) return;
+      final provider = settings['provider'] as String? ?? 'openai';
+      final base = settings['base_url'] as String? ?? '';
+      final model = settings['model'] as String? ?? '';
+      setState(() {
+        _preset = _presetFor(provider, base);
+        _baseUrl.text = base.isEmpty ? _preset.baseUrl : base;
+        _model.text = model.isEmpty ? _preset.model : model;
+        _hasKey = settings['has_key'] == true;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  _AiPreset _presetFor(String provider, String base) {
+    if (provider == 'anthropic') return _AiPreset.anthropic;
+    if (base.contains('deepseek')) return _AiPreset.deepseek;
+    if (base.contains('openai.com')) return _AiPreset.openai;
+    return base.isEmpty ? _AiPreset.deepseek : _AiPreset.custom;
+  }
+
+  void _applyPreset(_AiPreset preset) {
+    setState(() {
+      _preset = preset;
+      if (preset != _AiPreset.custom) {
+        _baseUrl.text = preset.baseUrl;
+        _model.text = preset.model;
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+      _saved = null;
+    });
+    try {
+      await widget.onSaveAiSettings(
+        provider: _preset.provider,
+        baseUrl: _baseUrl.text.trim(),
+        model: _model.text.trim(),
+        apiKey: _apiKey.text.trim().isEmpty ? null : _apiKey.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _saved = 'Saved';
+        if (_apiKey.text.trim().isNotEmpty) _hasKey = true;
+        _apiKey.clear();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.settings_outlined, size: 22),
+          SizedBox(width: 8),
+          Text('Settings'),
+        ],
+      ),
+      content: SizedBox(
+        width: 480,
+        child: _loading
+            ? const SizedBox(
+                height: 120,
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.tune, size: 18, color: Color(0xFF2563EB)),
+                        const SizedBox(width: 8),
+                        Text('Appearance', style: Theme.of(context).textTheme.titleMedium),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _sliderRow(
+                      label: 'Page width',
+                      value: _pageWidth,
+                      min: 640,
+                      max: 1440,
+                      display: '${_pageWidth.round()} px',
+                      onChanged: (value) {
+                        setState(() => _pageWidth = value);
+                        _applyAppearance();
+                      },
+                    ),
+                    _sliderRow(
+                      label: 'Font size',
+                      value: _fontScale,
+                      min: 0.85,
+                      max: 1.4,
+                      display: '${(_fontScale * 100).round()}%',
+                      onChanged: (value) {
+                        setState(() => _fontScale = value);
+                        _applyAppearance();
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const SizedBox(width: 90, child: Text('Font')),
+                        Expanded(
+                          child: Wrap(
+                            spacing: 8,
+                            children: [
+                              _fontChip('System', null),
+                              _fontChip('Serif', 'serif'),
+                              _fontChip('Mono', 'monospace'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 28),
+                    Row(
+                      children: [
+                        const Icon(Icons.auto_awesome, size: 18, color: Color(0xFF7C3AED)),
+                        const SizedBox(width: 8),
+                        Text('AI provider', style: Theme.of(context).textTheme.titleMedium),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<_AiPreset>(
+                      initialValue: _preset,
+                      decoration: const InputDecoration(
+                        labelText: 'Provider',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _AiPreset.values
+                          .map(
+                            (preset) => DropdownMenuItem(
+                              value: preset,
+                              child: Text(preset.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: _saving
+                          ? null
+                          : (preset) {
+                              if (preset != null) _applyPreset(preset);
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _baseUrl,
+                      enabled: !_saving,
+                      decoration: const InputDecoration(
+                        labelText: 'API base URL',
+                        hintText: 'https://api.deepseek.com',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _model,
+                      enabled: !_saving,
+                      decoration: const InputDecoration(
+                        labelText: 'Model',
+                        hintText: 'deepseek-chat',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _apiKey,
+                      enabled: !_saving,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: 'API key',
+                        hintText: _hasKey
+                            ? '•••••••• (leave blank to keep)'
+                            : 'Required for hosted providers',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Local models (Ollama, LM Studio) usually need no key. '
+                      'The key is stored on the server and never returned.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                    const Divider(height: 28),
+                    Row(
+                      children: [
+                        const Icon(Icons.person_outline, size: 18, color: Color(0xFF2563EB)),
+                        const SizedBox(width: 8),
+                        Text('Account', style: Theme.of(context).textTheme.titleMedium),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.userEmail,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _name,
+                      enabled: !_accountBusy,
+                      decoration: const InputDecoration(
+                        labelText: 'Display name',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: _accountBusy ? null : _saveProfile,
+                        icon: const Icon(Icons.save, size: 16),
+                        label: const Text('Save name'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _curPass,
+                      enabled: !_accountBusy,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Current password',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _newPass,
+                      enabled: !_accountBusy,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'New password (min 8 chars)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: _accountBusy ? null : _changeAccountPassword,
+                        icon: const Icon(Icons.lock_outline, size: 16),
+                        label: const Text('Change password'),
+                      ),
+                    ),
+                    if (_accountMsg != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _accountMsg!,
+                        style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+                      ),
+                    ],
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      ErrorBanner(_error!),
+                    ],
+                    if (_saved != null) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+                          const SizedBox(width: 6),
+                          Text(_saved!),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving || _loading ? null : _save,
+          icon: _saving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.save, size: 18),
+          label: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Global AI dialog: type an instruction and pick where the generated content
+/// goes — a new page, the current page, or a brand-new workspace.
+class _AiDialog extends StatefulWidget {
+  const _AiDialog({
+    required this.canEdit,
+    required this.hasWorkspace,
+    required this.onStream,
+    required this.onNewPage,
+    required this.onCurrentPage,
+    required this.onNewWorkspace,
+  });
+
+  final bool canEdit;
+  final bool hasWorkspace;
+  final Stream<String> Function(String prompt, {String? system}) onStream;
+  final Future<void> Function(String markdown) onNewPage;
+  final Future<void> Function(String markdown)? onCurrentPage;
+  final Future<void> Function(String markdown) onNewWorkspace;
+
+  @override
+  State<_AiDialog> createState() => _AiDialogState();
+}
+
+class _AiDialogState extends State<_AiDialog> {
+  final _prompt = TextEditingController();
+  final _scroll = ScrollController();
+  late _AiTarget _target = widget.hasWorkspace
+      ? _AiTarget.newPage
+      : _AiTarget.newWorkspace;
+  StreamSubscription<String>? _sub;
+  bool _streaming = false;
+  bool _applying = false;
+  bool _done = false;
+  final StringBuffer _buffer = StringBuffer();
+  String? _error;
+
+  bool get _busy => _streaming || _applying;
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _prompt.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _generate() {
+    final prompt = _prompt.text.trim();
+    if (prompt.isEmpty) return;
+    // New page / new workspace want a document with a title line.
+    final system = _target == _AiTarget.currentPage ? null : kAiDocSystem;
+    setState(() {
+      _streaming = true;
+      _done = false;
+      _error = null;
+      _buffer.clear();
+    });
+    _sub = widget.onStream(prompt, system: system).listen(
+      (delta) {
+        setState(() => _buffer.write(delta));
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent);
+          }
+        });
+      },
+      onError: (Object error) {
+        if (mounted) {
+          setState(() {
+            _streaming = false;
+            _error = error.toString();
+          });
+        }
+      },
+      onDone: () {
+        if (mounted) {
+          setState(() {
+            _streaming = false;
+            _done = true;
+          });
+        }
+      },
+    );
+  }
+
+  Future<void> _apply() async {
+    final markdown = _buffer.toString().trim();
+    if (markdown.isEmpty) return;
+    setState(() {
+      _applying = true;
+      _error = null;
+    });
+    try {
+      switch (_target) {
+        case _AiTarget.newPage:
+          await widget.onNewPage(markdown);
+        case _AiTarget.currentPage:
+          await widget.onCurrentPage?.call(markdown);
+        case _AiTarget.newWorkspace:
+          await widget.onNewWorkspace(markdown);
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _applying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canWriteCurrent = widget.onCurrentPage != null;
+    final hasOutput = _buffer.isNotEmpty;
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.auto_awesome, size: 22, color: Color(0xFF7C3AED)),
+          SizedBox(width: 8),
+          Text('Ask AI'),
+        ],
+      ),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _prompt,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 5,
+              enabled: !_busy,
+              decoration: const InputDecoration(
+                hintText:
+                    'e.g. Write a project kickoff plan with goals, milestones, and risks',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (widget.canEdit)
+                  ChoiceChip(
+                    label: const Text('New page'),
+                    selected: _target == _AiTarget.newPage,
+                    onSelected: widget.hasWorkspace && !_busy
+                        ? (_) => setState(() => _target = _AiTarget.newPage)
+                        : null,
+                  ),
+                if (widget.canEdit && canWriteCurrent)
+                  ChoiceChip(
+                    label: const Text('Current page'),
+                    selected: _target == _AiTarget.currentPage,
+                    onSelected: _busy
+                        ? null
+                        : (_) => setState(() => _target = _AiTarget.currentPage),
+                  ),
+                ChoiceChip(
+                  label: const Text('New workspace'),
+                  selected: _target == _AiTarget.newWorkspace,
+                  onSelected: _busy
+                      ? null
+                      : (_) => setState(() => _target = _AiTarget.newWorkspace),
+                ),
+              ],
+            ),
+            if (hasOutput || _streaming) ...[
+              const SizedBox(height: 12),
+              Container(
+                height: 220,
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: SingleChildScrollView(
+                  controller: _scroll,
+                  child: Text(
+                    _buffer.isEmpty ? '…' : _buffer.toString(),
+                    style: const TextStyle(fontSize: 13, height: 1.5),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  if (_streaming) ...[
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('Generating…'),
+                  ] else if (_done)
+                    const Text(
+                      'Done — review, then insert.',
+                      style: TextStyle(color: Color(0xFF64748B)),
+                    ),
+                ],
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              ErrorBanner(_error!),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        if (!_done)
+          FilledButton.icon(
+            onPressed: _busy ? null : _generate,
+            icon: const Icon(Icons.auto_awesome, size: 18),
+            label: Text(hasOutput ? 'Regenerate' : 'Generate'),
+          )
+        else ...[
+          TextButton.icon(
+            onPressed: _applying ? null : _generate,
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Regenerate'),
+          ),
+          FilledButton.icon(
+            onPressed: _applying ? null : _apply,
+            icon: _applying
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check, size: 18),
+            label: const Text('Insert'),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Recycle bin: lists soft-deleted pages and offers restore / delete-forever.
+/// Only the roots of each deleted subtree are shown; restoring a root brings its
+/// whole subtree back.
+class _RecycleBinDialog extends StatefulWidget {
+  const _RecycleBinDialog({
+    required this.onLoad,
+    required this.onRestore,
+    required this.onPurge,
+  });
+
+  final Future<List<DocumentView>> Function() onLoad;
+  final Future<void> Function(DocumentView view) onRestore;
+  final Future<void> Function(DocumentView view) onPurge;
+
+  @override
+  State<_RecycleBinDialog> createState() => _RecycleBinDialogState();
+}
+
+class _RecycleBinDialogState extends State<_RecycleBinDialog> {
+  bool _loading = true;
+  String? _error;
+  List<DocumentView> _roots = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final all = await widget.onLoad();
+      final ids = {for (final v in all) v.id};
+      // Show only subtree roots: a deleted page whose parent is not itself in
+      // the bin (children come back with their parent on restore).
+      final roots = all
+          .where((v) => v.parentViewId == null || !ids.contains(v.parentViewId))
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _roots = roots;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.delete_outline, size: 22),
+          const SizedBox(width: 8),
+          const Text('Recycle bin'),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _loading ? null : _refresh,
+            icon: const Icon(Icons.refresh, size: 20),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 420,
+        height: 360,
+        child: _buildBody(context),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(child: ErrorBanner(_error!));
+    }
+    if (_roots.isEmpty) {
+      return const EmptyState(
+        icon: Icons.delete_outline,
+        title: 'Recycle bin is empty',
+        detail: 'Deleted pages appear here and can be restored.',
+      );
+    }
+    return ListView.separated(
+      itemCount: _roots.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, i) {
+        final view = _roots[i];
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          leading: const Icon(Icons.description_outlined, size: 18),
+          title: Text(view.name, overflow: TextOverflow.ellipsis),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'Restore',
+                icon: const Icon(Icons.restore, size: 20),
+                onPressed: () async {
+                  await widget.onRestore(view);
+                  await _refresh();
+                },
+              ),
+              IconButton(
+                tooltip: 'Delete forever',
+                color: const Color(0xFFDC2626),
+                icon: const Icon(Icons.delete_forever, size: 20),
+                onPressed: () async {
+                  await widget.onPurge(view);
+                  await _refresh();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 class DocumentListItem extends StatelessWidget {
   const DocumentListItem({
     required this.view,
@@ -2029,9 +3966,7 @@ class DocumentListItem extends StatelessWidget {
                       : const SizedBox.shrink(),
                 ),
                 Icon(
-                  depth == 0
-                      ? Icons.description_outlined
-                      : Icons.subdirectory_arrow_right,
+                  Icons.description_outlined,
                   size: 18,
                   color: isSelected
                       ? const Color(0xFF2563EB)
@@ -2273,6 +4208,10 @@ class ApiClient {
     return Workspace.fromJson(response['workspace'] as Map<String, dynamic>);
   }
 
+  Future<void> deleteWorkspace(String token, String workspaceId) async {
+    await _delete('/api/workspaces/$workspaceId', token);
+  }
+
   Future<List<WorkspaceMember>> listWorkspaceMembers(
     String token,
     String workspaceId,
@@ -2379,6 +4318,21 @@ class ApiClient {
     return DocumentView.fromJson(response['view'] as Map<String, dynamic>);
   }
 
+  Future<DocumentView> moveView(
+    String token,
+    String workspaceId,
+    String viewId, {
+    required String? parentViewId,
+    required String position,
+  }) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/views/$viewId/move',
+      {'parent_view_id': parentViewId, 'position': position},
+      token: token,
+    );
+    return DocumentView.fromJson(response['view'] as Map<String, dynamic>);
+  }
+
   Future<List<DocumentView>> deleteView(
     String token,
     String workspaceId,
@@ -2392,6 +4346,158 @@ class ApiClient {
     return items
         .map((item) => DocumentView.fromJson(item as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<List<DocumentView>> listTrash(String token, String workspaceId) async {
+    final response = await _get('/api/workspaces/$workspaceId/trash', token);
+    final items = response['views'] as List<dynamic>;
+    return items
+        .map((item) => DocumentView.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<DocumentView>> restoreView(
+    String token,
+    String workspaceId,
+    String viewId,
+  ) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/views/$viewId/restore',
+      const {},
+      token: token,
+    );
+    final items = response['views'] as List<dynamic>;
+    return items
+        .map((item) => DocumentView.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> purgeView(String token, String workspaceId, String viewId) async {
+    await _delete('/api/workspaces/$workspaceId/trash/$viewId', token);
+  }
+
+  Future<String> aiComplete(
+    String token,
+    String prompt, {
+    String? system,
+  }) async {
+    final body = <String, dynamic>{'prompt': prompt};
+    if (system != null) {
+      body['system'] = system;
+    }
+    final response = await _post('/api/ai/complete', body, token: token);
+    return response['text'] as String? ?? '';
+  }
+
+  /// Stream an AI completion over WebSocket, yielding text deltas as they arrive.
+  /// (Flutter Web's HTTP client can't stream responses, so AI streaming uses WS.)
+  Stream<String> aiStream(
+    String token,
+    String prompt, {
+    String? system,
+  }) async* {
+    final uri = _baseUri.replace(
+      scheme: _baseUri.scheme == 'https' ? 'wss' : 'ws',
+      path: '/ws/ai',
+      queryParameters: {'token': token},
+    );
+    final channel = WebSocketChannel.connect(uri);
+    try {
+      channel.sink.add(
+        jsonEncode({'prompt': prompt, 'system': ?system}),
+      );
+      await for (final raw in channel.stream) {
+        final message = jsonDecode(raw as String) as Map<String, dynamic>;
+        switch (message['type']) {
+          case 'delta':
+            yield message['text'] as String? ?? '';
+          case 'error':
+            throw ApiException(message['message'] as String? ?? 'AI error');
+          case 'done':
+            return;
+        }
+      }
+    } finally {
+      await channel.sink.close();
+    }
+  }
+
+  Future<List<SearchResult>> searchWorkspace(
+    String token,
+    String workspaceId,
+    String query,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/search?q=${Uri.encodeQueryComponent(query)}',
+      token,
+    );
+    final items = response['results'] as List<dynamic>;
+    return items
+        .map((item) => SearchResult.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<User> updateMe(String token, String displayName) async {
+    final response = await _patch('/api/auth/me', {
+      'display_name': displayName,
+    }, token: token);
+    return User.fromJson(response['user'] as Map<String, dynamic>);
+  }
+
+  Future<void> changePassword(
+    String token,
+    String currentPassword,
+    String newPassword,
+  ) async {
+    await _post('/api/auth/password', {
+      'current_password': currentPassword,
+      'new_password': newPassword,
+    }, token: token);
+  }
+
+  Future<Map<String, dynamic>> getAiSettings(String token) async {
+    return _get('/api/ai/settings', token);
+  }
+
+  Future<Map<String, dynamic>> updateAiSettings(
+    String token, {
+    required String provider,
+    required String baseUrl,
+    required String model,
+    String? apiKey,
+    int? maxTokens,
+  }) async {
+    final body = <String, dynamic>{
+      'provider': provider,
+      'base_url': baseUrl,
+      'model': model,
+    };
+    if (apiKey != null && apiKey.isNotEmpty) {
+      body['api_key'] = apiKey;
+    }
+    if (maxTokens != null) {
+      body['max_tokens'] = maxTokens;
+    }
+    return _patch('/api/ai/settings', body, token: token);
+  }
+
+  Future<DocumentBootstrap> importMarkdown(
+    String token,
+    String workspaceId,
+    String name,
+    String markdown, {
+    String? parentViewId,
+  }) async {
+    final body = <String, dynamic>{'name': name, 'markdown': markdown};
+    if (parentViewId != null) {
+      body['parent_view_id'] = parentViewId;
+    }
+    final response = await _post(
+      '/api/workspaces/$workspaceId/documents/import/markdown',
+      body,
+      token: token,
+    );
+    return DocumentBootstrap.fromJson(response);
   }
 
   Future<DocumentUpdateResult> applyDocumentUpdate(
@@ -2418,6 +4524,22 @@ class ApiClient {
       token,
     );
     return response['markdown'] as String;
+  }
+
+  Future<String> exportWorkspaceMarkdown(
+    String token,
+    String workspaceId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/export/markdown',
+      token,
+    );
+    return response['markdown'] as String? ?? '';
+  }
+
+  Future<String> exportAllMarkdown(String token) async {
+    final response = await _get('/api/export/markdown', token);
+    return response['markdown'] as String? ?? '';
   }
 
   Future<Map<String, dynamic>> _get(String path, String token) async {
@@ -2574,6 +4696,32 @@ class WorkspaceMember {
   final String email;
   final String displayName;
   final String role;
+}
+
+class SearchResult {
+  const SearchResult({
+    required this.viewId,
+    required this.objectId,
+    required this.name,
+    required this.snippet,
+    required this.titleMatch,
+  });
+
+  factory SearchResult.fromJson(Map<String, dynamic> json) {
+    return SearchResult(
+      viewId: json['view_id'] as String,
+      objectId: json['object_id'] as String,
+      name: json['name'] as String? ?? 'Untitled',
+      snippet: json['snippet'] as String? ?? '',
+      titleMatch: json['title_match'] == true,
+    );
+  }
+
+  final String viewId;
+  final String objectId;
+  final String name;
+  final String snippet;
+  final bool titleMatch;
 }
 
 class DocumentCreateResult {
@@ -3022,891 +5170,3 @@ Uri documentSocketUri(
   );
 }
 
-/// One editable block: its server id, current kind/data, and the controllers
-/// backing its text field.
-class _EditorBlock {
-  _EditorBlock({
-    required this.id,
-    required this.kind,
-    required String text,
-    required this.data,
-  }) : controller = TextEditingController(text: text),
-       focus = FocusNode();
-
-  final String id;
-  String kind;
-  Map<String, dynamic> data;
-  final TextEditingController controller;
-  final FocusNode focus;
-  final LayerLink link = LayerLink();
-  Timer? saveTimer;
-
-  void dispose() {
-    saveTimer?.cancel();
-    controller.dispose();
-    focus.dispose();
-  }
-}
-
-/// An entry in the slash (`/`) insert menu.
-class _SlashOption {
-  const _SlashOption(this.label, this.icon, this.kind, [this.data]);
-
-  final String label;
-  final IconData icon;
-  final String kind;
-  final Map<String, dynamic>? data;
-}
-
-const List<_SlashOption> _slashOptions = [
-  _SlashOption('Text', Icons.notes, 'paragraph'),
-  _SlashOption('Heading 1', Icons.title, 'heading', {'level': 1}),
-  _SlashOption('Heading 2', Icons.title, 'heading', {'level': 2}),
-  _SlashOption('Heading 3', Icons.title, 'heading', {'level': 3}),
-  _SlashOption('Bulleted list', Icons.format_list_bulleted, 'bulleted_list'),
-  _SlashOption('Numbered list', Icons.format_list_numbered, 'numbered_list'),
-  _SlashOption('To-do', Icons.check_box_outlined, 'todo', {'checked': false}),
-  _SlashOption('Quote', Icons.format_quote, 'quote'),
-  _SlashOption('Code', Icons.code, 'code_block'),
-];
-
-/// A block-based document editor with Markdown shortcuts.
-///
-/// Typing `# `, `- `, `1. `, `> `, `- [ ] `, or ``` ``` ``` at the start of a
-/// block converts it to the matching block type. Enter creates a new block (and
-/// continues lists); Backspace at the start of a block merges it into the
-/// previous one. Edits persist through [onApplyOperations]; remote snapshots are
-/// reconciled without disturbing the block currently being edited.
-class BlockEditor extends StatefulWidget {
-  const BlockEditor({
-    required this.documentId,
-    required this.rootBlockId,
-    required this.blocks,
-    required this.version,
-    required this.canEdit,
-    required this.onApplyOperations,
-    super.key,
-  });
-
-  final String documentId;
-  final String rootBlockId;
-  final List<DocumentBlock> blocks;
-  final int version;
-  final bool canEdit;
-  final Future<void> Function(List<Map<String, dynamic>> operations)
-  onApplyOperations;
-
-  @override
-  State<BlockEditor> createState() => _BlockEditorState();
-}
-
-class _BlockEditorState extends State<BlockEditor> {
-  final List<_EditorBlock> _blocks = [];
-  Future<void> _sendChain = Future.value();
-  int _idCounter = 0;
-
-  // Hover + slash-menu transient UI state. None of this is shown at rest.
-  String? _hoveredId;
-  String? _slashBlockId;
-  String _slashQuery = '';
-  OverlayEntry? _slashEntry;
-
-  @override
-  void initState() {
-    super.initState();
-    _syncFromWidget();
-    _ensureInitialBlock();
-  }
-
-  @override
-  void didUpdateWidget(covariant BlockEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // A new snapshot arrived (our own write or a remote edit); reconcile.
-    if (oldWidget.version != widget.version) {
-      setState(_syncFromWidget);
-      _ensureInitialBlock();
-      // Close the slash menu if its block vanished in the new snapshot.
-      if (_slashBlockId != null &&
-          !_blocks.any((block) => block.id == _slashBlockId)) {
-        _closeSlash();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _slashEntry?.remove();
-    _slashEntry = null;
-    for (final block in _blocks) {
-      block.dispose();
-    }
-    super.dispose();
-  }
-
-  /// Reconcile local editor blocks against the latest server snapshot.
-  /// Controllers are reused by id; the focused block is never overwritten so
-  /// in-flight typing is preserved.
-  void _syncFromWidget() {
-    final existing = {for (final block in _blocks) block.id: block};
-    final next = <_EditorBlock>[];
-
-    for (final src in widget.blocks) {
-      final current = existing.remove(src.id);
-      if (current == null) {
-        final block = _EditorBlock(
-          id: src.id,
-          kind: src.kind,
-          text: src.text,
-          data: Map<String, dynamic>.from(src.data),
-        );
-        _attachKeyHandler(block);
-        next.add(block);
-      } else {
-        current.kind = src.kind;
-        current.data = Map<String, dynamic>.from(src.data);
-        if (!current.focus.hasFocus && current.controller.text != src.text) {
-          current.controller.text = src.text;
-        }
-        next.add(current);
-      }
-    }
-
-    for (final leftover in existing.values) {
-      leftover.dispose();
-    }
-
-    _blocks
-      ..clear()
-      ..addAll(next);
-  }
-
-  void _ensureInitialBlock() {
-    if (_blocks.isNotEmpty || !widget.canEdit) {
-      return;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _blocks.isNotEmpty) {
-        return;
-      }
-      final block = _EditorBlock(id: _genId(), kind: 'paragraph', text: '', data: {});
-      _attachKeyHandler(block);
-      setState(() => _blocks.add(block));
-      _send([_insertOp(block, 0)]);
-    });
-  }
-
-  void _attachKeyHandler(_EditorBlock block) {
-    block.focus.onKeyEvent = (node, event) => _onKey(block, event);
-  }
-
-  KeyEventResult _onKey(_EditorBlock block, KeyEvent event) {
-    if (!widget.canEdit) {
-      return KeyEventResult.ignored;
-    }
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
-    }
-
-    // While the slash menu is open, Enter applies the top match and Escape
-    // dismisses it.
-    if (_slashEntry != null && _slashBlockId == block.id) {
-      if (event.logicalKey == LogicalKeyboardKey.escape) {
-        _closeSlash();
-        return KeyEventResult.handled;
-      }
-      if (event.logicalKey == LogicalKeyboardKey.enter) {
-        final matches = _filteredSlashOptions();
-        if (matches.isNotEmpty) {
-          _applySlash(block, matches.first);
-        } else {
-          _closeSlash();
-        }
-        return KeyEventResult.handled;
-      }
-    }
-
-    if (event.logicalKey == LogicalKeyboardKey.enter) {
-      if (HardwareKeyboard.instance.isShiftPressed || block.kind == 'code_block') {
-        return KeyEventResult.ignored; // soft newline
-      }
-      _handleEnter(block);
-      return KeyEventResult.handled;
-    }
-
-    if (event.logicalKey == LogicalKeyboardKey.backspace) {
-      final selection = block.controller.selection;
-      if (selection.isCollapsed &&
-          selection.baseOffset == 0 &&
-          _blocks.indexOf(block) > 0) {
-        _handleBackspaceMerge(block);
-        return KeyEventResult.handled;
-      }
-    }
-
-    // Cross-block cursor movement, so the whole document navigates like one
-    // continuous page. Only for unmodified arrows; Shift/Ctrl/Alt/Meta keep
-    // their native in-field behavior.
-    final keyboard = HardwareKeyboard.instance;
-    final plain = !keyboard.isShiftPressed &&
-        !keyboard.isControlPressed &&
-        !keyboard.isAltPressed &&
-        !keyboard.isMetaPressed;
-    if (plain) {
-      final selection = block.controller.selection;
-      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-        if (selection.isCollapsed && selection.baseOffset == 0) {
-          return _moveToPrevBlock(block, atEnd: true)
-              ? KeyEventResult.handled
-              : KeyEventResult.ignored;
-        }
-      } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-        if (selection.isCollapsed &&
-            selection.baseOffset == block.controller.text.length) {
-          return _moveToNextBlock(block, atStart: true)
-              ? KeyEventResult.handled
-              : KeyEventResult.ignored;
-        }
-      } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-        // Let the field move within its own wrapped lines first; if the cursor
-        // didn't move, it was on the top line, so hop to the previous block.
-        _hopIfCursorStuck(block, toPrevious: true);
-      } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-        _hopIfCursorStuck(block, toPrevious: false);
-      }
-    }
-
-    return KeyEventResult.ignored;
-  }
-
-  void _hopIfCursorStuck(_EditorBlock block, {required bool toPrevious}) {
-    final before = block.controller.selection.baseOffset;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !block.focus.hasFocus) {
-        return;
-      }
-      if (block.controller.selection.baseOffset == before) {
-        if (toPrevious) {
-          _moveToPrevBlock(block, atEnd: true);
-        } else {
-          _moveToNextBlock(block, atStart: true);
-        }
-      }
-    });
-  }
-
-  bool _moveToPrevBlock(_EditorBlock block, {required bool atEnd}) {
-    final index = _blocks.indexOf(block);
-    if (index <= 0) {
-      return false;
-    }
-    final previous = _blocks[index - 1];
-    previous.focus.requestFocus();
-    final offset = atEnd ? previous.controller.text.length : 0;
-    previous.controller.selection = TextSelection.collapsed(offset: offset);
-    return true;
-  }
-
-  bool _moveToNextBlock(_EditorBlock block, {required bool atStart}) {
-    final index = _blocks.indexOf(block);
-    if (index < 0 || index >= _blocks.length - 1) {
-      return false;
-    }
-    final next = _blocks[index + 1];
-    next.focus.requestFocus();
-    final offset = atStart ? 0 : next.controller.text.length;
-    next.controller.selection = TextSelection.collapsed(offset: offset);
-    return true;
-  }
-
-  void _handleEnter(_EditorBlock block) {
-    final index = _blocks.indexOf(block);
-    final text = block.controller.text;
-    final selection = block.controller.selection;
-    final offset = selection.isValid
-        ? selection.baseOffset.clamp(0, text.length)
-        : text.length;
-    final before = text.substring(0, offset);
-    final after = text.substring(offset);
-
-    final isList =
-        block.kind == 'bulleted_list' ||
-        block.kind == 'numbered_list' ||
-        block.kind == 'todo';
-
-    // Enter on an empty list item exits the list.
-    if (isList && text.trim().isEmpty) {
-      block.kind = 'paragraph';
-      block.data = {};
-      block.controller.text = '';
-      setState(() {});
-      _send([
-        {
-          'type': 'update_block',
-          'block_id': block.id,
-          'kind': 'paragraph',
-          'text': '',
-          'data': <String, dynamic>{},
-        },
-      ]);
-      return;
-    }
-
-    final newKind = isList ? block.kind : 'paragraph';
-    final newData = block.kind == 'todo'
-        ? <String, dynamic>{'checked': false}
-        : <String, dynamic>{};
-
-    block.controller.text = before;
-    final created = _EditorBlock(
-      id: _genId(),
-      kind: newKind,
-      text: after,
-      data: Map<String, dynamic>.from(newData),
-    );
-    _attachKeyHandler(created);
-    setState(() => _blocks.insert(index + 1, created));
-    _send([
-      {'type': 'update_block', 'block_id': block.id, 'text': before},
-      _insertOp(created, index + 1, text: after, data: newData),
-    ]);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      created.focus.requestFocus();
-      created.controller.selection = const TextSelection.collapsed(offset: 0);
-    });
-  }
-
-  void _handleBackspaceMerge(_EditorBlock block) {
-    final index = _blocks.indexOf(block);
-    final previous = _blocks[index - 1];
-    final joinOffset = previous.controller.text.length;
-    final merged = previous.controller.text + block.controller.text;
-    previous.controller.text = merged;
-    setState(() => _blocks.removeAt(index));
-    final removedId = block.id;
-    block.dispose();
-    _send([
-      {'type': 'update_block', 'block_id': previous.id, 'text': merged},
-      {'type': 'delete_block', 'block_id': removedId},
-    ]);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      previous.focus.requestFocus();
-      previous.controller.selection = TextSelection.collapsed(offset: joinOffset);
-    });
-  }
-
-  void _onChanged(_EditorBlock block, String value) {
-    // Slash menu: typing "/" into an empty paragraph opens it; the text after
-    // the slash filters; a space or non-slash text dismisses it.
-    if (_slashEntry != null && _slashBlockId == block.id) {
-      if (value.startsWith('/') && !value.contains(' ')) {
-        _slashQuery = value.substring(1);
-        _slashEntry!.markNeedsBuild();
-        return;
-      }
-      _closeSlash();
-    } else if (block.kind == 'paragraph' && value == '/') {
-      _openSlash(block);
-      return;
-    }
-
-    if (block.kind == 'paragraph') {
-      final conversion = _detectMarkdown(value);
-      if (conversion != null) {
-        block.kind = conversion.kind;
-        block.data = conversion.data;
-        block.controller.value = TextEditingValue(
-          text: conversion.text,
-          selection: TextSelection.collapsed(offset: conversion.text.length),
-        );
-        setState(() {});
-        _send([
-          {
-            'type': 'update_block',
-            'block_id': block.id,
-            'kind': conversion.kind,
-            'text': conversion.text,
-            'data': conversion.data,
-          },
-        ]);
-        return;
-      }
-    }
-    _scheduleSave(block);
-  }
-
-  ({String kind, String text, Map<String, dynamic> data})? _detectMarkdown(
-    String value,
-  ) {
-    for (var level = 6; level >= 1; level--) {
-      final prefix = '${'#' * level} ';
-      if (value.startsWith(prefix)) {
-        return (
-          kind: 'heading',
-          text: value.substring(prefix.length),
-          data: {'level': level},
-        );
-      }
-    }
-    if (value.startsWith('- [ ] ')) {
-      return (kind: 'todo', text: value.substring(6), data: {'checked': false});
-    }
-    if (value.startsWith('- [x] ') || value.startsWith('- [X] ')) {
-      return (kind: 'todo', text: value.substring(6), data: {'checked': true});
-    }
-    if (value.startsWith('[] ')) {
-      return (kind: 'todo', text: value.substring(3), data: {'checked': false});
-    }
-    if (value.startsWith('- ') || value.startsWith('* ')) {
-      return (kind: 'bulleted_list', text: value.substring(2), data: {});
-    }
-    if (value.startsWith('> ')) {
-      return (kind: 'quote', text: value.substring(2), data: {});
-    }
-    if (value.startsWith('```')) {
-      return (kind: 'code_block', text: value.substring(3), data: {});
-    }
-    final numbered = RegExp(r'^(\d+)\.\s').firstMatch(value);
-    if (numbered != null) {
-      return (kind: 'numbered_list', text: value.substring(numbered.end), data: {});
-    }
-    return null;
-  }
-
-  void _scheduleSave(_EditorBlock block) {
-    block.saveTimer?.cancel();
-    block.saveTimer = Timer(const Duration(milliseconds: 450), () {
-      _send([
-        {'type': 'update_block', 'block_id': block.id, 'text': block.controller.text},
-      ]);
-    });
-  }
-
-  void _toggleTodo(_EditorBlock block) {
-    final checked = block.data['checked'] != true;
-    block.data = {...block.data, 'checked': checked};
-    setState(() {});
-    _send([
-      {'type': 'update_block', 'block_id': block.id, 'data': block.data},
-    ]);
-  }
-
-  void _changeKind(_EditorBlock block, String kind, {Map<String, dynamic>? data}) {
-    block.kind = kind;
-    block.data = data ?? {};
-    setState(() {});
-    _send([
-      {'type': 'update_block', 'block_id': block.id, 'kind': kind, 'data': block.data},
-    ]);
-    block.focus.requestFocus();
-  }
-
-  void _deleteBlock(_EditorBlock block) {
-    final index = _blocks.indexOf(block);
-    setState(() => _blocks.removeAt(index));
-    final removedId = block.id;
-    block.dispose();
-    _send([
-      {'type': 'delete_block', 'block_id': removedId},
-    ]);
-    if (_blocks.isNotEmpty) {
-      final neighbor = _blocks[index > 0 ? index - 1 : 0];
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => neighbor.focus.requestFocus(),
-      );
-    }
-  }
-
-  void _appendBlock() {
-    final block = _EditorBlock(id: _genId(), kind: 'paragraph', text: '', data: {});
-    _attachKeyHandler(block);
-    final index = _blocks.length;
-    setState(() => _blocks.add(block));
-    _send([_insertOp(block, index)]);
-    WidgetsBinding.instance.addPostFrameCallback((_) => block.focus.requestFocus());
-  }
-
-  /// Tapping the empty area below the last block: focus a trailing empty
-  /// paragraph if one exists, otherwise append one. No visible button.
-  void _appendOrFocusLast() {
-    if (_blocks.isNotEmpty) {
-      final last = _blocks.last;
-      if (last.kind == 'paragraph' && last.controller.text.isEmpty) {
-        last.focus.requestFocus();
-        return;
-      }
-    }
-    _appendBlock();
-  }
-
-  void _insertBlockBelow(_EditorBlock block) {
-    final index = _blocks.indexOf(block);
-    final created = _EditorBlock(id: _genId(), kind: 'paragraph', text: '', data: {});
-    _attachKeyHandler(created);
-    setState(() => _blocks.insert(index + 1, created));
-    _send([_insertOp(created, index + 1)]);
-    WidgetsBinding.instance.addPostFrameCallback((_) => created.focus.requestFocus());
-  }
-
-  // --- Slash menu -----------------------------------------------------------
-
-  List<_SlashOption> _filteredSlashOptions() {
-    final query = _slashQuery.toLowerCase();
-    if (query.isEmpty) {
-      return _slashOptions;
-    }
-    return _slashOptions
-        .where((option) => option.label.toLowerCase().contains(query))
-        .toList();
-  }
-
-  void _openSlash(_EditorBlock block) {
-    _slashEntry?.remove();
-    _slashBlockId = block.id;
-    _slashQuery = '';
-    _slashEntry = OverlayEntry(builder: _buildSlashOverlay);
-    Overlay.of(context).insert(_slashEntry!);
-  }
-
-  void _closeSlash() {
-    _slashEntry?.remove();
-    _slashEntry = null;
-    _slashBlockId = null;
-    _slashQuery = '';
-  }
-
-  void _applySlash(_EditorBlock block, _SlashOption option) {
-    _closeSlash();
-    block.kind = option.kind;
-    block.data = option.data == null
-        ? <String, dynamic>{}
-        : Map<String, dynamic>.from(option.data!);
-    block.controller.value = const TextEditingValue(
-      selection: TextSelection.collapsed(offset: 0),
-    );
-    setState(() {});
-    _send([
-      {
-        'type': 'update_block',
-        'block_id': block.id,
-        'kind': block.kind,
-        'text': '',
-        'data': block.data,
-      },
-    ]);
-    WidgetsBinding.instance.addPostFrameCallback((_) => block.focus.requestFocus());
-  }
-
-  Widget _buildSlashOverlay(BuildContext context) {
-    final block = _blocks
-        .where((item) => item.id == _slashBlockId)
-        .firstOrNull;
-    if (block == null) {
-      return const SizedBox.shrink();
-    }
-    final options = _filteredSlashOptions();
-
-    return Stack(
-      children: [
-        // Tap-outside barrier.
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: _closeSlash,
-          ),
-        ),
-        CompositedTransformFollower(
-          link: block.link,
-          showWhenUnlinked: false,
-          targetAnchor: Alignment.bottomLeft,
-          followerAnchor: Alignment.topLeft,
-          offset: const Offset(0, 6),
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: Material(
-              elevation: 8,
-              borderRadius: BorderRadius.circular(8),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 260, maxHeight: 320),
-                child: options.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('No matching block'),
-                      )
-                    : ListView(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        shrinkWrap: true,
-                        children: [
-                          for (final option in options)
-                            ListTile(
-                              dense: true,
-                              leading: Icon(option.icon, size: 20),
-                              title: Text(option.label),
-                              onTap: () => _applySlash(block, option),
-                            ),
-                        ],
-                      ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Map<String, dynamic> _insertOp(
-    _EditorBlock block,
-    int index, {
-    String text = '',
-    Map<String, dynamic> data = const {},
-  }) {
-    return {
-      'type': 'insert_block',
-      'parent_id': widget.rootBlockId,
-      'index': index,
-      'block': {
-        'id': block.id,
-        'type': block.kind,
-        'text': text,
-        'data': data,
-        'children': <String>[],
-      },
-    };
-  }
-
-  void _send(List<Map<String, dynamic>> operations) {
-    _sendChain = _sendChain
-        .then((_) => widget.onApplyOperations(operations))
-        .catchError((_) {});
-  }
-
-  String _genId() => 'block_${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
-
-  int _ordinal(int index) {
-    var ordinal = 1;
-    for (var j = index - 1; j >= 0; j--) {
-      if (_blocks[j].kind == 'numbered_list') {
-        ordinal++;
-      } else {
-        break;
-      }
-    }
-    return ordinal;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (var i = 0; i < _blocks.length; i++) _buildBlock(context, _blocks[i], i),
-        // Invisible click target below the document: tapping it continues
-        // writing, the way clicking under the text does in Word/Typora.
-        if (widget.canEdit)
-          GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: _appendOrFocusLast,
-            child: const SizedBox(height: 96, width: double.infinity),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildBlock(BuildContext context, _EditorBlock block, int index) {
-    Widget content;
-    switch (block.kind) {
-      case 'bulleted_list':
-        content = Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(top: 6, right: 8),
-              child: Text('•', style: TextStyle(fontSize: 16)),
-            ),
-            Expanded(child: _blockField(block, hint: 'List item')),
-          ],
-        );
-      case 'numbered_list':
-        content = Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 6, right: 8),
-              child: Text('${_ordinal(index)}.', style: const TextStyle(fontSize: 14)),
-            ),
-            Expanded(child: _blockField(block, hint: 'List item')),
-          ],
-        );
-      case 'todo':
-        final checked = block.data['checked'] == true;
-        content = Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 28,
-              height: 32,
-              child: Checkbox(
-                value: checked,
-                visualDensity: VisualDensity.compact,
-                onChanged: widget.canEdit ? (_) => _toggleTodo(block) : null,
-              ),
-            ),
-            const SizedBox(width: 4),
-            Expanded(child: _blockField(block, hint: 'To-do')),
-          ],
-        );
-      case 'quote':
-        content = Container(
-          decoration: const BoxDecoration(
-            border: Border(left: BorderSide(color: Color(0xFFCBD5E1), width: 3)),
-          ),
-          padding: const EdgeInsets.only(left: 12),
-          child: _blockField(block, hint: 'Quote'),
-        );
-      case 'code_block':
-        content = Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFFF1F5F9),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: _blockField(block, hint: 'Code'),
-        );
-      case 'heading':
-        content = _blockField(block, hint: 'Heading');
-      default:
-        content = _blockField(
-          block,
-          hint: index == 0
-              ? "Write, or press '/' for commands"
-              : null,
-        );
-    }
-
-    final hovered = _hoveredId == block.id;
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hoveredId = block.id),
-      onExit: (_) {
-        if (_hoveredId == block.id) {
-          setState(() => _hoveredId = null);
-        }
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Reserved gutter keeps the text aligned; the handle only appears
-            // on hover, so the resting page shows no block chrome.
-            SizedBox(
-              width: 28,
-              child: widget.canEdit && hovered
-                  ? Align(alignment: Alignment.topCenter, child: _blockMenu(block))
-                  : null,
-            ),
-            Expanded(
-              child: CompositedTransformTarget(link: block.link, child: content),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _blockField(_EditorBlock block, {String? hint}) {
-    final theme = Theme.of(context);
-    TextStyle? style;
-    switch (block.kind) {
-      case 'heading':
-        final level = (block.data['level'] as num?)?.toInt() ?? 1;
-        style = (level <= 1
-                ? theme.textTheme.headlineSmall
-                : level == 2
-                ? theme.textTheme.titleLarge
-                : theme.textTheme.titleMedium)
-            ?.copyWith(fontWeight: FontWeight.w700);
-      case 'code_block':
-        style = const TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 13.5,
-          height: 1.5,
-        );
-      case 'quote':
-        style = theme.textTheme.bodyLarge?.copyWith(
-          fontStyle: FontStyle.italic,
-          color: const Color(0xFF475569),
-        );
-      case 'todo':
-        final checked = block.data['checked'] == true;
-        style = theme.textTheme.bodyLarge?.copyWith(
-          decoration: checked ? TextDecoration.lineThrough : null,
-          color: checked ? const Color(0xFF94A3B8) : null,
-        );
-      default:
-        style = theme.textTheme.bodyLarge?.copyWith(height: 1.5);
-    }
-
-    return TextField(
-      controller: block.controller,
-      focusNode: block.focus,
-      readOnly: !widget.canEdit,
-      style: style,
-      maxLines: null,
-      keyboardType: TextInputType.multiline,
-      textInputAction: TextInputAction.newline,
-      onChanged: (value) => _onChanged(block, value),
-      decoration: InputDecoration(
-        isDense: true,
-        border: InputBorder.none,
-        hintText: hint,
-        contentPadding: const EdgeInsets.symmetric(vertical: 4),
-      ),
-    );
-  }
-
-  Widget _blockMenu(_EditorBlock block) {
-    return PopupMenuButton<String>(
-      tooltip: 'Block options',
-      icon: const Icon(Icons.drag_indicator, size: 18, color: Color(0xFFB4BCC8)),
-      iconSize: 18,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(),
-      splashRadius: 16,
-      onSelected: (value) => _onMenu(block, value),
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'add_below', child: Text('Add block below')),
-        PopupMenuDivider(),
-        PopupMenuItem(value: 'paragraph', child: Text('Turn into Text')),
-        PopupMenuItem(value: 'heading1', child: Text('Turn into Heading 1')),
-        PopupMenuItem(value: 'heading2', child: Text('Turn into Heading 2')),
-        PopupMenuItem(value: 'heading3', child: Text('Turn into Heading 3')),
-        PopupMenuItem(value: 'bulleted_list', child: Text('Turn into Bulleted list')),
-        PopupMenuItem(value: 'numbered_list', child: Text('Turn into Numbered list')),
-        PopupMenuItem(value: 'todo', child: Text('Turn into To-do')),
-        PopupMenuItem(value: 'quote', child: Text('Turn into Quote')),
-        PopupMenuItem(value: 'code_block', child: Text('Turn into Code')),
-        PopupMenuDivider(),
-        PopupMenuItem(value: 'delete', child: Text('Delete')),
-      ],
-    );
-  }
-
-  void _onMenu(_EditorBlock block, String value) {
-    switch (value) {
-      case 'add_below':
-        _insertBlockBelow(block);
-      case 'delete':
-        _deleteBlock(block);
-      case 'heading1':
-        _changeKind(block, 'heading', data: {'level': 1});
-      case 'heading2':
-        _changeKind(block, 'heading', data: {'level': 2});
-      case 'heading3':
-        _changeKind(block, 'heading', data: {'level': 3});
-      case 'todo':
-        _changeKind(block, 'todo', data: {'checked': false});
-      default:
-        _changeKind(block, value);
-    }
-  }
-}
