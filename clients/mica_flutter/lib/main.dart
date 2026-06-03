@@ -914,6 +914,26 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Re-host a pasted image URL server-side, returning the new file id + name.
+  Future<({String fileId, String name})?> _importEditorImageUrl(
+    String url,
+  ) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null) return null;
+    try {
+      final file = await _api.importImageUrl(
+        session.accessToken,
+        workspace.id,
+        url,
+      );
+      return (fileId: file.id, name: file.name);
+    } catch (error) {
+      if (mounted) setState(() => _message = error.toString());
+      return null;
+    }
+  }
+
   /// Resolve an image file id to a fresh signed URL and fetch its bytes (so the
   /// editor can decode + paint it on the canvas).
   Future<Uint8List?> _loadEditorImageBytes(String fileId) async {
@@ -1168,6 +1188,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onMoveBlock: _moveBlock,
                 onApplyOperations: _applyEditorOperations,
                 onUploadImage: _uploadEditorImage,
+                onImportImageUrl: _importEditorImageUrl,
                 onLoadImageBytes: _loadEditorImageBytes,
                 onAiStream: _aiStream,
                 onAiNewPage: _aiNewPageFromMarkdown,
@@ -1407,6 +1428,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onMoveBlock,
     required this.onApplyOperations,
     required this.onUploadImage,
+    required this.onImportImageUrl,
     required this.onLoadImageBytes,
     required this.onAiStream,
     required this.onAiNewPage,
@@ -1477,6 +1499,8 @@ class WorkspaceView extends StatefulWidget {
     String mimeType,
   )
   onUploadImage;
+  final Future<({String fileId, String name})?> Function(String url)
+  onImportImageUrl;
   final Future<Uint8List?> Function(String fileId) onLoadImageBytes;
   final Stream<String> Function(String prompt, {String? system}) onAiStream;
   final Future<void> Function(String markdown) onAiNewPage;
@@ -2048,6 +2072,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       canEdit: canEdit,
                       onApplyOperations: widget.onApplyOperations,
                       onUploadImage: widget.onUploadImage,
+                      onImportImageUrl: widget.onImportImageUrl,
                       onLoadImageBytes: widget.onLoadImageBytes,
                       onAiStream: widget.onAiStream,
                       appearance: widget.appearance,
@@ -4645,6 +4670,21 @@ class ApiClient {
       token: token,
     );
     return UploadedFile.fromResponse(complete);
+  }
+
+  /// Re-host a remote image by URL (server-side fetch + store), avoiding dead
+  /// links. Returns the new file id + name.
+  Future<UploadedFile> importImageUrl(
+    String token,
+    String workspaceId,
+    String url,
+  ) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/files/import-url',
+      {'url': url},
+      token: token,
+    );
+    return UploadedFile.fromResponse(response);
   }
 
   /// Resolve image file ids to fresh (signed) download URLs. Returns a

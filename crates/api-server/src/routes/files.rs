@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
   Json,
@@ -9,6 +10,7 @@ use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult, S3Config};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
@@ -51,6 +53,11 @@ pub struct FileResponse {
 #[derive(Debug, Deserialize)]
 pub struct ResolveRequest {
   ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportUrlRequest {
+  url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,6 +154,113 @@ pub async fn resolve(
   Ok(Json(ResolveResponse { files }))
 }
 
+/// `POST /api/workspaces/{workspace_id}/files/import-url`
+///
+/// Server-side fetch a remote image and re-host it (so pasted image URLs don't
+/// rot). The bytes are downloaded here, content-addressed, uploaded to storage
+/// via a self-issued presigned PUT, and recorded — returning a file like a
+/// normal upload.
+pub async fn import_url(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<ImportUrlRequest>,
+) -> ApiResult<Json<FileResponse>> {
+  let user_id = user_id_from_headers(&state, &headers)?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  let storage = storage(&state)?;
+
+  let url = payload.url.trim();
+  if !(url.starts_with("http://") || url.starts_with("https://")) {
+    return Err(ApiError::BadRequest("url must be http(s)".to_string()));
+  }
+
+  let client = reqwest::Client::builder()
+    .timeout(Duration::from_secs(20))
+    .build()
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+  let response = client
+    .get(url)
+    .send()
+    .await
+    .map_err(|_| ApiError::BadRequest("could not fetch the image url".to_string()))?;
+  if !response.status().is_success() {
+    return Err(ApiError::BadRequest(format!(
+      "image url returned {}",
+      response.status()
+    )));
+  }
+
+  let header_mime = response
+    .headers()
+    .get(reqwest::header::CONTENT_TYPE)
+    .and_then(|v| v.to_str().ok())
+    .map(|s| s.split(';').next().unwrap_or(s).trim().to_string())
+    .unwrap_or_default();
+
+  let bytes = response
+    .bytes()
+    .await
+    .map_err(|_| ApiError::BadRequest("could not read the image url".to_string()))?;
+  let byte_size = bytes.len() as i64;
+  validate_byte_size(byte_size, storage.max_upload_bytes)?;
+
+  // Determine MIME + extension (header first, else the URL's extension).
+  let ext = mime_to_ext(&header_mime)
+    .map(str::to_string)
+    .or_else(|| file_extension(url));
+  let mime = if header_mime.starts_with("image/") {
+    header_mime
+  } else {
+    match ext.as_deref().and_then(ext_to_mime) {
+      Some(m) => m.to_string(),
+      None => return Err(ApiError::BadRequest("url is not an image".to_string())),
+    }
+  };
+
+  let hash = {
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()
+  };
+  let object_key = match &ext {
+    Some(ext) => format!("workspaces/{workspace_id}/{hash}.{ext}"),
+    None => format!("workspaces/{workspace_id}/{hash}"),
+  };
+
+  // Upload via a self-issued presigned PUT (storage signs; we do the PUT).
+  let upload = storage.presign_put(&object_key);
+  let put = client
+    .put(&upload.url)
+    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .body(bytes.to_vec())
+    .send()
+    .await
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+  if !put.status().is_success() {
+    return Err(ApiError::Internal(format!(
+      "storage upload returned {}",
+      put.status()
+    )));
+  }
+
+  let original_name = sanitize_file_name(&url_file_name(url, ext.as_deref()));
+  let file = store::insert_file(
+    &state.db,
+    workspace_id,
+    user_id,
+    &object_key,
+    &original_name,
+    &mime,
+    byte_size,
+  )
+  .await?;
+  let download_url = storage.download_url(&file.object_key);
+
+  Ok(Json(FileResponse { file, download_url }))
+}
+
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}`
 ///
 /// Returns file metadata and a fresh download URL.
@@ -231,14 +345,57 @@ fn build_object_key(workspace_id: Uuid, content_hash: &str, file_name: &str) -> 
   Ok(format!("workspaces/{workspace_id}/{name}"))
 }
 
-/// Lowercase alphanumeric extension of [file_name], or None.
+/// Lowercase alphanumeric extension of [file_name], or None. Ignores any query
+/// string / fragment so URLs like `a.png?x=1` still resolve to `png`.
 fn file_extension(file_name: &str) -> Option<String> {
-  let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+  let path = file_name.split(['?', '#']).next().unwrap_or(file_name);
+  let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
   let ext = base.rsplit_once('.')?.1;
   if ext.is_empty() || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
     return None;
   }
   Some(ext.to_ascii_lowercase())
+}
+
+fn mime_to_ext(mime: &str) -> Option<&'static str> {
+  match mime {
+    "image/png" => Some("png"),
+    "image/jpeg" => Some("jpg"),
+    "image/gif" => Some("gif"),
+    "image/webp" => Some("webp"),
+    "image/bmp" => Some("bmp"),
+    "image/svg+xml" => Some("svg"),
+    "image/avif" => Some("avif"),
+    _ => None,
+  }
+}
+
+fn ext_to_mime(ext: &str) -> Option<&'static str> {
+  match ext {
+    "png" => Some("image/png"),
+    "jpg" | "jpeg" => Some("image/jpeg"),
+    "gif" => Some("image/gif"),
+    "webp" => Some("image/webp"),
+    "bmp" => Some("image/bmp"),
+    "svg" => Some("image/svg+xml"),
+    "avif" => Some("image/avif"),
+    _ => None,
+  }
+}
+
+/// Derive a display filename from a URL's last path segment (falling back to
+/// `image.<ext>`).
+fn url_file_name(url: &str, ext: Option<&str>) -> String {
+  let path = url.split(['?', '#']).next().unwrap_or(url);
+  let base = path.rsplit('/').next().unwrap_or("");
+  if base.contains('.') && !base.is_empty() {
+    base.to_string()
+  } else {
+    match ext {
+      Some(ext) => format!("image.{ext}"),
+      None => "image".to_string(),
+    }
+  }
 }
 
 /// Confirm a client-provided object key belongs to this workspace, blocking

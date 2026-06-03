@@ -38,6 +38,7 @@ class MicaEditor extends StatefulWidget {
     required this.onApplyOperations,
     this.onAiStream,
     this.onUploadImage,
+    this.onImportImageUrl,
     this.onLoadImageBytes,
     this.appearance = const EditorAppearance(),
     super.key,
@@ -66,6 +67,11 @@ class MicaEditor extends StatefulWidget {
     String fileName,
     String mimeType,
   )? onUploadImage;
+
+  /// Re-host a pasted image URL server-side (avoids dead links), returning the
+  /// new `(file_id, name)`. When null, pasted image URLs are left as text.
+  final Future<({String fileId, String name})?> Function(String url)?
+  onImportImageUrl;
 
   /// Resolve an image `file_id` to its bytes (the host resolves a fresh signed
   /// URL and fetches it). Used to paint image nodes on the canvas.
@@ -238,6 +244,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return true;
     }
 
+    // A bare image URL: re-host it (server-side fetch) so the link can't rot,
+    // then insert an image block instead of pasting the raw link text.
+    final trimmed = plain.trim();
+    if (!rich && widget.onImportImageUrl != null && _looksLikeImageUrl(trimmed)) {
+      _importAndInsertImageUrl(trimmed);
+      return true;
+    }
+
     if (markdown.trim().isEmpty) return false;
     if (rich || markdown.contains('\n')) {
       _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
@@ -245,6 +259,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return true;
     }
     return false;
+  }
+
+  static final RegExp _imageUrlRe = RegExp(
+    r'^https?://\S+\.(png|jpe?g|gif|webp|bmp|svg|avif)(\?\S*)?$',
+    caseSensitive: false,
+  );
+
+  bool _looksLikeImageUrl(String text) =>
+      !text.contains(RegExp(r'\s')) && _imageUrlRe.hasMatch(text);
+
+  Future<void> _importAndInsertImageUrl(String url) async {
+    final import = widget.onImportImageUrl;
+    if (import == null) return;
+    final result = await import(url);
+    if (result == null || !mounted) return;
+    _controller.insertImage(fileId: result.fileId, name: result.name);
+    _syncImeFromSelection(force: true);
   }
 
   // ---------------------------------------------------------------------------
