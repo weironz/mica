@@ -444,13 +444,13 @@ class RenderDocument extends RenderBox {
         ..codeWrap = codeWrap
         ..codeWidth = isCode ? painter.width : 0;
 
-      // Code blocks reserve a toolbar row above the text.
-      final innerTop = isCode ? EditorTheme.codePadV + EditorTheme.codeToolbar : 0.0;
+      // Code blocks pad symmetrically; their controls float at the bottom-right
+      // on hover (no reserved top toolbar row).
+      final innerTop = isCode ? EditorTheme.codePadV : 0.0;
       layout.boxTop = y;
       layout.textTop = y + innerTop;
       layout.textHeight = painter.height;
-      layout.boxHeight = painter.height +
-          (isCode ? 2 * EditorTheme.codePadV + EditorTheme.codeToolbar : 0);
+      layout.boxHeight = painter.height + (isCode ? 2 * EditorTheme.codePadV : 0);
 
       if (node.kind == 'numbered_list') {
         consecutiveNumbered += 1;
@@ -464,31 +464,6 @@ class RenderDocument extends RenderBox {
         layout.checkbox = Rect.fromLTWH(2, layout.textTop + (lh - box) / 2, box, box);
       }
       if (isCode) {
-        // Language selector (top-left) + wrap & copy icons (top-right).
-        final marker = TextPainter(
-          text: TextSpan(
-            text: '${layout.langText}  ▾',
-            style: const TextStyle(fontSize: 11, color: EditorTheme.muted),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        layout.langLabel = Rect.fromLTWH(
-          8,
-          layout.boxTop + 4,
-          marker.width + 14,
-          marker.height + 6,
-        );
-        marker.dispose();
-        const iconBox = 22.0;
-        layout.copyButton =
-            Rect.fromLTWH(maxWidth - iconBox - 8, layout.boxTop + 3, iconBox, iconBox);
-        layout.wrapButton = Rect.fromLTWH(
-          maxWidth - 2 * iconBox - 12,
-          layout.boxTop + 3,
-          iconBox,
-          iconBox,
-        );
-
         // Keep the caret visible by auto-scrolling the code horizontally — but
         // only when the caret actually moved, so blink/re-layout or a manual
         // scrollbar drag is never yanked back to the caret.
@@ -525,6 +500,32 @@ class RenderDocument extends RenderBox {
             barH,
           );
         }
+
+        // Controls float at the bottom-right (above the scrollbar if present):
+        // language selector + wrap + copy, right-aligned.
+        const iconBox = 22.0;
+        final marker = TextPainter(
+          text: TextSpan(
+            text: '${layout.langText}  ▾',
+            style: const TextStyle(fontSize: 11, color: EditorTheme.muted),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        final labelW = marker.width + 14;
+        final labelH = marker.height + 6;
+        marker.dispose();
+        final bottomLimit = layout.scrollTrack?.top ?? (layout.boxTop + layout.boxHeight);
+        final iconY = bottomLimit - iconBox - 4;
+        layout.copyButton =
+            Rect.fromLTWH(maxWidth - iconBox - 8, iconY, iconBox, iconBox);
+        layout.wrapButton =
+            Rect.fromLTWH(maxWidth - 2 * iconBox - 12, iconY, iconBox, iconBox);
+        layout.langLabel = Rect.fromLTWH(
+          maxWidth - 2 * iconBox - 12 - labelW - 6,
+          iconY + (iconBox - labelH) / 2,
+          labelW,
+          labelH,
+        );
       }
 
       _layouts.add(layout);
