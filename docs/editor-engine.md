@@ -364,15 +364,21 @@ The recurring problem the engine must get right for every node type:
    (composition, stray newlines), and caret scroll-into-view.
 2. **Selection:** mouse drag + Shift-key ranged selection across blocks;
    select-all; delete-selection; copy/cut/paste (internal + Markdown + plain).
-3. **Markdown input rules + slash menu** on the new surface; inline marks
-   (bold/italic/code/link) with the chosen storage from Open Question 1.
+3. **Markdown input rules + slash menu — DONE.** on the new surface; inline
+   marks (bold/italic/code/strike/link) stored additively over plain text in
+   `data.marks` (`[start,end)` ranges; see `marks.dart`).
    *Done:* block-level input rules (`# `…`###### `, `- `/`* `, `1. `, `> `,
    ` ``` `, and `- ` then `[ ] `/`[x] ` → todo) convert the block and strip the
    marker as you type; the `/` slash menu (filter, ↑/↓, Enter/Tab to apply, Esc
    to dismiss) converts the focused block — both live in
    `controller.applyInputRules` / `applySlashCommand` and the editor's slash
-   overlay. *Pending:* inline marks (bold/italic/code/link) over plain text,
-   and inline input rules (`**b**`, `*i*`, `` `code` ``, `[t](url)`).
+   overlay. Inline marks: rendered via `buildMarkedSpan`; toggled with
+   Ctrl/Cmd+B/I/E and Ctrl/Cmd+K (link) and a floating selection toolbar;
+   Cmd/Ctrl+click opens a link. Inline input rules (`**b**`, `*i*`/`_i_`,
+   `` `code` ``, `~~s~~`, `[t](url)`) convert and strip markers as you type
+   (`controller._applyInlineRule`), preserving nested marks. Paste/AI/import run
+   `parseInline`; copy/export round-trip via `inlineToMarkdown` (client) and the
+   Rust mirror in `crates/app-core/src/documents.rs`.
 4. **Undo/redo** via transactions.
 5. **Void nodes:** divider, image (files API), with the selection/deletion
    semantics above.

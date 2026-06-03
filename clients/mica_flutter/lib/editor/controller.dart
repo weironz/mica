@@ -719,7 +719,117 @@ class EditorController extends ChangeNotifier {
         }
       }
     }
+
+    // Inline rules: a just-typed closing marker (or `)` for a link) converts the
+    // wrapped run into a mark and strips the syntax. Code blocks carry no marks.
+    if (node.kind != 'code_block' && node.kind != 'table') {
+      if (_applyInlineRule(node, i, text, caret)) return true;
+    }
     return false;
+  }
+
+  /// Detect an inline-Markdown span ending at [caret] and, if found, strip its
+  /// markers, apply the mark (shifting existing marks), and place the caret after
+  /// the converted run. Returns true on conversion.
+  bool _applyInlineRule(EditorNode node, int i, String text, int caret) {
+    // Resolved span to convert: text[innerStart, innerEnd) becomes the marked
+    // run after the markers in [matchStart, caret) are removed.
+    int matchStart = -1, innerStart = -1, innerEnd = -1;
+    String? type;
+    String? href;
+
+    // Link: [label](url) — closing `)` just typed.
+    if (text.endsWith(')')) {
+      final m = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)$')
+          .firstMatch(text.substring(0, caret));
+      if (m != null) {
+        matchStart = m.start;
+        innerStart = m.start + 1; // after '['
+        innerEnd = m.start + 1 + m.group(1)!.length; // before ']'
+        type = 'link';
+        href = m.group(2);
+      }
+    }
+
+    // Two-char wrappers: **bold**, ~~strike~~.
+    if (type == null && caret >= 4) {
+      for (final mk in const [('**', 'bold'), ('~~', 'strike')]) {
+        if (text.substring(caret - 2, caret) != mk.$1) continue;
+        final open = text.lastIndexOf(mk.$1, caret - 3);
+        if (open < 0) continue;
+        final s = open + 2;
+        final e = caret - 2;
+        if (e <= s || text.substring(s, e).trim().isEmpty) continue;
+        matchStart = open;
+        innerStart = s;
+        innerEnd = e;
+        type = mk.$2;
+        break;
+      }
+    }
+
+    // One-char wrappers: `code`, *italic*, _italic_.
+    if (type == null && caret >= 3) {
+      for (final mk in const [('`', 'code'), ('*', 'italic'), ('_', 'italic')]) {
+        final ch = mk.$1;
+        if (text[caret - 1] != ch) continue;
+        final open = text.lastIndexOf(ch, caret - 2);
+        if (open < 0) continue;
+        // Skip markers that are part of a two-char wrapper (e.g. the `*` in `**`).
+        if (open > 0 && text[open - 1] == ch) continue;
+        if (text[caret - 2] == ch) continue;
+        final s = open + 1;
+        final e = caret - 1;
+        if (e <= s || text.substring(s, e).trim().isEmpty) continue;
+        matchStart = open;
+        innerStart = s;
+        innerEnd = e;
+        type = mk.$2;
+        break;
+      }
+    }
+
+    if (type == null) return false;
+
+    final inner = text.substring(innerStart, innerEnd);
+    final newText = text.substring(0, matchStart) + inner + text.substring(caret);
+
+    // Shift existing marks for the two marker deletions (right side first so the
+    // left offsets stay valid), then add the new mark over the converted run.
+    var marks = marksFromData(node.data);
+    // Right deletion: [innerEnd, caret).
+    marks = shiftMarks(
+      marks,
+      innerEnd,
+      caret,
+      innerEnd - caret,
+      text.length - (caret - innerEnd),
+    );
+    // Left deletion: [matchStart, innerStart).
+    marks = shiftMarks(
+      marks,
+      matchStart,
+      innerStart,
+      matchStart - innerStart,
+      newText.length,
+    );
+    final markEnd = matchStart + inner.length;
+    marks = applyMark(marks, matchStart, markEnd, type, href: href, add: true);
+
+    node
+      ..text = newText
+      ..data = {...node.data, 'marks': marksToJson(marks)};
+    _dirty.remove(node.id);
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': newText,
+        'data': node.data,
+      },
+    ]);
+    collapseTo(DocPosition(i, markEnd));
+    return true;
   }
 
   /// Apply a slash-menu choice: remove the `/query` text in [start, end) and
