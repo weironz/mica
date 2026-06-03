@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/editor.dart';
+import 'upload/sha256.dart';
 
 /// Dev convenience: when true, the app signs in automatically on startup so you
 /// don't have to log in on every reload. Turn it off for a real login screen:
@@ -4542,6 +4543,73 @@ class ApiClient {
     return response['markdown'] as String? ?? '';
   }
 
+  /// Upload an image: presign a content-addressed key, PUT the bytes directly to
+  /// object storage, then record metadata. Returns the new file id + name.
+  Future<UploadedFile> uploadImage(
+    String token,
+    String workspaceId, {
+    required String fileName,
+    required String mimeType,
+    required Uint8List bytes,
+  }) async {
+    final hash = sha256Hex(bytes);
+    final presign = await _post(
+      '/api/workspaces/$workspaceId/files/presign',
+      {
+        'file_name': fileName,
+        'mime_type': mimeType,
+        'byte_size': bytes.length,
+        'content_hash': hash,
+      },
+      token: token,
+    );
+    final objectKey = presign['object_key'] as String;
+    final uploadUrl = presign['upload_url'] as String;
+
+    final put = await http.put(
+      Uri.parse(uploadUrl),
+      headers: {'content-type': mimeType},
+      body: bytes,
+    );
+    if (put.statusCode < 200 || put.statusCode >= 300) {
+      throw ApiException('upload failed (HTTP ${put.statusCode})');
+    }
+
+    final complete = await _post(
+      '/api/workspaces/$workspaceId/files/complete',
+      {
+        'object_key': objectKey,
+        'file_name': fileName,
+        'mime_type': mimeType,
+        'byte_size': bytes.length,
+      },
+      token: token,
+    );
+    return UploadedFile.fromResponse(complete);
+  }
+
+  /// Resolve image file ids to fresh (signed) download URLs. Returns a
+  /// `fileId -> url` map; unknown ids are simply absent.
+  Future<Map<String, String>> resolveFiles(
+    String token,
+    String workspaceId,
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return {};
+    final response = await _post(
+      '/api/workspaces/$workspaceId/files/resolve',
+      {'ids': ids},
+      token: token,
+    );
+    final files = (response['files'] as List<dynamic>? ?? []);
+    final out = <String, String>{};
+    for (final raw in files) {
+      final f = UploadedFile.fromResponse(raw as Map<String, dynamic>);
+      out[f.id] = f.downloadUrl;
+    }
+    return out;
+  }
+
   Future<Map<String, dynamic>> _get(String path, String token) async {
     final response = await http.get(
       _baseUri.replace(path: path),
@@ -4616,6 +4684,31 @@ class ApiClient {
       port: 8080,
     );
   }
+}
+
+class UploadedFile {
+  const UploadedFile({
+    required this.id,
+    required this.name,
+    required this.mimeType,
+    required this.downloadUrl,
+  });
+
+  /// Parse a `{file: {...}, download_url}` payload from presign-complete/resolve.
+  factory UploadedFile.fromResponse(Map<String, dynamic> json) {
+    final file = json['file'] as Map<String, dynamic>;
+    return UploadedFile(
+      id: file['id'] as String,
+      name: file['original_name'] as String? ?? '',
+      mimeType: file['mime_type'] as String? ?? '',
+      downloadUrl: json['download_url'] as String? ?? '',
+    );
+  }
+
+  final String id;
+  final String name;
+  final String mimeType;
+  final String downloadUrl;
 }
 
 class AuthSession {
