@@ -442,8 +442,10 @@ class EditorController extends ChangeNotifier {
   }
 
   /// Serialize the current ranged selection to text (tables become GFM). Empty
-  /// when the selection is collapsed/absent.
-  String selectionText() {
+  /// when the selection is collapsed/absent. [imageUrls] maps an image's
+  /// `file_id` to a fresh download URL so copied Markdown links actually resolve
+  /// (falling back to the external url, then the bare filename).
+  String selectionText({Map<String, String>? imageUrls}) {
     final sel = selection;
     if (sel == null || sel.isCollapsed) return '';
     final s = sel.start;
@@ -455,7 +457,11 @@ class EditorController extends ChangeNotifier {
         return tableToMarkdown(TableData.fromBlock(node.data));
       }
       if (node.kind == 'image') {
-        final target = (node.data['name'] ?? node.data['url'] ?? '') as String;
+        final fileId = node.data['file_id'] as String?;
+        final target = (imageUrls?[fileId] ??
+            node.data['url'] ??
+            node.data['name'] ??
+            '') as String;
         return '![${node.text}]($target)';
       }
       if (node.kind == 'divider') return '---';

@@ -42,6 +42,7 @@ class MicaEditor extends StatefulWidget {
     this.onUploadImage,
     this.onImportImageUrl,
     this.onLoadImageBytes,
+    this.onResolveImageUrls,
     this.appearance = const EditorAppearance(),
     super.key,
   });
@@ -79,6 +80,11 @@ class MicaEditor extends StatefulWidget {
   /// URL and fetches it). Used to paint image nodes on the canvas.
   final Future<Uint8List?> Function(String fileId)? onLoadImageBytes;
 
+  /// Batch-resolve image `file_id`s to fresh download URLs (for copy/export so
+  /// pasted Markdown links resolve). Cached eagerly when the document changes.
+  final Future<Map<String, String>> Function(List<String> fileIds)?
+  onResolveImageUrls;
+
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
 
@@ -109,6 +115,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   final Map<String, ui.Image> _imageCache = {};
   final Set<String> _imageErrors = {};
   final Set<String> _imageLoading = {};
+  // file_id -> fresh download URL, for copy/export of images.
+  final Map<String, String> _imageUrlCache = {};
   // Active table column resize: node, right-column index, start x, start weights.
   ({int node, int col, double startX, List<double> weights, double avail})?
   _colResize;
@@ -204,6 +212,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       setState(() {});
       _restartBlink();
       _refreshMarkBar();
+      _cacheImageUrls();
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).
@@ -541,7 +550,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     if (accel && key == LogicalKeyboardKey.keyC) {
-      final text = _controller.selectionText();
+      final text = _controller.selectionText(imageUrls: _imageUrlCache);
       if (text.isEmpty) return KeyEventResult.ignored;
       copyTextToClipboard(text).then((_) {
         if (mounted) _focus.requestFocus();
@@ -550,7 +559,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     if (accel && key == LogicalKeyboardKey.keyX) {
-      final text = _controller.selectionText();
+      final text = _controller.selectionText(imageUrls: _imageUrlCache);
       if (text.isEmpty) return KeyEventResult.ignored;
       copyTextToClipboard(text).then((_) {
         if (!mounted) return;
@@ -1037,6 +1046,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _imageLoading.remove(fileId);
         setState(() => _imageErrors.add(fileId));
       }
+    });
+  }
+
+  /// Resolve fresh download URLs for any image file_ids not yet cached, so copy
+  /// can emit working Markdown links synchronously (no gesture-breaking await).
+  void _cacheImageUrls() {
+    final resolve = widget.onResolveImageUrls;
+    if (resolve == null) return;
+    final ids = <String>[];
+    for (final n in _controller.nodes) {
+      if (n.kind != 'image') continue;
+      final id = n.data['file_id'] as String?;
+      if (id != null && !_imageUrlCache.containsKey(id)) ids.add(id);
+    }
+    if (ids.isEmpty) return;
+    resolve(ids).then((map) {
+      if (mounted) _imageUrlCache.addAll(map);
     });
   }
 

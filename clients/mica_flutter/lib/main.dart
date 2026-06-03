@@ -939,6 +939,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Batch-resolve image file ids to fresh signed download URLs (for copy/export).
+  Future<Map<String, String>> _resolveEditorImageUrls(List<String> ids) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null || ids.isEmpty) return {};
+    try {
+      return await _api.resolveFiles(session.accessToken, workspace.id, ids);
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// Fetch an image's bytes for the canvas. The key is either an external URL
   /// (markdown image) — fetched directly — or a file id, resolved to a fresh
   /// signed URL first.
@@ -1201,6 +1213,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onUploadImage: _uploadEditorImage,
                 onImportImageUrl: _importEditorImageUrl,
                 onLoadImageBytes: _loadEditorImageBytes,
+                onResolveImageUrls: _resolveEditorImageUrls,
                 onAiStream: _aiStream,
                 onAiNewPage: _aiNewPageFromMarkdown,
                 onAiCurrentPage: _selectedBootstrap == null
@@ -1441,6 +1454,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onUploadImage,
     required this.onImportImageUrl,
     required this.onLoadImageBytes,
+    required this.onResolveImageUrls,
     required this.onAiStream,
     required this.onAiNewPage,
     required this.onAiCurrentPage,
@@ -1513,6 +1527,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<({String fileId, String name})?> Function(String url)
   onImportImageUrl;
   final Future<Uint8List?> Function(String fileId) onLoadImageBytes;
+  final Future<Map<String, String>> Function(List<String> fileIds)
+  onResolveImageUrls;
   final Stream<String> Function(String prompt, {String? system}) onAiStream;
   final Future<void> Function(String markdown) onAiNewPage;
   final Future<void> Function(String markdown)? onAiCurrentPage;
@@ -2085,6 +2101,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onUploadImage: widget.onUploadImage,
                       onImportImageUrl: widget.onImportImageUrl,
                       onLoadImageBytes: widget.onLoadImageBytes,
+                      onResolveImageUrls: widget.onResolveImageUrls,
                       onAiStream: widget.onAiStream,
                       appearance: widget.appearance,
                     ),
