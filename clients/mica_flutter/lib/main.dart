@@ -546,6 +546,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.exportWorkspaceMarkdown(session.accessToken, workspace.id);
   }
 
+  Future<String> _exportWorkspaceMarkdownById(String workspaceId) async {
+    final session = _requireSession();
+    return _api.exportWorkspaceMarkdown(session.accessToken, workspaceId);
+  }
+
   Future<String> _exportAllMarkdown() async {
     final session = _requireSession();
     return _api.exportAllMarkdown(session.accessToken);
@@ -1274,6 +1279,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onExportPageZip: _exportPageZip,
                 onImportMarkdown: _importMarkdownAsPage,
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
+                onExportWorkspaceById: _exportWorkspaceMarkdownById,
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
                 onAddMember: _addWorkspaceMember,
@@ -1515,6 +1521,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportPageZip,
     required this.onImportMarkdown,
     required this.onExportWorkspaceMarkdown,
+    required this.onExportWorkspaceById,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
@@ -1603,6 +1610,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<Uint8List> Function() onExportPageZip;
   final Future<void> Function(String fileName, String markdown) onImportMarkdown;
   final Future<String> Function() onExportWorkspaceMarkdown;
+  final Future<String> Function(String workspaceId) onExportWorkspaceById;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
@@ -1718,40 +1726,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ],
             ),
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    onPressed: _openAiDialog,
-                    icon: const Icon(Icons.auto_awesome, size: 18),
-                    label: const Text('Ask AI'),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                PopupMenuButton<String>(
-                  tooltip: 'Export',
-                  icon: const Icon(Icons.download_outlined),
-                  onSelected: _onExport,
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'page',
-                      child: Text('Export current page'),
-                    ),
-                    const PopupMenuItem(
-                      value: 'page-zip',
-                      child: Text('Download page as ZIP (with images)'),
-                    ),
-                    const PopupMenuItem(
-                      value: 'workspace',
-                      child: Text('Export workspace'),
-                    ),
-                    const PopupMenuItem(
-                      value: 'all',
-                      child: Text('Export all workspaces'),
-                    ),
-                  ],
-                ),
-              ],
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonalIcon(
+                onPressed: _openAiDialog,
+                icon: const Icon(Icons.auto_awesome, size: 18),
+                label: const Text('Ask AI'),
+              ),
             ),
             const SizedBox(height: 16),
             Row(
@@ -1778,6 +1759,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onSelect: widget.onSelectWorkspace,
               onRename: _promptRenameWorkspace,
               onDelete: _confirmDeleteWorkspace,
+              onExport: _exportWorkspaceFile,
               onCreate: _promptCreateWorkspace,
             ),
             if (_workspaceSettingsOpen) _workspaceSettings(context),
@@ -2744,6 +2726,25 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     await widget.onImportMarkdown(picked.name, picked.text);
   }
 
+  /// Download a whole workspace as one Markdown file (from its dropdown menu).
+  Future<void> _exportWorkspaceFile(Workspace workspace) async {
+    try {
+      final markdown = await widget.onExportWorkspaceById(workspace.id);
+      final name = workspace.name.trim().isEmpty ? 'workspace' : workspace.name.trim();
+      downloadImage(
+        Uint8List.fromList(utf8.encode(markdown)),
+        '$name.md',
+        'text/markdown',
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export failed: $error')),
+        );
+      }
+    }
+  }
+
   Future<void> _onExport(String kind) async {
     if (kind == 'page-zip') {
       try {
@@ -2838,6 +2839,7 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onSelect,
     required this.onRename,
     required this.onDelete,
+    required this.onExport,
     required this.onCreate,
   });
 
@@ -2846,6 +2848,7 @@ class _WorkspaceSelector extends StatefulWidget {
   final Future<void> Function(Workspace workspace) onSelect;
   final void Function(Workspace workspace) onRename;
   final void Function(Workspace workspace) onDelete;
+  final void Function(Workspace workspace) onExport;
   final VoidCallback onCreate;
 
   @override
@@ -2951,24 +2954,49 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
               ),
             ),
           ),
-          IconButton(
-            tooltip: 'Rename',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            onPressed: () {
+          PopupMenuButton<String>(
+            tooltip: 'Workspace menu',
+            icon: const Icon(Icons.more_horiz, size: 18),
+            onSelected: (value) {
               _menu.close();
-              widget.onRename(workspace);
+              switch (value) {
+                case 'rename':
+                  widget.onRename(workspace);
+                case 'export':
+                  widget.onExport(workspace);
+                case 'delete':
+                  widget.onDelete(workspace);
+              }
             },
-          ),
-          IconButton(
-            tooltip: 'Delete',
-            visualDensity: VisualDensity.compact,
-            color: const Color(0xFFDC2626),
-            icon: const Icon(Icons.delete_outline, size: 18),
-            onPressed: () {
-              _menu.close();
-              widget.onDelete(workspace);
-            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'rename',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.edit_outlined),
+                  title: Text('Rename'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'export',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.download_outlined),
+                  title: Text('Export Markdown'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
+                  title: Text('Delete'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(width: 4),
         ],
