@@ -189,7 +189,11 @@ List<Mark> _normalize(List<Mark> marks) {
   }
 
   while (i < src.length) {
-    final link = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)').matchAsPrefix(src, i);
+    // A `[..](..)` is a link — unless preceded by `!`, which makes it an image
+    // (`![alt](url)`); images aren't inline marks, so leave them as literal text.
+    final link = (i > 0 && src[i - 1] == '!')
+        ? null
+        : RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)').matchAsPrefix(src, i);
     if (link != null) {
       final start = out.length;
       out.write(link.group(1)!);

@@ -175,6 +175,13 @@ void _node(html.Node node, StringBuffer out) {
       out.writeln();
     case 'br':
       out.writeln();
+    case 'img':
+      // A block-level image → its own ![alt](src) line.
+      final src = _cleanSrc(node.getAttribute('src'));
+      if (src != null) {
+        out.writeln('![${node.getAttribute('alt') ?? ''}]($src)');
+        out.writeln();
+      }
     case 'div':
     case 'section':
     case 'article':
@@ -184,6 +191,7 @@ void _node(html.Node node, StringBuffer out) {
     case 'aside':
     case 'nav':
     case 'figure':
+    case 'picture':
     case 'span':
       // Containers: recurse over children as blocks.
       for (final child in node.nodes) {
@@ -294,11 +302,42 @@ void _gather(html.Node node, StringBuffer sb) {
     if (child is html.Text) {
       sb.write(child.text);
     } else if (child is html.Element) {
-      if (child.tagName.toLowerCase() == 'br') {
+      final tag = child.tagName.toLowerCase();
+      if (tag == 'br') {
         sb.write(' ');
+      } else if (tag == 'a') {
+        // Preserve hyperlinks as inline Markdown links.
+        final href = _cleanHref(child.getAttribute('href'));
+        final inner = StringBuffer();
+        _gather(child, inner);
+        final text = inner.toString().trim();
+        if (href != null && text.isNotEmpty) {
+          sb.write('[$text]($href)');
+        } else {
+          sb.write(text);
+        }
+      } else if (tag == 'img') {
+        final src = _cleanSrc(child.getAttribute('src'));
+        if (src != null) {
+          sb.write('![${child.getAttribute('alt') ?? ''}]($src)');
+        }
       } else {
         _gather(child, sb);
       }
     }
   }
+}
+
+/// A usable link target, or null for empty / in-page / javascript: hrefs.
+String? _cleanHref(String? href) {
+  final h = href?.trim() ?? '';
+  if (h.isEmpty || h.startsWith('#') || h.startsWith('javascript:')) return null;
+  return h;
+}
+
+/// A usable image source, or null for empty / inline data: URIs.
+String? _cleanSrc(String? src) {
+  final s = src?.trim() ?? '';
+  if (s.isEmpty || s.startsWith('data:')) return null;
+  return s;
 }

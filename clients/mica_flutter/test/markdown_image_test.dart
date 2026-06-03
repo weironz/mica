@@ -36,6 +36,30 @@ void main() {
     expect(c.selectionText(), contains('![cat](https://x.io/cat.png)'));
   });
 
+  test('image vs link are distinguished by the ! prefix', () {
+    // A standalone link line stays a paragraph (with a link mark), not an image.
+    final link = markdownToBlocks('[docs](https://x.io)');
+    expect(link.single.kind, 'paragraph');
+    expect(link.single.text, 'docs');
+    expect((link.single.data['marks'] as List).single['type'], 'link');
+
+    // The same target with a ! is an image block.
+    final img = markdownToBlocks('![docs](https://x.io)');
+    expect(img.single.kind, 'image');
+    expect(img.single.data['url'], 'https://x.io');
+  });
+
+  test('inline image is not mistaken for a link', () {
+    // A paragraph mixing a link and an inline image: only the link becomes a
+    // mark; the image stays literal (no inline-image marks), never a broken link.
+    final blocks = markdownToBlocks('see [d](https://a) and ![i](https://b) end');
+    final p = blocks.single;
+    expect(p.kind, 'paragraph');
+    final marks = (p.data['marks'] as List?) ?? [];
+    expect(marks.where((m) => m['type'] == 'link').length, 1);
+    expect(p.text, contains('![i](https://b)'));
+  });
+
   test('setImageSource swaps an external url for our file_id', () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([
