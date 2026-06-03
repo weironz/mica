@@ -387,13 +387,19 @@ The recurring problem the engine must get right for every node type:
    one step (undo flushes pending first). Bound to Ctrl/Cmd+Z and
    Ctrl/Cmd+Shift+Z / Ctrl+Y in `editor._onKey`. *Pending:* toolbar buttons
    (state is controller-private; keyboard-only for now).
-5. **Void nodes:** divider — DONE; image (files API) — pending. Atomic nodes
-   (`EditorNode.isAtomic`: `table`/`divider`) hold no inline caret: `caretRectFor`
-   returns null, `positionAt` snaps clicks to the nearest text node, and
-   Backspace/Delete from an adjacent paragraph remove the whole node. Dividers
-   are created by the `---`/`***`/`___` input rule or the `/divider` slash
-   command (both leave a trailing paragraph for the caret) and round-trip through
-   Markdown import/export (`crates/app-core/src/documents.rs`).
+5. **Void nodes — DONE (divider + image).** Atomic nodes (`EditorNode.isAtomic`:
+   `table`/`divider`/`image`) hold no inline caret: `caretRectFor` returns null,
+   `positionAt` snaps clicks to the nearest text node, Up/Down make the block a
+   whole-block caret stop (selected highlight; another press steps past), and
+   Backspace/Delete from/on the block removes it. Dividers: `---`/`***`/`___`
+   input rule or `/divider`. Images: content-addressed upload (sha256 object key,
+   original name preserved) via `crates/api-server/.../files.rs` to RustFS;
+   blocks store `file_id` (resolved to fresh signed URLs on load, never stale)
+   or an external `url` (pasted Markdown links are re-hosted into our storage).
+   Insert via `/image` picker, clipboard paste, or pasted URL; rendered on the
+   canvas (`paintImage` + ui.Image cache); hover toolbar (expand/align/resize/
+   delete), right-click menu (copy/download/delete), fullscreen viewer. Markdown
+   `![alt](url)` round-trips (import/export).
 6. **Tables:** structure, cell navigation/selection, row/col commands, GFM
    round-trip.
 7. **Polish:** drag-reorder, virtualization, accessibility, RTL, touch.
