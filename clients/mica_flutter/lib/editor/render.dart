@@ -744,25 +744,44 @@ class RenderDocument extends RenderBox {
     _paintCaret(canvas, offset);
   }
 
-  /// When the caret rests on an atomic node (image/divider/table) it has no
-  /// inline caret; show the block as selected instead.
+  /// Highlight selected atomic nodes (image/divider/table) on top of their
+  /// opaque content: a whole-block caret stop (collapsed) gets a tint + border;
+  /// atomic nodes inside a ranged selection get the selection tint.
   void _paintAtomicSelection(Canvas canvas, Offset offset) {
     final sel = _selection;
-    if (sel == null || !sel.isCollapsed || !_isAtomicNode(sel.focus.node)) return;
-    if (sel.focus.node >= _layouts.length) return;
-    final l = _layouts[sel.focus.node];
+    if (sel == null) return;
+    if (sel.isCollapsed) {
+      if (_isAtomicNode(sel.focus.node) && sel.focus.node < _layouts.length) {
+        _drawAtomicHighlight(canvas, offset, sel.focus.node, border: true);
+      }
+      return;
+    }
+    for (var i = sel.start.node; i <= sel.end.node && i < _layouts.length; i++) {
+      if (_isAtomicNode(i) && (i != sel.start.node || i != sel.end.node)) {
+        _drawAtomicHighlight(canvas, offset, i, border: false);
+      }
+    }
+  }
+
+  void _drawAtomicHighlight(Canvas canvas, Offset offset, int i, {required bool border}) {
+    final l = _layouts[i];
     final box = (l.kind == 'image' && l.imageDst != null)
         ? l.imageDst!.shift(offset)
         : Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight);
-    final rr = RRect.fromRectAndRadius(box.inflate(2), const Radius.circular(6));
-    canvas.drawRRect(rr, Paint()..color = EditorTheme.selection);
-    canvas.drawRRect(
-      rr,
-      Paint()
-        ..color = EditorTheme.caret
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2,
+    final rr = RRect.fromRectAndRadius(
+      box.inflate(border ? 2 : 0),
+      const Radius.circular(6),
     );
+    canvas.drawRRect(rr, Paint()..color = EditorTheme.selection);
+    if (border) {
+      canvas.drawRRect(
+        rr,
+        Paint()
+          ..color = EditorTheme.caret
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
   }
 
   void _paintBlockBackgrounds(Canvas canvas, Offset offset) {
@@ -1199,17 +1218,10 @@ class RenderDocument extends RenderBox {
     final paint = Paint()..color = EditorTheme.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
       final l = _layouts[i];
-      if (l.kind == 'divider' || l.kind == 'image' || l.kind == 'table') {
-        // Highlight the whole atomic node when it falls inside a multi-node
-        // selection (images highlight just their painted rect).
-        if (i != start.node || i != end.node) {
-          final box = l.kind == 'image' && l.imageDst != null
-              ? l.imageDst!.shift(offset)
-              : Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight);
-          canvas.drawRect(box, paint);
-        }
-        continue;
-      }
+      // Atomic nodes (image/table/divider) are opaque and painted after the
+      // selection layer, so their highlight is drawn on top in
+      // _paintAtomicSelection instead — skip them here.
+      if (EditorNode.isAtomicKind(l.kind)) continue;
       final from = i == start.node ? start.offset : 0;
       final to = i == end.node ? end.offset : _nodes[i].text.length;
       final isCode = l.kind == 'code_block';
