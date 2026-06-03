@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import 'highlight.dart';
+import 'marks.dart';
 import 'model.dart';
 import 'table.dart';
 
@@ -353,7 +354,7 @@ class RenderDocument extends RenderBox {
       if (isCode && node.text.isNotEmpty) {
         span = buildCodeSpan(node.text, codeLang!, style);
       } else {
-        span = TextSpan(text: node.text.isEmpty ? '​' : node.text, style: style);
+        span = buildMarkedSpan(node.text, marksFromData(node.data), style);
       }
 
       final codeWrap = isCode && node.data['wrap'] == true;

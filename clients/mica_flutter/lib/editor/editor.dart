@@ -8,7 +8,9 @@ import 'package:flutter/services.dart';
 import 'controller.dart';
 import 'highlight.dart';
 import 'markdown.dart';
+import 'marks.dart';
 import 'model.dart';
+import 'open_url.dart';
 import 'render.dart';
 import 'rich_paste.dart';
 import 'table.dart';
@@ -74,6 +76,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   OverlayEntry? _cellEntry; // active table cell editor
   VoidCallback? _cellFocusListener;
+  OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
   // Active table column resize: node, right-column index, start x, start weights.
   ({int node, int col, double startX, List<double> weights, double avail})?
@@ -127,6 +130,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _slashEntry = null;
     _cellEntry?.remove();
     _cellEntry = null;
+    _markBar?.remove();
+    _markBar = null;
     setRichPasteHandler(null);
     _blink?.cancel();
     _conn?.close();
@@ -162,6 +167,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (!mounted) return;
       setState(() {});
       _restartBlink();
+      _refreshMarkBar();
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).
@@ -182,6 +188,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _detachIme();
       _blink?.cancel();
       _closeSlash();
+      _hideMarkBar();
       setRichPasteHandler(null);
     }
     if (mounted) setState(() {});
@@ -448,6 +455,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return KeyEventResult.handled;
     }
 
+    // Inline formatting over a ranged selection.
+    if (accel && key == LogicalKeyboardKey.keyB) {
+      _controller.toggleMark('bold');
+      return KeyEventResult.handled;
+    }
+    if (accel && key == LogicalKeyboardKey.keyI) {
+      _controller.toggleMark('italic');
+      return KeyEventResult.handled;
+    }
+    if (accel && key == LogicalKeyboardKey.keyE) {
+      _controller.toggleMark('code');
+      return KeyEventResult.handled;
+    }
+    if (accel && key == LogicalKeyboardKey.keyK) {
+      _promptLink();
+      return KeyEventResult.handled;
+    }
+
     // A ranged selection (possibly across blocks) is deleted as a unit — the
     // OS input only knows the focused node, so we must do it ourselves.
     if ((key == LogicalKeyboardKey.backspace ||
@@ -635,6 +660,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final r = _render;
     if (r == null) return;
     final local = r.globalToLocal(d.globalPosition);
+    final hw = HardwareKeyboard.instance;
+    if (hw.isControlPressed || hw.isMetaPressed) {
+      final href = _linkAt(r.positionAt(local));
+      if (href != null) {
+        openUrl(href);
+        return;
+      }
+    }
     final langNode = r.codeLanguageAt(local);
     if (langNode != null) {
       _openLanguageMenu(langNode, d.globalPosition);
@@ -834,6 +867,145 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!committed) focus.requestFocus();
     });
+  }
+
+  /// The href of a link mark covering [pos], or null if none.
+  String? _linkAt(DocPosition pos) {
+    if (pos.node < 0 || pos.node >= _controller.nodes.length) return null;
+    final node = _controller.nodes[pos.node];
+    for (final m in marksFromData(node.data)) {
+      if (m.type == 'link' &&
+          m.href != null &&
+          pos.offset >= m.start &&
+          pos.offset < m.end) {
+        return m.href;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _promptLink() async {
+    final sel = _controller.selection;
+    final node = _controller.focusedNode;
+    if (sel == null || sel.isCollapsed || sel.isMultiNode || node == null) return;
+    if (rangeHasMark(
+      marksFromData(node.data),
+      sel.start.offset,
+      sel.end.offset,
+      'link',
+    )) {
+      _controller.toggleMark('link'); // remove existing link
+      return;
+    }
+    final field = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add link'),
+        content: TextField(
+          controller: field,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'https://…',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(field.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    field.dispose();
+    if (url != null && url.trim().isNotEmpty) {
+      _controller.toggleMark('link', href: url.trim());
+    }
+  }
+
+  void _refreshMarkBar() {
+    final sel = _controller.selection;
+    final node = _controller.focusedNode;
+    final show = _focus.hasFocus &&
+        widget.canEdit &&
+        sel != null &&
+        !sel.isCollapsed &&
+        !sel.isMultiNode &&
+        node != null &&
+        node.kind != 'code_block' &&
+        node.kind != 'table';
+    if (!show) {
+      _hideMarkBar();
+      return;
+    }
+    if (_markBar == null) {
+      _markBar = OverlayEntry(builder: _buildMarkBar);
+      Overlay.of(context).insert(_markBar!);
+    } else {
+      _markBar!.markNeedsBuild();
+    }
+  }
+
+  void _hideMarkBar() {
+    _markBar?.remove();
+    _markBar = null;
+  }
+
+  Widget _buildMarkBar(BuildContext context) {
+    final r = _render;
+    final sel = _controller.selection;
+    if (r == null || sel == null) return const SizedBox.shrink();
+    final rect = r.caretRectFor(sel.start);
+    if (rect == null) return const SizedBox.shrink();
+    final origin = r.localToGlobal(rect.topLeft);
+    final screen = MediaQuery.of(context).size;
+    final left = origin.dx.clamp(8.0, screen.width - 240);
+    final top = (origin.dy - 44).clamp(8.0, screen.height - 8);
+
+    Widget button(IconData icon, String type, {VoidCallback? custom}) {
+      return IconButton(
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        icon: Icon(icon, color: EditorTheme.text),
+        onPressed: () {
+          if (custom != null) {
+            custom();
+          } else {
+            _controller.toggleMark(type);
+          }
+        },
+      );
+    }
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: ExcludeFocus(
+        child: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                button(Icons.format_bold, 'bold'),
+                button(Icons.format_italic, 'italic'),
+                button(Icons.code, 'code'),
+                button(Icons.strikethrough_s, 'strike'),
+                button(Icons.link, 'link', custom: _promptLink),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _openTableMenu(int node, Offset globalPosition) async {

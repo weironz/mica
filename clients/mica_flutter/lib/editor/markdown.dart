@@ -1,14 +1,25 @@
 /// Minimal Markdown → block-spec parser used to insert AI-generated content
 /// into the live document. It maps each Markdown line to a backend block kind
-/// (paragraph/heading/list/todo/quote/code_block). Inline marks (**bold** etc.)
-/// are not yet applied — that arrives with the inline-marks milestone — so inline
-/// syntax is currently kept verbatim in the text.
+/// (paragraph/heading/list/todo/quote/code_block). Inline marks (**bold**,
+/// *italic*, `code`, ~~strike~~, [link](url)) are parsed into clean text plus
+/// `data.marks` via [parseInline]; code blocks and tables keep raw text.
 library;
 
+import 'marks.dart';
 import 'table.dart';
 
 /// A block to create: its kind, plain text, and data map (heading level, etc.).
 typedef BlockSpec = ({String kind, String text, Map<String, dynamic> data});
+
+/// Parse inline Markdown in [text] into clean text + marks, merged into [data].
+BlockSpec _inline(String kind, String text, Map<String, dynamic> data) {
+  final parsed = parseInline(text);
+  final merged = {...data};
+  if (parsed.marks.isNotEmpty) {
+    merged['marks'] = marksToJson(parsed.marks);
+  }
+  return (kind: kind, text: parsed.text, data: merged);
+}
 
 List<BlockSpec> markdownToBlocks(String markdown) {
   final result = <BlockSpec>[];
@@ -66,48 +77,42 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     final h = heading.firstMatch(line);
     if (h != null) {
-      result.add((
-        kind: 'heading',
-        text: h.group(2)!.trim(),
-        data: {'level': h.group(1)!.length},
-      ));
+      result.add(_inline('heading', h.group(2)!.trim(), {'level': h.group(1)!.length}));
       i++;
       continue;
     }
 
     final t = todo.firstMatch(line);
     if (t != null) {
-      result.add((
-        kind: 'todo',
-        text: t.group(2)!.trim(),
-        data: {'checked': t.group(1)!.toLowerCase() == 'x'},
-      ));
+      result.add(_inline('todo', t.group(2)!.trim(), {
+        'checked': t.group(1)!.toLowerCase() == 'x',
+      }));
       i++;
       continue;
     }
 
     final b = bullet.firstMatch(line);
     if (b != null) {
-      result.add((kind: 'bulleted_list', text: b.group(1)!.trim(), data: {}));
+      result.add(_inline('bulleted_list', b.group(1)!.trim(), {}));
       i++;
       continue;
     }
 
     final n = numbered.firstMatch(line);
     if (n != null) {
-      result.add((kind: 'numbered_list', text: n.group(1)!.trim(), data: {}));
+      result.add(_inline('numbered_list', n.group(1)!.trim(), {}));
       i++;
       continue;
     }
 
     final q = quote.firstMatch(line);
     if (q != null) {
-      result.add((kind: 'quote', text: q.group(1)!.trim(), data: {}));
+      result.add(_inline('quote', q.group(1)!.trim(), {}));
       i++;
       continue;
     }
 
-    result.add((kind: 'paragraph', text: line, data: {}));
+    result.add(_inline('paragraph', line, {}));
     i++;
   }
 

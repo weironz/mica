@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'marks.dart';
 import 'model.dart';
 import 'table.dart';
 
@@ -144,14 +145,80 @@ class EditorController extends ChangeNotifier {
     if (sel == null) return;
     final i = sel.focus.node;
     if (i >= nodes.length) return;
-    nodes[i].text = text;
+    final node = nodes[i];
+    final old = node.text;
+
+    if (old != text) {
+      final marks = marksFromData(node.data);
+      if (marks.isNotEmpty) {
+        final prefix = _commonPrefix(old, text);
+        final suffix = _commonSuffix(old, text, prefix);
+        final shifted = shiftMarks(
+          marks,
+          prefix,
+          old.length - suffix,
+          text.length - old.length,
+          text.length,
+        );
+        node.data = {...node.data, 'marks': marksToJson(shifted)};
+      }
+    }
+
+    node.text = text;
     selection = DocSelection(
       anchor: DocPosition(i, selStart.clamp(0, text.length)),
       focus: DocPosition(i, selEnd.clamp(0, text.length)),
     );
     goalX = null;
-    _markDirty(nodes[i].id);
+    _markDirty(node.id);
     notifyListeners();
+  }
+
+  /// Toggle an inline mark over the current ranged (single-node) selection.
+  /// For links, pass [href] to add; call without href on a linked range to remove.
+  void toggleMark(String type, {String? href}) {
+    final sel = selection;
+    if (sel == null || sel.isCollapsed || sel.isMultiNode) return;
+    final i = sel.focus.node;
+    final node = nodes[i];
+    if (node.kind == 'code_block' || node.kind == 'table') return;
+    final from = sel.start.offset;
+    final to = sel.end.offset;
+    final marks = marksFromData(node.data);
+    final has = rangeHasMark(marks, from, to, type);
+    final add = !has;
+    if (type == 'link' && add && (href == null || href.isEmpty)) return;
+    final next = applyMark(marks, from, to, type, href: href, add: add);
+    node.data = {...node.data, 'marks': marksToJson(next)};
+    _dirty.remove(node.id);
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': node.text,
+        'data': node.data,
+      },
+    ]);
+    notifyListeners();
+  }
+
+  int _commonPrefix(String a, String b) {
+    final n = a.length < b.length ? a.length : b.length;
+    var i = 0;
+    while (i < n && a.codeUnitAt(i) == b.codeUnitAt(i)) {
+      i++;
+    }
+    return i;
+  }
+
+  int _commonSuffix(String a, String b, int prefix) {
+    final max = (a.length < b.length ? a.length : b.length) - prefix;
+    var i = 0;
+    while (i < max &&
+        a.codeUnitAt(a.length - 1 - i) == b.codeUnitAt(b.length - 1 - i)) {
+      i++;
+    }
+    return i;
   }
 
   void _markDirty(String id) {
@@ -170,7 +237,13 @@ class EditorController extends ChangeNotifier {
     for (final id in ids) {
       final node = nodes.where((n) => n.id == id).firstOrNull;
       if (node != null) {
-        ops.add({'type': 'update_block', 'block_id': id, 'text': node.text});
+        // Include data so shifted inline marks persist with the text.
+        ops.add({
+          'type': 'update_block',
+          'block_id': id,
+          'text': node.text,
+          'data': node.data,
+        });
       }
     }
     if (ops.isEmpty) {
@@ -339,7 +412,17 @@ class EditorController extends ChangeNotifier {
         return tableToMarkdown(TableData.fromBlock(node.data));
       }
       final len = node.text.length;
-      return node.text.substring(from.clamp(0, len), to.clamp(0, len));
+      final a = from.clamp(0, len);
+      final b = to.clamp(0, len);
+      final sub = node.text.substring(a, b);
+      if (node.kind == 'code_block') return sub;
+      final marks = <Mark>[];
+      for (final m in marksFromData(node.data)) {
+        final s = m.start.clamp(a, b);
+        final e = m.end.clamp(a, b);
+        if (e > s) marks.add(Mark(s - a, e - a, m.type, href: m.href));
+      }
+      return marks.isEmpty ? sub : inlineToMarkdown(sub, marks);
     }
 
     if (s.node == e.node) {

@@ -222,6 +222,11 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     }
 
     let (kind, text, data) = classify_markdown_line(content);
+    let (text, data) = if kind == "image" {
+      (text, data)
+    } else {
+      apply_inline_marks(text, data)
+    };
     push_block(&mut blocks, &mut root_children, kind, text, data);
     index += 1;
   }
@@ -579,10 +584,13 @@ fn append_markdown_block(
 fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<String>) {
   let indent = "  ".repeat(depth);
   let text = block.text.trim_end();
+  // Inline marks (bold/italic/code/strike/link) rendered back to Markdown.
+  let rich = render_inline(block);
+  let rich = rich.trim_end();
   match block.kind.as_str() {
     "heading" => {
       let level = heading_level(block, depth);
-      lines.push(format!("{} {}", "#".repeat(level), text));
+      lines.push(format!("{} {}", "#".repeat(level), rich));
       lines.push(String::new());
     }
     "todo" => {
@@ -591,12 +599,12 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
       } else {
         " "
       };
-      lines.push(format!("{indent}- [{marker}] {text}"));
+      lines.push(format!("{indent}- [{marker}] {rich}"));
     }
-    "bulleted_list" | "bullet_list" => lines.push(format!("{indent}- {text}")),
-    "numbered_list" | "number_list" => lines.push(format!("{indent}1. {text}")),
+    "bulleted_list" | "bullet_list" => lines.push(format!("{indent}- {rich}")),
+    "numbered_list" | "number_list" => lines.push(format!("{indent}1. {rich}")),
     "quote" => {
-      lines.push(format!("> {text}"));
+      lines.push(format!("> {rich}"));
       lines.push(String::new());
     }
     "code_block" | "code" => {
@@ -617,11 +625,279 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
     }
     _ => {
       if !text.is_empty() {
-        lines.push(format!("{indent}{text}"));
+        lines.push(format!("{indent}{rich}"));
         lines.push(String::new());
       }
     }
   }
+}
+
+/// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`, `[t](url)`)
+/// in [text] into clean text plus marks merged into [data] under `"marks"`.
+/// Offsets are UTF-16 code-unit indices to match the Flutter client.
+fn apply_inline_marks(text: String, data: Value) -> (String, Value) {
+  let parsed = parse_inline(&text);
+  if parsed.marks.is_empty() {
+    return (parsed.text, data);
+  }
+  let marks: Vec<Value> = parsed
+    .marks
+    .iter()
+    .map(|m| {
+      let mut obj = serde_json::Map::new();
+      obj.insert("start".into(), json!(m.start));
+      obj.insert("end".into(), json!(m.end));
+      obj.insert("type".into(), json!(m.kind));
+      if let Some(href) = &m.href {
+        obj.insert("href".into(), json!(href));
+      }
+      Value::Object(obj)
+    })
+    .collect();
+  let mut obj = match data {
+    Value::Object(map) => map,
+    _ => serde_json::Map::new(),
+  };
+  obj.insert("marks".into(), Value::Array(marks));
+  (parsed.text, Value::Object(obj))
+}
+
+struct ParsedInline {
+  text: String,
+  marks: Vec<InlineMark>,
+}
+
+/// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
+/// marks over it, with offsets in UTF-16 code units.
+fn parse_inline(src: &str) -> ParsedInline {
+  let chars: Vec<char> = src.chars().collect();
+  let mut out = String::new();
+  let mut out_len: usize = 0; // UTF-16 length of `out`
+  let mut marks: Vec<InlineMark> = Vec::new();
+  let mut i = 0;
+
+  // Find the next index of `needle` (as chars) starting at `from`.
+  let find_from = |from: usize, needle: &[char]| -> Option<usize> {
+    if needle.is_empty() {
+      return None;
+    }
+    let mut j = from;
+    while j + needle.len() <= chars.len() {
+      if chars[j..j + needle.len()] == *needle {
+        return Some(j);
+      }
+      j += 1;
+    }
+    None
+  };
+
+  while i < chars.len() {
+    // Link: [text](url)
+    if chars[i] == '[' {
+      if let Some(close) = find_from(i + 1, &[']']) {
+        if close + 1 < chars.len() && chars[close + 1] == '(' {
+          if let Some(rparen) = find_from(close + 2, &[')']) {
+            let label: String = chars[i + 1..close].iter().collect();
+            let url: String = chars[close + 2..rparen].iter().collect();
+            if !url.contains(char::is_whitespace) && !label.is_empty() {
+              let start = out_len;
+              out.push_str(&label);
+              out_len += label.encode_utf16().count();
+              marks.push(InlineMark {
+                start,
+                end: out_len,
+                kind: "link".into(),
+                href: Some(url),
+              });
+              i = rparen + 1;
+              continue;
+            }
+          }
+        }
+      }
+    }
+    // Bold: **...**
+    if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+      if let Some(end) = find_from(i + 2, &['*', '*']) {
+        if end > i + 2 {
+          let inner: String = chars[i + 2..end].iter().collect();
+          push_inner(&inner, "bold", None, &mut out, &mut out_len, &mut marks);
+          i = end + 2;
+          continue;
+        }
+      }
+    }
+    // Strike: ~~...~~
+    if chars[i] == '~' && i + 1 < chars.len() && chars[i + 1] == '~' {
+      if let Some(end) = find_from(i + 2, &['~', '~']) {
+        if end > i + 2 {
+          let inner: String = chars[i + 2..end].iter().collect();
+          push_inner(&inner, "strike", None, &mut out, &mut out_len, &mut marks);
+          i = end + 2;
+          continue;
+        }
+      }
+    }
+    // Inline code: `...`
+    if chars[i] == '`' {
+      if let Some(end) = find_from(i + 1, &['`']) {
+        if end > i {
+          let inner: String = chars[i + 1..end].iter().collect();
+          let start = out_len;
+          out.push_str(&inner);
+          out_len += inner.encode_utf16().count();
+          marks.push(InlineMark {
+            start,
+            end: out_len,
+            kind: "code".into(),
+            href: None,
+          });
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    // Italic: *...* or _..._
+    if chars[i] == '*' || chars[i] == '_' {
+      let ch = chars[i];
+      if let Some(end) = find_from(i + 1, &[ch]) {
+        if end > i + 1 {
+          let inner: String = chars[i + 1..end].iter().collect();
+          push_inner(&inner, "italic", None, &mut out, &mut out_len, &mut marks);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    out.push(chars[i]);
+    out_len += chars[i].len_utf16();
+    i += 1;
+  }
+
+  ParsedInline { text: out, marks }
+}
+
+/// Parse [inner] recursively and append it to [out], adding a [kind] mark over
+/// the appended range.
+fn push_inner(
+  inner: &str,
+  kind: &str,
+  href: Option<String>,
+  out: &mut String,
+  out_len: &mut usize,
+  marks: &mut Vec<InlineMark>,
+) {
+  let start = *out_len;
+  let parsed = parse_inline(inner);
+  out.push_str(&parsed.text);
+  *out_len += parsed.text.encode_utf16().count();
+  for m in parsed.marks {
+    marks.push(InlineMark {
+      start: m.start + start,
+      end: m.end + start,
+      kind: m.kind,
+      href: m.href,
+    });
+  }
+  marks.push(InlineMark {
+    start,
+    end: *out_len,
+    kind: kind.to_string(),
+    href,
+  });
+}
+
+/// An inline mark over a `[start, end)` range of a block's plain text.
+struct InlineMark {
+  start: usize,
+  end: usize,
+  kind: String,
+  href: Option<String>,
+}
+
+fn marks_from_block(block: &Block) -> Vec<InlineMark> {
+  let Some(raw) = block.data.get("marks").and_then(Value::as_array) else {
+    return Vec::new();
+  };
+  // Mark offsets index into UTF-16 code units (the Flutter client's string
+  // model); convert against this text's UTF-16 view when slicing.
+  let units: Vec<u16> = block.text.encode_utf16().collect();
+  let len = units.len();
+  let mut marks = Vec::new();
+  for m in raw {
+    let Some(obj) = m.as_object() else { continue };
+    let start = obj.get("start").and_then(Value::as_u64).map(|v| v as usize);
+    let end = obj.get("end").and_then(Value::as_u64).map(|v| v as usize);
+    let kind = obj.get("type").and_then(Value::as_str);
+    if let (Some(start), Some(end), Some(kind)) = (start, end, kind) {
+      let start = start.min(len);
+      let end = end.min(len);
+      if end > start {
+        marks.push(InlineMark {
+          start,
+          end,
+          kind: kind.to_string(),
+          href: obj.get("href").and_then(Value::as_str).map(str::to_string),
+        });
+      }
+    }
+  }
+  marks
+}
+
+/// Render a block's text with its inline marks back to Markdown. Code blocks and
+/// tables carry no inline marks and are emitted verbatim by their own arms.
+fn render_inline(block: &Block) -> String {
+  if matches!(block.kind.as_str(), "code_block" | "code" | "table") {
+    return block.text.clone();
+  }
+  let marks = marks_from_block(block);
+  if marks.is_empty() {
+    return block.text.clone();
+  }
+  let units: Vec<u16> = block.text.encode_utf16().collect();
+  let mut points: Vec<usize> = vec![0, units.len()];
+  for m in &marks {
+    points.push(m.start);
+    points.push(m.end);
+  }
+  points.sort_unstable();
+  points.dedup();
+
+  let mut out = String::new();
+  for w in points.windows(2) {
+    let (a, b) = (w[0], w[1]);
+    if a >= b {
+      continue;
+    }
+    let mut seg = String::from_utf16_lossy(&units[a..b]);
+    let mut href: Option<&str> = None;
+    let mut has_link = false;
+    // Innermost (shortest) marks wrap first.
+    let mut active: Vec<&InlineMark> = marks
+      .iter()
+      .filter(|m| m.start <= a && m.end >= b)
+      .collect();
+    active.sort_by_key(|m| m.end - m.start);
+    for m in active {
+      match m.kind.as_str() {
+        "code" => seg = format!("`{seg}`"),
+        "bold" => seg = format!("**{seg}**"),
+        "italic" => seg = format!("*{seg}*"),
+        "strike" => seg = format!("~~{seg}~~"),
+        "link" => {
+          has_link = true;
+          href = m.href.as_deref();
+        }
+        _ => {}
+      }
+    }
+    if has_link {
+      seg = format!("[{seg}]({})", href.unwrap_or(""));
+    }
+    out.push_str(&seg);
+  }
+  out
 }
 
 fn append_table_markdown(block: &Block, lines: &mut Vec<String>) {
@@ -840,6 +1116,35 @@ fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_id: 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn inline_marks_round_trip() {
+    let md = "This is **bold**, *italic*, `code`, ~~gone~~ and a [link](https://x.io).";
+    let snapshot = import_markdown(md, "root");
+    let para = snapshot
+      .blocks
+      .iter()
+      .find(|b| b.kind == "paragraph" && b.id != "root")
+      .expect("paragraph block");
+    assert_eq!(para.text, "This is bold, italic, code, gone and a link.");
+    let marks = para.data.get("marks").and_then(Value::as_array).unwrap();
+    let kinds: Vec<&str> = marks
+      .iter()
+      .filter_map(|m| m.get("type").and_then(Value::as_str))
+      .collect();
+    assert!(kinds.contains(&"bold"));
+    assert!(kinds.contains(&"italic"));
+    assert!(kinds.contains(&"code"));
+    assert!(kinds.contains(&"strike"));
+    assert!(kinds.contains(&"link"));
+
+    let exported = export_markdown(&snapshot).expect("export");
+    assert!(exported.contains("**bold**"));
+    assert!(exported.contains("*italic*"));
+    assert!(exported.contains("`code`"));
+    assert!(exported.contains("~~gone~~"));
+    assert!(exported.contains("[link](https://x.io)"));
+  }
 
   #[test]
   fn insert_block_adds_child_at_index() {
