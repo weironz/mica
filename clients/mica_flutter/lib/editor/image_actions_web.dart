@@ -19,9 +19,16 @@ void downloadImage(Uint8List bytes, String filename, String mime) {
   html.Url.revokeObjectUrl(url);
 }
 
-/// Copy [bytes] to the system clipboard as an image. Requires the async
-/// Clipboard API (secure context); returns false if unavailable or denied.
+/// Copy [bytes] to the system clipboard as an image. Tries the modern async
+/// Clipboard API (secure contexts), then falls back to the legacy
+/// execCommand('copy') on a selected <img>, which works on plain http too.
 Future<bool> copyImageToClipboard(Uint8List bytes, String mime) async {
+  if (await _copyViaClipboardApi(bytes, mime)) return true;
+  return _copyViaExecCommand(bytes, mime);
+}
+
+/// Modern path — requires a secure context (https/localhost).
+Future<bool> _copyViaClipboardApi(Uint8List bytes, String mime) async {
   try {
     final clipboard = js_util.getProperty(html.window.navigator, 'clipboard');
     if (clipboard == null) return false;
@@ -39,5 +46,36 @@ Future<bool> copyImageToClipboard(Uint8List bytes, String mime) async {
     return true;
   } catch (_) {
     return false;
+  }
+}
+
+/// Legacy path — select an off-screen <img> and execCommand('copy'). Works in
+/// non-secure (http) contexts where the async Clipboard API is unavailable.
+Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
+  final blob = html.Blob(<dynamic>[bytes], mime);
+  final url = html.Url.createObjectUrlFromBlob(blob);
+  final holder = html.DivElement()
+    ..contentEditable = 'true'
+    ..style.position = 'fixed'
+    ..style.left = '-10000px'
+    ..style.top = '0';
+  final img = html.ImageElement(src: url);
+  holder.append(img);
+  html.document.body?.append(holder);
+  try {
+    await img.onLoad.first;
+    final range = html.Range()..selectNode(img);
+    final selection = html.window.getSelection();
+    selection
+      ?..removeAllRanges()
+      ..addRange(range);
+    final ok = html.document.execCommand('copy');
+    selection?.removeAllRanges();
+    return ok;
+  } catch (_) {
+    return false;
+  } finally {
+    holder.remove();
+    html.Url.revokeObjectUrl(url);
   }
 }

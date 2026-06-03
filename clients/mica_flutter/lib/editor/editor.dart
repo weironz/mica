@@ -1614,7 +1614,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final ok = await copyImageToClipboard(data.bytes, data.mime);
     if (!mounted) return;
-    _toast(ok ? 'Image copied' : 'Copy needs HTTPS — use Download instead');
+    _toast(ok ? 'Image copied' : 'Copy failed — try Download instead');
   }
 
   Future<void> _downloadImage(int node) async {
