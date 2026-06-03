@@ -1520,7 +1520,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _autoScroller = EdgeDraggingAutoScroller(
         scrollable,
         onScrollViewScrolled: _extendSelectionToLastDrag,
-        velocityScalar: 30,
+        velocityScalar: 90,
       );
     }
   }
