@@ -939,16 +939,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Batch-resolve image file ids to fresh signed download URLs (for copy/export).
+  /// Map image file ids to their permanent Mica blob links (stable, never
+  /// expiring — the endpoint re-signs storage on each request). Used by copy so
+  /// pasted images keep displaying anywhere.
   Future<Map<String, String>> _resolveEditorImageUrls(List<String> ids) async {
-    final session = _session;
     final workspace = _selectedWorkspace;
-    if (session == null || workspace == null || ids.isEmpty) return {};
-    try {
-      return await _api.resolveFiles(session.accessToken, workspace.id, ids);
-    } catch (_) {
-      return {};
-    }
+    if (workspace == null || ids.isEmpty) return {};
+    final base = _api.baseUri;
+    final origin = '${base.scheme}://${base.host}:${base.port}';
+    return {
+      for (final id in ids)
+        id: '$origin/api/workspaces/${workspace.id}/files/$id/blob',
+    };
   }
 
   /// Fetch an image's bytes for the canvas. The key is either an external URL

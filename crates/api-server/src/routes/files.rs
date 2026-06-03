@@ -4,7 +4,8 @@ use std::time::Duration;
 use axum::{
   Json,
   extract::{Path, State},
-  http::HeaderMap,
+  http::{HeaderMap, StatusCode},
+  response::{IntoResponse, Redirect, Response},
 };
 use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult, S3Config};
@@ -259,6 +260,27 @@ pub async fn import_url(
   let download_url = storage.download_url(&file.object_key);
 
   Ok(Json(FileResponse { file, download_url }))
+}
+
+/// `GET /api/workspaces/{workspace_id}/files/{file_id}/blob`
+///
+/// A stable, never-expiring public link to an image's bytes — it 302-redirects
+/// to a freshly-signed storage URL on every request, so the link itself never
+/// goes stale. Unauthenticated (the `file_id` UUID is the capability), so copied
+/// Markdown images keep displaying in other apps. Used for copy/export.
+pub async fn blob(
+  State(state): State<AppState>,
+  Path((workspace_id, file_id)): Path<(Uuid, Uuid)>,
+) -> Response {
+  let Ok(storage) = storage(&state) else {
+    return StatusCode::NOT_FOUND.into_response();
+  };
+  match store::fetch_file(&state.db, workspace_id, file_id).await {
+    Ok(Some(file)) => {
+      Redirect::temporary(&storage.download_url(&file.object_key)).into_response()
+    }
+    _ => StatusCode::NOT_FOUND.into_response(),
+  }
 }
 
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}`

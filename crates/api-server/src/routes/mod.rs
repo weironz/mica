@@ -145,6 +145,10 @@ pub fn api_router() -> Router<AppState> {
       post(files::import_url),
     )
     .route(
+      "/workspaces/{workspace_id}/files/{file_id}/blob",
+      get(files::blob),
+    )
+    .route(
       "/workspaces/{workspace_id}/files/{file_id}",
       get(files::get_file).delete(files::delete_file),
     )
