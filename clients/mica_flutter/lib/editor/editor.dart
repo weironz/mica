@@ -43,6 +43,7 @@ class MicaEditor extends StatefulWidget {
     this.onImportImageUrl,
     this.onLoadImageBytes,
     this.onResolveImageUrls,
+    this.reHostImages = true,
     this.appearance = const EditorAppearance(),
     super.key,
   });
@@ -84,6 +85,10 @@ class MicaEditor extends StatefulWidget {
   /// pasted Markdown links resolve). Cached eagerly when the document changes.
   final Future<Map<String, String>> Function(List<String> fileIds)?
   onResolveImageUrls;
+
+  /// When true, pasted/imported external image URLs are re-hosted into Mica's
+  /// storage; when false they stay as standard external Markdown links.
+  final bool reHostImages;
 
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
@@ -296,6 +301,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// pasted/AI Markdown) into our own storage, so they render on the canvas and
   /// can't rot. Runs in the background; each conversion repaints when done.
   void _rehostExternalImages() {
+    if (!widget.reHostImages) return;
     final import = widget.onImportImageUrl;
     if (import == null) return;
     for (final node in [..._controller.nodes]) {
@@ -1022,6 +1028,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _imageErrors.contains(fileId)) {
       return;
     }
+    // An external url that we're about to re-host: don't CORS-fetch it (it will
+    // become a file_id shortly). When re-hosting is off, fetch it best-effort.
+    final isUrl = fileId.startsWith('http://') || fileId.startsWith('https://');
+    if (isUrl && widget.reHostImages) return;
     final load = widget.onLoadImageBytes;
     if (load == null) return;
     _imageLoading.add(fileId);
@@ -1595,6 +1605,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Future<void> _showImageMenu(int node, Offset globalPosition) async {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (overlay == null) return;
+    final data = _controller.nodes[node].data;
+    final isExternal =
+        data['file_id'] == null && (data['url'] as String?)?.startsWith('http') == true;
     final choice = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -1603,14 +1616,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         overlay.size.width - globalPosition.dx,
         overlay.size.height - globalPosition.dy,
       ),
-      items: const [
-        PopupMenuItem(value: 'copy', child: Text('Copy image')),
-        PopupMenuItem(value: 'download', child: Text('Download')),
-        PopupMenuItem(value: 'delete', child: Text('Delete')),
+      items: [
+        if (isExternal)
+          const PopupMenuItem(value: 'rehost', child: Text('Save to Mica storage')),
+        const PopupMenuItem(value: 'copy', child: Text('Copy image')),
+        const PopupMenuItem(value: 'download', child: Text('Download')),
+        const PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
     );
     if (choice == null || !mounted) return;
     switch (choice) {
+      case 'rehost':
+        await _rehostImage(node);
       case 'copy':
         await _copyImage(node);
       case 'download':
@@ -1619,6 +1636,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.deleteNode(node);
         _syncImeFromSelection(force: true);
     }
+  }
+
+  /// Re-host one external image into Mica storage (right-click action).
+  Future<void> _rehostImage(int node) async {
+    final import = widget.onImportImageUrl;
+    if (import == null || node < 0 || node >= _controller.nodes.length) return;
+    final url = _controller.nodes[node].data['url'] as String?;
+    if (url == null) return;
+    final id = _controller.nodes[node].id;
+    final result = await import(url);
+    if (result == null || !mounted) {
+      _toast('Could not save the image');
+      return;
+    }
+    _controller.setImageSource(id, fileId: result.fileId, name: result.name);
   }
 
   /// Bytes + filename for an image node (re-fetched via the host loader).

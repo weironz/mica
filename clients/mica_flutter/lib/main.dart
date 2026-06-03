@@ -117,6 +117,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // Editor appearance (in-memory; applied live to the editor).
   EditorAppearance _appearance = const EditorAppearance();
   double _pageWidth = 1160;
+  // When on, pasted external image URLs are re-hosted into Mica storage.
+  bool _reHostImages = true;
 
   DocumentSyncClient? _sync;
   List<PresenceUser> _presence = const [];
@@ -1230,6 +1232,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onChangePassword: _changePassword,
                 appearance: _appearance,
                 pageWidth: _pageWidth,
+                reHostImages: _reHostImages,
+                onReHostImagesChanged: (value) =>
+                    setState(() => _reHostImages = value),
                 onAppearanceChanged: (appearance, pageWidth) {
                   setState(() {
                     _appearance = appearance;
@@ -1469,6 +1474,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onChangePassword,
     required this.appearance,
     required this.pageWidth,
+    required this.reHostImages,
+    required this.onReHostImagesChanged,
     required this.onAppearanceChanged,
     required this.onSearch,
     required this.onOpenSearchResult,
@@ -1549,6 +1556,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String current, String next) onChangePassword;
   final EditorAppearance appearance;
   final double pageWidth;
+  final bool reHostImages;
+  final void Function(bool value) onReHostImagesChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<List<SearchResult>> Function(String query) onSearch;
@@ -2105,6 +2114,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onLoadImageBytes: widget.onLoadImageBytes,
                       onResolveImageUrls: widget.onResolveImageUrls,
                       onAiStream: widget.onAiStream,
+                      reHostImages: widget.reHostImages,
                       appearance: widget.appearance,
                     ),
                   ),
@@ -2480,6 +2490,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onChangePassword: widget.onChangePassword,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
+        reHostImages: widget.reHostImages,
+        onReHostImagesChanged: widget.onReHostImagesChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
       ),
     );
@@ -3176,6 +3188,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.onChangePassword,
     required this.appearance,
     required this.pageWidth,
+    required this.reHostImages,
+    required this.onReHostImagesChanged,
     required this.onAppearanceChanged,
   });
 
@@ -3193,6 +3207,8 @@ class _SettingsDialog extends StatefulWidget {
   onSaveAiSettings;
   final EditorAppearance appearance;
   final double pageWidth;
+  final bool reHostImages;
+  final void Function(bool value) onReHostImagesChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
 
@@ -3220,6 +3236,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late double _fontScale = widget.appearance.fontScale;
   late String? _fontFamily = widget.appearance.fontFamily;
   late double _pageWidth = widget.pageWidth;
+  late bool _reHostImages = widget.reHostImages;
 
   @override
   void initState() {
@@ -3458,6 +3475,21 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: _reHostImages,
+                      title: const Text('Re-host network images'),
+                      subtitle: const Text(
+                        'Pasted image links are saved into Mica storage. Off: keep '
+                        'them as standard external Markdown links.',
+                      ),
+                      onChanged: (value) {
+                        setState(() => _reHostImages = value);
+                        widget.onReHostImagesChanged(value);
+                      },
                     ),
                     const Divider(height: 28),
                     Row(
