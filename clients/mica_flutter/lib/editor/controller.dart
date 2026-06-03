@@ -462,15 +462,23 @@ class EditorController extends ChangeNotifier {
       final len = node.text.length;
       final a = from.clamp(0, len);
       final b = to.clamp(0, len);
+      final full = a == 0 && b == len; // whole block selected
       final sub = node.text.substring(a, b);
-      if (node.kind == 'code_block') return sub;
+      if (node.kind == 'code_block') {
+        if (!full) return sub;
+        final lang = (node.data['language'] as String?) ?? '';
+        return '```$lang\n$sub\n```';
+      }
       final marks = <Mark>[];
       for (final m in marksFromData(node.data)) {
         final s = m.start.clamp(a, b);
         final e = m.end.clamp(a, b);
         if (e > s) marks.add(Mark(s - a, e - a, m.type, href: m.href));
       }
-      return marks.isEmpty ? sub : inlineToMarkdown(sub, marks);
+      final inline = marks.isEmpty ? sub : inlineToMarkdown(sub, marks);
+      // Prepend the block-level Markdown marker only for a fully-selected block
+      // (a partial first/last line is copied as plain inline text).
+      return full ? '${_blockPrefix(node)}$inline' : inline;
     }
 
     if (s.node == e.node) {
@@ -482,7 +490,26 @@ class EditorController extends ChangeNotifier {
         nodeText(i, 0, nodes[i].text.length),
       nodeText(e.node, 0, e.offset),
     ];
-    return parts.join('\n');
+    // Blank line between blocks so headings/lists/quotes parse as Markdown.
+    return parts.join('\n\n');
+  }
+
+  /// The leading Markdown marker for a block kind (heading/list/quote/todo).
+  String _blockPrefix(EditorNode node) {
+    switch (node.kind) {
+      case 'heading':
+        return '${'#' * node.headingLevel} ';
+      case 'bulleted_list':
+        return '- ';
+      case 'numbered_list':
+        return '1. ';
+      case 'quote':
+        return '> ';
+      case 'todo':
+        return node.todoChecked ? '- [x] ' : '- [ ] ';
+      default:
+        return '';
+    }
   }
 
   /// Delete the current ranged selection, which may span multiple nodes. The
