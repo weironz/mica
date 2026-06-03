@@ -158,6 +158,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     _imageCache.clear();
     setRichPasteHandler(null);
+    setRichImagePasteHandler(null);
     _blink?.cancel();
     _conn?.close();
     _focus.removeListener(_onFocusChange);
@@ -209,12 +210,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _attachIme();
       _restartBlink();
       setRichPasteHandler(_handleRichPaste);
+      setRichImagePasteHandler(_handlePasteImage);
     } else {
       _detachIme();
       _blink?.cancel();
       _closeSlash();
       _hideMarkBar();
       setRichPasteHandler(null);
+      setRichImagePasteHandler(null);
     }
     if (mounted) setState(() {});
   }
@@ -1447,6 +1450,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (result == null || !mounted) return;
     // Decode straightaway so the image paints without a resolve round-trip.
     _primeImage(result.fileId, picked.bytes);
+    _controller.insertImage(fileId: result.fileId, name: result.name);
+    _syncImeFromSelection(force: true);
+  }
+
+  /// Upload a pasted bitmap (screenshot / copied image) and insert it.
+  Future<void> _handlePasteImage(Uint8List bytes, String mime, String name) async {
+    final upload = widget.onUploadImage;
+    if (upload == null || !mounted || !_focus.hasFocus || !widget.canEdit) return;
+    final result = await upload(bytes, name, mime);
+    if (result == null || !mounted) return;
+    _primeImage(result.fileId, bytes);
     _controller.insertImage(fileId: result.fileId, name: result.name);
     _syncImeFromSelection(force: true);
   }

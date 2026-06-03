@@ -7,22 +7,64 @@
 // clipboard's HTML flavor and parsing it via the browser DOM.
 // ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:typed_data';
 
 typedef RichPasteHandler = bool Function(String markdown, String plain, bool rich);
+typedef ImagePasteHandler = void Function(
+  Uint8List bytes,
+  String mime,
+  String name,
+);
 
 RichPasteHandler? _handler;
+ImagePasteHandler? _imageHandler;
 bool _installed = false;
+
+void setRichImagePasteHandler(ImagePasteHandler? handler) {
+  _imageHandler = handler;
+}
 
 void setRichPasteHandler(RichPasteHandler? handler) {
   _handler = handler;
   if (_installed) return;
   _installed = true;
   html.document.addEventListener('paste', (event) {
-    final handler = _handler;
-    if (handler == null) return;
     final data = (event as html.ClipboardEvent).clipboardData;
     if (data == null) return;
 
+    // A pasted bitmap (screenshot, copied image) arrives as a file item; upload
+    // it rather than dropping it as text.
+    final imageHandler = _imageHandler;
+    final files = data.files;
+    if (imageHandler != null && files != null && files.isNotEmpty) {
+      html.File? image;
+      for (final f in files) {
+        if (f.type.startsWith('image/')) {
+          image = f;
+          break;
+        }
+      }
+      if (image != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        final file = image;
+        final reader = html.FileReader()..readAsArrayBuffer(file);
+        reader.onLoadEnd.first.then((_) {
+          final result = reader.result;
+          if (result is ByteBuffer) {
+            imageHandler(
+              result.asUint8List(),
+              file.type.isEmpty ? 'image/png' : file.type,
+              file.name.isEmpty ? 'pasted-image.png' : file.name,
+            );
+          }
+        });
+        return;
+      }
+    }
+
+    final handler = _handler;
+    if (handler == null) return;
     final htmlData = data.getData('text/html');
     final plain = data.getData('text/plain');
     final hasHtml = htmlData.trim().isNotEmpty;
