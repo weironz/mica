@@ -12,6 +12,7 @@ This repository is bootstrapping the backend-first MVP:
 - WebSocket document rooms for real-time multi-client sync and presence.
 - Append-only document history with named versions and restore.
 - Markdown import, Markdown/HTML export, and S3/MinIO file uploads.
+- Optional AI text generation (Anthropic) for in-editor and global content creation.
 - Flutter Web client with live document sync and collaborator presence.
 
 See:
@@ -103,6 +104,19 @@ POST   /api/workspaces/{workspace_id}/files/complete
 GET    /api/workspaces/{workspace_id}/files/{file_id}
 DELETE /api/workspaces/{workspace_id}/files/{file_id}
 ```
+
+AI text generation (optional) calls the Anthropic Messages API. Set
+`ANTHROPIC_API_KEY` (and optionally `AI_MODEL`, `AI_MAX_TOKENS`); when unset the
+endpoint returns `503` and the in-app AI features stay hidden/disabled:
+
+```text
+POST /api/ai/complete   { "prompt": "...", "system": "(optional)" }  -> { "text": "<markdown>" }
+```
+
+In the client this powers: the editor's `/` → **Ask AI** command (generates
+Markdown and inserts it as blocks at the caret), and a global **Ask AI** button
+that can create a new page, write into the current page, or spin up a new
+workspace from a prompt. New pages/workspaces reuse the Markdown import path.
 
 When the `S3_*` variables are unset these endpoints return `503`. For local
 development, run MinIO and create the bucket:

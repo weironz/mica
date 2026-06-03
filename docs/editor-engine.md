@@ -351,13 +351,28 @@ The recurring problem the engine must get right for every node type:
 
 ## Milestones
 
-1. **Core surface:** single input connection + document model + caret across
-   text nodes; replace the N-`TextField` editor for paragraph/heading/list/
-   todo/quote/code. Cross-block arrow nav as a true unified caret.
+1. **Core surface — IN PROGRESS.** single input connection + document model +
+   caret across text nodes; replace the N-`TextField` editor for paragraph/
+   heading/list/todo/quote/code. Cross-block arrow nav as a true unified caret.
+   *Done:* the engine lives in `clients/mica_flutter/lib/editor/`
+   (`model.dart`, `controller.dart`, `render.dart`, `editor.dart`); a single
+   leaf `RenderDocument` paints all nodes + caret + selection and hit-tests
+   screen→position; one `TextInputClient` owns IME; `MicaEditor` replaces
+   `BlockEditor`. Caret moves L/R/Up/Down/Home/End across blocks; Enter splits,
+   Backspace/Delete merge; click/drag place and extend selection across blocks;
+   todo checkboxes toggle. *Needs live-browser tuning:* web IME/key interplay
+   (composition, stray newlines), and caret scroll-into-view.
 2. **Selection:** mouse drag + Shift-key ranged selection across blocks;
    select-all; delete-selection; copy/cut/paste (internal + Markdown + plain).
 3. **Markdown input rules + slash menu** on the new surface; inline marks
    (bold/italic/code/link) with the chosen storage from Open Question 1.
+   *Done:* block-level input rules (`# `…`###### `, `- `/`* `, `1. `, `> `,
+   ` ``` `, and `- ` then `[ ] `/`[x] ` → todo) convert the block and strip the
+   marker as you type; the `/` slash menu (filter, ↑/↓, Enter/Tab to apply, Esc
+   to dismiss) converts the focused block — both live in
+   `controller.applyInputRules` / `applySlashCommand` and the editor's slash
+   overlay. *Pending:* inline marks (bold/italic/code/link) over plain text,
+   and inline input rules (`**b**`, `*i*`, `` `code` ``, `[t](url)`).
 4. **Undo/redo** via transactions.
 5. **Void nodes:** divider, image (files API), with the selection/deletion
    semantics above.

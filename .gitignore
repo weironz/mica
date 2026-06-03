@@ -5,6 +5,10 @@
 *.log
 *.tmp
 
+# Local secrets (AI provider keys)
+/deepseek.conf
+*.key
+
 # Local reference checkout of AppFlowy (not part of this project)
 /appflowy-src/
 

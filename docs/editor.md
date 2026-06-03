@@ -71,24 +71,31 @@ Structure comes from writing, not from clicking block controls:
 
 ## Current status
 
-The Flutter web client is block-based with inline Markdown shortcuts, Enter/
-Backspace structural editing, and per-kind styling. The resting page now shows
-no block chrome:
+The client now runs on the **in-house single-surface engine** (Milestone 1 of
+[editor-engine.md](editor-engine.md)), replacing the old one-`TextField`-per-block
+editor. A single `RenderDocument` paints the whole document — text, caret, and
+selection — and one `TextInputClient` owns IME. The caret travels the document
+as one continuous page:
 
-- The block handle (`⋮`: turn-into, add-below, delete) appears only on hover,
-  in a reserved left gutter; it is invisible at rest.
-- Block insertion is summoned with a **slash command** (`/`) at the cursor — a
-  filterable menu (type to filter, Enter applies the top match, Esc dismisses) —
-  instead of a persistent "Add block" button.
-- Clicking the empty space below the document continues writing (focuses or
-  appends a trailing paragraph), with no visible button.
+- Unified caret across blocks: Left/Right/Up/Down/Home/End, click to place,
+  click-drag to select **across** blocks (the long-standing single-line-only
+  limitation is gone).
+- Enter splits the current block (empty list item exits the list); Backspace at
+  line start and Delete at line end merge blocks; todo checkboxes toggle.
+- Per-kind typography with no resting block chrome.
+- **Markdown shortcuts** convert the block as you type (`# `…`###### `, `- `/`* `,
+  `1. `, `> `, ` ``` `, `- ` then `[ ] ` → to-do) and strip the marker.
+- The **slash menu** (`/`) is summoned at the caret — filter by typing, ↑/↓ to
+  move, Enter/Tab to apply, Esc to dismiss — to convert the current block.
 
-Remaining gap: inline rich text (see below).
+Being layered on next: inline rich text (marks: bold/italic/code/link) and
+inline Markdown rules, then undo/redo, void nodes (image/divider), tables — see
+the milestones in [editor-engine.md](editor-engine.md). Web IME/key interplay and
+caret scroll-into-view still need live-browser tuning.
 
 ## Out of scope (for now)
 
-- Inline rich text (bold/italic/links as styled spans) needs a rich-text editing
-  core (`super_editor` / `appflowy_editor`); Flutter's plain `TextField` cannot
-  edit styled spans. Block-level structure is handled today; inline formatting is
-  a separate, larger effort.
+- Inline rich text (bold/italic/links as styled spans) is planned as **marks over
+  plain text** on the in-house engine (Milestone 3), not via a third-party editor
+  core. Block-level structure works today; inline formatting is the next layer.
 - Conflict-free concurrent typing (CRDT/OT) is deferred per the MVP plan.
