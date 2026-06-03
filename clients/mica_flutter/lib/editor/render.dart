@@ -1494,21 +1494,26 @@ class RenderDocument extends RenderBox {
         break;
       }
     }
-    // The caret can't sit inside an atomic node (table/divider); snap to the
-    // nearest text node.
+    // The caret can't sit inside an atomic node (table/divider/image); snap by
+    // the pointer's side of the node's vertical midline: above → end of the
+    // previous node, below → start of the next node. This lets a drag-select
+    // include the atomic block (highlighting it) once it crosses the midline.
     if (_nodes[idx].isAtomic) {
+      final l = _layouts[idx];
+      final belowMid = y >= l.boxTop + l.boxHeight / 2;
+      if (belowMid && idx + 1 < _nodes.length) {
+        return DocPosition(idx + 1, 0);
+      }
       var alt = idx - 1;
       while (alt >= 0 && _nodes[alt].isAtomic) {
         alt--;
       }
-      if (alt < 0) {
-        alt = idx + 1;
-        while (alt < _nodes.length && _nodes[alt].isAtomic) {
-          alt++;
-        }
+      if (alt >= 0) {
+        return DocPosition(alt, _nodes[alt].text.length);
       }
-      if (alt < 0 || alt >= _nodes.length) return DocPosition(idx, 0);
-      return DocPosition(alt, _nodes[alt].text.length);
+      // No text node above: fall back to the next node, else this one.
+      if (idx + 1 < _nodes.length) return DocPosition(idx + 1, 0);
+      return DocPosition(idx, 0);
     }
 
     final l = _layouts[idx];
