@@ -117,6 +117,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
+  // Auto-scroll the surrounding page while drag-selecting past the viewport edge.
+  EdgeDraggingAutoScroller? _autoScroller;
+  ScrollableState? _scrollable;
+  Offset? _lastDragGlobal;
   OverlayEntry? _cellEntry; // active table cell editor
   VoidCallback? _cellFocusListener;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
@@ -188,6 +192,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _imageCache.clear();
     setRichPasteHandler(null);
     setRichImagePasteHandler(null);
+    _autoScroller?.stopAutoScroll();
     _blink?.cancel();
     _conn?.close();
     _focus.removeListener(_onFocusChange);
@@ -1462,6 +1467,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (anchor == null) return;
     final p = r.positionAt(local);
     _controller.setSelection(DocSelection(anchor: anchor, focus: p));
+    // Auto-scroll the page vertically when the drag nears the viewport edge so
+    // the selection can extend beyond what's currently visible.
+    _lastDragGlobal = d.globalPosition;
+    _ensureAutoScroller();
+    _autoScroller?.startAutoScrollIfNecessary(
+      Rect.fromCenter(center: d.globalPosition, width: 1, height: 1),
+    );
     // Auto-scroll a code block horizontally when selecting near its edges;
     // the closer to the edge, the faster (keeps up with the drag).
     if (_controller.focusedNode?.isCode ?? false) {
@@ -1495,7 +1507,38 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     _dragAnchor = null;
     _scrollbarDrag = null;
+    _autoScroller?.stopAutoScroll();
+    _lastDragGlobal = null;
     _syncImeFromSelection();
+  }
+
+  /// Lazily bind to the surrounding [Scrollable] for drag-select auto-scroll.
+  void _ensureAutoScroller() {
+    final scrollable = Scrollable.maybeOf(context);
+    if (scrollable != null && scrollable != _scrollable) {
+      _scrollable = scrollable;
+      _autoScroller = EdgeDraggingAutoScroller(
+        scrollable,
+        onScrollViewScrolled: _extendSelectionToLastDrag,
+        velocityScalar: 30,
+      );
+    }
+  }
+
+  /// While the page auto-scrolls under a held pointer, keep extending the
+  /// selection to the (now-moved) content under that pointer.
+  void _extendSelectionToLastDrag() {
+    final r = _render;
+    final anchor = _dragAnchor;
+    final global = _lastDragGlobal;
+    if (r == null || anchor == null || global == null) return;
+    final p = r.positionAt(r.globalToLocal(global));
+    _controller.setSelection(DocSelection(anchor: anchor, focus: p));
+    if (_autoScroller != null) {
+      _autoScroller!.startAutoScrollIfNecessary(
+        Rect.fromCenter(center: global, width: 1, height: 1),
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
