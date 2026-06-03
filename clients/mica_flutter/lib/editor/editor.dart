@@ -117,9 +117,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
-  // Auto-scroll the surrounding page while drag-selecting past the viewport edge.
-  EdgeDraggingAutoScroller? _autoScroller;
-  ScrollableState? _scrollable;
+  // Auto-scroll the surrounding page while drag-selecting near the viewport edge.
+  Timer? _autoScrollTimer;
   Offset? _lastDragGlobal;
   OverlayEntry? _cellEntry; // active table cell editor
   VoidCallback? _cellFocusListener;
@@ -192,7 +191,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _imageCache.clear();
     setRichPasteHandler(null);
     setRichImagePasteHandler(null);
-    _autoScroller?.stopAutoScroll();
+    _stopAutoScroll();
     _blink?.cancel();
     _conn?.close();
     _focus.removeListener(_onFocusChange);
@@ -1470,9 +1469,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Auto-scroll the page vertically when the drag nears the viewport edge so
     // the selection can extend beyond what's currently visible.
     _lastDragGlobal = d.globalPosition;
-    _ensureAutoScroller();
-    _autoScroller?.startAutoScrollIfNecessary(
-      Rect.fromCenter(center: d.globalPosition, width: 1, height: 1),
+    _autoScrollTimer ??= Timer.periodic(
+      const Duration(milliseconds: 16),
+      (_) => _autoScrollTick(),
     );
     // Auto-scroll a code block horizontally when selecting near its edges;
     // the closer to the edge, the faster (keeps up with the drag).
@@ -1507,38 +1506,48 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     _dragAnchor = null;
     _scrollbarDrag = null;
-    _autoScroller?.stopAutoScroll();
-    _lastDragGlobal = null;
+    _stopAutoScroll();
     _syncImeFromSelection();
   }
 
-  /// Lazily bind to the surrounding [Scrollable] for drag-select auto-scroll.
-  void _ensureAutoScroller() {
-    final scrollable = Scrollable.maybeOf(context);
-    if (scrollable != null && scrollable != _scrollable) {
-      _scrollable = scrollable;
-      _autoScroller = EdgeDraggingAutoScroller(
-        scrollable,
-        onScrollViewScrolled: _extendSelectionToLastDrag,
-        velocityScalar: 90,
-      );
-    }
+  void _stopAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+    _lastDragGlobal = null;
   }
 
-  /// While the page auto-scrolls under a held pointer, keep extending the
-  /// selection to the (now-moved) content under that pointer.
-  void _extendSelectionToLastDrag() {
-    final r = _render;
-    final anchor = _dragAnchor;
+  /// One auto-scroll step: while the held pointer is within the edge zone of the
+  /// surrounding scroll view, scroll the page (faster nearer the edge) and keep
+  /// extending the selection to the content now under the pointer.
+  void _autoScrollTick() {
+    final scrollable = Scrollable.maybeOf(context);
     final global = _lastDragGlobal;
-    if (r == null || anchor == null || global == null) return;
+    final anchor = _dragAnchor;
+    final r = _render;
+    if (scrollable == null || global == null || anchor == null || r == null) {
+      return;
+    }
+    final box = scrollable.context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    const zone = 90.0; // edge band that triggers scrolling
+    const maxStep = 32.0; // px per ~16ms tick at the very edge (~2000px/s)
+
+    double delta = 0;
+    if (global.dy < top + zone) {
+      delta = -((top + zone - global.dy) / zone).clamp(0.0, 1.0) * maxStep;
+    } else if (global.dy > bottom - zone) {
+      delta = ((global.dy - (bottom - zone)) / zone).clamp(0.0, 1.0) * maxStep;
+    }
+    if (delta == 0) return;
+
+    final pos = scrollable.position;
+    final target = (pos.pixels + delta).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    if (target == pos.pixels) return;
+    pos.jumpTo(target);
     final p = r.positionAt(r.globalToLocal(global));
     _controller.setSelection(DocSelection(anchor: anchor, focus: p));
-    if (_autoScroller != null) {
-      _autoScroller!.startAutoScrollIfNecessary(
-        Rect.fromCenter(center: global, width: 1, height: 1),
-      );
-    }
   }
 
   // ---------------------------------------------------------------------------
