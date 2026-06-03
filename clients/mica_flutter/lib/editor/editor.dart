@@ -44,6 +44,7 @@ class MicaEditor extends StatefulWidget {
     this.onLoadImageBytes,
     this.onResolveImageUrls,
     this.reHostImages = true,
+    this.focusNode,
     this.appearance = const EditorAppearance(),
     super.key,
   });
@@ -90,6 +91,10 @@ class MicaEditor extends StatefulWidget {
   /// storage; when false they stay as standard external Markdown links.
   final bool reHostImages;
 
+  /// Optional external focus node so the host can move focus into the editor
+  /// (e.g. pressing Enter in the page title jumps to the first body line).
+  final FocusNode? focusNode;
+
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
 
@@ -99,7 +104,8 @@ class MicaEditor extends StatefulWidget {
 
 class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   late final EditorController _controller;
-  final FocusNode _focus = FocusNode(debugLabel: 'MicaEditor');
+  late final FocusNode _focus =
+      widget.focusNode ?? FocusNode(debugLabel: 'MicaEditor');
   final GlobalKey _surfaceKey = GlobalKey();
 
   TextInputConnection? _conn;
@@ -185,7 +191,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _blink?.cancel();
     _conn?.close();
     _focus.removeListener(_onFocusChange);
-    _focus.dispose();
+    // Only dispose a focus node we created; an external one is owned by the host.
+    if (widget.focusNode == null) _focus.dispose();
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
@@ -231,10 +238,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _onFocusChange() {
     if (_focus.hasFocus && widget.canEdit) {
+      // Focus gained without a caret (e.g. Enter from the page title) → land on
+      // the first line so typing starts at the top of the body.
+      if (_controller.selection == null && _controller.nodes.isNotEmpty) {
+        _controller.collapseTo(const DocPosition(0, 0));
+      }
       _attachIme();
       _restartBlink();
       setRichPasteHandler(_handleRichPaste);
       setRichImagePasteHandler(_handlePasteImage);
+      _syncImeFromSelection(force: true);
     } else {
       _detachIme();
       _blink?.cancel();

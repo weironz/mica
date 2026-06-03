@@ -1597,6 +1597,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final _rename = TextEditingController();
   final _memberEmail = TextEditingController();
   final _pageTitle = TextEditingController();
+  final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
   Timer? _pageTitleSaveTimer;
   final Set<String> _collapsedViewIds = {};
   // True only while a page is being dragged in the tree. The drop zones overlay
@@ -1627,6 +1628,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _rename.dispose();
     _memberEmail.dispose();
     _pageTitle.dispose();
+    _editorFocus.dispose();
     _pageTitleSaveTimer?.cancel();
     super.dispose();
   }
@@ -2049,7 +2051,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final canEdit = matchesEditRole(workspace.role);
 
     return ColoredBox(
-      color: const Color(0xFFF8FAFC),
+      color: Colors.white,
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
         child: Center(
@@ -2065,7 +2067,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       child: TextField(
                         controller: _pageTitle,
                         style: Theme.of(context).textTheme.headlineMedium,
+                        textInputAction: TextInputAction.next,
                         onChanged: (_) => _schedulePageTitleSave(),
+                        // Enter in the title drops into the first body line.
+                        onSubmitted: (_) => _editorFocus.requestFocus(),
                         decoration: const InputDecoration(
                           hintText: 'Untitled',
                           border: InputBorder.none,
@@ -2105,19 +2110,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     _PresenceBar(presence: widget.presence),
                   ],
                 ),
-                const SizedBox(height: 20),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32,
-                      vertical: 28,
-                    ),
-                    child: MicaEditor(
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: MicaEditor(
                       key: ValueKey(bootstrap.document.id),
+                      focusNode: _editorFocus,
                       rootBlockId: bootstrap.document.rootBlockId,
                       nodes: [
                         for (final b in bootstrap.childBlocks)
@@ -2139,7 +2137,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       reHostImages: widget.reHostImages,
                       appearance: widget.appearance,
                     ),
-                  ),
                 ),
                 if (widget.selectedMarkdown != null) ...[
                   const SizedBox(height: 28),
