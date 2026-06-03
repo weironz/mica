@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'editor/clipboard_copy.dart';
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
+import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
 import 'upload/sha256.dart';
 
@@ -641,6 +642,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Import a Markdown file as a new page (title from its H1, else the filename).
+  Future<void> _importMarkdownAsPage(String fileName, String markdown) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final base = fileName
+          .replaceAll(RegExp(r'\.(md|markdown|txt)$', caseSensitive: false), '')
+          .trim();
+      final title =
+          _titleFromMarkdown(markdown, base.isEmpty ? 'Imported' : base);
+      final bootstrap = await _api.importMarkdown(
+        session.accessToken,
+        workspace.id,
+        title,
+        markdown,
+      );
+      setState(() {
+        final views = _viewsByWorkspace[workspace.id] ?? const [];
+        _viewsByWorkspace = {
+          ..._viewsByWorkspace,
+          workspace.id: [...views, bootstrap.view],
+        };
+        _selectedView = bootstrap.view;
+        _selectedBootstrap = bootstrap;
+        _selectedMarkdown = null;
+      });
+    });
+  }
+
   Future<void> _aiCurrentFromMarkdown(String markdown) {
     return _run(() async {
       final bootstrap = _selectedBootstrap;
@@ -1242,6 +1272,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onOpenSearchResult: _openViewById,
                 onExportPageMarkdown: _exportPageMarkdown,
                 onExportPageZip: _exportPageZip,
+                onImportMarkdown: _importMarkdownAsPage,
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
@@ -1482,6 +1513,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onOpenSearchResult,
     required this.onExportPageMarkdown,
     required this.onExportPageZip,
+    required this.onImportMarkdown,
     required this.onExportWorkspaceMarkdown,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
@@ -1569,6 +1601,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String viewId) onOpenSearchResult;
   final Future<String> Function() onExportPageMarkdown;
   final Future<Uint8List> Function() onExportPageZip;
+  final Future<void> Function(String fileName, String markdown) onImportMarkdown;
   final Future<String> Function() onExportWorkspaceMarkdown;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
@@ -2201,12 +2234,42 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         ),
                       ),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: widget.onExportMarkdown,
-                      icon: const Icon(Icons.download_outlined),
-                      label: const Text('Export'),
+                    PopupMenuButton<String>(
+                      tooltip: 'Page menu',
+                      icon: const Icon(Icons.expand_more),
+                      onSelected: _onPageMenu,
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: 'export-md',
+                          child: ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.download_outlined),
+                            title: Text('Export Markdown'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'export-zip',
+                          child: ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.folder_zip_outlined),
+                            title: Text('Export ZIP (with images)'),
+                          ),
+                        ),
+                        PopupMenuDivider(),
+                        PopupMenuItem(
+                          value: 'import-md',
+                          child: ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.upload_file_outlined),
+                            title: Text('Import Markdown…'),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
                     IconButton(
                       tooltip: _toolsExpanded
                           ? 'Hide side panel'
@@ -2641,6 +2704,44 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onPurge: widget.onPurgeView,
       ),
     );
+  }
+
+  /// Page title menu: Markdown export/import + ZIP export.
+  Future<void> _onPageMenu(String value) async {
+    switch (value) {
+      case 'export-md':
+        await _downloadPageMarkdown();
+      case 'export-zip':
+        await _onExport('page-zip');
+      case 'import-md':
+        await _importMarkdownFile();
+    }
+  }
+
+  Future<void> _downloadPageMarkdown() async {
+    try {
+      final markdown = await widget.onExportPageMarkdown();
+      final title = _pageTitle.text.trim().isEmpty
+          ? 'page'
+          : _pageTitle.text.trim();
+      downloadImage(
+        Uint8List.fromList(utf8.encode(markdown)),
+        '$title.md',
+        'text/markdown',
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export failed: $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _importMarkdownFile() async {
+    final picked = await pickTextFile();
+    if (picked == null || !mounted) return;
+    await widget.onImportMarkdown(picked.name, picked.text);
   }
 
   Future<void> _onExport(String kind) async {
