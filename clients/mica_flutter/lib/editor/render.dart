@@ -338,6 +338,21 @@ class RenderDocument extends RenderBox {
         continue;
       }
 
+      if (node.kind == 'divider') {
+        final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+          ..kind = 'divider'
+          ..nodeId = node.id
+          ..contentLeft = 0
+          ..boxTop = y
+          ..textTop = y
+          ..textHeight = _dividerHeight
+          ..boxHeight = _dividerHeight;
+        _layouts.add(layout);
+        y += layout.boxHeight;
+        prevKind = node.kind;
+        continue;
+      }
+
       final style = _appearance.applyTo(
         EditorTheme.styleFor(node),
         isCode: node.isCode,
@@ -474,6 +489,9 @@ class RenderDocument extends RenderBox {
   static const double _tTopGutter = 16;
   static const double _tBottomBar = 16;
   static const double _tEdge = 16; // overlay handle thickness
+
+  // Vertical box reserved for a divider (horizontal rule centered within it).
+  static const double _dividerHeight = 26;
 
   _NodeLayout _layoutTable(EditorNode node, double top, double maxWidth) {
     final table = TableData.fromBlock(node.data);
@@ -843,6 +861,17 @@ class RenderDocument extends RenderBox {
       _paintTable(canvas, offset, l, i);
       return;
     }
+    if (l.kind == 'divider') {
+      final cy = offset.dy + l.boxTop + l.boxHeight / 2;
+      canvas.drawLine(
+        Offset(offset.dx, cy),
+        Offset(offset.dx + size.width, cy),
+        Paint()
+          ..color = EditorTheme.quoteBar
+          ..strokeWidth = 1.5,
+      );
+      return;
+    }
     final origin = offset + Offset(l.contentLeft, l.textTop);
 
     switch (l.kind) {
@@ -922,6 +951,16 @@ class RenderDocument extends RenderBox {
     final paint = Paint()..color = EditorTheme.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
       final l = _layouts[i];
+      if (l.kind == 'divider') {
+        // Highlight the whole rule when it falls inside a multi-node selection.
+        if (i != start.node || i != end.node) {
+          canvas.drawRect(
+            Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight),
+            paint,
+          );
+        }
+        continue;
+      }
       final from = i == start.node ? start.offset : 0;
       final to = i == end.node ? end.offset : _nodes[i].text.length;
       final isCode = l.kind == 'code_block';
@@ -1182,7 +1221,7 @@ class RenderDocument extends RenderBox {
   Rect? caretRectFor(DocPosition pos) {
     if (pos.node < 0 || pos.node >= _layouts.length) return null;
     final l = _layouts[pos.node];
-    if (l.kind == 'table') return null; // tables have no inline caret
+    if (EditorNode.isAtomicKind(l.kind)) return null; // no inline caret
     final off = pos.offset.clamp(0, _nodes[pos.node].text.length);
     final caret = l.painter.getOffsetForCaret(TextPosition(offset: off), Rect.zero);
     final scroll = l.kind == 'code_block' ? (_codeScroll[l.nodeId] ?? 0) : 0.0;
@@ -1206,15 +1245,16 @@ class RenderDocument extends RenderBox {
         break;
       }
     }
-    // The caret can't sit inside a table; snap to the nearest text node.
-    if (_nodes[idx].kind == 'table') {
+    // The caret can't sit inside an atomic node (table/divider); snap to the
+    // nearest text node.
+    if (_nodes[idx].isAtomic) {
       var alt = idx - 1;
-      while (alt >= 0 && _nodes[alt].kind == 'table') {
+      while (alt >= 0 && _nodes[alt].isAtomic) {
         alt--;
       }
       if (alt < 0) {
         alt = idx + 1;
-        while (alt < _nodes.length && _nodes[alt].kind == 'table') {
+        while (alt < _nodes.length && _nodes[alt].isAtomic) {
           alt++;
         }
       }

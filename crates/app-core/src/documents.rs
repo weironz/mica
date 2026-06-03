@@ -221,6 +221,13 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
+    // Horizontal rule (`---`, `***`, `___`) → divider block.
+    if is_divider(content) {
+      push_block(&mut blocks, &mut root_children, "divider", String::new(), Value::Null);
+      index += 1;
+      continue;
+    }
+
     let (kind, text, data) = classify_markdown_line(content);
     let (text, data) = if kind == "image" {
       (text, data)
@@ -247,6 +254,16 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     root_block_id: root_block_id.to_string(),
     blocks: all_blocks,
   }
+}
+
+/// A Markdown thematic break: 3+ of the same `-`, `*`, or `_` (already trimmed).
+fn is_divider(content: &str) -> bool {
+  let bytes = content.as_bytes();
+  if bytes.len() < 3 {
+    return false;
+  }
+  let first = bytes[0];
+  matches!(first, b'-' | b'*' | b'_') && bytes.iter().all(|&b| b == first)
 }
 
 fn is_table_separator(line: &str) -> bool {
@@ -622,6 +639,10 @@ fn append_markdown_block_content(block: &Block, depth: usize, lines: &mut Vec<St
     }
     "table" => {
       append_table_markdown(block, lines);
+    }
+    "divider" => {
+      lines.push("---".to_string());
+      lines.push(String::new());
     }
     _ => {
       if !text.is_empty() {
@@ -1144,6 +1165,22 @@ mod tests {
     assert!(exported.contains("`code`"));
     assert!(exported.contains("~~gone~~"));
     assert!(exported.contains("[link](https://x.io)"));
+  }
+
+  #[test]
+  fn divider_round_trips() {
+    let md = "before\n\n---\n\nafter";
+    let snapshot = import_markdown(md, "root");
+    let kinds: Vec<&str> = snapshot
+      .blocks
+      .iter()
+      .filter(|b| b.id != "root")
+      .map(|b| b.kind.as_str())
+      .collect();
+    assert_eq!(kinds, vec!["paragraph", "divider", "paragraph"]);
+
+    let exported = export_markdown(&snapshot).expect("export");
+    assert!(exported.contains("\n---\n"), "exported: {exported:?}");
   }
 
   #[test]

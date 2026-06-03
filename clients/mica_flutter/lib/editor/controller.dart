@@ -379,6 +379,18 @@ class EditorController extends ChangeNotifier {
     // Nothing before the first block to merge into.
     if (i == 0) return false;
     final prev = nodes[i - 1];
+
+    // An atomic neighbor (divider/table) can't absorb text — delete it instead
+    // of merging, keeping the current node and its caret.
+    if (prev.isAtomic) {
+      nodes.removeAt(i - 1);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': prev.id},
+      ]);
+      collapseTo(DocPosition(i - 1, 0));
+      return true;
+    }
+
     final junction = prev.text.length;
     final merged = prev.text + cur.text;
     prev.text = merged;
@@ -402,6 +414,18 @@ class EditorController extends ChangeNotifier {
     if (i < 0 || i + 1 >= nodes.length) return false;
     final cur = nodes[i];
     final next = nodes[i + 1];
+
+    // Delete-at-end-of-line removes an atomic following node (divider/table)
+    // rather than trying to merge its (empty) text in.
+    if (next.isAtomic) {
+      nodes.removeAt(i + 1);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': next.id},
+      ]);
+      collapseTo(DocPosition(i, cur.text.length));
+      return true;
+    }
+
     final junction = cur.text.length;
     final merged = cur.text + next.text;
     cur.text = merged;
@@ -726,6 +750,11 @@ class EditorController extends ChangeNotifier {
       if (caret == 3 && text == '```') {
         return convert('code_block', {}, 3);
       }
+      if (caret == 3 && (text == '---' || text == '***' || text == '___')) {
+        node.text = '';
+        insertDivider();
+        return true;
+      }
     } else if (node.kind == 'bulleted_list') {
       for (final t in const ['[ ] ', '[] ']) {
         if (caret == t.length && text.startsWith(t)) {
@@ -1011,6 +1040,49 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(last, nodes[last].text.length));
   }
 
+  /// Insert a divider (horizontal rule) at the caret. An empty focused
+  /// paragraph becomes the divider; otherwise a divider is inserted after the
+  /// focused node. A trailing paragraph is ensured so the caret has a text node
+  /// to land on (the divider itself is atomic / non-focusable).
+  void insertDivider() {
+    final sel = selection;
+    if (sel == null) return;
+    final i = sel.focus.node;
+    if (i >= nodes.length) return;
+    final node = nodes[i];
+    final ops = <DocOp>[];
+    int dividerIndex;
+    if (node.text.isEmpty && node.kind == 'paragraph') {
+      node
+        ..kind = 'divider'
+        ..text = ''
+        ..data = {};
+      _dirty.remove(node.id);
+      ops.add({
+        'type': 'update_block',
+        'block_id': node.id,
+        'kind': 'divider',
+        'text': '',
+        'data': <String, dynamic>{},
+      });
+      dividerIndex = i;
+    } else {
+      final d = EditorNode(id: _genId(), kind: 'divider', text: '');
+      nodes.insert(i + 1, d);
+      ops.add(_insertOp(d, i + 1));
+      dividerIndex = i + 1;
+    }
+
+    final afterIndex = dividerIndex + 1;
+    if (afterIndex >= nodes.length || nodes[afterIndex].isAtomic) {
+      final p = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+      nodes.insert(afterIndex, p);
+      ops.add(_insertOp(p, afterIndex));
+    }
+    _sendNow(ops);
+    collapseTo(DocPosition(afterIndex, 0));
+  }
+
   /// Append an empty paragraph after the last node and move the caret into it.
   /// Used as the downward escape from a trailing code block.
   void addParagraphAfterLast() {
@@ -1144,7 +1216,7 @@ class EditorController extends ChangeNotifier {
     // The initial-load baseline may have no selection; keep a caret so editing
     // can resume immediately after undoing all the way back.
     if (selection == null && nodes.isNotEmpty) {
-      selection = DocSelection.collapsed(const DocPosition(0, 0));
+      selection = const DocSelection.collapsed(DocPosition(0, 0));
     }
     _dirty.clear();
     if (ops.isNotEmpty) _send(ops);

@@ -1352,6 +1352,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _runInlineAi();
       return;
     }
+    if (opt.kind == 'divider') {
+      // Clear the "/..." text, then insert an atomic divider with a trailing
+      // paragraph for the caret.
+      _controller.applySlashCommand(_slashStart, caret, 'paragraph', {});
+      _controller.insertDivider();
+      _closeSlash();
+      _syncImeFromSelection(force: true);
+      return;
+    }
     final data = opt.kind == 'table'
         ? TableData.empty().toBlockData()
         : opt.data;
@@ -1662,4 +1671,5 @@ const List<_SlashOption> _slashOptions = [
   _SlashOption('Quote', Icons.format_quote, 'quote'),
   _SlashOption('Code', Icons.code, 'code_block'),
   _SlashOption('Table', Icons.grid_on, 'table'),
+  _SlashOption('Divider', Icons.horizontal_rule, 'divider'),
 ];

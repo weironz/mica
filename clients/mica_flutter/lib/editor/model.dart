@@ -29,6 +29,12 @@ class EditorNode {
 
   bool get isCode => kind == 'code_block';
 
+  /// Void/atomic nodes hold no inline caret — the caret skips over them and
+  /// clicks snap to the nearest text node. Tables are edited via cell overlays;
+  /// dividers are pure decoration.
+  static bool isAtomicKind(String kind) => kind == 'table' || kind == 'divider';
+  bool get isAtomic => isAtomicKind(kind);
+
   int get headingLevel {
     final level = data['level'];
     if (level is int) return level.clamp(1, 6);

@@ -69,8 +69,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       continue;
     }
 
-    // A horizontal rule has no block type yet; treat as a blank separator.
+    // A horizontal rule (`---`, `***`, `___`) becomes a divider block.
     if (divider.hasMatch(line)) {
+      result.add((kind: 'divider', text: '', data: {}));
       i++;
       continue;
     }
