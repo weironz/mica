@@ -117,7 +117,7 @@ pub async fn complete(
     workspace_id,
     user_id,
     &payload.object_key,
-    &base_name(&payload.file_name),
+    &safe_file_name(&payload.file_name),
     &payload.mime_type,
     payload.byte_size,
   )
@@ -245,7 +245,7 @@ pub async fn import_url(
     )));
   }
 
-  let original_name = base_name(&url_file_name(url, ext.as_deref()));
+  let original_name = safe_file_name(&url_file_name(url, ext.as_deref()));
   let file = store::insert_file(
     &state.db,
     workspace_id,
@@ -411,16 +411,31 @@ fn ensure_key_in_workspace(workspace_id: Uuid, object_key: &str) -> ApiResult<()
   Ok(())
 }
 
-/// The basename of a client/URL file name (strip any directory components),
-/// preserving the original characters — spaces, parentheses, CJK, etc. This is
-/// display/export metadata (`original_name`), NOT a storage path: object keys
-/// are content-addressed hashes, so the raw name is safe to keep.
-fn base_name(name: &str) -> String {
-  let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
-  if base.is_empty() {
+/// Tidy a client/URL file name for use as display/export metadata: strip any
+/// directory, keep letters/digits of ANY script (so Chinese & English survive)
+/// plus `-`, `_`, `.`, and replace every other char (spaces, parentheses,
+/// punctuation) with a single `_`. Keeps Markdown link targets clean —
+/// `My Photo (1).png` → `My_Photo_1.png`, `我的照片 v2.png` → `我的照片_v2.png`.
+fn safe_file_name(name: &str) -> String {
+  let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+  let mut out = String::new();
+  let mut prev_underscore = false;
+  for ch in base.chars() {
+    if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+      out.push(ch);
+      prev_underscore = ch == '_';
+    } else if !prev_underscore {
+      out.push('_');
+      prev_underscore = true;
+    }
+  }
+  // Drop underscores hugging the extension dot, then trim the ends.
+  let tidy = out.replace("_.", ".").replace("._", ".");
+  let trimmed = tidy.trim_matches('_').to_string();
+  if trimmed.is_empty() {
     "file".to_string()
   } else {
-    base.to_string()
+    trimmed
   }
 }
 
@@ -448,12 +463,14 @@ mod tests {
   }
 
   #[test]
-  fn base_name_strips_path_but_preserves_characters() {
-    assert_eq!(base_name("../../etc/passwd"), "passwd");
-    // Spaces, parentheses, and unicode (CJK) are kept verbatim.
-    assert_eq!(base_name("my file (1).PNG"), "my file (1).PNG");
-    assert_eq!(base_name("photos/我的照片.png"), "我的照片.png");
-    assert_eq!(base_name("  "), "file");
+  fn safe_file_name_keeps_unicode_drops_specials() {
+    assert_eq!(safe_file_name("../../etc/passwd"), "passwd");
+    // Spaces/parentheses → underscores (collapsed, trimmed off the extension).
+    assert_eq!(safe_file_name("my file (1).PNG"), "my_file_1.PNG");
+    // Chinese (and English) letters/digits are preserved.
+    assert_eq!(safe_file_name("photos/我的照片.png"), "我的照片.png");
+    assert_eq!(safe_file_name("我的照片 v2.png"), "我的照片_v2.png");
+    assert_eq!(safe_file_name("  "), "file");
   }
 
   #[test]
