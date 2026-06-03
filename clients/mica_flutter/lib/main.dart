@@ -1145,32 +1145,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _session;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mica'),
-        actions: [
-          if (_isBusy)
-            const Padding(
-              padding: EdgeInsets.only(right: 16),
-              child: SizedBox(
-                height: 18,
-                width: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          if (session != null)
-            IconButton(
-              tooltip: 'Refresh',
-              onPressed: _isBusy ? null : _refreshWorkspaces,
-              icon: const Icon(Icons.refresh),
-            ),
-          if (session != null)
-            IconButton(
-              tooltip: 'Sign out',
-              onPressed: _isBusy ? null : _signOut,
-              icon: const Icon(Icons.logout),
-            ),
-        ],
-      ),
       body: SafeArea(
         child: session == null
             ? Row(
@@ -1197,6 +1171,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               )
             : WorkspaceView(
                 session: session,
+                isBusy: _isBusy,
+                onRefresh: () {
+                  if (!_isBusy) _refreshWorkspaces();
+                },
+                onSignOut: () {
+                  if (!_isBusy) _signOut();
+                },
                 workspaces: _workspaces,
                 selectedWorkspace: _selectedWorkspace,
                 members: _selectedWorkspace == null
@@ -1446,6 +1427,9 @@ class _SidePanelState extends State<SidePanel> {
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.session,
+    required this.isBusy,
+    required this.onRefresh,
+    required this.onSignOut,
     required this.workspaces,
     required this.selectedWorkspace,
     required this.members,
@@ -1507,6 +1491,9 @@ class WorkspaceView extends StatefulWidget {
   });
 
   final AuthSession? session;
+  final bool isBusy;
+  final VoidCallback onRefresh;
+  final VoidCallback onSignOut;
   final List<Workspace> workspaces;
   final Workspace? selectedWorkspace;
   final List<WorkspaceMember> members;
@@ -1668,6 +1655,38 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // App header — top-left, grouped with the sidebar (no global AppBar).
+            Row(
+              children: [
+                const Text(
+                  'Mica',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                if (widget.isBusy)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 4),
+                    child: SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                IconButton(
+                  tooltip: 'Refresh',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.onRefresh,
+                  icon: const Icon(Icons.refresh, size: 20),
+                ),
+                IconButton(
+                  tooltip: 'Sign out',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.onSignOut,
+                  icon: const Icon(Icons.logout, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
