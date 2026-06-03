@@ -24,6 +24,37 @@ void setRichImagePasteHandler(ImagePasteHandler? handler) {
   _imageHandler = handler;
 }
 
+/// Extract a pasted image file from `files` (preferred) or `items`.
+html.File? _clipboardImage(html.DataTransfer data) {
+  final files = data.files;
+  if (files != null) {
+    for (final f in files) {
+      if (f.type.startsWith('image/')) return f;
+    }
+  }
+  final items = data.items;
+  if (items != null) {
+    final n = items.length ?? 0;
+    for (var i = 0; i < n; i++) {
+      final item = items[i];
+      if (item.kind == 'file' && (item.type?.startsWith('image/') ?? false)) {
+        final file = item.getAsFile();
+        if (file != null) return file;
+      }
+    }
+  }
+  return null;
+}
+
+/// dart2js types FileReader's readAsArrayBuffer result inconsistently; accept
+/// the common byte representations.
+Uint8List? _bytesOf(Object? result) {
+  if (result is ByteBuffer) return result.asUint8List();
+  if (result is Uint8List) return result;
+  if (result is List<int>) return Uint8List.fromList(result);
+  return null;
+}
+
 void setRichPasteHandler(RichPasteHandler? handler) {
   _handler = handler;
   if (_installed) return;
@@ -32,30 +63,22 @@ void setRichPasteHandler(RichPasteHandler? handler) {
     final data = (event as html.ClipboardEvent).clipboardData;
     if (data == null) return;
 
-    // A pasted bitmap (screenshot, copied image) arrives as a file item; upload
-    // it rather than dropping it as text.
+    // A pasted bitmap (screenshot, copied image) arrives as a file — in the
+    // clipboard's `files` and/or `items`. Upload it rather than dropping as text.
     final imageHandler = _imageHandler;
-    final files = data.files;
-    if (imageHandler != null && files != null && files.isNotEmpty) {
-      html.File? image;
-      for (final f in files) {
-        if (f.type.startsWith('image/')) {
-          image = f;
-          break;
-        }
-      }
+    if (imageHandler != null) {
+      final image = _clipboardImage(data);
       if (image != null) {
         event.preventDefault();
         event.stopPropagation();
-        final file = image;
-        final reader = html.FileReader()..readAsArrayBuffer(file);
+        final reader = html.FileReader()..readAsArrayBuffer(image);
         reader.onLoadEnd.first.then((_) {
-          final result = reader.result;
-          if (result is ByteBuffer) {
+          final bytes = _bytesOf(reader.result);
+          if (bytes != null) {
             imageHandler(
-              result.asUint8List(),
-              file.type.isEmpty ? 'image/png' : file.type,
-              file.name.isEmpty ? 'pasted-image.png' : file.name,
+              bytes,
+              image.type.isEmpty ? 'image/png' : image.type,
+              image.name.isEmpty ? 'pasted-image.png' : image.name,
             );
           }
         });
