@@ -1679,12 +1679,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   onPressed: widget.onRefresh,
                   icon: const Icon(Icons.refresh, size: 20),
                 ),
-                IconButton(
-                  tooltip: 'Sign out',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: widget.onSignOut,
-                  icon: const Icon(Icons.logout, size: 20),
-                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -1720,11 +1714,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       child: Text('Export all workspaces'),
                     ),
                   ],
-                ),
-                IconButton(
-                  tooltip: 'Settings',
-                  onPressed: _openSettings,
-                  icon: const Icon(Icons.settings_outlined),
                 ),
               ],
             ),
@@ -1795,6 +1784,98 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
             const SizedBox(height: 12),
             Expanded(child: _pageTree(context, canEdit)),
+            const Divider(height: 24),
+            _accountTile(context),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Account row pinned to the bottom of the left sidebar. Tapping opens a menu
+  /// with Settings and Sign out.
+  Widget _accountTile(BuildContext context) {
+    final user = widget.session?.user;
+    final name = user?.displayName.isNotEmpty == true
+        ? user!.displayName
+        : (user?.email ?? 'Account');
+    final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '?';
+    return PopupMenuButton<String>(
+      tooltip: 'Account',
+      position: PopupMenuPosition.under,
+      onSelected: (value) {
+        switch (value) {
+          case 'settings':
+            _openSettings();
+          case 'signout':
+            widget.onSignOut();
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'settings',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.settings_outlined),
+            title: Text('Settings'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'signout',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.logout),
+            title: Text('Sign out'),
+          ),
+        ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: const Color(0xFFE2E8F0),
+              child: Text(
+                initial,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF334155),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (user?.email != null)
+                    Text(
+                      user!.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Icon(Icons.more_vert, size: 18, color: Color(0xFF94A3B8)),
           ],
         ),
       ),
