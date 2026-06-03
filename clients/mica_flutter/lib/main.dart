@@ -13,6 +13,7 @@ import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
 import 'upload/sha256.dart';
+import 'upload/unzip.dart';
 
 /// Dev convenience: when true, the app signs in automatically on startup so you
 /// don't have to log in on every reload. Turn it off for a real login screen:
@@ -676,6 +677,141 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Import a workspace ZIP (Mica's export format): rebuild the page tree from
+  /// the folder layout, upload bundled `assets/`, and rewire image references.
+  Future<void> _importWorkspaceZip(String fileName, Uint8List zipBytes) {
+    return _run(() async {
+      final session = _requireSession();
+      final entries = readStoreZip(zipBytes);
+      final wsName = fileName
+          .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
+          .trim();
+      final workspace = await _api.createWorkspace(
+        session.accessToken,
+        wsName.isEmpty ? 'Imported' : wsName,
+      );
+
+      // Upload bundled assets → map "assets/<name>" to its file id.
+      final assets = <String, ({String fileId, String name})>{};
+      for (final e in entries) {
+        if (!e.name.startsWith('assets/')) continue;
+        final base = e.name.substring('assets/'.length);
+        if (base.isEmpty) continue;
+        final file = await _api.uploadImage(
+          session.accessToken,
+          workspace.id,
+          fileName: base,
+          mimeType: _guessImageMime(base),
+          bytes: e.bytes,
+        );
+        assets['assets/$base'] = (fileId: file.id, name: file.name);
+      }
+
+      // Create pages parents-first (shallower paths first) so a child can find
+      // its already-created parent.
+      final mds = entries.where((e) => e.name.toLowerCase().endsWith('.md')).toList()
+        ..sort((a, b) =>
+            a.name.split('/').length.compareTo(b.name.split('/').length));
+      final viewByPath = <String, String>{};
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      for (final e in mds) {
+        final parts = e.name.split('/');
+        String? parentViewId;
+        if (parts.length > 1) {
+          final parentMd = '${parts.sublist(0, parts.length - 1).join('/')}.md';
+          parentViewId = viewByPath[parentMd];
+        }
+        final markdown = utf8.decode(e.bytes, allowMalformed: true);
+        final fallback = parts.last.replaceAll(
+          RegExp(r'\.md$', caseSensitive: false),
+          '',
+        );
+        final title = _titleFromMarkdown(markdown, fallback);
+        final created = await _api.createDocument(
+          session.accessToken,
+          workspace.id,
+          title,
+          parentViewId: parentViewId,
+        );
+        viewByPath[e.name] = created.view.id;
+
+        final specs = markdownToBlocks(markdown);
+        final ops = <Map<String, dynamic>>[];
+        var index = 0;
+        for (var k = 0; k < specs.length; k++) {
+          // Skip a leading H1 that duplicates the page title.
+          if (k == 0 &&
+              specs[k].kind == 'heading' &&
+              specs[k].text.trim() == title) {
+            continue;
+          }
+          var data = specs[k].data;
+          if (specs[k].kind == 'image') {
+            final url = data['url'] as String?;
+            final asset = url == null ? null : assets[_normalizeAssetRef(url)];
+            if (asset != null) {
+              data = {'file_id': asset.fileId, 'name': asset.name};
+            }
+          }
+          ops.add({
+            'type': 'insert_block',
+            'parent_id': created.document.rootBlockId,
+            'index': index,
+            'block': {
+              'id': 'block_${stamp}_${viewByPath.length}_$k',
+              'type': specs[k].kind,
+              'text': specs[k].text,
+              'data': data,
+              'children': <String>[],
+            },
+          });
+          index++;
+        }
+        if (ops.isNotEmpty) {
+          await _api.applyDocumentUpdate(
+            session.accessToken,
+            workspace.id,
+            created.document.id,
+            ops,
+          );
+        }
+      }
+
+      final workspaces = await _api.listWorkspaces(session.accessToken);
+      if (mounted) setState(() => _workspaces = workspaces);
+      await _selectWorkspace(workspace);
+    });
+  }
+
+  /// Strip leading `../` / `./` from a Markdown asset ref → `assets/<name>`.
+  String _normalizeAssetRef(String url) {
+    var u = url.trim();
+    while (u.startsWith('../')) {
+      u = u.substring(3);
+    }
+    if (u.startsWith('./')) u = u.substring(2);
+    return u;
+  }
+
+  String _guessImageMime(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'svg':
+        return 'image/svg+xml';
+      case 'bmp':
+        return 'image/bmp';
+      default:
+        return 'image/png';
+    }
+  }
+
   Future<void> _aiCurrentFromMarkdown(String markdown) {
     return _run(() async {
       final bootstrap = _selectedBootstrap;
@@ -1280,6 +1416,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onImportMarkdown: _importMarkdownAsPage,
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
                 onExportWorkspaceZip: _exportWorkspaceZip,
+                onImportWorkspaceZip: _importWorkspaceZip,
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
                 onAddMember: _addWorkspaceMember,
@@ -1522,6 +1659,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onImportMarkdown,
     required this.onExportWorkspaceMarkdown,
     required this.onExportWorkspaceZip,
+    required this.onImportWorkspaceZip,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
@@ -1611,6 +1749,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String fileName, String markdown) onImportMarkdown;
   final Future<String> Function() onExportWorkspaceMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
+  final Future<void> Function(String fileName, Uint8List bytes)
+  onImportWorkspaceZip;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
@@ -2811,12 +2951,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// Pick a Markdown file and import it as a new workspace (from global settings).
+  /// Pick a Markdown file or a workspace ZIP and import it as a new workspace
+  /// (from global settings). A ZIP rebuilds the page tree; a .md becomes one page.
   Future<void> _importWorkspaceFile() async {
-    final picked = await pickTextFile();
+    final picked = await pickImportFile();
     if (picked == null || !mounted) return;
     Navigator.of(context).pop(); // close settings before the import flow runs
-    await widget.onAiNewWorkspace(picked.text);
+    if (picked.name.toLowerCase().endsWith('.zip')) {
+      await widget.onImportWorkspaceZip(picked.name, picked.bytes);
+    } else {
+      await widget.onAiNewWorkspace(utf8.decode(picked.bytes, allowMalformed: true));
+    }
   }
 
   void _openAiDialog() {
@@ -3977,7 +4122,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _sectionTitle(context, Icons.import_export, 'Data', const Color(0xFF0EA5E9)),
     const SizedBox(height: 12),
     const Text(
-      'Import a Markdown file as a new workspace.',
+      'Import a workspace from a Mica ZIP (rebuilds the page tree + images), '
+      'or a single Markdown file as a one-page workspace.',
       style: TextStyle(color: Color(0xFF64748B)),
     ),
     const SizedBox(height: 12),
@@ -3986,7 +4132,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       child: OutlinedButton.icon(
         onPressed: () => widget.onImportWorkspace(),
         icon: const Icon(Icons.upload_file_outlined, size: 18),
-        label: const Text('Import workspace (Markdown)'),
+        label: const Text('Import workspace (Markdown / ZIP)'),
       ),
     ),
     const SizedBox(height: 16),
