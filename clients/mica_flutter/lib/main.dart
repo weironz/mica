@@ -3245,71 +3245,53 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
               ),
             ),
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Workspace menu',
-            icon: const Icon(Icons.more_horiz, size: 18),
-            onSelected: (value) {
-              _menu.close();
-              switch (value) {
-                case 'rename':
-                  widget.onRename(workspace);
-                case 'export':
-                  widget.onExport(workspace);
-                case 'import-files':
-                  widget.onImportFilesInto(workspace);
-                case 'import-folder':
-                  widget.onImportFolderInto(workspace);
-                case 'delete':
-                  widget.onDelete(workspace);
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'rename',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.edit_outlined),
-                  title: Text('Rename'),
-                ),
+          MenuAnchor(
+            menuChildren: [
+              _wsAction(
+                Icons.edit_outlined,
+                'Rename',
+                () => widget.onRename(workspace),
               ),
-              PopupMenuItem(
-                value: 'export',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.folder_zip_outlined),
-                  title: Text('Export (ZIP)'),
-                ),
+              _wsAction(
+                Icons.folder_zip_outlined,
+                'Export (ZIP)',
+                () => widget.onExport(workspace),
               ),
-              PopupMenuItem(
-                value: 'import-files',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.upload_file_outlined),
-                  title: Text('Import files (.md / .zip)'),
+              // One Import entry; the native picker can't mix files and
+              // folders, so the choice lives in a submenu.
+              SubmenuButton(
+                leadingIcon: const Icon(
+                  Icons.download_outlined,
+                  size: 18,
+                  color: Color(0xFF475569),
                 ),
+                menuChildren: [
+                  _wsAction(
+                    Icons.upload_file_outlined,
+                    'Files (.md / .zip)',
+                    () => widget.onImportFilesInto(workspace),
+                  ),
+                  _wsAction(
+                    Icons.drive_folder_upload_outlined,
+                    'Folder',
+                    () => widget.onImportFolderInto(workspace),
+                  ),
+                ],
+                child: const Text('Import'),
               ),
-              PopupMenuItem(
-                value: 'import-folder',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.drive_folder_upload_outlined),
-                  title: Text('Import folder'),
-                ),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
-                  title: Text('Delete'),
-                ),
+              _wsAction(
+                Icons.delete_outline,
+                'Delete',
+                () => widget.onDelete(workspace),
+                color: const Color(0xFFDC2626),
               ),
             ],
+            builder: (context, controller, child) => IconButton(
+              tooltip: 'Workspace menu',
+              icon: const Icon(Icons.more_horiz, size: 18),
+              onPressed: () =>
+                  controller.isOpen ? controller.close() : controller.open(),
+            ),
           ),
           const SizedBox(width: 4),
         ],
@@ -3341,6 +3323,26 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// A per-workspace menu action that also closes the outer dropdown.
+  Widget _wsAction(
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    Color? color,
+  }) {
+    return MenuItemButton(
+      leadingIcon: Icon(icon, size: 18, color: color ?? const Color(0xFF475569)),
+      onPressed: () {
+        _menu.close();
+        onTap();
+      },
+      child: Text(
+        label,
+        style: TextStyle(color: color ?? const Color(0xFF0F172A)),
       ),
     );
   }
