@@ -693,8 +693,11 @@ class RenderDocument extends RenderBox {
       for (var c = 0; c < cols; c++)
         Rect.fromLTWH(colEdges[c], top, colW[c], _tTopGutter),
     ];
+    // Inner borders between columns, plus the table's right edge (c == cols)
+    // so the LAST column is resizable too — drag resizes, a plain click on
+    // the strip still adds a column.
     final colBorders = [
-      for (var c = 1; c < cols; c++)
+      for (var c = 1; c <= cols; c++)
         (rect: Rect.fromLTWH(colEdges[c] - 4, gridTop, 8, gridHeight), col: c),
     ];
 

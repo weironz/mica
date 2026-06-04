@@ -149,6 +149,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Offset? _lastDragGlobal;
   OverlayEntry? _cellEntry; // active table cell editor
   VoidCallback? _cellFocusListener;
+  // Commit-and-close hook for the active cell editor; called when a drag
+  // begins so the floating field never detaches from its (re-laid-out) cell.
+  VoidCallback? _commitCellEditor;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
 
@@ -1082,7 +1085,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       focus.dispose();
       entry.remove();
       if (identical(_cellEntry, entry)) _cellEntry = null;
+      _commitCellEditor = null;
     }
+    _commitCellEditor = commit;
 
     void moveTo(int nextRow, int nextCol) {
       commit();
@@ -1832,6 +1837,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!widget.canEdit) return;
     final r = _render;
     if (r == null) return;
+    // A drag (column resize, selection…) relayouts under the floating cell
+    // editor — commit it first so it never hangs detached from its cell.
+    _commitCellEditor?.call();
     final local = r.globalToLocal(d.globalPosition);
     // Dragging a table column border resizes columns.
     final colBorder = r.tableColBorderAt(local);
@@ -1874,11 +1882,27 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final weights = [...resize.weights];
       final sum = weights.fold<double>(0, (a, b) => a + b);
       final pxPerWeight = resize.avail / sum;
+      final dxPx = local.dx - resize.startX;
+      if (resize.col >= weights.length) {
+        // The table's right edge: resize the LAST column against all the
+        // others (they scale to keep the table full-width).
+        if (weights.length < 2) return;
+        final lastPx = weights.last * pxPerWeight;
+        final restPx = resize.avail - lastPx;
+        final newLastPx = (lastPx + dxPx)
+            .clamp(40.0, resize.avail - 40.0 * (weights.length - 1));
+        final scale = (resize.avail - newLastPx) / restPx;
+        for (var i = 0; i < weights.length - 1; i++) {
+          weights[i] *= scale;
+        }
+        weights[weights.length - 1] = newLastPx / pxPerWeight;
+        _controller.previewTableColumnWidths(resize.node, weights);
+        return;
+      }
       final left = resize.col - 1;
       final right = resize.col;
       final leftPx = weights[left] * pxPerWeight;
       final rightPx = weights[right] * pxPerWeight;
-      final dxPx = local.dx - resize.startX;
       final newLeftPx = (leftPx + dxPx).clamp(40.0, leftPx + rightPx - 40.0);
       final newRightPx = leftPx + rightPx - newLeftPx;
       weights[left] = newLeftPx / pxPerWeight;
