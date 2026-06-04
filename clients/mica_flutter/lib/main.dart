@@ -123,6 +123,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   double _pageWidth = 1160;
   // When on, pasted external image URLs are re-hosted into Mica storage.
   bool _reHostImages = true;
+  // Formatting toolbar above the page (global setting; off by default).
+  bool _showFormatBar = false;
 
   DocumentSyncClient? _sync;
   List<PresenceUser> _presence = const [];
@@ -1349,6 +1351,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 reHostImages: _reHostImages,
                 onReHostImagesChanged: (value) =>
                     setState(() => _reHostImages = value),
+                showFormatBar: _showFormatBar,
+                onShowFormatBarChanged: (value) =>
+                    setState(() => _showFormatBar = value),
                 onAppearanceChanged: (appearance, pageWidth) {
                   setState(() {
                     _appearance = appearance;
@@ -1598,6 +1603,8 @@ class WorkspaceView extends StatefulWidget {
     required this.pageWidth,
     required this.reHostImages,
     required this.onReHostImagesChanged,
+    required this.showFormatBar,
+    required this.onShowFormatBarChanged,
     required this.onAppearanceChanged,
     required this.onSearch,
     required this.onOpenSearchResult,
@@ -1688,6 +1695,8 @@ class WorkspaceView extends StatefulWidget {
   final double pageWidth;
   final bool reHostImages;
   final void Function(bool value) onReHostImagesChanged;
+  final bool showFormatBar;
+  final void Function(bool value) onShowFormatBarChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<List<SearchResult>> Function(String query) onSearch;
@@ -1730,6 +1739,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   double _navWidth = 280;
   double _toolsWidth = 300;
   final EditorScrollHook _scrollHook = EditorScrollHook();
+  final EditorCommandHook _commandHook = EditorCommandHook();
 
   @override
   void didUpdateWidget(covariant WorkspaceView oldWidget) {
@@ -2311,7 +2321,100 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
     return ColoredBox(
       color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.showFormatBar && canEdit) _formatBar(context),
+          Expanded(child: _editorScroll(context, canEdit, bootstrap)),
+        ],
+      ),
+    );
+  }
+
+  /// The optional formatting toolbar (Settings -> Appearance, off by
+  /// default): one-click access to the high-frequency Markdown actions,
+  /// driven through [_commandHook] so focus/selection semantics stay in the
+  /// editor.
+  Widget _formatBar(BuildContext context) {
+    Widget btn(IconData icon, String tip, VoidCallback onTap) {
+      return Tooltip(
+        message: tip,
+        waitDuration: const Duration(milliseconds: 500),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(icon, size: 18, color: const Color(0xFF475569)),
+          ),
+        ),
+      );
+    }
+
+    Widget divider() => Container(
+      width: 1,
+      height: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      color: const Color(0xFFE2E8F0),
+    );
+
+    final h = _commandHook;
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
       child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            btn(Icons.undo, 'Undo (Ctrl+Z)', h.undo),
+            btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
+            divider(),
+            btn(Icons.notes, 'Text', () => h.setBlock('paragraph')),
+            btn(Icons.looks_one_outlined, 'Heading 1',
+                () => h.setBlock('heading', {'level': 1})),
+            btn(Icons.looks_two_outlined, 'Heading 2',
+                () => h.setBlock('heading', {'level': 2})),
+            btn(Icons.looks_3_outlined, 'Heading 3',
+                () => h.setBlock('heading', {'level': 3})),
+            divider(),
+            btn(Icons.format_bold, 'Bold (Ctrl+B)',
+                () => h.toggleMark('bold')),
+            btn(Icons.format_italic, 'Italic (Ctrl+I)',
+                () => h.toggleMark('italic')),
+            btn(Icons.format_strikethrough, 'Strikethrough',
+                () => h.toggleMark('strike')),
+            btn(Icons.code, 'Inline code (Ctrl+E)',
+                () => h.toggleMark('code')),
+            btn(Icons.link, 'Link (Ctrl+K)', h.editLink),
+            divider(),
+            btn(Icons.format_list_bulleted, 'Bulleted list',
+                () => h.setBlock('bulleted_list')),
+            btn(Icons.format_list_numbered, 'Numbered list',
+                () => h.setBlock('numbered_list')),
+            btn(Icons.check_box_outlined, 'To-do list',
+                () => h.setBlock('todo', {'checked': false})),
+            btn(Icons.format_quote, 'Quote', () => h.setBlock('quote')),
+            btn(Icons.terminal, 'Code block',
+                () => h.setBlock('code_block')),
+            divider(),
+            btn(Icons.horizontal_rule, 'Divider', () => h.insert('divider')),
+            btn(Icons.grid_on, 'Table', () => h.insert('table')),
+            btn(Icons.image_outlined, 'Image', () => h.insert('image')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _editorScroll(
+    BuildContext context,
+    bool canEdit,
+    DocumentBootstrap bootstrap,
+  ) {
+    return SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
         child: Center(
           child: ConstrainedBox(
@@ -2425,6 +2528,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onAiStream: widget.onAiStream,
                       reHostImages: widget.reHostImages,
                       scrollHook: _scrollHook,
+                      commandHook: _commandHook,
                       appearance: widget.appearance,
                       onOpenPage: _openPageLink,
                       pageLinks: () => [
@@ -2457,8 +2561,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 
   /// Tappable outline entries for the current page's headings (no section
@@ -2931,6 +3034,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         pageWidth: widget.pageWidth,
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
+        showFormatBar: widget.showFormatBar,
+        onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
       ),
@@ -3786,6 +3891,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.pageWidth,
     required this.reHostImages,
     required this.onReHostImagesChanged,
+    required this.showFormatBar,
+    required this.onShowFormatBarChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
   });
@@ -3806,6 +3913,8 @@ class _SettingsDialog extends StatefulWidget {
   final double pageWidth;
   final bool reHostImages;
   final void Function(bool value) onReHostImagesChanged;
+  final bool showFormatBar;
+  final void Function(bool value) onShowFormatBarChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
@@ -3836,6 +3945,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late String? _fontFamily = widget.appearance.fontFamily;
   late double _pageWidth = widget.pageWidth;
   late bool _reHostImages = widget.reHostImages;
+  late bool _showFormatBar = widget.showFormatBar;
 
   @override
   void initState() {
@@ -4071,6 +4181,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       onChanged: (value) {
         setState(() => _reHostImages = value);
         widget.onReHostImagesChanged(value);
+      },
+    ),
+    SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: _showFormatBar,
+      title: const Text('Formatting toolbar'),
+      subtitle: const Text(
+        'Show a toolbar of common Markdown actions above the page.',
+      ),
+      onChanged: (value) {
+        setState(() => _showFormatBar = value);
+        widget.onShowFormatBarChanged(value);
       },
     ),
   ];

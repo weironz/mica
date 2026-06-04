@@ -38,6 +38,26 @@ class EditorScrollHook {
   void scrollToBlock(String blockId) => _scroll?.call(blockId);
 }
 
+/// Lets the host's formatting toolbar drive editor commands (block converts,
+/// inline marks, inserts, undo/redo) without owning the controller. The
+/// editor registers itself while mounted; calls are no-ops otherwise.
+class EditorCommandHook {
+  void Function(String type)? _toggleMark;
+  void Function(String kind, Map<String, dynamic> data)? _setBlock;
+  void Function(String kind)? _insert; // 'divider' | 'table' | 'image'
+  VoidCallback? _editLink;
+  VoidCallback? _undo;
+  VoidCallback? _redo;
+
+  void toggleMark(String type) => _toggleMark?.call(type);
+  void setBlock(String kind, [Map<String, dynamic> data = const {}]) =>
+      _setBlock?.call(kind, data);
+  void insert(String kind) => _insert?.call(kind);
+  void editLink() => _editLink?.call();
+  void undo() => _undo?.call();
+  void redo() => _redo?.call();
+}
+
 class MicaEditor extends StatefulWidget {
   const MicaEditor({
     required this.rootBlockId,
@@ -53,6 +73,7 @@ class MicaEditor extends StatefulWidget {
     this.reHostImages = true,
     this.focusNode,
     this.scrollHook,
+    this.commandHook,
     this.appearance = const EditorAppearance(),
     this.onOpenPage,
     this.pageLinks,
@@ -107,6 +128,9 @@ class MicaEditor extends StatefulWidget {
 
   /// Optional hook the page outline uses to scroll a heading block into view.
   final EditorScrollHook? scrollHook;
+
+  /// Optional hook the host's formatting toolbar uses to run editor commands.
+  final EditorCommandHook? commandHook;
 
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
@@ -208,7 +232,67 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.addListener(_onControllerChanged);
     _focus.addListener(_onFocusChange);
     widget.scrollHook?._scroll = _scrollToBlock;
+    _registerCommandHook();
     _ensureNotEmptyDeferred();
+  }
+
+  /// Wire the host formatting toolbar's commands to the controller. Every
+  /// command restores editor focus first — toolbar clicks blur the canvas.
+  void _registerCommandHook() {
+    final hook = widget.commandHook;
+    if (hook == null) return;
+    void refocus() {
+      _focus.requestFocus();
+      _syncImeFromSelection(force: true);
+    }
+
+    hook
+      .._toggleMark = (type) {
+        if (!mounted || !widget.canEdit) return;
+        _focus.requestFocus();
+        _controller.toggleMark(type);
+        _syncImeFromSelection(force: true);
+      }
+      .._setBlock = (kind, data) {
+        if (!mounted || !widget.canEdit) return;
+        _focus.requestFocus();
+        _controller.setSelectedBlocksKind(kind, data: data);
+        _syncImeFromSelection(force: true);
+      }
+      .._insert = (kind) {
+        if (!mounted || !widget.canEdit) return;
+        switch (kind) {
+          case 'divider':
+            _focus.requestFocus();
+            _controller.insertDivider();
+            _syncImeFromSelection(force: true);
+          case 'table':
+            _focus.requestFocus();
+            _controller.insertBlocksAfterFocus([
+              (kind: 'table', text: '', data: TableData.empty().toBlockData()),
+            ]);
+            _syncImeFromSelection(force: true);
+          case 'image':
+            _pickAndInsertImage();
+        }
+      }
+      .._editLink = () {
+        if (!mounted || !widget.canEdit) return;
+        _focus.requestFocus();
+        _promptLink();
+      }
+      .._undo = () {
+        if (!mounted || !widget.canEdit) return;
+        _focus.requestFocus();
+        _controller.undo();
+        refocus();
+      }
+      .._redo = () {
+        if (!mounted || !widget.canEdit) return;
+        _focus.requestFocus();
+        _controller.redo();
+        refocus();
+      };
   }
 
   /// Scroll the surrounding page so the block [blockId] is near the top.
