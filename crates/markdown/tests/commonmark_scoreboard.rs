@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// Passing examples must never decrease. Raise this when the engine improves
 /// (P4 work); the per-section detail lives in docs/commonmark-scoreboard.md.
-const BASELINE_PASS: usize = 130; // 19.9% — measured 2026-06-05
+const BASELINE_PASS: usize = 186; // 28.5% — P4 warm-up buckets, 2026-06-05
 
 fn normalize(html: &str) -> String {
   // The official runner compares exact HTML; we only forgive trailing

@@ -21,6 +21,57 @@ BlockSpec _inline(String kind, String text, Map<String, dynamic> data) {
   return (kind: kind, text: parsed.text, data: merged);
 }
 
+/// Spec thematic break: 3+ of the same -/*/_ with optional spaces between.
+bool isThematicBreak(String line) {
+  var marker = '';
+  var count = 0;
+  for (var i = 0; i < line.length; i++) {
+    final c = line[i];
+    if (c == ' ' || c == '\t') continue;
+    if (c == '-' || c == '*' || c == '_') {
+      if (marker.isEmpty) {
+        marker = c;
+      } else if (c != marker) {
+        return false;
+      }
+      count++;
+    } else {
+      return false;
+    }
+  }
+  return count >= 3;
+}
+
+/// `===`/`---` underline (≤3 leading spaces) → setext heading level, or 0.
+int setextLevel(String raw) {
+  final lead = raw.length - raw.trimLeft().length;
+  if (lead > 3) return 0;
+  final t = raw.trim();
+  if (t.isEmpty) return 0;
+  if (t.split('').every((c) => c == '=')) return 1;
+  if (t.split('').every((c) => c == '-')) return 2;
+  return 0;
+}
+
+/// Strip [columns] of leading indentation (tabs = 4-column stops).
+String deindentColumns(String line, int columns) {
+  var col = 0;
+  for (var i = 0; i < line.length; i++) {
+    final c = line[i];
+    if (c == ' ') {
+      col += 1;
+    } else if (c == '\t') {
+      col = (col ~/ 4 + 1) * 4;
+    } else {
+      return line.substring(i);
+    }
+    if (col >= columns) {
+      return ' ' * (col - columns) + line.substring(i + 1);
+    }
+  }
+  return '';
+}
+
 List<BlockSpec> markdownToBlocks(String markdown) {
   final result = <BlockSpec>[];
   final lines = markdown.replaceAll('\r\n', '\n').split('\n');
@@ -28,11 +79,16 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   // (tolerates 2/3/4-space styles; tabs count as 4) — mirrors the Rust
   // engine. Only list/todo items nest; other blocks reset the stack.
   final listStack = <int>[];
-  int listLevel(String raw, String content) {
+  int leadCol(String raw, String content) {
     var col = 0;
     for (var k = 0; k < raw.length - content.length; k++) {
-      col += raw.codeUnitAt(k) == 0x09 ? 4 : 1;
+      col = raw.codeUnitAt(k) == 0x09 ? (col ~/ 4 + 1) * 4 : col + 1;
     }
+    return col;
+  }
+
+  int listLevel(String raw, String content) {
+    final col = leadCol(raw, content);
     while (listStack.isNotEmpty && col < listStack.last) {
       listStack.removeLast();
     }
@@ -48,7 +104,6 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   final bullet = RegExp(r'^[-*]\s+(.*)$');
   final numbered = RegExp(r'^\d+\.\s+(.*)$');
   final quote = RegExp(r'^>\s?(.*)$');
-  final divider = RegExp(r'^(-{3,}|\*{3,}|_{3,})$');
   final image = RegExp(r'^!\[([^\]]*)\]\(([^)\s]+)\)$');
 
   var i = 0;
@@ -89,8 +144,30 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       continue;
     }
 
-    // A horizontal rule (`---`, `***`, `___`) becomes a divider block.
-    if (divider.hasMatch(line)) {
+    // Indented code block: 4+ columns at top level (inside a list that
+    // means nesting instead).
+    if (listStack.isEmpty && leadCol(raw, raw.trimLeft()) >= 4) {
+      final code = <String>[];
+      var blanks = 0;
+      while (i < lines.length) {
+        final l = lines[i].trimRight();
+        if (l.trim().isEmpty) {
+          blanks++;
+          i++;
+          continue;
+        }
+        if (leadCol(l, l.trimLeft()) < 4) break;
+        code.addAll(List.filled(blanks, ''));
+        blanks = 0;
+        code.add(deindentColumns(l, 4));
+        i++;
+      }
+      result.add((kind: 'code_block', text: code.join('\n'), data: {}));
+      continue;
+    }
+
+    // A horizontal rule (`---`, `***`, `___`, `- - -`) becomes a divider.
+    if (isThematicBreak(line)) {
       listStack.clear();
       result.add((kind: 'divider', text: '', data: {}));
       i++;
@@ -162,6 +239,15 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     }
 
     listStack.clear();
+    // Setext heading: this paragraph line underlined by `===`/`---`.
+    if (i + 1 < lines.length) {
+      final level = setextLevel(lines[i + 1]);
+      if (level > 0) {
+        result.add(_inline('heading', line, {'level': level}));
+        i += 2;
+        continue;
+      }
+    }
     result.add(_inline('paragraph', line, {}));
     i++;
   }

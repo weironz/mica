@@ -145,10 +145,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       index += 1;
       continue; // blank lines between items keep the list context
     }
-    let col: usize = line[..line.len() - content.len()]
-      .chars()
-      .map(|c| if c == '\t' { 4 } else { 1 })
-      .sum();
+    let mut col: usize = 0;
+    for c in line[..line.len() - content.len()].chars() {
+      col = if c == '\t' { (col / 4 + 1) * 4 } else { col + 1 };
+    }
 
     if let Some(language) = content.strip_prefix("```") {
       list_stack.clear();
@@ -216,6 +216,43 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
+    // Indented code block: 4+ columns at top level (inside a list that
+    // indentation means nesting instead, handled by the stack above).
+    if list_stack.is_empty() && col >= 4 {
+      let mut code_lines: Vec<String> = Vec::new();
+      let mut pending_blanks = 0usize;
+      while index < raw_lines.len() {
+        let l = raw_lines[index].trim_end();
+        if l.trim().is_empty() {
+          pending_blanks += 1;
+          index += 1;
+          continue;
+        }
+        let c = l.trim_start();
+        let mut lcol = 0usize;
+        for ch in l[..l.len() - c.len()].chars() {
+          lcol = if ch == '\t' { (lcol / 4 + 1) * 4 } else { lcol + 1 };
+        }
+        if lcol < 4 {
+          break;
+        }
+        for _ in 0..pending_blanks {
+          code_lines.push(String::new());
+        }
+        pending_blanks = 0;
+        code_lines.push(deindent_columns(l, 4));
+        index += 1;
+      }
+      push_block(
+        &mut blocks,
+        &mut root_children,
+        "code_block",
+        code_lines.join("\n"),
+        Value::Null,
+      );
+      continue;
+    }
+
     // Horizontal rule (`---`, `***`, `___`) → divider block.
     if is_divider(content) {
       list_stack.clear();
@@ -225,6 +262,19 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     }
 
     let (kind, text, data) = classify_markdown_line(content);
+
+    // Setext heading: a paragraph line whose NEXT line underlines it with
+    // `===` (h1) or `---` (h2).
+    if kind == "paragraph"
+      && index + 1 < raw_lines.len()
+      && let Some(level) = setext_level(raw_lines[index + 1])
+    {
+      let (text, data) = apply_inline_marks(text, json!({ "level": level }));
+      push_block(&mut blocks, &mut root_children, "heading", text, data);
+      list_stack.clear();
+      index += 2;
+      continue;
+    }
     let (text, mut data) = if kind == "image" {
       (text, data)
     } else {
@@ -276,12 +326,63 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
 
 /// A Markdown thematic break: 3+ of the same `-`, `*`, or `_` (already trimmed).
 fn is_divider(content: &str) -> bool {
-  let bytes = content.as_bytes();
-  if bytes.len() < 3 {
-    return false;
+  // Spec thematic break: 3+ of the same -/*/_ with optional spaces/tabs
+  // between (`- - -`, `_  _  _`).
+  let mut marker = 0u8;
+  let mut count = 0usize;
+  for b in content.bytes() {
+    match b {
+      b' ' | b'\t' => {}
+      b'-' | b'*' | b'_' => {
+        if marker == 0 {
+          marker = b;
+        } else if b != marker {
+          return false;
+        }
+        count += 1;
+      }
+      _ => return false,
+    }
   }
-  let first = bytes[0];
-  matches!(first, b'-' | b'*' | b'_') && bytes.iter().all(|&b| b == first)
+  count >= 3
+}
+
+/// Strip [columns] of leading indentation, treating tabs as 4-column stops
+/// (a tab that overshoots emits the remainder as spaces).
+fn deindent_columns(line: &str, columns: usize) -> String {
+  let mut col = 0usize;
+  for (i, c) in line.char_indices() {
+    match c {
+      ' ' => col += 1,
+      '\t' => col = (col / 4 + 1) * 4,
+      _ => return line[i..].to_string(),
+    }
+    if col >= columns {
+      let mut rest = " ".repeat(col - columns);
+      rest.push_str(&line[i + c.len_utf8()..]);
+      return rest;
+    }
+  }
+  String::new()
+}
+
+/// `===`/`---` underline (≤3 leading spaces) → setext heading level, if any.
+fn setext_level(line: &str) -> Option<usize> {
+  let lead = line.len() - line.trim_start().len();
+  if lead > 3 {
+    return None;
+  }
+  let t = line.trim();
+  if t.is_empty() {
+    return None;
+  }
+  if t.bytes().all(|b| b == b'=') {
+    return Some(1);
+  }
+  if t.bytes().all(|b| b == b'-') {
+    return Some(2);
+  }
+  None
 }
 
 fn is_table_separator(line: &str) -> bool {
@@ -526,11 +627,22 @@ fn append_html_block(
       append_html_children(snapshot, &block.id, out)?;
     }
     "code_block" | "code" => {
-      out.push_str(&format!(
-        "<pre><code>{}</code></pre>\n",
-        escape_html(&block.text)
-      ));
+      let lang = block_data_str(block, "language").unwrap_or("");
+      let class = if lang.is_empty() {
+        String::new()
+      } else {
+        format!(" class=\"language-{}\"", escape_html(lang))
+      };
+      let body = if block.text.is_empty() {
+        String::new()
+      } else {
+        format!("{}\n", escape_html(&block.text))
+      };
+      out.push_str(&format!("<pre><code{class}>{body}</code></pre>\n"));
       append_html_children(snapshot, &block.id, out)?;
+    }
+    "divider" => {
+      out.push_str("<hr />\n");
     }
     "image" => {
       let url = escape_html(block_data_str(block, "url").unwrap_or_default());
@@ -1034,7 +1146,11 @@ fn escape_inline(text: &str) -> String {
 /// `1. x`, `---`) must escape its leader or it changes kind on re-import.
 fn escape_block_leader(line: String) -> String {
   let t = line.as_str();
-  let divider_like = t.len() >= 3 && t.chars().all(|c| c == '-');
+  let compact: String = t.chars().filter(|c| *c != ' ').collect();
+  let divider_like = compact.len() >= 3 && compact.chars().all(|c| c == '-');
+  // A paragraph that would read as a setext underline gets escaped too.
+  let setext_like = !t.is_empty() && (t.bytes().all(|b| b == b'=') || t.bytes().all(|b| b == b'-'));
+  let divider_like = divider_like || setext_like;
   let numbered = t
     .find(". ")
     .is_some_and(|dot| dot > 0 && t[..dot].bytes().all(|b| b.is_ascii_digit()));

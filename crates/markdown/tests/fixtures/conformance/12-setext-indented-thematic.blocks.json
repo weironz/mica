@@ -1,0 +1,36 @@
+[
+  {
+    "data": {
+      "level": 1
+    },
+    "kind": "heading",
+    "text": "Setext Title"
+  },
+  {
+    "data": {
+      "level": 2
+    },
+    "kind": "heading",
+    "text": "Second Level"
+  },
+  {
+    "data": {},
+    "kind": "code_block",
+    "text": "indented code\n  keeps deeper indent\n\ntab indented"
+  },
+  {
+    "data": {},
+    "kind": "divider",
+    "text": ""
+  },
+  {
+    "data": {},
+    "kind": "divider",
+    "text": ""
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "after the breaks"
+  }
+]
