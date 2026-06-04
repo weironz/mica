@@ -827,6 +827,8 @@ pub async fn export_workspace_zip(
     std::collections::HashMap::new();
   let mut used_assets: std::collections::HashSet<String> = std::collections::HashSet::new();
   let mut used_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+  // Page order for the import side: paths in pre-order tree order.
+  let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
 
   for (view, folder, base) in pages {
     if view.object_type != "document" {
@@ -905,11 +907,30 @@ pub async fn export_workspace_zip(
     path.push_str(&base);
     path.push_str(".md");
     path = unique_zip_path(path, &mut used_paths);
+    manifest_pages.push(serde_json::json!({
+      "path": path,
+      "title": view.name,
+    }));
     let content = format!("# {}\n\n{}", view.name, body);
     entries.push(ZipEntry {
       name: path,
       data: content.into_bytes(),
     });
+  }
+
+  if !manifest_pages.is_empty() {
+    let manifest = serde_json::json!({
+      "version": 1,
+      "generator": "mica",
+      "pages": manifest_pages,
+    });
+    entries.insert(
+      0,
+      ZipEntry {
+        name: "manifest.json".to_string(),
+        data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+      },
+    );
   }
 
   if entries.is_empty() {

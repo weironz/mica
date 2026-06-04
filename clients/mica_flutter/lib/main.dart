@@ -12,6 +12,7 @@ import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
+import 'upload/import_order.dart';
 import 'upload/sha256.dart';
 import 'upload/unzip.dart';
 
@@ -693,11 +694,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         wsName.isEmpty ? 'Imported' : wsName,
       );
 
+      // Mica's export writes a manifest.json carrying the page-tree order.
+      String? manifestJson;
+      for (final e in entries) {
+        if (e.name == 'manifest.json') {
+          manifestJson = utf8.decode(e.bytes, allowMalformed: true);
+          break;
+        }
+      }
+
       // Non-markdown files in the ZIP, addressable by path. Uploaded lazily
       // when a page actually references them, each at most once.
       final filesByPath = <String, Uint8List>{
         for (final e in entries)
-          if (!e.name.toLowerCase().endsWith('.md')) e.name: e.bytes,
+          if (!e.name.toLowerCase().endsWith('.md') &&
+              e.name != 'manifest.json')
+            e.name: e.bytes,
       };
       final zipPaths = filesByPath.keys.toSet();
       final uploadedByPath = <String, ({String fileId, String name})>{};
@@ -719,11 +731,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         return uploadedByPath[zipPath] = (fileId: file.id, name: file.name);
       }
 
-      // Create pages parents-first (shallower paths first) so a child can find
-      // its already-created parent.
-      final mds = entries.where((e) => e.name.toLowerCase().endsWith('.md')).toList()
-        ..sort((a, b) =>
-            a.name.split('/').length.compareTo(b.name.split('/').length));
+      // Create pages in manifest (page-tree) order so sibling order is
+      // restored; files unknown to the manifest follow, parents-first.
+      final mdByPath = {
+        for (final e in entries)
+          if (e.name.toLowerCase().endsWith('.md')) e.name: e,
+      };
+      final mds = [
+        for (final p in orderPagePaths(mdByPath.keys, manifestJson))
+          mdByPath[p]!,
+      ];
       final viewByPath = <String, String>{};
       final folderView = <String, String>{}; // folder path -> its page's view
       final stamp = DateTime.now().microsecondsSinceEpoch;
