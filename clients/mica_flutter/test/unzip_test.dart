@@ -243,6 +243,17 @@ void main() {
       expect(names(out), ['A/x.md', 'B/y.md']);
     });
 
+    test('drops dot-folders and their contents (.obsidian, .git, .trash)', () {
+      final out = normalizeZipEntries([
+        e('vault/.obsidian/app.json'),
+        e('vault/.git/config'),
+        e('vault/.trash/deleted.md'), // md inside a dot-folder ≠ a page
+        e('vault/.hidden.md'),
+        e('vault/note.md'),
+      ]);
+      expect(names(out), ['note.md']); // wrapper peeled too
+    });
+
     test('drops macOS metadata, then peels the remaining wrapper', () {
       final out = normalizeZipEntries([
         e('__MACOSX/notes/._a.md'),

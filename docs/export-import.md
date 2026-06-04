@@ -88,11 +88,17 @@ The tree import then:
 
 ### Archive normalization (`lib/upload/unzip.dart`)
 
-- `normalizeZipEntries` — drops `__MACOSX/`, AppleDouble `._*`, `.DS_Store`,
-  `Thumbs.db`; then repeatedly peels a single top-level folder when no file
-  sits beside it (zipped-folder habit, macOS Finder archives, Notion's
-  `Export-<id>/` shell). Mica exports are never peeled: `manifest.json`
-  always sits at the root.
+- `normalizeZipEntries` — drops `__MACOSX/`, `Thumbs.db` and **any path with
+  a dot-segment** (`.obsidian/`, `.git/`, `.trash/`, `.DS_Store`, AppleDouble
+  `._*` — an md inside a dot-folder must not become a page); then repeatedly
+  peels a single top-level folder when no file sits beside it (zipped-folder
+  habit, macOS Finder archives, Notion's `Export-<id>/` shell). Mica exports
+  are never peeled: `manifest.json` always sits at the root.
+- Non-`.md` files are never imported as content: they only sit in a lookup
+  table and are uploaded lazily when an image block references them by
+  relative path. Unreferenced files are dropped. The folder picker
+  additionally pre-filters to md/image/json extensions so huge unrelated
+  files are never read.
 - `expandNestedZips` — unpacks archives nested one level deep (Notion's
   whole-workspace exports ship `Part-N.zip` inside the outer ZIP).
 

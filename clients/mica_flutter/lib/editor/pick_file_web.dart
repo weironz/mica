@@ -48,8 +48,14 @@ Future<List<({String path, Uint8List bytes})>> pickImportFolder() async {
   final out = <({String path, Uint8List bytes})>[];
   for (final f in files) {
     final path = f.relativePath ?? f.name;
-    final base = path.split('/').last;
-    if (base.startsWith('.')) continue; // .DS_Store and friends
+    final parts = path.split('/');
+    // Skip hidden files AND anything inside dot-folders (.obsidian, .git,
+    // .trash…) — only the picked folder itself (first segment) may be hidden.
+    if (parts.skip(1).any((s) => s.startsWith('.')) ||
+        (parts.length == 1 && parts.first.startsWith('.'))) {
+      continue;
+    }
+    final base = parts.last;
     final ext = base.contains('.') ? base.split('.').last.toLowerCase() : '';
     if (!keep.contains(ext)) continue;
     out.add((path: path, bytes: await _readBytes(f)));

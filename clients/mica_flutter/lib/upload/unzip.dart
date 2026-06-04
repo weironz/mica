@@ -191,8 +191,10 @@ List<ZipFileEntry> normalizeZipEntries(List<ZipFileEntry> entries) {
 bool _isJunk(String path) {
   final parts = path.split('/');
   if (parts.contains('__MACOSX')) return true;
-  final base = parts.last;
-  return base.startsWith('._') || base == '.DS_Store' || base == 'Thumbs.db';
+  // Any dot-segment hides the whole subtree: .obsidian/, .git/, .trash/,
+  // .DS_Store, AppleDouble ._* files…
+  if (parts.any((s) => s.startsWith('.'))) return true;
+  return parts.last == 'Thumbs.db';
 }
 
 /// Decode a ZIP entry name. Precedence per the ZIP spec and common tools:
