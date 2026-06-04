@@ -63,6 +63,25 @@ void main() {
     expect(c.nodes.single.text, 'see Guide here');
   });
 
+  test('replaceLink changes label and target together', () {
+    final c = _doc('go Docs now', 0);
+    c.nodes.single.data = {
+      'marks': marksToJson([
+        Mark(3, 7, 'link', href: 'https://old.example'),
+        Mark(8, 11, 'bold'), // "now" stays bold and shifts with the edit
+      ]),
+    };
+    c.replaceLink(0, 3, 7, 'Handbook', 'https://new.example');
+    final node = c.nodes.single;
+    expect(node.text, 'go Handbook now');
+    final marks = marksFromData(node.data);
+    final link = marks.firstWhere((m) => m.type == 'link');
+    expect(link.href, 'https://new.example');
+    expect(node.text.substring(link.start, link.end), 'Handbook');
+    final bold = marks.firstWhere((m) => m.type == 'bold');
+    expect(node.text.substring(bold.start, bold.end), 'now');
+  });
+
   test('insertPageLink refuses code blocks', () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([EditorNode(id: 'a', kind: 'code_block', text: '[[x')]);

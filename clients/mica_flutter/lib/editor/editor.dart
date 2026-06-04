@@ -1657,22 +1657,44 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   Future<void> _editLinkFromBar() async {
     final mark = _linkBarMark;
-    final node = _linkBarNode;
+    final nodeIdx = _linkBarNode;
     _closeLinkBar();
-    if (mark == null) return;
-    final field = TextEditingController(text: mark.href ?? '');
-    final url = await showDialog<String>(
+    if (mark == null || nodeIdx < 0 || nodeIdx >= _controller.nodes.length) {
+      return;
+    }
+    final node = _controller.nodes[nodeIdx];
+    final start = mark.start.clamp(0, node.text.length);
+    final end = mark.end.clamp(start, node.text.length);
+    final currentText = node.text.substring(start, end);
+
+    final textField = TextEditingController(text: currentText);
+    final urlField = TextEditingController(text: mark.href ?? '');
+    final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Edit link'),
-        content: TextField(
-          controller: field,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'https://…',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: textField,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Text',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: urlField,
+              decoration: const InputDecoration(
+                labelText: 'URL',
+                hintText: 'https://…',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => Navigator.of(context).pop(true),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -1680,16 +1702,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(field.text),
+            onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Save'),
           ),
         ],
       ),
     );
-    field.dispose();
-    if (url != null && url.trim().isNotEmpty) {
-      _controller.setLinkRange(node, mark.start, mark.end, url.trim());
-    }
+    final newText = textField.text.trim();
+    final newUrl = urlField.text.trim();
+    textField.dispose();
+    urlField.dispose();
+    if (saved != true || newUrl.isEmpty) return;
+    _controller.replaceLink(
+      nodeIdx,
+      start,
+      end,
+      newText.isEmpty ? currentText : newText,
+      newUrl,
+    );
   }
 
   MouseCursor _cursorFor(RenderDocument r, Offset local) {

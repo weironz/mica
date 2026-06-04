@@ -1046,38 +1046,44 @@ class EditorController extends ChangeNotifier {
   }
 
   /// Replace `[from, to)` in the focused node with [title] carrying a link
-  /// mark to [href] — used by the `[[` page-link picker. Existing marks are
-  /// shifted across the replacement; the caret lands after the link.
+  /// mark to [href] — used by the `[[` page-link picker.
   void insertPageLink(int from, int to, String title, String href) {
     final sel = selection;
     if (sel == null) return;
-    final i = sel.focus.node;
-    if (i >= nodes.length) return;
+    replaceLink(sel.focus.node, from, to, title, href);
+  }
+
+  /// Replace `[start, end)` of node [i] with [text] linked to [href] (both
+  /// the label and the target may change — the hover toolbar's "edit link").
+  /// Existing marks are shifted across the replacement; the caret lands after
+  /// the link.
+  void replaceLink(int i, int start, int end, String text, String href) {
+    if (i < 0 || i >= nodes.length) return;
     final node = nodes[i];
     if (node.isAtomic || node.kind == 'code_block' || node.kind == 'table') {
       return;
     }
-    final s = from.clamp(0, node.text.length);
-    final e = to.clamp(s, node.text.length);
-    final newText = node.text.substring(0, s) + title + node.text.substring(e);
-    final delta = title.length - (e - s);
+    final s = start.clamp(0, node.text.length);
+    final e = end.clamp(s, node.text.length);
+    final newText = node.text.substring(0, s) + text + node.text.substring(e);
+    final delta = text.length - (e - s);
     final shifted = <Mark>[];
     for (final m in marksFromData(node.data)) {
-      var start = m.start, end = m.end;
-      if (start >= e) {
-        start += delta;
-      } else if (start > s) {
-        start = s;
+      var ms = m.start, me = m.end;
+      if (ms >= e) {
+        ms += delta;
+      } else if (ms > s) {
+        ms = s;
       }
-      if (end > e) {
-        end += delta;
-      } else if (end > s) {
-        end = s;
+      if (me > e) {
+        me += delta;
+      } else if (me > s) {
+        me = s;
       }
-      if (end > start) shifted.add(Mark(start, end, m.type, href: m.href));
+      if (me > ms) shifted.add(Mark(ms, me, m.type, href: m.href));
     }
     final next =
-        applyMark(shifted, s, s + title.length, 'link', href: href, add: true);
+        applyMark(shifted, s, s + text.length, 'link', href: href, add: true);
     node
       ..text = newText
       ..data = {...node.data, 'marks': marksToJson(next)};
@@ -1090,7 +1096,7 @@ class EditorController extends ChangeNotifier {
         'data': node.data,
       },
     ]);
-    collapseTo(DocPosition(i, s + title.length));
+    collapseTo(DocPosition(i, s + text.length));
   }
 
   /// Ensure a place to type when the document is empty.
