@@ -403,3 +403,22 @@ The recurring problem the engine must get right for every node type:
 6. **Tables:** structure, cell navigation/selection, row/col commands, GFM
    round-trip.
 7. **Polish:** drag-reorder, virtualization, accessibility, RTL, touch.
+8. **Markdown spec compliance** (engine roadmap; see `crates/markdown` and
+   docs/export-import.md). North star: **read the full CommonMark + GFM
+   spec, write a canonical subset** — full spec compliance is a *parsing*
+   goal; the exporter intentionally emits only our normalized form, and
+   round-trip stability (`export(import(x))` fixed point) stays the
+   invariant. Phases:
+   - **P1 — nested lists**: parsing + parent/child blocks + editor Tab
+     indent (same work item as milestone 7's list nesting). The single
+     biggest real-world gap: imports currently flatten hierarchy.
+   - **P2 — backslash escapes + autolinks `<url>`**: correctness-grade
+     (unhandled escapes mis-format text; autolinks are common in exports).
+   - **P3 — run the official CommonMark spec test suite** as a scoreboard;
+     compliance becomes a number, not a feeling.
+   - **P4 — data-driven long tail** (Setext headings, indented code blocks,
+     reference links, lazy continuation…; HTML blocks get a documented
+     degrade policy). Decision point: keep extending the in-house parser
+     vs adopting `comrak` for the *read side only* — decide on P3's
+     numbers; P1/P2 are in-house either way (they're coupled to the block
+     model and editor).
