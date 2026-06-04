@@ -409,7 +409,7 @@ The recurring problem the engine must get right for every node type:
    goal; the exporter intentionally emits only our normalized form, and
    round-trip stability (`export(import(x))` fixed point) stays the
    invariant. Phases:
-   - **P1 — nested lists**: flat blocks gain a `data.indent` level (the
+   - **P1 — nested lists — DONE.** flat blocks gain a `data.indent` level (the
      editor engine stays a flat node list — a true tree would rewrite the
      render/selection core; Notion ships flat+indent too). Scope: engine
      parses leading indentation into levels and exports nested GFM (plus
