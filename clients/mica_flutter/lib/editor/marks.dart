@@ -148,6 +148,32 @@ List<Mark> shiftMarks(
   return _normalize(result);
 }
 
+/// Marks for the two halves of a text split at [at]: first list keeps
+/// `[0, at)` ranges, second gets `[at, …)` ranges rebased to 0. A mark
+/// spanning the split is divided.
+(List<Mark>, List<Mark>) splitMarks(List<Mark> marks, int at) {
+  final before = <Mark>[];
+  final after = <Mark>[];
+  for (final m in marks) {
+    if (m.start < at) {
+      final end = m.end < at ? m.end : at;
+      if (end > m.start) before.add(Mark(m.start, end, m.type, href: m.href));
+    }
+    if (m.end > at) {
+      final start = m.start > at ? m.start : at;
+      if (m.end > start) {
+        after.add(Mark(start - at, m.end - at, m.type, href: m.href));
+      }
+    }
+  }
+  return (before, after);
+}
+
+/// Marks of two concatenated texts: [a]'s marks plus [b]'s shifted past the
+/// [junction] (the first text's length).
+List<Mark> concatMarks(List<Mark> a, List<Mark> b, int junction) =>
+    _normalize([...a, for (final m in b) m.shifted(junction)]);
+
 List<Mark> _normalize(List<Mark> marks) {
   if (marks.isEmpty) return marks;
   final sorted = [...marks]..sort((a, b) {

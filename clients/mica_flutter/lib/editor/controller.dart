@@ -170,12 +170,24 @@ class EditorController extends ChangeNotifier {
     if (old != text) {
       final marks = marksFromData(node.data);
       if (marks.isNotEmpty) {
-        final prefix = _commonPrefix(old, text);
-        final suffix = _commonSuffix(old, text, prefix);
+        var prefix = _commonPrefix(old, text);
+        var oldEnd = old.length - _commonSuffix(old, text, prefix);
+        // The naive diff is ambiguous when removed text repeats its neighbors
+        // (deleting a linked "AA" before another "A" aligns on the wrong "A").
+        // The edit must cover the previous ranged selection — widen to it so
+        // marks die with their text instead of bleeding onto the neighbors.
+        if (!sel.isCollapsed &&
+            sel.start.node == i &&
+            sel.end.node == i) {
+          final selS = sel.start.offset.clamp(0, old.length);
+          final selE = sel.end.offset.clamp(0, old.length);
+          if (prefix > selS) prefix = selS;
+          if (oldEnd < selE) oldEnd = selE;
+        }
         final shifted = shiftMarks(
           marks,
           prefix,
-          old.length - suffix,
+          oldEnd,
           text.length - old.length,
           text.length,
         );
@@ -305,13 +317,23 @@ class EditorController extends ChangeNotifier {
     final newData = _continuesOnEnter(node.kind)
         ? _continuationData(node)
         : <String, dynamic>{};
+    // Marks split with the text: each half keeps (a rebased copy of) its own.
+    final (beforeMarks, afterMarks) =
+        splitMarks(marksFromData(node.data), at);
+    if (afterMarks.isNotEmpty) newData['marks'] = marksToJson(afterMarks);
     final created = EditorNode(id: _genId(), kind: newKind, text: after, data: newData);
 
     node.text = before;
+    node.data = {...node.data, 'marks': marksToJson(beforeMarks)};
     nodes.insert(i + 1, created);
     _dirty.remove(node.id);
     _sendNow([
-      {'type': 'update_block', 'block_id': node.id, 'text': before},
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': before,
+        'data': node.data,
+      },
       _insertOp(created, i + 1),
     ]);
     collapseTo(DocPosition(i + 1, 0));
@@ -338,17 +360,31 @@ class EditorController extends ChangeNotifier {
     }
 
     final continues = _continuesOnEnter(node.kind);
+    final newData = continues ? _continuationData(node) : <String, dynamic>{};
+    // Marks split with the text (split point approximated by the left half's
+    // length — exact unless the same IME frame also changed the text).
+    final (beforeMarks, afterMarks) = splitMarks(
+      marksFromData(node.data),
+      before.length.clamp(0, node.text.length),
+    );
+    if (afterMarks.isNotEmpty) newData['marks'] = marksToJson(afterMarks);
     final created = EditorNode(
       id: _genId(),
       kind: continues ? node.kind : 'paragraph',
       text: after,
-      data: continues ? _continuationData(node) : <String, dynamic>{},
+      data: newData,
     );
     node.text = before;
+    node.data = {...node.data, 'marks': marksToJson(beforeMarks)};
     nodes.insert(i + 1, created);
     _dirty.remove(node.id);
     _sendNow([
-      {'type': 'update_block', 'block_id': node.id, 'text': before},
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': before,
+        'data': node.data,
+      },
       _insertOp(created, i + 1),
     ]);
     collapseTo(DocPosition(i + 1, 0));
@@ -394,12 +430,25 @@ class EditorController extends ChangeNotifier {
     final junction = prev.text.length;
     final merged = prev.text + cur.text;
     prev.text = merged;
+    prev.data = {
+      ...prev.data,
+      'marks': marksToJson(concatMarks(
+        marksFromData(prev.data),
+        marksFromData(cur.data),
+        junction,
+      )),
+    };
     nodes.removeAt(i);
     _dirty
       ..remove(cur.id)
       ..remove(prev.id);
     _sendNow([
-      {'type': 'update_block', 'block_id': prev.id, 'text': merged},
+      {
+        'type': 'update_block',
+        'block_id': prev.id,
+        'text': merged,
+        'data': prev.data,
+      },
       {'type': 'delete_block', 'block_id': cur.id},
     ]);
     collapseTo(DocPosition(i - 1, junction));
@@ -429,12 +478,25 @@ class EditorController extends ChangeNotifier {
     final junction = cur.text.length;
     final merged = cur.text + next.text;
     cur.text = merged;
+    cur.data = {
+      ...cur.data,
+      'marks': marksToJson(concatMarks(
+        marksFromData(cur.data),
+        marksFromData(next.data),
+        junction,
+      )),
+    };
     nodes.removeAt(i + 1);
     _dirty
       ..remove(cur.id)
       ..remove(next.id);
     _sendNow([
-      {'type': 'update_block', 'block_id': cur.id, 'text': merged},
+      {
+        'type': 'update_block',
+        'block_id': cur.id,
+        'text': merged,
+        'data': cur.data,
+      },
       {'type': 'delete_block', 'block_id': next.id},
     ]);
     collapseTo(DocPosition(i, junction));
@@ -533,9 +595,25 @@ class EditorController extends ChangeNotifier {
       final s = start.offset.clamp(0, node.text.length);
       final e = end.offset.clamp(0, node.text.length);
       node.text = node.text.substring(0, s) + node.text.substring(e);
+      // Marks die with their text — without this the ranges stay put and
+      // bleed onto whatever slides left into them (e.g. a deleted link's
+      // format infecting the following words).
+      final marks = shiftMarks(
+        marksFromData(node.data),
+        s,
+        e,
+        s - e,
+        node.text.length,
+      );
+      node.data = {...node.data, 'marks': marksToJson(marks)};
       _dirty.remove(node.id);
       _sendNow([
-        {'type': 'update_block', 'block_id': node.id, 'text': node.text},
+        {
+          'type': 'update_block',
+          'block_id': node.id,
+          'text': node.text,
+          'data': node.data,
+        },
       ]);
       collapseTo(DocPosition(start.node, s));
       return true;
@@ -548,11 +626,31 @@ class EditorController extends ChangeNotifier {
     final merged = startNode.text.substring(0, s) + endNode.text.substring(e);
     final removed = [for (var i = start.node + 1; i <= end.node; i++) nodes[i].id];
 
+    // Start node keeps marks strictly before the cut (clip, don't stretch —
+    // the joined tail must not inherit them); the end node's surviving tail
+    // brings its own marks along, remapped to the junction.
+    final (startMarks, _) = splitMarks(marksFromData(startNode.data), s);
+    final tailMarks = <Mark>[];
+    for (final m in marksFromData(endNode.data)) {
+      final ms = (m.start - e + s).clamp(s, merged.length);
+      final me = (m.end - e + s).clamp(s, merged.length);
+      if (me > ms) tailMarks.add(Mark(ms, me, m.type, href: m.href));
+    }
+
     startNode.text = merged;
+    startNode.data = {
+      ...startNode.data,
+      'marks': marksToJson([...startMarks, ...tailMarks]),
+    };
     nodes.removeRange(start.node + 1, end.node + 1);
     _dirty.remove(startNode.id);
     final ops = <DocOp>[
-      {'type': 'update_block', 'block_id': startNode.id, 'text': merged},
+      {
+        'type': 'update_block',
+        'block_id': startNode.id,
+        'text': merged,
+        'data': startNode.data,
+      },
     ];
     for (final id in removed) {
       _dirty.remove(id);
