@@ -467,9 +467,21 @@ The recurring problem the engine must get right for every node type:
      between a list and the next block — the round-trip fixed point
      holds. Scoreboard **394/652 (60.4%)** — List items 8%→60%, Lists
      31%→69%, Paragraphs 88%. Fixtures 12–15 pin both parsers.
-     Remaining big buckets: HTML blocks (44, degrade policy), Block
-     quotes (25, needs container children — also the blocker for the
-     last List-items examples: fences/quotes/code inside items),
-     Images (22). Decision point: keep extending
+     Images bucket DONE (2026-06-05, 22/22 = 100%): inline images
+     `![alt](url "title")` + all three reference forms ride the link
+     bridge as `image` marks over the alt; inner markup is kept in the
+     marks (markdown re-renders it) but flattens to plain text in the
+     HTML alt attribute (spec alt rule). The whole-line direct form
+     stays the image-block fast path (now with titles, angle dests,
+     nested brackets); a paragraph that is exactly one image mark gets
+     promoted to an image block post-pass. Ref-def labels reject
+     unescaped brackets; a literal `!` before a rendered link escapes
+     on export so it can't read back as an image. Image blocks export
+     spec-shaped `<p><img src alt title /></p>` HTML and keep titles
+     in markdown. Scoreboard **416/652 (63.8%)**. Fixtures 12–16 pin
+     both parsers. Remaining big buckets: HTML blocks (44, degrade
+     policy), Block quotes (25, needs container children — also the
+     blocker for the last List-items examples: fences/quotes/code
+     inside items). Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.

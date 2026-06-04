@@ -1,0 +1,76 @@
+[
+  {
+    "data": {
+      "url": "assets/banner.png"
+    },
+    "kind": "image",
+    "text": "banner"
+  },
+  {
+    "data": {
+      "title": "a title",
+      "url": "train.jpg"
+    },
+    "kind": "image",
+    "text": "photo"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 11,
+          "href": "https://x.io/i.png",
+          "start": 7,
+          "type": "image"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "inline icon inside text"
+  },
+  {
+    "data": {
+      "title": "gallery",
+      "url": "/gallery/art.png"
+    },
+    "kind": "image",
+    "text": "alt with emphasis"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 16,
+          "href": "/gallery/art.png",
+          "start": 13,
+          "title": "gallery",
+          "type": "image"
+        },
+        {
+          "end": 31,
+          "href": "/gallery/art.png",
+          "start": 26,
+          "title": "gallery",
+          "type": "image"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "ref shortcut art and full other"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 25,
+          "href": "/gallery/art.png",
+          "start": 16,
+          "title": "gallery",
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "![escaped] and !link form"
+  }
+]

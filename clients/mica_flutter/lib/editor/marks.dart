@@ -226,6 +226,10 @@ int _indexOfUnescaped(String src, String needle, int from) {
   if (close < 0 || close + 1 >= t.length || t[close + 1] != ':') return null;
   final label = t.substring(1, close);
   if (label.trim().isEmpty) return null;
+  // Labels may not contain unescaped brackets.
+  for (var k = 1; k < close; k++) {
+    if ((t[k] == '[' || t[k] == ']') && t[k - 1] != r'\') return null;
+  }
   final rest = t.substring(close + 2).trim();
   if (rest.isEmpty) return null;
   // Reuse the suffix parser by appending a virtual `)` and requiring full
@@ -376,14 +380,14 @@ String? autolinkTarget(String inner) {
     marks.add(Mark(start, out.length, type, href: href));
   }
 
-  void addLink(String label, String href, String? title) {
+  void addLink(String kind, String label, String href, String? title) {
     final start = out.length;
     final parsed = parseInline(label, defs: defs);
     out.write(parsed.text);
     for (final m in parsed.marks) {
       marks.add(m.shifted(start));
     }
-    marks.add(Mark(start, out.length, 'link', href: href, title: title));
+    marks.add(Mark(start, out.length, kind, href: href, title: title));
   }
 
   while (i < src.length) {
@@ -410,16 +414,17 @@ String? autolinkTarget(String inner) {
         }
       }
     }
-    // Links: [text](dest "title") | [text][label] | [text][] | [shortcut]
-    // — unless preceded by `!` (an image; not an inline mark).
-    if (src[i] == '[' && !(i > 0 && src[i - 1] == '!')) {
-      final close = matchingBracket(src, i);
-      if (close > i + 1) {
-        final label = src.substring(i + 1, close);
+    // Image: ![alt](dest "title") | ![alt][label] | ![alt][] | ![alt] —
+    // same bridge as links; the alt keeps its inner marks (HTML flattens
+    // them to plain text, markdown re-renders them).
+    if (src[i] == '!' && i + 1 < src.length && src[i + 1] == '[') {
+      final close = matchingBracket(src, i + 1);
+      if (close > i + 2) {
+        final label = src.substring(i + 2, close);
         if (close + 1 < src.length && src[close + 1] == '(') {
           final suffix = parseLinkSuffix(src, close + 2);
           if (suffix != null) {
-            addLink(label, suffix.dest, suffix.title);
+            addLink('image', label, suffix.dest, suffix.title);
             i = suffix.next;
             continue;
           }
@@ -437,7 +442,40 @@ String? autolinkTarget(String inner) {
           }
           final def = defs[normalizeLabel(refLabel)];
           if (def != null) {
-            addLink(label, def.dest, def.title);
+            addLink('image', label, def.dest, def.title);
+            i = next;
+            continue;
+          }
+        }
+      }
+    }
+    // Links: [text](dest "title") | [text][label] | [text][] | [shortcut]
+    if (src[i] == '[') {
+      final close = matchingBracket(src, i);
+      if (close > i + 1) {
+        final label = src.substring(i + 1, close);
+        if (close + 1 < src.length && src[close + 1] == '(') {
+          final suffix = parseLinkSuffix(src, close + 2);
+          if (suffix != null) {
+            addLink('link', label, suffix.dest, suffix.title);
+            i = suffix.next;
+            continue;
+          }
+        }
+        if (defs.isNotEmpty) {
+          var refLabel = label;
+          var next = close + 1;
+          if (close + 1 < src.length && src[close + 1] == '[') {
+            final end2 = matchingBracket(src, close + 1);
+            if (end2 > close + 1) {
+              final second = src.substring(close + 2, end2);
+              if (second.isNotEmpty) refLabel = second;
+              next = end2 + 1;
+            }
+          }
+          final def = defs[normalizeLabel(refLabel)];
+          if (def != null) {
+            addLink('link', label, def.dest, def.title);
             i = next;
             continue;
           }
@@ -667,7 +705,11 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       out.write(escapeInline(text.substring(pos, hi)));
       break;
     }
-    out.write(escapeInline(text.substring(pos, ps)));
+    var lead = escapeInline(text.substring(pos, ps));
+    if (pick.type == 'link' && lead.endsWith('!')) {
+      lead = '${lead.substring(0, lead.length - 1)}\\!';
+    }
+    out.write(lead);
     if (pick.type == 'code') {
       // Code spans are literal — no escaping, no nested marks.
       out.write('`${text.substring(ps, pe)}`');
@@ -701,6 +743,15 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
                 : '[$body]($dest "${t.replaceAll('"', r'\"')}")',
           );
         }
+      case 'image':
+        final href = pick.href ?? '';
+        final dest = href.contains(RegExp(r'\s')) ? '<$href>' : href;
+        final t = pick.title;
+        out.write(
+          t == null
+              ? '![$body]($dest)'
+              : '![$body]($dest "${t.replaceAll('"', r'\"')}")',
+        );
       default:
         out.write(body);
     }

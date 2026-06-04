@@ -50,14 +50,17 @@ void main() {
   });
 
   test('inline image is not mistaken for a link', () {
-    // A paragraph mixing a link and an inline image: only the link becomes a
-    // mark; the image stays literal (no inline-image marks), never a broken link.
+    // A paragraph mixing a link and an inline image: the link becomes a link
+    // mark and the image an image mark over its alt — never a broken link.
     final blocks = markdownToBlocks('see [d](https://a) and ![i](https://b) end');
     final p = blocks.single;
     expect(p.kind, 'paragraph');
+    expect(p.text, 'see d and i end');
     final marks = (p.data['marks'] as List?) ?? [];
     expect(marks.where((m) => m['type'] == 'link').length, 1);
-    expect(p.text, contains('![i](https://b)'));
+    final image = marks.singleWhere((m) => m['type'] == 'image');
+    expect(image['href'], 'https://b');
+    expect(p.text.substring(image['start'] as int, image['end'] as int), 'i');
   });
 
   test('setImageSource swaps an external url for our file_id', () {

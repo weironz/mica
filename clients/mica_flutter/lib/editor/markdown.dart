@@ -149,7 +149,22 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
   final fenceClose = RegExp(r'^```\s*$');
   final heading = RegExp(r'^(#{1,6})\s+(.*)$');
-  final image = RegExp(r'^!\[([^\]]*)\]\(([^)\s]+)\)$');
+
+  // A line that is exactly `![alt](url "title")` — spec destination rules
+  // (angle brackets, balanced parens, nested brackets in the alt); other
+  // image forms stay inline marks inside a paragraph.
+  (String, String, String?)? parseMarkdownImage(String content) {
+    if (content.length < 2 || content[0] != '!' || content[1] != '[') {
+      return null;
+    }
+    final close = matchingBracket(content, 1);
+    if (close < 0 || close + 1 >= content.length || content[close + 1] != '(') {
+      return null;
+    }
+    final suffix = parseLinkSuffix(content, close + 2);
+    if (suffix == null || suffix.next != content.length) return null;
+    return (content.substring(2, close), suffix.dest, suffix.title);
+  }
 
   // Map one non-blank line to (kind, text, data) — mirrors the Rust
   // classify_markdown_line (heading, todo, image, bullet, numbered, quote).
@@ -164,9 +179,12 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     if (content.startsWith('- [x] ') || content.startsWith('- [X] ')) {
       return ('todo', content.substring(6), {'checked': true});
     }
-    final img = image.firstMatch(content);
+    final img = parseMarkdownImage(content);
     if (img != null) {
-      return ('image', img.group(1)!.trim(), {'url': img.group(2)!.trim()});
+      return ('image', img.$1, {
+        'url': img.$2,
+        if (img.$3 != null) 'title': img.$3,
+      });
     }
     if (content.startsWith('- ') || content.startsWith('* ') || content.startsWith('+ ')) {
       return ('bulleted_list', content.substring(2), {});
@@ -400,7 +418,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     resetListState();
     if (kind == 'image') {
-      result.add((kind: 'image', text: text, data: data));
+      // The alt is plain text — inline markup flattens (spec alt rule).
+      final alt = parseInline(text, defs: defs).text;
+      result.add((kind: 'image', text: alt, data: data));
       i++;
       continue;
     }
@@ -410,6 +430,24 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       open = _OpenItem(result.length - 1, 'paragraph', 0, line, {});
     }
     i++;
+  }
+
+  // Promote a paragraph that is exactly one image (e.g. a reference-form
+  // `![alt][label]` on its own line) to an image block; markup inside the
+  // alt flattens, the same as the direct `![alt](url)` fast path.
+  for (var k = 0; k < result.length; k++) {
+    final b = result[k];
+    if (b.kind != 'paragraph' || b.text.isEmpty) continue;
+    final marks = (b.data['marks'] as List?) ?? const [];
+    for (final m in marks) {
+      if (m['type'] == 'image' && m['start'] == 0 && m['end'] == b.text.length) {
+        result[k] = (kind: 'image', text: b.text, data: {
+          'url': m['href'] ?? '',
+          if (m['title'] != null) 'title': m['title'],
+        });
+        break;
+      }
+    }
   }
 
   if (result.isEmpty) {

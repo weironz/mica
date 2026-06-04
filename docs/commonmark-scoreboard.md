@@ -5,7 +5,7 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 394/652 (60.4%)**
+**Total: 416/652 (63.8%)**
 
 | Section | Passed | Total | % |
 |---|---|---|---|
@@ -20,11 +20,11 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Fenced code blocks | 9 | 29 | 31% |
 | HTML blocks | 0 | 44 | 0% |
 | Hard line breaks | 4 | 15 | 27% |
-| Images | 2 | 22 | 9% |
+| Images | 22 | 22 | 100% |
 | Indented code blocks | 10 | 12 | 83% |
 | Inlines | 1 | 1 | 100% |
 | Link reference definitions | 14 | 27 | 52% |
-| Links | 62 | 90 | 69% |
+| Links | 64 | 90 | 71% |
 | List items | 29 | 48 | 60% |
 | Lists | 18 | 26 | 69% |
 | Paragraphs | 7 | 8 | 88% |

@@ -465,7 +465,8 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     last_list = None;
     pending_loose = false;
     let (text, data) = if kind == "image" {
-      (text, data)
+      // The alt is plain text — inline markup flattens (spec alt rule).
+      (parse_inline_with(&text, &defs).text, data)
     } else {
       apply_inline_marks(text, data, &defs)
     };
@@ -485,6 +486,35 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       had_blank: false,
     });
     index += 1;
+  }
+
+  // Promote a paragraph that is exactly one image (e.g. a reference-form
+  // `![alt][label]` on its own line) to an image block; markup inside the
+  // alt flattens, the same as the direct `![alt](url)` fast path.
+  for b in &mut blocks {
+    if b.kind != "paragraph" {
+      continue;
+    }
+    let full = b.text.encode_utf16().count();
+    if full == 0 {
+      continue;
+    }
+    let promoted = b.data.get("marks").and_then(Value::as_array).and_then(|ms| {
+      ms.iter().find(|m| {
+        m.get("type").and_then(Value::as_str) == Some("image")
+          && m.get("start").and_then(Value::as_u64) == Some(0)
+          && m.get("end").and_then(Value::as_u64) == Some(full as u64)
+      })
+    });
+    if let Some(image) = promoted {
+      let url = image.get("href").and_then(Value::as_str).unwrap_or_default();
+      let mut data = json!({ "url": url });
+      if let Some(t) = image.get("title").and_then(Value::as_str) {
+        data_insert(&mut data, "title", json!(t));
+      }
+      b.kind = "image".to_string();
+      b.data = data;
+    }
   }
 
   let root = Block {
@@ -613,8 +643,12 @@ fn classify_markdown_line(content: &str) -> (&'static str, String, Value) {
   {
     return ("todo", rest.to_string(), json!({ "checked": true }));
   }
-  if let Some(image) = parse_markdown_image(content) {
-    return ("image", image.0, json!({ "url": image.1 }));
+  if let Some((alt, url, title)) = parse_markdown_image(content) {
+    let data = match title {
+      Some(t) => json!({ "url": url, "title": t }),
+      None => json!({ "url": url }),
+    };
+    return ("image", alt, data);
   }
   if let Some(rest) = content
     .strip_prefix("- ")
@@ -698,14 +732,24 @@ fn data_insert(data: &mut Value, key: &str, value: Value) {
   }
 }
 
-/// Parse a line that is exactly `![alt](url)` into `(alt, url)`.
-fn parse_markdown_image(content: &str) -> Option<(String, String)> {
-  let rest = content.strip_prefix("![")?;
-  let alt_end = rest.find("](")?;
-  let alt = &rest[..alt_end];
-  let after = &rest[alt_end + 2..];
-  let url = after.strip_suffix(')')?;
-  Some((alt.to_string(), url.to_string()))
+/// Parse a line that is exactly `![alt](url "title")` into
+/// `(alt, url, title)` — spec destination rules (angle brackets, balanced
+/// parens, nested brackets in the alt).
+fn parse_markdown_image(content: &str) -> Option<(String, String, Option<String>)> {
+  let chars: Vec<char> = content.chars().collect();
+  if chars.len() < 2 || chars[0] != '!' || chars[1] != '[' {
+    return None;
+  }
+  let close = matching_bracket(&chars, 1)?;
+  if chars.get(close + 1) != Some(&'(') {
+    return None;
+  }
+  let (href, title, next) = parse_link_suffix(&chars, close + 2)?;
+  if next != chars.len() {
+    return None; // not the whole line — leave it to the inline parser
+  }
+  let alt: String = chars[2..close].iter().collect();
+  Some((alt, href, title))
 }
 
 fn append_html_children(
@@ -859,6 +903,21 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       pos = e;
       continue;
     }
+    if m.kind == "image" {
+      // The alt attribute is the PLAIN text of the span — inner marks flatten.
+      let alt = String::from_utf16_lossy(&units[s..e]);
+      let title_attr = match &m.title {
+        Some(t) => format!(" title=\"{}\"", escape_html(t)),
+        None => String::new(),
+      };
+      out.push_str(&format!(
+        "<img src=\"{}\" alt=\"{}\"{title_attr} />",
+        escape_html(m.href.as_deref().unwrap_or("")),
+        escape_html(&alt)
+      ));
+      pos = e;
+      continue;
+    }
     let inner: Vec<&InlineMark> = marks
       .iter()
       .enumerate()
@@ -939,12 +998,14 @@ fn append_html_block(
     }
     "image" => {
       let url = escape_html(block_data_str(block, "url").unwrap_or_default());
-      let alt = escape_html(if block.text.trim().is_empty() {
-        "image"
-      } else {
-        block.text.trim()
-      });
-      out.push_str(&format!("<img src=\"{url}\" alt=\"{alt}\">\n"));
+      let alt = escape_html(block.text.trim());
+      let title_attr = match block_data_str(block, "title") {
+        Some(t) => format!(" title=\"{}\"", escape_html(t)),
+        None => String::new(),
+      };
+      out.push_str(&format!(
+        "<p><img src=\"{url}\" alt=\"{alt}\"{title_attr} /></p>\n"
+      ));
     }
     _ => {
       if !text.is_empty() {
@@ -1162,7 +1223,10 @@ fn append_markdown_block_content(
           .to_string(),
       };
       // Keep an empty alt empty — `![](url)` must round-trip unchanged.
-      lines.push(format!("![{text}]({target})"));
+      match block_data_str(block, "title") {
+        Some(t) => lines.push(format!("![{text}]({target} \"{}\")", t.replace('"', "\\\""))),
+        None => lines.push(format!("![{text}]({target})")),
+      }
       lines.push(String::new());
     }
     "table" => {
@@ -1240,6 +1304,12 @@ fn parse_ref_definition(raw: &str) -> Option<(String, String, Option<String>)> {
   let label: String = chars[1..close].iter().collect();
   if label.trim().is_empty() {
     return None;
+  }
+  // Labels may not contain unescaped brackets.
+  for (k, &c) in chars[1..close].iter().enumerate() {
+    if (c == '[' || c == ']') && (k == 0 || chars[k] != '\\') {
+      return None;
+    }
   }
   let mut i = close + 2;
   while i < chars.len() && chars[i].is_whitespace() {
@@ -1459,8 +1529,9 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
     None
   };
 
-  // Emit a resolved link into out/marks (text parsed recursively).
-  let push_link = |label: &str,
+  // Emit a resolved link or image into out/marks (text parsed recursively).
+  let push_link = |kind: &str,
+                   label: &str,
                    href: String,
                    title: Option<String>,
                    out: &mut String,
@@ -1482,7 +1553,7 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
     marks.push(InlineMark {
       start,
       end: *out_len,
-      kind: "link".into(),
+      kind: kind.to_string(),
       href: Some(href),
       title,
     });
@@ -1517,6 +1588,45 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
         }
       }
     }
+    // Image: ![alt](dest "title") | ![alt][label] | ![alt][] | ![alt] —
+    // same bridge as links; the alt keeps its inner marks (HTML flattens
+    // them to plain text, markdown re-renders them).
+    if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[' {
+      if let Some(close) = matching_bracket(&chars, i + 1) {
+        let label: String = chars[i + 2..close].iter().collect();
+        if !label.is_empty() {
+          if close + 1 < chars.len() && chars[close + 1] == '(' {
+            if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
+              push_link("image", &label, href, title, &mut out, &mut out_len, &mut marks);
+              i = next;
+              continue;
+            }
+          }
+          if !defs.is_empty() {
+            let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
+              match matching_bracket(&chars, close + 1) {
+                Some(end2) => {
+                  let second: String = chars[close + 2..end2].iter().collect();
+                  if second.is_empty() {
+                    (label.clone(), end2 + 1) // collapsed ![alt][]
+                  } else {
+                    (second, end2 + 1) // full ![alt][label]
+                  }
+                }
+                None => (label.clone(), close + 1),
+              }
+            } else {
+              (label.clone(), close + 1) // shortcut ![alt]
+            };
+            if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
+              push_link("image", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
+              i = next;
+              continue;
+            }
+          }
+        }
+      }
+    }
     // Link: [text](dest "title") | [text][label] | [text][] | [shortcut]
     if chars[i] == '[' {
       if let Some(close) = matching_bracket(&chars, i) {
@@ -1525,7 +1635,7 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
           // Inline form.
           if close + 1 < chars.len() && chars[close + 1] == '(' {
             if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
-              push_link(&label, href, title, &mut out, &mut out_len, &mut marks);
+              push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks);
               i = next;
               continue;
             }
@@ -1548,7 +1658,7 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
               (label.clone(), close + 1) // shortcut [text]
             };
             if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
-              push_link(&label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
+              push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
               i = next;
               continue;
             }
@@ -1944,7 +2054,12 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
       out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..hi])));
       break;
     };
-    out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..s])));
+    let mut lead = escape_inline(&String::from_utf16_lossy(&units[pos..s]));
+    if marks[picked].kind == "link" && lead.ends_with('!') {
+      lead.pop();
+      lead.push_str("\\!");
+    }
+    out.push_str(&lead);
     let inner: Vec<&InlineMark> = marks
       .iter()
       .enumerate()
@@ -1980,6 +2095,18 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
             Some(t) => format!("[{body}]({dest} \"{}\")", t.replace('"', "\\\"")),
             None => format!("[{body}]({dest})"),
           }
+        }
+      }
+      "image" => {
+        let href = m.href.as_deref().unwrap_or("");
+        let dest = if href.contains(char::is_whitespace) {
+          format!("<{href}>")
+        } else {
+          href.to_string()
+        };
+        match &m.title {
+          Some(t) => format!("![{body}]({dest} \"{}\")", t.replace('"', "\\\"")),
+          None => format!("![{body}]({dest})"),
         }
       }
       _ => body,
