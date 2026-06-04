@@ -594,6 +594,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return true;
     }
 
+    // A pasted one-line formula ($$source$$ or \[source\]) becomes a math
+    // block — the single-line fast path below would keep it literal text.
+    if (node != null && !node.isAtomic && node.kind != 'table') {
+      final m = RegExp(r'^\$\$(.+)\$\$$').firstMatch(trimmed) ??
+          RegExp(r'^\\\[(.+)\\\]$').firstMatch(trimmed);
+      final src = m?.group(1)?.trim() ?? '';
+      if (m != null && src.isNotEmpty && !src.contains('\n')) {
+        _controller
+            .insertBlocksAfterFocus([(kind: 'math_block', text: src, data: {})]);
+        _syncImeFromSelection(force: true);
+        return true;
+      }
+    }
+
     if (markdown.trim().isEmpty) return false;
     if (rich || markdown.contains('\n')) {
       _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
