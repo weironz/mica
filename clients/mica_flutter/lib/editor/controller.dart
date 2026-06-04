@@ -1041,7 +1041,8 @@ class EditorController extends ChangeNotifier {
           return convert('heading', {'level': lvl}, marker.length);
         }
       }
-      if (caret == 2 && (text.startsWith('- ') || text.startsWith('* '))) {
+      if (caret == 2 &&
+          (text.startsWith('- ') || text.startsWith('* ') || text.startsWith('+ '))) {
         return convert('bulleted_list', {}, 2);
       }
       if (caret == 2 && text.startsWith('> ')) {
@@ -1122,7 +1123,12 @@ class EditorController extends ChangeNotifier {
 
     // One-char wrappers: `code`, *italic*, _italic_.
     if (type == null && caret >= 3) {
-      for (final mk in const [('`', 'code'), ('*', 'italic'), ('_', 'italic')]) {
+      for (final mk in const [
+        ('`', 'code'),
+        ('*', 'italic'),
+        ('_', 'italic'),
+        ('~', 'strike'),
+      ]) {
         final ch = mk.$1;
         if (text[caret - 1] != ch) continue;
         final open = text.lastIndexOf(ch, caret - 2);

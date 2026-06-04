@@ -25,6 +25,15 @@ void main() {
     }
   });
 
+  test('typing + space converts to a bulleted list', () {
+    final c = _fresh([_p('a', '')]);
+    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.nodes[0].text = '+ ';
+    c.selection = DocSelection.collapsed(const DocPosition(0, 2));
+    expect(c.applyInputRules(), isTrue);
+    expect(c.nodes[0].kind, 'bulleted_list');
+  });
+
   test('typing --- converts to a divider with a trailing paragraph', () {
     final c = _fresh([_p('a', '')]);
     c.selection = DocSelection.collapsed(const DocPosition(0, 0));

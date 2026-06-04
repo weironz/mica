@@ -37,6 +37,7 @@ void main() {
       ('x *i*', 'x i', 'italic', 'i'),
       ('x `c`', 'x c', 'code', 'c'),
       ('x ~~s~~', 'x s', 'strike', 's'),
+      ('x ~t~', 'x t', 'strike', 't'),
       ('x _u_', 'x u', 'italic', 'u'),
     ]) {
       final c = _fresh();
