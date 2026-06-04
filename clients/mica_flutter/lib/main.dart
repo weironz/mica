@@ -2464,7 +2464,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         textInputAction: TextInputAction.next,
                         onChanged: (_) => _schedulePageTitleSave(),
                         // Enter in the title drops into the first body line.
-                        onSubmitted: (_) => _editorFocus.requestFocus(),
+                        // onEditingComplete (not onSubmitted): it REPLACES the
+                        // default TextInputAction.next finalize, which would
+                        // otherwise call nextFocus() right after us and steal
+                        // the focus back to the page-menu button.
+                        onEditingComplete: () => _editorFocus.requestFocus(),
                         decoration: const InputDecoration(
                           hintText: 'Untitled',
                           border: InputBorder.none,
