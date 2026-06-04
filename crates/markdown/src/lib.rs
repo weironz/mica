@@ -174,6 +174,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   let mut quote_active = false;
   let mut quote_boundary = false;
   let mut pending_empty_quote: Option<usize> = None;
+  // Does the deepest open list item already hold container children
+  // (code/quote/divider blocks carrying `data.li`)? Then later indented
+  // paragraphs become child paragraphs instead of `\n\n` text joins.
+  let mut item_children = false;
   while index < raw_lines.len() {
     if def_lines.contains(&index) {
       index += 1;
@@ -250,6 +254,142 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       open_item = None;
       index += 1;
       continue;
+    }
+
+    // List-item container children: at or past the open item's content
+    // column, fences / indented code / dividers (and, below, quotes and
+    // paragraphs) belong INSIDE the item — flat blocks carrying `data.li`.
+    if let Some(&cc) = list_stack.last()
+      && col >= cc
+      && strip_quote_markers(content).0 == 0
+      && !matches!(
+        classify_markdown_line(content).0,
+        "bulleted_list" | "numbered_list" | "todo"
+      )
+    {
+      let level = list_stack.len() - 1;
+      // Fenced code child.
+      if let Some((fence_char, fence_len, info)) = fence_open(content) {
+        let language =
+          unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
+        let mut code_lines = Vec::new();
+        index += 1;
+        while index < raw_lines.len() {
+          let l = raw_lines[index];
+          let lt = l.trim_start();
+          if lt.is_empty() {
+            code_lines.push(String::new());
+            index += 1;
+            continue;
+          }
+          let lcol = leading_columns(l);
+          if lcol < cc {
+            break; // the item ended — so does the fence
+          }
+          if fence_close(lt, fence_char, fence_len) {
+            index += 1;
+            break;
+          }
+          // Content sheds up to the OPENING fence's indentation.
+          code_lines.push(deindent_columns(l, col));
+          index += 1;
+        }
+        // Trailing blank-only lines belong between blocks, not the code.
+        while code_lines.last().is_some_and(|l| l.is_empty()) {
+          code_lines.pop();
+        }
+        let mut data = if language.is_empty() {
+          json!({})
+        } else {
+          json!({ "language": language })
+        };
+        data_insert(&mut data, "li", json!(level));
+        if pending_loose {
+          if let Some((prev_idx, _, _)) = last_list {
+            data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
+          }
+          pending_loose = false;
+        }
+        push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
+        item_children = true;
+        open_item = None;
+        continue;
+      }
+      // Indented code child (4+ columns past the content column).
+      if col >= cc + 4 {
+        let mut code_lines: Vec<String> = Vec::new();
+        let mut blanks: Vec<String> = Vec::new();
+        while index < raw_lines.len() {
+          let l = raw_lines[index];
+          if l.trim().is_empty() {
+            blanks.push(deindent_columns(l, cc + 4));
+            index += 1;
+            continue;
+          }
+          if leading_columns(l) < cc + 4 {
+            break;
+          }
+          code_lines.append(&mut blanks);
+          code_lines.push(deindent_columns(l, cc + 4));
+          index += 1;
+        }
+        let mut data = json!({ "li": level });
+        if pending_loose {
+          if let Some((prev_idx, _, _)) = last_list {
+            data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
+          }
+          pending_loose = false;
+        }
+        push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
+        item_children = true;
+        open_item = None;
+        continue;
+      }
+      // Divider child.
+      if is_divider(content) {
+        let mut data = json!({ "li": level });
+        if pending_loose {
+          if let Some((prev_idx, _, _)) = last_list {
+            data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
+          }
+          pending_loose = false;
+        }
+        push_block(&mut blocks, &mut root_children, "divider", String::new(), data);
+        item_children = true;
+        open_item = None;
+        index += 1;
+        continue;
+      }
+      // Paragraph child: once the item holds children, indented paragraph
+      // lines become child blocks (order matters — text renders first).
+      if item_children
+        && classify_markdown_line(content).0 == "paragraph"
+        && open_item.is_none()
+      {
+        let mut data = json!({ "li": level });
+        if pending_loose {
+          if let Some((prev_idx, _, _)) = last_list {
+            data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
+          }
+          pending_loose = false;
+        }
+        let base = data.clone();
+        let (text2, data2) = apply_inline_marks(content.to_string(), data, &defs);
+        push_block(&mut blocks, &mut root_children, "paragraph", text2, data2);
+        open_item = Some(OpenItem {
+          block_idx: blocks.len() - 1,
+          kind: "paragraph".to_string(),
+          content_col: cc,
+          raw: content.to_string(),
+          base,
+          had_blank: false,
+          qdepth: 0,
+          ends_hard,
+        });
+        index += 1;
+        continue;
+      }
+      // Anything else falls through to the regular machinery.
     }
 
     if col < 4
@@ -397,8 +537,20 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     // space; up to 3 spaces may sit between nested markers) → depth + rest.
     let (qdepth, qrest) = strip_quote_markers(content);
     if qdepth > 0 {
-      list_stack.clear();
-      last_list = None;
+      // A quote at or past the open item's content column nests INSIDE the
+      // item (data.li) — the list context survives.
+      let li_ctx = match list_stack.last() {
+        Some(&cc) if col >= cc => Some(list_stack.len() - 1),
+        _ => None,
+      };
+      if li_ctx.is_none() {
+        list_stack.clear();
+        last_list = None;
+      } else if pending_loose {
+        if let Some((prev_idx, _, _)) = last_list {
+          data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
+        }
+      }
       pending_loose = false;
       let qrest_trim = qrest.trim_start();
 
@@ -466,6 +618,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
+        if let Some(level) = li_ctx {
+          data_insert(&mut data, "li", json!(level));
+          item_children = true;
+        }
         push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
         open_item = None;
         quote_active = true;
@@ -478,6 +634,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         let mut data = json!({ "quote": qdepth });
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
+        }
+        if let Some(level) = li_ctx {
+          data_insert(&mut data, "li", json!(level));
+          item_children = true;
         }
         push_block(
           &mut blocks,
@@ -497,6 +657,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
+        if let Some(level) = li_ctx {
+          data_insert(&mut data, "li", json!(level));
+          item_children = true;
+        }
         push_block(&mut blocks, &mut root_children, "divider", String::new(), data);
         open_item = None;
         quote_active = true;
@@ -512,6 +676,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       }
       if qbreak {
         data_insert(&mut data, "qbreak", json!(true));
+      }
+      if let Some(level) = li_ctx {
+        data_insert(&mut data, "li", json!(level));
+        item_children = true;
       }
       let raw = text.clone();
       let base = data.clone();
@@ -565,7 +733,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         && (text.is_empty() || data.get("start").is_some());
       if kind == "paragraph" || weak_item {
         if open.had_blank {
-          if col >= open.content_col && !open.raw.is_empty() {
+          if col >= open.content_col && !open.raw.is_empty() && !item_children {
             open.had_blank = false;
             open.raw.push_str("\n\n");
             open.raw.push_str(content);
@@ -655,12 +823,86 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       if kind == "numbered_list" && data.get("start").is_some() && continues_run {
         data.as_object_mut().map(|m| m.remove("start"));
       }
+      // An item whose text itself opens a container (`- ```'/`- ***`/code
+      // by 4+ extra spaces) becomes an EMPTY item plus a child block.
+      let starts_fence = fence_open(&text).map(|(c, n, info)| (c, n, info.to_string()));
+      let starts_divider = is_divider(&text) && !text.is_empty();
+      let starts_code = extra > 3;
+      if starts_fence.is_some() || starts_divider || starts_code {
+        let (item_text, item_data) = apply_inline_marks(String::new(), data, &defs);
+        push_block(&mut blocks, &mut root_children, kind, item_text, item_data);
+        let block_idx = blocks.len() - 1;
+        last_list = Some((block_idx, level, marker_char));
+        while list_stack.len() > level {
+          list_stack.pop();
+        }
+        list_stack.push(content_col);
+        item_children = true;
+        open_item = None;
+        if let Some((fence_char, fence_len, info)) = starts_fence {
+          let language =
+            unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
+          let mut code_lines = Vec::new();
+          index += 1;
+          while index < raw_lines.len() {
+            let l = raw_lines[index];
+            let lt = l.trim_start();
+            if lt.is_empty() {
+              code_lines.push(String::new());
+              index += 1;
+              continue;
+            }
+            if leading_columns(l) < content_col {
+              break;
+            }
+            if fence_close(lt, fence_char, fence_len) {
+              index += 1;
+              break;
+            }
+            code_lines.push(deindent_columns(l, content_col));
+            index += 1;
+          }
+          while code_lines.last().is_some_and(|l| l.is_empty()) {
+            code_lines.pop();
+          }
+          let mut cdata = if language.is_empty() {
+            json!({})
+          } else {
+            json!({ "language": language })
+          };
+          data_insert(&mut cdata, "li", json!(level));
+          push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), cdata);
+          continue;
+        }
+        if starts_divider {
+          push_block(
+            &mut blocks,
+            &mut root_children,
+            "divider",
+            String::new(),
+            json!({ "li": level }),
+          );
+          index += 1;
+          continue;
+        }
+        // starts_code: the kept extra spaces are an indented code child.
+        push_block(
+          &mut blocks,
+          &mut root_children,
+          "code_block",
+          deindent_columns(&text, 4),
+          json!({ "li": level }),
+        );
+        index += 1;
+        continue;
+      }
       let raw = text.clone();
       let base = data.clone();
       let (text, data) = apply_inline_marks(text, data, &defs);
       push_block(&mut blocks, &mut root_children, kind, text, data);
       let block_idx = blocks.len() - 1;
       last_list = Some((block_idx, level, marker_char));
+      item_children = false;
       open_item = Some(OpenItem {
         block_idx,
         kind: kind.to_string(),
@@ -678,6 +920,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     list_stack.clear();
     last_list = None;
     pending_loose = false;
+    item_children = false;
     let (text, data) = if kind == "image" {
       // The alt is plain text — inline markup flattens (spec alt rule).
       (parse_inline_with(&text, &defs).text, data)
@@ -780,6 +1023,19 @@ fn is_divider(content: &str) -> bool {
     }
   }
   count >= 3
+}
+
+/// Leading indentation of a line in columns (tabs = 4-column stops).
+fn leading_columns(line: &str) -> usize {
+  let mut col = 0usize;
+  for c in line.chars() {
+    match c {
+      ' ' => col += 1,
+      '\t' => col = (col / 4 + 1) * 4,
+      _ => break,
+    }
+  }
+  col
 }
 
 /// Strip [columns] of leading indentation, treating tabs as 4-column stops
@@ -1273,7 +1529,7 @@ fn append_html_children(
   let mut index = 0;
   while index < child_ids.len() {
     let child = block_for(snapshot, &child_ids[index])?;
-    if quote_depth_of(child) > 0 {
+    if quote_depth_of(child) > 0 && li_of(child).is_none() {
       // Collect one quote group (a `qbreak` starts the next blockquote)
       // and rebuild the nested <blockquote> structure from `data.quote`.
       let run_start = index;
@@ -1291,12 +1547,16 @@ fn append_html_children(
         .collect::<DocumentOperationResult<_>>()?;
       render_quote_group(snapshot, &items, 1, out)?;
     } else if list_tag_for(&child.kind).is_some() {
-      // Collect the maximal run of consecutive list items (any tag, any
-      // `data.indent` level) and render it as nested <ul>/<ol> structure.
+      // Collect the maximal run of list items (any tag, any `data.indent`
+      // level) plus their container children (`data.li`) and render the
+      // nested <ul>/<ol> structure.
       let run_start = index;
       while index < child_ids.len() {
         let b = block_for(snapshot, &child_ids[index])?;
-        if list_tag_for(&b.kind).is_none() || quote_depth_of(b) > 0 {
+        let is_li_child = li_of(b).is_some();
+        if (list_tag_for(&b.kind).is_none() && !is_li_child)
+          || (quote_depth_of(b) > 0 && !is_li_child)
+        {
           break;
         }
         index += 1;
@@ -1305,7 +1565,7 @@ fn append_html_children(
         .iter()
         .map(|id| block_for(snapshot, id))
         .collect::<DocumentOperationResult<_>>()?;
-      render_html_list(&items, 0, out);
+      render_html_list(snapshot, &items, 0, out)?;
     } else {
       append_html_block(snapshot, child, out)?;
       index += 1;
@@ -1343,7 +1603,7 @@ fn render_quote_group(
       {
         i += 1;
       }
-      render_html_list(&items[s..i], 0, out);
+      render_html_list(snapshot, &items[s..i], 0, out)?;
       continue;
     }
     if items[i].kind == "quote" {
@@ -1364,30 +1624,53 @@ fn list_indent(block: &Block) -> usize {
   block.data.get("indent").and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
-/// Render a flat run of list items (nesting via `data.indent`) as spec-shaped
-/// nested `<ul>`/`<ol>`: a tag change at the same level starts a new list,
-/// deeper items nest inside the preceding `<li>`, a loose list (any item
-/// carrying `data.loose`) wraps item text in `<p>`, and `data.start` on the
-/// first item of an ordered run becomes `<ol start="n">`.
-fn render_html_list(items: &[&Block], level: usize, out: &mut String) {
+/// Is this block a container child of a list item, and at which level?
+fn li_of(block: &Block) -> Option<usize> {
+  block.data.get("li").and_then(Value::as_u64).map(|v| v as usize)
+}
+
+/// The effective list level a block sits at: items by `data.indent`,
+/// container children by `data.li`.
+fn li_level(block: &Block) -> usize {
+  match li_of(block) {
+    Some(l) => l,
+    None => list_indent(block),
+  }
+}
+
+/// Render a flat run of list items (nesting via `data.indent`) plus their
+/// container children (`data.li`) as spec-shaped nested `<ul>`/`<ol>`: a tag
+/// change at the same level starts a new list, deeper items and children
+/// nest inside the preceding `<li>`, a loose list (any item carrying
+/// `data.loose`) wraps item text in `<p>`, and `data.start` on the first
+/// item of an ordered run becomes `<ol start="n">`.
+fn render_html_list(
+  snapshot: &DocumentSnapshotPayload,
+  items: &[&Block],
+  level: usize,
+  out: &mut String,
+) -> DocumentOperationResult<()> {
   let mut i = 0;
   while i < items.len() {
-    if list_indent(items[i]) > level {
-      // Orphan deeper items (no parent at this level): render a level down.
+    if li_level(items[i]) > level || (li_of(items[i]) == Some(level) && i == 0) {
+      // Orphan deeper entries (no parent at this level): render a level
+      // down; a leading direct child renders bare.
       let s = i;
-      while i < items.len() && list_indent(items[i]) > level {
+      while i < items.len()
+        && (li_level(items[i]) > level || (li_of(items[i]) == Some(level) && i == s))
+      {
         i += 1;
       }
-      render_html_list(&items[s..i], level + 1, out);
+      render_html_list(snapshot, &items[s..i], level + 1, out)?;
       continue;
     }
     let tag = list_tag_for(&items[i].kind).unwrap_or("ul");
     // Extent of this list: items at `level` with the same tag, plus any
-    // deeper items in between (they belong inside the current <li>).
+    // deeper items or container children in between.
     let mut li_heads: Vec<usize> = Vec::new();
     let mut j = i;
     while j < items.len() {
-      if list_indent(items[j]) == level {
+      if li_level(items[j]) == level && li_of(items[j]).is_none() {
         if list_tag_for(&items[j].kind) != Some(tag) {
           break;
         }
@@ -1410,23 +1693,24 @@ fn render_html_list(items: &[&Block], level: usize, out: &mut String) {
     for (k, &head) in li_heads.iter().enumerate() {
       let end = li_heads.get(k + 1).copied().unwrap_or(j);
       let body = html_inline(items[head]);
-      if loose && body.is_empty() && head + 1 >= end {
+      let has_children = head + 1 < end;
+      if loose && body.is_empty() && !has_children {
         out.push_str("<li></li>\n");
       } else if loose {
         out.push_str("<li>\n");
         for para in body.split("\n\n").filter(|p| !p.is_empty()) {
           out.push_str(&format!("<p>{para}</p>\n"));
         }
-        if head + 1 < end {
-          render_html_list(&items[head + 1..end], level + 1, out);
+        if has_children {
+          render_li_children(snapshot, &items[head + 1..end], level, out)?;
         }
         out.push_str("</li>\n");
       } else {
         out.push_str("<li>");
         out.push_str(&body);
-        if head + 1 < end {
+        if has_children {
           out.push('\n');
-          render_html_list(&items[head + 1..end], level + 1, out);
+          render_li_children(snapshot, &items[head + 1..end], level, out)?;
         }
         out.push_str("</li>\n");
       }
@@ -1434,6 +1718,56 @@ fn render_html_list(items: &[&Block], level: usize, out: &mut String) {
     out.push_str(&format!("</{tag}>\n"));
     i = j;
   }
+  Ok(())
+}
+
+/// Inside one `<li>`: direct container children (`data.li` == level) render
+/// as their blocks (quote runs rebuild <blockquote>); anything deeper is a
+/// nested list run.
+fn render_li_children(
+  snapshot: &DocumentSnapshotPayload,
+  items: &[&Block],
+  level: usize,
+  out: &mut String,
+) -> DocumentOperationResult<()> {
+  let mut i = 0;
+  while i < items.len() {
+    let b = items[i];
+    if li_of(b) == Some(level) {
+      if quote_depth_of(b) > 0 {
+        let s = i;
+        while i < items.len() {
+          let q = items[i];
+          if li_of(q) != Some(level) || quote_depth_of(q) == 0 {
+            break;
+          }
+          if i > s && q.data.get("qbreak").is_some() {
+            break;
+          }
+          i += 1;
+        }
+        render_quote_group(snapshot, &items[s..i], 1, out)?;
+        continue;
+      }
+      if b.kind == "paragraph" {
+        let text = html_inline(b);
+        if !text.is_empty() {
+          out.push_str(&format!("<p>{text}</p>\n"));
+        }
+      } else {
+        append_html_block(snapshot, b, out)?;
+      }
+      i += 1;
+      continue;
+    }
+    // Deeper: a nested list run (items and their children).
+    let s = i;
+    while i < items.len() && (li_level(items[i]) > level || li_of(items[i]) == Some(level + 1)) {
+      i += 1;
+    }
+    render_html_list(snapshot, &items[s..i], level + 1, out)?;
+  }
+  Ok(())
 }
 
 /// Inline marks rendered to nested HTML (<strong>/<em>/<code>/<del>/<a>),
@@ -1666,18 +2000,25 @@ fn append_markdown_children(
       .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
     let child = &snapshot.blocks[child_index];
     let quote = quote_depth_of(child);
+    let li_child = li_of(child);
     // A list runs until a blank line: separate it from whatever follows so
-    // the next block can't be read back as a lazy continuation.
-    if prev_was_item && !is_item(&child.kind) {
+    // the next block can't be read back as a lazy continuation. Container
+    // children (`data.li`) stay inside the run.
+    if prev_was_item && !is_item(&child.kind) && li_child.is_none() {
       lines.push(String::new());
     }
     // A quote group ends at depth 0 or a recorded break — a plain blank
     // line keeps the next block out of the quote on re-import.
-    if prev_quote > 0 && (quote == 0 || child.data.get("qbreak").is_some()) {
+    if prev_quote > 0 && li_child.is_none() && (quote == 0 || child.data.get("qbreak").is_some()) {
       lines.push(String::new());
     }
-    prev_was_item = is_item(&child.kind);
-    prev_quote = quote;
+    // A paragraph child needs a blank before it (that's what made it a
+    // child paragraph rather than a text join on import).
+    if li_child.is_some() && child.kind == "paragraph" {
+      lines.push(String::new());
+    }
+    prev_was_item = is_item(&child.kind) || li_child.is_some();
+    prev_quote = if li_child.is_some() { 0 } else { quote };
     let from = lines.len();
     append_markdown_block(snapshot, child, depth, lines, images)?;
     if quote > 0 {
@@ -1691,6 +2032,20 @@ fn append_markdown_children(
         } else {
           format!("{marker}{l}")
         };
+      }
+    }
+    if let Some(level) = li_child {
+      // Container children sit at the owning item's content column.
+      let indent = " ".repeat(level * 4 + 4);
+      for l in lines[from..].iter_mut() {
+        if !l.is_empty() {
+          *l = format!("{indent}{l}");
+        }
+      }
+      // Code/divider arms append a trailing blank — drop it so a following
+      // sibling item doesn't read as loose.
+      while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
       }
     }
   }

@@ -191,6 +191,16 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   var quoteActive = false;
   var quoteBoundary = false;
   int? pendingEmptyQuote;
+  // Does the deepest open list item already hold container children
+  // (code/quote/divider blocks carrying `data.li`)?
+  var itemChildren = false;
+  void markOwnerLoose() {
+    if (lastList != null) {
+      final prev = result[lastList!.$1];
+      result[lastList!.$1] =
+          (kind: prev.kind, text: prev.text, data: {...prev.data, 'loose': true});
+    }
+  }
   int quoteDepthOf(BlockSpec b) {
     final d = (b.data['quote'] as int?) ?? 0;
     return b.kind == 'quote' ? (d < 1 ? 1 : d) : d;
@@ -200,6 +210,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     open = null;
     lastList = null;
     pendingLoose = false;
+    itemChildren = false;
   }
 
   final heading = RegExp(r'^(#{1,6})([ \t]+(.*))?$');
@@ -341,6 +352,113 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       }
     }
 
+    // List-item container children: at or past the open item's content
+    // column, fences / indented code / dividers / child paragraphs belong
+    // INSIDE the item — flat blocks carrying `data.li`.
+    if (listStack.isNotEmpty &&
+        col >= listStack.last &&
+        stripQuoteMarkers(line).$1 == 0) {
+      final cc = listStack.last;
+      final level = listStack.length - 1;
+      final probe = classifyLine(line).$1;
+      final isItemLine =
+          probe == 'bulleted_list' || probe == 'numbered_list' || probe == 'todo';
+      if (!isItemLine) {
+        // Fenced code child.
+        final cfence = _fenceOpen(line);
+        if (cfence != null) {
+          final infoWords = cfence.info.trim().split(RegExp(r'\s+'));
+          final language = unescapeMd(infoWords.isEmpty ? '' : infoWords.first);
+          final buffer = <String>[];
+          i++;
+          while (i < lines.length) {
+            final l = lines[i];
+            final lt = l.trimLeft();
+            if (lt.isEmpty) {
+              buffer.add('');
+              i++;
+              continue;
+            }
+            if (leadCol(l, lt) < cc) break; // the item ended — so does the fence
+            if (_fenceClose(lt, cfence.ch, cfence.len)) {
+              i++;
+              break;
+            }
+            // Content sheds up to the OPENING fence's indentation.
+            buffer.add(deindentColumns(l, col));
+            i++;
+          }
+          while (buffer.isNotEmpty && buffer.last.isEmpty) {
+            buffer.removeLast();
+          }
+          if (pendingLoose) {
+            markOwnerLoose();
+            pendingLoose = false;
+          }
+          result.add((kind: 'code_block', text: buffer.join('\n'), data: {
+            if (language.isNotEmpty) 'language': language,
+            'li': level,
+          }));
+          itemChildren = true;
+          open = null;
+          continue;
+        }
+        // Indented code child (4+ columns past the content column).
+        if (col >= cc + 4) {
+          final code = <String>[];
+          final blanks = <String>[];
+          while (i < lines.length) {
+            final l = lines[i];
+            if (l.trim().isEmpty) {
+              blanks.add(deindentColumns(l, cc + 4));
+              i++;
+              continue;
+            }
+            if (leadCol(l, l.trimLeft()) < cc + 4) break;
+            code.addAll(blanks);
+            blanks.clear();
+            code.add(deindentColumns(l, cc + 4));
+            i++;
+          }
+          if (pendingLoose) {
+            markOwnerLoose();
+            pendingLoose = false;
+          }
+          result.add((kind: 'code_block', text: code.join('\n'), data: {'li': level}));
+          itemChildren = true;
+          open = null;
+          continue;
+        }
+        // Divider child.
+        if (isThematicBreak(line)) {
+          if (pendingLoose) {
+            markOwnerLoose();
+            pendingLoose = false;
+          }
+          result.add((kind: 'divider', text: '', data: {'li': level}));
+          itemChildren = true;
+          open = null;
+          i++;
+          continue;
+        }
+        // Paragraph child: once the item holds children, indented paragraph
+        // lines become child blocks (order matters — text renders first).
+        if (itemChildren && probe == 'paragraph' && open == null) {
+          if (pendingLoose) {
+            markOwnerLoose();
+            pendingLoose = false;
+          }
+          final base = <String, dynamic>{'li': level};
+          result.add(_inline('paragraph', line, {'li': level}, defs: defs));
+          open = _OpenItem(result.length - 1, 'paragraph', cc, line, base,
+              endsHard: endsHard);
+          i++;
+          continue;
+        }
+        // Anything else falls through to the regular machinery.
+      }
+    }
+
     final fence = col < 4 ? _fenceOpen(line) : null;
     if (fence != null) {
       resetListState();
@@ -415,8 +533,16 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     // Block quote: strip `>` markers → depth + rest (mirrors Rust).
     final (qdepth, qrest) = stripQuoteMarkers(line);
     if (qdepth > 0) {
-      listStack.clear();
-      lastList = null;
+      // A quote at or past the open item's content column nests INSIDE the
+      // item (data.li) — the list context survives.
+      final int? liCtx =
+          (listStack.isNotEmpty && col >= listStack.last) ? listStack.length - 1 : null;
+      if (liCtx == null) {
+        listStack.clear();
+        lastList = null;
+      } else if (pendingLoose) {
+        markOwnerLoose();
+      }
       pendingLoose = false;
       final qrestTrim = qrest.trimLeft();
 
@@ -471,7 +597,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
           if (language.isNotEmpty) 'language': language,
           'quote': qdepth,
           if (qbreak) 'qbreak': true,
+          'li': ?liCtx,
         }));
+        if (liCtx != null) itemChildren = true;
         open = null;
         quoteActive = true;
         continue;
@@ -482,7 +610,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         result.add((kind: 'code_block', text: deindentColumns(qrest, 4), data: {
           'quote': qdepth,
           if (qbreak) 'qbreak': true,
+          'li': ?liCtx,
         }));
+        if (liCtx != null) itemChildren = true;
         open = null;
         quoteActive = true;
         i++;
@@ -493,7 +623,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         result.add((kind: 'divider', text: '', data: {
           'quote': qdepth,
           if (qbreak) 'qbreak': true,
+          'li': ?liCtx,
         }));
+        if (liCtx != null) itemChildren = true;
         open = null;
         quoteActive = true;
         i++;
@@ -507,6 +639,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       final qdata = Map<String, dynamic>.of(qc.$3);
       if (qkind != 'quote' || qdepth > 1) qdata['quote'] = qdepth;
       if (qbreak) qdata['qbreak'] = true;
+      if (liCtx != null) {
+        qdata['li'] = liCtx;
+        itemChildren = true;
+      }
       if (qkind == 'image') {
         result.add((
           kind: 'image',
@@ -556,7 +692,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
           (text.isEmpty || data.containsKey('start'));
       if (kind == 'paragraph' || weakItem) {
         if (open!.hadBlank) {
-          if (col >= open!.contentCol && open!.raw.isNotEmpty) {
+          if (col >= open!.contentCol && open!.raw.isNotEmpty && !itemChildren) {
             open!.hadBlank = false;
             open!.raw = '${open!.raw}\n\n$line';
             open!.base['loose'] = true;
@@ -647,9 +783,59 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       if (kind == 'numbered_list' && data.containsKey('start') && continuesRun) {
         data.remove('start');
       }
+      // An item whose text itself opens a container (`- ```'/`- ***`/code
+      // by 4+ extra spaces) becomes an EMPTY item plus a child block.
+      final tfence = _fenceOpen(text);
+      final tdivider = text.isNotEmpty && isThematicBreak(text);
+      final tcode = extra > 3;
+      if (tfence != null || tdivider || tcode) {
+        result.add(_inline(kind, '', data, defs: defs));
+        lastList = (result.length - 1, level, markerChar);
+        itemChildren = true;
+        open = null;
+        if (tfence != null) {
+          final infoWords = tfence.info.trim().split(RegExp(r'\s+'));
+          final language = unescapeMd(infoWords.isEmpty ? '' : infoWords.first);
+          final buffer = <String>[];
+          i++;
+          while (i < lines.length) {
+            final l = lines[i];
+            final lt = l.trimLeft();
+            if (lt.isEmpty) {
+              buffer.add('');
+              i++;
+              continue;
+            }
+            if (leadCol(l, lt) < contentCol) break;
+            if (_fenceClose(lt, tfence.ch, tfence.len)) {
+              i++;
+              break;
+            }
+            buffer.add(deindentColumns(l, contentCol));
+            i++;
+          }
+          while (buffer.isNotEmpty && buffer.last.isEmpty) {
+            buffer.removeLast();
+          }
+          result.add((kind: 'code_block', text: buffer.join('\n'), data: {
+            if (language.isNotEmpty) 'language': language,
+            'li': level,
+          }));
+          continue;
+        }
+        if (tdivider) {
+          result.add((kind: 'divider', text: '', data: {'li': level}));
+          i++;
+          continue;
+        }
+        result.add((kind: 'code_block', text: deindentColumns(text, 4), data: {'li': level}));
+        i++;
+        continue;
+      }
       final base = Map<String, dynamic>.of(data);
       result.add(_inline(kind, text, data, defs: defs));
       lastList = (result.length - 1, level, markerChar);
+      itemChildren = false;
       open = _OpenItem(result.length - 1, kind, contentCol, text, base,
           endsHard: endsHard);
       i++;

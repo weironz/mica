@@ -516,10 +516,25 @@ The recurring problem the engine must get right for every node type:
      interrupt a paragraph) → 81%; href percent-encoding (houdini
      set) and `'` no longer HTML-escaped; 4+-column lines are lazy
      continuation, never new blocks. Setext/Paragraphs/Soft breaks/
-     Textual 100%, Emphasis 93%, Links 76%. Scoreboard **516/652
-     (79.1%)**. Fixtures 12–19 pin both parsers. Remaining: HTML
-     blocks 44 + Raw HTML 20 (degrade policy decision), list-item
-     containers (code/quotes in items) for List items/Lists tails,
-     Links precedence edge cases. Decision point: keep extending
+     Textual 100%, Emphasis 93%, Links 76%. Scoreboard 516/652
+     (79.1%). Fixtures 12–19 pin both parsers.
+     List-item containers DONE (2026-06-05): the flat-depth trick a
+     third time — blocks inside a list item carry `data.li` = the
+     owning item's indent level. Import recognizes, at or past the
+     open item's content column: fenced code (running while the item
+     does, content shed by the opener's column), indented code (4+
+     past the content column), dividers, quotes (`data.li` composes
+     with `data.quote`; the quote path keeps the list context), and —
+     once an item has children — child paragraphs (text joins would
+     render before the children, in the wrong order). Items whose TEXT
+     opens a container (`- ```...`, `- * * *`, 4+ extra marker spaces)
+     become an empty item plus a child. HTML renders children inside
+     the `<li>` (quote runs rebuild <blockquote>; deeper runs recurse);
+     markdown re-indents children to the content column, child
+     paragraphs get a separating blank. Scoreboard **533/652 (81.7%)**
+     — List items 62%→88%, Lists 69%→81%, Tabs 82%. Fixture 20 pins
+     both parsers. Remaining: HTML blocks 44 + Raw HTML 20 (the
+     degrade-policy decision), Links/Emphasis precedence edges, a few
+     tab/laziness exotics. Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.

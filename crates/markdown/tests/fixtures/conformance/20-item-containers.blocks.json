@@ -1,0 +1,79 @@
+[
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "plain item"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": ""
+  },
+  {
+    "data": {
+      "language": "py",
+      "li": 0
+    },
+    "kind": "code_block",
+    "text": "fenced inside item"
+  },
+  {
+    "data": {
+      "loose": true
+    },
+    "kind": "bulleted_list",
+    "text": "item then code"
+  },
+  {
+    "data": {
+      "li": 0
+    },
+    "kind": "code_block",
+    "text": "indented code child"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": ""
+  },
+  {
+    "data": {
+      "li": 0
+    },
+    "kind": "divider",
+    "text": ""
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "item with quote"
+  },
+  {
+    "data": {
+      "li": 0
+    },
+    "kind": "quote",
+    "text": "quoted in item\nstill quoted"
+  },
+  {
+    "data": {
+      "loose": true
+    },
+    "kind": "numbered_list",
+    "text": "fence first"
+  },
+  {
+    "data": {
+      "li": 0
+    },
+    "kind": "code_block",
+    "text": "code"
+  },
+  {
+    "data": {
+      "li": 0
+    },
+    "kind": "paragraph",
+    "text": "paragraph after child"
+  }
+]
