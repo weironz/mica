@@ -207,13 +207,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     });
   }
 
+  final Map<String, int> _mathTries = {};
+
   Future<void> _captureMath() async {
     if (_mathPending.isEmpty) return;
     final captured = <String>[];
     for (final source in _mathPending.toList()) {
       final boundary = _mathKeys[source]?.currentContext?.findRenderObject();
-      if (boundary is! RenderRepaintBoundary || boundary.debugNeedsPaint) {
-        continue; // not laid out yet — retry next frame
+      if (boundary is! RenderRepaintBoundary) {
+        continue; // not built yet — retry next frame
       }
       try {
         final img =
@@ -221,7 +223,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _mathCache[source] = img;
         captured.add(source);
       } catch (_) {
-        captured.add(source); // give up on this source; keep showing text
+        // Not painted yet — retry a few frames, then give up (source style).
+        final tries = (_mathTries[source] ?? 0) + 1;
+        _mathTries[source] = tries;
+        if (tries > 20) {
+          captured.add(source);
+        }
       }
     }
     if (captured.isNotEmpty && mounted) {
@@ -229,6 +236,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         for (final s in captured) {
           _mathPending.remove(s);
           _mathKeys.remove(s);
+          _mathTries.remove(s);
         }
       });
     }
@@ -237,31 +245,30 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
-  /// Offstage host that lays out pending formulas for capture.
-  Widget _mathRasterHost() => Offstage(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final source in _mathPending)
-              RepaintBoundary(
-                key: _mathKeys[source],
-                child: Math.tex(
+  /// Raster host: positioned far off-screen so it PAINTS (Offstage skips
+  /// painting entirely and toImage would never capture anything).
+  Widget _mathRasterHost() => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final source in _mathPending)
+            RepaintBoundary(
+              key: _mathKeys[source],
+              child: Math.tex(
+                source,
+                textStyle:
+                    const TextStyle(fontSize: 18, color: EditorTheme.text),
+                onErrorFallback: (e) => Text(
                   source,
-                  textStyle:
-                      const TextStyle(fontSize: 18, color: EditorTheme.text),
-                  onErrorFallback: (e) => Text(
-                    source,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 14,
-                      color: Color(0xFFB91C1C),
-                    ),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                    color: Color(0xFFB91C1C),
                   ),
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       );
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
@@ -2896,9 +2903,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             onPanStart: _onPanStart,
             onPanUpdate: _onPanUpdate,
             onPanEnd: _onPanEnd,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: Stack(
+              clipBehavior: Clip.hardEdge,
               children: [
                 DocumentSurface(
                   key: _surfaceKey,
@@ -2913,7 +2919,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   onRequestMath: _requestMath,
                   onRequestImage: _requestImage,
                 ),
-                _mathRasterHost(),
+                // Far off-screen: painted (capturable) but never visible.
+                Positioned(left: -100000, top: 0, child: _mathRasterHost()),
               ],
             ),
           ),
