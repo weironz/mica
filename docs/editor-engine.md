@@ -558,7 +558,25 @@ The recurring problem the engine must get right for every node type:
      ever shows source. Scoreboard **598/652 (91.7%)** — HTML blocks
      0%→95%, Raw HTML 35%→100%; 16 sections at 100%. Fixture 21 pins
      both parsers.
-     **P4 CLOSED (2026-06-05) at 598/652 = 91.7%.** The remaining 54
+     **GFM extensions COMPLETE (2026-06-05): 24/24 official extension
+     examples** (vendored in fixtures/gfm-extensions.json, regression
+     floor in tests/gfm_extensions.rs). Bare autolinks (http/https/ftp,
+     `www.` → http://, bare emails; GFM boundary + trailing-punctuation
+     trimming + domain rules; `www.` links write back bare), GFM
+     strikethrough (one OR two tildes, run-matched), tagfilter (the nine
+     disallowed tags escape on ALL raw HTML output — the security debt
+     from the HTML degrade, now spec-shaped), spec tables (separator
+     count must match the header, header defines the column count,
+     pipe-less lazy rows, per-column `data.aligns` from separator colons
+     — editor renders them, markdown writes them back, HTML emits
+     GFM-shaped <table><thead><tbody> with align attrs and inline-parsed
+     cells), task lists (GFM <input checkbox> shape; the `[x]` marker is
+     content so two-space subtasks nest). The CommonMark scoreboard
+     gains a GFM_DIALECT_WAIVERS list (608/611/612 bare autolinks,
+     170–175 tagfilter) — examples cmark-gfm with extensions also fails
+     — scored as 589/643 (91.6%).
+     **P4 CLOSED (2026-06-05) at 598/652 = 91.7% CommonMark (now 589/643
+     + 9 dialect waivers) and 24/24 GFM extensions.** The remaining 54
      are isolated precedence/exotic edges with no real-document impact
      — Links precedence (20), Emphasis rule-of-3 exotics (6), List
      items/Lists deep-container edges, code-span/entity/tab oddments —

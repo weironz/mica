@@ -725,7 +725,9 @@ class RenderDocument extends RenderBox {
   _NodeLayout _layoutTable(EditorNode node, double top, double maxWidth) {
     final table = TableData.fromBlock(node.data);
     final cols = table.columns.clamp(1, 64);
-    final textAlign = switch (table.align) {
+    // Per-column GFM alignment (separator colons) overrides the whole-table
+    // setting where present.
+    TextAlign alignAt(int c) => switch (table.alignFor(c)) {
       'center' => TextAlign.center,
       'right' => TextAlign.right,
       _ => TextAlign.left,
@@ -775,7 +777,7 @@ class RenderDocument extends RenderBox {
               isCode: false,
             ),
           ),
-          textAlign: textAlign,
+          textAlign: alignAt(c),
           textDirection: TextDirection.ltr,
         )..layout(
             minWidth: (colW[c] - padH * 2).clamp(0.0, double.infinity),

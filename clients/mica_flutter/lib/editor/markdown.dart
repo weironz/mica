@@ -823,8 +823,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     if (kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo') {
       // Content column: marker width plus up to 3 extra spaces consumed
       // (more means the item starts with indented code — the spaces stay
-      // in the text, the column sits right after the marker).
-      final markerWidth = line.length - text.length;
+      // in the text, the column sits right after the marker). A todo's
+      // task marker `[x] ` is CONTENT, not marker: only the `- ` counts.
+      final markerWidth = kind == 'todo' ? 2 : line.length - text.length;
       var extra = 0;
       while (extra < text.length && text.codeUnitAt(extra) == 0x20) {
         extra++;

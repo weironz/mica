@@ -15,7 +15,15 @@ use serde_json::Value;
 
 /// Passing examples must never decrease. Raise this when the engine improves
 /// (P4 work); the per-section detail lives in docs/commonmark-scoreboard.md.
-const BASELINE_PASS: usize = 598; // 91.7% — P4 HTML degrade, 2026-06-05
+const BASELINE_PASS: usize = 589; // 91.6% of 643 — GFM dialect, 2026-06-05
+
+/// CommonMark examples our GFM target dialect intentionally breaks —
+/// cmark-gfm with extensions enabled fails these identically:
+/// - 608/611/612: bare URL/email autolinks (GFM links them, CommonMark
+///   wants plain text);
+/// - 170–175: the tagfilter escapes `<script>`/`<style>`/`<textarea>`
+///   blocks that CommonMark passes through raw (security wins).
+const GFM_DIALECT_WAIVERS: &[u64] = &[608, 611, 612, 170, 171, 172, 173, 174, 175];
 
 fn normalize(html: &str) -> String {
   // The official runner compares exact HTML; we only forgive trailing
@@ -36,7 +44,12 @@ fn commonmark_scoreboard() {
   let mut per_section: BTreeMap<String, (usize, usize)> = BTreeMap::new();
   let mut passed = 0usize;
 
+  let mut waived = 0usize;
   for ex in &examples {
+    if GFM_DIALECT_WAIVERS.contains(&ex["example"].as_u64().unwrap()) {
+      waived += 1;
+      continue;
+    }
     let md = ex["markdown"].as_str().unwrap();
     let expected = ex["html"].as_str().unwrap();
     let section = ex["section"].as_str().unwrap().to_string();
@@ -50,7 +63,7 @@ fn commonmark_scoreboard() {
     }
   }
 
-  let total = examples.len();
+  let total = examples.len() - waived;
   let mut report = String::new();
   report.push_str("# CommonMark 0.31.2 scoreboard\n\n");
   report.push_str(
@@ -61,7 +74,8 @@ fn commonmark_scoreboard() {
      docs/editor-engine.md Milestone 8.\n\n",
   );
   report.push_str(&format!(
-    "**Total: {passed}/{total} ({:.1}%)**\n\n",
+    "**Total: {passed}/{total} ({:.1}%)** — {waived} GFM dialect waivers \
+     (bare autolinks, tagfilter) excluded.\n\n",
     100.0 * passed as f64 / total as f64
   ));
   report.push_str("| Section | Passed | Total | % |\n|---|---|---|---|\n");

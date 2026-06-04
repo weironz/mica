@@ -1,0 +1,11 @@
+visit www.example.com or https://mica.dev/page?a=(1) now
+mail dev@mica.dev please
+
+~one tilde~ and ~~two tildes~~ strike
+
+| name | qty | price |
+| :--- | :---: | ---: |
+| tea | 2 | 1.50 |
+
+- [x] parent task
+  - [ ] two-space subtask

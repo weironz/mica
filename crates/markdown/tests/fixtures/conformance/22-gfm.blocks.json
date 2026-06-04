@@ -1,0 +1,91 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 21,
+          "href": "http://www.example.com",
+          "start": 6,
+          "type": "link"
+        },
+        {
+          "end": 52,
+          "href": "https://mica.dev/page?a=(1)",
+          "start": 25,
+          "type": "link"
+        },
+        {
+          "end": 74,
+          "href": "mailto:dev@mica.dev",
+          "start": 62,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "visit www.example.com or https://mica.dev/page?a=(1) now\nmail dev@mica.dev please"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 9,
+          "start": 0,
+          "type": "strike"
+        },
+        {
+          "end": 24,
+          "start": 14,
+          "type": "strike"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "one tilde and two tildes strike"
+  },
+  {
+    "data": {
+      "align": "left",
+      "aligns": [
+        "left",
+        "center",
+        "right"
+      ],
+      "header": true,
+      "rows": [
+        [
+          "name",
+          "qty",
+          "price"
+        ],
+        [
+          "tea",
+          "2",
+          "1.50"
+        ]
+      ],
+      "widths": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "kind": "table",
+    "text": ""
+  },
+  {
+    "data": {
+      "checked": true
+    },
+    "kind": "todo",
+    "text": "parent task"
+  },
+  {
+    "data": {
+      "checked": false,
+      "indent": 1
+    },
+    "kind": "todo",
+    "text": "two-space subtask"
+  }
+]

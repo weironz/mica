@@ -264,6 +264,105 @@ int matchingBracket(String src, int open) {
   return -1;
 }
 
+/// GFM extended autolink starting at src[i] (caller checks the word
+/// boundary): bare http(s)/ftp URLs, `www.` (href gains http://), bare
+/// emails. Returns (consumed chars, href), or null.
+(int, String)? extendedAutolink(String src, int i) {
+  final rest = src.substring(i);
+  final lower = rest.toLowerCase();
+  for (final (prefix, implied) in [
+    ('https://', ''),
+    ('http://', ''),
+    ('ftp://', ''),
+    ('www.', 'http://'),
+  ]) {
+    if (lower.startsWith(prefix)) {
+      var end = rest.length;
+      for (var k = 0; k < rest.length; k++) {
+        final c = rest[k];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '<') {
+          end = k;
+          break;
+        }
+      }
+      end = _trimAutolinkEnd(rest.substring(0, end));
+      final candidate = rest.substring(0, end);
+      final afterScheme =
+          implied.isEmpty ? candidate.substring(prefix.length) : candidate;
+      final domain = afterScheme.split(RegExp(r'[/?#]')).first;
+      if (!_validAutolinkDomain(domain)) return null;
+      if (candidate.isEmpty) return null;
+      return (candidate.length, '$implied$candidate');
+    }
+  }
+  // Bare email.
+  if (RegExp(r'^[A-Za-z0-9]').hasMatch(rest)) {
+    final m = RegExp(r'^[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+').firstMatch(rest);
+    if (m != null) {
+      var text = m.group(0)!;
+      while (text.endsWith('.')) {
+        text = text.substring(0, text.length - 1);
+      }
+      final at = text.indexOf('@');
+      final domain = at >= 0 ? text.substring(at + 1) : '';
+      if (at > 0 &&
+          domain.contains('.') &&
+          RegExp(r'[A-Za-z0-9]$').hasMatch(text)) {
+        return (text.length, 'mailto:$text');
+      }
+    }
+  }
+  return null;
+}
+
+int _trimAutolinkEnd(String s) {
+  var end = s.length;
+  while (end > 0) {
+    final kept = s.substring(0, end);
+    final last = kept[kept.length - 1];
+    if ('?!.,:*_~\'"'.contains(last)) {
+      end -= 1;
+      continue;
+    }
+    if (last == ')') {
+      final opens = '('.allMatches(kept).length;
+      final closes = ')'.allMatches(kept).length;
+      if (closes > opens) {
+        end -= 1;
+        continue;
+      }
+      return end;
+    }
+    if (last == ';') {
+      final amp = kept.lastIndexOf('&');
+      if (amp >= 0) {
+        final body = kept.substring(amp + 1, end - 1);
+        if (body.isNotEmpty &&
+            RegExp(r'^[A-Za-z0-9]+$').hasMatch(body)) {
+          end = amp;
+          continue;
+        }
+      }
+      return end;
+    }
+    return end;
+  }
+  return 0;
+}
+
+bool _validAutolinkDomain(String domain) {
+  if (domain.isEmpty ||
+      !RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(domain)) {
+    return false;
+  }
+  final segments = domain.split('.');
+  if (segments.length < 2 || segments.any((s) => s.isEmpty)) return false;
+  final lastTwo = segments.length >= 2
+      ? segments.sublist(segments.length - 2)
+      : segments;
+  return !lastTwo.any((s) => s.contains('_'));
+}
+
 /// Inline raw HTML at src[i] == '<': open tag, closing tag, comment,
 /// processing instruction, declaration or CDATA. Returns the exclusive end
 /// index, or -1. Mirrors the Rust engine's inline_html_end.
@@ -821,13 +920,57 @@ String? autolinkTarget(String inner) {
       i = j;
       continue;
     }
-    if (src.startsWith('~~', i)) {
-      final end = _indexOfUnescaped(src, '~~', i + 2);
-      if (end > i + 1) {
-        addInner(src.substring(i + 2, end), 'strike');
-        i = end + 2;
+    // GFM extended autolinks: bare www./http(s)/ftp URLs and emails at a
+    // word boundary (start, whitespace, or `*`/`_`/`~`/`(`).
+    if (i == 0 ||
+        src[i - 1] == ' ' ||
+        src[i - 1] == '\t' ||
+        src[i - 1] == '\n' ||
+        '*_~('.contains(src[i - 1])) {
+      final auto = extendedAutolink(src, i);
+      if (auto != null) {
+        final text = src.substring(i, i + auto.$1);
+        final start = out.length;
+        out.write(text);
+        marks.add(Mark(start, out.length, 'link', href: auto.$2));
+        i += auto.$1;
         continue;
       }
+    }
+    // GFM strikethrough: one or two tildes close on a run of the same
+    // length (three or more stay literal).
+    if (src[i] == '~') {
+      var n = 0;
+      while (i + n < src.length && src[i + n] == '~') {
+        n++;
+      }
+      if (n <= 2) {
+        var j = i + n;
+        var close = -1;
+        while (j < src.length) {
+          if (src[j] == '~' && (j == 0 || src[j - 1] != r'\')) {
+            var m = 0;
+            while (j + m < src.length && src[j + m] == '~') {
+              m++;
+            }
+            if (m == n && j > i + n) {
+              close = j;
+              break;
+            }
+            j += m;
+          } else {
+            j++;
+          }
+        }
+        if (close >= 0) {
+          addInner(src.substring(i + n, close), 'strike');
+          i = close + n;
+          continue;
+        }
+      }
+      out.write('~' * n);
+      i += n;
+      continue;
     }
     // Inline code: an N-backtick run closes only on a run of exactly N;
     // line endings become spaces; one leading+trailing space strips when
@@ -1116,6 +1259,11 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
         final href = pick.href ?? '';
         final plain = text.substring(ps, pe);
         if (pick.title == null &&
+            plain.startsWith('www.') &&
+            href == 'http://$plain') {
+          // A bare `www.` link writes back bare (GFM re-links it on read).
+          out.write(plain);
+        } else if (pick.title == null &&
             (href == plain || href == 'mailto:$plain')) {
           out.write('<$plain>');
         } else {

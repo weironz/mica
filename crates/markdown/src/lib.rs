@@ -475,44 +475,73 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
-    // GFM pipe table: a `|`-row followed by a `| --- |` separator.
+    // GFM pipe table: a `|`-row followed by a `| --- |` separator whose
+    // cell count MATCHES the header row (spec rule).
     if content.contains('|')
       && index + 1 < raw_lines.len()
       && is_table_separator(raw_lines[index + 1].trim())
+      && split_table_row(raw_lines[index + 1].trim()).len() == split_table_row(content).len()
     {
       list_stack.clear();
       open_item = None;
       last_list = None;
       pending_loose = false;
-      let mut rows: Vec<Vec<String>> = vec![split_table_row(content)];
+      let header = split_table_row(content);
+      let width = header.len().max(1);
+      // Column alignment from the separator's colons.
+      let aligns: Vec<String> = split_table_row(raw_lines[index + 1].trim())
+        .iter()
+        .map(|cell| {
+          let t = cell.trim();
+          match (t.starts_with(':'), t.ends_with(':')) {
+            (true, true) => "center",
+            (false, true) => "right",
+            (true, false) => "left",
+            _ => "",
+          }
+          .to_string()
+        })
+        .collect();
+      let mut rows: Vec<Vec<String>> = vec![header];
       index += 2;
       while index < raw_lines.len() {
         let row = raw_lines[index].trim();
-        if row.is_empty() || !row.contains('|') {
+        if row.is_empty() {
+          break;
+        }
+        // A pipe-less line still belongs to the table unless it starts
+        // another block (GFM: the table breaks at a blank line or the
+        // beginning of another block-level structure).
+        if !row.contains('|')
+          && (classify_markdown_line(row).0 != "paragraph"
+            || is_divider(row)
+            || fence_open(row).is_some()
+            || html_block_start(row).is_some()
+            || strip_quote_markers(row).0 > 0)
+        {
           break;
         }
         rows.push(split_table_row(row));
         index += 1;
       }
-      let width = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+      // The header defines the column count: longer body rows truncate,
+      // shorter ones pad (spec rule).
       for row in rows.iter_mut() {
+        row.truncate(width);
         while row.len() < width {
           row.push(String::new());
         }
       }
-      push_block(
-        &mut blocks,
-        &mut root_children,
-        "table",
-        String::new(),
-        // Same shape the client editor uses (render defaults included).
-        json!({
-          "rows": rows,
-          "header": true,
-          "align": "left",
-          "widths": vec![1.0f64; width],
-        }),
-      );
+      let mut data = json!({
+        "rows": rows,
+        "header": true,
+        "align": "left",
+        "widths": vec![1.0f64; width],
+      });
+      if aligns.iter().any(|a| !a.is_empty()) {
+        data_insert(&mut data, "aligns", json!(aligns));
+      }
+      push_block(&mut blocks, &mut root_children, "table", String::new(), data);
       continue;
     }
 
@@ -810,8 +839,14 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     if matches!(kind, "bulleted_list" | "numbered_list" | "todo") {
       // Content column: marker width plus up to 3 extra spaces consumed
       // (more than that means the item starts with indented code — the
-      // spaces stay in the text and the column sits right after the marker).
-      let marker_width = content.len() - text.len();
+      // spaces stay in the text and the column sits right after the
+      // marker). A todo's task marker `[x] ` is CONTENT, not marker: only
+      // the `- ` counts, so two-space-indented subtasks nest.
+      let marker_width = if kind == "todo" {
+        2
+      } else {
+        content.len() - text.len()
+      };
       let extra = text.len() - text.trim_start_matches(' ').len();
       let (text, content_col) = if text.is_empty() {
         (text, col + marker_width + 1)
@@ -1465,6 +1500,132 @@ fn parse_entity(chars: &[char], i: usize) -> Option<(String, usize)> {
   named_entity(&body).map(|v| (v.to_string(), semi - i + 1))
 }
 
+/// GFM extended autolink starting at chars[i] (the caller checks the word
+/// boundary): bare `http(s)://…`, `www.…` (href gains `http://`) or a bare
+/// email. Returns (consumed chars, href).
+fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, String)> {
+  let rest: String = chars[i..].iter().collect();
+  let lower = rest.to_ascii_lowercase();
+  for (prefix, implied) in [
+    ("https://", ""),
+    ("http://", ""),
+    ("ftp://", ""),
+    ("www.", "http://"),
+  ] {
+    if lower.starts_with(prefix) {
+      // Take everything up to whitespace or '<', then trim trailing
+      // punctuation per the GFM rules.
+      let mut end = rest
+        .char_indices()
+        .find(|&(_, c)| c.is_whitespace() || c == '<')
+        .map(|(k, _)| k)
+        .unwrap_or(rest.len());
+      end = trim_autolink_end(&rest[..end]);
+      let candidate = &rest[..end];
+      let domain = &candidate[if implied.is_empty() { prefix.len() } else { 0 }..];
+      let domain = domain
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+      if !valid_autolink_domain(domain) {
+        return None;
+      }
+      let count = candidate.chars().count();
+      if count == 0 {
+        return None;
+      }
+      return Some((count, format!("{implied}{candidate}")));
+    }
+  }
+  // Bare email: local@domain.tld — `+` allowed before the @ only; the last
+  // character must be alphanumeric.
+  if chars[i].is_ascii_alphanumeric() {
+    let mut j = i;
+    while chars
+      .get(j)
+      .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+    {
+      j += 1;
+    }
+    if chars.get(j) == Some(&'@') {
+      let local_len = j - i;
+      let mut k = j + 1;
+      while chars
+        .get(k)
+        .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+      {
+        k += 1;
+      }
+      // Trailing `.` stays outside the link; trailing `-`/`_` invalidate.
+      while k > j + 1 && chars[k - 1] == '.' {
+        k -= 1;
+      }
+      if local_len > 0
+        && k > j + 1
+        && chars[k - 1].is_ascii_alphanumeric()
+        && chars[j + 1..k].contains(&'.')
+      {
+        let text: String = chars[i..k].iter().collect();
+        return Some((k - i, format!("mailto:{text}")));
+      }
+    }
+  }
+  None
+}
+
+/// GFM trailing-punctuation trimming for extended autolinks.
+fn trim_autolink_end(s: &str) -> usize {
+  let mut end = s.len();
+  loop {
+    let kept = &s[..end];
+    let Some(last) = kept.chars().last() else { return 0 };
+    if matches!(last, '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~' | '\'' | '"') {
+      end -= last.len_utf8();
+      continue;
+    }
+    if last == ')' {
+      let opens = kept.matches('(').count();
+      let closes = kept.matches(')').count();
+      if closes > opens {
+        end -= 1;
+        continue;
+      }
+      return end;
+    }
+    if last == ';' {
+      // A trailing entity reference (`&amp;`) drops off entirely.
+      if let Some(amp) = kept.rfind('&') {
+        let body = &kept[amp + 1..end - 1];
+        if !body.is_empty() && body.chars().all(|c| c.is_ascii_alphanumeric()) {
+          end = amp;
+          continue;
+        }
+      }
+      return end;
+    }
+    return end;
+  }
+}
+
+/// GFM autolink domain: alphanumeric/`-`/`_` segments joined by `.`, at
+/// least one dot, and no underscore in the last two segments.
+fn valid_autolink_domain(domain: &str) -> bool {
+  if domain.is_empty()
+    || !domain
+      .chars()
+      .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+  {
+    return false;
+  }
+  let segments: Vec<&str> = domain.split('.').collect();
+  if segments.len() < 2 || segments.iter().any(|s| s.is_empty()) {
+    return false;
+  }
+  !segments[segments.len().saturating_sub(2)..]
+    .iter()
+    .any(|s| s.contains('_'))
+}
+
 /// Block-level HTML tag names (CommonMark type-6 start condition).
 const HTML_BLOCK_TAGS: &[&str] = &[
   "address", "article", "aside", "base", "basefont", "blockquote", "body",
@@ -1937,7 +2098,16 @@ fn render_html_list(
     out.push_str(&format!("<{tag}{start_attr}>\n"));
     for (k, &head) in li_heads.iter().enumerate() {
       let end = li_heads.get(k + 1).copied().unwrap_or(j);
-      let body = html_inline(items[head]);
+      let mut body = html_inline(items[head]);
+      // GFM task list items render a disabled checkbox before the text.
+      if items[head].kind == "todo" {
+        let checked = if block_data_bool(items[head], "checked") {
+          "checked=\"\" "
+        } else {
+          ""
+        };
+        body = format!("<input {checked}disabled=\"\" type=\"checkbox\"> {body}");
+      }
       let has_children = head + 1 < end;
       if loose && body.is_empty() && !has_children {
         out.push_str("<li></li>\n");
@@ -2062,8 +2232,8 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       continue;
     }
     if m.kind == "html" {
-      // Raw inline HTML passes through unescaped.
-      out.push_str(&String::from_utf16_lossy(&units[s..e]));
+      // Raw inline HTML passes through unescaped (GFM tagfilter applied).
+      out.push_str(&tagfilter(&String::from_utf16_lossy(&units[s..e])));
       pos = e;
       continue;
     }
@@ -2144,8 +2314,8 @@ fn append_html_block(
     }
     "code_block" | "code" => {
       if block_data_bool(block, "raw") {
-        // A raw HTML block passes through verbatim.
-        out.push_str(&block.text);
+        // A raw HTML block passes through (GFM tagfilter applied).
+        out.push_str(&tagfilter(&block.text));
         out.push('\n');
         return Ok(());
       }
@@ -2162,6 +2332,62 @@ fn append_html_block(
       };
       out.push_str(&format!("<pre><code{class}>{body}</code></pre>\n"));
       append_html_children(snapshot, &block.id, out)?;
+    }
+    "table" => {
+      let Some(rows) = block.data.get("rows").and_then(Value::as_array) else {
+        return Ok(());
+      };
+      let aligns = block.data.get("aligns").and_then(Value::as_array);
+      let attr = |c: usize| -> String {
+        match aligns
+          .and_then(|a| a.get(c))
+          .and_then(Value::as_str)
+          .unwrap_or("")
+        {
+          "" => String::new(),
+          a => format!(" align=\"{a}\""),
+        }
+      };
+      let cell_html = |raw: &str| -> String {
+        let (text, data) = apply_inline_marks(raw.to_string(), Value::Null, &RefDefs::new());
+        html_inline(&Block {
+          id: String::new(),
+          kind: "paragraph".to_string(),
+          text,
+          data,
+          children: Vec::new(),
+        })
+      };
+      let row_cells = |row: &Value| -> Vec<String> {
+        row
+          .as_array()
+          .map(|cells| {
+            cells
+              .iter()
+              .map(|c| c.as_str().unwrap_or("").trim().to_string())
+              .collect()
+          })
+          .unwrap_or_default()
+      };
+      out.push_str("<table>\n<thead>\n<tr>\n");
+      if let Some(head) = rows.first() {
+        for (c, cell) in row_cells(head).iter().enumerate() {
+          out.push_str(&format!("<th{}>{}</th>\n", attr(c), cell_html(cell)));
+        }
+      }
+      out.push_str("</tr>\n</thead>\n");
+      if rows.len() > 1 {
+        out.push_str("<tbody>\n");
+        for row in rows.iter().skip(1) {
+          out.push_str("<tr>\n");
+          for (c, cell) in row_cells(row).iter().enumerate() {
+            out.push_str(&format!("<td{}>{}</td>\n", attr(c), cell_html(cell)));
+          }
+          out.push_str("</tr>\n");
+        }
+        out.push_str("</tbody>\n");
+      }
+      out.push_str("</table>\n");
     }
     "divider" => {
       out.push_str("<hr />\n");
@@ -2199,10 +2425,44 @@ fn block_for<'a>(
 
 fn list_tag_for(kind: &str) -> Option<&'static str> {
   match kind {
-    "bulleted_list" | "bullet_list" => Some("ul"),
+    "bulleted_list" | "bullet_list" | "todo" => Some("ul"),
     "numbered_list" | "number_list" => Some("ol"),
     _ => None,
   }
+}
+
+/// GFM tagfilter: escape the opening `<` of the nine disallowed raw-HTML
+/// tags so they render inert while everything else passes through.
+fn tagfilter(s: &str) -> String {
+  const BAD: &[&str] = &[
+    "title", "textarea", "style", "xmp", "iframe", "noembed", "noframes",
+    "script", "plaintext",
+  ];
+  let bytes = s.as_bytes();
+  let mut out = String::with_capacity(s.len());
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'<' {
+      let mut j = i + 1;
+      if bytes.get(j) == Some(&b'/') {
+        j += 1;
+      }
+      let name_start = j;
+      while bytes.get(j).is_some_and(|b| b.is_ascii_alphabetic()) {
+        j += 1;
+      }
+      let name = s[name_start..j].to_ascii_lowercase();
+      let boundary = matches!(bytes.get(j), None | Some(b' ' | b'\t' | b'\n' | b'>' | b'/'));
+      if BAD.contains(&name.as_str()) && boundary {
+        out.push_str("&lt;");
+        i += 1;
+        continue;
+      }
+    }
+    out.push(s.as_bytes()[i] as char);
+    i += 1;
+  }
+  out
 }
 
 /// Percent-encode a URL for an href attribute (cmark's houdini set: keep
@@ -3066,13 +3326,57 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
       i = j;
       continue;
     }
+    // GFM extended autolinks: bare www./http(s):// URLs and emails at a
+    // word boundary (start, whitespace, or `*`/`_`/`~`/`(`).
+    if (i == 0
+      || chars[i - 1].is_whitespace()
+      || matches!(chars[i - 1], '*' | '_' | '~' | '('))
+      && let Some((len, href)) = extended_autolink(&chars, i)
+    {
+      let text: String = chars[i..i + len].iter().collect();
+      let start = out_len;
+      out.push_str(&text);
+      out_len += text.encode_utf16().count();
+      marks.push(InlineMark {
+        start,
+        end: out_len,
+        kind: "link".into(),
+        href: Some(href),
+        title: None,
+      });
+      i += len;
+      continue;
+    }
     // Strike: ~~...~~
-    if chars[i] == '~' && i + 1 < chars.len() && chars[i + 1] == '~' {
-      if let Some(end) = find_unescaped(i + 2, &['~', '~']) {
-        if end > i + 2 {
-          let inner: String = chars[i + 2..end].iter().collect();
+    // GFM strikethrough: one or two tildes close on a run of the same
+    // length (three or more stay literal).
+    if chars[i] == '~' {
+      let mut n = 0;
+      while i + n < chars.len() && chars[i + n] == '~' {
+        n += 1;
+      }
+      if n <= 2 {
+        let mut j = i + n;
+        let mut close = None;
+        while j < chars.len() {
+          if chars[j] == '~' && (j == 0 || chars[j - 1] != '\\') {
+            let mut m = 0;
+            while j + m < chars.len() && chars[j + m] == '~' {
+              m += 1;
+            }
+            if m == n && j > i + n {
+              close = Some(j);
+              break;
+            }
+            j += m;
+          } else {
+            j += 1;
+          }
+        }
+        if let Some(end) = close {
+          let inner: String = chars[i + n..end].iter().collect();
           push_inner(&inner, "strike", None, defs, &mut out, &mut out_len, &mut marks);
-          i = end + 2;
+          i = end + n;
           continue;
         }
       }
@@ -3527,8 +3831,11 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
       "link" => {
         let href = m.href.as_deref().unwrap_or("");
         let plain = String::from_utf16_lossy(&units[s..e]);
-        // A title-less link whose text IS its target → autolink form.
-        if m.title.is_none() && (href == plain || href == format!("mailto:{plain}")) {
+        // A title-less link whose text IS its target → autolink form; a
+        // bare `www.` link writes back bare (GFM re-links it on read).
+        if m.title.is_none() && plain.starts_with("www.") && href == format!("http://{plain}") {
+          plain.to_string()
+        } else if m.title.is_none() && (href == plain || href == format!("mailto:{plain}")) {
           format!("<{plain}>")
         } else {
           let dest = if href.contains(char::is_whitespace) {
@@ -3596,7 +3903,22 @@ fn append_table_markdown(block: &Block, lines: &mut Vec<String>) {
     format!("| {} |", padded.join(" | "))
   };
   lines.push(row_line(&grid[0]));
-  lines.push(format!("| {} |", vec!["---"; cols].join(" | ")));
+  let aligns = block.data.get("aligns").and_then(Value::as_array);
+  let sep: Vec<&str> = (0..cols)
+    .map(|c| {
+      match aligns
+        .and_then(|a| a.get(c))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+      {
+        "center" => ":---:",
+        "right" => "---:",
+        "left" => ":---",
+        _ => "---",
+      }
+    })
+    .collect();
+  lines.push(format!("| {} |", sep.join(" | ")));
   for row in grid.iter().skip(1) {
     lines.push(row_line(row));
   }

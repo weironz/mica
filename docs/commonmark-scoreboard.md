@@ -5,12 +5,12 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 598/652 (91.7%)**
+**Total: 589/643 (91.6%)** — 9 GFM dialect waivers (bare autolinks, tagfilter) excluded.
 
 | Section | Passed | Total | % |
 |---|---|---|---|
 | ATX headings | 18 | 18 | 100% |
-| Autolinks | 19 | 19 | 100% |
+| Autolinks | 16 | 16 | 100% |
 | Backslash escapes | 13 | 13 | 100% |
 | Blank lines | 1 | 1 | 100% |
 | Block quotes | 25 | 25 | 100% |
@@ -18,7 +18,7 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Emphasis and strong emphasis | 126 | 132 | 95% |
 | Entity and numeric character references | 14 | 17 | 82% |
 | Fenced code blocks | 29 | 29 | 100% |
-| HTML blocks | 42 | 44 | 95% |
+| HTML blocks | 36 | 38 | 95% |
 | Hard line breaks | 13 | 15 | 87% |
 | Images | 22 | 22 | 100% |
 | Indented code blocks | 12 | 12 | 100% |
