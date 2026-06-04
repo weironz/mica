@@ -678,20 +678,32 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Import a workspace ZIP: rebuild the page tree from the folder layout
-  /// (folders without a matching `.md` become empty directory pages), and
-  /// upload images referenced by relative path, rewiring them to Mica's
-  /// `{file_id, name}` image format.
+  /// Import a workspace ZIP: rebuild the page tree from the folder layout.
   Future<void> _importWorkspaceZip(String fileName, Uint8List zipBytes) {
+    final wsName = fileName
+        .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
+        .trim();
+    return _importWorkspaceTree(
+      wsName.isEmpty ? 'Imported' : wsName,
+      () => readZip(zipBytes),
+    );
+  }
+
+  /// Import a file tree (relative path → bytes) as a new workspace: rebuild
+  /// the page tree from the folder layout (folders without a matching `.md`
+  /// become empty directory pages), and upload images referenced by relative
+  /// path, rewiring them to Mica's `{file_id, name}` image format. Entries
+  /// come lazily so ZIP parsing also runs inside the guarded flow.
+  Future<void> _importWorkspaceTree(
+    String wsName,
+    List<ZipFileEntry> Function() loadEntries,
+  ) {
     return _run(() async {
       final session = _requireSession();
-      final entries = readZip(zipBytes);
-      final wsName = fileName
-          .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
-          .trim();
+      final entries = loadEntries();
       final workspace = await _api.createWorkspace(
         session.accessToken,
-        wsName.isEmpty ? 'Imported' : wsName,
+        wsName,
       );
 
       // Mica's export writes a manifest.json carrying the page-tree order.
@@ -1455,6 +1467,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
                 onExportWorkspaceZip: _exportWorkspaceZip,
                 onImportWorkspaceZip: _importWorkspaceZip,
+                onImportWorkspaceTree: (name, entries) =>
+                    _importWorkspaceTree(name, () => entries),
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
                 onAddMember: _addWorkspaceMember,
@@ -1698,6 +1712,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportWorkspaceMarkdown,
     required this.onExportWorkspaceZip,
     required this.onImportWorkspaceZip,
+    required this.onImportWorkspaceTree,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
@@ -1789,6 +1804,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
   final Future<void> Function(String fileName, Uint8List bytes)
   onImportWorkspaceZip;
+  final Future<void> Function(String name, List<ZipFileEntry> entries)
+  onImportWorkspaceTree;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
@@ -1939,7 +1956,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onDelete: _confirmDeleteWorkspace,
               onExport: _exportWorkspaceFile,
               onCreate: _promptCreateWorkspace,
-              onImport: _importWorkspaceFile,
+              onImportFiles: _importWorkspaceFilesFlow,
+              onImportFolder: _importWorkspaceFolderFlow,
             ),
             if (_workspaceSettingsOpen) _workspaceSettings(context),
             if (widget.message != null) ...[
@@ -3005,6 +3023,48 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
+  /// Multi-select import: each ZIP becomes its own workspace; loose files
+  /// (.md plus any images they reference) build one workspace together.
+  Future<void> _importWorkspaceFilesFlow() async {
+    final picked = await pickImportFiles();
+    if (picked.isEmpty || !mounted) return;
+    final loose = <ZipFileEntry>[];
+    for (final f in picked) {
+      if (f.name.toLowerCase().endsWith('.zip')) {
+        await widget.onImportWorkspaceZip(f.name, f.bytes);
+      } else {
+        loose.add(ZipFileEntry(f.name, f.bytes));
+      }
+    }
+    final mds =
+        loose.where((e) => e.name.toLowerCase().endsWith('.md')).toList();
+    if (mds.isEmpty) return;
+    final name = mds.length == 1
+        ? mds.first.name.replaceAll(RegExp(r'\.md$', caseSensitive: false), '')
+        : 'Imported';
+    await widget.onImportWorkspaceTree(name, loose);
+  }
+
+  /// Folder import (recursive): the selected folder names the workspace and
+  /// its subfolders become the page tree.
+  Future<void> _importWorkspaceFolderFlow() async {
+    final picked = await pickImportFolder();
+    if (picked.isEmpty || !mounted) return;
+    var wsName = 'Imported';
+    final entries = <ZipFileEntry>[];
+    for (final f in picked) {
+      final parts = f.path.split('/');
+      if (parts.length > 1) {
+        // The picker includes the chosen folder itself as the first segment.
+        wsName = parts.first;
+        entries.add(ZipFileEntry(parts.sublist(1).join('/'), f.bytes));
+      } else {
+        entries.add(ZipFileEntry(f.path, f.bytes));
+      }
+    }
+    await widget.onImportWorkspaceTree(wsName, entries);
+  }
+
   void _openAiDialog() {
     showDialog<void>(
       context: context,
@@ -3032,7 +3092,8 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onDelete,
     required this.onExport,
     required this.onCreate,
-    required this.onImport,
+    required this.onImportFiles,
+    required this.onImportFolder,
   });
 
   final List<Workspace> workspaces;
@@ -3042,7 +3103,8 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(Workspace workspace) onDelete;
   final void Function(Workspace workspace) onExport;
   final VoidCallback onCreate;
-  final VoidCallback onImport;
+  final VoidCallback onImportFiles;
+  final VoidCallback onImportFolder;
 
   @override
   State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
@@ -3063,7 +3125,16 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         for (final workspace in widget.workspaces) _row(workspace),
         if (widget.workspaces.isNotEmpty) const Divider(height: 8),
         _createRow(),
-        _importRow(),
+        _actionRow(
+          Icons.upload_file_outlined,
+          'Import files (.md / .zip)',
+          widget.onImportFiles,
+        ),
+        _actionRow(
+          Icons.drive_folder_upload_outlined,
+          'Import folder',
+          widget.onImportFolder,
+        ),
       ],
       builder: (context, controller, child) {
         final label = widget.selected?.name ?? 'Select workspace';
@@ -3226,27 +3297,23 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  Widget _importRow() {
+  Widget _actionRow(IconData icon, String label, VoidCallback onTap) {
     return SizedBox(
       width: 320,
       child: InkWell(
         onTap: () {
           _menu.close();
-          widget.onImport();
+          onTap();
         },
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             children: [
-              Icon(
-                Icons.drive_folder_upload_outlined,
-                size: 18,
-                color: Color(0xFF475569),
-              ),
-              SizedBox(width: 10),
+              Icon(icon, size: 18, color: const Color(0xFF475569)),
+              const SizedBox(width: 10),
               Text(
-                'Import workspace (.md / .zip)',
-                style: TextStyle(
+                label,
+                style: const TextStyle(
                   color: Color(0xFF475569),
                   fontWeight: FontWeight.w600,
                 ),
