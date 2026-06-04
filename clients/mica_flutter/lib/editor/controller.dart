@@ -1051,7 +1051,7 @@ class EditorController extends ChangeNotifier {
       if (numbered != null && caret == numbered.end) {
         return convert('numbered_list', {}, numbered.end);
       }
-      if (caret == 3 && text == '```') {
+      if (caret == 3 && (text == '```' || text == '~~~')) {
         return convert('code_block', {}, 3);
       }
       if (caret == 3 && (text == '---' || text == '***' || text == '___')) {

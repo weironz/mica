@@ -13,6 +13,18 @@ EditorNode _p(String id, String text) =>
     EditorNode(id: id, kind: 'paragraph', text: text);
 
 void main() {
+  test('typing ``` or ~~~ converts to a code block', () {
+    for (final fence in ['```', '~~~']) {
+      final c = _fresh([_p('a', '')]);
+      c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+      c.nodes[0].text = fence;
+      c.selection = DocSelection.collapsed(const DocPosition(0, 3));
+      expect(c.applyInputRules(), isTrue, reason: fence);
+      expect(c.nodes[0].kind, 'code_block', reason: fence);
+      expect(c.nodes[0].text, '', reason: fence);
+    }
+  });
+
   test('typing --- converts to a divider with a trailing paragraph', () {
     final c = _fresh([_p('a', '')]);
     c.selection = DocSelection.collapsed(const DocPosition(0, 0));
