@@ -36,7 +36,20 @@ pub struct ImportParams {
   #[serde(default)]
   pub notion: bool,
   /// Import into this existing workspace instead of creating a new one.
+  /// Tolerates a bare/empty query value (treated as absent).
+  #[serde(default, deserialize_with = "empty_as_none")]
   pub workspace_id: Option<Uuid>,
+}
+
+fn empty_as_none<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  let raw: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+  match raw.as_deref() {
+    None | Some("") => Ok(None),
+    Some(v) => Uuid::parse_str(v).map(Some).map_err(serde::de::Error::custom),
+  }
 }
 
 #[derive(Debug, Serialize)]

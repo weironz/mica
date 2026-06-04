@@ -743,18 +743,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Workspace name from an archive filename: drop the extension and the
-  /// `Export-<uuid>` style ID suffix Notion appends.
+  /// ID noise Notion adds — `Export-<uuid>.zip` (suffix) and
+  /// `<uuid>_Export.zip` (prefix) both clean up to "Export".
   String _cleanArchiveName(String fileName) {
+    const hex32 = r'[0-9a-fA-F]{32}';
+    const uuid = r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+        r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
     var name = fileName
         .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
         .trim();
     name = name
-        .replaceFirst(RegExp(r'[ \-_]+[0-9a-fA-F]{32}$'), '')
-        .replaceFirst(
-          RegExp(r'[ \-_]+[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
-              r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'),
-          '',
-        );
+        .replaceFirst(RegExp('[ \\-_]+($hex32|$uuid)\$'), '')
+        .replaceFirst(RegExp('^($hex32|$uuid)[ \\-_]+'), '');
     return name;
   }
 
@@ -5476,7 +5476,7 @@ class ApiClient {
       _baseUri.replace(path: '/api/workspaces/import', queryParameters: {
         if (name != null && name.isNotEmpty) 'name': name,
         if (notion) 'notion': 'true',
-        ?'workspace_id': workspaceId,
+        'workspace_id': ?workspaceId,
       }),
       headers: {
         'content-type': 'application/zip',
