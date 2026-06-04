@@ -59,6 +59,9 @@ class EditorTheme {
   /// Left rail reserved for the block drag handle (every block shifts right).
   static const double gutter = 24.0;
 
+  /// Pixel ratio formulas are rasterized at (capture and draw agree).
+  static const double mathPixelRatio = 2.0;
+
   static const double caretWidth = 2;
   static const double bottomPad = 96;
 
@@ -169,6 +172,8 @@ class _NodeLayout {
   String kind = 'paragraph';
   bool todoChecked = false;
   int quoteDepth = 0; // blockquote nesting (bars on the left)
+  ui.Image? mathImage; // rendered formula (math_block), if captured
+  Size mathSize = Size.zero;
   bool quoteBreak = false; // a blank separated this quote from the previous
   double boxLeft = 0; // where the node's box begins (item-child inset)
 
@@ -280,6 +285,15 @@ class RenderDocument extends RenderBox {
     _images = value;
     markNeedsLayout();
   }
+
+  /// Rasterized formulas keyed by LaTeX source.
+  Map<String, ui.Image> _mathImages = {};
+  set mathImages(Map<String, ui.Image> value) {
+    _mathImages = value;
+    markNeedsLayout();
+  }
+
+  void Function(String source)? onRequestMath;
 
   /// `file_id`s that failed to load — painted as a broken-image placeholder.
   Set<String> _imageErrors = {};
@@ -496,6 +510,39 @@ class RenderDocument extends RenderBox {
         y += layout.boxHeight;
         prevKind = node.kind;
         continue;
+      }
+
+      if (node.kind == 'math_block' && node.text.trim().isNotEmpty) {
+        final img = _mathImages[node.text];
+        if (img == null) {
+          onRequestMath?.call(node.text);
+        } else {
+          // Rendered formula: centered, sized from the capture (image is at
+          // device pixel ratio; draw at logical size, downscale to fit).
+          const dpr = EditorTheme.mathPixelRatio;
+          var w = img.width / dpr;
+          var h = img.height / dpr;
+          final avail = (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
+          if (w > avail) {
+            h *= avail / w;
+            w = avail;
+          }
+          final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+            ..kind = 'math_block'
+            ..nodeId = node.id
+            ..boxLeft = EditorTheme.gutter
+            ..contentLeft = EditorTheme.gutter + ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
+            ..mathImage = img
+            ..mathSize = Size(w, h)
+            ..boxTop = y
+            ..textTop = y + 10
+            ..textHeight = h
+            ..boxHeight = h + 20;
+          _layouts.add(layout);
+          y += layout.boxHeight;
+          prevKind = node.kind;
+          continue;
+        }
       }
 
       final style = _appearance.applyTo(
@@ -1223,6 +1270,18 @@ class RenderDocument extends RenderBox {
       _paintTable(canvas, offset, l, i);
       return;
     }
+    if (l.kind == 'math_block' && l.mathImage != null) {
+      final dst = Rect.fromLTWH(
+          offset.dx + l.contentLeft, offset.dy + l.textTop, l.mathSize.width, l.mathSize.height);
+      final img = l.mathImage!;
+      canvas.drawImageRect(
+        img,
+        Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+        dst,
+        Paint()..filterQuality = FilterQuality.medium,
+      );
+      return;
+    }
     if (l.kind == 'divider') {
       final cy = offset.dy + l.boxTop + l.boxHeight / 2;
       canvas.drawLine(
@@ -1913,6 +1972,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.images = const {},
     this.imageErrors = const {},
     this.onRequestImage,
+    this.mathImages = const {},
+    this.onRequestMath,
     super.key,
   });
 
@@ -1925,6 +1986,11 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final Set<String> imageErrors;
   final void Function(String fileId)? onRequestImage;
 
+  /// Rasterized formulas keyed by LaTeX source (captured by the editor via
+  /// an offstage flutter_math_fork widget at device pixel ratio).
+  final Map<String, ui.Image> mathImages;
+  final void Function(String source)? onRequestMath;
+
   @override
   RenderDocument createRenderObject(BuildContext context) => RenderDocument(
     nodes: nodes,
@@ -1934,7 +2000,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
     appearance: appearance,
   )
     ..onRequestImage = onRequestImage
+    ..onRequestMath = onRequestMath
     ..imageErrors = imageErrors
+    ..mathImages = mathImages
     ..images = images;
 
   @override
@@ -1946,7 +2014,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..caretOn = caretOn
       ..appearance = appearance
       ..onRequestImage = onRequestImage
+      ..onRequestMath = onRequestMath
       ..imageErrors = imageErrors
+      ..mathImages = mathImages
       ..images = images;
   }
 }

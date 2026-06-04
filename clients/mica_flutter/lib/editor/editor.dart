@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:flutter_math_fork/flutter_math.dart';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -183,6 +186,83 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   DocPosition? _dragAnchor;
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _blockDrag; // block index being moved via its gutter drag handle
+
+  // Math rasterization: formulas render in an offstage flutter_math_fork
+  // widget, get captured as ui.Image post-frame, and paint like images.
+  final Map<String, ui.Image> _mathCache = {};
+  final Set<String> _mathPending = {};
+  final Map<String, GlobalKey> _mathKeys = {};
+
+  void _requestMath(String source) {
+    if (_mathCache.containsKey(source) || _mathPending.contains(source)) {
+      return;
+    }
+    // Called from the render object's layout — defer the rebuild.
+    _mathPending.add(source);
+    _mathKeys[source] = GlobalKey();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {});
+      WidgetsBinding.instance.addPostFrameCallback((_) => _captureMath());
+    });
+  }
+
+  Future<void> _captureMath() async {
+    if (_mathPending.isEmpty) return;
+    final captured = <String>[];
+    for (final source in _mathPending.toList()) {
+      final boundary = _mathKeys[source]?.currentContext?.findRenderObject();
+      if (boundary is! RenderRepaintBoundary || boundary.debugNeedsPaint) {
+        continue; // not laid out yet — retry next frame
+      }
+      try {
+        final img =
+            await boundary.toImage(pixelRatio: EditorTheme.mathPixelRatio);
+        _mathCache[source] = img;
+        captured.add(source);
+      } catch (_) {
+        captured.add(source); // give up on this source; keep showing text
+      }
+    }
+    if (captured.isNotEmpty && mounted) {
+      setState(() {
+        for (final s in captured) {
+          _mathPending.remove(s);
+          _mathKeys.remove(s);
+        }
+      });
+    }
+    if (_mathPending.isNotEmpty && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _captureMath());
+    }
+  }
+
+  /// Offstage host that lays out pending formulas for capture.
+  Widget _mathRasterHost() => Offstage(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final source in _mathPending)
+              RepaintBoundary(
+                key: _mathKeys[source],
+                child: Math.tex(
+                  source,
+                  textStyle:
+                      const TextStyle(fontSize: 18, color: EditorTheme.text),
+                  onErrorFallback: (e) => Text(
+                    source,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      color: Color(0xFFB91C1C),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
   // Auto-scroll the surrounding page while drag-selecting near the viewport edge.
@@ -2802,16 +2882,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             onPanStart: _onPanStart,
             onPanUpdate: _onPanUpdate,
             onPanEnd: _onPanEnd,
-            child: DocumentSurface(
-              key: _surfaceKey,
-              nodes: _controller.nodes,
-              selection: _controller.selection,
-              showCaret: _focus.hasFocus && widget.canEdit,
-              caretOn: _caretOn,
-              appearance: widget.appearance,
-              images: _imageCache,
-              imageErrors: _imageErrors,
-              onRequestImage: _requestImage,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DocumentSurface(
+                  key: _surfaceKey,
+                  nodes: _controller.nodes,
+                  selection: _controller.selection,
+                  showCaret: _focus.hasFocus && widget.canEdit,
+                  caretOn: _caretOn,
+                  appearance: widget.appearance,
+                  images: _imageCache,
+                  imageErrors: _imageErrors,
+                  mathImages: _mathCache,
+                  onRequestMath: _requestMath,
+                  onRequestImage: _requestImage,
+                ),
+                _mathRasterHost(),
+              ],
             ),
           ),
         ),
