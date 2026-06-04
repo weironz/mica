@@ -24,6 +24,23 @@ BlockSpec _inline(String kind, String text, Map<String, dynamic> data) {
 List<BlockSpec> markdownToBlocks(String markdown) {
   final result = <BlockSpec>[];
   final lines = markdown.replaceAll('\r\n', '\n').split('\n');
+  // Leading-width stack mapping source indentation columns to nesting levels
+  // (tolerates 2/3/4-space styles; tabs count as 4) — mirrors the Rust
+  // engine. Only list/todo items nest; other blocks reset the stack.
+  final listStack = <int>[];
+  int listLevel(String raw, String content) {
+    var col = 0;
+    for (var k = 0; k < raw.length - content.length; k++) {
+      col += raw.codeUnitAt(k) == 0x09 ? 4 : 1;
+    }
+    while (listStack.isNotEmpty && col < listStack.last) {
+      listStack.removeLast();
+    }
+    if (listStack.isEmpty || col > listStack.last) {
+      listStack.add(col);
+    }
+    return listStack.length - 1;
+  }
   final fenceOpen = RegExp(r'^```(\w*)\s*$');
   final fenceClose = RegExp(r'^```\s*$');
   final heading = RegExp(r'^(#{1,6})\s+(.*)$');
@@ -40,6 +57,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     final open = fenceOpen.firstMatch(raw);
     if (open != null) {
+      listStack.clear();
       final language = open.group(1) ?? '';
       final buffer = <String>[];
       i++;
@@ -58,6 +76,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     // GFM pipe table (a `|`-row followed by a `| --- |` separator).
     if (looksLikeGfmTable(lines, i)) {
+      listStack.clear();
       final parsed = parseGfmTable(lines, i);
       result.add((kind: 'table', text: '', data: parsed.table.toBlockData()));
       i = parsed.next;
@@ -72,6 +91,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     // A horizontal rule (`---`, `***`, `___`) becomes a divider block.
     if (divider.hasMatch(line)) {
+      listStack.clear();
       result.add((kind: 'divider', text: '', data: {}));
       i++;
       continue;
@@ -92,6 +112,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     final h = heading.firstMatch(line);
     if (h != null) {
+      listStack.clear();
       result.add(_inline('heading', h.group(2)!.trim(), {'level': h.group(1)!.length}));
       i++;
       continue;
@@ -99,8 +120,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     final t = todo.firstMatch(line);
     if (t != null) {
+      final level = listLevel(raw, line);
       result.add(_inline('todo', t.group(2)!.trim(), {
         'checked': t.group(1)!.toLowerCase() == 'x',
+        if (level > 0) 'indent': level,
       }));
       i++;
       continue;
@@ -108,25 +131,37 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     final b = bullet.firstMatch(line);
     if (b != null) {
-      result.add(_inline('bulleted_list', b.group(1)!.trim(), {}));
+      final level = listLevel(raw, line);
+      result.add(_inline(
+        'bulleted_list',
+        b.group(1)!.trim(),
+        {if (level > 0) 'indent': level},
+      ));
       i++;
       continue;
     }
 
     final n = numbered.firstMatch(line);
     if (n != null) {
-      result.add(_inline('numbered_list', n.group(1)!.trim(), {}));
+      final level = listLevel(raw, line);
+      result.add(_inline(
+        'numbered_list',
+        n.group(1)!.trim(),
+        {if (level > 0) 'indent': level},
+      ));
       i++;
       continue;
     }
 
     final q = quote.firstMatch(line);
     if (q != null) {
+      listStack.clear();
       result.add(_inline('quote', q.group(1)!.trim(), {}));
       i++;
       continue;
     }
 
+    listStack.clear();
     result.add(_inline('paragraph', line, {}));
     i++;
   }

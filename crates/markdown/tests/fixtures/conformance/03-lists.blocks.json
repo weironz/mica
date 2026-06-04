@@ -40,5 +40,82 @@
     },
     "kind": "numbered_list",
     "text": "two l"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "parent"
+  },
+  {
+    "data": {
+      "indent": 1
+    },
+    "kind": "bulleted_list",
+    "text": "child two-space"
+  },
+  {
+    "data": {
+      "indent": 2
+    },
+    "kind": "bulleted_list",
+    "text": "grandchild"
+  },
+  {
+    "data": {
+      "indent": 1
+    },
+    "kind": "bulleted_list",
+    "text": "child again"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "back to top"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "ordered parent"
+  },
+  {
+    "data": {
+      "indent": 1
+    },
+    "kind": "numbered_list",
+    "text": "four-space child"
+  },
+  {
+    "data": {
+      "indent": 1
+    },
+    "kind": "numbered_list",
+    "text": "sibling"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "parent two"
+  },
+  {
+    "data": {
+      "checked": false
+    },
+    "kind": "todo",
+    "text": "task parent"
+  },
+  {
+    "data": {
+      "checked": true,
+      "indent": 1,
+      "marks": [
+        {
+          "end": 11,
+          "start": 7,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "todo",
+    "text": "nested done task"
   }
 ]

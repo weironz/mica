@@ -913,8 +913,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
     }
 
+    // Tab / Shift+Tab: indent or outdent list items; inside a code block a
+    // Tab inserts two spaces. Always handled — the browser must never steal
+    // focus from the editor on Tab.
+    if (key == LogicalKeyboardKey.tab) {
+      final n = _controller.focusedNode;
+      if (n != null && n.isCode && sel.isCollapsed && !shift) {
+        _controller.insertTextAtCaret('  ');
+        _syncImeFromSelection(force: true);
+        return KeyEventResult.handled;
+      }
+      if (_controller.indentSelection(shift ? -1 : 1)) {
+        _syncImeFromSelection(force: true);
+      }
+      return KeyEventResult.handled;
+    }
+
     if (key == LogicalKeyboardKey.backspace) {
       if (sel.isCollapsed && sel.focus.offset == 0) {
+        // A nested list item outdents before any merge happens.
+        final n = _controller.focusedNode;
+        if (n != null && n.isListKind && n.indent > 0) {
+          _controller.indentSelection(-1);
+          _syncImeFromSelection(force: true);
+          return KeyEventResult.handled;
+        }
         if (_controller.mergeBackward()) {
           _syncImeFromSelection();
           return KeyEventResult.handled;

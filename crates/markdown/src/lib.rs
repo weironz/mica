@@ -133,16 +133,25 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   let mut root_children: Vec<String> = Vec::new();
 
   let mut index = 0;
+  // Leading-width stack mapping source indentation columns to nesting levels
+  // (tolerates 2/3/4-space styles; tabs count as 4). Only list/todo items
+  // nest; any other block resets the stack.
+  let mut list_stack: Vec<usize> = Vec::new();
   while index < raw_lines.len() {
     let line = raw_lines[index].trim_end();
     let content = line.trim_start();
 
     if content.is_empty() {
       index += 1;
-      continue;
+      continue; // blank lines between items keep the list context
     }
+    let col: usize = line[..line.len() - content.len()]
+      .chars()
+      .map(|c| if c == '\t' { 4 } else { 1 })
+      .sum();
 
     if let Some(language) = content.strip_prefix("```") {
+      list_stack.clear();
       let language = language.trim().to_string();
       let mut code_lines = Vec::new();
       index += 1;
@@ -174,6 +183,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       && index + 1 < raw_lines.len()
       && is_table_separator(raw_lines[index + 1].trim())
     {
+      list_stack.clear();
       let mut rows: Vec<Vec<String>> = vec![split_table_row(content)];
       index += 2;
       while index < raw_lines.len() {
@@ -208,17 +218,40 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
 
     // Horizontal rule (`---`, `***`, `___`) → divider block.
     if is_divider(content) {
+      list_stack.clear();
       push_block(&mut blocks, &mut root_children, "divider", String::new(), Value::Null);
       index += 1;
       continue;
     }
 
     let (kind, text, data) = classify_markdown_line(content);
-    let (text, data) = if kind == "image" {
+    let (text, mut data) = if kind == "image" {
       (text, data)
     } else {
       apply_inline_marks(text, data)
     };
+
+    // Nesting level for list items from the indentation stack.
+    if matches!(kind, "bulleted_list" | "numbered_list" | "todo") {
+      while list_stack.last().is_some_and(|&top| col < top) {
+        list_stack.pop();
+      }
+      if list_stack.last().is_none_or(|&top| col > top) {
+        list_stack.push(col);
+      }
+      let level = list_stack.len().saturating_sub(1);
+      if level > 0 {
+        match &mut data {
+          Value::Object(map) => {
+            map.insert("indent".into(), json!(level));
+          }
+          other => *other = json!({ "indent": level }),
+        }
+      }
+    } else {
+      list_stack.clear();
+    }
+
     push_block(&mut blocks, &mut root_children, kind, text, data);
     index += 1;
   }
@@ -561,7 +594,19 @@ fn append_markdown_block_content(
   lines: &mut Vec<String>,
   images: &BTreeMap<String, String>,
 ) {
-  let indent = "  ".repeat(depth);
+  // List/todo nesting from `data.indent` (4 spaces per level — valid
+  // CommonMark continuation for both `- ` and `1. ` parents); other kinds
+  // keep the children-tree depth indent.
+  let level = block
+    .data
+    .get("indent")
+    .and_then(Value::as_u64)
+    .unwrap_or(0) as usize;
+  let indent = if matches!(block.kind.as_str(), "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo") {
+    "    ".repeat(level)
+  } else {
+    "  ".repeat(depth)
+  };
   let text = block.text.trim_end();
   // Inline marks (bold/italic/code/strike/link) rendered back to Markdown.
   let rich = render_inline(block);

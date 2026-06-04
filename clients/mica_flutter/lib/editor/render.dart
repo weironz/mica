@@ -141,6 +141,7 @@ class _NodeLayout {
   double boxTop = 0; // y of the node's full box (incl. code padding)
   double boxHeight = 0;
   int ordinal = 0; // for numbered lists
+  int indentLevel = 0; // list nesting depth (bullet glyph variants)
   Rect? checkbox; // todo checkbox rect (local), if any
   Rect? langLabel; // code-block language selector rect (local), if any
   Rect? copyButton; // code-block copy button rect (local), if any
@@ -382,7 +383,7 @@ class RenderDocument extends RenderBox {
 
     double y = 0;
     String? prevKind;
-    var consecutiveNumbered = 0;
+    final numberedCounters = <int>[];
     for (final node in _nodes) {
       y += EditorTheme.gapAbove(node.kind, prevKind);
 
@@ -421,7 +422,8 @@ class RenderDocument extends RenderBox {
         EditorTheme.styleFor(node),
         isCode: node.isCode,
       );
-      final contentLeft = EditorTheme.leadingInset(node.kind);
+      final contentLeft = EditorTheme.leadingInset(node.kind) +
+          (node.isListKind ? 24.0 * node.indent : 0.0);
       final isCode = node.isCode;
       final textWidth = (maxWidth - contentLeft - (isCode ? EditorTheme.codePadH : 0))
           .clamp(0.0, double.infinity);
@@ -460,11 +462,26 @@ class RenderDocument extends RenderBox {
       layout.textHeight = painter.height;
       layout.boxHeight = painter.height + (isCode ? 2 * EditorTheme.codePadV : 0);
 
-      if (node.kind == 'numbered_list') {
-        consecutiveNumbered += 1;
-        layout.ordinal = consecutiveNumbered;
+      if (node.isListKind) {
+        final level = node.indent;
+        layout.indentLevel = level;
+        // Per-level ordered counters: deeper levels reset when we go back
+        // up; a bullet/todo at a level resets numbering at that level and
+        // below, without touching parent counters.
+        if (numberedCounters.length > level + 1) {
+          numberedCounters.removeRange(level + 1, numberedCounters.length);
+        }
+        if (node.kind == 'numbered_list') {
+          while (numberedCounters.length <= level) {
+            numberedCounters.add(0);
+          }
+          numberedCounters[level] += 1;
+          layout.ordinal = numberedCounters[level];
+        } else if (numberedCounters.length > level) {
+          numberedCounters.removeRange(level, numberedCounters.length);
+        }
       } else {
-        consecutiveNumbered = 0;
+        numberedCounters.clear();
       }
       if (node.kind == 'todo') {
         final lh = painter.preferredLineHeight;
@@ -1068,11 +1085,25 @@ class RenderDocument extends RenderBox {
 
     switch (l.kind) {
       case 'bulleted_list':
-        canvas.drawCircle(
-          origin + Offset(-14, l.painter.preferredLineHeight * 0.5),
-          2.6,
-          Paint()..color = EditorTheme.text,
-        );
+        final c = origin + Offset(-14, l.painter.preferredLineHeight * 0.5);
+        switch (l.indentLevel % 3) {
+          case 0: // ● filled
+            canvas.drawCircle(c, 2.6, Paint()..color = EditorTheme.text);
+          case 1: // ○ hollow
+            canvas.drawCircle(
+              c,
+              2.6,
+              Paint()
+                ..color = EditorTheme.text
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 1.2,
+            );
+          default: // ▪ square
+            canvas.drawRect(
+              Rect.fromCenter(center: c, width: 4.6, height: 4.6),
+              Paint()..color = EditorTheme.text,
+            );
+        }
       case 'numbered_list':
         final marker = TextPainter(
           text: TextSpan(

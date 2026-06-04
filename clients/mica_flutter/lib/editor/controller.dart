@@ -585,17 +585,18 @@ class EditorController extends ChangeNotifier {
 
   /// The leading Markdown marker for a block kind (heading/list/quote/todo).
   String _blockPrefix(EditorNode node) {
+    final pad = node.isListKind ? '    ' * node.indent : '';
     switch (node.kind) {
       case 'heading':
         return '${'#' * node.headingLevel} ';
       case 'bulleted_list':
-        return '- ';
+        return '$pad- ';
       case 'numbered_list':
-        return '1. ';
+        return '${pad}1. ';
       case 'quote':
         return '> ';
       case 'todo':
-        return node.todoChecked ? '- [x] ' : '- [ ] ';
+        return node.todoChecked ? '$pad- [x] ' : '$pad- [ ] ';
       default:
         return '';
     }
@@ -1605,8 +1606,53 @@ class EditorController extends ChangeNotifier {
   bool _continuesOnEnter(String kind) =>
       kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
 
+  /// Indent (+1) / outdent (-1) the list/todo items covered by the selection
+  /// — Tab / Shift+Tab. Each item clamps to one level deeper than the
+  /// nearest list item above it (no orphan levels). Returns true when
+  /// anything changed.
+  bool indentSelection(int delta) {
+    final sel = selection;
+    if (sel == null || nodes.isEmpty) return false;
+    final lo = sel.start.node.clamp(0, nodes.length - 1);
+    final hi = sel.end.node.clamp(0, nodes.length - 1);
+    final ops = <DocOp>[];
+    for (var i = lo; i <= hi; i++) {
+      final node = nodes[i];
+      if (!node.isListKind) continue;
+      var maxIndent = 0;
+      for (var p = i - 1; p >= 0; p--) {
+        if (nodes[p].isListKind) {
+          maxIndent = nodes[p].indent + 1;
+          break;
+        }
+        break; // any non-list block above caps this item at level 0
+      }
+      final next = (node.indent + delta).clamp(0, maxIndent);
+      if (next == node.indent) continue;
+      final data = {...node.data};
+      if (next > 0) {
+        data['indent'] = next;
+      } else {
+        data.remove('indent');
+      }
+      node.data = data;
+      ops.add({
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': node.text,
+        'data': data,
+      });
+    }
+    if (ops.isEmpty) return false;
+    _sendNow(ops);
+    notifyListeners();
+    return true;
+  }
+
   Map<String, dynamic> _continuationData(EditorNode node) {
-    if (node.kind == 'todo') return {'checked': false};
+    if (node.kind == 'todo') {
+      return {'checked': false, if (node.indent > 0) 'indent': node.indent};
+    }
     return Map<String, dynamic>.from(node.data);
   }
 

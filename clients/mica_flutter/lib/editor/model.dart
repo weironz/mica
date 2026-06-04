@@ -36,6 +36,12 @@ class EditorNode {
       kind == 'table' || kind == 'divider' || kind == 'image';
   bool get isAtomic => isAtomicKind(kind);
 
+  /// Nesting level for list/todo items (0 = top level), clamped for safety.
+  int get indent => ((data['indent'] as num?)?.toInt() ?? 0).clamp(0, 8);
+
+  bool get isListKind =>
+      kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
+
   int get headingLevel {
     final level = data['level'];
     if (level is int) return level.clamp(1, 6);
