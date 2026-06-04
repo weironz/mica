@@ -198,6 +198,20 @@ void _node(html.Node node, StringBuffer out) {
         _node(child, out);
       }
     default:
+      // Unknown elements that contain block-level structure (GitHub wraps
+      // README tables in <markdown-accessiblity-table>; sites nest content
+      // in all sorts of custom elements) recurse as containers — flattening
+      // would destroy the tables/lists inside. Only leaf-ish unknowns
+      // flatten to inline text.
+      if (node.querySelector(
+            'table, ul, ol, pre, blockquote, h1, h2, h3, h4, h5, h6, p, img',
+          ) !=
+          null) {
+        for (final child in node.nodes) {
+          _node(child, out);
+        }
+        return;
+      }
       final text = _inline(node);
       if (text.isNotEmpty) {
         out.writeln(text);
@@ -232,7 +246,11 @@ void _table(html.Element table, StringBuffer out) {
         .where((c) => c.tagName.toLowerCase() == 'td' || c.tagName.toLowerCase() == 'th')
         .toList();
     if (cells.isEmpty) continue;
-    out.writeln('| ${cells.map(_inline).join(' | ')} |');
+    // Pipes inside a cell would split it on re-parse — escape them; cell
+    // line breaks collapse to spaces (GFM cells are single-line).
+    String cell(html.Element c) =>
+        _inline(c).replaceAll('|', r'\|').replaceAll('\n', ' ');
+    out.writeln('| ${cells.map(cell).join(' | ')} |');
     if (!headerWritten) {
       out.writeln('| ${cells.map((_) => '---').join(' | ')} |');
       headerWritten = true;
