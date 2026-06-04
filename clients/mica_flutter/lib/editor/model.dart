@@ -39,6 +39,20 @@ class EditorNode {
   /// Nesting level for list/todo items (0 = top level), clamped for safety.
   int get indent => ((data['indent'] as num?)?.toInt() ?? 0).clamp(0, 8);
 
+  /// Quote nesting depth: the `quote` kind is depth ≥ 1; any other kind
+  /// inside a blockquote carries `data.quote` (markdown import).
+  int get quoteDepth {
+    final d = ((data['quote'] as num?)?.toInt() ?? 0).clamp(0, 8);
+    return kind == 'quote' && d < 1 ? 1 : d;
+  }
+
+  /// Container-child level inside a list item (`data.li`), or null when the
+  /// block is not nested in an item.
+  int? get liLevel {
+    final v = data['li'];
+    return v is num ? v.toInt().clamp(0, 8) : null;
+  }
+
   bool get isListKind =>
       kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
 

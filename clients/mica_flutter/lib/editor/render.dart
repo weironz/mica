@@ -154,6 +154,9 @@ class _NodeLayout {
   Rect? scrollTrack; // horizontal scrollbar track (local), if code overflows
   String kind = 'paragraph';
   bool todoChecked = false;
+  int quoteDepth = 0; // blockquote nesting (bars on the left)
+  bool quoteBreak = false; // a blank separated this quote from the previous
+  double boxLeft = 0; // where the node's box begins (item-child inset)
 
   // Table layout (kind == 'table').
   List<_TableCell> tableCells = const [];
@@ -396,10 +399,14 @@ class RenderDocument extends RenderBox {
       }
 
       if (node.kind == 'divider') {
+        final dLiInset =
+            node.liLevel != null ? 26.0 + 24.0 * node.liLevel! : 0.0;
         final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
           ..kind = 'divider'
           ..nodeId = node.id
-          ..contentLeft = 0
+          ..quoteDepth = node.quoteDepth
+          ..boxLeft = dLiInset
+          ..contentLeft = dLiInset + 16.0 * node.quoteDepth
           ..boxTop = y
           ..textTop = y
           ..textHeight = _dividerHeight
@@ -422,8 +429,18 @@ class RenderDocument extends RenderBox {
         EditorTheme.styleFor(node),
         isCode: node.isCode,
       );
+      // Item-child blocks (`data.li`) align under the owning item's text;
+      // quoted blocks (`data.quote`) inset 16px per depth for the bars (the
+      // `quote` kind's own leadingInset already covers the first bar).
+      final liInset =
+          node.liLevel != null ? 26.0 + 24.0 * node.liLevel! : 0.0;
+      final quoteExtra =
+          (16.0 * node.quoteDepth - (node.kind == 'quote' ? 16.0 : 0.0))
+              .clamp(0.0, double.infinity);
       final contentLeft = EditorTheme.leadingInset(node.kind) +
-          (node.isListKind ? 24.0 * node.indent : 0.0);
+          (node.isListKind ? 24.0 * node.indent : 0.0) +
+          liInset +
+          quoteExtra;
       final isCode = node.isCode;
       final textWidth = (maxWidth - contentLeft - (isCode ? EditorTheme.codePadH : 0))
           .clamp(0.0, double.infinity);
@@ -449,6 +466,9 @@ class RenderDocument extends RenderBox {
         ..contentLeft = contentLeft
         ..kind = node.kind
         ..nodeId = node.id
+        ..quoteDepth = node.quoteDepth
+        ..quoteBreak = node.data['qbreak'] == true
+        ..boxLeft = liInset
         ..todoChecked = node.todoChecked
         ..langText = codeLang ?? ''
         ..codeWrap = codeWrap
@@ -828,16 +848,31 @@ class RenderDocument extends RenderBox {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
       if (l.kind == 'code_block') {
+        final bgLeft = l.boxLeft + 16.0 * l.quoteDepth;
         canvas.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight),
+            Rect.fromLTWH(
+                offset.dx + bgLeft, offset.dy + l.boxTop, size.width - bgLeft, l.boxHeight),
             const Radius.circular(6),
           ),
           Paint()..color = EditorTheme.codeBg,
         );
-      } else if (l.kind == 'quote') {
+      }
+      // Blockquote bars: one per nesting depth, on any quoted block kind.
+      // Within one quote group the bars run continuously across the gaps
+      // between blocks (a `qbreak` starts a fresh group).
+      final prev = i > 0 ? _layouts[i - 1] : null;
+      for (var k = 0; k < l.quoteDepth; k++) {
+        var top = l.boxTop;
+        if (!l.quoteBreak &&
+            prev != null &&
+            prev.quoteDepth > k &&
+            prev.boxLeft == l.boxLeft) {
+          top = prev.boxTop + prev.boxHeight; // bridge the gap above
+        }
         canvas.drawRect(
-          Rect.fromLTWH(offset.dx + 2, offset.dy + l.textTop, 3, l.textHeight),
+          Rect.fromLTWH(offset.dx + l.boxLeft + 2 + 16.0 * k, offset.dy + top, 3,
+              l.boxHeight + (l.boxTop - top)),
           Paint()..color = EditorTheme.quoteBar,
         );
       }
@@ -1069,7 +1104,7 @@ class RenderDocument extends RenderBox {
     if (l.kind == 'divider') {
       final cy = offset.dy + l.boxTop + l.boxHeight / 2;
       canvas.drawLine(
-        Offset(offset.dx, cy),
+        Offset(offset.dx + l.contentLeft, cy),
         Offset(offset.dx + size.width, cy),
         Paint()
           ..color = EditorTheme.quoteBar
