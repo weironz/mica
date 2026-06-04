@@ -11,6 +11,7 @@
 
 # Local reference checkout of AppFlowy (not part of this project)
 /appflowy-src/
+/AFFiNE/
 
 # Flutter / Dart build + tooling artifacts
 **/build/
@@ -25,3 +26,9 @@
 
 # OS files
 .DS_Store
+# Added by code-review-graph
+.code-review-graph/
+
+# production secrets + built web bundle staging
+.env.prod
+deploy/web/

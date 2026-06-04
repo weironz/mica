@@ -5795,6 +5795,13 @@ class ApiClient {
     }
 
     final page = Uri.base;
+    // Served from a standard port (production behind the reverse proxy):
+    // the API is same-origin — nginx routes /api and /ws to the backend, so
+    // the same static bundle works on any server IP or domain.
+    if (page.scheme.isNotEmpty && (page.port == 80 || page.port == 443)) {
+      return Uri(scheme: page.scheme, host: page.host, port: page.port);
+    }
+    // Dev: the API listens on :8080 of the same host.
     return Uri(
       scheme: page.scheme.isEmpty ? 'http' : page.scheme,
       host: page.host.isEmpty ? '127.0.0.1' : page.host,
