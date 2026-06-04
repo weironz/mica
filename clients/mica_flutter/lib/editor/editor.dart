@@ -362,6 +362,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return true;
     }
 
+    // A bare URL pastes as a real link: over a ranged selection it links the
+    // selected text (Notion-style); at a caret it inserts the URL as linked
+    // text instead of plain text.
+    if (!rich &&
+        _looksLikeUrl(trimmed) &&
+        node != null &&
+        node.kind != 'table' &&
+        !node.isAtomic) {
+      final sel = _controller.selection;
+      if (sel != null && !sel.isCollapsed && !sel.isMultiNode) {
+        _controller.setLinkRange(
+          sel.focus.node,
+          sel.start.offset,
+          sel.end.offset,
+          trimmed,
+        );
+      } else {
+        if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
+        final at = _controller.selection?.focus.offset ?? 0;
+        _controller.insertPageLink(at, at, trimmed, trimmed);
+      }
+      _syncImeFromSelection(force: true);
+      return true;
+    }
+
     if (markdown.trim().isEmpty) return false;
     if (rich || markdown.contains('\n')) {
       _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
@@ -371,6 +396,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     return false;
   }
+
+  static final RegExp _bareUrlRe =
+      RegExp(r'^https?://\S+$', caseSensitive: false);
+
+  bool _looksLikeUrl(String text) =>
+      text.isNotEmpty && _bareUrlRe.hasMatch(text);
 
   static final RegExp _imageUrlRe = RegExp(
     r'^https?://\S+\.(png|jpe?g|gif|webp|bmp|svg|avif)(\?\S*)?$',
