@@ -32,3 +32,4 @@
 # production secrets + built web bundle staging
 .env.prod
 deploy/web/
+dist/
