@@ -2600,9 +2600,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       commandHook: _commandHook,
                       onExitTop: () {
                         _pageTitleFocus.requestFocus();
-                        // After the frame — the TextField select-alls on
-                        // focus; we want a plain caret at the end.
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                        // The web TextField select-alls when focused
+                        // programmatically; that happens in the focus
+                        // microtask, so queue ours right behind it — the
+                        // caret is collapsed before the next frame paints
+                        // (a post-frame callback here flashed the
+                        // selection for one frame).
+                        Future.microtask(() {
+                          if (!mounted) return;
                           _pageTitle.selection = TextSelection.collapsed(
                             offset: _pageTitle.text.length,
                           );
