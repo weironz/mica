@@ -89,6 +89,48 @@ void main() {
     expect(node.text.substring(bold.start, bold.end), 'left');
   });
 
+  test('Enter at the start of a heading keeps its format below', () {
+    final c = _doc([
+      EditorNode(id: 'a', kind: 'heading', text: 'Title', data: {
+        'level': 2,
+        'marks': marksToJson([Mark(0, 5, 'bold')]),
+      }),
+    ]);
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
+      focus: DocPosition(0, 0),
+    );
+    c.splitAtCaret();
+    expect(c.nodes.length, 2);
+    // Empty paragraph above; the heading moved down INTACT (kind, level,
+    // marks) — previously the format stranded on the empty upper line.
+    expect(c.nodes[0].kind, 'paragraph');
+    expect(c.nodes[0].text, '');
+    expect(c.nodes[1].kind, 'heading');
+    expect(c.nodes[1].text, 'Title');
+    expect(c.nodes[1].data['level'], 2);
+    expect(marksFromData(c.nodes[1].data).single.type, 'bold');
+    // Caret stays at the start of the heading.
+    expect(c.selection!.focus.node, 1);
+    expect(c.selection!.focus.offset, 0);
+  });
+
+  test('IME newline at block start inserts a paragraph above too', () {
+    final c = _doc([
+      EditorNode(id: 'a', kind: 'todo', text: 'task', data: {'checked': true}),
+    ]);
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
+      focus: DocPosition(0, 0),
+    );
+    c.applyNewlineSplit('', 'task');
+    expect(c.nodes.length, 2);
+    expect(c.nodes[0].kind, 'paragraph');
+    expect(c.nodes[1].kind, 'todo');
+    expect(c.nodes[1].text, 'task');
+    expect(c.nodes[1].data['checked'], true);
+  });
+
   test('splitAtCaret divides a mark spanning the split point', () {
     final c = _doc([
       EditorNode(id: 'a', kind: 'paragraph', text: 'boldtext', data: {

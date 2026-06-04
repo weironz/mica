@@ -311,6 +311,17 @@ class EditorController extends ChangeNotifier {
       return;
     }
 
+    // Enter at the very start of a non-empty block: insert an empty
+    // paragraph ABOVE and keep the block (kind + text + marks) intact below
+    // — splitting would strand the format on the empty upper line.
+    if (at == 0 && node.text.isNotEmpty) {
+      final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+      nodes.insert(i, created);
+      _sendNow([_insertOp(created, i)]);
+      collapseTo(DocPosition(i + 1, 0));
+      return;
+    }
+
     final before = node.text.substring(0, at);
     final after = node.text.substring(at);
     final newKind = _continuesOnEnter(node.kind) ? node.kind : 'paragraph';
@@ -356,6 +367,16 @@ class EditorController extends ChangeNotifier {
         {'type': 'update_block', 'block_id': node.id, 'kind': 'paragraph', 'data': {}, 'text': ''},
       ]);
       collapseTo(DocPosition(i, 0));
+      return;
+    }
+
+    // Enter at the start of a non-empty block (IME newline path): same
+    // insert-paragraph-above behavior as splitAtCaret.
+    if (before.isEmpty && after.isNotEmpty && after == node.text) {
+      final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+      nodes.insert(i, created);
+      _sendNow([_insertOp(created, i)]);
+      collapseTo(DocPosition(i + 1, 0));
       return;
     }
 
