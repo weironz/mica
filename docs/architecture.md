@@ -34,6 +34,15 @@ The first-class product surface is Web. Desktop and mobile should reuse the same
   `markdown_conformance_test.dart`; regenerate with `GEN_GOLD=1` after an
   intentional grammar change). The long-term in-house path to a single
   implementation is compiling the Rust engine to WASM for the client.
+- **CommonMark is the parsing base, GFM the target dialect, and anything
+  beyond degrades gracefully.** The reader aims at full CommonMark + GFM
+  (see editor-engine.md Milestone 8). For model features GFM cannot express
+  (table width/per-column align, future callouts/toggles…), the extension
+  convention is: (1) serialize to VALID GFM that renders acceptably in any
+  foreign viewer — never invent syntax others would misrender; (2) carry
+  the lossless form out-of-band where one exists (block data, the export
+  manifest); (3) re-importing our own export restores what GFM dropped
+  when possible. Round-trip stability stays the invariant.
 - **The Markdown engine is a named crate.** `mica-markdown` owns the block
   model ("AST") and Markdown/HTML parsing+rendering (like SiYuan's lute);
   `mica-app-core` keeps document *operations* and re-exports the engine;

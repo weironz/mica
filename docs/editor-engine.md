@@ -409,9 +409,16 @@ The recurring problem the engine must get right for every node type:
    goal; the exporter intentionally emits only our normalized form, and
    round-trip stability (`export(import(x))` fixed point) stays the
    invariant. Phases:
-   - **P1 — nested lists**: parsing + parent/child blocks + editor Tab
-     indent (same work item as milestone 7's list nesting). The single
-     biggest real-world gap: imports currently flatten hierarchy.
+   - **P1 — nested lists**: flat blocks gain a `data.indent` level (the
+     editor engine stays a flat node list — a true tree would rewrite the
+     render/selection core; Notion ships flat+indent too). Scope: engine
+     parses leading indentation into levels and exports nested GFM (plus
+     Dart-mirror parity + new conformance fixtures); editor gets
+     Tab/Shift+Tab (clamped to prev sibling + 1), Enter keeps level,
+     Backspace-at-start outdents first; render indents, varies bullet
+     glyphs per level and restarts ordered counters per level. Imports
+     stop flattening hierarchy. True container children (quote-with-code,
+     callouts) come AFTER P1 on the same groundwork.
    - **P2 — backslash escapes + autolinks `<url>`**: correctness-grade
      (unhandled escapes mis-format text; autolinks are common in exports).
    - **P3 — run the official CommonMark spec test suite** as a scoreboard;
