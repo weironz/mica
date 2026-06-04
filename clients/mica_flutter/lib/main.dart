@@ -1758,6 +1758,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final _memberEmail = TextEditingController();
   final _pageTitle = TextEditingController();
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
+  final FocusNode _pageTitleFocus = FocusNode(debugLabel: 'PageTitle');
   Timer? _pageTitleSaveTimer;
   final Set<String> _collapsedViewIds = {};
   // True only while a page is being dragged in the tree. The drop zones overlay
@@ -1795,6 +1796,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _memberEmail.dispose();
     _pageTitle.dispose();
     _editorFocus.dispose();
+    _pageTitleFocus.dispose();
     _pageTitleSaveTimer?.cancel();
     super.dispose();
   }
@@ -2460,6 +2462,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     Expanded(
                       child: TextField(
                         controller: _pageTitle,
+                        focusNode: _pageTitleFocus,
                         style: Theme.of(context).textTheme.headlineMedium,
                         textInputAction: TextInputAction.next,
                         onChanged: (_) => _schedulePageTitleSave(),
@@ -2565,6 +2568,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       reHostImages: widget.reHostImages,
                       scrollHook: _scrollHook,
                       commandHook: _commandHook,
+                      onExitTop: () {
+                        _pageTitleFocus.requestFocus();
+                        _pageTitle.selection = TextSelection.collapsed(
+                          offset: _pageTitle.text.length,
+                        );
+                      },
                       appearance: widget.appearance,
                       onOpenPage: _openPageLink,
                       pageLinks: () => [

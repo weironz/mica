@@ -74,6 +74,7 @@ class MicaEditor extends StatefulWidget {
     this.focusNode,
     this.scrollHook,
     this.commandHook,
+    this.onExitTop,
     this.appearance = const EditorAppearance(),
     this.onOpenPage,
     this.pageLinks,
@@ -131,6 +132,11 @@ class MicaEditor extends StatefulWidget {
 
   /// Optional hook the host's formatting toolbar uses to run editor commands.
   final EditorCommandHook? commandHook;
+
+  /// Called when the caret tries to leave the document upward (ArrowUp on the
+  /// first line, Backspace at the very start) — the host focuses the page
+  /// title.
+  final VoidCallback? onExitTop;
 
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
@@ -889,6 +895,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           _syncImeFromSelection();
           return KeyEventResult.handled;
         }
+        // Nothing above to merge into → step up into the page title.
+        if (sel.focus.node == 0 && widget.onExitTop != null) {
+          widget.onExitTop!();
+          return KeyEventResult.handled;
+        }
         return KeyEventResult.skipRemainingHandlers;
       }
       // Within-node delete is done by the OS input; keep it from the app's
@@ -988,6 +999,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final target = dir < 0
         ? r.positionAbove(focus, _controller.goalX)
         : r.positionBelow(focus, _controller.goalX);
+
+    // Upward escape from the very top: Up on the document's first line moves
+    // focus into the page title.
+    if (dir < 0 &&
+        !shift &&
+        focus.node == 0 &&
+        (target == null || target == focus) &&
+        widget.onExitTop != null) {
+      widget.onExitTop!();
+      return;
+    }
 
     // Downward escape from a trailing code block: Enter inside code inserts a
     // newline, so Down on the last line of a last-node code block creates a new
