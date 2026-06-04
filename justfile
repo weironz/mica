@@ -5,6 +5,33 @@ hub     := "willdockerhub"
 
 # ---------------------------------------------------------------- dev loop
 
+# Infra only (postgres + rustfs in compose); app processes run on the host
+# for fast incremental builds.
+dev-up:
+    docker compose up -d
+
+dev-down:
+    docker compose down
+
+# Host-run API with dev env (fast `cargo run` cycle).
+dev-api:
+    bash -c 'set -a && . ./.env && set +a && cargo run -p mica-api-server'
+
+# Build the web bundle and serve it on :8090 (hard-refresh after rebuilds).
+dev-web:
+    cd clients/mica_flutter && {{flutter}} build web --no-tree-shake-icons
+    cd clients/mica_flutter/build/web && python3 -m http.server 8090
+
+# Container-parity check: run the REAL images locally before a release —
+# catches container-only bugs (e.g. loopback binds) that host dev can't.
+# Stops dev infra first (port clash); needs a root .env.prod.
+parity-check version="dev": (docker-build version)
+    docker compose down 2>/dev/null || true
+    pkill -x mica-api-server 2>/dev/null || true
+    MICA_VERSION={{version}} docker compose --env-file .env.prod -f deploy/docker-compose.images.yml up -d
+    sleep 8
+    curl -fsS http://127.0.0.1/api/health && echo " ← parity OK (stack: deploy/docker-compose.images.yml)"
+
 # Run all tests (Rust workspace + Flutter).
 test:
     cargo test --workspace
