@@ -52,6 +52,8 @@ List<Map<String, dynamic>> marksToJson(List<Mark> marks) =>
 const Color _codeColor = Color(0xFFB91C1C);
 const Color _codeBg = Color(0x14B91C1C);
 const Color _linkColor = Color(0xFF2563EB);
+const Color _mathColor = Color(0xFF7C3AED);
+const Color _mathBg = Color(0x147C3AED);
 
 /// Build a styled [TextSpan] for [text] with [marks] applied over [base].
 TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
@@ -91,6 +93,14 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
         case 'link':
           style = style.copyWith(color: _linkColor);
           decorations.add(TextDecoration.underline);
+        case 'math':
+          // LaTeX source shown styled until real typesetting lands.
+          style = style.copyWith(
+            fontFamily: 'monospace',
+            fontStyle: FontStyle.italic,
+            color: _mathColor,
+            backgroundColor: _mathBg,
+          );
       }
     }
     if (decorations.isNotEmpty) {
@@ -205,16 +215,6 @@ List<Mark> _normalize(List<Mark> marks) {
 
 const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
 
-/// Index of the next [needle] at/after [from] that is not backslash-escaped.
-int _indexOfUnescaped(String src, String needle, int from) {
-  var j = from;
-  while (true) {
-    j = src.indexOf(needle, j);
-    if (j < 0) return -1;
-    if (j == 0 || src[j - 1] != r'\') return j;
-    j += 1;
-  }
-}
 
 /// Single-line link reference definition ` [label]: dest "title"`.
 ({String label, String dest, String? title})? parseRefDefinition(String raw) {
@@ -258,6 +258,34 @@ int matchingBracket(String src, int open) {
     if (c == ']') {
       depth--;
       if (depth == 0) return j;
+    }
+    j++;
+  }
+  return -1;
+}
+
+const kDollar = r'$';
+
+/// A valid `\$` math closer per the Pandoc rules, or -1.
+int _findMathCloser(String src, int contentStart) {
+  if (contentStart >= src.length) return -1;
+  final first = src[contentStart];
+  if (first == ' ' || first == '\t' || first == '\n') return -1;
+  var j = contentStart;
+  while (j < src.length) {
+    final c = src[j];
+    if (c == '\n') return -1; // inline math stays on one line
+    if (c == kDollar && j > contentStart) {
+      final prev = src[j - 1];
+      if (prev == ' ' || prev == '\t' || prev == r'\') {
+        j++;
+        continue;
+      }
+      if (j + 1 < src.length && RegExp(r'[0-9]').hasMatch(src[j + 1])) {
+        j++;
+        continue;
+      }
+      return j;
     }
     j++;
   }
@@ -792,6 +820,34 @@ String? autolinkTarget(String inner) {
   }
 
   while (i < src.length) {
+    // Inline math, LaTeX form: \( ... \) — checked before the escape arm,
+    // which would otherwise eat the `\(`.
+    if (src[i] == r'\' && i + 1 < src.length && src[i + 1] == '(') {
+      final close = src.indexOf(r'\)', i + 2);
+      if (close > i) {
+        final inner = src.substring(i + 2, close).trim();
+        if (inner.isNotEmpty) {
+          final start = out.length;
+          out.write(inner);
+          marks.add(Mark(start, out.length, 'math'));
+          i = close + 2;
+          continue;
+        }
+      }
+    }
+    // Inline math, dollar form (Pandoc rules: opener not followed by
+    // whitespace, closer not preceded by whitespace or followed by a digit).
+    if (src[i] == kDollar && (i + 1 >= src.length || src[i + 1] != kDollar)) {
+      final close = _findMathCloser(src, i + 1);
+      if (close > 0) {
+        final inner = src.substring(i + 1, close);
+        final start = out.length;
+        out.write(inner);
+        marks.add(Mark(start, out.length, 'math'));
+        i = close + 1;
+        continue;
+      }
+    }
     // Backslash escape: `\*` is a literal `*` (any ASCII punctuation).
     if (src[i] == r'\' &&
         i + 1 < src.length &&
@@ -1173,7 +1229,7 @@ String escapeInline(String text) {
       out.write(c);
       continue;
     }
-    if (r'\*_`~[]<'.contains(c)) out.write(r'\');
+    if (r'\*_`~[]<'.contains(c) || c == kDollar) out.write(r'\');
     out.write(c);
   }
   return out.toString();
@@ -1218,6 +1274,14 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
     if (pick.type == 'html') {
       // Raw inline HTML writes back verbatim.
       out.write(text.substring(ps, pe));
+      pos = pe;
+      continue;
+    }
+    if (pick.type == 'math') {
+      // LaTeX source is literal — canonical dollar form.
+      out.write(kDollar);
+      out.write(text.substring(ps, pe));
+      out.write(kDollar);
       pos = pe;
       continue;
     }

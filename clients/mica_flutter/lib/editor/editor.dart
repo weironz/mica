@@ -1144,6 +1144,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!widget.canEdit) return;
     _closeSlash();
     _closePageLink();
+    final mathIdx = r.blockAt(local);
+    if (mathIdx != null &&
+        mathIdx < _controller.nodes.length &&
+        _controller.nodes[mathIdx].kind == 'math_block') {
+      _editMathBlock(_controller.nodes[mathIdx]);
+      return;
+    }
     final langNode = r.codeLanguageAt(local);
     if (langNode != null) {
       _openLanguageMenu(langNode, d.globalPosition);
@@ -2438,6 +2445,51 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.applySlashCommand(_slashStart, caret, opt.kind, data);
     _closeSlash();
     _syncImeFromSelection(force: true);
+    if (opt.kind == 'math_block') {
+      // Straight into source editing — an empty formula shows nothing.
+      final node = _controller.focusedNode;
+      if (node != null && node.kind == 'math_block') {
+        _editMathBlock(node);
+      }
+    }
+  }
+
+  /// Edit a math block's LaTeX source in a dialog.
+  Future<void> _editMathBlock(EditorNode node) async {
+    final controller = TextEditingController(text: node.text);
+    final source = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Math formula', style: TextStyle(fontSize: 16)),
+        content: SizedBox(
+          width: 420,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 4,
+            minLines: 1,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+            decoration: const InputDecoration(
+              hintText: r'E = mc^2',
+              isDense: true,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    if (source != null) {
+      _controller.setBlockText(node.id, source.trim());
+    }
   }
 
   /// Right-click on an image → context menu (copy / download / delete).
@@ -2969,6 +3021,7 @@ const List<_SlashOption> _slashOptions = [
   _SlashOption('To-do', Icons.check_box_outlined, 'todo', {'checked': false}),
   _SlashOption('Quote', Icons.format_quote, 'quote'),
   _SlashOption('Code', Icons.code, 'code_block'),
+  _SlashOption('Math formula', Icons.functions, 'math_block'),
   _SlashOption('Table', Icons.grid_on, 'table'),
   _SlashOption('Divider', Icons.horizontal_rule, 'divider'),
   _SlashOption('Image', Icons.image_outlined, 'image'),

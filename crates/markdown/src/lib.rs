@@ -420,6 +420,17 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         });
         index += 1;
       }
+      if language == "math" {
+        // GitHub's ```math fence normalizes to a math block.
+        push_block(
+          &mut blocks,
+          &mut root_children,
+          "math_block",
+          code_lines.join("\n"),
+          Value::Null,
+        );
+        continue;
+      }
       let data = if language.is_empty() {
         Value::Null
       } else {
@@ -433,6 +444,60 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         data,
       );
       continue;
+    }
+
+    // Math block: `$$ … $$` or `\[ … \]`, single- or multi-line. The
+    // LaTeX source is carried verbatim in a `math_block`; export always
+    // writes the canonical `$$` form. (No spec exists — this follows the
+    // Pandoc/GitHub dollar convention; see docs/editor-engine.md.)
+    if col < 4
+      && let Some((open_rest, closer)) = match content {
+        c if c.starts_with("$$") => Some((&c[2..], "$$")),
+        c if c.starts_with("\\[") => Some((&c[2..], "\\]")),
+        _ => None,
+      }
+    {
+      let open_rest = open_rest.trim();
+      let mut source: Vec<String> = Vec::new();
+      let mut closed = false;
+      if let Some(inner) = open_rest.strip_suffix(closer) {
+        // Single-line form: $$x^2$$
+        if !inner.trim().is_empty() {
+          source.push(inner.trim().to_string());
+          closed = true;
+        }
+      }
+      if !closed && open_rest.is_empty() {
+        index += 1;
+        while index < raw_lines.len() {
+          let l = raw_lines[index].trim();
+          if l == closer {
+            index += 1;
+            closed = true;
+            break;
+          }
+          source.push(raw_lines[index].trim_end().to_string());
+          index += 1;
+        }
+      } else if closed {
+        index += 1;
+      }
+      if closed {
+        push_block(
+          &mut blocks,
+          &mut root_children,
+          "math_block",
+          source.join("\n"),
+          Value::Null,
+        );
+        list_stack.clear();
+        open_item = None;
+        last_list = None;
+        pending_loose = false;
+        item_children = false;
+        continue;
+      }
+      // Unclosed: fall through and let the line parse normally.
     }
 
     // HTML block (CommonMark types 1–7) → a raw html code block: the
@@ -1500,6 +1565,46 @@ fn parse_entity(chars: &[char], i: usize) -> Option<(String, usize)> {
   named_entity(&body).map(|v| (v.to_string(), semi - i + 1))
 }
 
+/// Find the two-char sequence `a``b` starting at `from`.
+fn find_pair(chars: &[char], from: usize, a: char, b: char) -> Option<usize> {
+  let mut j = from;
+  while j + 1 < chars.len() {
+    if chars[j] == a && chars[j + 1] == b {
+      return Some(j);
+    }
+    j += 1;
+  }
+  None
+}
+
+/// A valid `$` math closer per the Pandoc rules: content non-empty with
+/// non-space edges, closer not followed by a digit, no newline inside.
+fn find_math_closer(chars: &[char], content_start: usize) -> Option<usize> {
+  if chars.get(content_start).is_none_or(|c| c.is_whitespace()) {
+    return None;
+  }
+  let mut j = content_start;
+  while j < chars.len() {
+    let c = chars[j];
+    if c == '\n' {
+      return None; // inline math stays on one line
+    }
+    if c == '$' && j > content_start {
+      if chars[j - 1].is_whitespace() || chars[j - 1] == '\\' {
+        j += 1;
+        continue;
+      }
+      if chars.get(j + 1).is_some_and(|c| c.is_ascii_digit()) {
+        j += 1;
+        continue;
+      }
+      return Some(j);
+    }
+    j += 1;
+  }
+  None
+}
+
 /// GFM extended autolink starting at chars[i] (the caller checks the word
 /// boundary): bare `http(s)://…`, `www.…` (href gains `http://`) or a bare
 /// email. Returns (consumed chars, href).
@@ -2237,6 +2342,14 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       pos = e;
       continue;
     }
+    if m.kind == "math" {
+      out.push_str(&format!(
+        "<span class=\"math\">{}</span>",
+        escape_html(&String::from_utf16_lossy(&units[s..e]))
+      ));
+      pos = e;
+      continue;
+    }
     if m.kind == "image" {
       // The alt attribute is the PLAIN text of the span — inner marks flatten.
       let alt = String::from_utf16_lossy(&units[s..e]);
@@ -2388,6 +2501,9 @@ fn append_html_block(
         out.push_str("</tbody>\n");
       }
       out.push_str("</table>\n");
+    }
+    "math_block" => {
+      out.push_str(&format!("<div class=\"math\">{}</div>\n", escape_html(&block.text)));
     }
     "divider" => {
       out.push_str("<hr />\n");
@@ -2727,6 +2843,12 @@ fn append_markdown_block_content(
     }
     "table" => {
       append_table_markdown(block, lines);
+    }
+    "math_block" => {
+      lines.push("$$".to_string());
+      lines.extend(block.text.lines().map(str::to_string));
+      lines.push("$$".to_string());
+      lines.push(String::new());
     }
     "divider" => {
       lines.push("---".to_string());
@@ -3164,6 +3286,49 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
   };
 
   while i < chars.len() {
+    // Inline math, LaTeX form: \( … \) (normalized to `$ … $` on write).
+    // Checked before the escape arm, which would otherwise eat the `\(`.
+    if chars[i] == '\\'
+      && chars.get(i + 1) == Some(&'(')
+      && let Some(close) = find_pair(&chars, i + 2, '\\', ')')
+    {
+      let inner: String = chars[i + 2..close].iter().collect();
+      let inner = inner.trim().to_string();
+      if !inner.is_empty() {
+        let start = out_len;
+        out.push_str(&inner);
+        out_len += inner.encode_utf16().count();
+        marks.push(InlineMark {
+          start,
+          end: out_len,
+          kind: "math".into(),
+          href: None,
+          title: None,
+        });
+        i = close + 2;
+        continue;
+      }
+    }
+    // Inline math, dollar form: `$ … $` — the opener may not be followed
+    // by whitespace, the closer may not be preceded by whitespace or
+    // followed by a digit (the Pandoc rules; keeps `$5 and $10` literal).
+    if chars[i] == '$' && chars.get(i + 1) != Some(&'$') {
+      if let Some(close) = find_math_closer(&chars, i + 1) {
+        let inner: String = chars[i + 1..close].iter().collect();
+        let start = out_len;
+        out.push_str(&inner);
+        out_len += inner.encode_utf16().count();
+        marks.push(InlineMark {
+          start,
+          end: out_len,
+          kind: "math".into(),
+          href: None,
+          title: None,
+        });
+        i = close + 1;
+        continue;
+      }
+    }
     // Backslash escape: `\*` is a literal `*` (any ASCII punctuation).
     if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1].is_ascii_punctuation() {
       out.push(chars[i + 1]);
@@ -3706,7 +3871,7 @@ fn escape_inline(text: &str) -> String {
       out.push(c);
       continue;
     }
-    if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<') {
+    if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<' | '$') {
       out.push('\\');
     }
     out.push(c);
@@ -3793,6 +3958,12 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
     if m.kind == "html" {
       // Raw inline HTML writes back verbatim.
       out.push_str(&String::from_utf16_lossy(&units[s..e]));
+      pos = e;
+      continue;
+    }
+    if m.kind == "math" {
+      // LaTeX source is literal — canonical dollar form.
+      out.push_str(&format!("${}$", String::from_utf16_lossy(&units[s..e])));
       pos = e;
       continue;
     }

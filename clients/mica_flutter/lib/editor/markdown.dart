@@ -550,12 +550,52 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         i++;
       }
       if (i < lines.length) i++; // consume closing fence
+      if (language == 'math') {
+        // GitHub's ```math fence normalizes to a math block.
+        result.add((kind: 'math_block', text: buffer.join('\n'), data: {}));
+        continue;
+      }
       result.add((
         kind: 'code_block',
         text: buffer.join('\n'),
         data: language.isEmpty ? {} : {'language': language},
       ));
       continue;
+    }
+
+    // Math block: `$$ ... $$` or `\[ ... \]`, single- or multi-line —
+    // LaTeX source carried verbatim in a `math_block` (mirrors Rust).
+    if (col < 4 && (line.startsWith(r'$$') || line.startsWith(r'\['))) {
+      final closer = line.startsWith(r'$$') ? r'$$' : r'\]';
+      final openRest = line.substring(2).trim();
+      final source = <String>[];
+      var closed = false;
+      var j = i;
+      if (openRest.endsWith(closer) && openRest.length > closer.length) {
+        source.add(
+            openRest.substring(0, openRest.length - closer.length).trim());
+        closed = true;
+        j = i + 1;
+      } else if (openRest.isEmpty) {
+        j = i + 1;
+        while (j < lines.length) {
+          final l = lines[j].trim();
+          if (l == closer) {
+            j++;
+            closed = true;
+            break;
+          }
+          source.add(lines[j].trimRight());
+          j++;
+        }
+      }
+      if (closed) {
+        result.add((kind: 'math_block', text: source.join('\n'), data: {}));
+        i = j;
+        resetListState();
+        continue;
+      }
+      // Unclosed: fall through and let the line parse normally.
     }
 
     // HTML block (CommonMark types 1–7) → a raw html code block: the

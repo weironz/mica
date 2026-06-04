@@ -89,6 +89,14 @@ class EditorTheme {
         return const TextStyle(color: muted, fontSize: 16, height: 1.5, fontStyle: FontStyle.italic);
       case 'code_block':
         return const TextStyle(color: text, fontSize: 14, height: 1.5, fontFamily: 'monospace');
+      case 'math_block':
+        return const TextStyle(
+          color: Color(0xFF7C3AED),
+          fontSize: 15,
+          height: 1.6,
+          fontFamily: 'monospace',
+          fontStyle: FontStyle.italic,
+        );
       case 'todo':
         if (node.todoChecked) {
           return const TextStyle(
@@ -115,6 +123,8 @@ class EditorTheme {
       case 'quote':
         return 16;
       case 'code_block':
+        return codePadH;
+      case 'math_block':
         return codePadH;
       default:
         return 0;
@@ -369,6 +379,17 @@ class RenderDocument extends RenderBox {
         : l.boxTop + (l.boxHeight < 40 ? l.boxHeight / 2 : 20.0);
     return Rect.fromCenter(
         center: Offset(l.boxLeft - 12, cy), width: 18, height: 22);
+  }
+
+  /// The block whose box contains [local], if any.
+  int? blockAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      if (local.dy >= l.boxTop && local.dy < l.boxTop + l.boxHeight) {
+        return i;
+      }
+    }
+    return null;
   }
 
   /// The block whose drag handle sits under [local], if any.
@@ -911,6 +932,16 @@ class RenderDocument extends RenderBox {
   void _paintBlockBackgrounds(Canvas canvas, Offset offset) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      if (l.kind == 'math_block') {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop - 6,
+                size.width - l.boxLeft, l.boxHeight + 12),
+            const Radius.circular(6),
+          ),
+          Paint()..color = const Color(0xFFF5F3FF),
+        );
+      }
       if (l.kind == 'code_block') {
         final bgLeft = l.boxLeft + 16.0 * l.quoteDepth;
         canvas.drawRRect(

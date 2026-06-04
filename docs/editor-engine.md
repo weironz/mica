@@ -576,7 +576,24 @@ The recurring problem the engine must get right for every node type:
      170–175 tagfilter) — examples cmark-gfm with extensions also fails
      — scored as 589/643 (91.6%).
      **P4 CLOSED (2026-06-05) at 598/652 = 91.7% CommonMark (now 589/643
-     + 9 dialect waivers) and 24/24 GFM extensions.** The remaining 54
+     + 9 dialect waivers) and 24/24 GFM extensions.**
+     Math (2026-06-05) — NO spec exists (neither CommonMark nor the GFM
+     spec define math; GitHub's `$` rendering is a product feature), so
+     Mica adopts the Pandoc/GitHub dollar convention and records its own
+     rules here: inline `$…$` (opener not followed by whitespace, closer
+     not preceded by whitespace nor followed by a digit — `$5 and $10`
+     stays literal; single line only) → a `math` mark over the verbatim
+     LaTeX source; block `$$…$$` (single- or multi-line) → a
+     `math_block` kind carrying the source. Read-side normalization:
+     `\(…\)` → inline, `\[…\]` → block, ```math fences → block
+     (the AFFiNE preprocessor's set). Export always writes the canonical
+     dollar forms, and literal `$` in plain text escapes to `\$` so
+     round trips can't mint math. Editor: math_block is atomic, shows
+     tinted mono source, slash `/math` inserts + opens a source dialog,
+     click re-opens it; inline math renders as tinted mono source.
+     Real typesetting (flutter_math_fork, the AppFlowy choice) is the
+     planned follow-up — a recorded dependency exception. Fixture 23
+     pins both parsers. The remaining 54
      are isolated precedence/exotic edges with no real-document impact
      — Links precedence (20), Emphasis rule-of-3 exotics (6), List
      items/Lists deep-container edges, code-span/entity/tab oddments —

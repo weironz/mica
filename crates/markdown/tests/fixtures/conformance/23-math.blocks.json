@@ -1,0 +1,48 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 20,
+          "start": 12,
+          "type": "math"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "inline math E = mc^2 in text"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "dollar prices $5 and $10 stay literal"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 20,
+          "start": 11,
+          "type": "math"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "latex form a^2 + b^2 normalizes"
+  },
+  {
+    "data": {},
+    "kind": "math_block",
+    "text": "\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}"
+  },
+  {
+    "data": {},
+    "kind": "math_block",
+    "text": "x^2 - 1"
+  },
+  {
+    "data": {},
+    "kind": "math_block",
+    "text": "\\sum_{i=1}^n i"
+  }
+]

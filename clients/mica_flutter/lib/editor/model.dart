@@ -33,7 +33,7 @@ class EditorNode {
   /// clicks snap to the nearest text node. Tables are edited via cell overlays;
   /// dividers and images are non-text content.
   static bool isAtomicKind(String kind) =>
-      kind == 'table' || kind == 'divider' || kind == 'image';
+      kind == 'table' || kind == 'divider' || kind == 'image' || kind == 'math_block';
   bool get isAtomic => isAtomicKind(kind);
 
   /// Nesting level for list/todo items (0 = top level), clamped for safety.

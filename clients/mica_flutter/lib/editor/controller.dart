@@ -1617,6 +1617,17 @@ class EditorController extends ChangeNotifier {
   bool _continuesOnEnter(String kind) =>
       kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
 
+  /// Replace a block's text wholesale (math source editing etc.).
+  void setBlockText(String id, String text) {
+    final node = nodes.where((n) => n.id == id).firstOrNull;
+    if (node == null || node.text == text) return;
+    node.text = text;
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'text': text, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Move the block at [from] to insertion [index] (0..nodes.length) — the
   /// gutter drag handle. Emits a `move_block` op; undo snapshots apply.
   bool moveBlock(int from, int index) {
