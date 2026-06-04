@@ -1055,6 +1055,39 @@ class EditorController extends ChangeNotifier {
       if (caret == 3 && (text == '```' || text == '~~~')) {
         return convert('code_block', {}, 3);
       }
+      // Typing dollar-dollar…dollar-dollar converts to a math block on close.
+      if (caret == text.length &&
+          text.length > 4 &&
+          text.startsWith(r'$$') &&
+          text.endsWith(r'$$')) {
+        final src = text.substring(2, text.length - 2).trim();
+        if (src.isNotEmpty && !src.contains(r'$$')) {
+          node
+            ..kind = 'math_block'
+            ..text = src
+            ..data = {};
+          _dirty.remove(node.id);
+          final ops = <DocOp>[
+            {
+              'type': 'update_block',
+              'block_id': node.id,
+              'kind': 'math_block',
+              'text': src,
+              'data': <String, dynamic>{},
+            },
+          ];
+          // Atomic block: park the caret on a paragraph after it.
+          final after = i + 1;
+          if (after >= nodes.length || nodes[after].isAtomic) {
+            final p = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+            nodes.insert(after, p);
+            ops.add(_insertOp(p, after));
+          }
+          _sendNow(ops);
+          collapseTo(DocPosition(after, 0));
+          return true;
+        }
+      }
       if (caret == 3 && (text == '---' || text == '***' || text == '___')) {
         node.text = '';
         insertDivider();

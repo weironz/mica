@@ -34,6 +34,17 @@ void main() {
     expect(c.nodes[0].kind, 'bulleted_list');
   });
 
+  test('typing a closed dollar-dollar line converts to a math block', () {
+    final c = _fresh([_p('a', '')]);
+    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.nodes[0].text = r'$$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$';
+    c.selection = DocSelection.collapsed(DocPosition(0, c.nodes[0].text.length));
+    expect(c.applyInputRules(), isTrue);
+    expect(c.nodes[0].kind, 'math_block');
+    expect(c.nodes[0].text, r'x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}');
+    expect(c.nodes[1].kind, 'paragraph', reason: 'caret parks after the atom');
+  });
+
   test('typing --- converts to a divider with a trailing paragraph', () {
     final c = _fresh([_p('a', '')]);
     c.selection = DocSelection.collapsed(const DocPosition(0, 0));
