@@ -12,10 +12,8 @@ import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
-import 'upload/import_order.dart';
-import 'upload/notion.dart';
 import 'upload/sha256.dart';
-import 'upload/unzip.dart';
+import 'upload/zip_writer.dart';
 
 /// Dev convenience: when true, the app signs in automatically on startup so you
 /// don't have to log in on every reload. Turn it off for a real login screen:
@@ -679,299 +677,85 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Import a workspace ZIP: rebuild the page tree from the folder layout.
-  /// [notion] forces Notion adaptation (the "From Notion" menu entry);
-  /// otherwise it is auto-detected from the archive contents.
+  /// Import a workspace archive server-side: one upload, the Rust engine
+  /// does everything (unzip, page tree, ordering, Notion adaptation, images
+  /// to S3, link rewiring) — see crates/interchange. [notion] forces Notion
+  /// adaptation; otherwise the server auto-detects it.
   Future<void> _importWorkspaceZip(
     String fileName,
     Uint8List zipBytes, {
     bool notion = false,
   }) {
-    // Export filenames like `Export-<uuid>` are cleaned regardless of mode.
-    final wsName = stripNotionId(fileName
-        .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
-        .trim());
-    return _importWorkspaceTree(
-      wsName.isEmpty ? 'Imported' : wsName,
-      () => readZip(zipBytes),
-      notionHint: notion,
+    final wsName = _cleanArchiveName(fileName);
+    return _runServerImport(
+      zipBytes,
+      name: wsName.isEmpty ? 'Imported' : wsName,
+      notion: notion,
     );
   }
 
-  /// Import a file tree (relative path → bytes) as a NEW workspace. Entries
-  /// come lazily so ZIP parsing also runs inside the guarded flow.
-  Future<void> _importWorkspaceTree(
-    String wsName,
-    List<ZipFileEntry> Function() loadEntries, {
-    bool notionHint = false,
+  /// Import loose files / a picked folder into an EXISTING workspace: pack
+  /// them into a STORE ZIP (no compression — it goes straight to our own
+  /// backend) and let the server import it.
+  Future<void> _importTreeIntoWorkspace(
+    Workspace workspace,
+    List<ArchiveFile> entries,
+  ) {
+    return _runServerImport(buildStoreZip(entries), workspaceId: workspace.id);
+  }
+
+  /// Upload the archive, poll the import job, then refresh and open the
+  /// resulting workspace.
+  Future<void> _runServerImport(
+    Uint8List zipBytes, {
+    String? name,
+    bool notion = false,
+    String? workspaceId,
   }) {
     return _run(() async {
       final session = _requireSession();
-      final entries = loadEntries();
-      final workspace = await _api.createWorkspace(
+      final jobId = await _api.startWorkspaceImport(
         session.accessToken,
-        wsName,
+        zipBytes,
+        name: name,
+        notion: notion,
+        workspaceId: workspaceId,
       );
-      await _importEntriesInto(session, workspace, entries,
-          notionHint: notionHint);
+      ImportJobStatus job;
+      while (true) {
+        job = await _api.importJobStatus(session.accessToken, jobId);
+        if (job.status != 'running') break;
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      }
+      if (job.status == 'error') {
+        throw ApiException(job.error ?? 'import failed');
+      }
       final workspaces = await _api.listWorkspaces(session.accessToken);
       if (mounted) setState(() => _workspaces = workspaces);
-      await _selectWorkspace(workspace);
+      final targetId = job.workspaceId ?? workspaceId;
+      for (final w in workspaces) {
+        if (w.id == targetId) {
+          await _selectWorkspace(w);
+          break;
+        }
+      }
     });
   }
 
-  /// Import a file tree into an EXISTING workspace (pages appended at the
-  /// root level), then reload it.
-  Future<void> _importTreeIntoWorkspace(
-    Workspace workspace,
-    List<ZipFileEntry> entries,
-  ) {
-    return _run(() async {
-      final session = _requireSession();
-      await _importEntriesInto(session, workspace, entries);
-      await _selectWorkspace(workspace);
-    });
-  }
-
-  /// Shared import core: rebuild the page tree from the folder layout
-  /// (folders without a matching `.md` become empty directory pages), and
-  /// upload images referenced by relative path, rewiring them to Mica's
-  /// `{file_id, name}` image format.
-  Future<void> _importEntriesInto(
-    AuthSession session,
-    Workspace workspace,
-    List<ZipFileEntry> rawEntries, {
-    bool notionHint = false,
-  }) async {
-    // Peel wrapper folders (zipped folder / Notion export shell), drop OS
-    // metadata, and expand nested Part-N.zip archives (Notion whole-
-    // workspace exports) before anything else looks at the paths.
-    final entries =
-        expandNestedZips(normalizeZipEntries(rawEntries));
-    final mdNames = [
-      for (final e in entries)
-        if (e.name.toLowerCase().endsWith('.md')) e.name,
-    ];
-    // ignore: avoid_print
-    print('[mica-import] raw=${rawEntries.length} entries=${entries.length} '
-        'md=${mdNames.length}');
-    for (final n in mdNames.take(100)) {
-      // ignore: avoid_print
-      print('[mica-import] md: $n');
-    }
-
-    // Mica's export writes a manifest.json carrying the page-tree order.
-    String? manifestJson;
-    for (final e in entries) {
-      if (e.name == 'manifest.json') {
-        manifestJson = utf8.decode(e.bytes, allowMalformed: true);
-        break;
-      }
-    }
-
-    // Non-markdown files in the ZIP, addressable by path. Uploaded lazily
-    // when a page actually references them, each at most once.
-    final filesByPath = <String, Uint8List>{
-      for (final e in entries)
-        if (!e.name.toLowerCase().endsWith('.md') &&
-            e.name != 'manifest.json')
-          e.name: e.bytes,
-    };
-    final zipPaths = filesByPath.keys.toSet();
-    final uploadedByPath = <String, ({String fileId, String name})>{};
-
-    Future<({String fileId, String name})?> uploadImageRef(
-        String mdPath, String url) async {
-      final zipPath = resolveZipPath(mdPath, url, zipPaths);
-      if (zipPath == null) return null; // external URL or not in the ZIP
-      final cached = uploadedByPath[zipPath];
-      if (cached != null) return cached;
-      final base = zipPath.split('/').last;
-      final file = await _api.uploadImage(
-        session.accessToken,
-        workspace.id,
-        fileName: base,
-        mimeType: _guessImageMime(base),
-        bytes: filesByPath[zipPath]!,
-      );
-      return uploadedByPath[zipPath] = (fileId: file.id, name: file.name);
-    }
-
-    // Create pages in manifest (page-tree) order so sibling order is
-    // restored; files unknown to the manifest follow, parents-first.
-    final mdByPath = {
-      for (final e in entries)
-        if (e.name.toLowerCase().endsWith('.md')) e.name: e,
-    };
-    final mds = [
-      for (final p in orderPagePaths(mdByPath.keys, manifestJson))
-        mdByPath[p]!,
-    ];
-    // Notion mode: forced by the "From Notion" entry, or auto-detected when
-    // most pages carry Notion ID suffixes. Standard archives get exact
-    // matching — no risk of mangling hash-like names.
-    final isNotion = notionHint || looksLikeNotionExport(mdByPath.keys);
-    String clean(String s) => isNotion ? stripNotionId(s) : s;
-    // ignore: avoid_print
-    print('[mica-import] notion=$isNotion (hint=$notionHint)');
-
-    // Folder ↔ page association; in Notion mode folder `apple/` matches the
-    // page exported as `apple 31f5<…>.md`.
-    final mdForFolder = folderPageIndex(mdByPath.keys, notion: isNotion);
-    final viewByPath = <String, String>{};
-    final folderView = <String, String>{}; // folder path -> its page's view
-    final stamp = DateTime.now().microsecondsSinceEpoch;
-    final createdPages = <({
-      ZipFileEntry entry,
-      String markdown,
-      String title,
-      DocumentCreateResult created,
-    })>[];
-
-    // Phase 1 — create every page (and directory page) so the tree and the
-    // path → view mapping are complete before any content references them.
-    for (final e in mds) {
-      final parts = e.name.split('/');
-      // Walk the folder chain. A folder maps to the page exported as
-      // `<folder>.md` (modulo Notion IDs) when present; otherwise create an
-      // empty page to act as the directory node.
-      String? parentViewId;
-      var folderPath = '';
-      var normFolderPath = '';
-      for (var d = 0; d + 1 < parts.length; d++) {
-        folderPath =
-            folderPath.isEmpty ? parts[d] : '$folderPath/${parts[d]}';
-        final seg = clean(parts[d]);
-        normFolderPath =
-            normFolderPath.isEmpty ? seg : '$normFolderPath/$seg';
-        final folderMd = mdForFolder[normFolderPath];
-        var v = (folderMd != null ? viewByPath[folderMd] : null) ??
-            folderView[folderPath];
-        if (v == null) {
-          final dirPage = await _api.createDocument(
-            session.accessToken,
-            workspace.id,
-            seg,
-            parentViewId: parentViewId,
-          );
-          v = dirPage.view.id;
-          folderView[folderPath] = v;
-        }
-        parentViewId = v;
-      }
-      final markdown = utf8.decode(e.bytes, allowMalformed: true);
-      final fallback = clean(parts.last.replaceAll(
-        RegExp(r'\.md$', caseSensitive: false),
-        '',
-      ));
-      final title = _titleFromMarkdown(markdown, fallback);
-      final created = await _api.createDocument(
-        session.accessToken,
-        workspace.id,
-        title,
-        parentViewId: parentViewId,
-      );
-      viewByPath[e.name] = created.view.id;
-      createdPages.add((
-        entry: e,
-        markdown: markdown,
-        title: title,
-        created: created,
-      ));
-    }
-
-    // Phase 2 — content. Runs after every page exists so relative `.md`
-    // links can be rewired to internal page links, including forward ones.
-    final mdPathSet = mdByPath.keys.toSet();
-
-    Map<String, dynamic> rewritePageLinks(
-        Map<String, dynamic> data, String mdPath) {
-      final raw = data['marks'];
-      if (raw is! List) return data;
-      var changed = false;
-      final next = <dynamic>[];
-      for (final m in raw) {
-        if (m is Map && m['type'] == 'link' && m['href'] is String) {
-          final target =
-              resolveZipPath(mdPath, m['href'] as String, mdPathSet);
-          final viewId = target == null ? null : viewByPath[target];
-          if (viewId != null) {
-            next.add({...m, 'href': 'mica://page/$viewId'});
-            changed = true;
-            continue;
-          }
-        }
-        next.add(m);
-      }
-      return changed ? {...data, 'marks': next} : data;
-    }
-
-    var pageSeq = 0;
-    for (final page in createdPages) {
-      pageSeq++;
-      final specs = markdownToBlocks(page.markdown);
-      final ops = <Map<String, dynamic>>[];
-      var index = 0;
-      for (var k = 0; k < specs.length; k++) {
-        // Skip a leading H1 that duplicates the page title.
-        if (k == 0 &&
-            specs[k].kind == 'heading' &&
-            specs[k].text.trim() == page.title) {
-          continue;
-        }
-        var data = specs[k].data;
-        if (specs[k].kind == 'image') {
-          final url = data['url'] as String?;
-          if (url != null) {
-            final up = await uploadImageRef(page.entry.name, url);
-            if (up != null) {
-              data = {'file_id': up.fileId, 'name': up.name};
-            }
-          }
-        }
-        data = rewritePageLinks(data, page.entry.name);
-        ops.add({
-          'type': 'insert_block',
-          'parent_id': page.created.document.rootBlockId,
-          'index': index,
-          'block': {
-            'id': 'block_${stamp}_${pageSeq}_$k',
-            'type': specs[k].kind,
-            'text': specs[k].text,
-            'data': data,
-            'children': <String>[],
-          },
-        });
-        index++;
-      }
-      if (ops.isNotEmpty) {
-        await _api.applyDocumentUpdate(
-          session.accessToken,
-          workspace.id,
-          page.created.document.id,
-          ops,
+  /// Workspace name from an archive filename: drop the extension and the
+  /// `Export-<uuid>` style ID suffix Notion appends.
+  String _cleanArchiveName(String fileName) {
+    var name = fileName
+        .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
+        .trim();
+    name = name
+        .replaceFirst(RegExp(r'[ \-_]+[0-9a-fA-F]{32}$'), '')
+        .replaceFirst(
+          RegExp(r'[ \-_]+[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+              r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'),
+          '',
         );
-      }
-    }
-  }
-
-  String _guessImageMime(String name) {
-    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-    switch (ext) {
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'gif':
-        return 'image/gif';
-      case 'webp':
-        return 'image/webp';
-      case 'svg':
-        return 'image/svg+xml';
-      case 'bmp':
-        return 'image/bmp';
-      default:
-        return 'image/png';
-    }
+    return name;
   }
 
   Future<void> _aiCurrentFromMarkdown(String markdown) {
@@ -1915,7 +1699,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
-  final Future<void> Function(Workspace workspace, List<ZipFileEntry> entries)
+  final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   onImportWorkspaceTreeInto;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
@@ -3152,19 +2936,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   /// Multi-select import into an existing workspace: .md files (plus images
-  /// they reference) append pages at the root; a ZIP's whole tree unpacks in.
+  /// they reference) append pages at the root; ZIPs ride along as-is — the
+  /// server expands nested archives.
   Future<void> _importFilesIntoWorkspace(Workspace workspace) async {
     final picked = await pickImportFiles();
     if (picked.isEmpty || !mounted) return;
-    final entries = <ZipFileEntry>[];
-    for (final f in picked) {
-      if (f.name.toLowerCase().endsWith('.zip')) {
-        entries.addAll(readZip(f.bytes));
-      } else {
-        entries.add(ZipFileEntry(f.name, f.bytes));
-      }
-    }
-    await widget.onImportWorkspaceTreeInto(workspace, entries);
+    await widget.onImportWorkspaceTreeInto(workspace, [
+      for (final f in picked) ArchiveFile(f.name, f.bytes),
+    ]);
   }
 
   /// Folder import (recursive) into an existing workspace: the folder's
@@ -3172,12 +2951,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _importFolderIntoWorkspace(Workspace workspace) async {
     final picked = await pickImportFolder();
     if (picked.isEmpty || !mounted) return;
-    final entries = <ZipFileEntry>[];
+    final entries = <ArchiveFile>[];
     for (final f in picked) {
       // The picker includes the chosen folder itself as the first segment —
       // drop it so the folder's contents land at the workspace root.
       final parts = f.path.split('/');
-      entries.add(ZipFileEntry(
+      entries.add(ArchiveFile(
         parts.length > 1 ? parts.sublist(1).join('/') : f.path,
         f.bytes,
       ));
@@ -5160,6 +4939,33 @@ class AuthFormValue {
   final String password;
 }
 
+/// Progress of a server-side workspace import job.
+class ImportJobStatus {
+  const ImportJobStatus({
+    required this.status,
+    required this.total,
+    required this.done,
+    this.workspaceId,
+    this.error,
+  });
+
+  factory ImportJobStatus.fromJson(Map<String, dynamic> json) {
+    return ImportJobStatus(
+      status: json['status'] as String? ?? 'running',
+      total: (json['total'] as num?)?.toInt() ?? 0,
+      done: (json['done'] as num?)?.toInt() ?? 0,
+      workspaceId: json['workspace_id'] as String?,
+      error: json['error'] as String?,
+    );
+  }
+
+  final String status; // running | done | error
+  final int total;
+  final int done;
+  final String? workspaceId;
+  final String? error;
+}
+
 class ApiClient {
   ApiClient() : _baseUri = _resolveBaseUri();
 
@@ -5655,6 +5461,36 @@ class ApiClient {
       out[f.id] = f.downloadUrl;
     }
     return out;
+  }
+
+  /// Start a server-side workspace import: the body is the raw archive.
+  /// Returns the job id to poll with [importJobStatus].
+  Future<String> startWorkspaceImport(
+    String token,
+    Uint8List zipBytes, {
+    String? name,
+    bool notion = false,
+    String? workspaceId,
+  }) async {
+    final response = await http.post(
+      _baseUri.replace(path: '/api/workspaces/import', queryParameters: {
+        if (name != null && name.isNotEmpty) 'name': name,
+        if (notion) 'notion': 'true',
+        ?'workspace_id': workspaceId,
+      }),
+      headers: {
+        'content-type': 'application/zip',
+        'authorization': 'Bearer $token',
+      },
+      body: zipBytes,
+    );
+    final body = _decode(response);
+    return body['job_id'] as String;
+  }
+
+  Future<ImportJobStatus> importJobStatus(String token, String jobId) async {
+    final response = await _get('/api/import/jobs/$jobId', token);
+    return ImportJobStatus.fromJson(response);
   }
 
   Future<Map<String, dynamic>> _get(String path, String token) async {
