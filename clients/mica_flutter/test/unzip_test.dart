@@ -153,6 +153,54 @@ void main() {
     expect(utf8.decode(entries.single.bytes), 'hi');
   });
 
+  test('readZip handles ZIP64 markers (streamed server archives)', () {
+    // Central sizes/offset are 0xffffffff with a 0x0001 extra; the EOCD uses
+    // 0xffff/0xffffffff markers deferring to the zip64 EOCD + locator.
+    final zip = base64.decode(
+      'UEsDBC0AAAgIAAAAAACimgY8CgAAAAgAAAAHAAAAUGFnZS5tZFNWeLJ3wdOlewFQSwEC'
+      'LQAtAAAICAAAAAAAopoGPP//////////BwAcAAAAAAAAAAAAAAD/////UGFnZS5tZAEA'
+      'GAAIAAAAAAAAAAoAAAAAAAAAAAAAAAAAAABQSwYGLAAAAAAAAAAtAC0AAAAAAAAAAAAB'
+      'AAAAAAAAAAEAAAAAAAAAUQAAAAAAAAAvAAAAAAAAAFBLBgcAAAAAgAAAAAAAAAABAAAA'
+      'UEsFBgAAAAD///////////////8AAA==',
+    );
+    final entries = readZip(Uint8List.fromList(zip));
+    expect(entries.single.name, 'Page.md');
+    expect(utf8.decode(entries.single.bytes), '# 你好');
+  });
+
+  test('readZip handles data-descriptor entries (flag bit 3)', () {
+    // Local header sizes are zero; real sizes only in the descriptor and the
+    // central directory — central-driven reading must still work.
+    final zip = base64.decode(
+      'UEsDBBQACAgIAAAAAAAAAAAAAAAAAAAAAAAJAAAAc3RyZWFtLm1kKy4pSk3MTU1RSM7P'
+      'K0nNKwEAUEsHCJGEwQoSAAAAEAAAAFBLAQIUABQACAgIAAAAAACRhMEKEgAAABAAAAAJ'
+      'AAAAAAAAAAAAAAAAAAAAAABzdHJlYW0ubWRQSwUGAAAAAAEAAQA3AAAASQAAAAAA',
+    );
+    final entries = readZip(Uint8List.fromList(zip));
+    expect(entries.single.name, 'stream.md');
+    expect(utf8.decode(entries.single.bytes), 'streamed content');
+  });
+
+  test('expandNestedZips unpacks Part-N.zip inside a wrapper folder', () {
+    final outer = base64.decode(
+      'UEsDBBQAAAAIAM9dxFxzsiOohQAAALIBAAAWAAAARXhwb3J0LTEyMzQvUGFydC0xLnpp'
+      'cAvwZmYRYWBg4GA4H3skZv/d1kZ+II8XiDWB2L00MyVVITEpOSU1DRdpaKSXmxIcVqB/'
+      '1sfz6akzp711mRgCUEy9KVBfzw7ksQKxH9Gm6geXJhFQZGwCtppDzxdkJSOTCDNur8BA'
+      'AyMDKR5DNxbdLwhjw6juswBvVjaQ2UxAeBlInwTbBABQSwECFAMUAAAACADPXcRcc7Ij'
+      'qIUAAACyAQAAFgAAAAAAAAAAAAAAgAEAAAAARXhwb3J0LTEyMzQvUGFydC0xLnppcFBL'
+      'BQYAAAAAAQABAEQAAAC5AAAAAAA=',
+    );
+    final entries = expandNestedZips(
+      normalizeZipEntries(readZip(Uint8List.fromList(outer))),
+    );
+    final names = entries.map((e) => e.name).toList();
+    expect(names, [
+      'Guide abcdefabcdefabcdefabcdefabcdef12.md',
+      'Guide abcdefabcdefabcdefabcdefabcdef12/Sub abcdefabcdefabcdefabcdefabcdef34.md',
+    ]);
+    expect(utf8.decode(entries.first.bytes), '# Guide\ninner');
+  });
+
   group('normalizeZipEntries', () {
     ZipFileEntry e(String name) => ZipFileEntry(name, Uint8List(0));
     List<String> names(List<ZipFileEntry> l) => l.map((x) => x.name).toList();

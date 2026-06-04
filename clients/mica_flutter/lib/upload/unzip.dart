@@ -32,8 +32,22 @@ List<ZipFileEntry> readZip(Uint8List data) {
   }
   if (eocd < 0) return _readLocalEntries(data, bd);
 
-  final total = bd.getUint16(eocd + 10, Endian.little);
+  var total = bd.getUint16(eocd + 10, Endian.little);
   var off = bd.getUint32(eocd + 16, Endian.little);
+  // ZIP64: 0xffff/0xffffffff are markers deferring to the zip64 EOCD record
+  // (streamed server-side archives use these even for small files).
+  if (total == 0xffff || off == 0xffffffff) {
+    final loc = eocd - 20;
+    if (loc >= 0 && bd.getUint32(loc, Endian.little) == 0x07064b50) {
+      final z64 = _u64(bd, loc + 8);
+      if (z64 >= 0 &&
+          z64 + 56 <= data.length &&
+          bd.getUint32(z64, Endian.little) == 0x06064b50) {
+        total = _u64(bd, z64 + 32);
+        off = _u64(bd, z64 + 48);
+      }
+    }
+  }
   final out = <ZipFileEntry>[];
   for (var n = 0; n < total; n++) {
     if (off + 46 > data.length ||
@@ -42,12 +56,41 @@ List<ZipFileEntry> readZip(Uint8List data) {
     }
     final flags = bd.getUint16(off + 8, Endian.little);
     final method = bd.getUint16(off + 10, Endian.little);
-    final compSize = bd.getUint32(off + 20, Endian.little);
-    final uncompSize = bd.getUint32(off + 24, Endian.little);
+    var compSize = bd.getUint32(off + 20, Endian.little);
+    var uncompSize = bd.getUint32(off + 24, Endian.little);
     final nameLen = bd.getUint16(off + 28, Endian.little);
     final extraLen = bd.getUint16(off + 30, Endian.little);
     final commentLen = bd.getUint16(off + 32, Endian.little);
-    final localOff = bd.getUint32(off + 42, Endian.little);
+    var localOff = bd.getUint32(off + 42, Endian.little);
+    // ZIP64 extra field (0x0001): 8-byte values for exactly the fields
+    // that hold the 0xffffffff marker, in spec order.
+    if (compSize == 0xffffffff ||
+        uncompSize == 0xffffffff ||
+        localOff == 0xffffffff) {
+      var p = off + 46 + nameLen;
+      final end = p + extraLen;
+      while (p + 4 <= end) {
+        final id = bd.getUint16(p, Endian.little);
+        final size = bd.getUint16(p + 2, Endian.little);
+        if (id == 0x0001) {
+          var q = p + 4;
+          final fieldEnd = p + 4 + size;
+          if (uncompSize == 0xffffffff && q + 8 <= fieldEnd) {
+            uncompSize = _u64(bd, q);
+            q += 8;
+          }
+          if (compSize == 0xffffffff && q + 8 <= fieldEnd) {
+            compSize = _u64(bd, q);
+            q += 8;
+          }
+          if (localOff == 0xffffffff && q + 8 <= fieldEnd) {
+            localOff = _u64(bd, q);
+          }
+          break;
+        }
+        p += 4 + size;
+      }
+    }
     final name = _decodeName(
       data.sublist(off + 46, off + 46 + nameLen),
       flags,
@@ -72,6 +115,36 @@ List<ZipFileEntry> readZip(Uint8List data) {
       uncompSize,
     );
     if (entry != null) out.add(ZipFileEntry(name, entry));
+  }
+  return out;
+}
+
+/// Read a little-endian u64 without 64-bit shifts (unsupported on dart2js).
+/// Values beyond 2^53 don't occur for in-memory archives.
+int _u64(ByteData bd, int off) {
+  final lo = bd.getUint32(off, Endian.little);
+  final hi = bd.getUint32(off + 4, Endian.little);
+  return hi * 0x100000000 + lo;
+}
+
+/// Expand archives nested one level inside [entries] — Notion's whole-
+/// workspace exports ship `Part-N.zip` files inside the outer ZIP. Inner
+/// content is normalized; unreadable inner archives are dropped.
+List<ZipFileEntry> expandNestedZips(List<ZipFileEntry> entries) {
+  if (!entries.any((e) => e.name.toLowerCase().endsWith('.zip'))) {
+    return entries;
+  }
+  final out = <ZipFileEntry>[];
+  for (final e in entries) {
+    if (e.name.toLowerCase().endsWith('.zip')) {
+      try {
+        out.addAll(normalizeZipEntries(readZip(e.bytes)));
+      } catch (_) {
+        // skip unreadable inner archive
+      }
+    } else {
+      out.add(e);
+    }
   }
   return out;
 }

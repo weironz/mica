@@ -732,9 +732,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     Workspace workspace,
     List<ZipFileEntry> rawEntries,
   ) async {
-    // Peel wrapper folders (zipped folder / Notion export shell) and drop
-    // OS metadata before anything else looks at the paths.
-    final entries = normalizeZipEntries(rawEntries);
+    // Peel wrapper folders (zipped folder / Notion export shell), drop OS
+    // metadata, and expand nested Part-N.zip archives (Notion whole-
+    // workspace exports) before anything else looks at the paths.
+    final entries =
+        expandNestedZips(normalizeZipEntries(rawEntries));
+    // ignore: avoid_print
+    print('[mica-import] raw=${rawEntries.length} entries=${entries.length} '
+        'md=${entries.where((e) => e.name.toLowerCase().endsWith('.md')).length} '
+        'first=${entries.take(3).map((e) => e.name).toList()}');
 
     // Mica's export writes a manifest.json carrying the page-tree order.
     String? manifestJson;
