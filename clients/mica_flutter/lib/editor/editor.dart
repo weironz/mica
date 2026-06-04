@@ -1944,20 +1944,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _openLanguageMenu(int nodeIndex, Offset globalPosition) async {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (overlay == null) return;
-    final position = RelativeRect.fromRect(
-      globalPosition & const Size(40, 40),
-      Offset.zero & overlay.size,
-    );
-    final selected = await showMenu<String>(
+    final selected = await showDialog<String>(
       context: context,
-      position: position,
-      constraints: const BoxConstraints(maxHeight: 360),
-      items: [
-        for (final language in kCodeLanguages)
-          PopupMenuItem<String>(value: language, child: Text(language)),
-      ],
+      barrierColor: Colors.transparent,
+      builder: (context) => _LanguagePicker(anchor: globalPosition),
     );
     if (selected != null) {
       _controller.setCodeLanguage(nodeIndex, selected);
@@ -2926,3 +2916,162 @@ const List<_SlashOption> _slashOptions = [
   _SlashOption('Divider', Icons.horizontal_rule, 'divider'),
   _SlashOption('Image', Icons.image_outlined, 'image'),
 ];
+
+/// Code-block language picker: a small anchored panel with a search box —
+/// the language list is long, so filtering beats scrolling. ↑/↓ move the
+/// highlight, Enter picks, Esc dismisses; pops with the chosen language.
+class _LanguagePicker extends StatefulWidget {
+  const _LanguagePicker({required this.anchor});
+
+  final Offset anchor;
+
+  @override
+  State<_LanguagePicker> createState() => _LanguagePickerState();
+}
+
+class _LanguagePickerState extends State<_LanguagePicker> {
+  final TextEditingController _query = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  int _index = 0;
+
+  List<String> get _filtered {
+    final q = _query.text.trim().toLowerCase();
+    if (q.isEmpty) return kCodeLanguages;
+    return [
+      for (final l in kCodeLanguages)
+        if (l.toLowerCase().contains(q)) l,
+    ];
+  }
+
+  @override
+  void dispose() {
+    _query.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _pick(String language) => Navigator.of(context).pop(language);
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final items = _filtered;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown && items.isNotEmpty) {
+      setState(() => _index = (_index + 1) % items.length);
+      _reveal(items.length);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp && items.isNotEmpty) {
+      setState(() => _index = (_index - 1 + items.length) % items.length);
+      _reveal(items.length);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter && items.isNotEmpty) {
+      _pick(items[_index.clamp(0, items.length - 1)]);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _reveal(int count) {
+    if (!_scroll.hasClients || count == 0) return;
+    const itemH = 34.0;
+    final target = (_index * itemH).clamp(0.0, _scroll.position.maxScrollExtent);
+    final top = _scroll.offset;
+    final bottom = top + 240 - itemH;
+    if (target < top || target > bottom) {
+      _scroll.jumpTo((target - 100).clamp(0.0, _scroll.position.maxScrollExtent));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    const w = 240.0;
+    const h = 312.0;
+    final left = widget.anchor.dx.clamp(8.0, screen.width - w - 8);
+    final top = widget.anchor.dy.clamp(8.0, screen.height - h - 8);
+    final items = _filtered;
+    final active = _index.clamp(0, items.isEmpty ? 0 : items.length - 1);
+
+    return Stack(
+      children: [
+        Positioned(
+          left: left,
+          top: top,
+          child: Focus(
+            onKeyEvent: _onKey,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: w,
+                height: h,
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _query,
+                      autofocus: true,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: const InputDecoration(
+                        hintText: 'Search language…',
+                        prefixIcon: Icon(Icons.search, size: 16),
+                        prefixIconConstraints: BoxConstraints(minWidth: 28),
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 8,
+                        ),
+                      ),
+                      onChanged: (_) => setState(() => _index = 0),
+                    ),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: items.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No matches',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Color(0xFF94A3B8),
+                                ),
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: _scroll,
+                              itemExtent: 34,
+                              itemCount: items.length,
+                              itemBuilder: (context, i) => InkWell(
+                                onTap: () => _pick(items[i]),
+                                child: Container(
+                                  color: i == active
+                                      ? const Color(0x142563EB)
+                                      : null,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    items[i],
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
