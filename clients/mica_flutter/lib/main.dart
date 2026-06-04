@@ -689,10 +689,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  /// Import a file tree (relative path → bytes) as a new workspace: rebuild
-  /// the page tree from the folder layout (folders without a matching `.md`
-  /// become empty directory pages), and upload images referenced by relative
-  /// path, rewiring them to Mica's `{file_id, name}` image format. Entries
+  /// Import a file tree (relative path → bytes) as a NEW workspace. Entries
   /// come lazily so ZIP parsing also runs inside the guarded flow.
   Future<void> _importWorkspaceTree(
     String wsName,
@@ -705,142 +702,165 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         session.accessToken,
         wsName,
       );
-
-      // Mica's export writes a manifest.json carrying the page-tree order.
-      String? manifestJson;
-      for (final e in entries) {
-        if (e.name == 'manifest.json') {
-          manifestJson = utf8.decode(e.bytes, allowMalformed: true);
-          break;
-        }
-      }
-
-      // Non-markdown files in the ZIP, addressable by path. Uploaded lazily
-      // when a page actually references them, each at most once.
-      final filesByPath = <String, Uint8List>{
-        for (final e in entries)
-          if (!e.name.toLowerCase().endsWith('.md') &&
-              e.name != 'manifest.json')
-            e.name: e.bytes,
-      };
-      final zipPaths = filesByPath.keys.toSet();
-      final uploadedByPath = <String, ({String fileId, String name})>{};
-
-      Future<({String fileId, String name})?> uploadImageRef(
-          String mdPath, String url) async {
-        final zipPath = resolveZipPath(mdPath, url, zipPaths);
-        if (zipPath == null) return null; // external URL or not in the ZIP
-        final cached = uploadedByPath[zipPath];
-        if (cached != null) return cached;
-        final base = zipPath.split('/').last;
-        final file = await _api.uploadImage(
-          session.accessToken,
-          workspace.id,
-          fileName: base,
-          mimeType: _guessImageMime(base),
-          bytes: filesByPath[zipPath]!,
-        );
-        return uploadedByPath[zipPath] = (fileId: file.id, name: file.name);
-      }
-
-      // Create pages in manifest (page-tree) order so sibling order is
-      // restored; files unknown to the manifest follow, parents-first.
-      final mdByPath = {
-        for (final e in entries)
-          if (e.name.toLowerCase().endsWith('.md')) e.name: e,
-      };
-      final mds = [
-        for (final p in orderPagePaths(mdByPath.keys, manifestJson))
-          mdByPath[p]!,
-      ];
-      final viewByPath = <String, String>{};
-      final folderView = <String, String>{}; // folder path -> its page's view
-      final stamp = DateTime.now().microsecondsSinceEpoch;
-      for (final e in mds) {
-        final parts = e.name.split('/');
-        // Walk the folder chain. A folder maps to the page exported as
-        // `<folder>.md` when present; otherwise create an empty page to act
-        // as the directory node.
-        String? parentViewId;
-        var folderPath = '';
-        for (var d = 0; d + 1 < parts.length; d++) {
-          folderPath =
-              folderPath.isEmpty ? parts[d] : '$folderPath/${parts[d]}';
-          var v = viewByPath['$folderPath.md'] ?? folderView[folderPath];
-          if (v == null) {
-            final dirPage = await _api.createDocument(
-              session.accessToken,
-              workspace.id,
-              parts[d],
-              parentViewId: parentViewId,
-            );
-            v = dirPage.view.id;
-            folderView[folderPath] = v;
-          }
-          parentViewId = v;
-        }
-        final markdown = utf8.decode(e.bytes, allowMalformed: true);
-        final fallback = parts.last.replaceAll(
-          RegExp(r'\.md$', caseSensitive: false),
-          '',
-        );
-        final title = _titleFromMarkdown(markdown, fallback);
-        final created = await _api.createDocument(
-          session.accessToken,
-          workspace.id,
-          title,
-          parentViewId: parentViewId,
-        );
-        viewByPath[e.name] = created.view.id;
-
-        final specs = markdownToBlocks(markdown);
-        final ops = <Map<String, dynamic>>[];
-        var index = 0;
-        for (var k = 0; k < specs.length; k++) {
-          // Skip a leading H1 that duplicates the page title.
-          if (k == 0 &&
-              specs[k].kind == 'heading' &&
-              specs[k].text.trim() == title) {
-            continue;
-          }
-          var data = specs[k].data;
-          if (specs[k].kind == 'image') {
-            final url = data['url'] as String?;
-            if (url != null) {
-              final up = await uploadImageRef(e.name, url);
-              if (up != null) {
-                data = {'file_id': up.fileId, 'name': up.name};
-              }
-            }
-          }
-          ops.add({
-            'type': 'insert_block',
-            'parent_id': created.document.rootBlockId,
-            'index': index,
-            'block': {
-              'id': 'block_${stamp}_${viewByPath.length}_$k',
-              'type': specs[k].kind,
-              'text': specs[k].text,
-              'data': data,
-              'children': <String>[],
-            },
-          });
-          index++;
-        }
-        if (ops.isNotEmpty) {
-          await _api.applyDocumentUpdate(
-            session.accessToken,
-            workspace.id,
-            created.document.id,
-            ops,
-          );
-        }
-      }
-
+      await _importEntriesInto(session, workspace, entries);
       final workspaces = await _api.listWorkspaces(session.accessToken);
       if (mounted) setState(() => _workspaces = workspaces);
       await _selectWorkspace(workspace);
     });
+  }
+
+  /// Import a file tree into an EXISTING workspace (pages appended at the
+  /// root level), then reload it.
+  Future<void> _importTreeIntoWorkspace(
+    Workspace workspace,
+    List<ZipFileEntry> entries,
+  ) {
+    return _run(() async {
+      final session = _requireSession();
+      await _importEntriesInto(session, workspace, entries);
+      await _selectWorkspace(workspace);
+    });
+  }
+
+  /// Shared import core: rebuild the page tree from the folder layout
+  /// (folders without a matching `.md` become empty directory pages), and
+  /// upload images referenced by relative path, rewiring them to Mica's
+  /// `{file_id, name}` image format.
+  Future<void> _importEntriesInto(
+    AuthSession session,
+    Workspace workspace,
+    List<ZipFileEntry> entries,
+  ) async {
+    // Mica's export writes a manifest.json carrying the page-tree order.
+    String? manifestJson;
+    for (final e in entries) {
+      if (e.name == 'manifest.json') {
+        manifestJson = utf8.decode(e.bytes, allowMalformed: true);
+        break;
+      }
+    }
+
+    // Non-markdown files in the ZIP, addressable by path. Uploaded lazily
+    // when a page actually references them, each at most once.
+    final filesByPath = <String, Uint8List>{
+      for (final e in entries)
+        if (!e.name.toLowerCase().endsWith('.md') &&
+            e.name != 'manifest.json')
+          e.name: e.bytes,
+    };
+    final zipPaths = filesByPath.keys.toSet();
+    final uploadedByPath = <String, ({String fileId, String name})>{};
+
+    Future<({String fileId, String name})?> uploadImageRef(
+        String mdPath, String url) async {
+      final zipPath = resolveZipPath(mdPath, url, zipPaths);
+      if (zipPath == null) return null; // external URL or not in the ZIP
+      final cached = uploadedByPath[zipPath];
+      if (cached != null) return cached;
+      final base = zipPath.split('/').last;
+      final file = await _api.uploadImage(
+        session.accessToken,
+        workspace.id,
+        fileName: base,
+        mimeType: _guessImageMime(base),
+        bytes: filesByPath[zipPath]!,
+      );
+      return uploadedByPath[zipPath] = (fileId: file.id, name: file.name);
+    }
+
+    // Create pages in manifest (page-tree) order so sibling order is
+    // restored; files unknown to the manifest follow, parents-first.
+    final mdByPath = {
+      for (final e in entries)
+        if (e.name.toLowerCase().endsWith('.md')) e.name: e,
+    };
+    final mds = [
+      for (final p in orderPagePaths(mdByPath.keys, manifestJson))
+        mdByPath[p]!,
+    ];
+    final viewByPath = <String, String>{};
+    final folderView = <String, String>{}; // folder path -> its page's view
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    for (final e in mds) {
+      final parts = e.name.split('/');
+      // Walk the folder chain. A folder maps to the page exported as
+      // `<folder>.md` when present; otherwise create an empty page to act
+      // as the directory node.
+      String? parentViewId;
+      var folderPath = '';
+      for (var d = 0; d + 1 < parts.length; d++) {
+        folderPath =
+            folderPath.isEmpty ? parts[d] : '$folderPath/${parts[d]}';
+        var v = viewByPath['$folderPath.md'] ?? folderView[folderPath];
+        if (v == null) {
+          final dirPage = await _api.createDocument(
+            session.accessToken,
+            workspace.id,
+            parts[d],
+            parentViewId: parentViewId,
+          );
+          v = dirPage.view.id;
+          folderView[folderPath] = v;
+        }
+        parentViewId = v;
+      }
+      final markdown = utf8.decode(e.bytes, allowMalformed: true);
+      final fallback = parts.last.replaceAll(
+        RegExp(r'\.md$', caseSensitive: false),
+        '',
+      );
+      final title = _titleFromMarkdown(markdown, fallback);
+      final created = await _api.createDocument(
+        session.accessToken,
+        workspace.id,
+        title,
+        parentViewId: parentViewId,
+      );
+      viewByPath[e.name] = created.view.id;
+
+      final specs = markdownToBlocks(markdown);
+      final ops = <Map<String, dynamic>>[];
+      var index = 0;
+      for (var k = 0; k < specs.length; k++) {
+        // Skip a leading H1 that duplicates the page title.
+        if (k == 0 &&
+            specs[k].kind == 'heading' &&
+            specs[k].text.trim() == title) {
+          continue;
+        }
+        var data = specs[k].data;
+        if (specs[k].kind == 'image') {
+          final url = data['url'] as String?;
+          if (url != null) {
+            final up = await uploadImageRef(e.name, url);
+            if (up != null) {
+              data = {'file_id': up.fileId, 'name': up.name};
+            }
+          }
+        }
+        ops.add({
+          'type': 'insert_block',
+          'parent_id': created.document.rootBlockId,
+          'index': index,
+          'block': {
+            'id': 'block_${stamp}_${viewByPath.length}_$k',
+            'type': specs[k].kind,
+            'text': specs[k].text,
+            'data': data,
+            'children': <String>[],
+          },
+        });
+        index++;
+      }
+      if (ops.isNotEmpty) {
+        await _api.applyDocumentUpdate(
+          session.accessToken,
+          workspace.id,
+          created.document.id,
+          ops,
+        );
+      }
+    }
   }
 
   String _guessImageMime(String name) {
@@ -1467,8 +1487,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
                 onExportWorkspaceZip: _exportWorkspaceZip,
                 onImportWorkspaceZip: _importWorkspaceZip,
-                onImportWorkspaceTree: (name, entries) =>
-                    _importWorkspaceTree(name, () => entries),
+                onImportWorkspaceTreeInto: _importTreeIntoWorkspace,
                 onExportAllMarkdown: _exportAllMarkdown,
                 onExportMarkdown: _exportSelectedMarkdown,
                 onAddMember: _addWorkspaceMember,
@@ -1712,7 +1731,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportWorkspaceMarkdown,
     required this.onExportWorkspaceZip,
     required this.onImportWorkspaceZip,
-    required this.onImportWorkspaceTree,
+    required this.onImportWorkspaceTreeInto,
     required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
@@ -1804,8 +1823,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
   final Future<void> Function(String fileName, Uint8List bytes)
   onImportWorkspaceZip;
-  final Future<void> Function(String name, List<ZipFileEntry> entries)
-  onImportWorkspaceTree;
+  final Future<void> Function(Workspace workspace, List<ZipFileEntry> entries)
+  onImportWorkspaceTreeInto;
   final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
@@ -1956,8 +1975,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onDelete: _confirmDeleteWorkspace,
               onExport: _exportWorkspaceFile,
               onCreate: _promptCreateWorkspace,
-              onImportFiles: _importWorkspaceFilesFlow,
-              onImportFolder: _importWorkspaceFolderFlow,
+              onImport: _importWorkspaceFile,
+              onImportFilesInto: _importFilesIntoWorkspace,
+              onImportFolderInto: _importFolderIntoWorkspace,
             ),
             if (_workspaceSettingsOpen) _workspaceSettings(context),
             if (widget.message != null) ...[
@@ -3023,46 +3043,38 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  /// Multi-select import: each ZIP becomes its own workspace; loose files
-  /// (.md plus any images they reference) build one workspace together.
-  Future<void> _importWorkspaceFilesFlow() async {
+  /// Multi-select import into an existing workspace: .md files (plus images
+  /// they reference) append pages at the root; a ZIP's whole tree unpacks in.
+  Future<void> _importFilesIntoWorkspace(Workspace workspace) async {
     final picked = await pickImportFiles();
     if (picked.isEmpty || !mounted) return;
-    final loose = <ZipFileEntry>[];
-    for (final f in picked) {
-      if (f.name.toLowerCase().endsWith('.zip')) {
-        await widget.onImportWorkspaceZip(f.name, f.bytes);
-      } else {
-        loose.add(ZipFileEntry(f.name, f.bytes));
-      }
-    }
-    final mds =
-        loose.where((e) => e.name.toLowerCase().endsWith('.md')).toList();
-    if (mds.isEmpty) return;
-    final name = mds.length == 1
-        ? mds.first.name.replaceAll(RegExp(r'\.md$', caseSensitive: false), '')
-        : 'Imported';
-    await widget.onImportWorkspaceTree(name, loose);
-  }
-
-  /// Folder import (recursive): the selected folder names the workspace and
-  /// its subfolders become the page tree.
-  Future<void> _importWorkspaceFolderFlow() async {
-    final picked = await pickImportFolder();
-    if (picked.isEmpty || !mounted) return;
-    var wsName = 'Imported';
     final entries = <ZipFileEntry>[];
     for (final f in picked) {
-      final parts = f.path.split('/');
-      if (parts.length > 1) {
-        // The picker includes the chosen folder itself as the first segment.
-        wsName = parts.first;
-        entries.add(ZipFileEntry(parts.sublist(1).join('/'), f.bytes));
+      if (f.name.toLowerCase().endsWith('.zip')) {
+        entries.addAll(readZip(f.bytes));
       } else {
-        entries.add(ZipFileEntry(f.path, f.bytes));
+        entries.add(ZipFileEntry(f.name, f.bytes));
       }
     }
-    await widget.onImportWorkspaceTree(wsName, entries);
+    await widget.onImportWorkspaceTreeInto(workspace, entries);
+  }
+
+  /// Folder import (recursive) into an existing workspace: the folder's
+  /// contents become pages, its subfolders the page tree.
+  Future<void> _importFolderIntoWorkspace(Workspace workspace) async {
+    final picked = await pickImportFolder();
+    if (picked.isEmpty || !mounted) return;
+    final entries = <ZipFileEntry>[];
+    for (final f in picked) {
+      // The picker includes the chosen folder itself as the first segment —
+      // drop it so the folder's contents land at the workspace root.
+      final parts = f.path.split('/');
+      entries.add(ZipFileEntry(
+        parts.length > 1 ? parts.sublist(1).join('/') : f.path,
+        f.bytes,
+      ));
+    }
+    await widget.onImportWorkspaceTreeInto(workspace, entries);
   }
 
   void _openAiDialog() {
@@ -3092,8 +3104,9 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onDelete,
     required this.onExport,
     required this.onCreate,
-    required this.onImportFiles,
-    required this.onImportFolder,
+    required this.onImport,
+    required this.onImportFilesInto,
+    required this.onImportFolderInto,
   });
 
   final List<Workspace> workspaces;
@@ -3103,8 +3116,9 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(Workspace workspace) onDelete;
   final void Function(Workspace workspace) onExport;
   final VoidCallback onCreate;
-  final VoidCallback onImportFiles;
-  final VoidCallback onImportFolder;
+  final VoidCallback onImport;
+  final void Function(Workspace workspace) onImportFilesInto;
+  final void Function(Workspace workspace) onImportFolderInto;
 
   @override
   State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
@@ -3127,13 +3141,8 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         _createRow(),
         _actionRow(
           Icons.upload_file_outlined,
-          'Import files (.md / .zip)',
-          widget.onImportFiles,
-        ),
-        _actionRow(
-          Icons.drive_folder_upload_outlined,
-          'Import folder',
-          widget.onImportFolder,
+          'Import workspace (.md / .zip)',
+          widget.onImport,
         ),
       ],
       builder: (context, controller, child) {
@@ -3229,6 +3238,10 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                   widget.onRename(workspace);
                 case 'export':
                   widget.onExport(workspace);
+                case 'import-files':
+                  widget.onImportFilesInto(workspace);
+                case 'import-folder':
+                  widget.onImportFolderInto(workspace);
                 case 'delete':
                   widget.onDelete(workspace);
               }
@@ -3250,6 +3263,24 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.folder_zip_outlined),
                   title: Text('Export (ZIP)'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'import-files',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.upload_file_outlined),
+                  title: Text('Import files (.md / .zip)'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'import-folder',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.drive_folder_upload_outlined),
+                  title: Text('Import folder'),
                 ),
               ),
               PopupMenuItem(
