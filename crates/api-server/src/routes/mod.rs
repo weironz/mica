@@ -11,6 +11,7 @@ mod documents;
 mod files;
 mod health;
 mod history;
+mod import;
 mod workspaces;
 pub mod ws;
 
@@ -92,6 +93,12 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/trash/{view_id}",
       delete(documents::purge_view),
     )
+    .route(
+      "/workspaces/import",
+      post(import::start_import)
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
+    )
+    .route("/import/jobs/{job_id}", get(import::import_job))
     .route(
       "/workspaces/{workspace_id}/documents",
       post(documents::create_document),

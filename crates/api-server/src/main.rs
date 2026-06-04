@@ -7,7 +7,6 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 mod routes;
-mod zip;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
 use crate::routes::ws;
-use crate::zip::{ZipEntry, build_zip};
+use mica_interchange::{ZipEntry, build_zip};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentRequest {

@@ -326,6 +326,64 @@ fn storage(state: &AppState) -> ApiResult<Arc<S3Config>> {
   })
 }
 
+/// Server-side upload of in-memory bytes (the workspace importer's path):
+/// content-hash the bytes, PUT via a self-issued presigned URL, and record
+/// the file (deduplicated by object key). Returns the stored record.
+pub(crate) async fn store_bytes(
+  state: &AppState,
+  client: &reqwest::Client,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  file_name: &str,
+  bytes: &[u8],
+) -> ApiResult<store::FileRecord> {
+  let storage = storage(state)?;
+  let byte_size = bytes.len() as i64;
+  validate_byte_size(byte_size, storage.max_upload_bytes)?;
+
+  let ext = file_extension(file_name);
+  let mime = ext
+    .as_deref()
+    .and_then(ext_to_mime)
+    .unwrap_or("application/octet-stream")
+    .to_string();
+  let hash = {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()
+  };
+  let object_key = match &ext {
+    Some(ext) => format!("workspaces/{workspace_id}/{hash}.{ext}"),
+    None => format!("workspaces/{workspace_id}/{hash}"),
+  };
+
+  let upload = storage.presign_put(&object_key);
+  let put = client
+    .put(&upload.url)
+    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .body(bytes.to_vec())
+    .send()
+    .await
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+  if !put.status().is_success() {
+    return Err(ApiError::Internal(format!(
+      "storage upload returned {}",
+      put.status()
+    )));
+  }
+
+  store::insert_file(
+    &state.db,
+    workspace_id,
+    user_id,
+    &object_key,
+    &safe_file_name(file_name),
+    &mime,
+    byte_size,
+  )
+  .await
+}
+
 fn validate_mime(mime_type: &str) -> ApiResult<()> {
   if mime_type.trim().is_empty() {
     return Err(ApiError::BadRequest("mime_type is required".to_string()));
