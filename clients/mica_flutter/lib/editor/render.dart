@@ -1325,8 +1325,9 @@ class RenderDocument extends RenderBox {
     for (final h in l.rowHandles) {
       final r = h.shift(offset);
       for (var k = -1; k <= 1; k++) {
+        // Centered ON the left border line (r.left == the line's x).
         canvas.drawCircle(
-          Offset(r.left + 3, r.center.dy + k * 5.0),
+          Offset(r.left, r.center.dy + k * 5.0),
           1.6,
           handlePaint,
         );
