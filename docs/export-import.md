@@ -69,7 +69,7 @@ Implemented in `crates/api-server/src/routes/documents.rs`
   prefers the bundled asset path for an image, then its name, then its URL.
   Images that were never re-hosted (external links) stay standard
   `![alt](https://…)` markdown.
-- **ZIP writer** (`crates/api-server/src/zip.rs`): STORE-only (markdown and
+- **ZIP writer** (`crates/interchange/src/zip/writer.rs`): STORE-only (markdown and
   already-compressed images don't benefit from deflate), UTF-8 name flag
   (0x0800) set so CJK names survive.
 
