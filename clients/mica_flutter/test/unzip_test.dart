@@ -76,13 +76,13 @@ Uint8List buildStoreZip(Map<String, List<int>> files) {
 }
 
 void main() {
-  test('readStoreZip round-trips files (incl. CJK names + nested paths)', () {
+  test('readZip round-trips files (incl. CJK names + nested paths)', () {
     final zip = buildStoreZip({
       'Guide.md': utf8.encode('# Guide'),
       'Guide/Setup.md': utf8.encode('## Setup'),
       'assets/图片.png': [1, 2, 3, 4],
     });
-    final entries = readStoreZip(zip);
+    final entries = readZip(zip);
     final byName = {for (final e in entries) e.name: e.bytes};
     expect(byName.keys.toSet(), {'Guide.md', 'Guide/Setup.md', 'assets/图片.png'});
     expect(utf8.decode(byName['Guide.md']!), '# Guide');
@@ -90,12 +90,39 @@ void main() {
     expect(byName['assets/图片.png'], [1, 2, 3, 4]);
   });
 
-  test('readStoreZip skips directory entries', () {
+  test('readZip skips directory entries', () {
     final zip = buildStoreZip({
       'folder/': const [],
       'folder/a.md': utf8.encode('a'),
     });
-    final names = readStoreZip(zip).map((e) => e.name).toList();
+    final names = readZip(zip).map((e) => e.name).toList();
     expect(names, ['folder/a.md']);
+  });
+
+  test('readZip reads a DEFLATE zip made by an external tool', () {
+    // Built with Python zipfile (ZIP_DEFLATED, level 9): nested paths, a CJK
+    // name, repeated text that actually compresses, and an empty file.
+    final zip = base64.decode(
+      'UEsDBBQAAAAIAEVMxFy0mEsXGAAAAHABAAAIAAAAR3VpZGUubWRTVnAvzUxJ5SpKLUhN'
+      'LFHIycwbZdOSDQBQSwMEFAAAAAgARUzEXMIS3MkKAAAACAAAAA4AAABHdWlkZS9TZXR1'
+      'cC5tZFNWVghOLSktAABQSwMEFAAACAgARUzEXDgV/woJAAAAKAAAABEAAABhc3NldHMv'
+      '5Zu+54mHLnBuZ2NkYmZhJAIDAFBLAwQUAAAACABFTMRcAAAAAAIAAAAAAAAACAAAAGVt'
+      'cHR5Lm1kAwBQSwECFAMUAAAACABFTMRctJhLFxgAAABwAQAACAAAAAAAAAAAAAAAgAEA'
+      'AAAAR3VpZGUubWRQSwECFAMUAAAACABFTMRcwhLcyQoAAAAIAAAADgAAAAAAAAAAAAAA'
+      'gAE+AAAAR3VpZGUvU2V0dXAubWRQSwECFAMUAAAICABFTMRcOBX/CgkAAAAoAAAAEQAA'
+      'AAAAAAAAAAAAgAF0AAAAYXNzZXRzL+WbvueJhy5wbmdQSwECFAMUAAAACABFTMRcAAAA'
+      'AAIAAAAAAAAACAAAAAAAAAAAAAAAgAGsAAAAZW1wdHkubWRQSwUGAAAAAAQABADnAAAA'
+      '1AAAAAAA',
+    );
+    final entries = readZip(Uint8List.fromList(zip));
+    final byName = {for (final e in entries) e.name: e.bytes};
+    expect(byName.keys.toSet(),
+        {'Guide.md', 'Guide/Setup.md', 'assets/图片.png', 'empty.md'});
+    expect(
+        utf8.decode(byName['Guide.md']!), '# Guide\n${'repeat line\n' * 30}');
+    expect(utf8.decode(byName['Guide/Setup.md']!), '## Setup');
+    expect(byName['assets/图片.png'],
+        List.filled(10, [1, 2, 3, 4]).expand((x) => x).toList());
+    expect(byName['empty.md'], isEmpty);
   });
 }

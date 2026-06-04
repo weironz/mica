@@ -677,12 +677,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Import a workspace ZIP (Mica's export format): rebuild the page tree from
+  /// Import a workspace ZIP: rebuild the page tree from
   /// the folder layout, upload bundled `assets/`, and rewire image references.
   Future<void> _importWorkspaceZip(String fileName, Uint8List zipBytes) {
     return _run(() async {
       final session = _requireSession();
-      final entries = readStoreZip(zipBytes);
+      final entries = readZip(zipBytes);
       final wsName = fileName
           .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
           .trim();
