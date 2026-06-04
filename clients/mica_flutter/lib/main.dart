@@ -13,6 +13,7 @@ import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
 import 'upload/import_order.dart';
+import 'upload/notion.dart';
 import 'upload/sha256.dart';
 import 'upload/unzip.dart';
 
@@ -679,14 +680,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Import a workspace ZIP: rebuild the page tree from the folder layout.
-  /// Works for Mica exports and Notion "Markdown & CSV" exports alike.
-  Future<void> _importWorkspaceZip(String fileName, Uint8List zipBytes) {
+  /// [notion] forces Notion adaptation (the "From Notion" menu entry);
+  /// otherwise it is auto-detected from the archive contents.
+  Future<void> _importWorkspaceZip(
+    String fileName,
+    Uint8List zipBytes, {
+    bool notion = false,
+  }) {
+    // Export filenames like `Export-<uuid>` are cleaned regardless of mode.
     final wsName = stripNotionId(fileName
         .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
         .trim());
     return _importWorkspaceTree(
       wsName.isEmpty ? 'Imported' : wsName,
       () => readZip(zipBytes),
+      notionHint: notion,
     );
   }
 
@@ -694,8 +702,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// come lazily so ZIP parsing also runs inside the guarded flow.
   Future<void> _importWorkspaceTree(
     String wsName,
-    List<ZipFileEntry> Function() loadEntries,
-  ) {
+    List<ZipFileEntry> Function() loadEntries, {
+    bool notionHint = false,
+  }) {
     return _run(() async {
       final session = _requireSession();
       final entries = loadEntries();
@@ -703,7 +712,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         session.accessToken,
         wsName,
       );
-      await _importEntriesInto(session, workspace, entries);
+      await _importEntriesInto(session, workspace, entries,
+          notionHint: notionHint);
       final workspaces = await _api.listWorkspaces(session.accessToken);
       if (mounted) setState(() => _workspaces = workspaces);
       await _selectWorkspace(workspace);
@@ -730,8 +740,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _importEntriesInto(
     AuthSession session,
     Workspace workspace,
-    List<ZipFileEntry> rawEntries,
-  ) async {
+    List<ZipFileEntry> rawEntries, {
+    bool notionHint = false,
+  }) async {
     // Peel wrapper folders (zipped folder / Notion export shell), drop OS
     // metadata, and expand nested Part-N.zip archives (Notion whole-
     // workspace exports) before anything else looks at the paths.
@@ -796,9 +807,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       for (final p in orderPagePaths(mdByPath.keys, manifestJson))
         mdByPath[p]!,
     ];
-    // Folder ↔ page association tolerant of Notion ID suffixes: folder
-    // `apple/` matches the page exported as `apple 31f5<…>.md`.
-    final mdForFolder = folderPageIndex(mdByPath.keys);
+    // Notion mode: forced by the "From Notion" entry, or auto-detected when
+    // most pages carry Notion ID suffixes. Standard archives get exact
+    // matching — no risk of mangling hash-like names.
+    final isNotion = notionHint || looksLikeNotionExport(mdByPath.keys);
+    String clean(String s) => isNotion ? stripNotionId(s) : s;
+    // ignore: avoid_print
+    print('[mica-import] notion=$isNotion (hint=$notionHint)');
+
+    // Folder ↔ page association; in Notion mode folder `apple/` matches the
+    // page exported as `apple 31f5<…>.md`.
+    final mdForFolder = folderPageIndex(mdByPath.keys, notion: isNotion);
     final viewByPath = <String, String>{};
     final folderView = <String, String>{}; // folder path -> its page's view
     final stamp = DateTime.now().microsecondsSinceEpoch;
@@ -813,7 +832,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       for (var d = 0; d + 1 < parts.length; d++) {
         folderPath =
             folderPath.isEmpty ? parts[d] : '$folderPath/${parts[d]}';
-        final seg = stripNotionId(parts[d]);
+        final seg = clean(parts[d]);
         normFolderPath =
             normFolderPath.isEmpty ? seg : '$normFolderPath/$seg';
         final folderMd = mdForFolder[normFolderPath];
@@ -823,7 +842,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           final dirPage = await _api.createDocument(
             session.accessToken,
             workspace.id,
-            stripNotionId(parts[d]),
+            seg,
             parentViewId: parentViewId,
           );
           v = dirPage.view.id;
@@ -832,7 +851,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         parentViewId = v;
       }
       final markdown = utf8.decode(e.bytes, allowMalformed: true);
-      final fallback = stripNotionId(parts.last.replaceAll(
+      final fallback = clean(parts.last.replaceAll(
         RegExp(r'\.md$', caseSensitive: false),
         '',
       ));
@@ -1848,7 +1867,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String fileName, String markdown) onImportMarkdown;
   final Future<String> Function() onExportWorkspaceMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
-  final Future<void> Function(String fileName, Uint8List bytes)
+  final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
   final Future<void> Function(Workspace workspace, List<ZipFileEntry> entries)
   onImportWorkspaceTreeInto;
@@ -2002,7 +2021,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onDelete: _confirmDeleteWorkspace,
               onExport: _exportWorkspaceFile,
               onCreate: _promptCreateWorkspace,
-              onImport: _importWorkspaceFile,
+              onImport: (notion) => _importWorkspaceFile(notion: notion),
               onImportFilesInto: _importFilesIntoWorkspace,
               onImportFolderInto: _importFolderIntoWorkspace,
             ),
@@ -3055,16 +3074,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// Pick a workspace ZIP (Mica export or a Notion "Markdown & CSV" export —
-  /// both flow through the same tree import) and rebuild it as a new
-  /// workspace.
-  Future<void> _importWorkspaceFile({bool fromSettings = false}) async {
+  /// Pick a workspace ZIP and rebuild it as a new workspace. [notion] forces
+  /// Notion adaptation (otherwise auto-detected from the contents).
+  Future<void> _importWorkspaceFile({
+    bool fromSettings = false,
+    bool notion = false,
+  }) async {
     final picked = await pickImportFile(zipOnly: true);
     if (picked == null || !mounted) return;
     if (fromSettings) {
       Navigator.of(context).pop(); // close settings before the import flow runs
     }
-    await widget.onImportWorkspaceZip(picked.name, picked.bytes);
+    await widget.onImportWorkspaceZip(picked.name, picked.bytes,
+        notion: notion);
   }
 
   /// Multi-select import into an existing workspace: .md files (plus images
@@ -3140,7 +3162,7 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(Workspace workspace) onDelete;
   final void Function(Workspace workspace) onExport;
   final VoidCallback onCreate;
-  final VoidCallback onImport;
+  final void Function(bool notion) onImport;
   final void Function(Workspace workspace) onImportFilesInto;
   final void Function(Workspace workspace) onImportFolderInto;
 
@@ -3172,10 +3194,15 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
               color: Color(0xFF475569),
             ),
             menuChildren: [
-              _importChoice(Icons.folder_zip_outlined, 'From ZIP (Mica export)'),
+              _importChoice(
+                Icons.folder_zip_outlined,
+                'From ZIP (Mica export)',
+                notion: false,
+              ),
               _importChoice(
                 Icons.cloud_download_outlined,
                 'From Notion (Markdown & CSV ZIP)',
+                notion: true,
               ),
             ],
             child: const Text(
@@ -3373,14 +3400,14 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  /// Both submenu entries run the same ZIP import — Notion's "Markdown & CSV"
-  /// export is a markdown ZIP too; its ID-suffixed names are auto-detected.
-  Widget _importChoice(IconData icon, String label) {
+  /// Both submenu entries share the tree-import core; the Notion one forces
+  /// Notion adaptation (ID-suffix stripping, folder↔page matching).
+  Widget _importChoice(IconData icon, String label, {required bool notion}) {
     return MenuItemButton(
       leadingIcon: Icon(icon, size: 18, color: const Color(0xFF475569)),
       onPressed: () {
         _menu.close();
-        widget.onImport();
+        widget.onImport(notion);
       },
       child: Text(
         label,
