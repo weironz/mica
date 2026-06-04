@@ -20,7 +20,7 @@ services:
   # S3-compatible object storage for file/image uploads (RustFS — a maintained
   # Rust alternative to MinIO). S3 API on :9000, web console on :9001.
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0-beta.6
     container_name: mica-rustfs
     restart: unless-stopped
     security_opt:

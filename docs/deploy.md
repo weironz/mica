@@ -2,7 +2,7 @@
 
 Production form: nginx serves the Flutter bundle and reverse-proxies
 `/api` + `/ws` to the Rust backend; PostgreSQL and RustFS run alongside.
-Everything ships via `docker-compose.prod.yml`.
+Everything ships via `deploy/docker-compose.prod.yml`.
 
 ```
 browser ── :80 nginx ──┬── /            static Flutter bundle (deploy/web)
@@ -60,8 +60,22 @@ reload picks up new releases (asset files are content-hashed).
 
 | Data | Where | Backup |
 |---|---|---|
-| Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f docker-compose.prod.yml exec postgres pg_dump -U mica mica > backup.sql` |
+| Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f deploy/docker-compose.prod.yml exec postgres pg_dump -U mica mica > backup.sql` |
 | Image bytes | volume `mica-prod-rustfs` | snapshot the volume directory |
+
+## Variant: multi-app server behind an existing Traefik
+
+`deploy/docker-compose.traefik.yml` — used for mica.cloudcele.com. No host
+ports; Traefik (label routing, `letsencrypt` certresolver) terminates TLS
+for both the app (`DOMAIN`) and RustFS (`S3_DOMAIN`, e.g.
+`s3.mica.cloudcele.com` — needs its own DNS A record; presigned URLs embed
+it and SigV4 survives the proxy because Traefik forwards Host unchanged).
+Ship images by `docker save | scp | docker load` when the server can't
+reach Docker Hub. First boot: create the bucket once
+(`docker exec mica-rustfs-1 mkdir -p /data/<bucket>` + restart) — RustFS is
+filesystem-backed. If the ACME cert stays on TRAEFIK DEFAULT CERT after a
+DNS change, restart Traefik to clear its issuance backoff. The API must
+bind `HTTP_ADDR=0.0.0.0:8080` in containers (compose files set it).
 
 ## Moving to a domain + HTTPS later
 
