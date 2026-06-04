@@ -38,6 +38,21 @@ void main() {
     expect(t.rows[0], ['A', 'B', 'C']);
   });
 
+  test('setTableWidth persists and round-trips; default omits the key', () {
+    final c = _doc();
+    // Default-width tables must NOT serialize 'width' (parser conformance
+    // with the Rust engine, which doesn't model table width).
+    expect(c.nodes.single.data.containsKey('width'), isFalse);
+    c.setTableWidth(0, 0.6);
+    expect(c.nodes.single.data['width'], 0.6);
+    final t = TableData.fromBlock(c.nodes.single.data);
+    expect(t.tableWidth, 0.6);
+    expect(t.rows[0], ['A', 'B', 'C']); // grid untouched
+    // Clamped at the extremes.
+    c.setTableWidth(0, 5.0);
+    expect(TableData.fromBlock(c.nodes.single.data).tableWidth, 1.0);
+  });
+
   test('moveTableRow reorders body rows but never the header', () {
     final c = _doc();
     c.moveTableRow(0, 2, -1);

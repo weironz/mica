@@ -161,8 +161,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   final Set<String> _imageLoading = {};
   // file_id -> fresh download URL, for copy/export of images.
   final Map<String, String> _imageUrlCache = {};
-  // Active table column resize: node, right-column index, start x, start weights.
-  ({int node, int col, double startX, List<double> weights, double avail})?
+  // Active table column resize: node, right-column index, start x, start
+  // weights, full available width, and the table's width fraction at start.
+  // col == weights.length means the table's right edge (overall width drag).
+  ({
+    int node,
+    int col,
+    double startX,
+    List<double> weights,
+    double avail,
+    double frac,
+  })?
   _colResize;
 
   // Slash (`/`) insert menu — transient; never shown at rest.
@@ -1850,6 +1859,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         startX: local.dx,
         weights: [...r.tableWeights(colBorder.node)],
         avail: r.tableAvailWidth(),
+        frac: r.tableWidthFraction(colBorder.node),
       );
       return;
     }
@@ -1884,19 +1894,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final pxPerWeight = resize.avail / sum;
       final dxPx = local.dx - resize.startX;
       if (resize.col >= weights.length) {
-        // The table's right edge: resize the LAST column against all the
-        // others (they scale to keep the table full-width).
-        if (weights.length < 2) return;
-        final lastPx = weights.last * pxPerWeight;
-        final restPx = resize.avail - lastPx;
-        final newLastPx = (lastPx + dxPx)
-            .clamp(40.0, resize.avail - 40.0 * (weights.length - 1));
-        final scale = (resize.avail - newLastPx) / restPx;
-        for (var i = 0; i < weights.length - 1; i++) {
-          weights[i] *= scale;
-        }
-        weights[weights.length - 1] = newLastPx / pxPerWeight;
-        _controller.previewTableColumnWidths(resize.node, weights);
+        // The table's right edge drags the OVERALL width: the whole table
+        // shrinks/grows (columns keep their proportions).
+        final startPx = resize.avail * resize.frac.clamp(0.15, 1.0);
+        final minPx = (40.0 * weights.length).clamp(60.0, resize.avail);
+        final newPx = (startPx + dxPx).clamp(minPx, resize.avail);
+        _controller.previewTableWidth(resize.node, newPx / resize.avail);
         return;
       }
       final left = resize.col - 1;
@@ -1954,11 +1957,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final resize = _colResize;
     if (resize != null) {
-      // Persist the final widths once (preview was local-only).
-      _controller.setTableColumnWidths(
-        resize.node,
-        _render?.tableWeights(resize.node) ?? resize.weights,
-      );
+      // Persist the final geometry once (preview was local-only).
+      if (resize.col >= resize.weights.length) {
+        _controller.setTableWidth(
+          resize.node,
+          _render?.tableWidthFraction(resize.node) ?? resize.frac,
+        );
+      } else {
+        _controller.setTableColumnWidths(
+          resize.node,
+          _render?.tableWeights(resize.node) ?? resize.weights,
+        );
+      }
       _colResize = null;
       return;
     }

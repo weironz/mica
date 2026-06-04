@@ -12,6 +12,7 @@ class TableData {
     this.rows, {
     this.header = true,
     this.align = 'left',
+    this.tableWidth = 1.0,
     List<double>? widths,
   }) : widths = _normalizeWidths(widths, rows.isEmpty ? 0 : rows.first.length);
 
@@ -24,6 +25,10 @@ class TableData {
 
   /// Per-column relative weights (sum normalized at layout). Length == columns.
   final List<double> widths;
+
+  /// Overall table width as a fraction of the available content width
+  /// (1.0 = full width). Dragging the table's right edge adjusts this.
+  final double tableWidth;
 
   int get columns => rows.isEmpty ? 0 : rows.first.length;
   int get rowCount => rows.length;
@@ -57,10 +62,12 @@ class TableData {
       'right' => 'right',
       _ => 'left',
     };
+    final tw = data['width'];
     return TableData(
       rows,
       header: data['header'] != false,
       align: align,
+      tableWidth: tw is num ? tw.toDouble().clamp(0.15, 1.0) : 1.0,
       widths: widths,
     );
   }
@@ -75,6 +82,9 @@ class TableData {
     'header': header,
     'align': align,
     'widths': widths,
+    // Default-width tables omit the key (keeps parser conformance with the
+    // Rust engine, which doesn't model table width).
+    if (tableWidth != 1.0) 'width': tableWidth,
   };
 
   void insertRow(int at) {

@@ -872,12 +872,43 @@ class EditorController extends ChangeNotifier {
         table.rows,
         header: table.header,
         align: align,
+        tableWidth: table.tableWidth,
         widths: table.widths,
       ),
     );
   }
 
   /// Live preview of column widths during a drag (no op sent / no save).
+  /// Live preview of the overall table width while dragging its right edge.
+  void previewTableWidth(int index, double fraction) {
+    final table = _tableAt(index);
+    if (table == null) return;
+    nodes[index].data = TableData(
+      table.rows,
+      header: table.header,
+      align: table.align,
+      tableWidth: fraction.clamp(0.15, 1.0),
+      widths: table.widths,
+    ).toBlockData();
+    notifyListeners();
+  }
+
+  /// Persist the overall table width (drag end).
+  void setTableWidth(int index, double fraction) {
+    final table = _tableAt(index);
+    if (table == null) return;
+    _writeTable(
+      index,
+      TableData(
+        table.rows,
+        header: table.header,
+        align: table.align,
+        tableWidth: fraction.clamp(0.15, 1.0),
+        widths: table.widths,
+      ),
+    );
+  }
+
   void previewTableColumnWidths(int index, List<double> widths) {
     final table = _tableAt(index);
     if (table == null) return;

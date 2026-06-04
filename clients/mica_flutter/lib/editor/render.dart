@@ -625,7 +625,11 @@ class RenderDocument extends RenderBox {
     };
     final gridTop = top + _tTopGutter;
     const x0 = 0.0;
-    final availW = maxWidth.clamp(60.0, double.infinity);
+    final fullW = maxWidth.clamp(60.0, double.infinity);
+    // The table spans a fraction of the content width (dragging its right
+    // edge adjusts it); columns share that span by weight.
+    final availW = (fullW * table.tableWidth.clamp(0.15, 1.0))
+        .clamp(60.0, fullW);
 
     // Column widths from normalized weights.
     final weights = [
@@ -719,7 +723,14 @@ class RenderDocument extends RenderBox {
       ..rowHandles = rowHandles
       ..colHandles = colHandles
       ..colBorders = colBorders
-      ..addColBar = Rect.fromLTWH(maxWidth - _tEdge, gridTop, _tEdge, gridHeight)
+      // The add-column strip sits just past the table's right edge (clamped
+      // inside the content area when the table is full-width).
+      ..addColBar = Rect.fromLTWH(
+        (colEdges.last + 2).clamp(0.0, maxWidth - _tEdge),
+        gridTop,
+        _tEdge,
+        gridHeight,
+      )
       ..addRowBar = Rect.fromLTWH(x0, gridBottom, availW, _tBottomBar)
       ..tableHandle = Rect.fromLTWH(0, top, _tEdge, _tTopGutter)
       ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, _tTopGutter);
@@ -1457,6 +1468,12 @@ class RenderDocument extends RenderBox {
 
   /// Pixel width available to columns (full content width).
   double tableAvailWidth() => size.width.clamp(60.0, double.infinity);
+
+  /// Current overall width fraction of a table node.
+  double tableWidthFraction(int index) {
+    if (index < 0 || index >= _nodes.length) return 1.0;
+    return TableData.fromBlock(_nodes[index].data).tableWidth;
+  }
 
   void _paintCaret(Canvas canvas, Offset offset) {
     final sel = _selection;
