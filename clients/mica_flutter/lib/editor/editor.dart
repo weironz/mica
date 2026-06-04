@@ -1672,36 +1672,48 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Edit link'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: textField,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Text',
-                border: OutlineInputBorder(),
+        title: const Text('Edit link', style: TextStyle(fontSize: 15)),
+        titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 4, 12, 8),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: textField,
+                autofocus: true,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: 'Text',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: urlField,
-              decoration: const InputDecoration(
-                labelText: 'URL',
-                hintText: 'https://…',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 10),
+              TextField(
+                controller: urlField,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: 'URL',
+                  hintText: 'https://…',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => Navigator.of(context).pop(true),
               ),
-              onSubmitted: (_) => Navigator.of(context).pop(true),
-            ),
-          ],
+            ],
+          ),
         ),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Save'),
           ),
