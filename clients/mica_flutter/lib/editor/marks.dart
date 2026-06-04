@@ -363,6 +363,7 @@ String? autolinkTarget(String inner) {
 }) {
   final out = StringBuffer();
   final marks = <Mark>[];
+  final delims = <_Delim>[];
   var i = 0;
 
   void addInner(String inner, String type, {String? href}) {
@@ -443,13 +444,21 @@ String? autolinkTarget(String inner) {
         }
       }
     }
-    if (src.startsWith('**', i)) {
-      final end = _indexOfUnescaped(src, '**', i + 2);
-      if (end > i + 1) {
-        addInner(src.substring(i + 2, end), 'bold');
-        i = end + 2;
-        continue;
+    // Emphasis delimiters (* and _): record the run with flanking; pairing
+    // happens after the scan (spec algorithm, mirrors the Rust engine).
+    if (src[i] == '*' || src[i] == '_') {
+      final c = src[i];
+      var j = i;
+      while (j < src.length && src[j] == c) {
+        j++;
       }
+      final count = j - i;
+      final f = _flanking(c, i == 0 ? null : src[i - 1],
+          j < src.length ? src[j] : null);
+      delims.add(_Delim(c, out.length, count, f.open, f.close));
+      out.write(c * count);
+      i = j;
+      continue;
     }
     if (src.startsWith('~~', i)) {
       final end = _indexOfUnescaped(src, '~~', i + 2);
@@ -469,19 +478,131 @@ String? autolinkTarget(String inner) {
         continue;
       }
     }
-    if (src[i] == '*' || src[i] == '_') {
-      final ch = src[i];
-      final end = _indexOfUnescaped(src, ch, i + 1);
-      if (end > i + 1) {
-        addInner(src.substring(i + 1, end), 'italic');
-        i = end + 1;
-        continue;
-      }
-    }
     out.write(src[i]);
     i++;
   }
-  return (text: out.toString(), marks: _normalize(marks));
+  final processed = _processEmphasis(out.toString(), marks, delims);
+  // NOTE: parse output is intentionally NOT merge-normalized — nested
+  // same-type emphasis (`<em><em>`) must survive for spec fidelity; the
+  // editor's own operations (applyMark etc.) still normalize.
+  marks.sort((a, b) => a.start != b.start ? a.start - b.start : a.end - b.end);
+  return (text: processed, marks: marks);
+}
+
+/// One run of `*`/`_` delimiters, tracked in output coordinates.
+class _Delim {
+  _Delim(this.c, this.start, this.count, this.canOpen, this.canClose)
+      : curStart = start,
+        orig = count;
+  final String c;
+  final int start;
+  int curStart;
+  int count;
+  final int orig;
+  final bool canOpen;
+  final bool canClose;
+}
+
+bool _isMdPunct(String? c) {
+  if (c == null) return false;
+  return _asciiPunct.contains(c) ||
+      (c.codeUnitAt(0) >= 0x2010 && c.codeUnitAt(0) <= 0x2027);
+}
+
+({bool open, bool close}) _flanking(String c, String? prev, String? next) {
+  final prevWs = prev == null || prev.trim().isEmpty;
+  final nextWs = next == null || next.trim().isEmpty;
+  final prevPunct = _isMdPunct(prev);
+  final nextPunct = _isMdPunct(next);
+  final left = !nextWs && (!nextPunct || prevWs || prevPunct);
+  final right = !prevWs && (!prevPunct || nextWs || nextPunct);
+  if (c == '_') {
+    return (
+      open: left && (!right || prevPunct),
+      close: right && (!left || nextPunct),
+    );
+  }
+  return (open: left, close: right);
+}
+
+/// Spec process-emphasis: pair closers with the nearest valid opener (same
+/// char, rule of 3), strong before em; delete used delimiter characters and
+/// remap mark offsets. Returns the rebuilt text.
+String _processEmphasis(String text, List<Mark> marks, List<_Delim> delims) {
+  if (delims.isEmpty) return text;
+  final deletions = <(int, int)>[];
+  final pending = <Mark>[];
+
+  var closerI = 0;
+  while (closerI < delims.length) {
+    final cl = delims[closerI];
+    if (cl.count == 0 || !cl.canClose) {
+      closerI++;
+      continue;
+    }
+    int? openerI;
+    for (var k = closerI - 1; k >= 0; k--) {
+      final o = delims[k];
+      if (o.count == 0 || !o.canOpen || o.c != cl.c) continue;
+      if ((o.canClose || cl.canOpen) &&
+          (o.orig + cl.orig) % 3 == 0 &&
+          !(o.orig % 3 == 0 && cl.orig % 3 == 0)) {
+        continue;
+      }
+      openerI = k;
+      break;
+    }
+    if (openerI == null) {
+      closerI++;
+      continue;
+    }
+    final o = delims[openerI];
+    final useN = (o.count >= 2 && cl.count >= 2) ? 2 : 1;
+    o.count -= useN;
+    final oDel = o.start + o.count;
+    deletions.add((oDel, useN));
+    final cDel = cl.curStart;
+    deletions.add((cDel, useN));
+    cl.curStart += useN;
+    cl.count -= useN;
+    pending.add(Mark(oDel + useN, cDel, useN == 2 ? 'bold' : 'italic'));
+    for (var k = openerI + 1; k < closerI; k++) {
+      delims[k].count = 0;
+    }
+    if (cl.count == 0) closerI++;
+  }
+
+  if (deletions.isEmpty) return text;
+  marks.addAll(pending);
+  deletions.sort((a, b) => a.$1.compareTo(b.$1));
+
+  final keep = StringBuffer();
+  final removedBefore = List<int>.filled(text.length + 1, 0);
+  var di = 0;
+  var removed = 0;
+  var skipUntil = 0;
+  for (var idx = 0; idx < text.length; idx++) {
+    removedBefore[idx] = removed;
+    if (idx >= skipUntil && di < deletions.length && deletions[di].$1 == idx) {
+      skipUntil = idx + deletions[di].$2;
+      di++;
+    }
+    if (idx < skipUntil) {
+      removed++;
+    } else {
+      keep.write(text[idx]);
+    }
+  }
+  removedBefore[text.length] = removed;
+
+  for (var k = 0; k < marks.length; k++) {
+    final m = marks[k];
+    final ns = m.start - removedBefore[m.start.clamp(0, text.length)];
+    final ne = m.end - removedBefore[m.end.clamp(0, text.length)];
+    marks[k] = Mark(ns, ne, m.type, href: m.href, title: m.title);
+  }
+  marks.removeWhere((m) => m.end <= m.start);
+  return keep.toString();
 }
 
 /// A paragraph whose text LOOKS like a block marker (`- x`, `> x`, `# x`,

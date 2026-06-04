@@ -8,10 +8,12 @@ void main() {
     expect(p.marks, isEmpty);
   });
 
-  test('escaped closer does not terminate emphasis', () {
+  test('escaped delimiter is literal; spec pairing applies around it', () {
+    // cmark: <p><em><em>bold *</em> still</em>*</p>
     final p = parseInline(r'**bold \** still**');
-    expect(p.text, 'bold ** still');
-    expect(p.marks.single.type, 'bold');
+    expect(p.text, 'bold * still*');
+    expect(p.marks.where((m) => m.type == 'italic').length, 2);
+    expect(p.marks.where((m) => m.type == 'bold'), isEmpty);
   });
 
   test('autolinks: absolute URI and email', () {

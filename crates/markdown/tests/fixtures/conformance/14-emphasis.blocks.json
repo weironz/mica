@@ -1,0 +1,115 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 12,
+          "start": 6,
+          "type": "italic"
+        },
+        {
+          "end": 21,
+          "start": 17,
+          "type": "bold"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "plain italic and bold basics"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 14,
+          "start": 12,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "intraword stars work but sn_ake_s do not"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 13,
+          "start": 0,
+          "type": "italic"
+        },
+        {
+          "end": 12,
+          "start": 1,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "(parens rule) and a * loose star"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 12,
+          "start": 0,
+          "type": "bold"
+        },
+        {
+          "end": 12,
+          "start": 0,
+          "type": "italic"
+        },
+        {
+          "end": 34,
+          "start": 17,
+          "type": "bold"
+        },
+        {
+          "end": 29,
+          "start": 24,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "both at once and nested inner tail"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 6,
+          "start": 3,
+          "type": "italic"
+        },
+        {
+          "end": 26,
+          "start": 16,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "foobar edge and underscore word"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 22,
+          "start": 16,
+          "type": "italic"
+        },
+        {
+          "end": 28,
+          "start": 16,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "rule of three: *strong in em"
+  }
+]

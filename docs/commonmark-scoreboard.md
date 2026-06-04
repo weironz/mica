@@ -5,7 +5,7 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 235/652 (36.0%)**
+**Total: 315/652 (48.3%)**
 
 | Section | Passed | Total | % |
 |---|---|---|---|
@@ -14,8 +14,8 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Backslash escapes | 5 | 13 | 38% |
 | Blank lines | 1 | 1 | 100% |
 | Block quotes | 1 | 25 | 4% |
-| Code spans | 7 | 22 | 32% |
-| Emphasis and strong emphasis | 44 | 132 | 33% |
+| Code spans | 8 | 22 | 36% |
+| Emphasis and strong emphasis | 117 | 132 | 89% |
 | Entity and numeric character references | 4 | 17 | 24% |
 | Fenced code blocks | 9 | 29 | 31% |
 | HTML blocks | 0 | 44 | 0% |
@@ -24,7 +24,7 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Indented code blocks | 7 | 12 | 58% |
 | Inlines | 1 | 1 | 100% |
 | Link reference definitions | 12 | 27 | 44% |
-| Links | 51 | 90 | 57% |
+| Links | 56 | 90 | 62% |
 | List items | 8 | 48 | 17% |
 | Lists | 4 | 26 | 15% |
 | Paragraphs | 3 | 8 | 38% |
@@ -34,4 +34,4 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Soft line breaks | 0 | 2 | 0% |
 | Tabs | 5 | 11 | 45% |
 | Textual content | 2 | 3 | 67% |
-| Thematic breaks | 15 | 19 | 79% |
+| Thematic breaks | 16 | 19 | 84% |

@@ -1109,15 +1109,12 @@ fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
 
 /// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
 /// marks over it, with offsets in UTF-16 code units.
-fn parse_inline(src: &str) -> ParsedInline {
-  parse_inline_with(src, &RefDefs::new())
-}
-
 fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
   let chars: Vec<char> = src.chars().collect();
   let mut out = String::new();
   let mut out_len: usize = 0; // UTF-16 length of `out`
   let mut marks: Vec<InlineMark> = Vec::new();
+  let mut delims: Vec<Delim> = Vec::new();
   let mut i = 0;
 
   // Find the next index of `needle` (as chars) starting at `from`.
@@ -1244,16 +1241,34 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
         }
       }
     }
-    // Bold: **...**
-    if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
-      if let Some(end) = find_unescaped(i + 2, &['*', '*']) {
-        if end > i + 2 {
-          let inner: String = chars[i + 2..end].iter().collect();
-          push_inner(&inner, "bold", None, defs, &mut out, &mut out_len, &mut marks);
-          i = end + 2;
-          continue;
-        }
+    // Emphasis delimiters (* and _): record the run with its flanking
+    // properties; pairing happens after the scan (spec algorithm).
+    if chars[i] == '*' || chars[i] == '_' {
+      let c = chars[i];
+      let mut j = i;
+      while j < chars.len() && chars[j] == c {
+        j += 1;
       }
+      let count = j - i;
+      let prev = if i == 0 { None } else { Some(chars[i - 1]) };
+      let next = chars.get(j).copied();
+      let (can_open, can_close) = flanking(c, prev, next);
+      let start = out_len;
+      for _ in 0..count {
+        out.push(c);
+      }
+      out_len += count; // BMP chars: 1 UTF-16 unit each
+      delims.push(Delim {
+        c,
+        start,
+        cur_start: start,
+        count,
+        orig: count,
+        can_open,
+        can_close,
+      });
+      i = j;
+      continue;
     }
     // Strike: ~~...~~
     if chars[i] == '~' && i + 1 < chars.len() && chars[i + 1] == '~' {
@@ -1286,24 +1301,151 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
         }
       }
     }
-    // Italic: *...* or _..._
-    if chars[i] == '*' || chars[i] == '_' {
-      let ch = chars[i];
-      if let Some(end) = find_unescaped(i + 1, &[ch]) {
-        if end > i + 1 {
-          let inner: String = chars[i + 1..end].iter().collect();
-          push_inner(&inner, "italic", None, defs, &mut out, &mut out_len, &mut marks);
-          i = end + 1;
-          continue;
-        }
-      }
-    }
     out.push(chars[i]);
     out_len += chars[i].len_utf16();
     i += 1;
   }
 
+  process_emphasis(&mut out, &mut marks, &mut delims);
+
   ParsedInline { text: out, marks }
+}
+
+/// One run of `*`/`_` delimiters, tracked in output (UTF-16) coordinates.
+struct Delim {
+  c: char,
+  start: usize,     // original run start in `out`
+  cur_start: usize, // advances as the closer side is consumed
+  count: usize,     // remaining delimiter characters
+  orig: usize,      // original run length (rule-of-3)
+  can_open: bool,
+  can_close: bool,
+}
+
+fn is_md_punct(c: char) -> bool {
+  c.is_ascii_punctuation()
+    || matches!(c, '\u{2018}'..='\u{201F}' | '\u{2010}'..='\u{2027}')
+}
+
+/// Left/right flanking → (can_open, can_close) per the spec, including the
+/// `_` intraword restrictions.
+fn flanking(c: char, prev: Option<char>, next: Option<char>) -> (bool, bool) {
+  let prev_ws = prev.is_none_or(char::is_whitespace);
+  let next_ws = next.is_none_or(char::is_whitespace);
+  let prev_punct = prev.is_some_and(is_md_punct);
+  let next_punct = next.is_some_and(is_md_punct);
+
+  let left = !next_ws && (!next_punct || prev_ws || prev_punct);
+  let right = !prev_ws && (!prev_punct || next_ws || next_punct);
+
+  if c == '_' {
+    (left && (!right || prev_punct), right && (!left || next_punct))
+  } else {
+    (left, right)
+  }
+}
+
+/// The spec's process-emphasis: pair closers with the nearest valid opener
+/// (same char, rule-of-3), strong before em, deleting used delimiter
+/// characters and emitting bold/italic marks over the content between.
+fn process_emphasis(out: &mut String, marks: &mut Vec<InlineMark>, delims: &mut [Delim]) {
+  if delims.is_empty() {
+    return;
+  }
+  let mut deletions: Vec<(usize, usize)> = Vec::new(); // (start, len) in out coords
+
+  let mut closer_i = 0;
+  while closer_i < delims.len() {
+    if delims[closer_i].count == 0 || !delims[closer_i].can_close {
+      closer_i += 1;
+      continue;
+    }
+    // Nearest opener walking back.
+    let mut opener_i = None;
+    let mut k = closer_i;
+    while k > 0 {
+      k -= 1;
+      let o = &delims[k];
+      if o.count == 0 || !o.can_open || o.c != delims[closer_i].c {
+        continue;
+      }
+      // Rule of 3.
+      let cl = &delims[closer_i];
+      if (o.can_close || cl.can_open)
+        && (o.orig + cl.orig) % 3 == 0
+        && !(o.orig % 3 == 0 && cl.orig % 3 == 0)
+      {
+        continue;
+      }
+      opener_i = Some(k);
+      break;
+    }
+    let Some(oi) = opener_i else {
+      // No opener: if it can't also open, it is pure text now.
+      closer_i += 1;
+      continue;
+    };
+
+    let use_n = if delims[oi].count >= 2 && delims[closer_i].count >= 2 { 2 } else { 1 };
+    // Opener consumes from its right edge; closer from its left edge.
+    delims[oi].count -= use_n;
+    let o_del = delims[oi].start + delims[oi].count;
+    deletions.push((o_del, use_n));
+    let c_del = delims[closer_i].cur_start;
+    deletions.push((c_del, use_n));
+    delims[closer_i].cur_start += use_n;
+    delims[closer_i].count -= use_n;
+
+    marks.push(InlineMark {
+      start: o_del + use_n,
+      end: c_del,
+      kind: if use_n == 2 { "bold" } else { "italic" }.to_string(),
+      href: None,
+      title: None,
+    });
+
+    // Delimiters between opener and closer can never pair across.
+    for d in delims[oi + 1..closer_i].iter_mut() {
+      d.count = 0;
+    }
+    if delims[closer_i].count == 0 {
+      closer_i += 1;
+    }
+  }
+
+  if deletions.is_empty() {
+    return;
+  }
+  deletions.sort_unstable();
+
+  // Rebuild the text without the consumed delimiter characters and remap
+  // every mark offset past the deletions.
+  let units: Vec<u16> = out.encode_utf16().collect();
+  let mut keep: Vec<u16> = Vec::with_capacity(units.len());
+  let mut removed_before: Vec<usize> = Vec::with_capacity(units.len() + 1);
+  let mut di = 0;
+  let mut removed = 0usize;
+  let mut skip_until = 0usize;
+  for (idx, &u) in units.iter().enumerate() {
+    removed_before.push(removed);
+    if idx >= skip_until && di < deletions.len() && deletions[di].0 == idx {
+      skip_until = idx + deletions[di].1;
+      di += 1;
+    }
+    if idx < skip_until {
+      removed += 1;
+    } else {
+      keep.push(u);
+    }
+  }
+  removed_before.push(removed);
+
+  *out = String::from_utf16_lossy(&keep);
+  for m in marks.iter_mut() {
+    m.start -= removed_before[m.start.min(removed_before.len() - 1)];
+    m.end -= removed_before[m.end.min(removed_before.len() - 1)];
+  }
+  marks.retain(|m| m.end > m.start);
 }
 
 /// CommonMark autolink target for `<inner>`: an absolute URI (scheme:) maps

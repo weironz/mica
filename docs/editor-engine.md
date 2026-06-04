@@ -445,8 +445,14 @@ The recurring problem the engine must get right for every node type:
      `title` field), reference definitions (`[label]: dest "title"`,
      case-insensitive, full/collapsed/shortcut forms) with a defs
      pre-pass in both parsers; renderers emit titles and `<spaced
-     dests>`. Scoreboard 130 → 186 → **235/652 (36.0%)**; fixtures 12+13
-     pin both parsers. Remaining big buckets: Emphasis (132), List
+     dests>`. Emphasis bucket DONE (2026-06-05): the spec delimiter-stack
+     algorithm (left/right flanking, `_` intraword restrictions, rule
+     of 3, nearest-opener pairing with strong-before-em, delimiter
+     deletion + offset remap) replaces the naive closer search in both
+     parsers; parse output keeps nested same-type marks for
+     `<em><em>` fidelity (editor ops still normalize). Scoreboard
+     130 → 186 → 235 → **315/652 (48.3%)** — Emphasis 7%→89%.
+     Fixtures 12–14 pin both parsers. Remaining big buckets: List
      items (48), HTML blocks (44, degrade policy), Block quotes (25,
      needs container children), Images (22). Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
