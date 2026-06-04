@@ -1939,6 +1939,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onDelete: _confirmDeleteWorkspace,
               onExport: _exportWorkspaceFile,
               onCreate: _promptCreateWorkspace,
+              onImport: _importWorkspaceFile,
             ),
             if (_workspaceSettingsOpen) _workspaceSettings(context),
             if (widget.message != null) ...[
@@ -2984,17 +2985,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
-        onImportWorkspace: _importWorkspaceFile,
+        onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
       ),
     );
   }
 
-  /// Pick a Markdown file or a workspace ZIP and import it as a new workspace
-  /// (from global settings). A ZIP rebuilds the page tree; a .md becomes one page.
-  Future<void> _importWorkspaceFile() async {
+  /// Pick a Markdown file or a workspace ZIP and import it as a new workspace.
+  /// A ZIP rebuilds the page tree; a .md becomes one page.
+  Future<void> _importWorkspaceFile({bool fromSettings = false}) async {
     final picked = await pickImportFile();
     if (picked == null || !mounted) return;
-    Navigator.of(context).pop(); // close settings before the import flow runs
+    if (fromSettings) {
+      Navigator.of(context).pop(); // close settings before the import flow runs
+    }
     if (picked.name.toLowerCase().endsWith('.zip')) {
       await widget.onImportWorkspaceZip(picked.name, picked.bytes);
     } else {
@@ -3029,6 +3032,7 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onDelete,
     required this.onExport,
     required this.onCreate,
+    required this.onImport,
   });
 
   final List<Workspace> workspaces;
@@ -3038,6 +3042,7 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(Workspace workspace) onDelete;
   final void Function(Workspace workspace) onExport;
   final VoidCallback onCreate;
+  final VoidCallback onImport;
 
   @override
   State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
@@ -3058,6 +3063,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         for (final workspace in widget.workspaces) _row(workspace),
         if (widget.workspaces.isNotEmpty) const Divider(height: 8),
         _createRow(),
+        _importRow(),
       ],
       builder: (context, controller, child) {
         final label = widget.selected?.name ?? 'Select workspace';
@@ -3210,6 +3216,38 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 'New workspace',
                 style: TextStyle(
                   color: Color(0xFF2563EB),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _importRow() {
+    return SizedBox(
+      width: 320,
+      child: InkWell(
+        onTap: () {
+          _menu.close();
+          widget.onImport();
+        },
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            children: [
+              Icon(
+                Icons.drive_folder_upload_outlined,
+                size: 18,
+                color: Color(0xFF475569),
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Import workspace (.md / .zip)',
+                style: TextStyle(
+                  color: Color(0xFF475569),
                   fontWeight: FontWeight.w600,
                 ),
               ),
