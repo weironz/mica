@@ -1470,12 +1470,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   Future<void> _openRowMenu(int node, int row, Offset globalPosition) async {
     final selected = await _showSmallMenu(globalPosition, const [
+      ('moveUp', 'Move up'),
+      ('moveDown', 'Move down'),
       ('above', 'Insert row above'),
       ('below', 'Insert row below'),
       ('delete', 'Delete row'),
       ('deleteTable', 'Delete table'),
     ]);
     switch (selected) {
+      case 'moveUp':
+        _controller.moveTableRow(node, row, -1);
+      case 'moveDown':
+        _controller.moveTableRow(node, row, 1);
       case 'above':
         _controller.insertTableRow(node, row);
       case 'below':
@@ -1490,12 +1496,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   Future<void> _openColumnMenu(int node, int col, Offset globalPosition) async {
     final selected = await _showSmallMenu(globalPosition, const [
+      ('moveLeft', 'Move left'),
+      ('moveRight', 'Move right'),
       ('left', 'Insert column left'),
       ('right', 'Insert column right'),
       ('delete', 'Delete column'),
       ('deleteTable', 'Delete table'),
     ]);
     switch (selected) {
+      case 'moveLeft':
+        _controller.moveTableColumn(node, col, -1);
+      case 'moveRight':
+        _controller.moveTableColumn(node, col, 1);
       case 'left':
         _controller.insertTableColumn(node, col);
       case 'right':

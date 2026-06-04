@@ -828,6 +828,41 @@ class EditorController extends ChangeNotifier {
     _writeTable(index, table);
   }
 
+  /// Reorder a column by [delta] positions (the column menu's move
+  /// left/right). Cell contents and the column width travel together.
+  void moveTableColumn(int index, int col, int delta) {
+    final table = _tableAt(index);
+    if (table == null) return;
+    final to = col + delta;
+    if (col < 0 || to < 0 || col >= table.columns || to >= table.columns) {
+      return;
+    }
+    for (final row in table.rows) {
+      if (col >= row.length || to >= row.length) continue;
+      final v = row.removeAt(col);
+      row.insert(to, v);
+    }
+    if (col < table.widths.length && to < table.widths.length) {
+      final w = table.widths.removeAt(col);
+      table.widths.insert(to, w);
+    }
+    _writeTable(index, table);
+  }
+
+  /// Reorder a body row by [delta] positions (the header row stays put).
+  void moveTableRow(int index, int row, int delta) {
+    final table = _tableAt(index);
+    if (table == null) return;
+    final first = table.header ? 1 : 0;
+    final to = row + delta;
+    if (row < first || to < first || row >= table.rows.length || to >= table.rows.length) {
+      return;
+    }
+    final r = table.rows.removeAt(row);
+    table.rows.insert(to, r);
+    _writeTable(index, table);
+  }
+
   void setTableAlign(int index, String align) {
     final table = _tableAt(index);
     if (table == null) return;
