@@ -43,6 +43,26 @@ void main() {
     expect(node.text.substring(link.start, link.end), 'Very Long Title');
   });
 
+  test('setLinkRange edits and removes a link without touching text', () {
+    final c = _doc('see Guide here', 0);
+    c.nodes.single.data = {
+      'marks': marksToJson([Mark(4, 9, 'link', href: 'https://old.example')]),
+    };
+    // Edit: same range, new href.
+    c.setLinkRange(0, 4, 9, 'mica://page/v9');
+    var link = marksFromData(c.nodes.single.data).single;
+    expect(link.href, 'mica://page/v9');
+    expect([link.start, link.end], [4, 9]);
+    expect(c.nodes.single.text, 'see Guide here');
+    // Remove: link mark gone, text intact.
+    c.setLinkRange(0, 4, 9, null);
+    expect(
+      marksFromData(c.nodes.single.data).where((m) => m.type == 'link'),
+      isEmpty,
+    );
+    expect(c.nodes.single.text, 'see Guide here');
+  });
+
   test('insertPageLink refuses code blocks', () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([EditorNode(id: 'a', kind: 'code_block', text: '[[x')]);

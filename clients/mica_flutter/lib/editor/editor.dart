@@ -174,6 +174,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   String _pageQuery = '';
   int _pageIndex = 0;
 
+  // Hover toolbar over a link (edit / copy / remove).
+  OverlayEntry? _linkBar;
+  Timer? _linkBarHide;
+  int _linkBarNode = -1;
+  Mark? _linkBarMark;
+  bool _pointerOverLinkBar = false;
+
   RenderDocument? get _render =>
       _surfaceKey.currentContext?.findRenderObject() as RenderDocument?;
 
@@ -244,6 +251,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _slashEntry = null;
     _pageEntry?.remove();
     _pageEntry = null;
+    _linkBarHide?.cancel();
+    _linkBar?.remove();
+    _linkBar = null;
     _cellEntry?.remove();
     _cellEntry = null;
     _markBar?.remove();
@@ -320,6 +330,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _blink?.cancel();
       _closeSlash();
       _closePageLink();
+      _closeLinkBar();
       _hideMarkBar();
       setRichPasteHandler(null);
       setRichImagePasteHandler(null);
@@ -518,6 +529,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ext < 0 ? text.length : ext,
     );
     _lastSentIme = value;
+
+    // Any text change can shift mark ranges — drop the hover link bar.
+    _closeLinkBar();
 
     // Markdown input rules take precedence; a conversion strips the marker.
     if (_controller.applyInputRules()) {
@@ -923,6 +937,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _openHref(href);
       return;
     }
+    _closeLinkBar();
     if (!widget.canEdit) return;
     _closeSlash();
     _closePageLink();
@@ -1218,6 +1233,27 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return href;
   }
 
+  /// Like [_linkHitAt] but returns the node index and the full link mark, for
+  /// the hover toolbar (its actions need the mark's whole range).
+  ({int node, Mark mark})? _linkMarkHitAt(RenderDocument r, Offset local) {
+    final pos = r.positionAt(local);
+    if (pos.node < 0 || pos.node >= _controller.nodes.length) return null;
+    final rect = r.caretRectFor(pos);
+    if (rect == null) return null;
+    if (local.dy < rect.top - 2 || local.dy > rect.bottom + 2) return null;
+    if ((local.dx - rect.left).abs() > 24) return null;
+    final node = _controller.nodes[pos.node];
+    for (final m in marksFromData(node.data)) {
+      if (m.type == 'link' &&
+          m.href != null &&
+          pos.offset >= m.start &&
+          pos.offset < m.end) {
+        return (node: pos.node, mark: m);
+      }
+    }
+    return null;
+  }
+
   static const _pageScheme = 'mica://page/';
 
   void _openHref(String href) {
@@ -1481,6 +1517,179 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     r.setHover(local);
     final cursor = _cursorFor(r, local);
     if (cursor != _cursor) setState(() => _cursor = cursor);
+
+    // Link hover toolbar: show while the pointer is on link text, keep it
+    // while the pointer is over the bar itself, hide after a short grace.
+    final hit = _linkMarkHitAt(r, local);
+    if (hit != null) {
+      _linkBarHide?.cancel();
+      final same = _linkBar != null &&
+          _linkBarNode == hit.node &&
+          _linkBarMark?.start == hit.mark.start &&
+          _linkBarMark?.href == hit.mark.href;
+      if (!same) _showLinkBar(hit.node, hit.mark);
+    } else if (_linkBar != null && !_pointerOverLinkBar) {
+      _scheduleLinkBarHide();
+    }
+  }
+
+  void _showLinkBar(int node, Mark mark) {
+    _linkBarNode = node;
+    _linkBarMark = mark;
+    if (_linkBar == null) {
+      _linkBar = OverlayEntry(builder: _buildLinkBar);
+      Overlay.of(context).insert(_linkBar!);
+    } else {
+      _linkBar!.markNeedsBuild();
+    }
+  }
+
+  void _scheduleLinkBarHide() {
+    _linkBarHide?.cancel();
+    _linkBarHide = Timer(const Duration(milliseconds: 350), () {
+      if (!_pointerOverLinkBar) _closeLinkBar();
+    });
+  }
+
+  void _closeLinkBar() {
+    _linkBarHide?.cancel();
+    _linkBarHide = null;
+    _linkBar?.remove();
+    _linkBar = null;
+    _linkBarMark = null;
+    _linkBarNode = -1;
+    _pointerOverLinkBar = false;
+  }
+
+  Widget _buildLinkBar(BuildContext context) {
+    final r = _render;
+    final mark = _linkBarMark;
+    if (r == null || mark == null) return const SizedBox.shrink();
+    final rect = r.caretRectFor(DocPosition(_linkBarNode, mark.start));
+    if (rect == null) return const SizedBox.shrink();
+    final origin = r.localToGlobal(rect.bottomLeft);
+    final screen = MediaQuery.of(context).size;
+    final left = origin.dx.clamp(8.0, screen.width - 320);
+    final top = (origin.dy + 4).clamp(8.0, screen.height - 48);
+
+    Widget action(IconData icon, String label, VoidCallback onTap) {
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: const Color(0xFF475569)),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF0F172A)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: MouseRegion(
+        onEnter: (_) {
+          _pointerOverLinkBar = true;
+          _linkBarHide?.cancel();
+        },
+        onExit: (_) {
+          _pointerOverLinkBar = false;
+          _scheduleLinkBarHide();
+        },
+        child: ExcludeFocus(
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  action(Icons.copy_outlined, 'Copy link', _copyLinkFromBar),
+                  if (widget.canEdit) ...[
+                    Container(
+                      width: 1,
+                      height: 18,
+                      color: const Color(0xFFE2E8F0),
+                    ),
+                    action(Icons.edit_outlined, 'Edit link', _editLinkFromBar),
+                    Container(
+                      width: 1,
+                      height: 18,
+                      color: const Color(0xFFE2E8F0),
+                    ),
+                    action(Icons.link_off, 'Remove link', _removeLinkFromBar),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _copyLinkFromBar() {
+    final href = _linkBarMark?.href;
+    _closeLinkBar();
+    if (href == null) return;
+    copyTextToClipboard(href).then((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
+  void _removeLinkFromBar() {
+    final mark = _linkBarMark;
+    final node = _linkBarNode;
+    _closeLinkBar();
+    if (mark == null) return;
+    _controller.setLinkRange(node, mark.start, mark.end, null);
+  }
+
+  Future<void> _editLinkFromBar() async {
+    final mark = _linkBarMark;
+    final node = _linkBarNode;
+    _closeLinkBar();
+    if (mark == null) return;
+    final field = TextEditingController(text: mark.href ?? '');
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit link'),
+        content: TextField(
+          controller: field,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'https://…',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(field.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    field.dispose();
+    if (url != null && url.trim().isNotEmpty) {
+      _controller.setLinkRange(node, mark.start, mark.end, url.trim());
+    }
   }
 
   MouseCursor _cursorFor(RenderDocument r, Offset local) {
@@ -2239,7 +2448,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       child: MouseRegion(
         cursor: widget.canEdit ? _cursor : MouseCursor.defer,
         onHover: _onHover,
-        onExit: (_) => _render?.setHover(null),
+        onExit: (_) {
+          _render?.setHover(null);
+          if (!_pointerOverLinkBar) _scheduleLinkBarHide();
+        },
         child: Focus(
           focusNode: _focus,
           onKeyEvent: _onKey,

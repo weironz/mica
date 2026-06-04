@@ -1021,6 +1021,30 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(i, s));
   }
 
+  /// Replace the link over `[start, end)` of node [i]: with an [href] the
+  /// range gets that link; with null the link is removed (text untouched).
+  /// Used by the link hover toolbar (edit / remove).
+  void setLinkRange(int i, int start, int end, String? href) {
+    if (i < 0 || i >= nodes.length) return;
+    final node = nodes[i];
+    final marks = marksFromData(node.data);
+    var next = applyMark(marks, start, end, 'link', add: false);
+    if (href != null && href.isNotEmpty) {
+      next = applyMark(next, start, end, 'link', href: href, add: true);
+    }
+    node.data = {...node.data, 'marks': marksToJson(next)};
+    _dirty.remove(node.id);
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': node.text,
+        'data': node.data,
+      },
+    ]);
+    notifyListeners();
+  }
+
   /// Replace `[from, to)` in the focused node with [title] carrying a link
   /// mark to [href] — used by the `[[` page-link picker. Existing marks are
   /// shifted across the replacement; the caret lands after the link.
