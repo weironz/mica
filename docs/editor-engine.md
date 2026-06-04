@@ -478,10 +478,29 @@ The recurring problem the engine must get right for every node type:
      unescaped brackets; a literal `!` before a rendered link escapes
      on export so it can't read back as an image. Image blocks export
      spec-shaped `<p><img src alt title /></p>` HTML and keep titles
-     in markdown. Scoreboard **416/652 (63.8%)**. Fixtures 12–16 pin
-     both parsers. Remaining big buckets: HTML blocks (44, degrade
-     policy), Block quotes (25, needs container children — also the
-     blocker for the last List-items examples: fences/quotes/code
-     inside items). Decision point: keep extending
+     in markdown. Scoreboard 416/652 (63.8%). Fixtures 12–16 pin
+     both parsers.
+     Block quotes bucket DONE (2026-06-05, 25/25 = 100%) — WITHOUT
+     container children: same flat-model trick as lists. Blocks inside
+     quotes carry `data.quote` = marker depth (the `quote` kind IS the
+     quoted paragraph, depth ≥ 2 recorded); `data.qbreak` marks a
+     blank-separated new blockquote. Import strips `>` markers (one
+     optional space each, ≤3 spaces between nested), joins marked AND
+     lazy paragraph lines into the open quoted paragraph (partial
+     markers continue the deepest paragraph, ex 251), handles fences /
+     indented code / dividers / headings / lists / images inside
+     quotes, `>`-only lines as paragraph breaks, and content-less
+     groups as empty quote blocks. HTML rebuilds nested <blockquote>
+     recursively from the depths (render_quote_group, the
+     render_html_list pattern); markdown export re-prefixes every line
+     with `> `×depth (blanks become bare `>`) plus a plain blank after
+     each group. Editor degrade: non-paragraph blocks inside quotes
+     render as their plain kinds (no quote border) until the editor
+     learns `data.quote`. Also fixed: an indented (4+ col) marker can't
+     start a top-level list (ex 238). Scoreboard **438/652 (67.2%)**,
+     Block quotes 24%→100%, List items 62%. Fixtures 12–17 pin both
+     parsers. Remaining big bucket: HTML blocks (44) + Raw HTML (20) —
+     needs the degrade policy decision; List items' last examples need
+     code/quote containers inside list items. Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.

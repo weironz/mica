@@ -161,6 +161,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     raw: String,
     base: Value,
     had_blank: bool,
+    qdepth: usize,
   }
   let mut open_item: Option<OpenItem> = None;
   // Last pushed list item (index, level, marker char) — anchors loose-list
@@ -170,6 +171,13 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   // A blank line seen inside a list: if another item follows, the list is
   // loose (items render as paragraphs in HTML).
   let mut pending_loose = false;
+  // Block quotes (flat model: blocks carry `data.quote` = depth, the HTML
+  // exporter rebuilds nested <blockquote>): is a quote group currently
+  // open, did a blank just close one (next quote gets `data.qbreak`), and
+  // is a content-less `>` group waiting to become an empty quote block.
+  let mut quote_active = false;
+  let mut quote_boundary = false;
+  let mut pending_empty_quote: Option<usize> = None;
   while index < raw_lines.len() {
     if def_lines.contains(&index) {
       index += 1;
@@ -183,10 +191,27 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       // paragraph (items merely note the blank — an indented line can still
       // continue them), and make the list loose if it continues.
       match open_item.as_mut() {
-        Some(open) if open.kind != "paragraph" => open.had_blank = true,
+        Some(open)
+          if matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo") =>
+        {
+          open.had_blank = true
+        }
         _ => open_item = None,
       }
       pending_loose = pending_loose || !list_stack.is_empty();
+      // A content-less `>` group becomes an empty quote block; a blank
+      // after a quote separates blockquotes (the next gets `qbreak`).
+      if let Some(d) = pending_empty_quote.take() {
+        let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
+        if quote_boundary {
+          data_insert(&mut data, "qbreak", json!(true));
+        }
+        push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
+      }
+      if blocks.last().is_some_and(|b| quote_depth_of(b) > 0) {
+        quote_boundary = true;
+      }
+      quote_active = false;
       index += 1;
       continue;
     }
@@ -340,7 +365,163 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
-    let (kind, text, mut data) = classify_markdown_line(content);
+    // Block quote: strip `>` markers (each takes one optional following
+    // space; up to 3 spaces may sit between nested markers) → depth + rest.
+    let (qdepth, qrest) = strip_quote_markers(content);
+    if qdepth > 0 {
+      list_stack.clear();
+      last_list = None;
+      pending_loose = false;
+      let qrest_trim = qrest.trim_start();
+
+      // `>` with nothing after: a paragraph break inside the quote — or,
+      // if the group never gets content, an empty blockquote.
+      if qrest_trim.is_empty() {
+        if !quote_active && pending_empty_quote.is_none() {
+          pending_empty_quote = Some(qdepth);
+        }
+        open_item = None;
+        quote_active = true;
+        index += 1;
+        continue;
+      }
+
+      // Lazy/marked continuation: a plain paragraph line at the same or a
+      // shallower marker depth keeps the open quoted paragraph going.
+      let (kind, text, mut data) = classify_markdown_line(qrest_trim);
+      if kind == "paragraph"
+        && !qrest_trim.starts_with("```")
+        && let Some(open) = open_item.as_mut()
+        && open.qdepth >= qdepth
+        && !open.had_blank
+      {
+        open.raw.push('\n');
+        open.raw.push_str(qrest_trim);
+        let (joined, joined_data) =
+          apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
+        blocks[open.block_idx].text = joined;
+        blocks[open.block_idx].data = joined_data;
+        quote_active = true;
+        index += 1;
+        continue;
+      }
+
+      pending_empty_quote = None;
+      let qbreak = quote_boundary;
+      quote_boundary = false;
+
+      // Fenced code inside the quote: runs while the markers do.
+      if let Some(language) = qrest_trim.strip_prefix("```") {
+        let language = language.trim().to_string();
+        let mut code_lines = Vec::new();
+        index += 1;
+        while index < raw_lines.len() {
+          let lcontent = raw_lines[index].trim_end().trim_start();
+          let (d2, r2) = strip_quote_markers(lcontent);
+          if d2 < qdepth {
+            break; // the quote ended — so does the fence
+          }
+          if r2.trim_start().starts_with("```") {
+            index += 1;
+            break;
+          }
+          code_lines.push(r2.to_string());
+          index += 1;
+        }
+        let mut data = if language.is_empty() {
+          Value::Null
+        } else {
+          json!({ "language": language })
+        };
+        data_insert(&mut data, "quote", json!(qdepth));
+        if qbreak {
+          data_insert(&mut data, "qbreak", json!(true));
+        }
+        push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
+        open_item = None;
+        quote_active = true;
+        continue;
+      }
+
+      // Indented code inside the quote (per marked line).
+      let qcol = qrest.len() - qrest_trim.len();
+      if qcol >= 4 {
+        let mut data = json!({ "quote": qdepth });
+        if qbreak {
+          data_insert(&mut data, "qbreak", json!(true));
+        }
+        push_block(
+          &mut blocks,
+          &mut root_children,
+          "code_block",
+          deindent_columns(qrest, 4),
+          data,
+        );
+        open_item = None;
+        quote_active = true;
+        index += 1;
+        continue;
+      }
+
+      if is_divider(qrest_trim) {
+        let mut data = json!({ "quote": qdepth });
+        if qbreak {
+          data_insert(&mut data, "qbreak", json!(true));
+        }
+        push_block(&mut blocks, &mut root_children, "divider", String::new(), data);
+        open_item = None;
+        quote_active = true;
+        index += 1;
+        continue;
+      }
+
+      // Quoted content block: plain text becomes the `quote` kind (depth in
+      // `data.quote` past 1); any other kind carries `data.quote`.
+      let kind = if kind == "paragraph" { "quote" } else { kind };
+      if kind != "quote" || qdepth > 1 {
+        data_insert(&mut data, "quote", json!(qdepth));
+      }
+      if qbreak {
+        data_insert(&mut data, "qbreak", json!(true));
+      }
+      let raw = text.clone();
+      let base = data.clone();
+      let (text, data) = if kind == "image" {
+        (parse_inline_with(&text, &defs).text, data)
+      } else {
+        apply_inline_marks(text, data, &defs)
+      };
+      push_block(&mut blocks, &mut root_children, kind, text, data);
+      open_item = if matches!(kind, "quote" | "bulleted_list" | "numbered_list" | "todo") {
+        Some(OpenItem {
+          block_idx: blocks.len() - 1,
+          kind: kind.to_string(),
+          content_col: 0,
+          raw,
+          base,
+          had_blank: false,
+          qdepth,
+        })
+      } else {
+        None
+      };
+      quote_active = true;
+      index += 1;
+      continue;
+    }
+
+    let (kind, text, data) = classify_markdown_line(content);
+    // An indented (4+ columns) marker cannot start a list at top level —
+    // the line is paragraph continuation or code, never a new item.
+    let (kind, text, data) = if matches!(kind, "bulleted_list" | "numbered_list" | "todo")
+      && col >= 4
+      && list_stack.is_empty()
+    {
+      ("paragraph", content.to_string(), Value::Null)
+    } else {
+      (kind, text, data)
+    };
+    let mut data = data;
 
     // Continuation (CommonMark): a paragraph line joins the open block with
     // a soft break (lazy lines included); after a blank, a line indented to
@@ -456,6 +637,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         raw,
         base,
         had_blank: false,
+        qdepth: 0,
       });
       index += 1;
       continue;
@@ -484,8 +666,17 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       raw,
       base: Value::Null,
       had_blank: false,
+      qdepth: 0,
     });
     index += 1;
+  }
+
+  if let Some(d) = pending_empty_quote.take() {
+    let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
+    if quote_boundary {
+      data_insert(&mut data, "qbreak", json!(true));
+    }
+    push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
   }
 
   // Promote a paragraph that is exactly one image (e.g. a reference-form
@@ -722,6 +913,40 @@ fn numbered_list_marker(content: &str) -> Option<(u64, &str)> {
   }
 }
 
+/// Strip leading `>` quote markers: each consumes one optional following
+/// space, and up to 3 spaces may precede the next nested marker. Returns the
+/// marker depth and the remaining content.
+fn strip_quote_markers(content: &str) -> (usize, &str) {
+  let b = content.as_bytes();
+  let mut i = 0;
+  let mut depth = 0;
+  loop {
+    let mut j = i;
+    let mut spaces = 0;
+    while j < b.len() && b[j] == b' ' {
+      j += 1;
+      spaces += 1;
+    }
+    if spaces > 3 || j >= b.len() || b[j] != b'>' {
+      break;
+    }
+    j += 1;
+    if j < b.len() && b[j] == b' ' {
+      j += 1;
+    }
+    depth += 1;
+    i = j;
+  }
+  (depth, &content[i..])
+}
+
+/// Quote nesting depth of a block: the `quote` kind is depth ≥ 1, any other
+/// kind inside a quote carries `data.quote`.
+fn quote_depth_of(block: &Block) -> usize {
+  let d = block.data.get("quote").and_then(Value::as_u64).unwrap_or(0) as usize;
+  if block.kind == "quote" { d.max(1) } else { d }
+}
+
 /// Insert a key into a block's `data`, upgrading `Null` to an object.
 fn data_insert(data: &mut Value, key: &str, value: Value) {
   match data {
@@ -764,13 +989,32 @@ fn append_html_children(
   let mut index = 0;
   while index < child_ids.len() {
     let child = block_for(snapshot, &child_ids[index])?;
-    if list_tag_for(&child.kind).is_some() {
+    if quote_depth_of(child) > 0 {
+      // Collect one quote group (a `qbreak` starts the next blockquote)
+      // and rebuild the nested <blockquote> structure from `data.quote`.
+      let run_start = index;
+      index += 1;
+      while index < child_ids.len() {
+        let b = block_for(snapshot, &child_ids[index])?;
+        if quote_depth_of(b) == 0 || b.data.get("qbreak").is_some() {
+          break;
+        }
+        index += 1;
+      }
+      let items: Vec<&Block> = child_ids[run_start..index]
+        .iter()
+        .map(|id| block_for(snapshot, id))
+        .collect::<DocumentOperationResult<_>>()?;
+      render_quote_group(snapshot, &items, 1, out)?;
+    } else if list_tag_for(&child.kind).is_some() {
       // Collect the maximal run of consecutive list items (any tag, any
       // `data.indent` level) and render it as nested <ul>/<ol> structure.
       let run_start = index;
-      while index < child_ids.len()
-        && list_tag_for(&block_for(snapshot, &child_ids[index])?.kind).is_some()
-      {
+      while index < child_ids.len() {
+        let b = block_for(snapshot, &child_ids[index])?;
+        if list_tag_for(&b.kind).is_none() || quote_depth_of(b) > 0 {
+          break;
+        }
         index += 1;
       }
       let items: Vec<&Block> = child_ids[run_start..index]
@@ -784,6 +1028,51 @@ fn append_html_children(
     }
   }
 
+  Ok(())
+}
+
+/// Render one quote group (flat blocks carrying `data.quote` depths) as
+/// nested `<blockquote>`: deeper runs recurse, `quote`-kind blocks are the
+/// paragraphs, list items group into lists, anything else renders normally.
+fn render_quote_group(
+  snapshot: &DocumentSnapshotPayload,
+  items: &[&Block],
+  depth: usize,
+  out: &mut String,
+) -> DocumentOperationResult<()> {
+  out.push_str("<blockquote>\n");
+  let mut i = 0;
+  while i < items.len() {
+    if quote_depth_of(items[i]) > depth {
+      let s = i;
+      while i < items.len() && quote_depth_of(items[i]) > depth {
+        i += 1;
+      }
+      render_quote_group(snapshot, &items[s..i], depth + 1, out)?;
+      continue;
+    }
+    if list_tag_for(&items[i].kind).is_some() {
+      let s = i;
+      while i < items.len()
+        && quote_depth_of(items[i]) == depth
+        && list_tag_for(&items[i].kind).is_some()
+      {
+        i += 1;
+      }
+      render_html_list(&items[s..i], 0, out);
+      continue;
+    }
+    if items[i].kind == "quote" {
+      let text = html_inline(items[i]);
+      if !text.is_empty() {
+        out.push_str(&format!("<p>{text}</p>\n"));
+      }
+    } else {
+      append_html_block(snapshot, items[i], out)?;
+    }
+    i += 1;
+  }
+  out.push_str("</blockquote>\n");
   Ok(())
 }
 
@@ -1066,17 +1355,39 @@ fn append_markdown_children(
     matches!(kind, "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo")
   };
   let mut prev_was_item = false;
+  let mut prev_quote = 0usize;
   for child_id in child_ids {
     let child_index = block_index(snapshot, &child_id)
       .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
     let child = &snapshot.blocks[child_index];
+    let quote = quote_depth_of(child);
     // A list runs until a blank line: separate it from whatever follows so
     // the next block can't be read back as a lazy continuation.
     if prev_was_item && !is_item(&child.kind) {
       lines.push(String::new());
     }
+    // A quote group ends at depth 0 or a recorded break — a plain blank
+    // line keeps the next block out of the quote on re-import.
+    if prev_quote > 0 && (quote == 0 || child.data.get("qbreak").is_some()) {
+      lines.push(String::new());
+    }
     prev_was_item = is_item(&child.kind);
+    prev_quote = quote;
+    let from = lines.len();
     append_markdown_block(snapshot, child, depth, lines, images)?;
+    if quote > 0 {
+      // Re-prefix every emitted line with the quote markers; blanks become
+      // bare `>` so paragraph breaks stay inside the quote.
+      let marker = "> ".repeat(quote);
+      let bare = marker.trim_end().to_string();
+      for l in lines[from..].iter_mut() {
+        *l = if l.is_empty() {
+          bare.clone()
+        } else {
+          format!("{marker}{l}")
+        };
+      }
+    }
   }
 
   Ok(())
@@ -1200,7 +1511,8 @@ fn append_markdown_block_content(
       push_list_item(lines, block, &indent, &format!("{n}{delim} "), rich);
     }
     "quote" => {
-      lines.push(format!("> {rich}"));
+      // Marker prefixes are added by the children walker (depth-aware).
+      lines.extend(rich.split('\n').map(str::to_string));
       lines.push(String::new());
     }
     "code_block" | "code" => {

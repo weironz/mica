@@ -32,13 +32,36 @@ typedef BlockSpec = ({String kind, String text, Map<String, dynamic> data});
 
 /// A paragraph-like block kept open for multi-line continuation.
 class _OpenItem {
-  _OpenItem(this.index, this.kind, this.contentCol, this.raw, this.base);
+  _OpenItem(this.index, this.kind, this.contentCol, this.raw, this.base,
+      {this.qdepth = 0});
   final int index;
   final String kind;
   final int contentCol;
   String raw;
   final Map<String, dynamic> base;
   bool hadBlank = false;
+  final int qdepth;
+}
+
+/// Strip leading `>` quote markers (one optional space each; ≤3 spaces may
+/// sit between nested markers) → (depth, rest). Mirrors the Rust engine.
+(int, String) stripQuoteMarkers(String content) {
+  var i = 0;
+  var depth = 0;
+  while (true) {
+    var j = i;
+    var spaces = 0;
+    while (j < content.length && content[j] == ' ') {
+      j++;
+      spaces++;
+    }
+    if (spaces > 3 || j >= content.length || content[j] != '>') break;
+    j++;
+    if (j < content.length && content[j] == ' ') j++;
+    depth++;
+    i = j;
+  }
+  return (depth, content.substring(i));
 }
 
 /// Parse inline Markdown in [text] into clean text + marks, merged into [data].
@@ -140,6 +163,15 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   _OpenItem? open;
   (int, int, String)? lastList; // (block index, level, marker char)
   var pendingLoose = false;
+  // Block quotes (flat model: `data.quote` = depth): is a group open, did a
+  // blank just close one (next quote gets `qbreak`), pending empty group.
+  var quoteActive = false;
+  var quoteBoundary = false;
+  int? pendingEmptyQuote;
+  int quoteDepthOf(BlockSpec b) {
+    final d = (b.data['quote'] as int?) ?? 0;
+    return b.kind == 'quote' ? (d < 1 ? 1 : d) : d;
+  }
   void resetListState() {
     listStack.clear();
     open = null;
@@ -220,12 +252,29 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       // Blank lines between items keep the list context, end the open
       // paragraph (items merely note the blank), and make the list loose
       // if it continues.
-      if (open != null && open!.kind != 'paragraph') {
+      if (open != null &&
+          (open!.kind == 'bulleted_list' ||
+              open!.kind == 'numbered_list' ||
+              open!.kind == 'todo')) {
         open!.hadBlank = true;
       } else {
         open = null;
       }
       pendingLoose = pendingLoose || listStack.isNotEmpty;
+      // A content-less `>` group becomes an empty quote block; a blank
+      // after a quote separates blockquotes (the next gets `qbreak`).
+      final pending = pendingEmptyQuote;
+      if (pending != null) {
+        result.add((kind: 'quote', text: '', data: {
+          if (pending > 1) 'quote': pending,
+          if (quoteBoundary) 'qbreak': true,
+        }));
+        pendingEmptyQuote = null;
+      }
+      if (result.isNotEmpty && quoteDepthOf(result.last) > 0) {
+        quoteBoundary = true;
+      }
+      quoteActive = false;
       i++;
       continue;
     }
@@ -303,10 +352,135 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       continue;
     }
 
+    // Block quote: strip `>` markers → depth + rest (mirrors Rust).
+    final (qdepth, qrest) = stripQuoteMarkers(line);
+    if (qdepth > 0) {
+      listStack.clear();
+      lastList = null;
+      pendingLoose = false;
+      final qrestTrim = qrest.trimLeft();
+
+      // `>` with nothing after: a paragraph break inside the quote — or,
+      // if the group never gets content, an empty blockquote.
+      if (qrestTrim.isEmpty) {
+        if (!quoteActive && pendingEmptyQuote == null) {
+          pendingEmptyQuote = qdepth;
+        }
+        open = null;
+        quoteActive = true;
+        i++;
+        continue;
+      }
+
+      // Lazy/marked continuation of the open quoted paragraph.
+      final qc = classifyLine(qrestTrim);
+      if (qc.$1 == 'paragraph' &&
+          !qrestTrim.startsWith('```') &&
+          open != null &&
+          open!.qdepth >= qdepth &&
+          !open!.hadBlank) {
+        open!.raw = '${open!.raw}\n$qrestTrim';
+        reapply(open!);
+        quoteActive = true;
+        i++;
+        continue;
+      }
+
+      pendingEmptyQuote = null;
+      final qbreak = quoteBoundary;
+      quoteBoundary = false;
+
+      // Fenced code inside the quote: runs while the markers do.
+      if (qrestTrim.startsWith('```')) {
+        final language = qrestTrim.substring(3).trim();
+        final buffer = <String>[];
+        i++;
+        while (i < lines.length) {
+          final lcontent = lines[i].trimRight().trimLeft();
+          final (d2, r2) = stripQuoteMarkers(lcontent);
+          if (d2 < qdepth) break; // the quote ended — so does the fence
+          if (r2.trimLeft().startsWith('```')) {
+            i++;
+            break;
+          }
+          buffer.add(r2);
+          i++;
+        }
+        result.add((kind: 'code_block', text: buffer.join('\n'), data: {
+          if (language.isNotEmpty) 'language': language,
+          'quote': qdepth,
+          if (qbreak) 'qbreak': true,
+        }));
+        open = null;
+        quoteActive = true;
+        continue;
+      }
+
+      // Indented code inside the quote (per marked line).
+      if (qrest.length - qrestTrim.length >= 4) {
+        result.add((kind: 'code_block', text: deindentColumns(qrest, 4), data: {
+          'quote': qdepth,
+          if (qbreak) 'qbreak': true,
+        }));
+        open = null;
+        quoteActive = true;
+        i++;
+        continue;
+      }
+
+      if (isThematicBreak(qrestTrim)) {
+        result.add((kind: 'divider', text: '', data: {
+          'quote': qdepth,
+          if (qbreak) 'qbreak': true,
+        }));
+        open = null;
+        quoteActive = true;
+        i++;
+        continue;
+      }
+
+      // Quoted content block: plain text becomes the `quote` kind (depth in
+      // `data.quote` past 1); any other kind carries `data.quote`.
+      final qkind = qc.$1 == 'paragraph' ? 'quote' : qc.$1;
+      final qtext = qc.$2;
+      final qdata = Map<String, dynamic>.of(qc.$3);
+      if (qkind != 'quote' || qdepth > 1) qdata['quote'] = qdepth;
+      if (qbreak) qdata['qbreak'] = true;
+      if (qkind == 'image') {
+        result.add((
+          kind: 'image',
+          text: parseInline(qtext, defs: defs).text,
+          data: qdata,
+        ));
+        open = null;
+      } else {
+        final qbase = Map<String, dynamic>.of(qdata);
+        result.add(_inline(qkind, qtext, qdata, defs: defs));
+        open = (qkind == 'quote' ||
+                qkind == 'bulleted_list' ||
+                qkind == 'numbered_list' ||
+                qkind == 'todo')
+            ? _OpenItem(result.length - 1, qkind, 0, qtext, qbase, qdepth: qdepth)
+            : null;
+      }
+      quoteActive = true;
+      i++;
+      continue;
+    }
+
     final c = classifyLine(line);
-    final kind = c.$1;
+    var kind = c.$1;
     var text = c.$2;
-    final data = Map<String, dynamic>.of(c.$3);
+    var data = Map<String, dynamic>.of(c.$3);
+    // An indented (4+ columns) marker cannot start a list at top level —
+    // the line is paragraph continuation or code, never a new item.
+    if ((kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo') &&
+        col >= 4 &&
+        listStack.isEmpty) {
+      kind = 'paragraph';
+      text = line;
+      data = {};
+    }
 
     // Continuation (CommonMark): a paragraph line joins the open block with
     // a soft break (lazy lines included); after a blank, a line indented to
@@ -430,6 +604,14 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       open = _OpenItem(result.length - 1, 'paragraph', 0, line, {});
     }
     i++;
+  }
+
+  final pendingTail = pendingEmptyQuote;
+  if (pendingTail != null) {
+    result.add((kind: 'quote', text: '', data: {
+      if (pendingTail > 1) 'quote': pendingTail,
+      if (quoteBoundary) 'qbreak': true,
+    }));
   }
 
   // Promote a paragraph that is exactly one image (e.g. a reference-form

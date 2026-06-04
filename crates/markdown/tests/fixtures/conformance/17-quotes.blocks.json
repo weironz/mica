@@ -1,0 +1,75 @@
+[
+  {
+    "data": {},
+    "kind": "quote",
+    "text": "simple quote\njoined marked"
+  },
+  {
+    "data": {
+      "level": 1,
+      "qbreak": true,
+      "quote": 1
+    },
+    "kind": "heading",
+    "text": "heading inside"
+  },
+  {
+    "data": {},
+    "kind": "quote",
+    "text": "body text\ncontinued lazy"
+  },
+  {
+    "data": {
+      "qbreak": true,
+      "quote": 2
+    },
+    "kind": "quote",
+    "text": "nested two deep\nstill nested"
+  },
+  {
+    "data": {
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": ""
+  },
+  {
+    "data": {
+      "qbreak": true,
+      "quote": 1
+    },
+    "kind": "bulleted_list",
+    "text": "item in quote\nmore of the item"
+  },
+  {
+    "data": {
+      "language": "js",
+      "qbreak": true,
+      "quote": 1
+    },
+    "kind": "code_block",
+    "text": "let x = 1"
+  },
+  {
+    "data": {
+      "qbreak": true,
+      "quote": 1
+    },
+    "kind": "code_block",
+    "text": "raw indented code"
+  },
+  {
+    "data": {
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "alpha group"
+  },
+  {
+    "data": {
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "beta group after blank"
+  }
+]

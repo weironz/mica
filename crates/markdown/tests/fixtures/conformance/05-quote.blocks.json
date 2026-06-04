@@ -10,11 +10,6 @@
       ]
     },
     "kind": "quote",
-    "text": "quoted line with code"
-  },
-  {
-    "data": {},
-    "kind": "quote",
-    "text": "second line"
+    "text": "quoted line with code\nsecond line"
   }
 ]
