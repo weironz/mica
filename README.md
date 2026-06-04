@@ -21,6 +21,7 @@ See:
 - [Editor Design Principles](docs/editor.md)
 - [Editor Engine Design](docs/editor-engine.md)
 - [Sync and API Draft](docs/sync-and-api.md)
+- [Export / Import Design](docs/export-import.md)
 - [MVP Plan](docs/mvp-plan.md)
 
 ## Development
