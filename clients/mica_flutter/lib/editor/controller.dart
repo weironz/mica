@@ -1611,10 +1611,43 @@ class EditorController extends ChangeNotifier {
   bool _continuesOnEnter(String kind) =>
       kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
 
+  /// Kinds that can live INSIDE a list item as container children
+  /// (`data.li`) — what the markdown importer produces.
+  static bool _attachableKind(String kind) =>
+      kind == 'code_block' ||
+      kind == 'quote' ||
+      kind == 'paragraph' ||
+      kind == 'divider';
+
+  /// The indent level of the list item that would own node [i] as a
+  /// container child: the nearest item above, skipping that item's other
+  /// children; null when nothing is there to attach to.
+  int? _owningItemIndentAt(int i) {
+    for (var p = i - 1; p >= 0; p--) {
+      final n = nodes[p];
+      if (n.isListKind) return n.indent;
+      if (n.liLevel != null) continue; // earlier children of the same item
+      return null;
+    }
+    return null;
+  }
+
+  /// Can the block become a container child of a preceding list item (Tab)?
+  bool canAttachToItem(String id) {
+    final i = nodes.indexWhere((n) => n.id == id);
+    if (i < 0) return false;
+    final node = nodes[i];
+    return !node.isListKind &&
+        node.liLevel == null &&
+        _attachableKind(node.kind) &&
+        _owningItemIndentAt(i) != null;
+  }
+
   /// Indent (+1) / outdent (-1) the list/todo items covered by the selection
   /// — Tab / Shift+Tab. Each item clamps to one level deeper than the
-  /// nearest list item above it (no orphan levels). Returns true when
-  /// anything changed.
+  /// nearest list item above it (no orphan levels). Non-list blocks attach
+  /// to / detach from the preceding list item as container children
+  /// (`data.li`). Returns true when anything changed.
   bool indentSelection(int delta) {
     final sel = selection;
     if (sel == null || nodes.isEmpty) return false;
@@ -1623,14 +1656,40 @@ class EditorController extends ChangeNotifier {
     final ops = <DocOp>[];
     for (var i = lo; i <= hi; i++) {
       final node = nodes[i];
-      if (!node.isListKind) continue;
+      if (!node.isListKind) {
+        if (!_attachableKind(node.kind)) continue;
+        if (delta > 0 && node.liLevel == null) {
+          final owner = _owningItemIndentAt(i);
+          if (owner == null) continue;
+          final data = {...node.data}..['li'] = owner;
+          node.data = data;
+          ops.add({
+            'type': 'update_block',
+            'block_id': node.id,
+            'text': node.text,
+            'data': data,
+          });
+        } else if (delta < 0 && node.liLevel != null) {
+          final data = {...node.data}..remove('li');
+          node.data = data;
+          ops.add({
+            'type': 'update_block',
+            'block_id': node.id,
+            'text': node.text,
+            'data': data,
+          });
+        }
+        continue;
+      }
       var maxIndent = 0;
       for (var p = i - 1; p >= 0; p--) {
         if (nodes[p].isListKind) {
           maxIndent = nodes[p].indent + 1;
           break;
         }
-        break; // any non-list block above caps this item at level 0
+        // The item above may carry container children between it and us.
+        if (nodes[p].liLevel != null) continue;
+        break; // any other block above caps this item at level 0
       }
       final next = (node.indent + delta).clamp(0, maxIndent);
       if (next == node.indent) continue;

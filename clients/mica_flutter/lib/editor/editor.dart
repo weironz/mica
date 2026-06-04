@@ -919,9 +919,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (key == LogicalKeyboardKey.tab) {
       final n = _controller.focusedNode;
       if (n != null && n.isCode && sel.isCollapsed && !shift) {
-        _controller.insertTextAtCaret('  ');
-        _syncImeFromSelection(force: true);
-        return KeyEventResult.handled;
+        // At the very start of a free-standing code block, Tab attaches it
+        // to the list item above; anywhere else it indents the code text.
+        final attach =
+            sel.focus.offset == 0 && _controller.canAttachToItem(n.id);
+        if (!attach) {
+          _controller.insertTextAtCaret('  ');
+          _syncImeFromSelection(force: true);
+          return KeyEventResult.handled;
+        }
       }
       if (_controller.indentSelection(shift ? -1 : 1)) {
         _syncImeFromSelection(force: true);
