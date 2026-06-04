@@ -495,12 +495,19 @@ class RenderDocument extends RenderBox {
           while (numberedCounters.length <= level) {
             numberedCounters.add(0);
           }
-          numberedCounters[level] += 1;
+          // An imported `data.start` pins the number — a list interrupted
+          // by bullets/code/quotes resumes (`<ol start>` semantics) instead
+          // of restarting at 1.
+          final start = (node.data['start'] as num?)?.toInt();
+          numberedCounters[level] =
+              start ?? (numberedCounters[level] + 1);
           layout.ordinal = numberedCounters[level];
         } else if (numberedCounters.length > level) {
           numberedCounters.removeRange(level, numberedCounters.length);
         }
-      } else {
+      } else if (node.liLevel == null) {
+        // Container children (`data.li`) live INSIDE an item — they must
+        // not reset the surrounding list's numbering.
         numberedCounters.clear();
       }
       if (node.kind == 'todo') {
