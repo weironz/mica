@@ -737,10 +737,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // workspace exports) before anything else looks at the paths.
     final entries =
         expandNestedZips(normalizeZipEntries(rawEntries));
+    final mdNames = [
+      for (final e in entries)
+        if (e.name.toLowerCase().endsWith('.md')) e.name,
+    ];
     // ignore: avoid_print
     print('[mica-import] raw=${rawEntries.length} entries=${entries.length} '
-        'md=${entries.where((e) => e.name.toLowerCase().endsWith('.md')).length} '
-        'first=${entries.take(3).map((e) => e.name).toList()}');
+        'md=${mdNames.length}');
+    for (final n in mdNames.take(100)) {
+      // ignore: avoid_print
+      print('[mica-import] md: $n');
+    }
 
     // Mica's export writes a manifest.json carrying the page-tree order.
     String? manifestJson;
@@ -789,20 +796,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       for (final p in orderPagePaths(mdByPath.keys, manifestJson))
         mdByPath[p]!,
     ];
+    // Folder ↔ page association tolerant of Notion ID suffixes: folder
+    // `apple/` matches the page exported as `apple 31f5<…>.md`.
+    final mdForFolder = folderPageIndex(mdByPath.keys);
     final viewByPath = <String, String>{};
     final folderView = <String, String>{}; // folder path -> its page's view
     final stamp = DateTime.now().microsecondsSinceEpoch;
     for (final e in mds) {
       final parts = e.name.split('/');
       // Walk the folder chain. A folder maps to the page exported as
-      // `<folder>.md` when present; otherwise create an empty page to act
-      // as the directory node.
+      // `<folder>.md` (modulo Notion IDs) when present; otherwise create an
+      // empty page to act as the directory node.
       String? parentViewId;
       var folderPath = '';
+      var normFolderPath = '';
       for (var d = 0; d + 1 < parts.length; d++) {
         folderPath =
             folderPath.isEmpty ? parts[d] : '$folderPath/${parts[d]}';
-        var v = viewByPath['$folderPath.md'] ?? folderView[folderPath];
+        final seg = stripNotionId(parts[d]);
+        normFolderPath =
+            normFolderPath.isEmpty ? seg : '$normFolderPath/$seg';
+        final folderMd = mdForFolder[normFolderPath];
+        var v = (folderMd != null ? viewByPath[folderMd] : null) ??
+            folderView[folderPath];
         if (v == null) {
           final dirPage = await _api.createDocument(
             session.accessToken,
