@@ -1726,6 +1726,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
   bool _workspaceSettingsOpen = false;
+  // Pane widths, drag-resizable via the splitters (long page names need room).
+  double _navWidth = 280;
+  double _toolsWidth = 300;
   final EditorScrollHook _scrollHook = EditorScrollHook();
 
   @override
@@ -1767,14 +1770,38 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(width: 280, child: _navigationPane(context)),
-        const VerticalDivider(width: 1),
+        SizedBox(width: _navWidth, child: _navigationPane(context)),
+        _resizeHandle(
+          onDrag: (dx) => setState(
+            () => _navWidth = (_navWidth + dx).clamp(220.0, 480.0),
+          ),
+        ),
         Expanded(child: _editorPane(context)),
         if (_toolsExpanded) ...[
-          const VerticalDivider(width: 1),
-          SizedBox(width: 300, child: _workspaceTools(context)),
+          _resizeHandle(
+            onDrag: (dx) => setState(
+              () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
+            ),
+          ),
+          SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
         ],
       ],
+    );
+  }
+
+  /// A slim draggable splitter between panes (the divider line stays 1px;
+  /// the grab area is wider for easy targeting).
+  Widget _resizeHandle({required void Function(double dx) onDrag}) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeLeftRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
+        child: const SizedBox(
+          width: 7,
+          child: Center(child: VerticalDivider(width: 1)),
+        ),
+      ),
     );
   }
 
