@@ -1611,6 +1611,30 @@ class EditorController extends ChangeNotifier {
   bool _continuesOnEnter(String kind) =>
       kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
 
+  /// Move the block at [from] to insertion [index] (0..nodes.length) — the
+  /// gutter drag handle. Emits a `move_block` op; undo snapshots apply.
+  bool moveBlock(int from, int index) {
+    if (from < 0 || from >= nodes.length) return false;
+    final to = index.clamp(0, nodes.length);
+    if (to == from || to == from + 1) return false;
+    final node = nodes.removeAt(from);
+    final at = to > from ? to - 1 : to;
+    nodes.insert(at, node);
+    _sendNow([
+      {
+        'type': 'move_block',
+        'block_id': node.id,
+        'parent_id': rootBlockId,
+        'index': at,
+      },
+    ]);
+    if (!node.isAtomic) {
+      setSelection(DocSelection.collapsed(DocPosition(at, 0)));
+    }
+    notifyListeners();
+    return true;
+  }
+
   /// Kinds that can live INSIDE a list item as container children
   /// (`data.li`) — what the markdown importer produces.
   static bool _attachableKind(String kind) =>

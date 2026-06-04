@@ -54,6 +54,10 @@ class EditorTheme {
   static const Color selection = Color(0x332563EB);
   static const Color codeBg = Color(0xFFF1F5F9);
   static const Color quoteBar = Color(0xFFCBD5E1);
+  static const Color dropLine = Color(0xFF2563EB);
+
+  /// Left rail reserved for the block drag handle (every block shifts right).
+  static const double gutter = 24.0;
 
   static const double caretWidth = 2;
   static const double bottomPad = 96;
@@ -328,20 +332,68 @@ class RenderDocument extends RenderBox {
       }
     }
     final border = local == null ? null : tableColBorderAt(local);
+    int? block;
+    if (local != null) {
+      for (var i = 0; i < _layouts.length; i++) {
+        final l = _layouts[i];
+        if (local.dy >= l.boxTop && local.dy < l.boxTop + l.boxHeight) {
+          block = i;
+          break;
+        }
+      }
+    }
     if (node != _hoverCode ||
         icon != _hoverIcon ||
         image != _hoverImage ||
+        block != _hoverBlock ||
         border?.node != _hoverColBorder?.node ||
         border?.col != _hoverColBorder?.col) {
       _hoverCode = node;
       _hoverIcon = icon;
       _hoverImage = image;
+      _hoverBlock = block;
       _hoverColBorder = border;
       markNeedsPaint();
     }
   }
 
   ({int node, int col})? _hoverColBorder;
+  int? _hoverBlock; // block under the pointer (shows the drag handle)
+  int? _dropIndex; // insertion index while a block drag is live
+
+  /// The grab rect of block [i]'s drag handle (gutter rail, first line).
+  Rect _handleRectFor(int i) {
+    final l = _layouts[i];
+    final cy = l.painter.text != null && l.kind != 'divider' && l.kind != 'image'
+        ? l.textTop + l.painter.preferredLineHeight * 0.5
+        : l.boxTop + (l.boxHeight < 40 ? l.boxHeight / 2 : 20.0);
+    return Rect.fromCenter(
+        center: Offset(l.boxLeft - 12, cy), width: 18, height: 22);
+  }
+
+  /// The block whose drag handle sits under [local], if any.
+  int? dragHandleAt(Offset local) {
+    final h = _hoverBlock;
+    if (h == null || h >= _layouts.length) return null;
+    return _handleRectFor(h).inflate(2).contains(local) ? h : null;
+  }
+
+  /// Insertion index (0..nodes.length) for a drop at height [dy].
+  int dropIndexAt(double dy) {
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      if (dy < l.boxTop + l.boxHeight / 2) return i;
+    }
+    return _layouts.length;
+  }
+
+  int? get dropIndex => _dropIndex;
+
+  void setDropIndicator(int? index) {
+    if (_dropIndex == index) return;
+    _dropIndex = index;
+    markNeedsPaint();
+  }
 
   @override
   void attach(PipelineOwner owner) {
@@ -405,8 +457,8 @@ class RenderDocument extends RenderBox {
           ..kind = 'divider'
           ..nodeId = node.id
           ..quoteDepth = node.quoteDepth
-          ..boxLeft = dLiInset
-          ..contentLeft = dLiInset + 16.0 * node.quoteDepth
+          ..boxLeft = EditorTheme.gutter + dLiInset
+          ..contentLeft = EditorTheme.gutter + dLiInset + 16.0 * node.quoteDepth
           ..boxTop = y
           ..textTop = y
           ..textHeight = _dividerHeight
@@ -437,7 +489,8 @@ class RenderDocument extends RenderBox {
       final quoteExtra =
           (16.0 * node.quoteDepth - (node.kind == 'quote' ? 16.0 : 0.0))
               .clamp(0.0, double.infinity);
-      final contentLeft = EditorTheme.leadingInset(node.kind) +
+      final contentLeft = EditorTheme.gutter +
+          EditorTheme.leadingInset(node.kind) +
           (node.isListKind ? 24.0 * node.indent : 0.0) +
           liInset +
           quoteExtra;
@@ -468,7 +521,7 @@ class RenderDocument extends RenderBox {
         ..nodeId = node.id
         ..quoteDepth = node.quoteDepth
         ..quoteBreak = node.data['qbreak'] == true
-        ..boxLeft = liInset
+        ..boxLeft = EditorTheme.gutter + liInset
         ..todoChecked = node.todoChecked
         ..langText = codeLang ?? ''
         ..codeWrap = codeWrap
@@ -513,7 +566,8 @@ class RenderDocument extends RenderBox {
       if (node.kind == 'todo') {
         final lh = painter.preferredLineHeight;
         const box = 18.0;
-        layout.checkbox = Rect.fromLTWH(2, layout.textTop + (lh - box) / 2, box, box);
+        layout.checkbox = Rect.fromLTWH(
+            EditorTheme.gutter + 2, layout.textTop + (lh - box) / 2, box, box);
       }
       if (isCode) {
         // Keep the caret visible by auto-scrolling the code horizontally — but
@@ -616,7 +670,7 @@ class RenderDocument extends RenderBox {
       onRequestImage?.call(key);
     }
 
-    final maxW = maxWidth.clamp(1.0, double.infinity);
+    final maxW = (maxWidth - EditorTheme.gutter).clamp(1.0, double.infinity);
     final align = switch (node.data['align']) {
       'center' => 1,
       'right' => 2,
@@ -635,7 +689,8 @@ class RenderDocument extends RenderBox {
       h = _imagePlaceholderH;
     }
 
-    final left = switch (align) {
+    final left = EditorTheme.gutter +
+        switch (align) {
       1 => (maxW - w) / 2,
       2 => maxW - w,
       _ => 0.0,
@@ -676,8 +731,8 @@ class RenderDocument extends RenderBox {
       _ => TextAlign.left,
     };
     final gridTop = top + _tTopGutter;
-    const x0 = 0.0;
-    final fullW = maxWidth.clamp(60.0, double.infinity);
+    const x0 = EditorTheme.gutter;
+    final fullW = (maxWidth - EditorTheme.gutter).clamp(60.0, double.infinity);
     // The table spans a fraction of the content width (dragging its right
     // edge adjusts it); columns share that span by weight.
     final availW = (fullW * table.tableWidth.clamp(0.15, 1.0))
@@ -739,7 +794,7 @@ class RenderDocument extends RenderBox {
           Offset(colEdges[c] + padH, yy + padV),
         ));
       }
-      rowHandles.add(Rect.fromLTWH(0, yy, 10, rowH));
+      rowHandles.add(Rect.fromLTWH(x0, yy, 10, rowH));
       yy += rowH;
     }
     final gridBottom = yy;
@@ -784,7 +839,7 @@ class RenderDocument extends RenderBox {
         gridHeight,
       )
       ..addRowBar = Rect.fromLTWH(x0, gridBottom, availW, _tBottomBar)
-      ..tableHandle = Rect.fromLTWH(0, top, 16, _tTopGutter)
+      ..tableHandle = Rect.fromLTWH(x0, top, 16, _tTopGutter)
       ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, _tTopGutter);
     return layout;
   }
@@ -887,6 +942,33 @@ class RenderDocument extends RenderBox {
       if (l.kind == 'code_block' && _hoverCode == i) {
         _paintCodeToolbar(canvas, offset, l);
       }
+    }
+    // Drag handle (⠿) on the hovered block's gutter rail.
+    final hover = _hoverBlock;
+    if (hover != null && hover < _layouts.length) {
+      final r = _handleRectFor(hover).shift(offset);
+      final paint = Paint()..color = EditorTheme.faint;
+      for (var row = 0; row < 3; row++) {
+        for (var col = 0; col < 2; col++) {
+          canvas.drawCircle(
+            Offset(r.center.dx - 3 + col * 6.0, r.center.dy - 6 + row * 6.0),
+            1.4,
+            paint,
+          );
+        }
+      }
+    }
+    // Drop indicator while a block drag is live.
+    final drop = _dropIndex;
+    if (drop != null && _layouts.isNotEmpty) {
+      final y = drop < _layouts.length
+          ? _layouts[drop].boxTop - 2
+          : _layouts.last.boxTop + _layouts.last.boxHeight + 2;
+      canvas.drawRect(
+        Rect.fromLTWH(
+            offset.dx + EditorTheme.gutter, offset.dy + y, size.width - EditorTheme.gutter, 2.5),
+        Paint()..color = EditorTheme.dropLine,
+      );
     }
   }
 
@@ -1563,7 +1645,8 @@ class RenderDocument extends RenderBox {
   }
 
   /// Pixel width available to columns (full content width).
-  double tableAvailWidth() => size.width.clamp(60.0, double.infinity);
+  double tableAvailWidth() =>
+      (size.width - EditorTheme.gutter).clamp(60.0, double.infinity);
 
   /// Current overall width fraction of a table node.
   double tableWidthFraction(int index) {

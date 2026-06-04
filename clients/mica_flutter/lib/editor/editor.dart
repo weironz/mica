@@ -182,6 +182,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   bool _caretOn = true;
   DocPosition? _dragAnchor;
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
+  int? _blockDrag; // block index being moved via its gutter drag handle
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
   // Auto-scroll the surrounding page while drag-selecting near the viewport edge.
@@ -1943,6 +1944,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   MouseCursor _cursorFor(RenderDocument r, Offset local) {
+    if (_blockDrag != null || r.dragHandleAt(local) != null) {
+      return _blockDrag != null
+          ? SystemMouseCursors.grabbing
+          : SystemMouseCursors.grab;
+    }
     if (r.tableColBorderAt(local) != null || r.imageResizeAt(local) != null) {
       return SystemMouseCursors.resizeLeftRight;
     }
@@ -1991,6 +1997,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // editor — commit it first so it never hangs detached from its cell.
     _commitCellEditor?.call();
     final local = r.globalToLocal(d.globalPosition);
+    // Dragging a block's gutter handle moves the block.
+    final handle = r.dragHandleAt(local);
+    if (handle != null) {
+      _blockDrag = handle;
+      r.setDropIndicator(r.dropIndexAt(local.dy));
+      return;
+    }
     // Dragging a table column border resizes columns.
     final colBorder = r.tableColBorderAt(local);
     if (colBorder != null) {
@@ -2028,6 +2041,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final r = _render;
     if (r == null) return;
     final local = r.globalToLocal(d.globalPosition);
+    if (_blockDrag != null) {
+      r.setDropIndicator(r.dropIndexAt(local.dy));
+      return;
+    }
     final resize = _colResize;
     if (resize != null) {
       final weights = [...resize.weights];
@@ -2088,6 +2105,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPanEnd(DragEndDetails d) {
+    if (_blockDrag != null) {
+      final r = _render;
+      final from = _blockDrag!;
+      _blockDrag = null;
+      final to = r?.dropIndex;
+      r?.setDropIndicator(null);
+      if (to != null) {
+        _controller.moveBlock(from, to);
+      }
+      return;
+    }
     if (_imageResize != null) {
       if (_imageResizeWidth != null) {
         _controller.setImageWidth(_imageResize!, _imageResizeWidth!);

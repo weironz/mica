@@ -403,6 +403,14 @@ The recurring problem the engine must get right for every node type:
 6. **Tables:** structure, cell navigation/selection, row/col commands, GFM
    round-trip.
 7. **Polish:** drag-reorder, virtualization, accessibility, RTL, touch.
+   *Drag-reorder DONE (2026-06-05):* a 24px gutter rail on the left of every
+   block (all layouts shifted: text, dividers, images, tables — todo
+   checkboxes, table handles and quote bars included); hovering a block shows
+   a ⠿ handle on its box edge (item children show it at their inset), grab
+   cursor, drag paints a blue insertion line between blocks, drop calls
+   `controller.moveBlock` → one `move_block` op (server-validated), caret
+   follows the block, undo restores the order via the snapshot diff.
+   *Still open:* virtualization, accessibility, RTL, touch.
 8. **Markdown spec compliance** (engine roadmap; see `crates/markdown` and
    docs/export-import.md). North star: **read the full CommonMark + GFM
    spec, write a canonical subset** — full spec compliance is a *parsing*
