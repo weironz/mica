@@ -12,6 +12,7 @@ import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
+import 'prefs.dart';
 import 'upload/sha256.dart';
 import 'upload/zip_writer.dart';
 
@@ -133,9 +134,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   @override
   void initState() {
     super.initState();
+    _loadPrefs();
     if (kDevAutoLogin) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _devAutoLogin());
     }
+  }
+
+  /// Restore persisted client settings (Settings dialog writes them through
+  /// [_savePrefs] on every change).
+  void _loadPrefs() {
+    final fontScale = double.tryParse(loadPref('fontScale') ?? '');
+    final fontFamily = loadPref('fontFamily');
+    _appearance = EditorAppearance(
+      fontScale: (fontScale ?? 1.0).clamp(0.85, 1.4),
+      fontFamily: (fontFamily == null || fontFamily.isEmpty)
+          ? null
+          : fontFamily,
+    );
+    _pageWidth =
+        (double.tryParse(loadPref('pageWidth') ?? '') ?? 1160).clamp(640, 1440);
+    _reHostImages = loadPref('reHostImages') != 'false';
+    _showFormatBar = loadPref('showFormatBar') == 'true';
+  }
+
+  void _savePrefs() {
+    savePref('fontScale', _appearance.fontScale.toString());
+    savePref('fontFamily', _appearance.fontFamily ?? '');
+    savePref('pageWidth', _pageWidth.toString());
+    savePref('reHostImages', _reHostImages.toString());
+    savePref('showFormatBar', _showFormatBar.toString());
   }
 
   /// Sign in with the dev account on startup. Falls back to registering it the
@@ -1349,16 +1376,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 appearance: _appearance,
                 pageWidth: _pageWidth,
                 reHostImages: _reHostImages,
-                onReHostImagesChanged: (value) =>
-                    setState(() => _reHostImages = value),
+                onReHostImagesChanged: (value) {
+                  setState(() => _reHostImages = value);
+                  _savePrefs();
+                },
                 showFormatBar: _showFormatBar,
-                onShowFormatBarChanged: (value) =>
-                    setState(() => _showFormatBar = value),
+                onShowFormatBarChanged: (value) {
+                  setState(() => _showFormatBar = value);
+                  _savePrefs();
+                },
                 onAppearanceChanged: (appearance, pageWidth) {
                   setState(() {
                     _appearance = appearance;
                     _pageWidth = pageWidth;
                   });
+                  _savePrefs();
                 },
                 onSearch: _searchWorkspace,
                 onOpenSearchResult: _openViewById,
