@@ -17,10 +17,10 @@ dev-down:
 dev-api:
     bash -c 'set -a && . ./.env && set +a && cargo run -p mica-api-server'
 
-# Build the web bundle and serve it on :8090 (hard-refresh after rebuilds).
+# Rebuild the web bundle — the compose `web` (nginx) serves the bind-mounted
+# build dir live; just refresh the browser afterwards.
 dev-web:
     cd clients/mica_flutter && {{flutter}} build web --no-tree-shake-icons
-    cd clients/mica_flutter/build/web && python3 -m http.server 8090
 
 # Container-parity check: run the REAL images locally before a release —
 # catches container-only bugs (e.g. loopback binds) that host dev can't.

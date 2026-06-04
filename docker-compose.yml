@@ -76,6 +76,21 @@ services:
     ports:
       - "8080:8080"
 
+  # Dev web server: serves the live Flutter bundle (bind mount — rebuild and
+  # refresh, no restart) with production-identical routing on :8090 (host
+  # port 80 is taken on this VM).
+  web:
+    image: nginx:alpine
+    container_name: mica-web-dev
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./deploy/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./clients/mica_flutter/build/web:/usr/share/nginx/html:ro
+
 volumes:
   mica-postgres-data:
   mica-rustfs-data:
