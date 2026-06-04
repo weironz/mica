@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'gbk.dart';
 import 'inflate.dart';
 
 /// One file read out of a ZIP archive.
@@ -39,6 +40,7 @@ List<ZipFileEntry> readZip(Uint8List data) {
         bd.getUint32(off, Endian.little) != 0x02014b50) {
       break;
     }
+    final flags = bd.getUint16(off + 8, Endian.little);
     final method = bd.getUint16(off + 10, Endian.little);
     final compSize = bd.getUint32(off + 20, Endian.little);
     final uncompSize = bd.getUint32(off + 24, Endian.little);
@@ -46,9 +48,10 @@ List<ZipFileEntry> readZip(Uint8List data) {
     final extraLen = bd.getUint16(off + 30, Endian.little);
     final commentLen = bd.getUint16(off + 32, Endian.little);
     final localOff = bd.getUint32(off + 42, Endian.little);
-    final name = utf8.decode(
+    final name = _decodeName(
       data.sublist(off + 46, off + 46 + nameLen),
-      allowMalformed: true,
+      flags,
+      data.sublist(off + 46 + nameLen, off + 46 + nameLen + extraLen),
     );
     off += 46 + nameLen + extraLen + commentLen;
     if (name.endsWith('/')) continue; // directory
@@ -71,6 +74,38 @@ List<ZipFileEntry> readZip(Uint8List data) {
     if (entry != null) out.add(ZipFileEntry(name, entry));
   }
   return out;
+}
+
+/// Decode a ZIP entry name. Precedence per the ZIP spec and common tools:
+/// the UTF-8 flag (bit 11), then the Info-ZIP Unicode Path extra field
+/// (0x7075), then strict UTF-8 (most tools write UTF-8 without setting the
+/// flag), and finally GBK — what Windows Explorer produces on a Chinese
+/// locale.
+String _decodeName(List<int> raw, int flags, List<int> extra) {
+  if (flags & 0x800 != 0) return utf8.decode(raw, allowMalformed: true);
+  var i = 0;
+  while (i + 4 <= extra.length) {
+    final id = extra[i] | (extra[i + 1] << 8);
+    final size = extra[i + 2] | (extra[i + 3] << 8);
+    if (id == 0x7075 && size >= 5 && i + 4 + size <= extra.length) {
+      // 1-byte version + 4-byte name CRC, then the UTF-8 name.
+      return utf8.decode(extra.sublist(i + 9, i + 4 + size),
+          allowMalformed: true);
+    }
+    i += 4 + size;
+  }
+  try {
+    final s = utf8.decode(raw);
+    // GBK byte pairs are frequently *also* valid UTF-8, but then decode into
+    // blocks essentially absent from real filenames (Latin Extended-B, IPA,
+    // Greek symbols: U+0180–U+03FF). If that happens and GBK decodes cleanly,
+    // it was GBK all along ("图片" → "ͼƬ").
+    if (!s.runes.any((r) => r >= 0x0180 && r <= 0x03FF)) return s;
+    final g = decodeGbk(raw);
+    return g.contains('�') ? s : g;
+  } on FormatException {
+    return decodeGbk(raw);
+  }
 }
 
 /// Resolve a Markdown reference (`../assets/图 1.png`) found inside
@@ -123,6 +158,7 @@ List<ZipFileEntry> _readLocalEntries(Uint8List data, ByteData bd) {
   var i = 0;
   while (i + 30 <= data.length) {
     if (bd.getUint32(i, Endian.little) != 0x04034b50) break;
+    final flags = bd.getUint16(i + 6, Endian.little);
     final method = bd.getUint16(i + 8, Endian.little);
     final compSize = bd.getUint32(i + 18, Endian.little);
     final uncompSize = bd.getUint32(i + 22, Endian.little);
@@ -131,9 +167,10 @@ List<ZipFileEntry> _readLocalEntries(Uint8List data, ByteData bd) {
     final nameStart = i + 30;
     final dataStart = nameStart + nameLen + extraLen;
     if (dataStart + compSize > data.length) break;
-    final name = utf8.decode(
+    final name = _decodeName(
       data.sublist(nameStart, nameStart + nameLen),
-      allowMalformed: true,
+      flags,
+      data.sublist(nameStart + nameLen, dataStart),
     );
     if (!name.endsWith('/')) {
       final entry = _decodeEntry(

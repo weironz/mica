@@ -126,6 +126,33 @@ void main() {
     expect(byName['empty.md'], isEmpty);
   });
 
+  test('readZip decodes GBK entry names (Windows Explorer, CJK locale)', () {
+    // Hand-crafted STORE zip: names are GBK bytes, UTF-8 flag NOT set —
+    // exactly what Explorer's "compress" produces on a Chinese Windows.
+    final zip = base64.decode(
+      'UEsDBBQAAAAAAAAAAAAHuXpbCgAAAAoAAAAQAAAA1tDOxMS/wrwv0rPD5i5tZEdCSyDl'
+      'hoXlrrlQSwMEFAAAAAAAAAAAABIRx+kCAAAAAgAAAAgAAADNvMasLnBuZwkJUEsBAhQA'
+      'FAAAAAAAAAAAAAe5elsKAAAACgAAABAAAAAAAAAAAAAAAAAAAAAAANbQzsTEv8K8L9Kz'
+      'w+YubWRQSwECFAAUAAAAAAAAAAAAEhHH6QIAAAACAAAACAAAAAAAAAAAAAAAAAA4AAAA'
+      'zbzGrC5wbmdQSwUGAAAAAAIAAgB0AAAAYAAAAAAA',
+    );
+    final entries = readZip(Uint8List.fromList(zip));
+    final byName = {for (final e in entries) e.name: e.bytes};
+    expect(byName.keys.toSet(), {'中文目录/页面.md', '图片.png'});
+    expect(utf8.decode(byName['中文目录/页面.md']!), 'GBK 内容');
+  });
+
+  test('readZip prefers the Info-ZIP Unicode Path extra field (0x7075)', () {
+    final zip = base64.decode(
+      'UEsDBBQAAAAAAAAAAACsKpPYAgAAAAIAAAAHABIAX19fXy5tZHVwDgABrWBbNOa1i+iv'
+      'lS5tZGhpUEsBAhQAFAAAAAAAAAAAAKwqk9gCAAAAAgAAAAcAEgAAAAAAAAAAAAAAAAAA'
+      'AF9fX18ubWR1cA4AAa1gWzTmtYvor5UubWRQSwUGAAAAAAEAAQBHAAAAOQAAAAAA',
+    );
+    final entries = readZip(Uint8List.fromList(zip));
+    expect(entries.single.name, '测试.md');
+    expect(utf8.decode(entries.single.bytes), 'hi');
+  });
+
   group('resolveZipPath', () {
     final paths = {
       'assets/图片.png',
