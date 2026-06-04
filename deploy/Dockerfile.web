@@ -1,0 +1,7 @@
+# Self-contained web image: nginx + the prebuilt Flutter bundle + routing.
+# Build context is the repo root AFTER `just web-build` staged the bundle:
+#   docker build -f deploy/Dockerfile.web -t willdockerhub/mica-web:vX.Y .
+FROM nginx:alpine
+COPY deploy/nginx.conf /etc/nginx/nginx.conf
+COPY deploy/web /usr/share/nginx/html
+EXPOSE 80
