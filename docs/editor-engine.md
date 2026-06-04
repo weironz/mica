@@ -549,8 +549,14 @@ The recurring problem the engine must get right for every node type:
      must sanitize (whitelist) before display; the editor itself only
      ever shows source. Scoreboard **598/652 (91.7%)** — HTML blocks
      0%→95%, Raw HTML 35%→100%; 16 sections at 100%. Fixture 21 pins
-     both parsers. Remaining 54: Links precedence edges (20), Emphasis
-     exotics (6), List items/Lists container edges, code-span/entity/
-     tab oddments. Decision point: keep extending
+     both parsers.
+     **P4 CLOSED (2026-06-05) at 598/652 = 91.7%.** The remaining 54
+     are isolated precedence/exotic edges with no real-document impact
+     — Links precedence (20), Emphasis rule-of-3 exotics (6), List
+     items/Lists deep-container edges, code-span/entity/tab oddments —
+     each would be a one-off special case; fix on demand when a real
+     document hits one. The scoreboard stays a permanent regression
+     floor (BASELINE_PASS = 598) and the 21 conformance fixtures pin
+     both parsers; any future grammar change must keep or raise both. Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.
