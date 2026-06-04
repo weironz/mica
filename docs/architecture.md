@@ -16,6 +16,21 @@ The first-class product surface is Web. Desktop and mobile should reuse the same
 - Real-time sync is operation/update based.
 - History is implemented with snapshots plus append-only updates.
 - Infinite canvas is out of scope.
+- **Rust by default for the data plane.** Anything that parses files, walks
+  archives, batches, hashes or talks to storage belongs in the Rust backend
+  (see `crates/interchange` + `docs/export-import.md` for the reference
+  shape: a pure engine crate, side effects in api-server, the client only
+  uploads and polls). Dart/Flutter owns what only a client can own: painting,
+  caret/selection, hit-testing, and the editor's latency-critical hot paths.
+- **Editor hot paths stay client-side by design.** Live input rules
+  (`**b**` as you type), paste-to-blocks, copy-as-markdown (clipboard APIs
+  must produce data inside the user gesture) cannot take a network round
+  trip per keystroke. This means a small, deliberate duplication of the
+  markdown/inline-marks grammar in Dart (`lib/editor/marks.dart`,
+  `markdown.dart`) mirroring Rust (`app-core/src/documents.rs`). Keep the
+  two in lockstep when the grammar changes; the long-term in-house path to
+  a single implementation is compiling the Rust engine to WASM for the
+  client.
 
 ## AppFlowy Alignment
 
