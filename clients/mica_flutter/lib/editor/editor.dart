@@ -54,6 +54,8 @@ class MicaEditor extends StatefulWidget {
     this.focusNode,
     this.scrollHook,
     this.appearance = const EditorAppearance(),
+    this.onOpenPage,
+    this.pageLinks,
     super.key,
   });
 
@@ -109,8 +111,22 @@ class MicaEditor extends StatefulWidget {
   /// User-adjustable font appearance.
   final EditorAppearance appearance;
 
+  /// Open an internal page link (`mica://page/<viewId>`). When null, page
+  /// links are inert.
+  final void Function(String viewId)? onOpenPage;
+
+  /// Pages offered by the `[[` link picker. When null, the picker is hidden.
+  final List<PageLinkTarget> Function()? pageLinks;
+
   @override
   State<MicaEditor> createState() => _MicaEditorState();
+}
+
+/// A linkable page for the `[[` picker.
+class PageLinkTarget {
+  const PageLinkTarget({required this.id, required this.title});
+  final String id;
+  final String title;
 }
 
 class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
@@ -151,6 +167,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int _slashStart = 0;
   String _slashQuery = '';
   int _slashIndex = 0;
+
+  // `[[` page-link picker — same lifecycle as the slash menu.
+  OverlayEntry? _pageEntry;
+  int _pageStart = 0;
+  String _pageQuery = '';
+  int _pageIndex = 0;
 
   RenderDocument? get _render =>
       _surfaceKey.currentContext?.findRenderObject() as RenderDocument?;
@@ -208,6 +230,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           if (mounted) _refreshSlash();
         });
       }
+      if (_pageEntry != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _refreshPageLink();
+        });
+      }
     }
   }
 
@@ -215,6 +242,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void dispose() {
     _slashEntry?.remove();
     _slashEntry = null;
+    _pageEntry?.remove();
+    _pageEntry = null;
     _cellEntry?.remove();
     _cellEntry = null;
     _markBar?.remove();
@@ -290,6 +319,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _detachIme();
       _blink?.cancel();
       _closeSlash();
+      _closePageLink();
       _hideMarkBar();
       setRichPasteHandler(null);
       setRichImagePasteHandler(null);
@@ -492,10 +522,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Markdown input rules take precedence; a conversion strips the marker.
     if (_controller.applyInputRules()) {
       _closeSlash();
+      _closePageLink();
       _syncImeFromSelection(force: true);
       return;
     }
     _refreshSlash();
+    _refreshPageLink();
   }
 
   @override
@@ -555,6 +587,36 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final hw = HardwareKeyboard.instance;
     final shift = hw.isShiftPressed;
     final accel = hw.isControlPressed || hw.isMetaPressed;
+
+    // The `[[` page-link picker, when open, captures the same keys as the
+    // slash menu.
+    if (_pageEntry != null) {
+      final items = _filteredPages();
+      if (key == LogicalKeyboardKey.escape) {
+        _closePageLink();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        if (items.isNotEmpty) _pageIndex = (_pageIndex + 1) % items.length;
+        _pageEntry?.markNeedsBuild();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowUp) {
+        if (items.isNotEmpty) {
+          _pageIndex = (_pageIndex - 1 + items.length) % items.length;
+        }
+        _pageEntry?.markNeedsBuild();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.tab) {
+        if (items.isNotEmpty) {
+          _applyPageLink(items[_pageIndex.clamp(0, items.length - 1)]);
+        } else {
+          _closePageLink();
+        }
+        return KeyEventResult.handled;
+      }
+    }
 
     // The slash menu, when open, captures navigation and commit/dismiss keys.
     if (_slashEntry != null) {
@@ -851,19 +913,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // ---------------------------------------------------------------------------
 
   void _onTapDown(TapDownDetails d) {
-    if (!widget.canEdit) return;
-    _closeSlash();
     final r = _render;
     if (r == null) return;
     final local = r.globalToLocal(d.globalPosition);
-    final hw = HardwareKeyboard.instance;
-    if (hw.isControlPressed || hw.isMetaPressed) {
-      final href = _linkAt(r.positionAt(local));
-      if (href != null) {
-        openUrl(href);
-        return;
-      }
+    // A plain click on a link opens it (also on read-only pages); placing the
+    // caret inside link text is keyboard/edge territory, like Notion.
+    final href = _linkHitAt(r, local);
+    if (href != null) {
+      _openHref(href);
+      return;
     }
+    if (!widget.canEdit) return;
+    _closeSlash();
+    _closePageLink();
     final langNode = r.codeLanguageAt(local);
     if (langNode != null) {
       _openLanguageMenu(langNode, d.globalPosition);
@@ -1142,6 +1204,30 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return null;
   }
 
+  /// The link under the pointer, but only when the pointer is actually on the
+  /// text — positionAt snaps to the nearest offset, so clicking the empty
+  /// margin past a line that ends in a link must NOT count as a hit.
+  String? _linkHitAt(RenderDocument r, Offset local) {
+    final pos = r.positionAt(local);
+    final href = _linkAt(pos);
+    if (href == null) return null;
+    final rect = r.caretRectFor(pos);
+    if (rect == null) return null;
+    if (local.dy < rect.top - 2 || local.dy > rect.bottom + 2) return null;
+    if ((local.dx - rect.left).abs() > 24) return null;
+    return href;
+  }
+
+  static const _pageScheme = 'mica://page/';
+
+  void _openHref(String href) {
+    if (href.startsWith(_pageScheme)) {
+      widget.onOpenPage?.call(href.substring(_pageScheme.length));
+      return;
+    }
+    openUrl(href);
+  }
+
   Future<void> _promptLink() async {
     final sel = _controller.selection;
     final node = _controller.focusedNode;
@@ -1410,7 +1496,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         r.tableRowHandleAt(local) != null ||
         r.tableColHandleAt(local) != null ||
         r.tableAddAt(local) != null ||
-        r.imageActionAt(local) != null;
+        r.imageActionAt(local) != null ||
+        _linkHitAt(r, local) != null;
     return clickable ? SystemMouseCursors.click : SystemMouseCursors.text;
   }
 
@@ -1601,6 +1688,154 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     pos.jumpTo(target);
     final p = r.positionAt(r.globalToLocal(global));
     _controller.setSelection(DocSelection(anchor: anchor, focus: p));
+  }
+
+  // ---------------------------------------------------------------------------
+  // `[[` page-link picker
+  // ---------------------------------------------------------------------------
+
+  List<PageLinkTarget> _filteredPages() {
+    final all = widget.pageLinks?.call() ?? const <PageLinkTarget>[];
+    final q = _pageQuery.toLowerCase();
+    final list = q.isEmpty
+        ? all
+        : [
+            for (final p in all)
+              if (p.title.toLowerCase().contains(q)) p,
+          ];
+    return list.take(8).toList();
+  }
+
+  /// Recompute the page-link session from the caret: open the picker when an
+  /// unclosed `[[` token precedes the caret, otherwise close it.
+  void _refreshPageLink() {
+    if (widget.pageLinks == null) return;
+    final sel = _controller.selection;
+    final node = _controller.focusedNode;
+    if (sel == null ||
+        node == null ||
+        !sel.isCollapsed ||
+        node.kind == 'code_block' ||
+        node.kind == 'table') {
+      _closePageLink();
+      return;
+    }
+    final caret = sel.focus.offset;
+    if (caret > node.text.length) {
+      _closePageLink();
+      return;
+    }
+    final before = node.text.substring(0, caret);
+    final open = before.lastIndexOf('[[');
+    if (open < 0) {
+      _closePageLink();
+      return;
+    }
+    final query = before.substring(open + 2);
+    if (query.contains('[') || query.contains(']') || query.contains('\n')) {
+      _closePageLink();
+      return;
+    }
+    _pageStart = open;
+    _pageQuery = query;
+    final items = _filteredPages();
+    if (items.isEmpty) {
+      _closePageLink();
+      return;
+    }
+    _pageIndex = _pageIndex.clamp(0, items.length - 1);
+    if (_pageEntry == null) {
+      _pageEntry = OverlayEntry(builder: _buildPageLinkOverlay);
+      Overlay.of(context).insert(_pageEntry!);
+    } else {
+      _pageEntry!.markNeedsBuild();
+    }
+  }
+
+  void _closePageLink() {
+    _pageEntry?.remove();
+    _pageEntry = null;
+    _pageQuery = '';
+    _pageIndex = 0;
+  }
+
+  void _applyPageLink(PageLinkTarget p) {
+    final caret = _controller.selection?.focus.offset ?? _pageStart;
+    _controller.insertPageLink(
+      _pageStart,
+      caret,
+      p.title,
+      '$_pageScheme${p.id}',
+    );
+    _closePageLink();
+    _syncImeFromSelection(force: true);
+  }
+
+  Widget _buildPageLinkOverlay(BuildContext context) {
+    final r = _render;
+    final sel = _controller.selection;
+    if (r == null || sel == null) return const SizedBox.shrink();
+    final rect = r.caretRectFor(sel.focus);
+    if (rect == null) return const SizedBox.shrink();
+    final origin = r.localToGlobal(rect.bottomLeft);
+    final screen = MediaQuery.of(context).size;
+    final items = _filteredPages();
+    final left = origin.dx.clamp(8.0, screen.width - 296);
+    final top = (origin.dy + 6).clamp(8.0, screen.height - 296);
+    return Positioned(
+      left: left,
+      top: top,
+      child: ExcludeFocus(
+        child: Material(
+          elevation: 8,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: 288,
+            constraints: const BoxConstraints(maxHeight: 288),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: items.length,
+              itemBuilder: (context, i) {
+                final p = items[i];
+                final active = i == _pageIndex;
+                return InkWell(
+                  onTap: () => _applyPageLink(p),
+                  child: Container(
+                    color: active ? const Color(0x142563EB) : null,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.description_outlined,
+                          size: 18,
+                          color: Color(0xFF475569),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            p.title.isEmpty ? 'Untitled' : p.title,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------------

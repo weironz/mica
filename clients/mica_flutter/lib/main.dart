@@ -2569,6 +2569,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       reHostImages: widget.reHostImages,
                       scrollHook: _scrollHook,
                       appearance: widget.appearance,
+                      onOpenPage: _openPageLink,
+                      pageLinks: () => [
+                        for (final v in widget.views)
+                          if (v.objectType == 'document')
+                            PageLinkTarget(id: v.id, title: v.name),
+                      ],
                     ),
                 ),
                 if (widget.selectedMarkdown != null) ...[
@@ -3072,6 +3078,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
       ),
     );
+  }
+
+  /// Navigate to a page targeted by an internal `mica://page/<viewId>` link.
+  void _openPageLink(String viewId) {
+    for (final v in widget.views) {
+      if (v.id == viewId) {
+        widget.onSelectView(v);
+        return;
+      }
+    }
   }
 
   /// Pick a workspace ZIP and rebuild it as a new workspace. [notion] forces
