@@ -575,6 +575,81 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Convert every (non-atomic) block in the current selection to [kind] — for
+  /// turning a multi-line selection into a list / quote / heading / todo, or
+  /// merging the lines into one code block. Inline marks are preserved.
+  void setSelectedBlocksKind(String kind, {Map<String, dynamic>? data}) {
+    final sel = selection;
+    if (sel == null || nodes.isEmpty) return;
+    final lo = sel.start.node.clamp(0, nodes.length - 1);
+    final hi = sel.end.node.clamp(0, nodes.length - 1);
+
+    if (kind == 'code_block') {
+      // Merge the selected blocks' text into a single code block.
+      final texts = <String>[];
+      String? firstId;
+      final removeIds = <String>[];
+      for (var i = lo; i <= hi; i++) {
+        final node = nodes[i];
+        if (node.isAtomic) continue;
+        if (firstId == null) {
+          firstId = node.id;
+        } else {
+          removeIds.add(node.id);
+        }
+        texts.add(node.text);
+      }
+      if (firstId == null) return;
+      final firstIndex = nodes.indexWhere((n) => n.id == firstId);
+      final merged = texts.join('\n');
+      final ops = <DocOp>[];
+      nodes[firstIndex]
+        ..kind = 'code_block'
+        ..text = merged
+        ..data = {};
+      _dirty.remove(firstId);
+      ops.add({
+        'type': 'update_block',
+        'block_id': firstId,
+        'kind': 'code_block',
+        'text': merged,
+        'data': <String, dynamic>{},
+      });
+      nodes.removeWhere((n) => removeIds.contains(n.id));
+      for (final id in removeIds) {
+        _dirty.remove(id);
+        ops.add({'type': 'delete_block', 'block_id': id});
+      }
+      _sendNow(ops);
+      collapseTo(DocPosition(firstIndex, merged.length));
+      return;
+    }
+
+    final ops = <DocOp>[];
+    for (var i = lo; i <= hi; i++) {
+      final node = nodes[i];
+      if (node.isAtomic || node.kind == 'code_block') continue;
+      final marks = node.data['marks'];
+      final nd = <String, dynamic>{
+        if (marks != null) 'marks': marks,
+        ...?data,
+      };
+      node
+        ..kind = kind
+        ..data = nd;
+      ops.add({
+        'type': 'update_block',
+        'block_id': node.id,
+        'kind': kind,
+        'data': nd,
+      });
+    }
+    if (ops.isNotEmpty) {
+      _sendNow(ops);
+      notifyListeners();
+    }
+  }
+
   /// Set a code block's language (null/`auto` clears it, re-enabling detection).
   void setCodeLanguage(int index, String? language) {
     if (index < 0 || index >= nodes.length) return;

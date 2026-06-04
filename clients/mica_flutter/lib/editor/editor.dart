@@ -1189,15 +1189,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _refreshMarkBar() {
     final sel = _controller.selection;
-    final node = _controller.focusedNode;
+    // Show on any ranged selection: inline marks for a single text block, plus
+    // block-type conversion (list/quote/heading/code) for any selection.
     final show = _focus.hasFocus &&
         widget.canEdit &&
         sel != null &&
         !sel.isCollapsed &&
-        !sel.isMultiNode &&
-        node != null &&
-        node.kind != 'code_block' &&
-        node.kind != 'table';
+        _render?.caretRectFor(sel.start) != null;
     if (!show) {
       _hideMarkBar();
       return;
@@ -1223,21 +1221,32 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (rect == null) return const SizedBox.shrink();
     final origin = r.localToGlobal(rect.topLeft);
     final screen = MediaQuery.of(context).size;
-    final left = origin.dx.clamp(8.0, screen.width - 240);
+    final left = origin.dx.clamp(8.0, screen.width - 420);
     final top = (origin.dy - 44).clamp(8.0, screen.height - 8);
 
-    Widget button(IconData icon, String type, {VoidCallback? custom}) {
+    final singleText = !sel.isMultiNode &&
+        _controller.focusedNode != null &&
+        _controller.focusedNode!.kind != 'code_block' &&
+        _controller.focusedNode!.kind != 'table';
+
+    Widget markBtn(IconData icon, String type, String tip, {VoidCallback? custom}) {
       return IconButton(
         iconSize: 18,
         visualDensity: VisualDensity.compact,
+        tooltip: tip,
         icon: Icon(icon, color: EditorTheme.text),
-        onPressed: () {
-          if (custom != null) {
-            custom();
-          } else {
-            _controller.toggleMark(type);
-          }
-        },
+        onPressed: custom ?? () => _controller.toggleMark(type),
+      );
+    }
+
+    Widget blockBtn(IconData icon, String kind, String tip,
+        {Map<String, dynamic>? data}) {
+      return IconButton(
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        tooltip: tip,
+        icon: Icon(icon, color: EditorTheme.muted),
+        onPressed: () => _controller.setSelectedBlocksKind(kind, data: data),
       );
     }
 
@@ -1253,11 +1262,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                button(Icons.format_bold, 'bold'),
-                button(Icons.format_italic, 'italic'),
-                button(Icons.code, 'code'),
-                button(Icons.strikethrough_s, 'strike'),
-                button(Icons.link, 'link', custom: _promptLink),
+                if (singleText) ...[
+                  markBtn(Icons.format_bold, 'bold', 'Bold'),
+                  markBtn(Icons.format_italic, 'italic', 'Italic'),
+                  markBtn(Icons.code, 'code', 'Inline code'),
+                  markBtn(Icons.strikethrough_s, 'strike', 'Strikethrough'),
+                  markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
+                  const VerticalDivider(width: 9, indent: 8, endIndent: 8),
+                ],
+                blockBtn(Icons.notes, 'paragraph', 'Text'),
+                blockBtn(Icons.title, 'heading', 'Heading', data: {'level': 2}),
+                blockBtn(Icons.format_list_bulleted, 'bulleted_list', 'Bulleted list'),
+                blockBtn(Icons.format_list_numbered, 'numbered_list', 'Numbered list'),
+                blockBtn(Icons.check_box_outlined, 'todo', 'To-do', data: {'checked': false}),
+                blockBtn(Icons.format_quote, 'quote', 'Quote'),
+                blockBtn(Icons.terminal, 'code_block', 'Code block'),
               ],
             ),
           ),
