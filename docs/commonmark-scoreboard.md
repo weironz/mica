@@ -5,33 +5,33 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 315/652 (48.3%)**
+**Total: 394/652 (60.4%)**
 
 | Section | Passed | Total | % |
 |---|---|---|---|
 | ATX headings | 13 | 18 | 72% |
 | Autolinks | 16 | 19 | 84% |
-| Backslash escapes | 5 | 13 | 38% |
+| Backslash escapes | 6 | 13 | 46% |
 | Blank lines | 1 | 1 | 100% |
-| Block quotes | 1 | 25 | 4% |
-| Code spans | 8 | 22 | 36% |
-| Emphasis and strong emphasis | 117 | 132 | 89% |
-| Entity and numeric character references | 4 | 17 | 24% |
+| Block quotes | 6 | 25 | 24% |
+| Code spans | 9 | 22 | 41% |
+| Emphasis and strong emphasis | 123 | 132 | 93% |
+| Entity and numeric character references | 5 | 17 | 29% |
 | Fenced code blocks | 9 | 29 | 31% |
 | HTML blocks | 0 | 44 | 0% |
 | Hard line breaks | 4 | 15 | 27% |
 | Images | 2 | 22 | 9% |
-| Indented code blocks | 7 | 12 | 58% |
+| Indented code blocks | 10 | 12 | 83% |
 | Inlines | 1 | 1 | 100% |
-| Link reference definitions | 12 | 27 | 44% |
-| Links | 56 | 90 | 62% |
-| List items | 8 | 48 | 17% |
-| Lists | 4 | 26 | 15% |
-| Paragraphs | 3 | 8 | 38% |
+| Link reference definitions | 14 | 27 | 52% |
+| Links | 62 | 90 | 69% |
+| List items | 29 | 48 | 60% |
+| Lists | 18 | 26 | 69% |
+| Paragraphs | 7 | 8 | 88% |
 | Precedence | 1 | 1 | 100% |
-| Raw HTML | 4 | 20 | 20% |
-| Setext headings | 16 | 27 | 59% |
-| Soft line breaks | 0 | 2 | 0% |
-| Tabs | 5 | 11 | 45% |
+| Raw HTML | 5 | 20 | 25% |
+| Setext headings | 25 | 27 | 93% |
+| Soft line breaks | 2 | 2 | 100% |
+| Tabs | 7 | 11 | 64% |
 | Textual content | 2 | 3 | 67% |
-| Thematic breaks | 16 | 19 | 84% |
+| Thematic breaks | 17 | 19 | 89% |

@@ -1,0 +1,87 @@
+[
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "alpha\nlazy line joins"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "beta\nindented continuation"
+  },
+  {
+    "data": {
+      "loose": true
+    },
+    "kind": "bulleted_list",
+    "text": "gamma is loose"
+  },
+  {
+    "data": {
+      "marker": "+"
+    },
+    "kind": "bulleted_list",
+    "text": "plus starts a new list"
+  },
+  {
+    "data": {
+      "loose": true
+    },
+    "kind": "numbered_list",
+    "text": "one"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "two"
+  },
+  {
+    "data": {
+      "loose": true,
+      "marker": ")",
+      "start": 3
+    },
+    "kind": "numbered_list",
+    "text": "new delim restarts"
+  },
+  {
+    "data": {
+      "loose": true,
+      "marker": ".",
+      "start": 7
+    },
+    "kind": "numbered_list",
+    "text": "start at seven"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "parent item"
+  },
+  {
+    "data": {
+      "indent": 1
+    },
+    "kind": "bulleted_list",
+    "text": "child item"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "sibling not child"
+  },
+  {
+    "data": {
+      "level": 1
+    },
+    "kind": "heading",
+    "text": "para first\npara second"
+  },
+  {
+    "data": {
+      "loose": true
+    },
+    "kind": "bulleted_list",
+    "text": "item with two paragraphs\n\nsecond paragraph here"
+  }
+]

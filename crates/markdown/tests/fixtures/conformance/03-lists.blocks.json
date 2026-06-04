@@ -18,12 +18,16 @@
     "text": "second bold item"
   },
   {
-    "data": {},
+    "data": {
+      "marker": "*"
+    },
     "kind": "bulleted_list",
     "text": "star bullet"
   },
   {
-    "data": {},
+    "data": {
+      "loose": true
+    },
     "kind": "numbered_list",
     "text": "one"
   },
@@ -42,7 +46,9 @@
     "text": "two l"
   },
   {
-    "data": {},
+    "data": {
+      "loose": true
+    },
     "kind": "bulleted_list",
     "text": "parent"
   },
@@ -73,7 +79,9 @@
     "text": "back to top"
   },
   {
-    "data": {},
+    "data": {
+      "loose": true
+    },
     "kind": "numbered_list",
     "text": "ordered parent"
   },
@@ -92,13 +100,16 @@
     "text": "sibling"
   },
   {
-    "data": {},
+    "data": {
+      "start": 2
+    },
     "kind": "numbered_list",
     "text": "parent two"
   },
   {
     "data": {
-      "checked": false
+      "checked": false,
+      "loose": true
     },
     "kind": "todo",
     "text": "task parent"
@@ -106,7 +117,6 @@
   {
     "data": {
       "checked": true,
-      "indent": 1,
       "marks": [
         {
           "end": 11,

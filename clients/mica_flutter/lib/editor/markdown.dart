@@ -11,6 +11,36 @@ import 'table.dart';
 /// A block to create: its kind, plain text, and data map (heading level, etc.).
 typedef BlockSpec = ({String kind, String text, Map<String, dynamic> data});
 
+/// Ordered-list marker: 1–9 digits + `.` or `)` + space (or end-of-line for
+/// an empty item) — mirrors the Rust engine's numbered_list_marker.
+({int start, String rest})? numberedListMarker(String content) {
+  var d = 0;
+  while (d < content.length &&
+      content.codeUnitAt(d) >= 0x30 &&
+      content.codeUnitAt(d) <= 0x39) {
+    d++;
+  }
+  if (d == 0 || d > 9) return null;
+  final start = int.parse(content.substring(0, d));
+  final rest = content.substring(d);
+  if (rest == '.' || rest == ')') return (start: start, rest: '');
+  if (rest.length >= 2 && (rest[0] == '.' || rest[0] == ')') && rest[1] == ' ') {
+    return (start: start, rest: rest.substring(2));
+  }
+  return null;
+}
+
+/// A paragraph-like block kept open for multi-line continuation.
+class _OpenItem {
+  _OpenItem(this.index, this.kind, this.contentCol, this.raw, this.base);
+  final int index;
+  final String kind;
+  final int contentCol;
+  String raw;
+  final Map<String, dynamic> base;
+  bool hadBlank = false;
+}
+
 /// Parse inline Markdown in [text] into clean text + marks, merged into [data].
 BlockSpec _inline(
   String kind,
@@ -91,9 +121,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       defLines.add(k);
     }
   }
-  // Leading-width stack mapping source indentation columns to nesting levels
-  // (tolerates 2/3/4-space styles; tabs count as 4) — mirrors the Rust
-  // engine. Only list/todo items nest; other blocks reset the stack.
+  // Stack of open list items' CONTENT columns (tabs count as 4): a new item
+  // is a child only when its marker reaches the parent's content column —
+  // mirrors the Rust engine. Other blocks reset the stack.
   final listStack = <int>[];
   int leadCol(String raw, String content) {
     var col = 0;
@@ -103,24 +133,61 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     return col;
   }
 
-  int listLevel(String raw, String content) {
-    final col = leadCol(raw, content);
-    while (listStack.isNotEmpty && col < listStack.last) {
-      listStack.removeLast();
-    }
-    if (listStack.isEmpty || col > listStack.last) {
-      listStack.add(col);
-    }
-    return listStack.length - 1;
+  // The most recently pushed paragraph-like block (paragraph or list/todo
+  // item), kept open for multi-line continuation — mirrors the Rust engine:
+  // lazy lines join with a soft break; for items, a blank + indented line
+  // starts a second paragraph (\n\n join, list turns loose).
+  _OpenItem? open;
+  (int, int, String)? lastList; // (block index, level, marker char)
+  var pendingLoose = false;
+  void resetListState() {
+    listStack.clear();
+    open = null;
+    lastList = null;
+    pendingLoose = false;
   }
-  final fenceOpen = RegExp(r'^```(\w*)\s*$');
+
   final fenceClose = RegExp(r'^```\s*$');
   final heading = RegExp(r'^(#{1,6})\s+(.*)$');
-  final todo = RegExp(r'^[-*]\s+\[([ xX])\]\s+(.*)$');
-  final bullet = RegExp(r'^[-*]\s+(.*)$');
-  final numbered = RegExp(r'^\d+\.\s+(.*)$');
-  final quote = RegExp(r'^>\s?(.*)$');
   final image = RegExp(r'^!\[([^\]]*)\]\(([^)\s]+)\)$');
+
+  // Map one non-blank line to (kind, text, data) — mirrors the Rust
+  // classify_markdown_line (heading, todo, image, bullet, numbered, quote).
+  (String, String, Map<String, dynamic>) classifyLine(String content) {
+    final h = heading.firstMatch(content);
+    if (h != null) {
+      return ('heading', h.group(2)!.trim(), {'level': h.group(1)!.length});
+    }
+    if (content.startsWith('- [ ] ')) {
+      return ('todo', content.substring(6), {'checked': false});
+    }
+    if (content.startsWith('- [x] ') || content.startsWith('- [X] ')) {
+      return ('todo', content.substring(6), {'checked': true});
+    }
+    final img = image.firstMatch(content);
+    if (img != null) {
+      return ('image', img.group(1)!.trim(), {'url': img.group(2)!.trim()});
+    }
+    if (content.startsWith('- ') || content.startsWith('* ') || content.startsWith('+ ')) {
+      return ('bulleted_list', content.substring(2), {});
+    }
+    if (content == '-' || content == '*' || content == '+') {
+      // A bare marker is an empty list item.
+      return ('bulleted_list', '', {});
+    }
+    final nm = numberedListMarker(content);
+    if (nm != null) {
+      return ('numbered_list', nm.rest, {if (nm.start != 1) 'start': nm.start});
+    }
+    if (content.startsWith('> ')) {
+      return ('quote', content.substring(2), {});
+    }
+    return ('paragraph', content, {});
+  }
+
+  void reapply(_OpenItem o) {
+    result[o.index] = _inline(o.kind, o.raw, Map<String, dynamic>.of(o.base), defs: defs);
+  }
 
   var i = 0;
   while (i < lines.length) {
@@ -129,14 +196,41 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       continue;
     }
     final raw = lines[i].trimRight();
+    final line = raw.trimLeft();
 
-    final open = fenceOpen.firstMatch(raw);
-    if (open != null) {
-      listStack.clear();
-      final language = open.group(1) ?? '';
+    if (line.isEmpty) {
+      // Blank lines between items keep the list context, end the open
+      // paragraph (items merely note the blank), and make the list loose
+      // if it continues.
+      if (open != null && open!.kind != 'paragraph') {
+        open!.hadBlank = true;
+      } else {
+        open = null;
+      }
+      pendingLoose = pendingLoose || listStack.isNotEmpty;
+      i++;
+      continue;
+    }
+    final col = leadCol(raw, line);
+
+    // Setext underline of the open (possibly multi-line) paragraph: the
+    // whole continued paragraph becomes the heading.
+    if (open != null && open!.kind == 'paragraph') {
+      final level = setextLevel(raw);
+      if (level > 0) {
+        result[open!.index] = _inline('heading', open!.raw, {'level': level}, defs: defs);
+        open = null;
+        i++;
+        continue;
+      }
+    }
+
+    if (line.startsWith('```')) {
+      resetListState();
+      final language = line.substring(3).trim();
       final buffer = <String>[];
       i++;
-      while (i < lines.length && !fenceClose.hasMatch(lines[i].trimRight())) {
+      while (i < lines.length && !fenceClose.hasMatch(lines[i].trim())) {
         buffer.add(lines[i]);
         i++;
       }
@@ -151,22 +245,19 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     // GFM pipe table (a `|`-row followed by a `| --- |` separator).
     if (looksLikeGfmTable(lines, i)) {
-      listStack.clear();
+      resetListState();
       final parsed = parseGfmTable(lines, i);
       result.add((kind: 'table', text: '', data: parsed.table.toBlockData()));
       i = parsed.next;
       continue;
     }
 
-    final line = raw.trim();
-    if (line.isEmpty) {
-      i++;
-      continue;
-    }
-
-    // Indented code block: 4+ columns at top level (inside a list that
-    // means nesting instead).
-    if (listStack.isEmpty && leadCol(raw, raw.trimLeft()) >= 4) {
+    // Indented code block: 4+ columns outside any open construct (after a
+    // blank, a line below the item's content column ends the list).
+    if (col >= 4 &&
+        ((listStack.isEmpty && open == null) ||
+            (open != null && open!.hadBlank && col < open!.contentCol))) {
+      resetListState();
       final code = <String>[];
       var blanks = 0;
       while (i < lines.length) {
@@ -188,87 +279,136 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
     // A horizontal rule (`---`, `***`, `___`, `- - -`) becomes a divider.
     if (isThematicBreak(line)) {
-      listStack.clear();
+      resetListState();
       result.add((kind: 'divider', text: '', data: {}));
       i++;
       continue;
     }
 
-    // A standalone image: ![alt](url). The url is kept as an external source;
-    // the editor renders it and (when wired) can re-host it to avoid dead links.
-    final img = image.firstMatch(line);
-    if (img != null) {
-      result.add((
-        kind: 'image',
-        text: img.group(1)!.trim(),
-        data: {'url': img.group(2)!.trim()},
-      ));
-      i++;
-      continue;
-    }
+    final c = classifyLine(line);
+    final kind = c.$1;
+    var text = c.$2;
+    final data = Map<String, dynamic>.of(c.$3);
 
-    final h = heading.firstMatch(line);
-    if (h != null) {
-      listStack.clear();
-      result.add(_inline('heading', h.group(2)!.trim(), {'level': h.group(1)!.length}, defs: defs));
-      i++;
-      continue;
-    }
-
-    final t = todo.firstMatch(line);
-    if (t != null) {
-      final level = listLevel(raw, line);
-      result.add(_inline('todo', t.group(2)!.trim(), {
-        'checked': t.group(1)!.toLowerCase() == 'x',
-        if (level > 0) 'indent': level,
-      }, defs: defs));
-      i++;
-      continue;
-    }
-
-    final b = bullet.firstMatch(line);
-    if (b != null) {
-      final level = listLevel(raw, line);
-      result.add(_inline(
-        'bulleted_list',
-        b.group(1)!.trim(),
-        {if (level > 0) 'indent': level},
-      ));
-      i++;
-      continue;
-    }
-
-    final n = numbered.firstMatch(line);
-    if (n != null) {
-      final level = listLevel(raw, line);
-      result.add(_inline(
-        'numbered_list',
-        n.group(1)!.trim(),
-        {if (level > 0) 'indent': level},
-      ));
-      i++;
-      continue;
-    }
-
-    final q = quote.firstMatch(line);
-    if (q != null) {
-      listStack.clear();
-      result.add(_inline('quote', q.group(1)!.trim(), {}, defs: defs));
-      i++;
-      continue;
-    }
-
-    listStack.clear();
-    // Setext heading: this paragraph line underlined by `===`/`---`.
-    if (i + 1 < lines.length) {
-      final level = setextLevel(lines[i + 1]);
-      if (level > 0) {
-        result.add(_inline('heading', line, {'level': level}, defs: defs));
-        i += 2;
-        continue;
+    // Continuation (CommonMark): a paragraph line joins the open block with
+    // a soft break (lazy lines included); after a blank, a line indented to
+    // the item's content column starts a second paragraph inside the item
+    // (the list turns loose). An empty list item or an ordered marker other
+    // than `1.` cannot interrupt a paragraph — those lines stay text.
+    if (open != null) {
+      final weakItem = (kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo') &&
+          open!.kind == 'paragraph' &&
+          !open!.hadBlank &&
+          (text.isEmpty || data.containsKey('start'));
+      if (kind == 'paragraph' || weakItem) {
+        if (open!.hadBlank) {
+          if (col >= open!.contentCol && open!.raw.isNotEmpty) {
+            open!.hadBlank = false;
+            open!.raw = '${open!.raw}\n\n$line';
+            open!.base['loose'] = true;
+            pendingLoose = false;
+            reapply(open!);
+            i++;
+            continue;
+          }
+          // The blank closed the item; whatever follows is a new block.
+        } else {
+          open!.raw = open!.raw.isEmpty ? line : '${open!.raw}\n$line';
+          reapply(open!);
+          i++;
+          continue;
+        }
       }
     }
-    result.add(_inline('paragraph', line, {}, defs: defs));
+
+    // List/todo items: content column, nesting level, loose / <ol start> /
+    // marker-change bookkeeping; the item stays open for continuations.
+    if (kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo') {
+      // Content column: marker width plus up to 3 extra spaces consumed
+      // (more means the item starts with indented code — the spaces stay
+      // in the text, the column sits right after the marker).
+      final markerWidth = line.length - text.length;
+      var extra = 0;
+      while (extra < text.length && text.codeUnitAt(extra) == 0x20) {
+        extra++;
+      }
+      int contentCol;
+      if (text.isEmpty) {
+        contentCol = col + markerWidth + 1;
+      } else if (extra <= 3) {
+        text = text.substring(extra);
+        contentCol = col + markerWidth + extra;
+      } else {
+        contentCol = col + markerWidth;
+      }
+      while (listStack.isNotEmpty && col < listStack.last) {
+        listStack.removeLast();
+      }
+      final level = listStack.length;
+      listStack.add(contentCol);
+      if (level > 0) data['indent'] = level;
+      // The marker character: `-`/`*`/`+` for bullets and todos, the
+      // delimiter (`.`/`)`) for ordered items.
+      String markerChar;
+      if (kind == 'numbered_list') {
+        var d = 0;
+        while (line.codeUnitAt(d) >= 0x30 && line.codeUnitAt(d) <= 0x39) {
+          d++;
+        }
+        markerChar = line[d];
+      } else {
+        markerChar = line[0];
+      }
+      // Does this item continue the previous run (same level, same kind,
+      // same marker)? A marker change starts a new list.
+      final continuesRun = lastList != null &&
+          lastList!.$2 == level &&
+          result[lastList!.$1].kind == kind &&
+          lastList!.$3 == markerChar;
+      final sameLevelBreak = !continuesRun &&
+          lastList != null &&
+          lastList!.$2 == level &&
+          result[lastList!.$1].kind == kind;
+      if (sameLevelBreak) {
+        data['marker'] = markerChar;
+      }
+      // The blank line belongs to whichever list the boundary sits in:
+      // same-or-shallower level → this item is loose; deeper level → the
+      // blank separated a parent's text from its sublist, so the parent is.
+      if (pendingLoose) {
+        if (lastList != null && level > lastList!.$2) {
+          final prev = result[lastList!.$1];
+          result[lastList!.$1] =
+              (kind: prev.kind, text: prev.text, data: {...prev.data, 'loose': true});
+        } else {
+          data['loose'] = true;
+        }
+        pendingLoose = false;
+      }
+      // Only the number on the item that BEGINS an ordered run sets the
+      // list's start; later numbers are ignored by the spec.
+      if (kind == 'numbered_list' && data.containsKey('start') && continuesRun) {
+        data.remove('start');
+      }
+      final base = Map<String, dynamic>.of(data);
+      result.add(_inline(kind, text, data, defs: defs));
+      lastList = (result.length - 1, level, markerChar);
+      open = _OpenItem(result.length - 1, kind, contentCol, text, base);
+      i++;
+      continue;
+    }
+
+    resetListState();
+    if (kind == 'image') {
+      result.add((kind: 'image', text: text, data: data));
+      i++;
+      continue;
+    }
+    result.add(_inline(kind, text, data, defs: defs));
+    // Paragraphs stay open for lazy continuation and setext underlines.
+    if (kind == 'paragraph') {
+      open = _OpenItem(result.length - 1, 'paragraph', 0, line, {});
+    }
     i++;
   }
 

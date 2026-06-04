@@ -451,9 +451,25 @@ The recurring problem the engine must get right for every node type:
      deletion + offset remap) replaces the naive closer search in both
      parsers; parse output keeps nested same-type marks for
      `<em><em>` fidelity (editor ops still normalize). Scoreboard
-     130 → 186 → 235 → **315/652 (48.3%)** — Emphasis 7%→89%.
-     Fixtures 12–14 pin both parsers. Remaining big buckets: List
-     items (48), HTML blocks (44, degrade policy), Block quotes (25,
-     needs container children), Images (22). Decision point: keep extending
+     130 → 186 → 235 → 315 — Emphasis 7%→89%.
+     List items bucket DONE (2026-06-05): multi-line items + lazy
+     continuation (paragraph-like blocks stay "open"; indented or lazy
+     lines join with a soft break, re-parsing inline marks over the
+     joined source), blank + indented line → second paragraph inside
+     the item (`\n\n` join, `data.loose`), loose lists (`<p>`-wrapped
+     items in HTML), `+` bullets and `N)` ordered markers (≤9 digits),
+     `<ol start>` via `data.start` on a run's first item, marker/delim
+     changes break lists (`data.marker`), content-column nesting
+     (` - b` is a sibling of `- a`, not a child), empty items, setext
+     underlines convert the whole open multi-line paragraph (and
+     export back in setext form). Markdown export emits loose blanks,
+     continuation indentation, recorded markers/delims, and a blank
+     between a list and the next block — the round-trip fixed point
+     holds. Scoreboard **394/652 (60.4%)** — List items 8%→60%, Lists
+     31%→69%, Paragraphs 88%. Fixtures 12–15 pin both parsers.
+     Remaining big buckets: HTML blocks (44, degrade policy), Block
+     quotes (25, needs container children — also the blocker for the
+     last List-items examples: fences/quotes/code inside items),
+     Images (22). Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.

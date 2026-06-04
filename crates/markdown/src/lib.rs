@@ -144,10 +144,32 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   }
 
   let mut index = 0;
-  // Leading-width stack mapping source indentation columns to nesting levels
-  // (tolerates 2/3/4-space styles; tabs count as 4). Only list/todo items
-  // nest; any other block resets the stack.
+  // Stack of open list items' CONTENT columns (tabs count as 4): a new item
+  // is a child only when its marker reaches the parent's content column —
+  // `- foo` / ` - bar` are siblings. Other blocks reset the stack.
   let mut list_stack: Vec<usize> = Vec::new();
+  // The most recently pushed paragraph-like block (paragraph or list/todo
+  // item), kept open for multi-line continuation: indented or lazy lines
+  // join its text with a soft break; for items, a blank + indented line
+  // starts a second paragraph (joined with \n\n, list turns loose). `raw`
+  // is the accumulated marker-stripped source, `base` the data before
+  // inline marks so the joined text can re-parse cleanly.
+  struct OpenItem {
+    block_idx: usize,
+    kind: String,
+    content_col: usize,
+    raw: String,
+    base: Value,
+    had_blank: bool,
+  }
+  let mut open_item: Option<OpenItem> = None;
+  // Last pushed list item (index, level, marker char) — anchors loose-list
+  // marking, the "only a run's first number sets <ol start>" rule, and
+  // marker-change list breaks (`-` vs `+`, `.` vs `)`).
+  let mut last_list: Option<(usize, usize, char)> = None;
+  // A blank line seen inside a list: if another item follows, the list is
+  // loose (items render as paragraphs in HTML).
+  let mut pending_loose = false;
   while index < raw_lines.len() {
     if def_lines.contains(&index) {
       index += 1;
@@ -157,16 +179,43 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     let content = line.trim_start();
 
     if content.is_empty() {
+      // Blank lines between items keep the list context, end the open
+      // paragraph (items merely note the blank — an indented line can still
+      // continue them), and make the list loose if it continues.
+      match open_item.as_mut() {
+        Some(open) if open.kind != "paragraph" => open.had_blank = true,
+        _ => open_item = None,
+      }
+      pending_loose = pending_loose || !list_stack.is_empty();
       index += 1;
-      continue; // blank lines between items keep the list context
+      continue;
     }
     let mut col: usize = 0;
     for c in line[..line.len() - content.len()].chars() {
       col = if c == '\t' { (col / 4 + 1) * 4 } else { col + 1 };
     }
 
+    // Setext underline of the open (possibly multi-line) paragraph: the
+    // whole continued paragraph becomes the heading.
+    if let Some(open) = &open_item
+      && open.kind == "paragraph"
+      && let Some(level) = setext_level(line)
+    {
+      let (text, data) = apply_inline_marks(open.raw.clone(), json!({ "level": level }), &defs);
+      let idx = open.block_idx;
+      blocks[idx].kind = "heading".to_string();
+      blocks[idx].text = text;
+      blocks[idx].data = data;
+      open_item = None;
+      index += 1;
+      continue;
+    }
+
     if let Some(language) = content.strip_prefix("```") {
       list_stack.clear();
+      open_item = None;
+      last_list = None;
+      pending_loose = false;
       let language = language.trim().to_string();
       let mut code_lines = Vec::new();
       index += 1;
@@ -199,6 +248,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       && is_table_separator(raw_lines[index + 1].trim())
     {
       list_stack.clear();
+      open_item = None;
+      last_list = None;
+      pending_loose = false;
       let mut rows: Vec<Vec<String>> = vec![split_table_row(content)];
       index += 2;
       while index < raw_lines.len() {
@@ -233,7 +285,16 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
 
     // Indented code block: 4+ columns at top level (inside a list that
     // indentation means nesting instead, handled by the stack above).
-    if list_stack.is_empty() && col >= 4 {
+    if col >= 4
+      && ((list_stack.is_empty() && open_item.is_none())
+        || open_item
+          .as_ref()
+          .is_some_and(|o| o.had_blank && col < o.content_col))
+    {
+      list_stack.clear();
+      open_item = None;
+      last_list = None;
+      pending_loose = false;
       let mut code_lines: Vec<String> = Vec::new();
       let mut pending_blanks = 0usize;
       while index < raw_lines.len() {
@@ -271,53 +332,158 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     // Horizontal rule (`---`, `***`, `___`) → divider block.
     if is_divider(content) {
       list_stack.clear();
+      open_item = None;
+      last_list = None;
+      pending_loose = false;
       push_block(&mut blocks, &mut root_children, "divider", String::new(), Value::Null);
       index += 1;
       continue;
     }
 
-    let (kind, text, data) = classify_markdown_line(content);
+    let (kind, text, mut data) = classify_markdown_line(content);
 
-    // Setext heading: a paragraph line whose NEXT line underlines it with
-    // `===` (h1) or `---` (h2).
-    if kind == "paragraph"
-      && index + 1 < raw_lines.len()
-      && let Some(level) = setext_level(raw_lines[index + 1])
-    {
-      let (text, data) = apply_inline_marks(text, json!({ "level": level }), &defs);
-      push_block(&mut blocks, &mut root_children, "heading", text, data);
-      list_stack.clear();
-      index += 2;
+    // Continuation (CommonMark): a paragraph line joins the open block with
+    // a soft break (lazy lines included); after a blank, a line indented to
+    // the item's content column starts a second paragraph inside the item
+    // (the list turns loose). An empty list item or an ordered marker other
+    // than `1.` cannot interrupt a paragraph — those lines stay text.
+    if let Some(open) = open_item.as_mut() {
+      let weak_item = matches!(kind, "bulleted_list" | "numbered_list" | "todo")
+        && open.kind == "paragraph"
+        && !open.had_blank
+        && (text.is_empty() || data.get("start").is_some());
+      if kind == "paragraph" || weak_item {
+        if open.had_blank {
+          if col >= open.content_col && !open.raw.is_empty() {
+            open.had_blank = false;
+            open.raw.push_str("\n\n");
+            open.raw.push_str(content);
+            data_insert(&mut open.base, "loose", json!(true));
+            pending_loose = false;
+            let (joined, joined_data) =
+              apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
+            blocks[open.block_idx].text = joined;
+            blocks[open.block_idx].data = joined_data;
+            index += 1;
+            continue;
+          }
+          // The blank closed the item; whatever follows is a new block.
+        } else {
+          if open.raw.is_empty() {
+            open.raw = content.to_string();
+          } else {
+            open.raw.push('\n');
+            open.raw.push_str(content);
+          }
+          let (joined, joined_data) =
+            apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
+          blocks[open.block_idx].text = joined;
+          blocks[open.block_idx].data = joined_data;
+          index += 1;
+          continue;
+        }
+      }
+    }
+
+    // List/todo items: nesting level from the indentation stack, loose and
+    // <ol start> bookkeeping, then the item stays open for continuations.
+    if matches!(kind, "bulleted_list" | "numbered_list" | "todo") {
+      // Content column: marker width plus up to 3 extra spaces consumed
+      // (more than that means the item starts with indented code — the
+      // spaces stay in the text and the column sits right after the marker).
+      let marker_width = content.len() - text.len();
+      let extra = text.len() - text.trim_start_matches(' ').len();
+      let (text, content_col) = if text.is_empty() {
+        (text, col + marker_width + 1)
+      } else if extra <= 3 {
+        (text[extra..].to_string(), col + marker_width + extra)
+      } else {
+        (text, col + marker_width)
+      };
+      while list_stack.last().is_some_and(|&cc| col < cc) {
+        list_stack.pop();
+      }
+      let level = list_stack.len();
+      list_stack.push(content_col);
+      if level > 0 {
+        data_insert(&mut data, "indent", json!(level));
+      }
+      // The marker character: `-`/`*`/`+` for bullets and todos, the
+      // delimiter (`.`/`)`) for ordered items.
+      let marker_char = if kind == "numbered_list" {
+        content.as_bytes()[content.bytes().position(|b| !b.is_ascii_digit()).unwrap()] as char
+      } else {
+        content.as_bytes()[0] as char
+      };
+      // Does this item continue the previous run (same level, same kind,
+      // same marker)? A marker change starts a new list.
+      let continues_run = last_list.is_some_and(|(idx, lv, mk)| {
+        lv == level && blocks[idx].kind == kind && mk == marker_char
+      });
+      let same_level_break = !continues_run
+        && last_list.is_some_and(|(idx, lv, _)| lv == level && blocks[idx].kind == kind);
+      if same_level_break {
+        // Record the changed bullet/delimiter so export keeps the break.
+        data_insert(&mut data, "marker", json!(marker_char.to_string()));
+      }
+      // The blank line belongs to whichever list the boundary sits in:
+      // same-or-shallower level → this item is loose; deeper level → the
+      // blank separated a parent's text from its sublist, so the parent is.
+      if pending_loose {
+        match last_list {
+          Some((prev_idx, prev_level, _)) if level > prev_level => {
+            data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
+          }
+          _ => data_insert(&mut data, "loose", json!(true)),
+        }
+        pending_loose = false;
+      }
+      // Only the number on the item that BEGINS an ordered run sets the
+      // list's start; later numbers are ignored by the spec.
+      if kind == "numbered_list" && data.get("start").is_some() && continues_run {
+        data.as_object_mut().map(|m| m.remove("start"));
+      }
+      let raw = text.clone();
+      let base = data.clone();
+      let (text, data) = apply_inline_marks(text, data, &defs);
+      push_block(&mut blocks, &mut root_children, kind, text, data);
+      let block_idx = blocks.len() - 1;
+      last_list = Some((block_idx, level, marker_char));
+      open_item = Some(OpenItem {
+        block_idx,
+        kind: kind.to_string(),
+        content_col,
+        raw,
+        base,
+        had_blank: false,
+      });
+      index += 1;
       continue;
     }
-    let (text, mut data) = if kind == "image" {
+
+    list_stack.clear();
+    last_list = None;
+    pending_loose = false;
+    let (text, data) = if kind == "image" {
       (text, data)
     } else {
       apply_inline_marks(text, data, &defs)
     };
-
-    // Nesting level for list items from the indentation stack.
-    if matches!(kind, "bulleted_list" | "numbered_list" | "todo") {
-      while list_stack.last().is_some_and(|&top| col < top) {
-        list_stack.pop();
-      }
-      if list_stack.last().is_none_or(|&top| col > top) {
-        list_stack.push(col);
-      }
-      let level = list_stack.len().saturating_sub(1);
-      if level > 0 {
-        match &mut data {
-          Value::Object(map) => {
-            map.insert("indent".into(), json!(level));
-          }
-          other => *other = json!({ "indent": level }),
-        }
-      }
+    let raw = if kind == "paragraph" {
+      Some(content.to_string())
     } else {
-      list_stack.clear();
-    }
-
+      None
+    };
     push_block(&mut blocks, &mut root_children, kind, text, data);
+    // Paragraphs stay open for lazy continuation and setext underlines.
+    open_item = raw.map(|raw| OpenItem {
+      block_idx: blocks.len() - 1,
+      kind: "paragraph".to_string(),
+      content_col: 0,
+      raw,
+      base: Value::Null,
+      had_blank: false,
+    });
     index += 1;
   }
 
@@ -453,11 +619,21 @@ fn classify_markdown_line(content: &str) -> (&'static str, String, Value) {
   if let Some(rest) = content
     .strip_prefix("- ")
     .or_else(|| content.strip_prefix("* "))
+    .or_else(|| content.strip_prefix("+ "))
   {
     return ("bulleted_list", rest.to_string(), Value::Null);
   }
-  if let Some(rest) = numbered_list_rest(content) {
-    return ("numbered_list", rest.to_string(), Value::Null);
+  if matches!(content, "-" | "*" | "+") {
+    // A bare marker is an empty list item.
+    return ("bulleted_list", String::new(), Value::Null);
+  }
+  if let Some((start, rest)) = numbered_list_marker(content) {
+    let data = if start == 1 {
+      Value::Null
+    } else {
+      json!({ "start": start })
+    };
+    return ("numbered_list", rest.to_string(), data);
   }
   if let Some(rest) = content.strip_prefix("> ") {
     return ("quote", rest.to_string(), Value::Null);
@@ -493,12 +669,33 @@ fn heading_prefix_level(content: &str) -> Option<usize> {
   }
 }
 
-fn numbered_list_rest(content: &str) -> Option<&str> {
-  let digits_end = content.find(|c: char| !c.is_ascii_digit())?;
-  if digits_end == 0 {
+/// Ordered-list marker: 1–9 digits + `.` or `)` + space (or end-of-line for
+/// an empty item). Returns the start number and the content after the marker.
+fn numbered_list_marker(content: &str) -> Option<(u64, &str)> {
+  let digits_end = content
+    .find(|c: char| !c.is_ascii_digit())
+    .unwrap_or(content.len());
+  if digits_end == 0 || digits_end > 9 {
     return None;
   }
-  content[digits_end..].strip_prefix(". ")
+  let start: u64 = content[..digits_end].parse().ok()?;
+  let rest = &content[digits_end..];
+  match rest.as_bytes() {
+    [] => None,
+    [b'.'] | [b')'] => Some((start, "")),
+    [b'.', b' ', ..] | [b')', b' ', ..] => Some((start, &rest[2..])),
+    _ => None,
+  }
+}
+
+/// Insert a key into a block's `data`, upgrading `Null` to an object.
+fn data_insert(data: &mut Value, key: &str, value: Value) {
+  match data {
+    Value::Object(map) => {
+      map.insert(key.into(), value);
+    }
+    other => *other = json!({ key: value }),
+  }
 }
 
 /// Parse a line that is exactly `![alt](url)` into `(alt, url)`.
@@ -523,33 +720,103 @@ fn append_html_children(
   let mut index = 0;
   while index < child_ids.len() {
     let child = block_for(snapshot, &child_ids[index])?;
-    match list_tag_for(&child.kind) {
-      // Group a run of same-kind list items into a single <ul>/<ol>.
-      Some(tag) => {
-        out.push_str(&format!("<{tag}>\n"));
-        while index < child_ids.len() {
-          let item = block_for(snapshot, &child_ids[index])?;
-          if list_tag_for(&item.kind) != Some(tag) {
-            break;
-          }
-          out.push_str(&format!("<li>{}", escape_html(item.text.trim())));
-          if !item.children.is_empty() {
-            out.push('\n');
-            append_html_children(snapshot, &item.id, out)?;
-          }
-          out.push_str("</li>\n");
-          index += 1;
-        }
-        out.push_str(&format!("</{tag}>\n"));
-      }
-      None => {
-        append_html_block(snapshot, child, out)?;
+    if list_tag_for(&child.kind).is_some() {
+      // Collect the maximal run of consecutive list items (any tag, any
+      // `data.indent` level) and render it as nested <ul>/<ol> structure.
+      let run_start = index;
+      while index < child_ids.len()
+        && list_tag_for(&block_for(snapshot, &child_ids[index])?.kind).is_some()
+      {
         index += 1;
       }
+      let items: Vec<&Block> = child_ids[run_start..index]
+        .iter()
+        .map(|id| block_for(snapshot, id))
+        .collect::<DocumentOperationResult<_>>()?;
+      render_html_list(&items, 0, out);
+    } else {
+      append_html_block(snapshot, child, out)?;
+      index += 1;
     }
   }
 
   Ok(())
+}
+
+fn list_indent(block: &Block) -> usize {
+  block.data.get("indent").and_then(Value::as_u64).unwrap_or(0) as usize
+}
+
+/// Render a flat run of list items (nesting via `data.indent`) as spec-shaped
+/// nested `<ul>`/`<ol>`: a tag change at the same level starts a new list,
+/// deeper items nest inside the preceding `<li>`, a loose list (any item
+/// carrying `data.loose`) wraps item text in `<p>`, and `data.start` on the
+/// first item of an ordered run becomes `<ol start="n">`.
+fn render_html_list(items: &[&Block], level: usize, out: &mut String) {
+  let mut i = 0;
+  while i < items.len() {
+    if list_indent(items[i]) > level {
+      // Orphan deeper items (no parent at this level): render a level down.
+      let s = i;
+      while i < items.len() && list_indent(items[i]) > level {
+        i += 1;
+      }
+      render_html_list(&items[s..i], level + 1, out);
+      continue;
+    }
+    let tag = list_tag_for(&items[i].kind).unwrap_or("ul");
+    // Extent of this list: items at `level` with the same tag, plus any
+    // deeper items in between (they belong inside the current <li>).
+    let mut li_heads: Vec<usize> = Vec::new();
+    let mut j = i;
+    while j < items.len() {
+      if list_indent(items[j]) == level {
+        if list_tag_for(&items[j].kind) != Some(tag) {
+          break;
+        }
+        // A marker/delimiter change recorded at import starts a new list.
+        if !li_heads.is_empty()
+          && (items[j].data.get("start").is_some() || items[j].data.get("marker").is_some())
+        {
+          break;
+        }
+        li_heads.push(j);
+      }
+      j += 1;
+    }
+    let loose = li_heads.iter().any(|&k| block_data_bool(items[k], "loose"));
+    let start_attr = match items[i].data.get("start").and_then(Value::as_u64) {
+      Some(n) if tag == "ol" && n != 1 => format!(" start=\"{n}\""),
+      _ => String::new(),
+    };
+    out.push_str(&format!("<{tag}{start_attr}>\n"));
+    for (k, &head) in li_heads.iter().enumerate() {
+      let end = li_heads.get(k + 1).copied().unwrap_or(j);
+      let body = html_inline(items[head]);
+      if loose && body.is_empty() && head + 1 >= end {
+        out.push_str("<li></li>\n");
+      } else if loose {
+        out.push_str("<li>\n");
+        for para in body.split("\n\n").filter(|p| !p.is_empty()) {
+          out.push_str(&format!("<p>{para}</p>\n"));
+        }
+        if head + 1 < end {
+          render_html_list(&items[head + 1..end], level + 1, out);
+        }
+        out.push_str("</li>\n");
+      } else {
+        out.push_str("<li>");
+        out.push_str(&body);
+        if head + 1 < end {
+          out.push('\n');
+          render_html_list(&items[head + 1..end], level + 1, out);
+        }
+        out.push_str("</li>\n");
+      }
+    }
+    out.push_str(&format!("</{tag}>\n"));
+    i = j;
+  }
 }
 
 /// Inline marks rendered to nested HTML (<strong>/<em>/<code>/<del>/<a>),
@@ -645,7 +912,11 @@ fn append_html_block(
       append_html_children(snapshot, &block.id, out)?;
     }
     "quote" => {
-      out.push_str(&format!("<blockquote>{text}</blockquote>\n"));
+      if text.is_empty() {
+        out.push_str("<blockquote>\n</blockquote>\n");
+      } else {
+        out.push_str(&format!("<blockquote>\n<p>{text}</p>\n</blockquote>\n"));
+      }
       append_html_children(snapshot, &block.id, out)?;
     }
     "code_block" | "code" => {
@@ -730,10 +1001,21 @@ fn append_markdown_children(
     .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
   let child_ids = snapshot.blocks[parent_index].children.clone();
 
+  let is_item = |kind: &str| {
+    matches!(kind, "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo")
+  };
+  let mut prev_was_item = false;
   for child_id in child_ids {
     let child_index = block_index(snapshot, &child_id)
       .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
-    append_markdown_block(snapshot, &snapshot.blocks[child_index], depth, lines, images)?;
+    let child = &snapshot.blocks[child_index];
+    // A list runs until a blank line: separate it from whatever follows so
+    // the next block can't be read back as a lazy continuation.
+    if prev_was_item && !is_item(&child.kind) {
+      lines.push(String::new());
+    }
+    prev_was_item = is_item(&child.kind);
+    append_markdown_block(snapshot, child, depth, lines, images)?;
   }
 
   Ok(())
@@ -784,6 +1066,23 @@ fn append_markdown_block(
   Ok(())
 }
 
+/// Emit one list/todo item: a leading blank if the item is loose (so the
+/// list re-imports loose), the marker line, then continuation lines indented
+/// to the item's content column.
+fn push_list_item(lines: &mut Vec<String>, block: &Block, indent: &str, marker: &str, rich: &str) {
+  if block_data_bool(block, "loose") {
+    lines.push(String::new());
+  }
+  let pad = " ".repeat(marker.len());
+  for (i, l) in rich.split('\n').enumerate() {
+    if i == 0 {
+      lines.push(format!("{indent}{marker}{l}"));
+    } else {
+      lines.push(format!("{indent}{pad}{l}"));
+    }
+  }
+}
+
 fn append_markdown_block_content(
   block: &Block,
   depth: usize,
@@ -810,7 +1109,13 @@ fn append_markdown_block_content(
   match block.kind.as_str() {
     "heading" => {
       let level = heading_level(block, depth);
-      lines.push(format!("{} {}", "#".repeat(level), rich));
+      if rich.contains('\n') && level <= 2 {
+        // Multi-line headings only exist in setext form.
+        lines.extend(rich.split('\n').map(str::to_string));
+        lines.push(if level == 1 { "===" } else { "---" }.to_string());
+      } else {
+        lines.push(format!("{} {}", "#".repeat(level), rich.replace('\n', " ")));
+      }
       lines.push(String::new());
     }
     "todo" => {
@@ -819,10 +1124,20 @@ fn append_markdown_block_content(
       } else {
         " "
       };
-      lines.push(format!("{indent}- [{marker}] {rich}"));
+      push_list_item(lines, block, &indent, &format!("- [{marker}] "), rich);
     }
-    "bulleted_list" | "bullet_list" => lines.push(format!("{indent}- {rich}")),
-    "numbered_list" | "number_list" => lines.push(format!("{indent}1. {rich}")),
+    "bulleted_list" | "bullet_list" => {
+      let marker = block_data_str(block, "marker").unwrap_or("-");
+      push_list_item(lines, block, &indent, &format!("{marker} "), rich);
+    }
+    "numbered_list" | "number_list" => {
+      // Only a run's first item carries `start`; the rest stay `1.` (valid
+      // CommonMark — ordered numbering continues regardless). A recorded
+      // `marker` restores the `)` delimiter that broke the previous run.
+      let n = block.data.get("start").and_then(Value::as_u64).unwrap_or(1);
+      let delim = block_data_str(block, "marker").unwrap_or(".");
+      push_list_item(lines, block, &indent, &format!("{n}{delim} "), rich);
+    }
     "quote" => {
       lines.push(format!("> {rich}"));
       lines.push(String::new());
