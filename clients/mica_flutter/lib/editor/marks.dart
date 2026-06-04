@@ -264,6 +264,95 @@ int matchingBracket(String src, int open) {
   return -1;
 }
 
+/// Inline raw HTML at src[i] == '<': open tag, closing tag, comment,
+/// processing instruction, declaration or CDATA. Returns the exclusive end
+/// index, or -1. Mirrors the Rust engine's inline_html_end.
+int inlineHtmlEnd(String src, int i) {
+  if (i >= src.length || src[i] != '<') return -1;
+  int findPat(int from, String pat) => src.indexOf(pat, from);
+  // Comment (<!--> and <!---> count as empty comments).
+  if (src.startsWith('!--', i + 1)) {
+    if (src.startsWith('>', i + 4)) return i + 5;
+    if (src.startsWith('->', i + 4)) return i + 6;
+    final p = findPat(i + 4, '-->');
+    return p < 0 ? -1 : p + 3;
+  }
+  if (src.startsWith('![CDATA[', i + 1)) {
+    final p = findPat(i + 9, ']]>');
+    return p < 0 ? -1 : p + 3;
+  }
+  if (i + 1 < src.length && src[i + 1] == '?') {
+    final p = findPat(i + 2, '?>');
+    return p < 0 ? -1 : p + 2;
+  }
+  bool isAlpha(String c) =>
+      (c.codeUnitAt(0) | 0x20) >= 0x61 && (c.codeUnitAt(0) | 0x20) <= 0x7A;
+  bool isAlnum(String c) => isAlpha(c) || (c.codeUnitAt(0) >= 0x30 && c.codeUnitAt(0) <= 0x39);
+  if (i + 1 < src.length && src[i + 1] == '!') {
+    if (i + 2 >= src.length || !isAlpha(src[i + 2])) return -1;
+    final p = findPat(i + 2, '>');
+    return p < 0 ? -1 : p + 1;
+  }
+  var closing = false;
+  var p = i + 1;
+  if (p < src.length && src[p] == '/') {
+    closing = true;
+    p++;
+  }
+  if (p >= src.length || !isAlpha(src[p])) return -1;
+  while (p < src.length && (isAlnum(src[p]) || src[p] == '-')) {
+    p++;
+  }
+  int skipWs(int q) {
+    while (q < src.length && (src[q] == ' ' || src[q] == '\t' || src[q] == '\n')) {
+      q++;
+    }
+    return q;
+  }
+  if (closing) {
+    final q = skipWs(p);
+    return (q < src.length && src[q] == '>') ? q + 1 : -1;
+  }
+  while (true) {
+    final q = skipWs(p);
+    if (q < src.length && src[q] == '>') return q + 1;
+    if (q + 1 < src.length && src[q] == '/' && src[q + 1] == '>') return q + 2;
+    if (q == p) return -1; // an attribute needs whitespace before it
+    if (q >= src.length) return -1;
+    final c0 = src[q];
+    if (!(isAlpha(c0) || c0 == '_' || c0 == ':')) return -1;
+    var r = q + 1;
+    while (r < src.length &&
+        (isAlnum(src[r]) || src[r] == '_' || src[r] == '.' || src[r] == ':' || src[r] == '-')) {
+      r++;
+    }
+    final eq = skipWs(r);
+    if (eq < src.length && src[eq] == '=') {
+      final v = skipWs(eq + 1);
+      if (v >= src.length) return -1;
+      final quote = src[v];
+      if (quote == '"' || quote == "'") {
+        var w = v + 1;
+        while (w < src.length && src[w] != quote) {
+          w++;
+        }
+        if (w >= src.length) return -1;
+        p = w + 1;
+      } else {
+        var w = v;
+        while (w < src.length &&
+            !' \t\n"\'=<>`'.contains(src[w])) {
+          w++;
+        }
+        if (w == v) return -1;
+        p = w;
+      }
+    } else {
+      p = r;
+    }
+  }
+}
+
 /// Curated named-entity table (the spec set plus common real-world names);
 /// unknown entities stay literal, which is exactly the spec behavior.
 const Map<String, String> _namedEntities = {
@@ -636,6 +725,17 @@ String? autolinkTarget(String inner) {
           continue;
         }
       }
+      // Raw inline HTML: a valid tag/comment/PI/declaration/CDATA shape
+      // passes through verbatim under an `html` mark.
+      final htmlEnd = inlineHtmlEnd(src, i);
+      if (htmlEnd > i) {
+        final raw = src.substring(i, htmlEnd);
+        final start = out.length;
+        out.write(raw);
+        marks.add(Mark(start, out.length, 'html'));
+        i = htmlEnd;
+        continue;
+      }
     }
     // Image: ![alt](dest "title") | ![alt][label] | ![alt][] | ![alt] —
     // same bridge as links; the alt keeps its inner marks (HTML flattens
@@ -972,6 +1072,12 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       lead = '${lead.substring(0, lead.length - 1)}\\!';
     }
     out.write(lead);
+    if (pick.type == 'html') {
+      // Raw inline HTML writes back verbatim.
+      out.write(text.substring(ps, pe));
+      pos = pe;
+      continue;
+    }
     if (pick.type == 'code') {
       // Code spans are literal — no escaping, no nested marks. The fence is
       // one backtick longer than any run inside; a space pads content that

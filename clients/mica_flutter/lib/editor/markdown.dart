@@ -44,6 +44,78 @@ class _OpenItem {
   bool endsHard;
 }
 
+/// Block-level HTML tag names (CommonMark type-6 start condition).
+const _htmlBlockTags = {
+  'address', 'article', 'aside', 'base', 'basefont', 'blockquote', 'body',
+  'caption', 'center', 'col', 'colgroup', 'dd', 'details', 'dialog', 'dir',
+  'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form',
+  'frame', 'frameset', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header',
+  'hr', 'html', 'iframe', 'legend', 'li', 'link', 'main', 'menu', 'menuitem',
+  'nav', 'noframes', 'ol', 'optgroup', 'option', 'p', 'param', 'search',
+  'section', 'summary', 'table', 'tbody', 'td', 'template', 'tfoot', 'th',
+  'thead', 'title', 'tr', 'track', 'ul',
+};
+
+/// CommonMark HTML block start conditions (1–7); type 7 cannot interrupt a
+/// paragraph. Mirrors the Rust engine's html_block_start.
+int? htmlBlockStart(String content) {
+  if (!content.startsWith('<')) return null;
+  final rest = content.substring(1);
+  if (rest.startsWith('!--')) return 2;
+  if (rest.startsWith('?')) return 3;
+  if (rest.startsWith('![CDATA[')) return 5;
+  if (rest.startsWith('!')) {
+    final d = rest.substring(1);
+    if (d.isNotEmpty && RegExp(r'^[A-Za-z]').hasMatch(d)) return 4;
+    return null;
+  }
+  final closing = rest.startsWith('/');
+  final nameRest = closing ? rest.substring(1) : rest;
+  final nm = RegExp(r'^[A-Za-z][A-Za-z0-9-]*').firstMatch(nameRest);
+  if (nm == null) return null;
+  final name = nm.group(0)!.toLowerCase();
+  final after = nameRest.substring(nm.end);
+  final boundary = after.isEmpty ||
+      after.startsWith(' ') ||
+      after.startsWith('\t') ||
+      after.startsWith('>');
+  const type1 = {'pre', 'script', 'style', 'textarea'};
+  if (!closing && type1.contains(name) && boundary) return 1;
+  if (_htmlBlockTags.contains(name) &&
+      (boundary || (!closing && after.startsWith('/>')))) {
+    return 6;
+  }
+  // Type 7: a COMPLETE open/closing tag (any other name) alone on the line.
+  final end = inlineHtmlEnd(content, 0);
+  if (end > 0 &&
+      !type1.contains(name) &&
+      content.substring(end).trim().isEmpty) {
+    return 7;
+  }
+  return null;
+}
+
+/// Does this line end the HTML block of the given kind (types 1–5)?
+bool htmlBlockEnds(int kind, String line) {
+  final lower = line.toLowerCase();
+  switch (kind) {
+    case 1:
+      return lower.contains('</pre>') ||
+          lower.contains('</script>') ||
+          lower.contains('</style>') ||
+          lower.contains('</textarea>');
+    case 2:
+      return line.contains('-->');
+    case 3:
+      return line.contains('?>');
+    case 4:
+      return line.contains('>');
+    case 5:
+      return line.contains(']]>');
+  }
+  return false;
+}
+
 /// A fence opener: 3+ backticks or tildes; a backtick fence's info string
 /// may not contain backticks.
 ({String ch, int len, String info})? _fenceOpen(String content) {
@@ -483,6 +555,38 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         text: buffer.join('\n'),
         data: language.isEmpty ? {} : {'language': language},
       ));
+      continue;
+    }
+
+    // HTML block (CommonMark types 1–7) → a raw html code block: the
+    // source is the content (AFFiNE-style degrade), `data.raw` makes the
+    // exporters write it back verbatim. Type 7 can't interrupt a paragraph.
+    final htmlKind = col < 4 && listStack.isEmpty ? htmlBlockStart(line) : null;
+    if (htmlKind != null && !(htmlKind == 7 && open != null)) {
+      final htmlLines = <String>[lines[i]];
+      final endsByMarker = htmlKind <= 5;
+      var done = endsByMarker && htmlBlockEnds(htmlKind, line);
+      i++;
+      while (i < lines.length && !done) {
+        final l = lines[i];
+        if (endsByMarker) {
+          htmlLines.add(l);
+          done = htmlBlockEnds(htmlKind, l);
+          i++;
+        } else {
+          if (l.trim().isEmpty) break; // types 6–7 end at a blank line
+          htmlLines.add(l);
+          i++;
+        }
+      }
+      result.add((kind: 'code_block', text: htmlLines.join('\n'), data: {
+        'language': 'html',
+        'raw': true,
+      }));
+      open = null;
+      lastList = null;
+      pendingLoose = false;
+      itemChildren = false;
       continue;
     }
 

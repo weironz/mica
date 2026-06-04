@@ -21,8 +21,12 @@ void main() {
     expect(p.text, 'see https://e.com/a?b=1 or u@e.com');
     expect(p.marks[0].href, 'https://e.com/a?b=1');
     expect(p.marks[1].href, 'mailto:u@e.com');
-    // Not autolinks:
-    expect(parseInline('<not a url>').marks, isEmpty);
+    // Not an autolink — but a valid raw-HTML tag shape (spec behavior):
+    final h = parseInline('<not a url>');
+    expect(h.text, '<not a url>');
+    expect(h.marks.single.type, 'html');
+    // Not html either — stays literal text with no marks:
+    expect(parseInline('<no closer').marks, isEmpty);
   });
 
   test('nested marks render properly nested (old segment bug)', () {

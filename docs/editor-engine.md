@@ -531,10 +531,26 @@ The recurring problem the engine must get right for every node type:
      become an empty item plus a child. HTML renders children inside
      the `<li>` (quote runs rebuild <blockquote>; deeper runs recurse);
      markdown re-indents children to the content column, child
-     paragraphs get a separating blank. Scoreboard **533/652 (81.7%)**
+     paragraphs get a separating blank. Scoreboard 533/652 (81.7%)
      — List items 62%→88%, Lists 69%→81%, Tabs 82%. Fixture 20 pins
-     both parsers. Remaining: HTML blocks 44 + Raw HTML 20 (the
-     degrade-policy decision), Links/Emphasis precedence edges, a few
-     tab/laziness exotics. Decision point: keep extending
+     both parsers.
+     HTML degrade DONE (2026-06-05) — the decided policy (AFFiNE-style
+     carrier + raw write-back): an HTML block (the spec's 7 start/end
+     conditions, type 7 can't interrupt a paragraph) imports as
+     `code_block { language: "html", raw: true }` — the editor shows
+     source in the existing code-block UI and NEVER executes it; both
+     exporters honor `data.raw` by writing the source back VERBATIM
+     (no fences, no escaping), so foreign viewers still render the
+     HTML and the spec passes. Inline raw HTML (valid tag / comment /
+     PI / declaration / CDATA shapes, after autolinks) becomes an
+     `html` mark over the verbatim text — HTML and markdown render it
+     unescaped; invalid shapes stay escaped text. SECURITY: export
+     passes raw HTML through — any Mica-side HTML RENDERING surface
+     must sanitize (whitelist) before display; the editor itself only
+     ever shows source. Scoreboard **598/652 (91.7%)** — HTML blocks
+     0%→95%, Raw HTML 35%→100%; 16 sections at 100%. Fixture 21 pins
+     both parsers. Remaining 54: Links precedence edges (20), Emphasis
+     exotics (6), List items/Lists container edges, code-span/entity/
+     tab oddments. Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.

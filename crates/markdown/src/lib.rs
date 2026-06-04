@@ -435,6 +435,46 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
+    // HTML block (CommonMark types 1–7) → a raw html code block: the
+    // source is the content (AFFiNE-style degrade), `data.raw` makes both
+    // exporters write it back verbatim. Type 7 can't interrupt a paragraph.
+    if col < 4
+      && let Some(html_kind) = html_block_start(content)
+      && list_stack.is_empty()
+      && !(html_kind == 7 && open_item.is_some())
+    {
+      let mut html_lines: Vec<String> = vec![raw_lines[index].to_string()];
+      let ends_by_marker = html_kind <= 5;
+      let mut done = ends_by_marker && html_block_ends(html_kind, content);
+      index += 1;
+      while index < raw_lines.len() && !done {
+        let l = raw_lines[index];
+        if ends_by_marker {
+          html_lines.push(l.to_string());
+          done = html_block_ends(html_kind, l);
+          index += 1;
+        } else {
+          if l.trim().is_empty() {
+            break; // types 6–7 end at a blank line
+          }
+          html_lines.push(l.to_string());
+          index += 1;
+        }
+      }
+      push_block(
+        &mut blocks,
+        &mut root_children,
+        "code_block",
+        html_lines.join("\n"),
+        json!({ "language": "html", "raw": true }),
+      );
+      open_item = None;
+      last_list = None;
+      pending_loose = false;
+      item_children = false;
+      continue;
+    }
+
     // GFM pipe table: a `|`-row followed by a `| --- |` separator.
     if content.contains('|')
       && index + 1 < raw_lines.len()
@@ -1425,6 +1465,211 @@ fn parse_entity(chars: &[char], i: usize) -> Option<(String, usize)> {
   named_entity(&body).map(|v| (v.to_string(), semi - i + 1))
 }
 
+/// Block-level HTML tag names (CommonMark type-6 start condition).
+const HTML_BLOCK_TAGS: &[&str] = &[
+  "address", "article", "aside", "base", "basefont", "blockquote", "body",
+  "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+  "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+  "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+  "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
+  "nav", "noframes", "ol", "optgroup", "option", "p", "param", "search",
+  "section", "summary", "table", "tbody", "td", "template", "tfoot", "th",
+  "thead", "title", "tr", "track", "ul",
+];
+
+/// CommonMark HTML block start conditions. Returns the kind (1–7), which
+/// picks the end condition; type 7 cannot interrupt a paragraph.
+fn html_block_start(content: &str) -> Option<u8> {
+  let rest = content.strip_prefix('<')?;
+  if rest.starts_with("!--") {
+    return Some(2);
+  }
+  if rest.starts_with('?') {
+    return Some(3);
+  }
+  if rest.starts_with("![CDATA[") {
+    return Some(5);
+  }
+  if let Some(d) = rest.strip_prefix('!') {
+    if d.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+      return Some(4);
+    }
+    return None;
+  }
+  let (closing, name_rest) = match rest.strip_prefix('/') {
+    Some(r) => (true, r),
+    None => (false, rest),
+  };
+  let name_len = name_rest
+    .chars()
+    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+    .count();
+  if name_len == 0 || !name_rest.chars().next().unwrap().is_ascii_alphabetic() {
+    return None;
+  }
+  let name: String = name_rest[..name_len].to_ascii_lowercase();
+  let after = &name_rest[name_len..];
+  let boundary = after.is_empty() || after.starts_with([' ', '\t', '>']);
+  if !closing
+    && matches!(name.as_str(), "pre" | "script" | "style" | "textarea")
+    && boundary
+  {
+    return Some(1);
+  }
+  if HTML_BLOCK_TAGS.contains(&name.as_str())
+    && (boundary || (!closing && after.starts_with("/>")))
+  {
+    return Some(6);
+  }
+  // Type 7: a COMPLETE open/closing tag (any other name) alone on the line.
+  let chars: Vec<char> = content.chars().collect();
+  if let Some(end) = inline_html_end(&chars, 0)
+    && chars[1] != '!'
+    && chars[1] != '?'
+    && !matches!(name.as_str(), "pre" | "script" | "style" | "textarea")
+    && chars[end..].iter().all(|&c| c == ' ' || c == '\t')
+  {
+    return Some(7);
+  }
+  None
+}
+
+/// Does this line end the HTML block of the given kind (types 1–5)?
+fn html_block_ends(kind: u8, line: &str) -> bool {
+  let lower = line.to_ascii_lowercase();
+  match kind {
+    1 => {
+      lower.contains("</pre>")
+        || lower.contains("</script>")
+        || lower.contains("</style>")
+        || lower.contains("</textarea>")
+    }
+    2 => line.contains("-->"),
+    3 => line.contains("?>"),
+    4 => line.contains('>'),
+    5 => line.contains("]]>"),
+    _ => false,
+  }
+}
+
+/// Inline raw HTML at chars[i] == '<': open tag, closing tag, comment,
+/// processing instruction, declaration or CDATA. Returns the exclusive end.
+fn inline_html_end(chars: &[char], i: usize) -> Option<usize> {
+  if chars.get(i) != Some(&'<') {
+    return None;
+  }
+  let starts = |from: usize, pat: &str| -> bool {
+    pat.chars().enumerate().all(|(k, c)| chars.get(from + k) == Some(&c))
+  };
+  let find = |from: usize, pat: &str| -> Option<usize> {
+    let pat: Vec<char> = pat.chars().collect();
+    let mut j = from;
+    while j + pat.len() <= chars.len() {
+      if chars[j..j + pat.len()] == pat[..] {
+        return Some(j);
+      }
+      j += 1;
+    }
+    None
+  };
+  // Comment (<!--> and <!---> count as empty comments).
+  if starts(i + 1, "!--") {
+    if starts(i + 4, ">") {
+      return Some(i + 5);
+    }
+    if starts(i + 4, "->") {
+      return Some(i + 6);
+    }
+    return find(i + 4, "-->").map(|p| p + 3);
+  }
+  if starts(i + 1, "![CDATA[") {
+    return find(i + 9, "]]>").map(|p| p + 3);
+  }
+  if chars.get(i + 1) == Some(&'?') {
+    return find(i + 2, "?>").map(|p| p + 2);
+  }
+  if chars.get(i + 1) == Some(&'!') {
+    if !chars.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()) {
+      return None;
+    }
+    return find(i + 2, ">").map(|p| p + 1);
+  }
+  let (closing, mut p) = if chars.get(i + 1) == Some(&'/') {
+    (true, i + 2)
+  } else {
+    (false, i + 1)
+  };
+  if !chars.get(p).is_some_and(|c| c.is_ascii_alphabetic()) {
+    return None;
+  }
+  while chars.get(p).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '-') {
+    p += 1;
+  }
+  let skip_ws = |mut q: usize| -> usize {
+    while chars.get(q).is_some_and(|c| c.is_whitespace()) {
+      q += 1;
+    }
+    q
+  };
+  if closing {
+    let q = skip_ws(p);
+    return (chars.get(q) == Some(&'>')).then_some(q + 1);
+  }
+  loop {
+    let q = skip_ws(p);
+    match chars.get(q) {
+      Some('>') => return Some(q + 1),
+      Some('/') if chars.get(q + 1) == Some(&'>') => return Some(q + 2),
+      _ => {}
+    }
+    if q == p {
+      return None; // an attribute needs whitespace before it
+    }
+    // Attribute name.
+    if !chars.get(q).is_some_and(|c| c.is_ascii_alphabetic() || *c == '_' || *c == ':') {
+      return None;
+    }
+    let mut r = q + 1;
+    while chars
+      .get(r)
+      .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+    {
+      r += 1;
+    }
+    // Optional value.
+    let eq = skip_ws(r);
+    if chars.get(eq) == Some(&'=') {
+      let v = skip_ws(eq + 1);
+      match chars.get(v) {
+        Some(&quote) if quote == '"' || quote == '\'' => {
+          let mut w = v + 1;
+          while chars.get(w).is_some_and(|&c| c != quote) {
+            w += 1;
+          }
+          chars.get(w)?;
+          p = w + 1;
+        }
+        Some(_) => {
+          let mut w = v;
+          while chars
+            .get(w)
+            .is_some_and(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '=' | '<' | '>' | '`'))
+          {
+            w += 1;
+          }
+          if w == v {
+            return None;
+          }
+          p = w;
+        }
+        None => return None,
+      }
+    } else {
+      p = r;
+    }
+  }
+}
+
 /// A fence opener: 3+ backticks or tildes; a backtick fence's info string
 /// may not contain backticks. Returns (fence char, run length, info).
 fn fence_open(content: &str) -> Option<(u8, usize, &str)> {
@@ -1816,6 +2061,12 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       pos = e;
       continue;
     }
+    if m.kind == "html" {
+      // Raw inline HTML passes through unescaped.
+      out.push_str(&String::from_utf16_lossy(&units[s..e]));
+      pos = e;
+      continue;
+    }
     if m.kind == "image" {
       // The alt attribute is the PLAIN text of the span — inner marks flatten.
       let alt = String::from_utf16_lossy(&units[s..e]);
@@ -1892,6 +2143,12 @@ fn append_html_block(
       append_html_children(snapshot, &block.id, out)?;
     }
     "code_block" | "code" => {
+      if block_data_bool(block, "raw") {
+        // A raw HTML block passes through verbatim.
+        out.push_str(&block.text);
+        out.push('\n');
+        return Ok(());
+      }
       let lang = block_data_str(block, "language").unwrap_or("");
       let class = if lang.is_empty() {
         String::new()
@@ -2176,11 +2433,18 @@ fn append_markdown_block_content(
       lines.push(String::new());
     }
     "code_block" | "code" => {
-      let language = block_data_str(block, "language").unwrap_or("");
-      lines.push(format!("```{language}"));
-      lines.extend(block.text.lines().map(str::to_string));
-      lines.push("```".to_string());
-      lines.push(String::new());
+      if block_data_bool(block, "raw") {
+        // A raw HTML block writes back verbatim — no fences — so foreign
+        // viewers still render the HTML.
+        lines.extend(block.text.lines().map(str::to_string));
+        lines.push(String::new());
+      } else {
+        let language = block_data_str(block, "language").unwrap_or("");
+        lines.push(format!("```{language}"));
+        lines.extend(block.text.lines().map(str::to_string));
+        lines.push("```".to_string());
+        lines.push(String::new());
+      }
     }
     "image" => {
       // Prefer a bundled asset path (ZIP export) for an uploaded image; else
@@ -2676,6 +2940,23 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
           i = close + 1;
           continue;
         }
+      }
+      // Raw inline HTML: a valid tag/comment/PI/declaration/CDATA shape
+      // passes through verbatim under an `html` mark.
+      if let Some(end) = inline_html_end(&chars, i) {
+        let raw: String = chars[i..end].iter().collect();
+        let start = out_len;
+        out.push_str(&raw);
+        out_len += raw.encode_utf16().count();
+        marks.push(InlineMark {
+          start,
+          end: out_len,
+          kind: "html".into(),
+          href: None,
+          title: None,
+        });
+        i = end;
+        continue;
       }
     }
     // Image: ![alt](dest "title") | ![alt][label] | ![alt][] | ![alt] —
@@ -3205,6 +3486,12 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
       .map(|(_, m)| *m)
       .collect();
     let m = marks[picked];
+    if m.kind == "html" {
+      // Raw inline HTML writes back verbatim.
+      out.push_str(&String::from_utf16_lossy(&units[s..e]));
+      pos = e;
+      continue;
+    }
     if m.kind == "code" {
       // Code spans are literal — no escaping, no nested marks. The fence is
       // one backtick longer than any run inside; a space pads content that

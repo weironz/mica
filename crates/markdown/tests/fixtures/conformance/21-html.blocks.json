@@ -1,0 +1,67 @@
+[
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<table>\n  <tr><td>cell</td></tr>\n</table>"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 23,
+          "start": 10,
+          "type": "html"
+        },
+        {
+          "end": 37,
+          "start": 33,
+          "type": "html"
+        },
+        {
+          "end": 47,
+          "start": 42,
+          "type": "html"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "para with <b class=\"x\">inline tag</b> and <br/> mid-text"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<!-- a comment\nspanning lines -->"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<div align=\"center\">\nbadge wall\n</div>"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 34,
+          "start": 11,
+          "type": "html"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "standalone <custom-tag attr=plain> alone"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "literal < stays text and <no closer stays too"
+  }
+]
