@@ -1,0 +1,16 @@
+[
+  {
+    "data": {
+      "url": "https://example.com/p.png"
+    },
+    "kind": "image",
+    "text": "风景 照片"
+  },
+  {
+    "data": {
+      "url": "assets/local.png"
+    },
+    "kind": "image",
+    "text": ""
+  }
+]

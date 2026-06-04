@@ -1,0 +1,67 @@
+[
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "plain text here"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 4,
+          "start": 0,
+          "type": "bold"
+        },
+        {
+          "end": 16,
+          "start": 10,
+          "type": "italic"
+        },
+        {
+          "end": 26,
+          "start": 22,
+          "type": "code"
+        },
+        {
+          "end": 38,
+          "start": 32,
+          "type": "strike"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "bold then italic then code then strike"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 6,
+          "href": "https://example.com/x",
+          "start": 2,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "a link inside"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 27,
+          "start": 0,
+          "type": "bold"
+        },
+        {
+          "end": 22,
+          "start": 10,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "bold with inner italic kept"
+  }
+]

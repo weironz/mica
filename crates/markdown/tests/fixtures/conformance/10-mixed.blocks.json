@@ -1,0 +1,56 @@
+[
+  {
+    "data": {
+      "level": 1
+    },
+    "kind": "heading",
+    "text": "Doc"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "intro paragraph"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 6,
+          "start": 5,
+          "type": "bold"
+        }
+      ]
+    },
+    "kind": "bulleted_list",
+    "text": "item a"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "item b"
+  },
+  {
+    "data": {},
+    "kind": "quote",
+    "text": "note"
+  },
+  {
+    "data": {
+      "language": "js"
+    },
+    "kind": "code_block",
+    "text": "x = 1"
+  },
+  {
+    "data": {
+      "url": "img.png"
+    },
+    "kind": "image",
+    "text": "pic"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "done"
+  }
+]

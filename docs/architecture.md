@@ -27,10 +27,17 @@ The first-class product surface is Web. Desktop and mobile should reuse the same
   must produce data inside the user gesture) cannot take a network round
   trip per keystroke. This means a small, deliberate duplication of the
   markdown/inline-marks grammar in Dart (`lib/editor/marks.dart`,
-  `markdown.dart`) mirroring Rust (`app-core/src/documents.rs`). Keep the
-  two in lockstep when the grammar changes; the long-term in-house path to
-  a single implementation is compiling the Rust engine to WASM for the
-  client.
+  `markdown.dart`) mirroring the Rust engine (`crates/markdown`). The two
+  are pinned together by shared conformance fixtures
+  (`crates/markdown/tests/fixtures/conformance` — gold `.blocks.json` files
+  asserted by both `cargo test -p mica-markdown` and the Dart
+  `markdown_conformance_test.dart`; regenerate with `GEN_GOLD=1` after an
+  intentional grammar change). The long-term in-house path to a single
+  implementation is compiling the Rust engine to WASM for the client.
+- **The Markdown engine is a named crate.** `mica-markdown` owns the block
+  model ("AST") and Markdown/HTML parsing+rendering (like SiYuan's lute);
+  `mica-app-core` keeps document *operations* and re-exports the engine;
+  `mica-interchange` builds archive-level import/export on top.
 
 ## AppFlowy Alignment
 

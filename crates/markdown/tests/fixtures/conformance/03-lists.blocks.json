@@ -1,0 +1,44 @@
+[
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "first item"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 11,
+          "start": 7,
+          "type": "bold"
+        }
+      ]
+    },
+    "kind": "bulleted_list",
+    "text": "second bold item"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "star bullet"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "one"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 5,
+          "href": "https://e.com",
+          "start": 4,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "numbered_list",
+    "text": "two l"
+  }
+]

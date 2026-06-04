@@ -1,0 +1,28 @@
+[
+  {
+    "data": {
+      "align": "left",
+      "header": true,
+      "rows": [
+        [
+          "Name",
+          "Value"
+        ],
+        [
+          "alpha",
+          "1"
+        ],
+        [
+          "beta",
+          "2"
+        ]
+      ],
+      "widths": [
+        1.0,
+        1.0
+      ]
+    },
+    "kind": "table",
+    "text": ""
+  }
+]

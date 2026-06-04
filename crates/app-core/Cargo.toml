@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+mica-markdown = { path = "../markdown" }
 mica-infra = { path = "../infra" }
 chrono.workspace = true
 serde.workspace = true

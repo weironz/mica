@@ -4,6 +4,7 @@ members = [
   "crates/app-core",
   "crates/infra",
   "crates/interchange",
+  "crates/markdown",
 ]
 resolver = "2"
 

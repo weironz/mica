@@ -1,0 +1,23 @@
+[
+  {
+    "data": {
+      "checked": false
+    },
+    "kind": "todo",
+    "text": "open task"
+  },
+  {
+    "data": {
+      "checked": true,
+      "marks": [
+        {
+          "end": 9,
+          "start": 5,
+          "type": "italic"
+        }
+      ]
+    },
+    "kind": "todo",
+    "text": "done task"
+  }
+]

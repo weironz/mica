@@ -1,0 +1,3 @@
+![风景 照片](https://example.com/p.png)
+
+![](assets/local.png)

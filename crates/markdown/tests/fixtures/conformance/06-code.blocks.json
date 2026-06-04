@@ -1,0 +1,14 @@
+[
+  {
+    "data": {
+      "language": "rust"
+    },
+    "kind": "code_block",
+    "text": "fn main() {\n    println!(\"**not bold**\");\n}"
+  },
+  {
+    "data": {},
+    "kind": "code_block",
+    "text": "no language"
+  }
+]

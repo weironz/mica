@@ -1,0 +1,20 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 21,
+          "start": 17,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "quote",
+    "text": "quoted line with code"
+  },
+  {
+    "data": {},
+    "kind": "quote",
+    "text": "second line"
+  }
+]
