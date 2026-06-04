@@ -1,0 +1,82 @@
+[
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "*not bold* and snake_case stays plain"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "a literal backslash \\ and [not a link](x)"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "- not a list item"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "1. not a numbered item"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 31,
+          "href": "https://example.com/a?b=1",
+          "start": 6,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "visit https://example.com/a?b=1 now"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 21,
+          "href": "mailto:user@example.com",
+          "start": 5,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "mail user@example.com please"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 29,
+          "start": 0,
+          "type": "bold"
+        },
+        {
+          "end": 22,
+          "href": "https://e.co",
+          "start": 10,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "bold with https://e.co inside"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 29,
+          "start": 0,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "code keeps *stars* and \\n raw"
+  }
+]

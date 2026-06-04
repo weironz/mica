@@ -564,7 +564,12 @@ class EditorController extends ChangeNotifier {
         final e = m.end.clamp(a, b);
         if (e > s) marks.add(Mark(s - a, e - a, m.type, href: m.href));
       }
-      final inline = marks.isEmpty ? sub : inlineToMarkdown(sub, marks);
+      var inline = marks.isEmpty ? sub : inlineToMarkdown(sub, marks);
+      if (full && node.kind == 'paragraph') {
+        // A copied paragraph that looks like a list/heading/divider must
+        // not change kind when pasted back as markdown.
+        inline = escapeBlockLeader(inline);
+      }
       // Prepend the block-level Markdown marker only for a fully-selected block
       // (a partial first/last line is copied as plain inline text).
       return full ? '${_blockPrefix(node)}$inline' : inline;

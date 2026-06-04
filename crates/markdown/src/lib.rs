@@ -663,6 +663,7 @@ fn append_markdown_block_content(
     }
     _ => {
       if !text.is_empty() {
+        let rich = escape_block_leader(rich.to_string());
         lines.push(format!("{indent}{rich}"));
         lines.push(String::new());
       }
@@ -729,7 +730,46 @@ fn parse_inline(src: &str) -> ParsedInline {
     None
   };
 
+  // Find the next unescaped occurrence of `needle` starting at `from`.
+  let find_unescaped = |from: usize, needle: &[char]| -> Option<usize> {
+    let mut j = from;
+    while j + needle.len() <= chars.len() {
+      if chars[j..j + needle.len()] == *needle && (j == 0 || chars[j - 1] != '\\') {
+        return Some(j);
+      }
+      j += 1;
+    }
+    None
+  };
+
   while i < chars.len() {
+    // Backslash escape: `\*` is a literal `*` (any ASCII punctuation).
+    if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1].is_ascii_punctuation() {
+      out.push(chars[i + 1]);
+      out_len += chars[i + 1].len_utf16();
+      i += 2;
+      continue;
+    }
+    // Autolink: <https://…> or <user@host> — the URL is both text and target.
+    if chars[i] == '<' {
+      if let Some(close) = find_from(i + 1, &['>']) {
+        let inner: String = chars[i + 1..close].iter().collect();
+        let href = autolink_target(&inner);
+        if let Some(href) = href {
+          let start = out_len;
+          out.push_str(&inner);
+          out_len += inner.encode_utf16().count();
+          marks.push(InlineMark {
+            start,
+            end: out_len,
+            kind: "link".into(),
+            href: Some(href),
+          });
+          i = close + 1;
+          continue;
+        }
+      }
+    }
     // Link: [text](url)
     if chars[i] == '[' {
       if let Some(close) = find_from(i + 1, &[']']) {
@@ -756,7 +796,7 @@ fn parse_inline(src: &str) -> ParsedInline {
     }
     // Bold: **...**
     if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
-      if let Some(end) = find_from(i + 2, &['*', '*']) {
+      if let Some(end) = find_unescaped(i + 2, &['*', '*']) {
         if end > i + 2 {
           let inner: String = chars[i + 2..end].iter().collect();
           push_inner(&inner, "bold", None, &mut out, &mut out_len, &mut marks);
@@ -767,7 +807,7 @@ fn parse_inline(src: &str) -> ParsedInline {
     }
     // Strike: ~~...~~
     if chars[i] == '~' && i + 1 < chars.len() && chars[i + 1] == '~' {
-      if let Some(end) = find_from(i + 2, &['~', '~']) {
+      if let Some(end) = find_unescaped(i + 2, &['~', '~']) {
         if end > i + 2 {
           let inner: String = chars[i + 2..end].iter().collect();
           push_inner(&inner, "strike", None, &mut out, &mut out_len, &mut marks);
@@ -798,7 +838,7 @@ fn parse_inline(src: &str) -> ParsedInline {
     // Italic: *...* or _..._
     if chars[i] == '*' || chars[i] == '_' {
       let ch = chars[i];
-      if let Some(end) = find_from(i + 1, &[ch]) {
+      if let Some(end) = find_unescaped(i + 1, &[ch]) {
         if end > i + 1 {
           let inner: String = chars[i + 1..end].iter().collect();
           push_inner(&inner, "italic", None, &mut out, &mut out_len, &mut marks);
@@ -813,6 +853,36 @@ fn parse_inline(src: &str) -> ParsedInline {
   }
 
   ParsedInline { text: out, marks }
+}
+
+/// CommonMark autolink target for `<inner>`: an absolute URI (scheme:) maps
+/// to itself, a bare email maps to `mailto:`; anything else is not an
+/// autolink.
+fn autolink_target(inner: &str) -> Option<String> {
+  if inner.is_empty() || inner.chars().any(|c| c.is_whitespace() || c == '<') {
+    return None;
+  }
+  let bytes = inner.as_bytes();
+  // scheme: ALPHA (ALPHA/DIGIT/+/-/.)* ':'
+  if let Some(colon) = inner.find(':') {
+    let scheme = &inner[..colon];
+    if !scheme.is_empty()
+      && scheme.as_bytes()[0].is_ascii_alphabetic()
+      && scheme.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
+      && colon + 1 < inner.len()
+    {
+      return Some(inner.to_string());
+    }
+  }
+  // email: x@y.z (loose)
+  if let Some(at) = inner.find('@') {
+    let (local, host) = inner.split_at(at);
+    let host = &host[1..];
+    if !local.is_empty() && host.contains('.') && !host.ends_with('.') && bytes.iter().filter(|&&b| b == b'@').count() == 1 {
+      return Some(format!("mailto:{inner}"));
+    }
+  }
+  None
 }
 
 /// Parse [inner] recursively and append it to [out], adding a [kind] mark over
@@ -885,13 +955,49 @@ fn marks_from_block(block: &Block) -> Vec<InlineMark> {
 
 /// Render a block's text with its inline marks back to Markdown. Code blocks and
 /// tables carry no inline marks and are emitted verbatim by their own arms.
+/// Escape characters our (and CommonMark's) inline grammar would otherwise
+/// interpret, so literal text survives a round-trip.
+fn escape_inline(text: &str) -> String {
+  let mut out = String::with_capacity(text.len());
+  for c in text.chars() {
+    if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<') {
+      out.push('\\');
+    }
+    out.push(c);
+  }
+  out
+}
+
+/// A paragraph whose text LOOKS like a block marker (`- x`, `> x`, `# x`,
+/// `1. x`, `---`) must escape its leader or it changes kind on re-import.
+fn escape_block_leader(line: String) -> String {
+  let t = line.as_str();
+  let divider_like = t.len() >= 3 && t.chars().all(|c| c == '-');
+  let numbered = t
+    .find(". ")
+    .is_some_and(|dot| dot > 0 && t[..dot].bytes().all(|b| b.is_ascii_digit()));
+  if t.starts_with("- ")
+    || t.starts_with("+ ")
+    || t.starts_with("> ")
+    || divider_like
+    || (t.starts_with('#') && t[1..].trim_start_matches('#').starts_with(' '))
+  {
+    return format!("\\{line}");
+  }
+  if numbered {
+    let dot = t.find(". ").unwrap();
+    return format!("{}\\. {}", &t[..dot], &t[dot + 2..]);
+  }
+  line
+}
+
 fn render_inline(block: &Block) -> String {
   if matches!(block.kind.as_str(), "code_block" | "code" | "table") {
     return block.text.clone();
   }
   let marks = marks_from_block(block);
   if marks.is_empty() {
-    return block.text.clone();
+    return escape_inline(&block.text);
   }
   let units: Vec<u16> = block.text.encode_utf16().collect();
   let refs: Vec<&InlineMark> = marks.iter().collect();
@@ -918,24 +1024,39 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
       })
       .min_by_key(|&(s, e, _)| (s, usize::MAX - e));
     let Some((s, e, picked)) = next else {
-      out.push_str(&String::from_utf16_lossy(&units[pos..hi]));
+      out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..hi])));
       break;
     };
-    out.push_str(&String::from_utf16_lossy(&units[pos..s]));
+    out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..s])));
     let inner: Vec<&InlineMark> = marks
       .iter()
       .enumerate()
       .filter(|&(i, m)| i != picked && m.end.min(e) > m.start.max(s))
       .map(|(_, m)| *m)
       .collect();
-    let body = render_span(units, s, e, &inner);
     let m = marks[picked];
+    if m.kind == "code" {
+      // Code spans are literal — no escaping, no nested marks.
+      let raw = String::from_utf16_lossy(&units[s..e]);
+      out.push_str(&format!("`{raw}`"));
+      pos = e;
+      continue;
+    }
+    let body = render_span(units, s, e, &inner);
     out.push_str(&match m.kind.as_str() {
-      "code" => format!("`{body}`"),
       "bold" => format!("**{body}**"),
       "italic" => format!("*{body}*"),
       "strike" => format!("~~{body}~~"),
-      "link" => format!("[{body}]({})", m.href.as_deref().unwrap_or("")),
+      "link" => {
+        let href = m.href.as_deref().unwrap_or("");
+        let plain = String::from_utf16_lossy(&units[s..e]);
+        // A link whose text IS its target round-trips as an autolink.
+        if href == plain || href == format!("mailto:{plain}") {
+          format!("<{plain}>")
+        } else {
+          format!("[{body}]({href})")
+        }
+      }
       _ => body,
     });
     pos = e;

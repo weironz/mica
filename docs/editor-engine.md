@@ -419,8 +419,14 @@ The recurring problem the engine must get right for every node type:
      glyphs per level and restarts ordered counters per level. Imports
      stop flattening hierarchy. True container children (quote-with-code,
      callouts) come AFTER P1 on the same groundwork.
-   - **P2 — backslash escapes + autolinks `<url>`**: correctness-grade
-     (unhandled escapes mis-format text; autolinks are common in exports).
+   - **P2 — backslash escapes + autolinks `<url>` — DONE.** Both parsers
+     honor `\*` escapes (escape-aware emphasis closers; code spans stay
+     literal) and `<uri>`/`<email>` autolinks. Both renderers escape
+     literal segments and paragraph block-leaders (`\- x`, `1\. x`) so
+     text can't change kind on re-import, keep code spans raw, and emit
+     a link whose text equals its target as an autolink. The Dart
+     renderer was rewritten to the nested form in the process (its old
+     per-segment wrapping broke nested marks on copy).
    - **P3 — run the official CommonMark spec test suite** as a scoreboard;
      compliance becomes a number, not a feeling.
    - **P4 — data-driven long tail** (Setext headings, indented code blocks,

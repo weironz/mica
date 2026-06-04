@@ -197,8 +197,32 @@ List<Mark> _normalize(List<Mark> marks) {
   return out;
 }
 
+const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
+
+/// Index of the next [needle] at/after [from] that is not backslash-escaped.
+int _indexOfUnescaped(String src, String needle, int from) {
+  var j = from;
+  while (true) {
+    j = src.indexOf(needle, j);
+    if (j < 0) return -1;
+    if (j == 0 || src[j - 1] != r'\') return j;
+    j += 1;
+  }
+}
+
+/// CommonMark autolink target for `<inner>`: absolute URI → itself, bare
+/// email → mailto:, else null. Mirrors the Rust engine.
+String? autolinkTarget(String inner) {
+  if (inner.isEmpty || inner.contains(RegExp(r'[\s<]'))) return null;
+  if (RegExp(r'^[A-Za-z][A-Za-z0-9+.-]*:.').hasMatch(inner)) return inner;
+  if (RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s.]+$').hasMatch(inner)) {
+    return 'mailto:$inner';
+  }
+  return null;
+}
+
 /// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`,
-/// `[t](url)`) into clean text plus marks.
+/// `[t](url)`, `\*escapes\*`, `<autolinks>`) into clean text plus marks.
 ({String text, List<Mark> marks}) parseInline(String src) {
   final out = StringBuffer();
   final marks = <Mark>[];
@@ -215,6 +239,29 @@ List<Mark> _normalize(List<Mark> marks) {
   }
 
   while (i < src.length) {
+    // Backslash escape: `\*` is a literal `*` (any ASCII punctuation).
+    if (src[i] == r'\' &&
+        i + 1 < src.length &&
+        _asciiPunct.contains(src[i + 1])) {
+      out.write(src[i + 1]);
+      i += 2;
+      continue;
+    }
+    // Autolink: <https://…> / <user@host> — the URL is both text and target.
+    if (src[i] == '<') {
+      final close = src.indexOf('>', i + 1);
+      if (close > i) {
+        final inner = src.substring(i + 1, close);
+        final href = autolinkTarget(inner);
+        if (href != null) {
+          final start = out.length;
+          out.write(inner);
+          marks.add(Mark(start, out.length, 'link', href: href));
+          i = close + 1;
+          continue;
+        }
+      }
+    }
     // A `[..](..)` is a link — unless preceded by `!`, which makes it an image
     // (`![alt](url)`); images aren't inline marks, so leave them as literal text.
     final link = (i > 0 && src[i - 1] == '!')
@@ -228,7 +275,7 @@ List<Mark> _normalize(List<Mark> marks) {
       continue;
     }
     if (src.startsWith('**', i)) {
-      final end = src.indexOf('**', i + 2);
+      final end = _indexOfUnescaped(src, '**', i + 2);
       if (end > i + 1) {
         addInner(src.substring(i + 2, end), 'bold');
         i = end + 2;
@@ -236,7 +283,7 @@ List<Mark> _normalize(List<Mark> marks) {
       }
     }
     if (src.startsWith('~~', i)) {
-      final end = src.indexOf('~~', i + 2);
+      final end = _indexOfUnescaped(src, '~~', i + 2);
       if (end > i + 1) {
         addInner(src.substring(i + 2, end), 'strike');
         i = end + 2;
@@ -255,7 +302,7 @@ List<Mark> _normalize(List<Mark> marks) {
     }
     if (src[i] == '*' || src[i] == '_') {
       final ch = src[i];
-      final end = src.indexOf(ch, i + 1);
+      final end = _indexOfUnescaped(src, ch, i + 1);
       if (end > i + 1) {
         addInner(src.substring(i + 1, end), 'italic');
         i = end + 1;
@@ -268,49 +315,99 @@ List<Mark> _normalize(List<Mark> marks) {
   return (text: out.toString(), marks: _normalize(marks));
 }
 
-/// Serialize text + marks back to inline Markdown (used for copy/export).
+/// A paragraph whose text LOOKS like a block marker (`- x`, `> x`, `# x`,
+/// `1. x`, `---`) must escape its leader or it changes kind on re-parse.
+/// Mirrors the Rust engine.
+String escapeBlockLeader(String line) {
+  final dividerLike =
+      line.length >= 3 && line.split('').every((c) => c == '-');
+  if (line.startsWith('- ') ||
+      line.startsWith('+ ') ||
+      line.startsWith('> ') ||
+      dividerLike ||
+      RegExp(r'^#{1,6} ').hasMatch(line)) {
+    return '\\$line';
+  }
+  final numbered = RegExp(r'^(\d+)\. ').firstMatch(line);
+  if (numbered != null) {
+    return '${numbered.group(1)}\\. ${line.substring(numbered.end)}';
+  }
+  return line;
+}
+
+/// Escape characters the inline grammar would otherwise interpret.
+String escapeInline(String text) {
+  final out = StringBuffer();
+  for (var i = 0; i < text.length; i++) {
+    final c = text[i];
+    if (r'\*_`~[]<'.contains(c)) out.write(r'\');
+    out.write(c);
+  }
+  return out.toString();
+}
+
+/// Serialize text + marks back to inline Markdown (copy/export). Properly
+/// NESTED rendering — the outermost mark opens once over its whole range,
+/// inner marks recurse inside (`**bold *italic* tail**`); literal segments
+/// are escaped; code spans stay raw; a link whose text is its own target
+/// becomes an `<autolink>`. Mirrors the Rust engine's render_span.
 String inlineToMarkdown(String text, List<Mark> marks) {
   if (marks.isEmpty) return text;
-  String wrap(String s, String marker) => '$marker$s$marker';
-  // Apply non-link marks by wrapping their (assumed non-crossing) ranges,
-  // innermost first; links wrap as [text](href).
-  final ordered = [...marks]..sort((a, b) => (b.end - b.start) - (a.end - a.start));
-  // Work on a list of (char, set<markers>) — simpler: rebuild by segments.
-  final len = text.length;
-  final points = <int>{0, len};
-  for (final m in marks) {
-    points
-      ..add(m.start.clamp(0, len))
-      ..add(m.end.clamp(0, len));
-  }
-  final sorted = points.toList()..sort();
-  final buffer = StringBuffer();
-  for (var i = 0; i < sorted.length - 1; i++) {
-    final a = sorted[i];
-    final b = sorted[i + 1];
-    if (a >= b) continue;
-    var seg = text.substring(a, b);
-    String? href;
-    var hasLink = false;
-    for (final m in ordered) {
-      if (m.start <= a && m.end >= b) {
-        switch (m.type) {
-          case 'code':
-            seg = wrap(seg, '`');
-          case 'bold':
-            seg = wrap(seg, '**');
-          case 'italic':
-            seg = wrap(seg, '*');
-          case 'strike':
-            seg = wrap(seg, '~~');
-          case 'link':
-            hasLink = true;
-            href = m.href;
-        }
+  return _renderSpan(text, 0, text.length, marks);
+}
+
+String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
+  final out = StringBuffer();
+  var pos = lo;
+  while (pos < hi) {
+    // Next mark by clipped start; ties prefer the widest (outermost).
+    Mark? pick;
+    var ps = 0, pe = 0;
+    for (final m in marks) {
+      final s = m.start < pos ? pos : m.start;
+      final e = m.end > hi ? hi : m.end;
+      if (e <= s) continue;
+      if (pick == null || s < ps || (s == ps && e > pe)) {
+        pick = m;
+        ps = s;
+        pe = e;
       }
     }
-    if (hasLink) seg = '[$seg]($href)';
-    buffer.write(seg);
+    if (pick == null) {
+      out.write(escapeInline(text.substring(pos, hi)));
+      break;
+    }
+    out.write(escapeInline(text.substring(pos, ps)));
+    if (pick.type == 'code') {
+      // Code spans are literal — no escaping, no nested marks.
+      out.write('`${text.substring(ps, pe)}`');
+      pos = pe;
+      continue;
+    }
+    final inner = [
+      for (final m in marks)
+        if (!identical(m, pick) && m.end > ps && m.start < pe) m,
+    ];
+    final body = _renderSpan(text, ps, pe, inner);
+    switch (pick.type) {
+      case 'bold':
+        out.write('**$body**');
+      case 'italic':
+        out.write('*$body*');
+      case 'strike':
+        out.write('~~$body~~');
+      case 'link':
+        final href = pick.href ?? '';
+        final plain = text.substring(ps, pe);
+        if (href == plain || href == 'mailto:$plain') {
+          out.write('<$plain>');
+        } else {
+          out.write('[$body]($href)');
+        }
+      default:
+        out.write(body);
+    }
+    pos = pe;
   }
-  return buffer.toString();
+  return out.toString();
 }
