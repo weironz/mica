@@ -436,12 +436,74 @@ fn append_html_children(
   Ok(())
 }
 
+/// Inline marks rendered to nested HTML (<strong>/<em>/<code>/<del>/<a>),
+/// mirroring the markdown render_span structure.
+fn html_inline(block: &Block) -> String {
+  if matches!(block.kind.as_str(), "code_block" | "code" | "table") {
+    return escape_html(&block.text);
+  }
+  let marks = marks_from_block(block);
+  if marks.is_empty() {
+    return escape_html(block.text.trim());
+  }
+  let units: Vec<u16> = block.text.encode_utf16().collect();
+  let refs: Vec<&InlineMark> = marks.iter().collect();
+  html_span(&units, 0, units.len(), &refs)
+}
+
+fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> String {
+  let mut out = String::new();
+  let mut pos = lo;
+  while pos < hi {
+    let next = marks
+      .iter()
+      .enumerate()
+      .filter_map(|(i, m)| {
+        let s = m.start.max(pos);
+        let e = m.end.min(hi);
+        (e > s).then_some((s, e, i))
+      })
+      .min_by_key(|&(s, e, _)| (s, usize::MAX - e));
+    let Some((s, e, picked)) = next else {
+      out.push_str(&escape_html(&String::from_utf16_lossy(&units[pos..hi])));
+      break;
+    };
+    out.push_str(&escape_html(&String::from_utf16_lossy(&units[pos..s])));
+    let m = marks[picked];
+    if m.kind == "code" {
+      let raw = String::from_utf16_lossy(&units[s..e]);
+      out.push_str(&format!("<code>{}</code>", escape_html(&raw)));
+      pos = e;
+      continue;
+    }
+    let inner: Vec<&InlineMark> = marks
+      .iter()
+      .enumerate()
+      .filter(|&(i, x)| i != picked && x.end.min(e) > x.start.max(s))
+      .map(|(_, x)| *x)
+      .collect();
+    let body = html_span(units, s, e, &inner);
+    out.push_str(&match m.kind.as_str() {
+      "bold" => format!("<strong>{body}</strong>"),
+      "italic" => format!("<em>{body}</em>"),
+      "strike" => format!("<del>{body}</del>"),
+      "link" => format!(
+        "<a href=\"{}\">{body}</a>",
+        escape_html(m.href.as_deref().unwrap_or(""))
+      ),
+      _ => body,
+    });
+    pos = e;
+  }
+  out
+}
+
 fn append_html_block(
   snapshot: &DocumentSnapshotPayload,
   block: &Block,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
-  let text = escape_html(block.text.trim());
+  let text = html_inline(block);
   match block.kind.as_str() {
     "heading" => {
       let level = heading_level(block, 0);

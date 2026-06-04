@@ -427,8 +427,14 @@ The recurring problem the engine must get right for every node type:
      a link whose text equals its target as an autolink. The Dart
      renderer was rewritten to the nested form in the process (its old
      per-segment wrapping broke nested marks on copy).
-   - **P3 — run the official CommonMark spec test suite** as a scoreboard;
-     compliance becomes a number, not a feeling.
+   - **P3 — official CommonMark spec scoreboard — DONE.** The vendored
+     0.31.2 spec (652 examples) runs through import→export_html in
+     `crates/markdown/tests/commonmark_scoreboard.rs`; the per-section
+     report lives in docs/commonmark-scoreboard.md (regenerate with
+     GEN_SCOREBOARD=1). Baseline: **130/652 (19.9%)** — a regression
+     floor assert keeps the number from ever dropping silently. Building
+     it surfaced that export_html dropped inline marks entirely (now
+     rendered as nested strong/em/code/del/a, +61 examples).
    - **P4 — data-driven long tail** (Setext headings, indented code blocks,
      reference links, lazy continuation…; HTML blocks get a documented
      degrade policy). Decision point: keep extending the in-house parser
