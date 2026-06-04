@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentOperation, export_html, export_markdown, export_markdown_with_assets, import_markdown,
-    payload_from_value,
+    DocumentOperation, DocumentSnapshotPayload, export_html, export_markdown,
+    export_markdown_with_assets, import_markdown, payload_from_value,
   },
   store::{self, DocumentRecord, SnapshotRecord, UpdateRecord},
 };
@@ -830,16 +830,38 @@ pub async fn export_workspace_zip(
   // Page order for the import side: paths in pre-order tree order.
   let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
 
-  for (view, folder, base) in pages {
+  // Final zip path per view, decided up front so page links can target pages
+  // that come later in the tree.
+  let mut path_by_view: std::collections::HashMap<String, String> =
+    std::collections::HashMap::new();
+  for (view, folder, base) in &pages {
+    if view.object_type != "document" {
+      continue;
+    }
+    let mut path = String::new();
+    for seg in folder {
+      path.push_str(seg);
+      path.push('/');
+    }
+    path.push_str(base);
+    path.push_str(".md");
+    path = unique_zip_path(path, &mut used_paths);
+    path_by_view.insert(view.id.to_string(), path);
+  }
+
+  for (view, folder, _base) in pages {
     if view.object_type != "document" {
       continue;
     }
     let Some(snapshot) = store::latest_snapshot(&state.db, view.object_id).await? else {
       continue;
     };
-    let Ok(payload) = payload_from_value(snapshot.payload) else {
+    let Ok(mut payload) = payload_from_value(snapshot.payload) else {
       continue;
     };
+    // Internal page links (`mica://page/<viewId>`) become standard relative
+    // markdown links to the target's .md inside the archive.
+    rewrite_page_links(&mut payload, folder.len(), &path_by_view);
 
     // Image assets used by this page (de-duplicated globally by object key).
     let rel = "../".repeat(folder.len());
@@ -899,14 +921,9 @@ pub async fn export_workspace_zip(
 
     let body = export_markdown_with_assets(&payload, &images)
       .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let mut path = String::new();
-    for seg in &folder {
-      path.push_str(seg);
-      path.push('/');
-    }
-    path.push_str(&base);
-    path.push_str(".md");
-    path = unique_zip_path(path, &mut used_paths);
+    let Some(path) = path_by_view.get(&view.id.to_string()).cloned() else {
+      continue;
+    };
     manifest_pages.push(serde_json::json!({
       "path": path,
       "title": view.name,
@@ -940,6 +957,39 @@ pub async fn export_workspace_zip(
     });
   }
   Ok(zip_response(build_zip(&entries), "workspace.zip"))
+}
+
+/// Rewrite internal page links (`mica://page/<viewId>`) in link marks to
+/// relative paths of the target page's `.md` inside the archive, so the
+/// exported markdown is fully standard. Links to pages outside the archive
+/// keep their `mica://` href.
+fn rewrite_page_links(
+  payload: &mut DocumentSnapshotPayload,
+  folder_depth: usize,
+  path_by_view: &std::collections::HashMap<String, String>,
+) {
+  const SCHEME: &str = "mica://page/";
+  for block in &mut payload.blocks {
+    let Some(marks) = block.data.get_mut("marks").and_then(serde_json::Value::as_array_mut)
+    else {
+      continue;
+    };
+    for mark in marks {
+      let Some(obj) = mark.as_object_mut() else {
+        continue;
+      };
+      let Some(target) = obj
+        .get("href")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|href| href.strip_prefix(SCHEME))
+        .and_then(|id| path_by_view.get(id))
+      else {
+        continue;
+      };
+      let rel = format!("{}{target}", "../".repeat(folder_depth));
+      obj.insert("href".into(), serde_json::json!(rel));
+    }
+  }
 }
 
 /// Flatten the page tree into `(view, ancestor-folder segments, unique base)`,

@@ -140,6 +140,27 @@ What the mode changes:
 Not adapted (by design, for now): database CSVs are ignored; inter-page
 links inside md bodies stay as exported.
 
+## Page links
+
+Inside the workspace, inter-page links are standard markdown link marks
+whose href uses the internal scheme `mica://page/<viewId>` (id-based, so
+renaming a page never breaks links). The `[[` picker is editor input UX
+only — it inserts a normal link and never persists in the document.
+
+At the interchange boundary the scheme disappears entirely:
+
+- **Export** rewrites `mica://page/<id>` hrefs to relative `.md` paths
+  (`[Setup](Guide/Setup.md)`, `[Alpha](../Alpha.md)`) via
+  `rewrite_page_links` — final zip paths are decided before the content pass
+  so forward links resolve. Links to pages outside the archive keep their
+  `mica://` href.
+- **Import** runs in two phases: first every page (and directory page) is
+  created, then content is applied — so link rewiring sees the complete
+  path → view map. A link href that resolves (via `resolveZipPath`, so
+  `../` chains and percent-encoding work) to an imported `.md` becomes
+  `mica://page/<newViewId>`. This also picks up Notion's internal links
+  (`Page%20<id>.md`).
+
 ## Permanent image links
 
 Import/export interacts with the image architecture

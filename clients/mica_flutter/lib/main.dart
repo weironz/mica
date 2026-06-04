@@ -821,6 +821,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final viewByPath = <String, String>{};
     final folderView = <String, String>{}; // folder path -> its page's view
     final stamp = DateTime.now().microsecondsSinceEpoch;
+    final createdPages = <({
+      ZipFileEntry entry,
+      String markdown,
+      String title,
+      DocumentCreateResult created,
+    })>[];
+
+    // Phase 1 — create every page (and directory page) so the tree and the
+    // path → view mapping are complete before any content references them.
     for (final e in mds) {
       final parts = e.name.split('/');
       // Walk the folder chain. A folder maps to the page exported as
@@ -863,33 +872,70 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         parentViewId: parentViewId,
       );
       viewByPath[e.name] = created.view.id;
+      createdPages.add((
+        entry: e,
+        markdown: markdown,
+        title: title,
+        created: created,
+      ));
+    }
 
-      final specs = markdownToBlocks(markdown);
+    // Phase 2 — content. Runs after every page exists so relative `.md`
+    // links can be rewired to internal page links, including forward ones.
+    final mdPathSet = mdByPath.keys.toSet();
+
+    Map<String, dynamic> rewritePageLinks(
+        Map<String, dynamic> data, String mdPath) {
+      final raw = data['marks'];
+      if (raw is! List) return data;
+      var changed = false;
+      final next = <dynamic>[];
+      for (final m in raw) {
+        if (m is Map && m['type'] == 'link' && m['href'] is String) {
+          final target =
+              resolveZipPath(mdPath, m['href'] as String, mdPathSet);
+          final viewId = target == null ? null : viewByPath[target];
+          if (viewId != null) {
+            next.add({...m, 'href': 'mica://page/$viewId'});
+            changed = true;
+            continue;
+          }
+        }
+        next.add(m);
+      }
+      return changed ? {...data, 'marks': next} : data;
+    }
+
+    var pageSeq = 0;
+    for (final page in createdPages) {
+      pageSeq++;
+      final specs = markdownToBlocks(page.markdown);
       final ops = <Map<String, dynamic>>[];
       var index = 0;
       for (var k = 0; k < specs.length; k++) {
         // Skip a leading H1 that duplicates the page title.
         if (k == 0 &&
             specs[k].kind == 'heading' &&
-            specs[k].text.trim() == title) {
+            specs[k].text.trim() == page.title) {
           continue;
         }
         var data = specs[k].data;
         if (specs[k].kind == 'image') {
           final url = data['url'] as String?;
           if (url != null) {
-            final up = await uploadImageRef(e.name, url);
+            final up = await uploadImageRef(page.entry.name, url);
             if (up != null) {
               data = {'file_id': up.fileId, 'name': up.name};
             }
           }
         }
+        data = rewritePageLinks(data, page.entry.name);
         ops.add({
           'type': 'insert_block',
-          'parent_id': created.document.rootBlockId,
+          'parent_id': page.created.document.rootBlockId,
           'index': index,
           'block': {
-            'id': 'block_${stamp}_${viewByPath.length}_$k',
+            'id': 'block_${stamp}_${pageSeq}_$k',
             'type': specs[k].kind,
             'text': specs[k].text,
             'data': data,
@@ -902,7 +948,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         await _api.applyDocumentUpdate(
           session.accessToken,
           workspace.id,
-          created.document.id,
+          page.created.document.id,
           ops,
         );
       }
