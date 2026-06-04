@@ -76,6 +76,52 @@ List<ZipFileEntry> readZip(Uint8List data) {
   return out;
 }
 
+/// Normalize archive entries for import: drop OS metadata (`__MACOSX/`,
+/// AppleDouble `._*` files, `.DS_Store`, `Thumbs.db`) and peel wrapper
+/// folders — when everything lives under a single top-level folder with no
+/// file beside it (a zipped folder, macOS Finder archives, Notion's
+/// `Export-<id>/` shell), strip that level, repeatedly.
+///
+/// Real content is never peeled: a Mica export keeps `manifest.json` (or a
+/// root page's `.md`) at the top level, so the single-folder condition fails.
+List<ZipFileEntry> normalizeZipEntries(List<ZipFileEntry> entries) {
+  var out = [
+    for (final e in entries)
+      if (!_isJunk(e.name)) e,
+  ];
+  while (out.isNotEmpty) {
+    String? top;
+    var single = true;
+    for (final e in out) {
+      final i = e.name.indexOf('/');
+      if (i <= 0) {
+        single = false; // a file at the root → not a wrapper
+        break;
+      }
+      final seg = e.name.substring(0, i);
+      if (top == null) {
+        top = seg;
+      } else if (top != seg) {
+        single = false;
+        break;
+      }
+    }
+    if (!single || top == null) break;
+    out = [
+      for (final e in out)
+        ZipFileEntry(e.name.substring(top.length + 1), e.bytes),
+    ];
+  }
+  return out;
+}
+
+bool _isJunk(String path) {
+  final parts = path.split('/');
+  if (parts.contains('__MACOSX')) return true;
+  final base = parts.last;
+  return base.startsWith('._') || base == '.DS_Store' || base == 'Thumbs.db';
+}
+
 /// Decode a ZIP entry name. Precedence per the ZIP spec and common tools:
 /// the UTF-8 flag (bit 11), then the Info-ZIP Unicode Path extra field
 /// (0x7075), then strict UTF-8 (most tools write UTF-8 without setting the

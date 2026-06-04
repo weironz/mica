@@ -730,8 +730,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _importEntriesInto(
     AuthSession session,
     Workspace workspace,
-    List<ZipFileEntry> entries,
+    List<ZipFileEntry> rawEntries,
   ) async {
+    // Peel wrapper folders (zipped folder / Notion export shell) and drop
+    // OS metadata before anything else looks at the paths.
+    final entries = normalizeZipEntries(rawEntries);
+
     // Mica's export writes a manifest.json carrying the page-tree order.
     String? manifestJson;
     for (final e in entries) {

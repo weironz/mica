@@ -153,6 +153,61 @@ void main() {
     expect(utf8.decode(entries.single.bytes), 'hi');
   });
 
+  group('normalizeZipEntries', () {
+    ZipFileEntry e(String name) => ZipFileEntry(name, Uint8List(0));
+    List<String> names(List<ZipFileEntry> l) => l.map((x) => x.name).toList();
+
+    test('peels a single wrapper folder (Notion export shell)', () {
+      final out = normalizeZipEntries([
+        e('Export-1f2e3d4c/Guide 0123456789abcdef0123456789abcdef.md'),
+        e('Export-1f2e3d4c/Guide 0123456789abcdef0123456789abcdef/img.png'),
+      ]);
+      expect(names(out), [
+        'Guide 0123456789abcdef0123456789abcdef.md',
+        'Guide 0123456789abcdef0123456789abcdef/img.png',
+      ]);
+    });
+
+    test('peels repeatedly through double wrappers', () {
+      final out = normalizeZipEntries([
+        e('outer/inner/x.md'),
+        e('outer/inner/sub/y.md'),
+      ]);
+      expect(names(out), ['x.md', 'sub/y.md']);
+    });
+
+    test('keeps a root-level file from being peeled (Mica exports)', () {
+      final out = normalizeZipEntries([
+        e('manifest.json'),
+        e('Guide.md'),
+        e('Guide/Setup.md'),
+      ]);
+      expect(names(out), ['manifest.json', 'Guide.md', 'Guide/Setup.md']);
+    });
+
+    test('a lone root page with children is not a wrapper', () {
+      final out = normalizeZipEntries([e('Page.md'), e('Page/Child.md')]);
+      expect(names(out), ['Page.md', 'Page/Child.md']);
+    });
+
+    test('two top folders are not peeled', () {
+      final out = normalizeZipEntries([e('A/x.md'), e('B/y.md')]);
+      expect(names(out), ['A/x.md', 'B/y.md']);
+    });
+
+    test('drops macOS metadata, then peels the remaining wrapper', () {
+      final out = normalizeZipEntries([
+        e('__MACOSX/notes/._a.md'),
+        e('notes/.DS_Store'),
+        e('notes/._a.md'),
+        e('notes/Thumbs.db'),
+        e('notes/a.md'),
+        e('notes/pics/b.png'),
+      ]);
+      expect(names(out), ['a.md', 'pics/b.png']);
+    });
+  });
+
   group('resolveZipPath', () {
     final paths = {
       'assets/图片.png',
