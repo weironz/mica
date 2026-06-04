@@ -48,6 +48,8 @@ class EditorCommandHook {
   VoidCallback? _editLink;
   VoidCallback? _undo;
   VoidCallback? _redo;
+  VoidCallback? _focusFirstLine;
+  void Function(String text)? _insertTopParagraph;
 
   void toggleMark(String type) => _toggleMark?.call(type);
   void setBlock(String kind, [Map<String, dynamic> data = const {}]) =>
@@ -56,6 +58,14 @@ class EditorCommandHook {
   void editLink() => _editLink?.call();
   void undo() => _undo?.call();
   void redo() => _redo?.call();
+
+  /// Move the caret to the start of the first body line (ArrowDown from the
+  /// page title).
+  void focusFirstLine() => _focusFirstLine?.call();
+
+  /// Insert a new paragraph at the very top (Enter in the page title pushes
+  /// the body down; [text] is the title remainder after the caret).
+  void insertTopParagraph(String text) => _insertTopParagraph?.call(text);
 }
 
 class MicaEditor extends StatefulWidget {
@@ -298,6 +308,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _focus.requestFocus();
         _controller.redo();
         refocus();
+      }
+      .._focusFirstLine = () {
+        if (!mounted) return;
+        _focus.requestFocus();
+        if (_controller.nodes.isNotEmpty) {
+          _controller.collapseTo(const DocPosition(0, 0));
+        }
+        _syncImeFromSelection(force: true);
+      }
+      .._insertTopParagraph = (text) {
+        if (!mounted || !widget.canEdit) return;
+        _focus.requestFocus();
+        _controller.insertParagraphAtTop(text);
+        _syncImeFromSelection(force: true);
       };
   }
 

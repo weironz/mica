@@ -1284,6 +1284,15 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(i, s + text.length));
   }
 
+  /// Insert a paragraph as the new first block (Enter in the page title
+  /// pushes the body down). Caret lands at its start.
+  void insertParagraphAtTop(String text) {
+    final created = EditorNode(id: _genId(), kind: 'paragraph', text: text);
+    nodes.insert(0, created);
+    _sendNow([_insertOp(created, 0)]);
+    collapseTo(const DocPosition(0, 0));
+  }
+
   /// Ensure a place to type when the document is empty.
   EditorNode ensureNotEmpty() {
     if (nodes.isNotEmpty) return nodes.first;

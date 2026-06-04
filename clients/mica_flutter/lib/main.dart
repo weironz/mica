@@ -2365,6 +2365,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
+  /// Enter in the page title: split at the caret — the remainder becomes a
+  /// new first body line (pushing the body down), the caret follows it.
+  void _titleEnter() {
+    final text = _pageTitle.text;
+    final sel = _pageTitle.selection;
+    final at = sel.isValid ? sel.start.clamp(0, text.length) : text.length;
+    final rest = text.substring(at);
+    if (rest.isNotEmpty) {
+      _pageTitle.text = text.substring(0, at);
+      _schedulePageTitleSave();
+    }
+    _commandHook.insertTopParagraph(rest);
+  }
+
   /// The optional formatting toolbar (Settings -> Appearance, off by
   /// default): one-click access to the high-frequency Markdown actions,
   /// driven through [_commandHook] so focus/selection semantics stay in the
@@ -2460,21 +2474,37 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _pageTitle,
-                        focusNode: _pageTitleFocus,
-                        style: Theme.of(context).textTheme.headlineMedium,
-                        textInputAction: TextInputAction.next,
-                        onChanged: (_) => _schedulePageTitleSave(),
-                        // Enter in the title drops into the first body line.
-                        // onEditingComplete (not onSubmitted): it REPLACES the
-                        // default TextInputAction.next finalize, which would
-                        // otherwise call nextFocus() right after us and steal
-                        // the focus back to the page-menu button.
-                        onEditingComplete: () => _editorFocus.requestFocus(),
-                        decoration: const InputDecoration(
-                          hintText: 'Untitled',
-                          border: InputBorder.none,
+                      child: Focus(
+                        // Intercepts keys bubbling from the title field:
+                        // ArrowDown moves into the first body line.
+                        canRequestFocus: false,
+                        skipTraversal: true,
+                        onKeyEvent: (node, event) {
+                          if (event is KeyDownEvent &&
+                              event.logicalKey ==
+                                  LogicalKeyboardKey.arrowDown) {
+                            _commandHook.focusFirstLine();
+                            return KeyEventResult.handled;
+                          }
+                          return KeyEventResult.ignored;
+                        },
+                        child: TextField(
+                          controller: _pageTitle,
+                          focusNode: _pageTitleFocus,
+                          style: Theme.of(context).textTheme.headlineMedium,
+                          textInputAction: TextInputAction.next,
+                          onChanged: (_) => _schedulePageTitleSave(),
+                          // Enter in the title: the text after the caret (or
+                          // nothing) becomes a NEW first body line, pushing
+                          // the body down. onEditingComplete (not
+                          // onSubmitted) — it REPLACES the default
+                          // TextInputAction.next finalize, which would
+                          // otherwise nextFocus() away from the editor.
+                          onEditingComplete: _titleEnter,
+                          decoration: const InputDecoration(
+                            hintText: 'Untitled',
+                            border: InputBorder.none,
+                          ),
                         ),
                       ),
                     ),
@@ -2570,9 +2600,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       commandHook: _commandHook,
                       onExitTop: () {
                         _pageTitleFocus.requestFocus();
-                        _pageTitle.selection = TextSelection.collapsed(
-                          offset: _pageTitle.text.length,
-                        );
+                        // After the frame — the TextField select-alls on
+                        // focus; we want a plain caret at the end.
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          _pageTitle.selection = TextSelection.collapsed(
+                            offset: _pageTitle.text.length,
+                          );
+                        });
                       },
                       appearance: widget.appearance,
                       onOpenPage: _openPageLink,
