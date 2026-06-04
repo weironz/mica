@@ -4,20 +4,25 @@ import 'package:flutter/widgets.dart';
 /// `data.marks`). The text stays clean; a mark is a `[start, end)` range with a
 /// type (and an href for links). See docs/editor-engine.md.
 class Mark {
-  Mark(this.start, this.end, this.type, {this.href});
+  Mark(this.start, this.end, this.type, {this.href, this.title});
 
   final int start;
   final int end;
   final String type; // bold | italic | code | strike | link
   final String? href;
 
-  Mark shifted(int delta) => Mark(start + delta, end + delta, type, href: href);
+  /// Optional link title (`[t](url "title")`) — carried for GFM fidelity.
+  final String? title;
+
+  Mark shifted(int delta) =>
+      Mark(start + delta, end + delta, type, href: href, title: title);
 
   Map<String, dynamic> toJson() => {
     'start': start,
     'end': end,
     'type': type,
     if (href != null) 'href': href,
+    if (title != null) 'title': title,
   };
 
   static const types = {'bold', 'italic', 'code', 'strike', 'link'};
@@ -33,7 +38,8 @@ List<Mark> marksFromData(Map<String, dynamic> data) {
       final end = (m['end'] as num?)?.toInt();
       final type = m['type'] as String?;
       if (start != null && end != null && type != null && end > start) {
-        marks.add(Mark(start, end, type, href: m['href'] as String?));
+        marks.add(Mark(start, end, type,
+            href: m['href'] as String?, title: m['title'] as String?));
       }
     }
   }
@@ -210,6 +216,134 @@ int _indexOfUnescaped(String src, String needle, int from) {
   }
 }
 
+/// Single-line link reference definition ` [label]: dest "title"`.
+({String label, String dest, String? title})? parseRefDefinition(String raw) {
+  final lead = raw.length - raw.trimLeft().length;
+  if (lead > 3) return null;
+  final t = raw.trim();
+  if (!t.startsWith('[')) return null;
+  final close = matchingBracket(t, 0);
+  if (close < 0 || close + 1 >= t.length || t[close + 1] != ':') return null;
+  final label = t.substring(1, close);
+  if (label.trim().isEmpty) return null;
+  final rest = t.substring(close + 2).trim();
+  if (rest.isEmpty) return null;
+  // Reuse the suffix parser by appending a virtual `)` and requiring full
+  // consumption.
+  final suffix = parseLinkSuffix('$rest)', 0);
+  if (suffix == null || suffix.next != rest.length + 1) return null;
+  return (label: label, dest: suffix.dest, title: suffix.title);
+}
+
+/// Case-fold and collapse internal whitespace (spec label matching).
+String normalizeLabel(String label) =>
+    label.trim().split(RegExp(r'\s+')).join(' ').toLowerCase();
+
+/// The `]` matching the `[` at [open], honoring nesting and escapes; -1 if
+/// none.
+int matchingBracket(String src, int open) {
+  var depth = 0;
+  var j = open;
+  while (j < src.length) {
+    final c = src[j];
+    if (c == r'\' && j + 1 < src.length) {
+      j += 2;
+      continue;
+    }
+    if (c == '[') depth++;
+    if (c == ']') {
+      depth--;
+      if (depth == 0) return j;
+    }
+    j++;
+  }
+  return -1;
+}
+
+/// Unescape backslash-escaped ASCII punctuation.
+String _unescapeMd(String s) {
+  final out = StringBuffer();
+  var i = 0;
+  while (i < s.length) {
+    if (s[i] == r'\' && i + 1 < s.length && _asciiPunct.contains(s[i + 1])) {
+      out.write(s[i + 1]);
+      i += 2;
+    } else {
+      out.write(s[i]);
+      i++;
+    }
+  }
+  return out.toString();
+}
+
+/// Inline-link suffix `(dest "title")` parsed right AFTER the `(`. Returns
+/// dest/title and the index just past the closing `)`. Mirrors the Rust
+/// engine.
+({String dest, String? title, int next})? parseLinkSuffix(String src, int i) {
+  final n = src.length;
+  bool ws(String c) => c == ' ' || c == '\t' || c == '\n';
+  while (i < n && ws(src[i])) {
+    i++;
+  }
+  String dest;
+  if (i < n && src[i] == '<') {
+    var j = i + 1;
+    while (j < n && src[j] != '>' && src[j] != '\n' && src[j] != '<') {
+      j++;
+    }
+    if (j >= n || src[j] != '>') return null;
+    dest = _unescapeMd(src.substring(i + 1, j));
+    i = j + 1;
+  } else {
+    var depth = 0;
+    final start = i;
+    while (i < n) {
+      final c = src[i];
+      if (ws(c)) break;
+      if (c == r'\' && i + 1 < n) {
+        i += 2;
+        continue;
+      }
+      if (c == '(') depth++;
+      if (c == ')') {
+        if (depth == 0) break;
+        depth--;
+      }
+      i++;
+    }
+    if (depth != 0) return null;
+    dest = _unescapeMd(src.substring(start, i));
+  }
+  while (i < n && ws(src[i])) {
+    i++;
+  }
+  String? title;
+  if (i < n && (src[i] == '"' || src[i] == "'" || src[i] == '(')) {
+    final close = src[i] == '(' ? ')' : src[i];
+    var j = i + 1;
+    final buf = StringBuffer();
+    while (j < n && src[j] != close) {
+      if (src[j] == r'\' && j + 1 < n) {
+        buf.write(src[j + 1]);
+        j += 2;
+        continue;
+      }
+      buf.write(src[j]);
+      j++;
+    }
+    if (j >= n) return null;
+    title = buf.toString();
+    i = j + 1;
+    while (i < n && ws(src[i])) {
+      i++;
+    }
+  }
+  if (i < n && src[i] == ')') {
+    return (dest: dest, title: title, next: i + 1);
+  }
+  return null;
+}
+
 /// CommonMark autolink target for `<inner>`: absolute URI → itself, bare
 /// email → mailto:, else null. Mirrors the Rust engine.
 String? autolinkTarget(String inner) {
@@ -223,19 +357,32 @@ String? autolinkTarget(String inner) {
 
 /// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`,
 /// `[t](url)`, `\*escapes\*`, `<autolinks>`) into clean text plus marks.
-({String text, List<Mark> marks}) parseInline(String src) {
+({String text, List<Mark> marks}) parseInline(
+  String src, {
+  Map<String, ({String dest, String? title})> defs = const {},
+}) {
   final out = StringBuffer();
   final marks = <Mark>[];
   var i = 0;
 
   void addInner(String inner, String type, {String? href}) {
     final start = out.length;
-    final parsed = parseInline(inner);
+    final parsed = parseInline(inner, defs: defs);
     out.write(parsed.text);
     for (final m in parsed.marks) {
       marks.add(m.shifted(start));
     }
     marks.add(Mark(start, out.length, type, href: href));
+  }
+
+  void addLink(String label, String href, String? title) {
+    final start = out.length;
+    final parsed = parseInline(label, defs: defs);
+    out.write(parsed.text);
+    for (final m in parsed.marks) {
+      marks.add(m.shifted(start));
+    }
+    marks.add(Mark(start, out.length, 'link', href: href, title: title));
   }
 
   while (i < src.length) {
@@ -262,17 +409,39 @@ String? autolinkTarget(String inner) {
         }
       }
     }
-    // A `[..](..)` is a link — unless preceded by `!`, which makes it an image
-    // (`![alt](url)`); images aren't inline marks, so leave them as literal text.
-    final link = (i > 0 && src[i - 1] == '!')
-        ? null
-        : RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)').matchAsPrefix(src, i);
-    if (link != null) {
-      final start = out.length;
-      out.write(link.group(1)!);
-      marks.add(Mark(start, out.length, 'link', href: link.group(2)));
-      i = link.end;
-      continue;
+    // Links: [text](dest "title") | [text][label] | [text][] | [shortcut]
+    // — unless preceded by `!` (an image; not an inline mark).
+    if (src[i] == '[' && !(i > 0 && src[i - 1] == '!')) {
+      final close = matchingBracket(src, i);
+      if (close > i + 1) {
+        final label = src.substring(i + 1, close);
+        if (close + 1 < src.length && src[close + 1] == '(') {
+          final suffix = parseLinkSuffix(src, close + 2);
+          if (suffix != null) {
+            addLink(label, suffix.dest, suffix.title);
+            i = suffix.next;
+            continue;
+          }
+        }
+        if (defs.isNotEmpty) {
+          var refLabel = label;
+          var next = close + 1;
+          if (close + 1 < src.length && src[close + 1] == '[') {
+            final end2 = matchingBracket(src, close + 1);
+            if (end2 > close + 1) {
+              final second = src.substring(close + 2, end2);
+              if (second.isNotEmpty) refLabel = second;
+              next = end2 + 1;
+            }
+          }
+          final def = defs[normalizeLabel(refLabel)];
+          if (def != null) {
+            addLink(label, def.dest, def.title);
+            i = next;
+            continue;
+          }
+        }
+      }
     }
     if (src.startsWith('**', i)) {
       final end = _indexOfUnescaped(src, '**', i + 2);
@@ -399,10 +568,17 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       case 'link':
         final href = pick.href ?? '';
         final plain = text.substring(ps, pe);
-        if (href == plain || href == 'mailto:$plain') {
+        if (pick.title == null &&
+            (href == plain || href == 'mailto:$plain')) {
           out.write('<$plain>');
         } else {
-          out.write('[$body]($href)');
+          final dest = href.contains(RegExp(r'\s')) ? '<$href>' : href;
+          final t = pick.title;
+          out.write(
+            t == null
+                ? '[$body]($dest)'
+                : '[$body]($dest "${t.replaceAll('"', r'\"')}")',
+          );
         }
       default:
         out.write(body);

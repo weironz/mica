@@ -12,8 +12,13 @@ import 'table.dart';
 typedef BlockSpec = ({String kind, String text, Map<String, dynamic> data});
 
 /// Parse inline Markdown in [text] into clean text + marks, merged into [data].
-BlockSpec _inline(String kind, String text, Map<String, dynamic> data) {
-  final parsed = parseInline(text);
+BlockSpec _inline(
+  String kind,
+  String text,
+  Map<String, dynamic> data, {
+  Map<String, ({String dest, String? title})> defs = const {},
+}) {
+  final parsed = parseInline(text, defs: defs);
   final merged = {...data};
   if (parsed.marks.isNotEmpty) {
     merged['marks'] = marksToJson(parsed.marks);
@@ -75,6 +80,17 @@ String deindentColumns(String line, int columns) {
 List<BlockSpec> markdownToBlocks(String markdown) {
   final result = <BlockSpec>[];
   final lines = markdown.replaceAll('\r\n', '\n').split('\n');
+
+  // Pass 1: link reference definitions — collected, then skipped.
+  final defs = <String, ({String dest, String? title})>{};
+  final defLines = <int>{};
+  for (var k = 0; k < lines.length; k++) {
+    final d = parseRefDefinition(lines[k]);
+    if (d != null) {
+      defs.putIfAbsent(normalizeLabel(d.label), () => (dest: d.dest, title: d.title));
+      defLines.add(k);
+    }
+  }
   // Leading-width stack mapping source indentation columns to nesting levels
   // (tolerates 2/3/4-space styles; tabs count as 4) — mirrors the Rust
   // engine. Only list/todo items nest; other blocks reset the stack.
@@ -108,6 +124,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
   var i = 0;
   while (i < lines.length) {
+    if (defLines.contains(i)) {
+      i++;
+      continue;
+    }
     final raw = lines[i].trimRight();
 
     final open = fenceOpen.firstMatch(raw);
@@ -190,7 +210,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     final h = heading.firstMatch(line);
     if (h != null) {
       listStack.clear();
-      result.add(_inline('heading', h.group(2)!.trim(), {'level': h.group(1)!.length}));
+      result.add(_inline('heading', h.group(2)!.trim(), {'level': h.group(1)!.length}, defs: defs));
       i++;
       continue;
     }
@@ -201,7 +221,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       result.add(_inline('todo', t.group(2)!.trim(), {
         'checked': t.group(1)!.toLowerCase() == 'x',
         if (level > 0) 'indent': level,
-      }));
+      }, defs: defs));
       i++;
       continue;
     }
@@ -233,7 +253,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     final q = quote.firstMatch(line);
     if (q != null) {
       listStack.clear();
-      result.add(_inline('quote', q.group(1)!.trim(), {}));
+      result.add(_inline('quote', q.group(1)!.trim(), {}, defs: defs));
       i++;
       continue;
     }
@@ -243,12 +263,12 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     if (i + 1 < lines.length) {
       final level = setextLevel(lines[i + 1]);
       if (level > 0) {
-        result.add(_inline('heading', line, {'level': level}));
+        result.add(_inline('heading', line, {'level': level}, defs: defs));
         i += 2;
         continue;
       }
     }
-    result.add(_inline('paragraph', line, {}));
+    result.add(_inline('paragraph', line, {}, defs: defs));
     i++;
   }
 

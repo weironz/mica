@@ -132,12 +132,27 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   let mut blocks: Vec<Block> = Vec::new();
   let mut root_children: Vec<String> = Vec::new();
 
+  // Pass 1: link reference definitions (`[label]: dest "title"`) — they can
+  // sit anywhere, resolve case-insensitively, and vanish from the output.
+  let mut defs = RefDefs::new();
+  let mut def_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
+  for (idx, raw) in raw_lines.iter().enumerate() {
+    if let Some((label, dest, title)) = parse_ref_definition(raw) {
+      defs.entry(normalize_label(&label)).or_insert((dest, title));
+      def_lines.insert(idx);
+    }
+  }
+
   let mut index = 0;
   // Leading-width stack mapping source indentation columns to nesting levels
   // (tolerates 2/3/4-space styles; tabs count as 4). Only list/todo items
   // nest; any other block resets the stack.
   let mut list_stack: Vec<usize> = Vec::new();
   while index < raw_lines.len() {
+    if def_lines.contains(&index) {
+      index += 1;
+      continue;
+    }
     let line = raw_lines[index].trim_end();
     let content = line.trim_start();
 
@@ -269,7 +284,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       && index + 1 < raw_lines.len()
       && let Some(level) = setext_level(raw_lines[index + 1])
     {
-      let (text, data) = apply_inline_marks(text, json!({ "level": level }));
+      let (text, data) = apply_inline_marks(text, json!({ "level": level }), &defs);
       push_block(&mut blocks, &mut root_children, "heading", text, data);
       list_stack.clear();
       index += 2;
@@ -278,7 +293,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     let (text, mut data) = if kind == "image" {
       (text, data)
     } else {
-      apply_inline_marks(text, data)
+      apply_inline_marks(text, data, &defs)
     };
 
     // Nesting level for list items from the indentation stack.
@@ -588,10 +603,17 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       "bold" => format!("<strong>{body}</strong>"),
       "italic" => format!("<em>{body}</em>"),
       "strike" => format!("<del>{body}</del>"),
-      "link" => format!(
-        "<a href=\"{}\">{body}</a>",
-        escape_html(m.href.as_deref().unwrap_or(""))
-      ),
+      "link" => match &m.title {
+        Some(t) => format!(
+          "<a href=\"{}\" title=\"{}\">{body}</a>",
+          escape_html(m.href.as_deref().unwrap_or("")),
+          escape_html(t)
+        ),
+        None => format!(
+          "<a href=\"{}\">{body}</a>",
+          escape_html(m.href.as_deref().unwrap_or(""))
+        ),
+      },
       _ => body,
     });
     pos = e;
@@ -848,8 +870,8 @@ fn append_markdown_block_content(
 /// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`, `[t](url)`)
 /// in [text] into clean text plus marks merged into [data] under `"marks"`.
 /// Offsets are UTF-16 code-unit indices to match the Flutter client.
-fn apply_inline_marks(text: String, data: Value) -> (String, Value) {
-  let parsed = parse_inline(&text);
+fn apply_inline_marks(text: String, data: Value, defs: &RefDefs) -> (String, Value) {
+  let parsed = parse_inline_with(&text, defs);
   if parsed.marks.is_empty() {
     return (parsed.text, data);
   }
@@ -863,6 +885,9 @@ fn apply_inline_marks(text: String, data: Value) -> (String, Value) {
       obj.insert("type".into(), json!(m.kind));
       if let Some(href) = &m.href {
         obj.insert("href".into(), json!(href));
+      }
+      if let Some(title) = &m.title {
+        obj.insert("title".into(), json!(title));
       }
       Value::Object(obj)
     })
@@ -880,9 +905,215 @@ struct ParsedInline {
   marks: Vec<InlineMark>,
 }
 
+/// Link reference definitions: normalized label → (destination, title).
+type RefDefs = std::collections::HashMap<String, (String, Option<String>)>;
+
+/// Single-line link reference definition: ` [label]: dest "title"` → parts.
+fn parse_ref_definition(raw: &str) -> Option<(String, String, Option<String>)> {
+  let lead = raw.len() - raw.trim_start().len();
+  if lead > 3 {
+    return None;
+  }
+  let chars: Vec<char> = raw.trim().chars().collect();
+  if chars.first() != Some(&'[') {
+    return None;
+  }
+  let close = matching_bracket(&chars, 0)?;
+  if chars.get(close + 1) != Some(&':') {
+    return None;
+  }
+  let label: String = chars[1..close].iter().collect();
+  if label.trim().is_empty() {
+    return None;
+  }
+  let mut i = close + 2;
+  while i < chars.len() && chars[i].is_whitespace() {
+    i += 1;
+  }
+  if i >= chars.len() {
+    return None; // dest on a later line: unsupported single-line form
+  }
+  // Destination (reuse the suffix parser's rules sans the closing paren).
+  let dest: String;
+  if chars[i] == '<' {
+    let mut j = i + 1;
+    while j < chars.len() && chars[j] != '>' {
+      j += 1;
+    }
+    if j >= chars.len() {
+      return None;
+    }
+    dest = unescape_md(&chars[i + 1..j].iter().collect::<String>());
+    i = j + 1;
+  } else {
+    let start = i;
+    while i < chars.len() && !chars[i].is_whitespace() {
+      i += 1;
+    }
+    dest = unescape_md(&chars[start..i].iter().collect::<String>());
+  }
+  while i < chars.len() && chars[i].is_whitespace() {
+    i += 1;
+  }
+  let mut title = None;
+  if i < chars.len() && matches!(chars[i], '"' | '\'' | '(') {
+    let closec = if chars[i] == '(' { ')' } else { chars[i] };
+    let mut j = i + 1;
+    let mut buf = String::new();
+    while j < chars.len() && chars[j] != closec {
+      if chars[j] == '\\' && j + 1 < chars.len() {
+        buf.push(chars[j + 1]);
+        j += 2;
+        continue;
+      }
+      buf.push(chars[j]);
+      j += 1;
+    }
+    if j >= chars.len() {
+      return None;
+    }
+    title = Some(buf);
+    i = j + 1;
+  }
+  while i < chars.len() && chars[i].is_whitespace() {
+    i += 1;
+  }
+  if i != chars.len() {
+    return None; // trailing junk → it's a paragraph, not a definition
+  }
+  Some((label, dest, title))
+}
+
+/// Case-fold and collapse internal whitespace, per the spec's label matching.
+fn normalize_label(label: &str) -> String {
+  label.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Unescape backslash-escaped ASCII punctuation (destinations/titles).
+fn unescape_md(s: &str) -> String {
+  let chars: Vec<char> = s.chars().collect();
+  let mut out = String::with_capacity(s.len());
+  let mut i = 0;
+  while i < chars.len() {
+    if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1].is_ascii_punctuation() {
+      out.push(chars[i + 1]);
+      i += 2;
+    } else {
+      out.push(chars[i]);
+      i += 1;
+    }
+  }
+  out
+}
+
+/// Parse an inline-link suffix `(dest "title")` starting right AFTER the `(`.
+/// Returns (href, title, index just past the closing `)`).
+fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<String>, usize)> {
+  let n = chars.len();
+  while i < n && chars[i].is_whitespace() {
+    i += 1;
+  }
+  // Destination: <may contain spaces> or bare with balanced parens.
+  let dest: String;
+  if i < n && chars[i] == '<' {
+    let mut j = i + 1;
+    while j < n && chars[j] != '>' && chars[j] != '\n' && chars[j] != '<' {
+      j += 1;
+    }
+    if j >= n || chars[j] != '>' {
+      return None;
+    }
+    dest = unescape_md(&chars[i + 1..j].iter().collect::<String>());
+    i = j + 1;
+  } else {
+    let mut depth = 0i32;
+    let start = i;
+    while i < n {
+      let c = chars[i];
+      if c.is_whitespace() {
+        break;
+      }
+      if c == '\\' && i + 1 < n {
+        i += 2;
+        continue;
+      }
+      match c {
+        '(' => depth += 1,
+        ')' => {
+          if depth == 0 {
+            break;
+          }
+          depth -= 1;
+        }
+        _ => {}
+      }
+      i += 1;
+    }
+    if depth != 0 {
+      return None;
+    }
+    dest = unescape_md(&chars[start..i].iter().collect::<String>());
+  }
+  while i < n && chars[i].is_whitespace() {
+    i += 1;
+  }
+  // Optional title: "..." / '...' / (...)
+  let mut title = None;
+  if i < n && matches!(chars[i], '"' | '\'' | '(') {
+    let close = if chars[i] == '(' { ')' } else { chars[i] };
+    let mut j = i + 1;
+    let mut buf = String::new();
+    while j < n && chars[j] != close {
+      if chars[j] == '\\' && j + 1 < n {
+        buf.push(chars[j + 1]);
+        j += 2;
+        continue;
+      }
+      buf.push(chars[j]);
+      j += 1;
+    }
+    if j >= n {
+      return None;
+    }
+    title = Some(buf);
+    i = j + 1;
+    while i < n && chars[i].is_whitespace() {
+      i += 1;
+    }
+  }
+  if i < n && chars[i] == ')' { Some((dest, title, i + 1)) } else { None }
+}
+
+/// Find the `]` matching the `[` at [open], honoring nesting and escapes.
+fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
+  let mut depth = 0i32;
+  let mut j = open;
+  while j < chars.len() {
+    let c = chars[j];
+    if c == '\\' && j + 1 < chars.len() {
+      j += 2;
+      continue;
+    }
+    if c == '[' {
+      depth += 1;
+    } else if c == ']' {
+      depth -= 1;
+      if depth == 0 {
+        return Some(j);
+      }
+    }
+    j += 1;
+  }
+  None
+}
+
 /// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
 /// marks over it, with offsets in UTF-16 code units.
 fn parse_inline(src: &str) -> ParsedInline {
+  parse_inline_with(src, &RefDefs::new())
+}
+
+fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
   let chars: Vec<char> = src.chars().collect();
   let mut out = String::new();
   let mut out_len: usize = 0; // UTF-16 length of `out`
@@ -916,6 +1147,35 @@ fn parse_inline(src: &str) -> ParsedInline {
     None
   };
 
+  // Emit a resolved link into out/marks (text parsed recursively).
+  let push_link = |label: &str,
+                   href: String,
+                   title: Option<String>,
+                   out: &mut String,
+                   out_len: &mut usize,
+                   marks: &mut Vec<InlineMark>| {
+    let start = *out_len;
+    let parsed = parse_inline_with(label, defs);
+    out.push_str(&parsed.text);
+    *out_len += parsed.text.encode_utf16().count();
+    for m in parsed.marks {
+      marks.push(InlineMark {
+        start: m.start + start,
+        end: m.end + start,
+        kind: m.kind,
+        href: m.href,
+        title: m.title,
+      });
+    }
+    marks.push(InlineMark {
+      start,
+      end: *out_len,
+      kind: "link".into(),
+      href: Some(href),
+      title,
+    });
+  };
+
   while i < chars.len() {
     // Backslash escape: `\*` is a literal `*` (any ASCII punctuation).
     if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1].is_ascii_punctuation() {
@@ -938,30 +1198,46 @@ fn parse_inline(src: &str) -> ParsedInline {
             end: out_len,
             kind: "link".into(),
             href: Some(href),
+            title: None,
           });
           i = close + 1;
           continue;
         }
       }
     }
-    // Link: [text](url)
+    // Link: [text](dest "title") | [text][label] | [text][] | [shortcut]
     if chars[i] == '[' {
-      if let Some(close) = find_from(i + 1, &[']']) {
-        if close + 1 < chars.len() && chars[close + 1] == '(' {
-          if let Some(rparen) = find_from(close + 2, &[')']) {
-            let label: String = chars[i + 1..close].iter().collect();
-            let url: String = chars[close + 2..rparen].iter().collect();
-            if !url.contains(char::is_whitespace) && !label.is_empty() {
-              let start = out_len;
-              out.push_str(&label);
-              out_len += label.encode_utf16().count();
-              marks.push(InlineMark {
-                start,
-                end: out_len,
-                kind: "link".into(),
-                href: Some(url),
-              });
-              i = rparen + 1;
+      if let Some(close) = matching_bracket(&chars, i) {
+        let label: String = chars[i + 1..close].iter().collect();
+        if !label.is_empty() {
+          // Inline form.
+          if close + 1 < chars.len() && chars[close + 1] == '(' {
+            if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
+              push_link(&label, href, title, &mut out, &mut out_len, &mut marks);
+              i = next;
+              continue;
+            }
+          }
+          // Reference forms (full / collapsed / shortcut).
+          if !defs.is_empty() {
+            let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
+              match matching_bracket(&chars, close + 1) {
+                Some(end2) => {
+                  let second: String = chars[close + 2..end2].iter().collect();
+                  if second.is_empty() {
+                    (label.clone(), end2 + 1) // collapsed [text][]
+                  } else {
+                    (second, end2 + 1) // full [text][label]
+                  }
+                }
+                None => (label.clone(), close + 1),
+              }
+            } else {
+              (label.clone(), close + 1) // shortcut [text]
+            };
+            if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
+              push_link(&label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
+              i = next;
               continue;
             }
           }
@@ -973,7 +1249,7 @@ fn parse_inline(src: &str) -> ParsedInline {
       if let Some(end) = find_unescaped(i + 2, &['*', '*']) {
         if end > i + 2 {
           let inner: String = chars[i + 2..end].iter().collect();
-          push_inner(&inner, "bold", None, &mut out, &mut out_len, &mut marks);
+          push_inner(&inner, "bold", None, defs, &mut out, &mut out_len, &mut marks);
           i = end + 2;
           continue;
         }
@@ -984,7 +1260,7 @@ fn parse_inline(src: &str) -> ParsedInline {
       if let Some(end) = find_unescaped(i + 2, &['~', '~']) {
         if end > i + 2 {
           let inner: String = chars[i + 2..end].iter().collect();
-          push_inner(&inner, "strike", None, &mut out, &mut out_len, &mut marks);
+          push_inner(&inner, "strike", None, defs, &mut out, &mut out_len, &mut marks);
           i = end + 2;
           continue;
         }
@@ -1003,6 +1279,7 @@ fn parse_inline(src: &str) -> ParsedInline {
             end: out_len,
             kind: "code".into(),
             href: None,
+            title: None,
           });
           i = end + 1;
           continue;
@@ -1015,7 +1292,7 @@ fn parse_inline(src: &str) -> ParsedInline {
       if let Some(end) = find_unescaped(i + 1, &[ch]) {
         if end > i + 1 {
           let inner: String = chars[i + 1..end].iter().collect();
-          push_inner(&inner, "italic", None, &mut out, &mut out_len, &mut marks);
+          push_inner(&inner, "italic", None, defs, &mut out, &mut out_len, &mut marks);
           i = end + 1;
           continue;
         }
@@ -1065,12 +1342,13 @@ fn push_inner(
   inner: &str,
   kind: &str,
   href: Option<String>,
+  defs: &RefDefs,
   out: &mut String,
   out_len: &mut usize,
   marks: &mut Vec<InlineMark>,
 ) {
   let start = *out_len;
-  let parsed = parse_inline(inner);
+  let parsed = parse_inline_with(inner, defs);
   out.push_str(&parsed.text);
   *out_len += parsed.text.encode_utf16().count();
   for m in parsed.marks {
@@ -1079,6 +1357,7 @@ fn push_inner(
       end: m.end + start,
       kind: m.kind,
       href: m.href,
+      title: m.title,
     });
   }
   marks.push(InlineMark {
@@ -1086,6 +1365,7 @@ fn push_inner(
     end: *out_len,
     kind: kind.to_string(),
     href,
+    title: None,
   });
 }
 
@@ -1095,6 +1375,7 @@ struct InlineMark {
   end: usize,
   kind: String,
   href: Option<String>,
+  title: Option<String>,
 }
 
 fn marks_from_block(block: &Block) -> Vec<InlineMark> {
@@ -1120,6 +1401,7 @@ fn marks_from_block(block: &Block) -> Vec<InlineMark> {
           end,
           kind: kind.to_string(),
           href: obj.get("href").and_then(Value::as_str).map(str::to_string),
+          title: obj.get("title").and_then(Value::as_str).map(str::to_string),
         });
       }
     }
@@ -1228,11 +1510,19 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
       "link" => {
         let href = m.href.as_deref().unwrap_or("");
         let plain = String::from_utf16_lossy(&units[s..e]);
-        // A link whose text IS its target round-trips as an autolink.
-        if href == plain || href == format!("mailto:{plain}") {
+        // A title-less link whose text IS its target → autolink form.
+        if m.title.is_none() && (href == plain || href == format!("mailto:{plain}")) {
           format!("<{plain}>")
         } else {
-          format!("[{body}]({href})")
+          let dest = if href.contains(char::is_whitespace) {
+            format!("<{href}>")
+          } else {
+            href.to_string()
+          };
+          match &m.title {
+            Some(t) => format!("[{body}]({dest} \"{}\")", t.replace('"', "\\\"")),
+            None => format!("[{body}]({dest})"),
+          }
         }
       }
       _ => body,

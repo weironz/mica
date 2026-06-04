@@ -1,0 +1,99 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 12,
+          "href": "https://e.com",
+          "start": 7,
+          "type": "link"
+        },
+        {
+          "end": 23,
+          "href": "https://e.com",
+          "start": 17,
+          "title": "the title",
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "inline basic and titled"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 17,
+          "href": "/url with space",
+          "start": 11,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "angle dest spaced works"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 15,
+          "href": "https://e.com/a(b)c",
+          "start": 9,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "balanced parens too"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 9,
+          "href": "https://example.com/ref",
+          "start": 5,
+          "title": "Ref Title",
+          "type": "link"
+        },
+        {
+          "end": 27,
+          "href": "https://example.com/ref",
+          "start": 24,
+          "title": "Ref Title",
+          "type": "link"
+        },
+        {
+          "end": 44,
+          "href": "https://example.com/ref",
+          "start": 41,
+          "title": "Ref Title",
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "full text and collapsed ref and shortcut ref"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 28,
+          "start": 7,
+          "type": "bold"
+        },
+        {
+          "end": 23,
+          "href": "https://e.com",
+          "start": 12,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "nested bold link inside bold"
+  }
+]

@@ -5,13 +5,13 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 186/652 (28.5%)**
+**Total: 235/652 (36.0%)**
 
 | Section | Passed | Total | % |
 |---|---|---|---|
 | ATX headings | 13 | 18 | 72% |
 | Autolinks | 16 | 19 | 84% |
-| Backslash escapes | 3 | 13 | 23% |
+| Backslash escapes | 5 | 13 | 38% |
 | Blank lines | 1 | 1 | 100% |
 | Block quotes | 1 | 25 | 4% |
 | Code spans | 7 | 22 | 32% |
@@ -20,11 +20,11 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Fenced code blocks | 9 | 29 | 31% |
 | HTML blocks | 0 | 44 | 0% |
 | Hard line breaks | 4 | 15 | 27% |
-| Images | 1 | 22 | 5% |
+| Images | 2 | 22 | 9% |
 | Indented code blocks | 7 | 12 | 58% |
 | Inlines | 1 | 1 | 100% |
-| Link reference definitions | 4 | 27 | 15% |
-| Links | 13 | 90 | 14% |
+| Link reference definitions | 12 | 27 | 44% |
+| Links | 51 | 90 | 57% |
 | List items | 8 | 48 | 17% |
 | Lists | 4 | 26 | 15% |
 | Paragraphs | 3 | 8 | 38% |

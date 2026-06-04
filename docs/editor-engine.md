@@ -440,9 +440,14 @@ The recurring problem the engine must get right for every node type:
      indented code blocks (top-level; inside lists indentation still
      means nesting), tab-stop column math, plus HTML-shape fixes
      (inner trailing newline in <pre><code>, language- class, <hr />).
-     Scoreboard 130 → **186/652 (28.5%)**; both parsers pinned by
-     fixture 12. Remaining big buckets: Emphasis (132), Links (90),
-     List items (48), HTML blocks (44, degrade policy), Block quotes
-     (25, needs container children). Decision point: keep extending
+     Links bucket DONE (2026-06-05): full inline grammar (angle-bracket
+     destinations, balanced parens, titles — marks gained an optional
+     `title` field), reference definitions (`[label]: dest "title"`,
+     case-insensitive, full/collapsed/shortcut forms) with a defs
+     pre-pass in both parsers; renderers emit titles and `<spaced
+     dests>`. Scoreboard 130 → 186 → **235/652 (36.0%)**; fixtures 12+13
+     pin both parsers. Remaining big buckets: Emphasis (132), List
+     items (48), HTML blocks (44, degrade policy), Block quotes (25,
+     needs container children), Images (22). Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.
