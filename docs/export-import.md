@@ -2,8 +2,30 @@
 
 How Mica moves content in and out: single pages, whole workspaces, and
 archives from other tools (Notion). Everything is dependency-free — the ZIP
-writer/reader, the DEFLATE inflater, SHA-256 and the GBK table are all
-in-house (see `prefer in-house over dependencies` in the project philosophy).
+writer/reader, the DEFLATE inflater and the GBK table are all in-house.
+
+## Architecture: the `mica-interchange` engine
+
+All heavy data work is Rust. The pure, I/O-free engine lives in
+`crates/interchange` (zip reader/writer, inflate, name decoding, archive
+normalization, Notion adaptation, ordering, `plan_import`); the api-server
+executes its plans (database writes, S3 uploads). The Flutter client only
+picks/pack-uploads archives and polls progress — bulk imports of tens of
+thousands of pages never depend on the browser tab.
+
+```
+client: pick files/folder ──pack STORE zip──┐
+client: pick .zip ──────────as-is───────────┤
+                                            ▼
+                    POST /api/workspaces/import   (job id)
+                                            │
+              interchange::plan_import (pure: tree, order, titles)
+                                            │
+        api-server executes: pages (pre-generated view ids), assets→S3,
+        image refs → {file_id,name}, .md links → mica://page/<id>
+                                            │
+                    GET /api/import/jobs/{id}     (progress)
+```
 
 ## Formats at a glance
 
@@ -54,85 +76,76 @@ Implemented in `crates/api-server/src/routes/documents.rs`
 Naming collisions among siblings are resolved by `unique_zip_path`
 (`Page.md`, `Page-2.md`). Path segments go through `safe_segment`.
 
-## Import pipeline
+## Import pipeline (server-side)
 
-All three client entry points feed one shared core,
-`_importEntriesInto` in `clients/mica_flutter/lib/main.dart`:
+All three client entry points (ZIP / loose files / folder) end up as one
+archive upload; the engine (`crates/interchange/src/import.rs`) normalizes
+(`normalize.rs`: peel wrappers, drop OS junk, expand nested `Part-N.zip`)
+and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
 
-```
-ZIP file ──readZip──┐
-loose .md files ────┤→ normalizeZipEntries → expandNestedZips → tree import
-picked folder ──────┘   (peel wrappers,       (inner Part-N.zip)
-                         drop OS junk)
-```
-
-The tree import then:
-
-1. **Reads `manifest.json`** if present and orders pages with
-   `orderPagePaths` (`lib/upload/import_order.dart`): manifest order first
-   (restores sibling order — view `position` is UUIDv7, so creation order
-   *is* sibling order), then unknown files parents-first + natural-sorted
-   (`2 < 10`, digit runs compared numerically).
+1. **Reads `manifest.json`** if present and orders pages (`order.rs`):
+   manifest order first (restores sibling order — view `position` is
+   UUIDv7, so creation order *is* sibling order), then unknown files
+   parents-first + natural-sorted (`2 < 10`, digit runs compared
+   numerically).
 2. **Walks each page's folder chain.** A folder maps to the page exported as
-   `<folder>.md` (via `folderPageIndex`); a folder with no matching page
+   `<folder>.md` (via `folder_page_index`); a folder with no matching page
    becomes an **empty directory page**, so hand-organized trees keep their
-   hierarchy.
-3. **Resolves image references** per page with `resolveZipPath`
-   (`lib/upload/unzip.dart`): relative to the md's own folder first, then
-   the archive root; `./`, `../` chains and percent-encoded names all work.
-   Matching files are uploaded **lazily, once each** (server dedups again by
-   sha256) and the block is rewired to Mica's `{file_id, name}` image form.
-   External URLs (`http(s):`, `data:`) stay links.
+   hierarchy. Every page's view id is pre-generated, so links can target
+   pages created later (forward references).
+3. **Resolves image references** per page with `resolve_ref`: relative to
+   the md's own folder first, then the archive root; `./`, `../` chains and
+   percent-encoded names all work. Matching files are uploaded **once each**
+   straight to S3 (deduped again by sha256 object keys) and the block is
+   rewired to Mica's `{file_id, name}` image form. External URLs stay
+   links.
 4. **Skips a leading `# H1`** that duplicates the page title (the export
    prepends one; round-trips must not double it).
 
-### Archive normalization (`lib/upload/unzip.dart`)
+### Archive normalization (`normalize.rs`)
 
-- `normalizeZipEntries` — drops `__MACOSX/`, `Thumbs.db` and **any path with
+- `normalize_entries` — drops `__MACOSX/`, `Thumbs.db` and **any path with
   a dot-segment** (`.obsidian/`, `.git/`, `.trash/`, `.DS_Store`, AppleDouble
   `._*` — an md inside a dot-folder must not become a page); then repeatedly
   peels a single top-level folder when no file sits beside it (zipped-folder
   habit, macOS Finder archives, Notion's `Export-<id>/` shell). Mica exports
   are never peeled: `manifest.json` always sits at the root.
 - Non-`.md` files are never imported as content: they only sit in a lookup
-  table and are uploaded lazily when an image block references them by
-  relative path. Unreferenced files are dropped. The folder picker
-  additionally pre-filters to md/image/json extensions so huge unrelated
-  files are never read.
-- `expandNestedZips` — unpacks archives nested one level deep (Notion's
+  table and are uploaded when an image block references them by relative
+  path. Unreferenced files are dropped. The client folder picker
+  pre-filters to md/image/json extensions so huge unrelated files are never
+  read from disk.
+- `expand_nested_zips` — unpacks archives nested one level deep (Notion's
   whole-workspace exports ship `Part-N.zip` inside the outer ZIP).
 
 ### ZIP reader capabilities
 
-`readZip` is central-directory-driven and handles what real-world tools
-produce:
+`zip/reader.rs` is central-directory-driven and handles what real-world
+tools produce:
 
 | Feature | Why it matters |
 |---|---|
-| STORE + DEFLATE | Mica exports are STORE; everything else (zip CLI, Explorer, Finder, Notion) is DEFLATE. Inflater: `lib/upload/inflate.dart`, RFC 1951, puff.c-style |
+| STORE + DEFLATE | Mica exports are STORE; everything else (zip CLI, Explorer, Finder, Notion) is DEFLATE. Inflater: `zip/inflate.rs`, RFC 1951, puff.c-style |
 | data descriptors (flag bit 3) | streamed writers leave local sizes zero; central dir has the truth |
 | ZIP64 markers | server-generated archives (Notion) write `0xffffffff` sizes/offsets with the real values in the `0x0001` extra and the zip64 EOCD |
-| entry-name encodings | precedence: UTF-8 flag → Info-ZIP Unicode Path extra (0x7075) → strict UTF-8 → **GBK** (`lib/upload/gbk.dart`, generated cp936 table) — Windows Explorer on a CJK locale sets no flag. GBK pairs that masquerade as valid UTF-8 are caught by rejecting decodes landing in U+0180–U+03FF when GBK decodes cleanly |
+| entry-name encodings | precedence: UTF-8 flag → Info-ZIP Unicode Path extra (0x7075) → strict UTF-8 → **GBK** (`zip/names.rs`, generated cp936 table) — Windows Explorer on a CJK locale sets no flag. GBK pairs that masquerade as valid UTF-8 are caught by rejecting decodes landing in U+0180–U+03FF when GBK decodes cleanly |
 
-Web platform note: no 64-bit shifts anywhere (dart2js); u64 reads use
-multiplication.
-
-## Notion adaptation (`lib/upload/notion.dart`)
+## Notion adaptation (`notion.rs`)
 
 Notion's "Markdown & CSV" export is itself a markdown ZIP, so it shares the
 pipeline. Everything Notion-specific is isolated in one module and applied
 only when **Notion mode** is on:
 
 - forced by the "From Notion" menu entry, or
-- auto-detected by `looksLikeNotionExport`: at least half the md files (and
+- auto-detected by `looks_like_notion_export`: at least half the md files (and
   ≥1) carry an ID suffix — a standard archive with one hash-named file is
   not mangled.
 
 What the mode changes:
 
-- `stripNotionId` removes the trailing 32-hex or dashed-UUID ID from page
+- `strip_notion_id` removes the trailing 32-hex or dashed-UUID ID from page
   titles, directory-page names and the workspace name.
-- `folderPageIndex(notion: true)` matches folders to pages **modulo IDs**:
+- `folder_page_index(notion: true)` matches folders to pages **modulo IDs**:
   Notion names folders plainly (`apple/`) but pages with the suffix
   (`apple 31f5<…>.md`). Without this every folder imported twice (an empty
   directory page plus a duplicate root page).
@@ -154,10 +167,10 @@ At the interchange boundary the scheme disappears entirely:
   `rewrite_page_links` — final zip paths are decided before the content pass
   so forward links resolve. Links to pages outside the archive keep their
   `mica://` href.
-- **Import** runs in two phases: first every page (and directory page) is
-  created, then content is applied — so link rewiring sees the complete
-  path → view map. A link href that resolves (via `resolveZipPath`, so
-  `../` chains and percent-encoding work) to an imported `.md` becomes
+- **Import** pre-generates every page's view id before inserting anything,
+  so link rewiring sees the complete path → view map (forward references
+  included). A link href that resolves (via `resolve_ref`, so `../` chains
+  and percent-encoding work) to an imported `.md` becomes
   `mica://page/<newViewId>`. This also picks up Notion's internal links
   (`Page%20<id>.md`).
 
@@ -171,8 +184,8 @@ so pasted markdown keeps working outside Mica.
 
 ## Known limitations
 
-- ZIP import reads the whole archive in memory (browser); multi-GB exports
-  are untested.
+- The archive is buffered in server memory during import (route body limit
+  1 GiB); streaming ingestion is future work.
 - Nested archives are expanded one level only.
 - Non-UTF-8, non-GBK entry-name code pages (Shift-JIS, EUC-KR…) fall back to
   lossy UTF-8.
@@ -180,10 +193,10 @@ so pasted markdown keeps working outside Mica.
 
 ## Tests
 
-- Rust: `cargo test -p mica-api-server` (zip writer, `safe_segment`,
-  `unique_zip_path`, …)
-- Dart: `flutter test` — `unzip_test.dart` (reader incl. ZIP64 /
-  data-descriptor / GBK / nested fixtures, wrapper peeling, ref resolution),
-  `inflate_test.dart` (against Python zlib output), `import_order_test.dart`
-  (manifest ordering, natural sort), `notion_test.dart` (detection,
-  ID stripping, folder↔page matching in both modes).
+- Rust: `cargo test -p mica-interchange` — binary fixtures
+  (`tests/fixtures/*.zip`, generated by Python zlib/zipfile) cover ZIP64,
+  data descriptors, GBK names, the 0x7075 extra field, nested Part zips,
+  wrapper peeling, Notion matching, ordering, ref resolution and full plan
+  integration; `cargo test -p mica-api-server` covers the export side.
+- E2E: import fixtures through `POST /workspaces/import`, export back, and
+  verify order/links/image bytes round-trip.
