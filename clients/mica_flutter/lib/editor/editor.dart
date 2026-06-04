@@ -1489,7 +1489,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ('above', 'Insert row above'),
       ('below', 'Insert row below'),
       ('delete', 'Delete row'),
-      ('deleteTable', 'Delete table'),
     ]);
     switch (selected) {
       case 'moveUp':
@@ -1502,9 +1501,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.insertTableRow(node, row + 1);
       case 'delete':
         _controller.deleteTableRow(node, row);
-      case 'deleteTable':
-        _closeCellEditor();
-        _controller.deleteNode(node);
     }
   }
 
@@ -1515,7 +1511,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ('left', 'Insert column left'),
       ('right', 'Insert column right'),
       ('delete', 'Delete column'),
-      ('deleteTable', 'Delete table'),
     ]);
     switch (selected) {
       case 'moveLeft':
@@ -1528,9 +1523,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.insertTableColumn(node, col + 1);
       case 'delete':
         _controller.deleteTableColumn(node, col);
-      case 'deleteTable':
-        _closeCellEditor();
-        _controller.deleteNode(node);
     }
   }
 

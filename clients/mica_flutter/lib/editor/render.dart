@@ -323,13 +323,21 @@ class RenderDocument extends RenderBox {
         }
       }
     }
-    if (node != _hoverCode || icon != _hoverIcon || image != _hoverImage) {
+    final border = local == null ? null : tableColBorderAt(local);
+    if (node != _hoverCode ||
+        icon != _hoverIcon ||
+        image != _hoverImage ||
+        border?.node != _hoverColBorder?.node ||
+        border?.col != _hoverColBorder?.col) {
       _hoverCode = node;
       _hoverIcon = icon;
       _hoverImage = image;
+      _hoverColBorder = border;
       markNeedsPaint();
     }
   }
+
+  ({int node, int col})? _hoverColBorder;
 
   @override
   void attach(PipelineOwner owner) {
@@ -543,7 +551,7 @@ class RenderDocument extends RenderBox {
   // sides); handles/add-buttons overlay the edges on hover instead of taking
   // horizontal space. Only vertical space is reserved (top gutter for column
   // handles, bottom bar for add-row).
-  static const double _tTopGutter = 16;
+  static const double _tTopGutter = 10;
   static const double _tBottomBar = 16;
   static const double _tEdge = 16; // overlay handle thickness
 
@@ -687,7 +695,7 @@ class RenderDocument extends RenderBox {
           Offset(colEdges[c] + padH, yy + padV),
         ));
       }
-      rowHandles.add(Rect.fromLTWH(0, yy, _tEdge, rowH));
+      rowHandles.add(Rect.fromLTWH(0, yy, 10, rowH));
       yy += rowH;
     }
     final gridBottom = yy;
@@ -702,7 +710,7 @@ class RenderDocument extends RenderBox {
     // the strip still adds a column.
     final colBorders = [
       for (var c = 1; c <= cols; c++)
-        (rect: Rect.fromLTWH(colEdges[c] - 4, gridTop, 8, gridHeight), col: c),
+        (rect: Rect.fromLTWH(colEdges[c] - 6, gridTop, 12, gridHeight), col: c),
     ];
 
     final layout = _NodeLayout(
@@ -732,7 +740,7 @@ class RenderDocument extends RenderBox {
         gridHeight,
       )
       ..addRowBar = Rect.fromLTWH(x0, gridBottom, availW, _tBottomBar)
-      ..tableHandle = Rect.fromLTWH(0, top, _tEdge, _tTopGutter)
+      ..tableHandle = Rect.fromLTWH(0, top, 16, _tTopGutter)
       ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, _tTopGutter);
     return layout;
   }
@@ -1296,29 +1304,43 @@ class RenderDocument extends RenderBox {
 
     if (_hoverCode != index) return;
 
-    final handlePaint = Paint()..color = const Color(0xFFCBD5E1);
+    final handlePaint = Paint()..color = const Color(0xFF94A3B8);
     final plusColor = EditorTheme.muted;
 
-    // Row handles (left gutter) + column handles (top gutter): little grips.
+    // Hovered column border: an accent line so the resize target is obvious.
+    final hb = _hoverColBorder;
+    if (hb != null && hb.node == index) {
+      final b = l.colBorders.where((x) => x.col == hb.col);
+      if (b.isNotEmpty) {
+        final r = b.first.rect.shift(offset);
+        canvas.drawRect(
+          Rect.fromLTWH(r.center.dx - 1, r.top, 2, r.height),
+          Paint()..color = const Color(0x802563EB),
+        );
+      }
+    }
+
+    // Row / column handles: three small dots sitting ON the edge lines
+    // (Notion/AFFiNE style) instead of strips covering cell content.
     for (final h in l.rowHandles) {
       final r = h.shift(offset);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(r.left + 3, r.center.dy - 9, 6, 18),
-          const Radius.circular(3),
-        ),
-        handlePaint,
-      );
+      for (var k = -1; k <= 1; k++) {
+        canvas.drawCircle(
+          Offset(r.left + 3, r.center.dy + k * 5.0),
+          1.6,
+          handlePaint,
+        );
+      }
     }
     for (final h in l.colHandles) {
       final r = h.shift(offset);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(r.center.dx - 9, r.top + 3, 18, 6),
-          const Radius.circular(3),
-        ),
-        handlePaint,
-      );
+      for (var k = -1; k <= 1; k++) {
+        canvas.drawCircle(
+          Offset(r.center.dx + k * 5.0, r.bottom),
+          1.6,
+          handlePaint,
+        );
+      }
     }
 
     void plusBar(Rect? rect, bool vertical) {
