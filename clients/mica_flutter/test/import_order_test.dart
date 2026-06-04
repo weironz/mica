@@ -53,6 +53,25 @@ void main() {
     );
   });
 
+  test('stripNotionId removes Notion export ID suffixes', () {
+    expect(
+      stripNotionId('My Page 1f2e3d4c5b6a7890abcdef1234567890'),
+      'My Page',
+    );
+    expect(
+      stripNotionId('读书笔记 0123456789abcdef0123456789ABCDEF'),
+      '读书笔记',
+    );
+    expect(
+      stripNotionId('Export-1f2e3d4c-5b6a-7890-abcd-ef1234567890'),
+      'Export',
+    );
+    // Ordinary names are untouched.
+    expect(stripNotionId('Guide'), 'Guide');
+    expect(stripNotionId('2024 总结'), '2024 总结');
+    expect(stripNotionId('deadbeef'), 'deadbeef');
+  });
+
   test('naturalCompare orders digit runs numerically', () {
     expect(naturalCompare('v2', 'v10'), lessThan(0));
     expect(naturalCompare('v10', 'v10'), 0);

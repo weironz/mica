@@ -40,6 +40,19 @@ List<String> orderPagePaths(Iterable<String> mdPaths, String? manifestJson) {
   return list;
 }
 
+/// Strip the ID Notion appends to exported file/folder names —
+/// `My Page 1f2e3d4c5b6a7890abcdef1234567890` (32 hex) or a dashed UUID —
+/// so imported pages get clean titles. No-op for ordinary names.
+String stripNotionId(String segment) {
+  return segment
+      .replaceFirst(RegExp(r'[ \-_]+[0-9a-fA-F]{32}$'), '')
+      .replaceFirst(
+        RegExp(r'[ \-_]+[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+            r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'),
+        '',
+      );
+}
+
 /// Compare strings with digit runs ordered numerically (`2.md` < `10.md`).
 int naturalCompare(String a, String b) {
   var i = 0, j = 0;

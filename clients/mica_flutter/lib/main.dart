@@ -679,10 +679,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Import a workspace ZIP: rebuild the page tree from the folder layout.
+  /// Works for Mica exports and Notion "Markdown & CSV" exports alike.
   Future<void> _importWorkspaceZip(String fileName, Uint8List zipBytes) {
-    final wsName = fileName
+    final wsName = stripNotionId(fileName
         .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
-        .trim();
+        .trim());
     return _importWorkspaceTree(
       wsName.isEmpty ? 'Imported' : wsName,
       () => readZip(zipBytes),
@@ -796,7 +797,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           final dirPage = await _api.createDocument(
             session.accessToken,
             workspace.id,
-            parts[d],
+            stripNotionId(parts[d]),
             parentViewId: parentViewId,
           );
           v = dirPage.view.id;
@@ -805,10 +806,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         parentViewId = v;
       }
       final markdown = utf8.decode(e.bytes, allowMalformed: true);
-      final fallback = parts.last.replaceAll(
+      final fallback = stripNotionId(parts.last.replaceAll(
         RegExp(r'\.md$', caseSensitive: false),
         '',
-      );
+      ));
       final title = _titleFromMarkdown(markdown, fallback);
       final created = await _api.createDocument(
         session.accessToken,
@@ -3028,19 +3029,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// Pick a Markdown file or a workspace ZIP and import it as a new workspace.
-  /// A ZIP rebuilds the page tree; a .md becomes one page.
+  /// Pick a workspace ZIP (Mica export or a Notion "Markdown & CSV" export —
+  /// both flow through the same tree import) and rebuild it as a new
+  /// workspace.
   Future<void> _importWorkspaceFile({bool fromSettings = false}) async {
-    final picked = await pickImportFile();
+    final picked = await pickImportFile(zipOnly: true);
     if (picked == null || !mounted) return;
     if (fromSettings) {
       Navigator.of(context).pop(); // close settings before the import flow runs
     }
-    if (picked.name.toLowerCase().endsWith('.zip')) {
-      await widget.onImportWorkspaceZip(picked.name, picked.bytes);
-    } else {
-      await widget.onAiNewWorkspace(utf8.decode(picked.bytes, allowMalformed: true));
-    }
+    await widget.onImportWorkspaceZip(picked.name, picked.bytes);
   }
 
   /// Multi-select import into an existing workspace: .md files (plus images
@@ -3139,10 +3137,29 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         for (final workspace in widget.workspaces) _row(workspace),
         if (widget.workspaces.isNotEmpty) const Divider(height: 8),
         _createRow(),
-        _actionRow(
-          Icons.upload_file_outlined,
-          'Import workspace (.md / .zip)',
-          widget.onImport,
+        SizedBox(
+          width: 320,
+          child: SubmenuButton(
+            leadingIcon: const Icon(
+              Icons.upload_file_outlined,
+              size: 18,
+              color: Color(0xFF475569),
+            ),
+            menuChildren: [
+              _importChoice(Icons.folder_zip_outlined, 'From ZIP (Mica export)'),
+              _importChoice(
+                Icons.cloud_download_outlined,
+                'From Notion (Markdown & CSV ZIP)',
+              ),
+            ],
+            child: const Text(
+              'Import workspace',
+              style: TextStyle(
+                color: Color(0xFF475569),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         ),
       ],
       builder: (context, controller, child) {
@@ -3328,30 +3345,18 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  Widget _actionRow(IconData icon, String label, VoidCallback onTap) {
-    return SizedBox(
-      width: 320,
-      child: InkWell(
-        onTap: () {
-          _menu.close();
-          onTap();
-        },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          child: Row(
-            children: [
-              Icon(icon, size: 18, color: const Color(0xFF475569)),
-              const SizedBox(width: 10),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Color(0xFF475569),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
+  /// Both submenu entries run the same ZIP import — Notion's "Markdown & CSV"
+  /// export is a markdown ZIP too; its ID-suffixed names are auto-detected.
+  Widget _importChoice(IconData icon, String label) {
+    return MenuItemButton(
+      leadingIcon: Icon(icon, size: 18, color: const Color(0xFF475569)),
+      onPressed: () {
+        _menu.close();
+        widget.onImport();
+      },
+      child: Text(
+        label,
+        style: const TextStyle(color: Color(0xFF475569)),
       ),
     );
   }
@@ -4296,8 +4301,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _sectionTitle(context, Icons.import_export, 'Data', const Color(0xFF0EA5E9)),
     const SizedBox(height: 12),
     const Text(
-      'Import a workspace from a Mica ZIP (rebuilds the page tree + images), '
-      'or a single Markdown file as a one-page workspace.',
+      'Import a workspace from a ZIP — a Mica export or a Notion '
+      '"Markdown & CSV" export. The page tree, ordering and images are '
+      'rebuilt.',
       style: TextStyle(color: Color(0xFF64748B)),
     ),
     const SizedBox(height: 12),
@@ -4306,7 +4312,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       child: OutlinedButton.icon(
         onPressed: () => widget.onImportWorkspace(),
         icon: const Icon(Icons.upload_file_outlined, size: 18),
-        label: const Text('Import workspace (Markdown / ZIP)'),
+        label: const Text('Import workspace (ZIP)'),
       ),
     ),
     const SizedBox(height: 16),

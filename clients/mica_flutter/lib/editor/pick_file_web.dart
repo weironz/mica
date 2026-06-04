@@ -12,9 +12,14 @@ Future<({String name, String text})?> pickTextFile() async {
   return (name: file.name, text: result is String ? result : '');
 }
 
-/// Pick a Markdown file or a workspace `.zip`, returning its raw bytes.
-Future<({String name, Uint8List bytes})?> pickImportFile() async {
-  final files = await _pickFiles('.md,.markdown,.txt,.zip,application/zip');
+/// Pick a workspace `.zip` (or also Markdown when [zipOnly] is false),
+/// returning its raw bytes.
+Future<({String name, Uint8List bytes})?> pickImportFile({
+  bool zipOnly = false,
+}) async {
+  final files = await _pickFiles(zipOnly
+      ? '.zip,application/zip'
+      : '.md,.markdown,.txt,.zip,application/zip');
   if (files.isEmpty) return null;
   final file = files.first;
   return (name: file.name, bytes: await _readBytes(file));
