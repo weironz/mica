@@ -677,8 +677,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Import a workspace ZIP: rebuild the page tree from
-  /// the folder layout, upload bundled `assets/`, and rewire image references.
+  /// Import a workspace ZIP: rebuild the page tree from the folder layout
+  /// (folders without a matching `.md` become empty directory pages), and
+  /// upload images referenced by relative path, rewiring them to Mica's
+  /// `{file_id, name}` image format.
   Future<void> _importWorkspaceZip(String fileName, Uint8List zipBytes) {
     return _run(() async {
       final session = _requireSession();
@@ -691,20 +693,30 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         wsName.isEmpty ? 'Imported' : wsName,
       );
 
-      // Upload bundled assets → map "assets/<name>" to its file id.
-      final assets = <String, ({String fileId, String name})>{};
-      for (final e in entries) {
-        if (!e.name.startsWith('assets/')) continue;
-        final base = e.name.substring('assets/'.length);
-        if (base.isEmpty) continue;
+      // Non-markdown files in the ZIP, addressable by path. Uploaded lazily
+      // when a page actually references them, each at most once.
+      final filesByPath = <String, Uint8List>{
+        for (final e in entries)
+          if (!e.name.toLowerCase().endsWith('.md')) e.name: e.bytes,
+      };
+      final zipPaths = filesByPath.keys.toSet();
+      final uploadedByPath = <String, ({String fileId, String name})>{};
+
+      Future<({String fileId, String name})?> uploadImageRef(
+          String mdPath, String url) async {
+        final zipPath = resolveZipPath(mdPath, url, zipPaths);
+        if (zipPath == null) return null; // external URL or not in the ZIP
+        final cached = uploadedByPath[zipPath];
+        if (cached != null) return cached;
+        final base = zipPath.split('/').last;
         final file = await _api.uploadImage(
           session.accessToken,
           workspace.id,
           fileName: base,
           mimeType: _guessImageMime(base),
-          bytes: e.bytes,
+          bytes: filesByPath[zipPath]!,
         );
-        assets['assets/$base'] = (fileId: file.id, name: file.name);
+        return uploadedByPath[zipPath] = (fileId: file.id, name: file.name);
       }
 
       // Create pages parents-first (shallower paths first) so a child can find
@@ -713,13 +725,30 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ..sort((a, b) =>
             a.name.split('/').length.compareTo(b.name.split('/').length));
       final viewByPath = <String, String>{};
+      final folderView = <String, String>{}; // folder path -> its page's view
       final stamp = DateTime.now().microsecondsSinceEpoch;
       for (final e in mds) {
         final parts = e.name.split('/');
+        // Walk the folder chain. A folder maps to the page exported as
+        // `<folder>.md` when present; otherwise create an empty page to act
+        // as the directory node.
         String? parentViewId;
-        if (parts.length > 1) {
-          final parentMd = '${parts.sublist(0, parts.length - 1).join('/')}.md';
-          parentViewId = viewByPath[parentMd];
+        var folderPath = '';
+        for (var d = 0; d + 1 < parts.length; d++) {
+          folderPath =
+              folderPath.isEmpty ? parts[d] : '$folderPath/${parts[d]}';
+          var v = viewByPath['$folderPath.md'] ?? folderView[folderPath];
+          if (v == null) {
+            final dirPage = await _api.createDocument(
+              session.accessToken,
+              workspace.id,
+              parts[d],
+              parentViewId: parentViewId,
+            );
+            v = dirPage.view.id;
+            folderView[folderPath] = v;
+          }
+          parentViewId = v;
         }
         final markdown = utf8.decode(e.bytes, allowMalformed: true);
         final fallback = parts.last.replaceAll(
@@ -748,9 +777,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           var data = specs[k].data;
           if (specs[k].kind == 'image') {
             final url = data['url'] as String?;
-            final asset = url == null ? null : assets[_normalizeAssetRef(url)];
-            if (asset != null) {
-              data = {'file_id': asset.fileId, 'name': asset.name};
+            if (url != null) {
+              final up = await uploadImageRef(e.name, url);
+              if (up != null) {
+                data = {'file_id': up.fileId, 'name': up.name};
+              }
             }
           }
           ops.add({
@@ -781,16 +812,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (mounted) setState(() => _workspaces = workspaces);
       await _selectWorkspace(workspace);
     });
-  }
-
-  /// Strip leading `../` / `./` from a Markdown asset ref → `assets/<name>`.
-  String _normalizeAssetRef(String url) {
-    var u = url.trim();
-    while (u.startsWith('../')) {
-      u = u.substring(3);
-    }
-    if (u.startsWith('./')) u = u.substring(2);
-    return u;
   }
 
   String _guessImageMime(String name) {

@@ -125,4 +125,48 @@ void main() {
         List.filled(10, [1, 2, 3, 4]).expand((x) => x).toList());
     expect(byName['empty.md'], isEmpty);
   });
+
+  group('resolveZipPath', () {
+    final paths = {
+      'assets/图片.png',
+      'Guide/pics/a.png',
+      'Guide/Setup/shot.png',
+    };
+
+    test('resolves relative to the md file folder', () {
+      expect(resolveZipPath('Guide/Setup.md', 'pics/a.png', paths),
+          'Guide/pics/a.png');
+      expect(resolveZipPath('Guide/Setup/Linux.md', './shot.png', paths),
+          'Guide/Setup/shot.png');
+    });
+
+    test('resolves ../ chains (Mica export layout)', () {
+      expect(resolveZipPath('Guide/Setup.md', '../assets/图片.png', paths),
+          'assets/图片.png');
+      expect(
+          resolveZipPath('Guide/Setup/Linux.md', '../../assets/图片.png', paths),
+          'assets/图片.png');
+    });
+
+    test('falls back to archive root for root-relative refs', () {
+      expect(resolveZipPath('Guide/Setup/Linux.md', 'assets/图片.png', paths),
+          'assets/图片.png');
+      // Excess ../ is tolerated rather than failing.
+      expect(resolveZipPath('Guide.md', '../../assets/图片.png', paths),
+          'assets/图片.png');
+    });
+
+    test('decodes percent-encoded names', () {
+      expect(
+          resolveZipPath('Guide/Setup.md', '../assets/%E5%9B%BE%E7%89%87.png',
+              paths),
+          'assets/图片.png');
+    });
+
+    test('external URLs and missing files return null', () {
+      expect(resolveZipPath('a.md', 'https://x.com/i.png', paths), isNull);
+      expect(resolveZipPath('a.md', 'data:image/png;base64,xx', paths), isNull);
+      expect(resolveZipPath('a.md', 'nope.png', paths), isNull);
+    });
+  });
 }

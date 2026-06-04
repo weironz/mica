@@ -73,6 +73,37 @@ List<ZipFileEntry> readZip(Uint8List data) {
   return out;
 }
 
+/// Resolve a Markdown reference (`../assets/图 1.png`) found inside
+/// [fromFile] (a path within the archive) to an archive path. Returns null
+/// when the reference is external (has a URL scheme) or matches nothing in
+/// [paths]. Tries the md file's own folder first, then the archive root.
+String? resolveZipPath(String fromFile, String ref, Set<String> paths) {
+  var u = ref.trim();
+  if (u.isEmpty) return null;
+  if (RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*:').hasMatch(u)) return null; // URL
+  u = u.split('#').first.split('?').first;
+  try {
+    u = Uri.decodeFull(u);
+  } catch (_) {}
+  final dir = fromFile.contains('/')
+      ? fromFile.substring(0, fromFile.lastIndexOf('/')).split('/')
+      : const <String>[];
+  for (final base in [dir, const <String>[]]) {
+    final stack = [...base];
+    for (final seg in u.split('/')) {
+      if (seg.isEmpty || seg == '.') continue;
+      if (seg == '..') {
+        if (stack.isNotEmpty) stack.removeLast();
+      } else {
+        stack.add(seg);
+      }
+    }
+    final p = stack.join('/');
+    if (paths.contains(p)) return p;
+  }
+  return null;
+}
+
 Uint8List? _decodeEntry(Uint8List comp, int method, int uncompSize) {
   switch (method) {
     case 0:
