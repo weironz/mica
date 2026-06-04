@@ -1,0 +1,67 @@
+[
+  {
+    "data": {
+      "level": 2
+    },
+    "kind": "heading",
+    "text": "closing hashes"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 11,
+          "start": 0,
+          "type": "code"
+        },
+        {
+          "end": 28,
+          "start": 16,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "simple code and double `tick span"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 2,
+          "start": 0,
+          "type": "code"
+        },
+        {
+          "end": 17,
+          "start": 8,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "`` then foo ` bar"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "hard break here\\\nafter two spaces"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "backslash break\\\njoins here"
+  },
+  {
+    "data": {
+      "language": "js"
+    },
+    "kind": "code_block",
+    "text": "tilde fenced"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "para with\nindented lazy line"
+  }
+]

@@ -497,10 +497,29 @@ The recurring problem the engine must get right for every node type:
      each group. Editor degrade: non-paragraph blocks inside quotes
      render as their plain kinds (no quote border) until the editor
      learns `data.quote`. Also fixed: an indented (4+ col) marker can't
-     start a top-level list (ex 238). Scoreboard **438/652 (67.2%)**,
+     start a top-level list (ex 238). Scoreboard 438/652 (67.2%),
      Block quotes 24%→100%, List items 62%. Fixtures 12–17 pin both
-     parsers. Remaining big bucket: HTML blocks (44) + Raw HTML (20) —
-     needs the degrade policy decision; List items' last examples need
-     code/quote containers inside list items. Decision point: keep extending
+     parsers.
+     Mid-tail sweep DONE (2026-06-05): ATX closing sequences + empty
+     headings (#⇥ too) → 100%; autolinks tightened (scheme 2–32 chars,
+     no backslash in emails) → 100%; spec backtick-run code spans
+     (N opens/N closes, newlines→space, one-space strip; export picks
+     a longer fence + pads) 77%; hard breaks (2+ trailing spaces or
+     backslash-EOL canonicalize to `\`+newline in text, HTML renders
+     <br />) 80%; `~~~` fences, info-string rules (first word, no
+     backticks in backtick fences, entity/escape decode), fence-indent
+     shedding, indented closers → Fenced 100%; indented-code blank/
+     trailing-space fidelity → 100%; entity & numeric char refs (full
+     numeric + curated ~170-name table both ends; unknown stay literal
+     per spec) 71%; multi-line link reference definitions (dest/title
+     on following lines, multi-line titles, fence-aware, can't
+     interrupt a paragraph) → 81%; href percent-encoding (houdini
+     set) and `'` no longer HTML-escaped; 4+-column lines are lazy
+     continuation, never new blocks. Setext/Paragraphs/Soft breaks/
+     Textual 100%, Emphasis 93%, Links 76%. Scoreboard **516/652
+     (79.1%)**. Fixtures 12–19 pin both parsers. Remaining: HTML
+     blocks 44 + Raw HTML 20 (degrade policy decision), list-item
+     containers (code/quotes in items) for List items/Lists tails,
+     Links precedence edge cases. Decision point: keep extending
      the in-house parser vs adopting `comrak` for the *read side only*
      — decide when the in-house curve flattens.

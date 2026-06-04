@@ -264,6 +264,208 @@ int matchingBracket(String src, int open) {
   return -1;
 }
 
+/// Curated named-entity table (the spec set plus common real-world names);
+/// unknown entities stay literal, which is exactly the spec behavior.
+const Map<String, String> _namedEntities = {
+  'AElig': 'Æ',
+  'Alpha': 'Α',
+  'Beta': 'Β',
+  'ClockwiseContourIntegral': '∲',
+  'Dagger': '‡',
+  'Dcaron': 'Ď',
+  'Delta': 'Δ',
+  'DifferentialD': 'ⅆ',
+  'Gamma': 'Γ',
+  'HilbertSpace': 'ℋ',
+  'Lambda': 'Λ',
+  'OElig': 'Œ',
+  'Omega': 'Ω',
+  'Phi': 'Φ',
+  'Pi': 'Π',
+  'Psi': 'Ψ',
+  'Scaron': 'Š',
+  'Sigma': 'Σ',
+  'Theta': 'Θ',
+  'Yuml': 'Ÿ',
+  'aacute': 'á',
+  'acirc': 'â',
+  'acute': '´',
+  'agrave': 'à',
+  'alpha': 'α',
+  'amp': '&',
+  'apos': '\'',
+  'aring': 'å',
+  'asymp': '≈',
+  'atilde': 'ã',
+  'auml': 'ä',
+  'beta': 'β',
+  'brvbar': '¦',
+  'bull': '•',
+  'cap': '∩',
+  'ccedil': 'ç',
+  'cedil': '¸',
+  'cent': '¢',
+  'chi': 'χ',
+  'circ': 'ˆ',
+  'clubs': '♣',
+  'copy': '©',
+  'cup': '∪',
+  'curren': '¤',
+  'dagger': '†',
+  'darr': '↓',
+  'deg': '°',
+  'delta': 'δ',
+  'diams': '♦',
+  'divide': '÷',
+  'eacute': 'é',
+  'ecirc': 'ê',
+  'egrave': 'è',
+  'empty': '∅',
+  'emsp': ' ',
+  'ensp': ' ',
+  'epsilon': 'ε',
+  'equiv': '≡',
+  'eta': 'η',
+  'euml': 'ë',
+  'euro': '€',
+  'exist': '∃',
+  'fnof': 'ƒ',
+  'forall': '∀',
+  'frac12': '½',
+  'frac14': '¼',
+  'frac34': '¾',
+  'frasl': '⁄',
+  'gamma': 'γ',
+  'ge': '≥',
+  'gt': '>',
+  'harr': '↔',
+  'hearts': '♥',
+  'hellip': '…',
+  'iacute': 'í',
+  'icirc': 'î',
+  'iexcl': '¡',
+  'infin': '∞',
+  'int': '∫',
+  'iota': 'ι',
+  'iquest': '¿',
+  'isin': '∈',
+  'iuml': 'ï',
+  'kappa': 'κ',
+  'lambda': 'λ',
+  'lang': '⟨',
+  'laquo': '«',
+  'larr': '←',
+  'lceil': '⌈',
+  'ldquo': '“',
+  'le': '≤',
+  'lfloor': '⌊',
+  'loz': '◊',
+  'lsquo': '‘',
+  'lt': '<',
+  'macr': '¯',
+  'mdash': '—',
+  'micro': 'µ',
+  'middot': '·',
+  'minus': '−',
+  'mu': 'μ',
+  'nbsp': ' ',
+  'ndash': '–',
+  'ne': '≠',
+  'ngE': '≧̸',
+  'not': '¬',
+  'notin': '∉',
+  'ntilde': 'ñ',
+  'nu': 'ν',
+  'oacute': 'ó',
+  'ocirc': 'ô',
+  'oelig': 'œ',
+  'omega': 'ω',
+  'oplus': '⊕',
+  'ordf': 'ª',
+  'ordm': 'º',
+  'oslash': 'ø',
+  'otilde': 'õ',
+  'otimes': '⊗',
+  'ouml': 'ö',
+  'para': '¶',
+  'permil': '‰',
+  'perp': '⊥',
+  'phi': 'φ',
+  'pi': 'π',
+  'plusmn': '±',
+  'pound': '£',
+  'prod': '∏',
+  'psi': 'ψ',
+  'quot': '"',
+  'radic': '√',
+  'rang': '⟩',
+  'raquo': '»',
+  'rarr': '→',
+  'rceil': '⌉',
+  'rdquo': '”',
+  'reg': '®',
+  'rfloor': '⌋',
+  'rho': 'ρ',
+  'rsquo': '’',
+  'scaron': 'š',
+  'sdot': '⋅',
+  'sect': '§',
+  'shy': '­',
+  'sigma': 'σ',
+  'spades': '♠',
+  'sub': '⊂',
+  'sum': '∑',
+  'sup': '⊃',
+  'sup1': '¹',
+  'sup2': '²',
+  'sup3': '³',
+  'szlig': 'ß',
+  'tau': 'τ',
+  'theta': 'θ',
+  'thinsp': ' ',
+  'tilde': '˜',
+  'times': '×',
+  'trade': '™',
+  'uacute': 'ú',
+  'uarr': '↑',
+  'ucirc': 'û',
+  'uml': '¨',
+  'upsilon': 'υ',
+  'uuml': 'ü',
+  'xi': 'ξ',
+  'yen': '¥',
+  'zeta': 'ζ',
+  'zwj': '‍',
+  'zwnj': '‌',
+};
+
+/// Parse an entity/numeric character reference starting at `&` (src[i]).
+/// Returns (decoded string, chars consumed), or null.
+(String, int)? parseEntity(String src, int i) {
+  if (i >= src.length || src[i] != '&') return null;
+  final semi = src.indexOf(';', i + 1);
+  if (semi < 0 || semi - i > 33) return null;
+  final body = src.substring(i + 1, semi);
+  if (body.startsWith('#')) {
+    var digits = body.substring(1);
+    var radix = 10;
+    if (digits.startsWith('x') || digits.startsWith('X')) {
+      digits = digits.substring(1);
+      radix = 16;
+    }
+    if (digits.isEmpty || digits.length > 7) return null;
+    final n = int.tryParse(digits, radix: radix);
+    if (n == null) return null;
+    final code = (n == 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF)) ? 0xFFFD : n;
+    return (String.fromCharCode(code), semi - i + 1);
+  }
+  final v = _namedEntities[body];
+  return v == null ? null : (v, semi - i + 1);
+}
+
+/// Unescape backslash-escaped ASCII punctuation (public mirror).
+String unescapeMd(String s) => _unescapeMd(s);
+
 /// Unescape backslash-escaped ASCII punctuation.
 String _unescapeMd(String s) {
   final out = StringBuffer();
@@ -272,6 +474,16 @@ String _unescapeMd(String s) {
     if (s[i] == r'\' && i + 1 < s.length && _asciiPunct.contains(s[i + 1])) {
       out.write(s[i + 1]);
       i += 2;
+    } else if (s[i] == '&') {
+      // Entity references decode inside destinations/titles/info strings.
+      final ent = parseEntity(s, i);
+      if (ent != null) {
+        out.write(ent.$1);
+        i += ent.$2;
+      } else {
+        out.write(s[i]);
+        i++;
+      }
     } else {
       out.write(s[i]);
       i++;
@@ -352,8 +564,9 @@ String _unescapeMd(String s) {
 /// email → mailto:, else null. Mirrors the Rust engine.
 String? autolinkTarget(String inner) {
   if (inner.isEmpty || inner.contains(RegExp(r'[\s<]'))) return null;
-  if (RegExp(r'^[A-Za-z][A-Za-z0-9+.-]*:.').hasMatch(inner)) return inner;
-  if (RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s.]+$').hasMatch(inner)) {
+  if (RegExp(r'^[A-Za-z][A-Za-z0-9+.-]{1,31}:.').hasMatch(inner)) return inner;
+  if (!inner.contains(r'\') &&
+      RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s.]+$').hasMatch(inner)) {
     return 'mailto:$inner';
   }
   return null;
@@ -398,6 +611,16 @@ String? autolinkTarget(String inner) {
       out.write(src[i + 1]);
       i += 2;
       continue;
+    }
+    // Entity / numeric character reference: decodes to plain TEXT (the
+    // result can't open emphasis or any structure).
+    if (src[i] == '&') {
+      final ent = parseEntity(src, i);
+      if (ent != null) {
+        out.write(ent.$1);
+        i += ent.$2;
+        continue;
+      }
     }
     // Autolink: <https://…> / <user@host> — the URL is both text and target.
     if (src[i] == '<') {
@@ -506,15 +729,49 @@ String? autolinkTarget(String inner) {
         continue;
       }
     }
+    // Inline code: an N-backtick run closes only on a run of exactly N;
+    // line endings become spaces; one leading+trailing space strips when
+    // both exist and the content isn't all spaces. No escapes inside.
     if (src[i] == '`') {
-      final end = src.indexOf('`', i + 1);
-      if (end > i) {
+      var n = 0;
+      while (i + n < src.length && src[i + n] == '`') {
+        n++;
+      }
+      var j = i + n;
+      var close = -1;
+      while (j < src.length) {
+        if (src[j] == '`') {
+          var m = 0;
+          while (j + m < src.length && src[j + m] == '`') {
+            m++;
+          }
+          if (m == n) {
+            close = j;
+            break;
+          }
+          j += m;
+        } else {
+          j++;
+        }
+      }
+      if (close >= 0) {
+        var inner = src.substring(i + n, close).replaceAll('\n', ' ');
+        if (inner.length >= 2 &&
+            inner.startsWith(' ') &&
+            inner.endsWith(' ') &&
+            inner.trim().isNotEmpty) {
+          inner = inner.substring(1, inner.length - 1);
+        }
         final start = out.length;
-        out.write(src.substring(i + 1, end));
+        out.write(inner);
         marks.add(Mark(start, out.length, 'code'));
-        i = end + 1;
+        i = close + n;
         continue;
       }
+      // No closer: the run is literal text.
+      out.write('`' * n);
+      i += n;
+      continue;
     }
     out.write(src[i]);
     i++;
@@ -668,6 +925,11 @@ String escapeInline(String text) {
   final out = StringBuffer();
   for (var i = 0; i < text.length; i++) {
     final c = text[i];
+    // A backslash right before a newline IS a hard break — keep it raw.
+    if (c == r'\' && i + 1 < text.length && text[i + 1] == '\n') {
+      out.write(c);
+      continue;
+    }
     if (r'\*_`~[]<'.contains(c)) out.write(r'\');
     out.write(c);
   }
@@ -711,8 +973,24 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
     }
     out.write(lead);
     if (pick.type == 'code') {
-      // Code spans are literal — no escaping, no nested marks.
-      out.write('`${text.substring(ps, pe)}`');
+      // Code spans are literal — no escaping, no nested marks. The fence is
+      // one backtick longer than any run inside; a space pads content that
+      // starts/ends with a backtick or with stripped-on-read spaces.
+      final raw = text.substring(ps, pe);
+      var longest = 0, cur = 0;
+      for (var k = 0; k < raw.length; k++) {
+        if (raw[k] == '`') {
+          cur++;
+          if (cur > longest) longest = cur;
+        } else {
+          cur = 0;
+        }
+      }
+      final fence = '`' * (longest + 1);
+      final pad = raw.startsWith('`') ||
+          raw.endsWith('`') ||
+          (raw.startsWith(' ') && raw.endsWith(' ') && raw.trim().isNotEmpty);
+      out.write(pad ? '$fence $raw $fence' : '$fence$raw$fence');
       pos = pe;
       continue;
     }

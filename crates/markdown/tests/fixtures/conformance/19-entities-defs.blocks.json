@@ -1,0 +1,49 @@
+[
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "copy © and star *foo* and hex 'quote'"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "unknown &MadeUpEntity; stays literal"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 9,
+          "href": "/multi-url",
+          "start": 4,
+          "title": "multi\nline title",
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "see multi resolves"
+  },
+  {
+    "data": {
+      "language": "python"
+    },
+    "kind": "code_block",
+    "text": "fenced with indent\nkeep"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 25,
+          "href": "/föö",
+          "start": 22,
+          "title": "tïtle",
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "ref with entity dest: ent"
+  }
+]

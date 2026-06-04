@@ -132,16 +132,11 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   let mut blocks: Vec<Block> = Vec::new();
   let mut root_children: Vec<String> = Vec::new();
 
-  // Pass 1: link reference definitions (`[label]: dest "title"`) — they can
-  // sit anywhere, resolve case-insensitively, and vanish from the output.
-  let mut defs = RefDefs::new();
-  let mut def_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
-  for (idx, raw) in raw_lines.iter().enumerate() {
-    if let Some((label, dest, title)) = parse_ref_definition(raw) {
-      defs.entry(normalize_label(&label)).or_insert((dest, title));
-      def_lines.insert(idx);
-    }
-  }
+  // Pass 1: link reference definitions (`[label]: dest "title"`, possibly
+  // spanning lines) — they resolve case-insensitively and vanish from the
+  // output. Definitions inside fences don't count, and a definition can't
+  // interrupt a paragraph.
+  let (defs, def_lines) = collect_ref_definitions(&raw_lines);
 
   let mut index = 0;
   // Stack of open list items' CONTENT columns (tabs count as 4): a new item
@@ -162,6 +157,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     base: Value,
     had_blank: bool,
     qdepth: usize,
+    ends_hard: bool,
   }
   let mut open_item: Option<OpenItem> = None;
   // Last pushed list item (index, level, marker char) — anchors loose-list
@@ -185,6 +181,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     }
     let line = raw_lines[index].trim_end();
     let content = line.trim_start();
+    // Two or more trailing spaces on the source line = a hard line break if
+    // a continuation joins (canonicalized to a backslash break).
+    let ends_hard = raw_lines[index].ends_with("  ");
 
     if content.is_empty() {
       // Blank lines between items keep the list context, end the open
@@ -220,6 +219,23 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       col = if c == '\t' { (col / 4 + 1) * 4 } else { col + 1 };
     }
 
+    // A 4+-column line cannot start a new block while a top-level
+    // paragraph-like block is open — it is lazy continuation text.
+    if col >= 4
+      && list_stack.is_empty()
+      && let Some(open) = open_item.as_mut()
+      && !open.had_blank
+    {
+      open.raw.push_str(if open.ends_hard { "\\\n" } else { "\n" });
+      open.raw.push_str(content);
+      open.ends_hard = ends_hard;
+      let (joined, joined_data) = apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
+      blocks[open.block_idx].text = joined;
+      blocks[open.block_idx].data = joined_data;
+      index += 1;
+      continue;
+    }
+
     // Setext underline of the open (possibly multi-line) paragraph: the
     // whole continued paragraph becomes the heading.
     if let Some(open) = &open_item
@@ -236,20 +252,32 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       continue;
     }
 
-    if let Some(language) = content.strip_prefix("```") {
+    if col < 4
+      && let Some((fence_char, fence_len, info)) = fence_open(content)
+    {
       list_stack.clear();
       open_item = None;
       last_list = None;
       pending_loose = false;
-      let language = language.trim().to_string();
+      // Only the first word of the info string is the language.
+      let language =
+        unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
       let mut code_lines = Vec::new();
       index += 1;
       while index < raw_lines.len() {
-        if raw_lines[index].trim_start().starts_with("```") {
+        let l = raw_lines[index];
+        let lt = l.trim_start();
+        let lcol = l.len() - lt.len();
+        if lcol < 4 && fence_close(lt, fence_char, fence_len) {
           index += 1;
           break;
         }
-        code_lines.push(raw_lines[index].to_string());
+        // Content lines shed up to the opening fence's indentation.
+        code_lines.push(if col > 0 {
+          deindent_columns(l, col)
+        } else {
+          l.to_string()
+        });
         index += 1;
       }
       let data = if language.is_empty() {
@@ -321,11 +349,13 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       last_list = None;
       pending_loose = false;
       let mut code_lines: Vec<String> = Vec::new();
-      let mut pending_blanks = 0usize;
+      let mut pending_blanks: Vec<String> = Vec::new();
       while index < raw_lines.len() {
-        let l = raw_lines[index].trim_end();
+        let l = raw_lines[index];
         if l.trim().is_empty() {
-          pending_blanks += 1;
+          // Blank-ish lines keep whatever indentation they have past the
+          // 4-column code margin.
+          pending_blanks.push(deindent_columns(l, 4));
           index += 1;
           continue;
         }
@@ -337,10 +367,8 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         if lcol < 4 {
           break;
         }
-        for _ in 0..pending_blanks {
-          code_lines.push(String::new());
-        }
-        pending_blanks = 0;
+        code_lines.append(&mut pending_blanks);
+        // Trailing spaces are code content — keep the line untrimmed.
         code_lines.push(deindent_columns(l, 4));
         index += 1;
       }
@@ -395,8 +423,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         && open.qdepth >= qdepth
         && !open.had_blank
       {
-        open.raw.push('\n');
+        open.raw.push_str(if open.ends_hard { "\\\n" } else { "\n" });
         open.raw.push_str(qrest_trim);
+        open.ends_hard = ends_hard;
         let (joined, joined_data) =
           apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
         blocks[open.block_idx].text = joined;
@@ -501,6 +530,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
           base,
           had_blank: false,
           qdepth,
+          ends_hard,
         })
       } else {
         None
@@ -553,9 +583,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
           if open.raw.is_empty() {
             open.raw = content.to_string();
           } else {
-            open.raw.push('\n');
+            open.raw.push_str(if open.ends_hard { "\\\n" } else { "\n" });
             open.raw.push_str(content);
           }
+          open.ends_hard = ends_hard;
           let (joined, joined_data) =
             apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
           blocks[open.block_idx].text = joined;
@@ -638,6 +669,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         base,
         had_blank: false,
         qdepth: 0,
+        ends_hard,
       });
       index += 1;
       continue;
@@ -667,6 +699,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       base: Value::Null,
       had_blank: false,
       qdepth: 0,
+      ends_hard,
     });
     index += 1;
   }
@@ -822,7 +855,7 @@ fn split_table_row(line: &str) -> Vec<String> {
 /// triple for block construction.
 fn classify_markdown_line(content: &str) -> (&'static str, String, Value) {
   if let Some(level) = heading_prefix_level(content) {
-    let text = content[level..].trim_start().to_string();
+    let text = strip_atx_closing(content[level..].trim_start()).to_string();
     return ("heading", text, json!({ "level": level }));
   }
   if let Some(rest) = content.strip_prefix("- [ ] ") {
@@ -887,10 +920,29 @@ fn push_block(
 
 fn heading_prefix_level(content: &str) -> Option<usize> {
   let hashes = content.chars().take_while(|&c| c == '#').count();
-  if (1..=6).contains(&hashes) && content[hashes..].starts_with(' ') {
+  if (1..=6).contains(&hashes)
+    && (content.len() == hashes || content[hashes..].starts_with([' ', '\t']))
+  {
     Some(hashes)
   } else {
     None
+  }
+}
+
+/// Strip an ATX closing sequence: trailing `#`s preceded by a space (or
+/// making up the whole text).
+fn strip_atx_closing(text: &str) -> &str {
+  let t = text.trim_end();
+  let trimmed = t.trim_end_matches('#');
+  if trimmed.len() == t.len() {
+    return t;
+  }
+  if trimmed.is_empty() {
+    return "";
+  }
+  match trimmed.strip_suffix(' ') {
+    Some(rest) => rest.trim_end(),
+    None => t,
   }
 }
 
@@ -911,6 +963,238 @@ fn numbered_list_marker(content: &str) -> Option<(u64, &str)> {
     [b'.', b' ', ..] | [b')', b' ', ..] => Some((start, &rest[2..])),
     _ => None,
   }
+}
+
+/// Curated named-entity table (the spec set plus common real-world names);
+/// unknown entities stay literal, which is exactly the spec behavior.
+fn named_entity(name: &str) -> Option<&'static str> {
+  match name {
+    "AElig" => Some("Æ"),
+    "Alpha" => Some("Α"),
+    "Beta" => Some("Β"),
+    "ClockwiseContourIntegral" => Some("∲"),
+    "Dagger" => Some("‡"),
+    "Dcaron" => Some("Ď"),
+    "Delta" => Some("Δ"),
+    "DifferentialD" => Some("ⅆ"),
+    "Gamma" => Some("Γ"),
+    "HilbertSpace" => Some("ℋ"),
+    "Lambda" => Some("Λ"),
+    "OElig" => Some("Œ"),
+    "Omega" => Some("Ω"),
+    "Phi" => Some("Φ"),
+    "Pi" => Some("Π"),
+    "Psi" => Some("Ψ"),
+    "Scaron" => Some("Š"),
+    "Sigma" => Some("Σ"),
+    "Theta" => Some("Θ"),
+    "Yuml" => Some("Ÿ"),
+    "aacute" => Some("á"),
+    "acirc" => Some("â"),
+    "acute" => Some("´"),
+    "agrave" => Some("à"),
+    "alpha" => Some("α"),
+    "amp" => Some("&"),
+    "apos" => Some("'"),
+    "aring" => Some("å"),
+    "asymp" => Some("≈"),
+    "atilde" => Some("ã"),
+    "auml" => Some("ä"),
+    "beta" => Some("β"),
+    "brvbar" => Some("¦"),
+    "bull" => Some("•"),
+    "cap" => Some("∩"),
+    "ccedil" => Some("ç"),
+    "cedil" => Some("¸"),
+    "cent" => Some("¢"),
+    "chi" => Some("χ"),
+    "circ" => Some("ˆ"),
+    "clubs" => Some("♣"),
+    "copy" => Some("©"),
+    "cup" => Some("∪"),
+    "curren" => Some("¤"),
+    "dagger" => Some("†"),
+    "darr" => Some("↓"),
+    "deg" => Some("°"),
+    "delta" => Some("δ"),
+    "diams" => Some("♦"),
+    "divide" => Some("÷"),
+    "eacute" => Some("é"),
+    "ecirc" => Some("ê"),
+    "egrave" => Some("è"),
+    "empty" => Some("∅"),
+    "emsp" => Some(" "),
+    "ensp" => Some(" "),
+    "epsilon" => Some("ε"),
+    "equiv" => Some("≡"),
+    "eta" => Some("η"),
+    "euml" => Some("ë"),
+    "euro" => Some("€"),
+    "exist" => Some("∃"),
+    "fnof" => Some("ƒ"),
+    "forall" => Some("∀"),
+    "frac12" => Some("½"),
+    "frac14" => Some("¼"),
+    "frac34" => Some("¾"),
+    "frasl" => Some("⁄"),
+    "gamma" => Some("γ"),
+    "ge" => Some("≥"),
+    "gt" => Some(">"),
+    "harr" => Some("↔"),
+    "hearts" => Some("♥"),
+    "hellip" => Some("…"),
+    "iacute" => Some("í"),
+    "icirc" => Some("î"),
+    "iexcl" => Some("¡"),
+    "infin" => Some("∞"),
+    "int" => Some("∫"),
+    "iota" => Some("ι"),
+    "iquest" => Some("¿"),
+    "isin" => Some("∈"),
+    "iuml" => Some("ï"),
+    "kappa" => Some("κ"),
+    "lambda" => Some("λ"),
+    "lang" => Some("⟨"),
+    "laquo" => Some("«"),
+    "larr" => Some("←"),
+    "lceil" => Some("⌈"),
+    "ldquo" => Some("“"),
+    "le" => Some("≤"),
+    "lfloor" => Some("⌊"),
+    "loz" => Some("◊"),
+    "lsquo" => Some("‘"),
+    "lt" => Some("<"),
+    "macr" => Some("¯"),
+    "mdash" => Some("—"),
+    "micro" => Some("µ"),
+    "middot" => Some("·"),
+    "minus" => Some("−"),
+    "mu" => Some("μ"),
+    "nbsp" => Some(" "),
+    "ndash" => Some("–"),
+    "ne" => Some("≠"),
+    "ngE" => Some("≧̸"),
+    "not" => Some("¬"),
+    "notin" => Some("∉"),
+    "ntilde" => Some("ñ"),
+    "nu" => Some("ν"),
+    "oacute" => Some("ó"),
+    "ocirc" => Some("ô"),
+    "oelig" => Some("œ"),
+    "omega" => Some("ω"),
+    "oplus" => Some("⊕"),
+    "ordf" => Some("ª"),
+    "ordm" => Some("º"),
+    "oslash" => Some("ø"),
+    "otilde" => Some("õ"),
+    "otimes" => Some("⊗"),
+    "ouml" => Some("ö"),
+    "para" => Some("¶"),
+    "permil" => Some("‰"),
+    "perp" => Some("⊥"),
+    "phi" => Some("φ"),
+    "pi" => Some("π"),
+    "plusmn" => Some("±"),
+    "pound" => Some("£"),
+    "prod" => Some("∏"),
+    "psi" => Some("ψ"),
+    "quot" => Some("\""),
+    "radic" => Some("√"),
+    "rang" => Some("⟩"),
+    "raquo" => Some("»"),
+    "rarr" => Some("→"),
+    "rceil" => Some("⌉"),
+    "rdquo" => Some("”"),
+    "reg" => Some("®"),
+    "rfloor" => Some("⌋"),
+    "rho" => Some("ρ"),
+    "rsquo" => Some("’"),
+    "scaron" => Some("š"),
+    "sdot" => Some("⋅"),
+    "sect" => Some("§"),
+    "shy" => Some("­"),
+    "sigma" => Some("σ"),
+    "spades" => Some("♠"),
+    "sub" => Some("⊂"),
+    "sum" => Some("∑"),
+    "sup" => Some("⊃"),
+    "sup1" => Some("¹"),
+    "sup2" => Some("²"),
+    "sup3" => Some("³"),
+    "szlig" => Some("ß"),
+    "tau" => Some("τ"),
+    "theta" => Some("θ"),
+    "thinsp" => Some(" "),
+    "tilde" => Some("˜"),
+    "times" => Some("×"),
+    "trade" => Some("™"),
+    "uacute" => Some("ú"),
+    "uarr" => Some("↑"),
+    "ucirc" => Some("û"),
+    "uml" => Some("¨"),
+    "upsilon" => Some("υ"),
+    "uuml" => Some("ü"),
+    "xi" => Some("ξ"),
+    "yen" => Some("¥"),
+    "zeta" => Some("ζ"),
+    "zwj" => Some("‍"),
+    "zwnj" => Some("‌"),
+    _ => None,
+  }
+}
+
+/// Parse an entity/numeric character reference starting at `&` (chars[i]).
+/// Returns (decoded string, chars consumed).
+fn parse_entity(chars: &[char], i: usize) -> Option<(String, usize)> {
+  if chars.get(i) != Some(&'&') {
+    return None;
+  }
+  let semi = chars[i + 1..].iter().take(33).position(|&c| c == ';')? + i + 1;
+  let body: String = chars[i + 1..semi].iter().collect();
+  if let Some(rest) = body.strip_prefix('#') {
+    let (digits, radix) = match rest.strip_prefix(['x', 'X']) {
+      Some(h) => (h, 16),
+      None => (rest, 10),
+    };
+    if digits.is_empty()
+      || digits.len() > 7
+      || !digits.chars().all(|c| c.is_digit(radix))
+    {
+      return None;
+    }
+    let n = u32::from_str_radix(digits, radix).ok()?;
+    let c = if n == 0 { '\u{FFFD}' } else { char::from_u32(n).unwrap_or('\u{FFFD}') };
+    return Some((c.to_string(), semi - i + 1));
+  }
+  named_entity(&body).map(|v| (v.to_string(), semi - i + 1))
+}
+
+/// A fence opener: 3+ backticks or tildes; a backtick fence's info string
+/// may not contain backticks. Returns (fence char, run length, info).
+fn fence_open(content: &str) -> Option<(u8, usize, &str)> {
+  let b = content.as_bytes();
+  let c = *b.first()?;
+  if c != b'`' && c != b'~' {
+    return None;
+  }
+  let mut n = 0;
+  while n < b.len() && b[n] == c {
+    n += 1;
+  }
+  if n < 3 {
+    return None;
+  }
+  let info = &content[n..];
+  if c == b'`' && info.contains('`') {
+    return None;
+  }
+  Some((c, n, info))
+}
+
+/// A fence closer: a run of the opening char at least as long, nothing else.
+fn fence_close(content: &str, fence_char: u8, fence_len: usize) -> bool {
+  let b = content.trim_end().as_bytes();
+  b.len() >= fence_len && b.iter().all(|&x| x == fence_char)
 }
 
 /// Strip leading `>` quote markers: each consumes one optional following
@@ -1154,13 +1438,19 @@ fn render_html_list(items: &[&Block], level: usize, out: &mut String) {
 
 /// Inline marks rendered to nested HTML (<strong>/<em>/<code>/<del>/<a>),
 /// mirroring the markdown render_span structure.
+/// Escape inline TEXT for HTML and render hard breaks (`\` + newline in
+/// the block text) as `<br />`.
+fn html_text(seg: &str) -> String {
+  escape_html(seg).replace("\\\n", "<br />\n")
+}
+
 fn html_inline(block: &Block) -> String {
   if matches!(block.kind.as_str(), "code_block" | "code" | "table") {
     return escape_html(&block.text);
   }
   let marks = marks_from_block(block);
   if marks.is_empty() {
-    return escape_html(block.text.trim());
+    return html_text(block.text.trim());
   }
   let units: Vec<u16> = block.text.encode_utf16().collect();
   let refs: Vec<&InlineMark> = marks.iter().collect();
@@ -1181,10 +1471,10 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       })
       .min_by_key(|&(s, e, _)| (s, usize::MAX - e));
     let Some((s, e, picked)) = next else {
-      out.push_str(&escape_html(&String::from_utf16_lossy(&units[pos..hi])));
+      out.push_str(&html_text(&String::from_utf16_lossy(&units[pos..hi])));
       break;
     };
-    out.push_str(&escape_html(&String::from_utf16_lossy(&units[pos..s])));
+    out.push_str(&html_text(&String::from_utf16_lossy(&units[pos..s])));
     let m = marks[picked];
     if m.kind == "code" {
       let raw = String::from_utf16_lossy(&units[s..e]);
@@ -1201,7 +1491,7 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       };
       out.push_str(&format!(
         "<img src=\"{}\" alt=\"{}\"{title_attr} />",
-        escape_html(m.href.as_deref().unwrap_or("")),
+        escape_html(&escape_href(m.href.as_deref().unwrap_or(""))),
         escape_html(&alt)
       ));
       pos = e;
@@ -1221,12 +1511,12 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       "link" => match &m.title {
         Some(t) => format!(
           "<a href=\"{}\" title=\"{}\">{body}</a>",
-          escape_html(m.href.as_deref().unwrap_or("")),
+          escape_html(&escape_href(m.href.as_deref().unwrap_or(""))),
           escape_html(t)
         ),
         None => format!(
           "<a href=\"{}\">{body}</a>",
-          escape_html(m.href.as_deref().unwrap_or(""))
+          escape_html(&escape_href(m.href.as_deref().unwrap_or("")))
         ),
       },
       _ => body,
@@ -1286,7 +1576,7 @@ fn append_html_block(
       out.push_str("<hr />\n");
     }
     "image" => {
-      let url = escape_html(block_data_str(block, "url").unwrap_or_default());
+      let url = escape_html(&escape_href(block_data_str(block, "url").unwrap_or_default()));
       let alt = escape_html(block.text.trim());
       let title_attr = match block_data_str(block, "title") {
         Some(t) => format!(" title=\"{}\"", escape_html(t)),
@@ -1324,6 +1614,22 @@ fn list_tag_for(kind: &str) -> Option<&'static str> {
   }
 }
 
+/// Percent-encode a URL for an href attribute (cmark's houdini set: keep
+/// alphanumerics and `-_.+!*'(),%#@?=;:/,&$~`; encode the rest per UTF-8
+/// byte). HTML-escape the result separately.
+fn escape_href(input: &str) -> String {
+  const SAFE: &[u8] = b"-_.+!*'(),%#@?=;:/,&$~";
+  let mut out = String::with_capacity(input.len());
+  for &b in input.as_bytes() {
+    if b.is_ascii_alphanumeric() || SAFE.contains(&b) {
+      out.push(b as char);
+    } else {
+      out.push_str(&format!("%{b:02X}"));
+    }
+  }
+  out
+}
+
 fn escape_html(input: &str) -> String {
   let mut out = String::with_capacity(input.len());
   for ch in input.chars() {
@@ -1332,7 +1638,6 @@ fn escape_html(input: &str) -> String {
       '<' => out.push_str("&lt;"),
       '>' => out.push_str("&gt;"),
       '"' => out.push_str("&quot;"),
-      '\'' => out.push_str("&#39;"),
       other => out.push(other),
     }
   }
@@ -1599,16 +1904,69 @@ struct ParsedInline {
 /// Link reference definitions: normalized label → (destination, title).
 type RefDefs = std::collections::HashMap<String, (String, Option<String>)>;
 
-/// Single-line link reference definition: ` [label]: dest "title"` → parts.
-fn parse_ref_definition(raw: &str) -> Option<(String, String, Option<String>)> {
-  let lead = raw.len() - raw.trim_start().len();
-  if lead > 3 {
-    return None;
+/// Scan all link reference definitions, fence-aware and multi-line: the
+/// destination may sit on the line after `[label]:`, and a (quoted) title
+/// may follow on its own line(s). Returns the defs and the set of consumed
+/// line indices.
+fn collect_ref_definitions(raw_lines: &[&str]) -> (RefDefs, std::collections::HashSet<usize>) {
+  let mut defs = RefDefs::new();
+  let mut def_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
+  let mut in_fence: Option<(u8, usize)> = None;
+  let mut prev_para = false; // an open paragraph means a def can't start
+  let mut i = 0;
+  while i < raw_lines.len() {
+    let line = raw_lines[i].trim_end();
+    let content = line.trim_start();
+    let col = line.len() - content.len();
+    if let Some((c, n)) = in_fence {
+      if fence_close(content, c, n) {
+        in_fence = None;
+      }
+      prev_para = false;
+      i += 1;
+      continue;
+    }
+    if col < 4
+      && let Some((c, n, _)) = fence_open(content)
+    {
+      in_fence = Some((c, n));
+      prev_para = false;
+      i += 1;
+      continue;
+    }
+    if content.is_empty() {
+      prev_para = false;
+      i += 1;
+      continue;
+    }
+    if !prev_para
+      && col < 4
+      && content.starts_with('[')
+      && let Some((label, dest, title, used)) = parse_ref_definition_multi(raw_lines, i)
+    {
+      defs.entry(normalize_label(&label)).or_insert((dest, title));
+      for k in i..i + used {
+        def_lines.insert(k);
+      }
+      i += used;
+      continue; // a definition doesn't open a paragraph
+    }
+    prev_para = true;
+    i += 1;
   }
-  let chars: Vec<char> = raw.trim().chars().collect();
-  if chars.first() != Some(&'[') {
-    return None;
-  }
+  (defs, def_lines)
+}
+
+/// `[label]:` at lines[i]; destination on the same or next line; optional
+/// quoted title after the destination (same line needs whitespace between)
+/// or on following line(s) — titles may span lines. Returns the parsed def
+/// and how many lines it consumed.
+fn parse_ref_definition_multi(
+  raw_lines: &[&str],
+  i: usize,
+) -> Option<(String, String, Option<String>, usize)> {
+  let first = raw_lines[i].trim();
+  let chars: Vec<char> = first.chars().collect();
   let close = matching_bracket(&chars, 0)?;
   if chars.get(close + 1) != Some(&':') {
     return None;
@@ -1617,71 +1975,122 @@ fn parse_ref_definition(raw: &str) -> Option<(String, String, Option<String>)> {
   if label.trim().is_empty() {
     return None;
   }
-  // Labels may not contain unescaped brackets.
   for (k, &c) in chars[1..close].iter().enumerate() {
     if (c == '[' || c == ']') && (k == 0 || chars[k] != '\\') {
       return None;
     }
   }
-  let mut i = close + 2;
-  while i < chars.len() && chars[i].is_whitespace() {
-    i += 1;
-  }
-  if i >= chars.len() {
-    return None; // dest on a later line: unsupported single-line form
-  }
-  // Destination (reuse the suffix parser's rules sans the closing paren).
-  let dest: String;
-  if chars[i] == '<' {
-    let mut j = i + 1;
-    while j < chars.len() && chars[j] != '>' {
-      j += 1;
-    }
-    if j >= chars.len() {
+  let after_colon: String = chars[close + 2..].iter().collect();
+  let after_colon = after_colon.trim();
+  let mut used = 1;
+  let dest_line = if after_colon.is_empty() {
+    // destination on the next line
+    let l2 = raw_lines.get(i + 1)?.trim();
+    if l2.is_empty() {
       return None;
     }
-    dest = unescape_md(&chars[i + 1..j].iter().collect::<String>());
-    i = j + 1;
+    used = 2;
+    l2.to_string()
   } else {
-    let start = i;
-    while i < chars.len() && !chars[i].is_whitespace() {
-      i += 1;
-    }
-    dest = unescape_md(&chars[start..i].iter().collect::<String>());
-  }
-  while i < chars.len() && chars[i].is_whitespace() {
-    i += 1;
-  }
-  let mut title = None;
-  if i < chars.len() && matches!(chars[i], '"' | '\'' | '(') {
-    let closec = if chars[i] == '(' { ')' } else { chars[i] };
-    let mut j = i + 1;
-    let mut buf = String::new();
-    while j < chars.len() && chars[j] != closec {
-      if chars[j] == '\\' && j + 1 < chars.len() {
-        buf.push(chars[j + 1]);
-        j += 2;
-        continue;
-      }
-      buf.push(chars[j]);
-      j += 1;
-    }
-    if j >= chars.len() {
+    after_colon.to_string()
+  };
+  let (dest, rest, had_ws) = parse_def_dest(&dest_line)?;
+  if !rest.is_empty() {
+    // a same-line title needs whitespace after the destination
+    if !had_ws {
       return None;
     }
-    title = Some(buf);
-    i = j + 1;
+    let title = parse_def_title(raw_lines, i + used - 1, &rest)?;
+    return Some((label, dest, Some(title.0), used + title.1));
   }
-  while i < chars.len() && chars[i].is_whitespace() {
-    i += 1;
+  // maybe a title on the following line(s)
+  if let Some(next) = raw_lines.get(i + used) {
+    let nt = next.trim();
+    if !nt.is_empty()
+      && matches!(nt.as_bytes()[0], b'"' | b'\'' | b'(')
+      && let Some(title) = parse_def_title(raw_lines, i + used, nt)
+    {
+      return Some((label, dest, Some(title.0), used + 1 + title.1));
+    }
   }
-  if i != chars.len() {
-    return None; // trailing junk → it's a paragraph, not a definition
-  }
-  Some((label, dest, title))
+  Some((label, dest, None, used))
 }
 
-/// Case-fold and collapse internal whitespace, per the spec's label matching.
+/// Destination: `<angle form>` or a run of non-whitespace. Returns the
+/// unescaped dest, the rest of the line (trimmed), and whether whitespace
+/// separated them.
+fn parse_def_dest(s: &str) -> Option<(String, String, bool)> {
+  if let Some(inner) = s.strip_prefix('<') {
+    let gt = inner.find('>')?;
+    let rest = &inner[gt + 1..];
+    let had_ws = rest.is_empty() || rest.starts_with([' ', '\t']);
+    return Some((unescape_md(&inner[..gt]), rest.trim().to_string(), had_ws));
+  }
+  let end = s.find([' ', '\t']).unwrap_or(s.len());
+  if end == 0 {
+    return None;
+  }
+  Some((
+    unescape_md(&s[..end]),
+    s[end..].trim().to_string(),
+    end < s.len(),
+  ))
+}
+
+/// A quoted title starting at `start` (the trimmed tail of line `line_idx`),
+/// possibly spanning lines. Returns (title, extra lines consumed); fails if
+/// non-whitespace follows the closing delimiter.
+fn parse_def_title(
+  raw_lines: &[&str],
+  line_idx: usize,
+  start: &str,
+) -> Option<(String, usize)> {
+  let open = start.chars().next()?;
+  let close = match open {
+    '"' => '"',
+    '\'' => '\'',
+    '(' => ')',
+    _ => return None,
+  };
+  // same-line close?
+  let body = &start[1..];
+  if let Some(pos) = find_unescaped_char(body, close) {
+    if !body[pos + close.len_utf8()..].trim().is_empty() {
+      return None;
+    }
+    return Some((unescape_md(&body[..pos]), 0));
+  }
+  // spans lines: accumulate until a line containing the unescaped closer
+  let mut acc = body.to_string();
+  let mut extra = 0usize;
+  loop {
+    extra += 1;
+    let l = raw_lines.get(line_idx + extra)?;
+    let lt = l.trim_end();
+    if let Some(pos) = find_unescaped_char(lt, close) {
+      if !lt[pos + close.len_utf8()..].trim().is_empty() {
+        return None;
+      }
+      acc.push('\n');
+      acc.push_str(&lt[..pos]);
+      return Some((unescape_md(&acc), extra));
+    }
+    acc.push('\n');
+    acc.push_str(lt);
+  }
+}
+
+fn find_unescaped_char(s: &str, target: char) -> Option<usize> {
+  let mut prev_backslash = false;
+  for (idx, c) in s.char_indices() {
+    if c == target && !prev_backslash {
+      return Some(idx);
+    }
+    prev_backslash = c == '\\' && !prev_backslash;
+  }
+  None
+}
+
 fn normalize_label(label: &str) -> String {
   label.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
@@ -1695,6 +2104,10 @@ fn unescape_md(s: &str) -> String {
     if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1].is_ascii_punctuation() {
       out.push(chars[i + 1]);
       i += 2;
+    } else if let Some((decoded, used)) = parse_entity(&chars, i) {
+      // Entity references decode inside destinations/titles/info strings.
+      out.push_str(&decoded);
+      i += used;
     } else {
       out.push(chars[i]);
       i += 1;
@@ -1879,6 +2292,16 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
       i += 2;
       continue;
     }
+    // Entity / numeric character reference: decodes to plain TEXT (the
+    // result can't open emphasis or any structure).
+    if chars[i] == '&'
+      && let Some((decoded, used)) = parse_entity(&chars, i)
+    {
+      out.push_str(&decoded);
+      out_len += decoded.encode_utf16().count();
+      i += used;
+      continue;
+    }
     // Autolink: <https://…> or <user@host> — the URL is both text and target.
     if chars[i] == '<' {
       if let Some(close) = find_from(i + 1, &['>']) {
@@ -2018,25 +2441,63 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
         }
       }
     }
-    // Inline code: `...`
+    // Inline code: an N-backtick run closes only on a run of exactly N;
+    // line endings become spaces; one leading+trailing space strips when
+    // both exist and the content isn't all spaces. No escapes inside.
     if chars[i] == '`' {
-      if let Some(end) = find_from(i + 1, &['`']) {
-        if end > i {
-          let inner: String = chars[i + 1..end].iter().collect();
-          let start = out_len;
-          out.push_str(&inner);
-          out_len += inner.encode_utf16().count();
-          marks.push(InlineMark {
-            start,
-            end: out_len,
-            kind: "code".into(),
-            href: None,
-            title: None,
-          });
-          i = end + 1;
-          continue;
+      let mut n = 0;
+      while i + n < chars.len() && chars[i + n] == '`' {
+        n += 1;
+      }
+      let mut j = i + n;
+      let mut close = None;
+      while j < chars.len() {
+        if chars[j] == '`' {
+          let mut m = 0;
+          while j + m < chars.len() && chars[j + m] == '`' {
+            m += 1;
+          }
+          if m == n {
+            close = Some(j);
+            break;
+          }
+          j += m;
+        } else {
+          j += 1;
         }
       }
+      if let Some(end) = close {
+        let mut inner: String = chars[i + n..end]
+          .iter()
+          .map(|&c| if c == '\n' { ' ' } else { c })
+          .collect();
+        if inner.len() >= 2
+          && inner.starts_with(' ')
+          && inner.ends_with(' ')
+          && !inner.bytes().all(|b| b == b' ')
+        {
+          inner = inner[1..inner.len() - 1].to_string();
+        }
+        let start = out_len;
+        out.push_str(&inner);
+        out_len += inner.encode_utf16().count();
+        marks.push(InlineMark {
+          start,
+          end: out_len,
+          kind: "code".into(),
+          href: None,
+          title: None,
+        });
+        i = end + n;
+        continue;
+      }
+      // No closer: the run is literal text.
+      for _ in 0..n {
+        out.push('`');
+      }
+      out_len += n;
+      i += n;
+      continue;
     }
     out.push(chars[i]);
     out_len += chars[i].len_utf16();
@@ -2196,7 +2657,8 @@ fn autolink_target(inner: &str) -> Option<String> {
   // scheme: ALPHA (ALPHA/DIGIT/+/-/.)* ':'
   if let Some(colon) = inner.find(':') {
     let scheme = &inner[..colon];
-    if !scheme.is_empty()
+    if scheme.len() >= 2
+      && scheme.len() <= 32
       && scheme.as_bytes()[0].is_ascii_alphabetic()
       && scheme.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
       && colon + 1 < inner.len()
@@ -2204,7 +2666,10 @@ fn autolink_target(inner: &str) -> Option<String> {
       return Some(inner.to_string());
     }
   }
-  // email: x@y.z (loose)
+  // email: x@y.z (loose; backslash escapes never count)
+  if inner.contains('\\') {
+    return None;
+  }
   if let Some(at) = inner.find('@') {
     let (local, host) = inner.split_at(at);
     let host = &host[1..];
@@ -2294,7 +2759,13 @@ fn marks_from_block(block: &Block) -> Vec<InlineMark> {
 /// interpret, so literal text survives a round-trip.
 fn escape_inline(text: &str) -> String {
   let mut out = String::with_capacity(text.len());
-  for c in text.chars() {
+  let chars: Vec<char> = text.chars().collect();
+  for (i, &c) in chars.iter().enumerate() {
+    // A backslash right before a newline IS a hard break — keep it raw.
+    if c == '\\' && chars.get(i + 1) == Some(&'\n') {
+      out.push(c);
+      continue;
+    }
     if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<') {
       out.push('\\');
     }
@@ -2380,9 +2851,29 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
       .collect();
     let m = marks[picked];
     if m.kind == "code" {
-      // Code spans are literal — no escaping, no nested marks.
+      // Code spans are literal — no escaping, no nested marks. The fence is
+      // one backtick longer than any run inside; a space pads content that
+      // starts/ends with a backtick or with stripped-on-read spaces.
       let raw = String::from_utf16_lossy(&units[s..e]);
-      out.push_str(&format!("`{raw}`"));
+      let mut longest = 0usize;
+      let mut cur = 0usize;
+      for c in raw.chars() {
+        if c == '`' {
+          cur += 1;
+          longest = longest.max(cur);
+        } else {
+          cur = 0;
+        }
+      }
+      let fence = "`".repeat(longest + 1);
+      let pad = raw.starts_with('`')
+        || raw.ends_with('`')
+        || (raw.starts_with(' ') && raw.ends_with(' ') && !raw.trim().is_empty());
+      if pad {
+        out.push_str(&format!("{fence} {raw} {fence}"));
+      } else {
+        out.push_str(&format!("{fence}{raw}{fence}"));
+      }
       pos = e;
       continue;
     }

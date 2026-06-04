@@ -5,33 +5,33 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 438/652 (67.2%)**
+**Total: 516/652 (79.1%)**
 
 | Section | Passed | Total | % |
 |---|---|---|---|
-| ATX headings | 13 | 18 | 72% |
-| Autolinks | 16 | 19 | 84% |
-| Backslash escapes | 6 | 13 | 46% |
+| ATX headings | 18 | 18 | 100% |
+| Autolinks | 19 | 19 | 100% |
+| Backslash escapes | 12 | 13 | 92% |
 | Blank lines | 1 | 1 | 100% |
 | Block quotes | 25 | 25 | 100% |
-| Code spans | 9 | 22 | 41% |
+| Code spans | 17 | 22 | 77% |
 | Emphasis and strong emphasis | 123 | 132 | 93% |
-| Entity and numeric character references | 5 | 17 | 29% |
-| Fenced code blocks | 10 | 29 | 34% |
+| Entity and numeric character references | 13 | 17 | 76% |
+| Fenced code blocks | 29 | 29 | 100% |
 | HTML blocks | 0 | 44 | 0% |
-| Hard line breaks | 4 | 15 | 27% |
+| Hard line breaks | 12 | 15 | 80% |
 | Images | 22 | 22 | 100% |
-| Indented code blocks | 10 | 12 | 83% |
+| Indented code blocks | 12 | 12 | 100% |
 | Inlines | 1 | 1 | 100% |
-| Link reference definitions | 14 | 27 | 52% |
-| Links | 64 | 90 | 71% |
+| Link reference definitions | 22 | 27 | 81% |
+| Links | 68 | 90 | 76% |
 | List items | 30 | 48 | 62% |
 | Lists | 18 | 26 | 69% |
-| Paragraphs | 7 | 8 | 88% |
+| Paragraphs | 8 | 8 | 100% |
 | Precedence | 1 | 1 | 100% |
-| Raw HTML | 5 | 20 | 25% |
-| Setext headings | 26 | 27 | 96% |
+| Raw HTML | 7 | 20 | 35% |
+| Setext headings | 27 | 27 | 100% |
 | Soft line breaks | 2 | 2 | 100% |
-| Tabs | 7 | 11 | 64% |
-| Textual content | 2 | 3 | 67% |
-| Thematic breaks | 17 | 19 | 89% |
+| Tabs | 8 | 11 | 73% |
+| Textual content | 3 | 3 | 100% |
+| Thematic breaks | 18 | 19 | 95% |
