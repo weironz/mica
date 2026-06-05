@@ -15,12 +15,14 @@ abstract class AtomicBlockRenderer {
 
   /// Build the node's layout slice, or return null to NOT claim the node this
   /// pass — it then falls through to the text pipeline. That null is the
-  /// graceful-degradation hook: math (and later mermaid) returns null while
-  /// its raster isn't ready / its source is empty, so the source stays
-  /// visible and editable as plain text.
+  /// graceful-degradation hook: math/mermaid return null while their preview
+  /// isn't ready (or failed), and mermaid declines while the caret sits in
+  /// the block, so the source stays visible and editable as plain text.
+  /// [index] is the node's position — for consulting the selection.
   _NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
+    int index,
     double y,
     double maxWidth,
   );
@@ -72,15 +74,16 @@ class MathBlockRenderer extends AtomicBlockRenderer {
   _NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
+    int index,
     double y,
     double maxWidth,
   ) {
     // Empty source, or raster not captured yet: request it and decline — the
     // text pipeline shows the editable LaTeX source meanwhile.
     if (node.text.trim().isEmpty) return null;
-    final img = host._mathImages[node.text];
+    final img = host._previewImages['math']?[node.text];
     if (img == null) {
-      host.onRequestMath?.call(node.text);
+      host.onRequestPreview?.call('math', node.text);
       return null;
     }
     // Rendered formula: centered, sized from the capture (image is at device
@@ -170,6 +173,7 @@ class ImageRenderer extends AtomicBlockRenderer {
   _NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
+    int index,
     double y,
     double maxWidth,
   ) {
@@ -351,6 +355,7 @@ class TableRenderer extends AtomicBlockRenderer {
   _NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
+    int index,
     double top,
     double maxWidth,
   ) {
@@ -598,6 +603,108 @@ class TableRenderer extends AtomicBlockRenderer {
 }
 
 // -----------------------------------------------------------------------------
+// Mermaid (a code_block wearing a diagram)
+// -----------------------------------------------------------------------------
+
+/// Renders ```mermaid fenced blocks as diagrams. The node stays a plain
+/// `code_block` in the document model (round-trips through Markdown
+/// untouched) — only rendering changes, and only when ALL of: the language
+/// is mermaid, the caret is outside the block (the focused block shows its
+/// editable source, Typora-style), and the preview pipeline has produced an
+/// image (no producer on this platform, a syntax error, or a pending render
+/// all fall back to the highlighted source via null-decline).
+class MermaidRenderer extends AtomicBlockRenderer {
+  const MermaidRenderer();
+
+  @override
+  String get kind => 'code_block';
+
+  @override
+  _NodeLayout? layout(
+    RenderDocument host,
+    EditorNode node,
+    int index,
+    double y,
+    double maxWidth,
+  ) {
+    if ((node.data['language'] as String?) != 'mermaid') return null;
+    if (node.text.trim().isEmpty) return null;
+    // Caret inside the block → editable source form.
+    final sel = host._selection;
+    if (sel != null && index >= sel.start.node && index <= sel.end.node) {
+      return null;
+    }
+    final img = host._previewImages['mermaid']?[node.text];
+    if (img == null) {
+      host.onRequestPreview?.call('mermaid', node.text);
+      return null;
+    }
+    // Centered like math; the producer renders at 2x for crispness, so draw
+    // at half the capture's pixel size, downscaled to fit.
+    var w = img.width / 2.0;
+    var h = img.height / 2.0;
+    final avail =
+        (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
+    if (w > avail) {
+      h *= avail / w;
+      w = avail;
+    }
+    // The painter must be laid out: code_block is a TEXT kind, so pointer
+    // hit-testing runs text-position math against it (unlike the atomic
+    // kinds, whose clicks take the block path). Empty text → offset 0 →
+    // the caret lands in the block → next layout declines → source form.
+    return _NodeLayout(
+      TextPainter(
+        text: const TextSpan(text: ''),
+        textDirection: TextDirection.ltr,
+      )..layout(),
+    )
+      ..kind = 'code_block'
+      ..nodeId = node.id
+      ..langText = 'mermaid'
+      ..boxLeft = EditorTheme.gutter
+      ..contentLeft = EditorTheme.gutter +
+          ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
+      ..mathImage = img
+      ..mathSize = Size(w, h)
+      ..boxTop = y
+      ..textTop = y + 10
+      ..textHeight = h
+      ..boxHeight = h + 20;
+  }
+
+  @override
+  void paint(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l,
+    int index,
+  ) {
+    final img = l.mathImage;
+    if (img == null) return;
+    // Card backdrop drawn here, not in paintBackground: that hook fires by
+    // kind and would tint every code block, mermaid or not.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop - 4,
+            host.size.width - l.boxLeft, l.boxHeight + 8),
+        const Radius.circular(6),
+      ),
+      Paint()..color = const Color(0xFFF8FAFC),
+    );
+    final dst = Rect.fromLTWH(offset.dx + l.contentLeft, offset.dy + l.textTop,
+        l.mathSize.width, l.mathSize.height);
+    canvas.drawImageRect(
+      img,
+      Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+      dst,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Divider
 // -----------------------------------------------------------------------------
 
@@ -611,6 +718,7 @@ class DividerRenderer extends AtomicBlockRenderer {
   _NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
+    int index,
     double y,
     double maxWidth,
   ) {

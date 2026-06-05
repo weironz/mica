@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
+import 'mermaid_preview.dart';
 import 'render.dart' show EditorTheme;
 
 /// A "source → picture" preview producer for one previewer id ('math',
@@ -49,11 +50,20 @@ class RasterPreviewPipeline {
   final Map<String, Map<String, GlobalKey>> _keys = {};
   final Map<String, Map<String, int>> _tries = {};
 
+  /// Sources whose preview failed (bad mermaid syntax, capture gave up).
+  /// Negative cache: without it the renderer re-requests the same failing
+  /// source every layout pass, looping the producer forever. An edit changes
+  /// the source string, which naturally retries.
+  final Map<String, Set<String>> _failed = {};
+
   RasterPreviewer? _byId(String id) =>
       previewers.where((p) => p.id == id).firstOrNull;
 
   /// Captured images for [id], keyed by source — handed to the render object.
   Map<String, ui.Image> imagesOf(String id) => _cache[id] ??= {};
+
+  /// All captured images, per previewer id — the render object's view.
+  Map<String, Map<String, ui.Image>> get images => _cache;
 
   /// Ask for a preview of [source]. Safe to call from layout: work is
   /// deferred post-frame. No-op when cached, already pending, or unknown id.
@@ -61,6 +71,7 @@ class RasterPreviewPipeline {
     final previewer = _byId(id);
     if (previewer == null) return;
     if (imagesOf(id).containsKey(source)) return;
+    if (_failed[id]?.contains(source) ?? false) return;
     final pending = _pending[id] ??= {};
     if (pending.contains(source)) return;
 
@@ -70,7 +81,11 @@ class RasterPreviewPipeline {
       direct.then((img) {
         requestRebuild(() {
           pending.remove(source);
-          if (img != null) imagesOf(id)[source] = img;
+          if (img != null) {
+            imagesOf(id)[source] = img;
+          } else {
+            (_failed[id] ??= {}).add(source);
+          }
         });
       });
       return;
@@ -119,10 +134,13 @@ class RasterPreviewPipeline {
           captured.add(source);
         } catch (_) {
           // Not painted yet — retry a few frames, then give up (the block
-          // stays on its source form).
+          // stays on its source form; failed-set stops re-requests).
           final tries = ((_tries[p.id] ??= {})[source] ?? 0) + 1;
           _tries[p.id]![source] = tries;
-          if (tries > 20) captured.add(source);
+          if (tries > 20) {
+            captured.add(source);
+            (_failed[p.id] ??= {}).add(source);
+          }
         }
       }
       if (captured.isNotEmpty) {
@@ -140,6 +158,19 @@ class RasterPreviewPipeline {
       WidgetsBinding.instance.addPostFrameCallback((_) => _capture());
     }
   }
+}
+
+/// Mermaid diagrams — the direct form (JS interop on web; elsewhere
+/// [mermaidAvailable] is false and the previewer simply isn't registered,
+/// so ```mermaid blocks stay highlighted source).
+class MermaidPreviewer extends RasterPreviewer {
+  const MermaidPreviewer();
+
+  @override
+  String get id => 'mermaid';
+
+  @override
+  Future<ui.Image?>? produce(String source) => renderMermaid(source);
 }
 
 /// LaTeX formulas through flutter_math_fork — the offstage form.

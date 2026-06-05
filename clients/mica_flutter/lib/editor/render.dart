@@ -295,6 +295,7 @@ class RenderDocument extends RenderBox {
     DividerRenderer(),
     ImageRenderer(),
     MathBlockRenderer(),
+    MermaidRenderer(),
     TableRenderer(),
   ];
 
@@ -316,14 +317,16 @@ class RenderDocument extends RenderBox {
     markNeedsLayout();
   }
 
-  /// Rasterized formulas keyed by LaTeX source.
-  Map<String, ui.Image> _mathImages = {};
-  set mathImages(Map<String, ui.Image> value) {
-    _mathImages = value;
+  /// Rasterized previews per previewer id ('math', 'mermaid', …), keyed by
+  /// source. Fed by the host's RasterPreviewPipeline.
+  Map<String, Map<String, ui.Image>> _previewImages = const {};
+  set previewImages(Map<String, Map<String, ui.Image>> value) {
+    _previewImages = value;
     markNeedsLayout();
   }
 
-  void Function(String source)? onRequestMath;
+  /// Ask the host pipeline for a preview of [source] under previewer [id].
+  void Function(String id, String source)? onRequestPreview;
 
   /// `file_id`s that failed to load — painted as a broken-image placeholder.
   Set<String> _imageErrors = {};
@@ -504,7 +507,8 @@ class RenderDocument extends RenderBox {
     double y = 0;
     String? prevKind;
     final numberedCounters = <int>[];
-    for (final node in _nodes) {
+    for (var nodeIndex = 0; nodeIndex < _nodes.length; nodeIndex++) {
+      final node = _nodes[nodeIndex];
       y += EditorTheme.gapAbove(node.kind, prevKind);
 
       // Atomic blocks dispatch to their registered renderer; a null return
@@ -512,7 +516,7 @@ class RenderDocument extends RenderBox {
       // pipeline so the source stays visible and editable.
       final renderer = _renderersByKind[node.kind];
       if (renderer != null) {
-        final layout = renderer.layout(this, node, y, maxWidth);
+        final layout = renderer.layout(this, node, nodeIndex, y, maxWidth);
         if (layout != null) {
           layout.renderedBy = renderer;
           _layouts.add(layout);
@@ -1553,8 +1557,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.images = const {},
     this.imageErrors = const {},
     this.onRequestImage,
-    this.mathImages = const {},
-    this.onRequestMath,
+    this.previewImages = const {},
+    this.onRequestPreview,
     super.key,
   });
 
@@ -1569,8 +1573,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
 
   /// Rasterized formulas keyed by LaTeX source (captured by the editor via
   /// an offstage flutter_math_fork widget at device pixel ratio).
-  final Map<String, ui.Image> mathImages;
-  final void Function(String source)? onRequestMath;
+  final Map<String, Map<String, ui.Image>> previewImages;
+  final void Function(String id, String source)? onRequestPreview;
 
   @override
   RenderDocument createRenderObject(BuildContext context) => RenderDocument(
@@ -1581,9 +1585,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
     appearance: appearance,
   )
     ..onRequestImage = onRequestImage
-    ..onRequestMath = onRequestMath
+    ..onRequestPreview = onRequestPreview
     ..imageErrors = imageErrors
-    ..mathImages = mathImages
+    ..previewImages = previewImages
     ..images = images;
 
   @override
@@ -1595,9 +1599,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..caretOn = caretOn
       ..appearance = appearance
       ..onRequestImage = onRequestImage
-      ..onRequestMath = onRequestMath
+      ..onRequestPreview = onRequestPreview
       ..imageErrors = imageErrors
-      ..mathImages = mathImages
+      ..previewImages = previewImages
       ..images = images;
   }
 }

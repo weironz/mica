@@ -13,6 +13,7 @@ import 'markdown.dart';
 import 'marks.dart';
 import 'clipboard_copy.dart';
 import 'image_actions.dart';
+import 'mermaid_preview.dart';
 import 'model.dart';
 import 'preview_raster.dart';
 import 'open_url.dart';
@@ -197,11 +198,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _blockDrag; // block index being moved via its gutter drag handle
 
-  // Source → picture previews (math today, mermaid later): the pipeline owns
-  // the cache / pending / off-screen-capture lifecycle, the previewers say
-  // how one source becomes a picture (docs/render-architecture.md).
+  // Source → picture previews (math, mermaid): the pipeline owns the cache /
+  // pending / off-screen-capture lifecycle, the previewers say how one source
+  // becomes a picture (docs/render-architecture.md). Mermaid only registers
+  // where its JS engine exists (web) — elsewhere ```mermaid blocks stay
+  // highlighted source via the renderer's null-decline.
   late final RasterPreviewPipeline _previews = RasterPreviewPipeline(
-    previewers: const [MathPreviewer()],
+    previewers: [
+      const MathPreviewer(),
+      if (mermaidAvailable) const MermaidPreviewer(),
+    ],
     requestRebuild: (fn) {
       if (mounted) setState(fn);
     },
@@ -2957,8 +2963,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   appearance: widget.appearance,
                   images: _imageCache,
                   imageErrors: _imageErrors,
-                  mathImages: _previews.imagesOf('math'),
-                  onRequestMath: (source) => _previews.request('math', source),
+                  previewImages: _previews.images,
+                  onRequestPreview: _previews.request,
                   onRequestImage: _requestImage,
                 ),
                 // Far off-screen: painted (capturable) but never visible.
