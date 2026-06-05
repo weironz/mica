@@ -12,6 +12,7 @@
 # Local reference checkout of AppFlowy (not part of this project)
 /appflowy-src/
 /AFFiNE/
+/vditor/
 
 # Flutter / Dart build + tooling artifacts
 **/build/
@@ -28,6 +29,10 @@
 .DS_Store
 # Added by code-review-graph
 .code-review-graph/
+
+# Claude Code personal overrides + Playwright MCP screenshots
+.claude/settings.local.json
+.playwright-mcp/
 
 # production secrets + built web bundle staging
 .env.prod
