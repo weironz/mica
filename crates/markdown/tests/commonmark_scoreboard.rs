@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// Passing examples must never decrease. Raise this when the engine improves
 /// (P4 work); the per-section detail lives in docs/commonmark-scoreboard.md.
-const BASELINE_PASS: usize = 589; // 91.6% of 643 — GFM dialect, 2026-06-05
+const BASELINE_PASS: usize = 620; // 96.4% of 643 — GFM dialect, 2026-06-05
 
 /// CommonMark examples our GFM target dialect intentionally breaks —
 /// cmark-gfm with extensions enabled fails these identically:
