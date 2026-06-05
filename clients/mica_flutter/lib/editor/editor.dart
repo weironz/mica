@@ -332,6 +332,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Mark? _linkBarMark;
   bool _pointerOverLinkBar = false;
 
+  // Multi-tap tracking for word (double) / block (triple) selection. The
+  // platform GestureDetector only reports double-taps without a position and
+  // has no triple-tap, so we count taps ourselves from _onTapDown: taps within
+  // [_multiTapSlop] pixels and [_multiTapWindow] of the previous one escalate
+  // the count (2 = word, 3 = block); anything else resets to a single tap.
+  static const Duration _multiTapWindow = Duration(milliseconds: 400);
+  static const double _multiTapSlop = 12.0;
+  int _tapCount = 0;
+  Offset? _lastTapLocal;
+  // The pointer-event timestamp of the previous down (binding clock, not wall
+  // clock) so the window is deterministic under the test fake-async clock.
+  Duration? _lastTapStamp;
+  Duration _downStamp = Duration.zero; // stamp of the in-flight pointer down
+
   RenderDocument? get _render =>
       _surfaceKey.currentContext?.findRenderObject() as RenderDocument?;
 
@@ -814,8 +828,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
 
+    // A newline typed inside a code block is a soft break that copies the
+    // previous line's leading whitespace (auto-indent), so nested code keeps
+    // its column. Detect the single `\n` the IME just inserted at the caret.
     final base = value.selection.baseOffset;
     final ext = value.selection.extentOffset;
+    if (node.isCode &&
+        text.contains('\n') &&
+        base == ext &&
+        base > 0 &&
+        text.length == node.text.length + 1 &&
+        text[base - 1] == '\n') {
+      _controller.insertCodeNewline(base);
+      _lastSentIme = _imeValue();
+      _syncImeFromSelection(force: true);
+      return;
+    }
+
     _controller.setFocusedText(
       text,
       base < 0 ? text.length : base,
@@ -1354,11 +1383,40 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     if (local.dy > r.contentBottom) {
+      _tapCount = 0;
       _controller.appendOrFocusLast();
-    } else {
-      _controller.collapseTo(r.positionAt(local));
+      _syncImeFromSelection();
+      return;
     }
+    // Count repeated taps at the same spot: 2 → select the word under the
+    // caret, 3 → select the whole block's text. Atomic blocks were handled
+    // above (e.g. a math double-tap opened its editor), so by here we are on a
+    // text block and multi-tap means text selection.
+    final count = _bumpTapCount(local);
+    final pos = r.positionAt(local);
+    var handled = false;
+    if (count == 2) {
+      handled = _controller.selectWordAt(pos);
+    } else if (count >= 3) {
+      handled = _controller.selectBlockText(pos.node);
+    }
+    if (!handled) _controller.collapseTo(pos);
     _syncImeFromSelection();
+  }
+
+  /// Update and return the running tap count for word/block selection. Taps
+  /// close in time and position escalate the count; otherwise it resets to 1.
+  /// Uses the pointer-down timestamp captured in [_downStamp] (binding clock).
+  int _bumpTapCount(Offset local) {
+    final now = _downStamp;
+    final last = _lastTapStamp;
+    final lastPos = _lastTapLocal;
+    final near = lastPos != null && (lastPos - local).distance <= _multiTapSlop;
+    final soon = last != null && (now - last) <= _multiTapWindow;
+    _tapCount = (near && soon) ? _tapCount + 1 : 1;
+    _lastTapLocal = local;
+    _lastTapStamp = now;
+    return _tapCount;
   }
 
   void _closeCellEditor() {
@@ -2133,6 +2191,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _onPanStart(DragStartDetails d) {
     if (!widget.canEdit) return;
+    _tapCount = 0; // a drag ends any tap sequence (no stray triple-click)
     final r = _render;
     if (r == null) return;
     // A drag (column resize, selection…) relayouts under the floating cell
@@ -2941,6 +3000,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Widget build(BuildContext context) {
     return Listener(
       onPointerSignal: _onPointerSignal,
+      // Capture the down timestamp (binding clock) for multi-tap counting; the
+      // GestureDetector's onTapDown does not expose it.
+      onPointerDown: (e) => _downStamp = e.timeStamp,
       child: MouseRegion(
         cursor: widget.canEdit ? _cursor : MouseCursor.defer,
         onHover: _onHover,

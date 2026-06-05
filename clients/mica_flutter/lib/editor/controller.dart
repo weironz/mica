@@ -153,6 +153,40 @@ class EditorController extends ChangeNotifier {
     return nodes[sel.focus.node];
   }
 
+  /// Double-click: select the "word" straddling [pos]. A word is a maximal run
+  /// of like characters — CJK ideographs grouped together, ASCII letters/digits
+  /// together — so a click in 中文 grabs the CJK run and a click in `foo_bar`
+  /// grabs an identifier. Whitespace and punctuation are boundaries; clicking
+  /// directly on one selects just that single character (Notion/browser feel).
+  /// No-op on atomic blocks (they carry no inline text). Returns true on a select.
+  bool selectWordAt(DocPosition pos) {
+    if (pos.node < 0 || pos.node >= nodes.length) return false;
+    final node = nodes[pos.node];
+    if (node.isAtomic) return false;
+    final text = node.text;
+    if (text.isEmpty) return false;
+    final (start, end) = wordBoundsAt(text, pos.offset.clamp(0, text.length));
+    if (start == end) return false;
+    setSelection(DocSelection(
+      anchor: DocPosition(pos.node, start),
+      focus: DocPosition(pos.node, end),
+    ));
+    return true;
+  }
+
+  /// Triple-click: select the whole text of block [index]. No-op on atomic
+  /// blocks. Returns true on a select.
+  bool selectBlockText(int index) {
+    if (index < 0 || index >= nodes.length) return false;
+    final node = nodes[index];
+    if (node.isAtomic || node.text.isEmpty) return false;
+    setSelection(DocSelection(
+      anchor: DocPosition(index, 0),
+      focus: DocPosition(index, node.text.length),
+    ));
+    return true;
+  }
+
   // ---------------------------------------------------------------------------
   // Text editing (from IME / typing)
   // ---------------------------------------------------------------------------
@@ -203,6 +237,35 @@ class EditorController extends ChangeNotifier {
       anchor: DocPosition(i, selStart.clamp(0, text.length)),
       focus: DocPosition(i, selEnd.clamp(0, text.length)),
     );
+    goalX = null;
+    _markDirty(node.id);
+    notifyListeners();
+  }
+
+  /// Soft newline inside a code block with auto-indent: insert `\n` at [caret]
+  /// (the offset just AFTER the break, in the post-newline text) followed by the
+  /// leading whitespace of the line the break ends, so nested code keeps its
+  /// column. The caret lands after the copied indent.
+  void insertCodeNewline(int caret) {
+    final sel = selection;
+    if (sel == null) return;
+    final i = sel.focus.node;
+    if (i >= nodes.length) return;
+    final node = nodes[i];
+    if (!node.isCode) return;
+    // [caret] indexes the text WITH the newline; the break sits at caret-1, so
+    // the old (newline-free) text splits at the same offset.
+    final at = (caret - 1).clamp(0, node.text.length);
+    final before = node.text.substring(0, at);
+    final after = node.text.substring(at);
+    // Leading whitespace of the current line (the run after the last newline).
+    final lineStart = before.lastIndexOf('\n') + 1;
+    final line = before.substring(lineStart);
+    final indent = line.substring(0, line.length - line.trimLeft().length);
+    final text = '$before\n$indent$after';
+    final pos = at + 1 + indent.length;
+    node.text = text;
+    selection = DocSelection.collapsed(DocPosition(i, pos));
     goalX = null;
     _markDirty(node.id);
     notifyListeners();
@@ -1719,7 +1782,12 @@ class EditorController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   bool _continuesOnEnter(String kind) =>
-      kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
+      kind == 'bulleted_list' ||
+      kind == 'numbered_list' ||
+      kind == 'todo' ||
+      // Enter inside a quote stays in the quote (carrying its depth); a second
+      // Enter on an empty quote line exits to a paragraph, like the lists.
+      kind == 'quote';
 
   /// Replace a block's text wholesale (math source editing etc.).
   void setBlockText(String id, String text) {
