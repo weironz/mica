@@ -2695,16 +2695,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   ),
                 ),
                 const SizedBox(height: 8),
+                // Collaborator presence, right-aligned under the title row.
+                // (The seq/snapshot sync counters that used to sit here were
+                // dev-only noise.)
                 Padding(
                   padding: const EdgeInsets.only(left: EditorTheme.gutter),
                   child: Row(
                     children: [
-                      Text(
-                        'seq ${bootstrap.document.currentSeq} · snapshot ${bootstrap.snapshot.versionSeq}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF64748B),
-                        ),
-                      ),
                       const Spacer(),
                       _PresenceBar(presence: widget.presence),
                     ],
