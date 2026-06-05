@@ -123,6 +123,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   bool _reHostImages = true;
   // Formatting toolbar above the page (global setting; off by default).
   bool _showFormatBar = false;
+  // Page title block at the top of the page (on by default).
+  bool _showPageTitle = true;
 
   DocumentSyncClient? _sync;
   List<PresenceUser> _presence = const [];
@@ -154,6 +156,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
     _reHostImages = loadPref('reHostImages') != 'false';
     _showFormatBar = loadPref('showFormatBar') == 'true';
+    _showPageTitle = loadPref('showPageTitle') != 'false';
   }
 
   void _savePrefs() {
@@ -162,6 +165,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     savePref('pageWidth', _pageWidth.toString());
     savePref('reHostImages', _reHostImages.toString());
     savePref('showFormatBar', _showFormatBar.toString());
+    savePref('showPageTitle', _showPageTitle.toString());
   }
 
   /// Sign in with the dev account on startup. Falls back to registering it the
@@ -1388,6 +1392,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   setState(() => _showFormatBar = value);
                   _savePrefs();
                 },
+                showPageTitle: _showPageTitle,
+                onShowPageTitleChanged: (value) {
+                  setState(() => _showPageTitle = value);
+                  _savePrefs();
+                },
                 onAppearanceChanged: (appearance, pageWidth) {
                   setState(() {
                     _appearance = appearance;
@@ -1640,6 +1649,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onReHostImagesChanged,
     required this.showFormatBar,
     required this.onShowFormatBarChanged,
+    required this.showPageTitle,
+    required this.onShowPageTitleChanged,
     required this.onAppearanceChanged,
     required this.onSearch,
     required this.onOpenSearchResult,
@@ -1732,6 +1743,8 @@ class WorkspaceView extends StatefulWidget {
   final void Function(bool value) onReHostImagesChanged;
   final bool showFormatBar;
   final void Function(bool value) onShowFormatBarChanged;
+  final bool showPageTitle;
+  final void Function(bool value) onShowPageTitleChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<List<SearchResult>> Function(String query) onSearch;
@@ -1792,7 +1805,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final bootstrap = widget.selectedBootstrap;
     if (bootstrap?.view.id != oldWidget.selectedBootstrap?.view.id ||
         bootstrap?.view.name != oldWidget.selectedBootstrap?.view.name) {
-      _pageTitle.text = bootstrap?.view.name ?? '';
+      // Skip the no-op echo of our own rename: assigning .text resets the
+      // selection, which the web engine renders as select-all — one
+      // backspace in the title would select the whole name after the
+      // debounced save round-tripped.
+      final name = bootstrap?.view.name ?? '';
+      if (_pageTitle.text != name) _pageTitle.text = name;
     }
   }
 
@@ -2584,41 +2602,47 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Expanded(
-                        child: Focus(
-                          // Intercepts keys bubbling from the title field:
-                          // ArrowDown moves into the first body line.
-                          canRequestFocus: false,
-                          skipTraversal: true,
-                          onKeyEvent: (node, event) {
-                            if (event is KeyDownEvent &&
-                                event.logicalKey ==
-                                    LogicalKeyboardKey.arrowDown) {
-                              _commandHook.focusFirstLine();
-                              return KeyEventResult.handled;
-                            }
-                            return KeyEventResult.ignored;
-                          },
-                          child: TextField(
-                            controller: _pageTitle,
-                            focusNode: _pageTitleFocus,
-                            style: Theme.of(context).textTheme.headlineMedium,
-                            textInputAction: TextInputAction.next,
-                            onChanged: (_) => _schedulePageTitleSave(),
-                            // Enter in the title: the text after the caret (or
-                            // nothing) becomes a NEW first body line, pushing
-                            // the body down. onEditingComplete (not
-                            // onSubmitted) — it REPLACES the default
-                            // TextInputAction.next finalize, which would
-                            // otherwise nextFocus() away from the editor.
-                            onEditingComplete: _titleEnter,
-                            decoration: const InputDecoration(
-                              hintText: 'Untitled',
-                              border: InputBorder.none,
+                      // Settings can hide the title; the row itself stays for
+                      // the page menu + side-panel toggle.
+                      if (!widget.showPageTitle)
+                        const Spacer()
+                      else
+                        Expanded(
+                          child: Focus(
+                            // Intercepts keys bubbling from the title field:
+                            // ArrowDown moves into the first body line.
+                            canRequestFocus: false,
+                            skipTraversal: true,
+                            onKeyEvent: (node, event) {
+                              if (event is KeyDownEvent &&
+                                  event.logicalKey ==
+                                      LogicalKeyboardKey.arrowDown) {
+                                _commandHook.focusFirstLine();
+                                return KeyEventResult.handled;
+                              }
+                              return KeyEventResult.ignored;
+                            },
+                            child: TextField(
+                              controller: _pageTitle,
+                              focusNode: _pageTitleFocus,
+                              style:
+                                  Theme.of(context).textTheme.headlineMedium,
+                              textInputAction: TextInputAction.next,
+                              onChanged: (_) => _schedulePageTitleSave(),
+                              // Enter in the title: the text after the caret
+                              // (or nothing) becomes a NEW first body line,
+                              // pushing the body down. onEditingComplete (not
+                              // onSubmitted) — it REPLACES the default
+                              // TextInputAction.next finalize, which would
+                              // otherwise nextFocus() away from the editor.
+                              onEditingComplete: _titleEnter,
+                              decoration: const InputDecoration(
+                                hintText: 'Untitled',
+                                border: InputBorder.none,
+                              ),
                             ),
                           ),
                         ),
-                      ),
                       PopupMenuButton<String>(
                         tooltip: 'Page menu',
                         icon: const Icon(Icons.expand_more),
@@ -2715,6 +2739,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     scrollHook: _scrollHook,
                     commandHook: _commandHook,
                     onExitTop: () {
+                      if (!widget.showPageTitle) return;
                       _pageTitleFocus.requestFocus();
                       // The web TextField select-alls when focused
                       // programmatically; that happens in the focus
@@ -3243,6 +3268,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
         showFormatBar: widget.showFormatBar,
+        showPageTitle: widget.showPageTitle,
+        onShowPageTitleChanged: widget.onShowPageTitleChanged,
         onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
@@ -4127,6 +4154,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.onReHostImagesChanged,
     required this.showFormatBar,
     required this.onShowFormatBarChanged,
+    required this.showPageTitle,
+    required this.onShowPageTitleChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
   });
@@ -4149,6 +4178,8 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(bool value) onReHostImagesChanged;
   final bool showFormatBar;
   final void Function(bool value) onShowFormatBarChanged;
+  final bool showPageTitle;
+  final void Function(bool value) onShowPageTitleChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
@@ -4180,6 +4211,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late double _pageWidth = widget.pageWidth;
   late bool _reHostImages = widget.reHostImages;
   late bool _showFormatBar = widget.showFormatBar;
+  late bool _showPageTitle = widget.showPageTitle;
 
   @override
   void initState() {
@@ -4435,6 +4467,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       onChanged: (value) {
         setState(() => _showFormatBar = value);
         widget.onShowFormatBarChanged(value);
+      },
+    ),
+    SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: _showPageTitle,
+      title: const Text('Page title'),
+      subtitle: const Text(
+        'Show the page title at the top of the page. Hidden, pages start '
+        'straight at the first line.',
+      ),
+      onChanged: (value) {
+        setState(() => _showPageTitle = value);
+        widget.onShowPageTitleChanged(value);
       },
     ),
   ];
