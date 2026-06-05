@@ -25,7 +25,7 @@ class Mark {
     if (title != null) 'title': title,
   };
 
-  static const types = {'bold', 'italic', 'code', 'strike', 'link'};
+  static const types = {'bold', 'italic', 'code', 'strike', 'link', 'footnote'};
 }
 
 List<Mark> marksFromData(Map<String, dynamic> data) {
@@ -54,6 +54,7 @@ const Color _codeBg = Color(0x14B91C1C);
 const Color _linkColor = Color(0xFF2563EB);
 const Color _mathColor = Color(0xFF7C3AED);
 const Color _mathBg = Color(0x147C3AED);
+const Color _footnoteColor = Color(0xFF2563EB);
 
 /// Build a styled [TextSpan] for [text] with [marks] applied over [base].
 TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
@@ -100,6 +101,14 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
             fontStyle: FontStyle.italic,
             color: _mathColor,
             backgroundColor: _mathBg,
+          );
+        case 'footnote':
+          // GFM reference chip: small superscript label in link blue. The
+          // raised baseline + reduced size reads as a footnote marker.
+          style = style.copyWith(
+            color: _footnoteColor,
+            fontSize: (style.fontSize ?? 14) * 0.75,
+            fontFeatures: const [FontFeature.superscripts()],
           );
       }
     }
@@ -975,6 +984,23 @@ String? autolinkTarget(String inner) {
         }
       }
     }
+    // Footnote reference: `[^label]` (GFM). The brackets and caret strip to
+    // the bare label under a `footnote` mark carrying the label as href —
+    // the same delimiter-strip + mark shape inline math uses. Checked before
+    // the link arm so `[^x]` never parses as a shortcut link. Mirrors Rust.
+    if (src[i] == '[' && i + 1 < src.length && src[i + 1] == '^') {
+      final close = matchingBracket(src, i);
+      if (close > i + 2) {
+        final label = src.substring(i + 2, close);
+        if (!label.contains(RegExp(r'[\s\[\]^]'))) {
+          final start = out.length;
+          out.write(label);
+          marks.add(Mark(start, out.length, 'footnote', href: label));
+          i = close + 1;
+          continue;
+        }
+      }
+    }
     // Links: [text](dest "title") | [text][label] | [text][] | [shortcut]
     if (src[i] == '[') {
       final close = matchingBracket(src, i);
@@ -1330,6 +1356,14 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       out.write(kDollar);
       out.write(text.substring(ps, pe));
       out.write(kDollar);
+      pos = pe;
+      continue;
+    }
+    if (pick.type == 'footnote') {
+      // The span text IS the label; the `[^…]` syntax is restored from the
+      // mark's href (the label survives even if the span text was edited).
+      final label = pick.href ?? text.substring(ps, pe);
+      out.write('[^$label]');
       pos = pe;
       continue;
     }
