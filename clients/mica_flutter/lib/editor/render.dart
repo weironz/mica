@@ -287,6 +287,7 @@ class RenderDocument extends RenderBox {
     DividerRenderer(),
     ImageRenderer(),
     MathBlockRenderer(),
+    TableRenderer(),
   ];
 
   static final Map<String, AtomicBlockRenderer> _renderersByKind = {
@@ -513,14 +514,6 @@ class RenderDocument extends RenderBox {
         }
       }
 
-      if (node.kind == 'table') {
-        final layout = _layoutTable(node, y, maxWidth);
-        _layouts.add(layout);
-        y += layout.boxHeight;
-        prevKind = node.kind;
-        continue;
-      }
-
       final style = _appearance.applyTo(
         EditorTheme.styleFor(node),
         isCode: node.isCode,
@@ -712,130 +705,6 @@ class RenderDocument extends RenderBox {
     if (raw.isEmpty) return TextSpan(text: ' ', style: base);
     final parsed = parseInline(raw);
     return buildMarkedSpan(parsed.text, parsed.marks, base);
-  }
-
-  _NodeLayout _layoutTable(EditorNode node, double top, double maxWidth) {
-    final table = TableData.fromBlock(node.data);
-    final cols = table.columns.clamp(1, 64);
-    // Per-column GFM alignment (separator colons) overrides the whole-table
-    // setting where present.
-    TextAlign alignAt(int c) => switch (table.alignFor(c)) {
-      'center' => TextAlign.center,
-      'right' => TextAlign.right,
-      _ => TextAlign.left,
-    };
-    final gridTop = top + _tTopGutter;
-    const x0 = EditorTheme.gutter;
-    final fullW = (maxWidth - EditorTheme.gutter).clamp(60.0, double.infinity);
-    // The table spans a fraction of the content width (dragging its right
-    // edge adjusts it); columns share that span by weight.
-    final availW = (fullW * table.tableWidth.clamp(0.15, 1.0))
-        .clamp(60.0, fullW);
-
-    // Column widths from normalized weights.
-    final weights = [
-      for (var c = 0; c < cols; c++)
-        c < table.widths.length ? table.widths[c] : 1.0,
-    ];
-    final weightSum = weights.fold<double>(0, (a, b) => a + b);
-    final colW = [for (final w in weights) availW * w / weightSum];
-    final colEdges = <double>[x0];
-    for (final w in colW) {
-      colEdges.add(colEdges.last + w);
-    }
-
-    const padH = 8.0;
-    const padV = 7.0;
-    const minRowH = 34.0;
-    final cells = <_TableCell>[];
-    final rowHandles = <Rect>[];
-    var yy = gridTop;
-    for (var r = 0; r < table.rows.length; r++) {
-      final isHeader = table.header && r == 0;
-      final painters = <TextPainter>[];
-      var rowH = minRowH;
-      for (var c = 0; c < cols; c++) {
-        final raw = c < table.rows[r].length ? table.rows[r][c] : '';
-        final tp = TextPainter(
-          text: cellDisplaySpan(
-            raw,
-            _appearance.applyTo(
-              TextStyle(
-                color: EditorTheme.text,
-                fontSize: 15,
-                height: 1.4,
-                fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
-              ),
-              isCode: false,
-            ),
-          ),
-          textAlign: alignAt(c),
-          textDirection: TextDirection.ltr,
-        )..layout(
-            minWidth: (colW[c] - padH * 2).clamp(0.0, double.infinity),
-            maxWidth: (colW[c] - padH * 2).clamp(0.0, double.infinity),
-          );
-        painters.add(tp);
-        rowH = rowH > tp.height + padV * 2 ? rowH : tp.height + padV * 2;
-      }
-      for (var c = 0; c < cols; c++) {
-        cells.add(_TableCell(
-          Rect.fromLTWH(colEdges[c], yy, colW[c], rowH),
-          painters[c],
-          isHeader,
-          r,
-          c,
-          Offset(colEdges[c] + padH, yy + padV),
-        ));
-      }
-      rowHandles.add(Rect.fromLTWH(x0, yy, 10, rowH));
-      yy += rowH;
-    }
-    final gridBottom = yy;
-    final gridHeight = gridBottom - gridTop;
-
-    final colHandles = [
-      for (var c = 0; c < cols; c++)
-        Rect.fromLTWH(colEdges[c], top, colW[c], _tTopGutter),
-    ];
-    // Inner borders between columns, plus the table's right edge (c == cols)
-    // so the LAST column is resizable too — drag resizes, a plain click on
-    // the strip still adds a column.
-    final colBorders = [
-      for (var c = 1; c <= cols; c++)
-        (rect: Rect.fromLTWH(colEdges[c] - 6, gridTop, 12, gridHeight), col: c),
-    ];
-
-    final layout = _NodeLayout(
-      TextPainter(text: const TextSpan(text: ''), textDirection: TextDirection.ltr)
-        ..layout(),
-    )
-      ..kind = 'table'
-      ..nodeId = node.id
-      ..contentLeft = 0
-      ..boxTop = top
-      ..textTop = gridTop
-      ..textHeight = gridHeight
-      ..boxHeight = _tTopGutter + gridHeight + _tBottomBar
-      ..tableCells = cells
-      ..tableTop = gridTop
-      ..tableHeight = gridHeight
-      ..tableHeader = table.header
-      ..rowHandles = rowHandles
-      ..colHandles = colHandles
-      ..colBorders = colBorders
-      // The add-column strip sits just past the table's right edge (clamped
-      // inside the content area when the table is full-width).
-      ..addColBar = Rect.fromLTWH(
-        (colEdges.last + 2).clamp(0.0, maxWidth - _tEdge),
-        gridTop,
-        _tEdge,
-        gridHeight,
-      )
-      ..addRowBar = Rect.fromLTWH(x0, gridBottom, availW, _tBottomBar)
-      ..tableHandle = Rect.fromLTWH(x0, top, 16, _tTopGutter)
-      ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, _tTopGutter);
-    return layout;
   }
 
   // ---------------------------------------------------------------------------
@@ -1191,10 +1060,6 @@ class RenderDocument extends RenderBox {
       renderer.paint(this, canvas, offset, l, i);
       return;
     }
-    if (l.kind == 'table') {
-      _paintTable(canvas, offset, l, i);
-      return;
-    }
     final origin = offset + Offset(l.contentLeft, l.textTop);
 
     switch (l.kind) {
@@ -1326,118 +1191,6 @@ class RenderDocument extends RenderBox {
       }
       if (isCode) canvas.restore();
     }
-  }
-
-  void _paintTable(Canvas canvas, Offset offset, _NodeLayout l, int index) {
-    final border = Paint()
-      ..color = const Color(0xFFCBD5E1)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    final headerBg = Paint()..color = const Color(0xFFF1F5F9);
-    final editing = _editingCell;
-    for (final cell in l.tableCells) {
-      final r = cell.rect.shift(offset);
-      if (cell.header) canvas.drawRect(r, headerBg);
-      canvas.drawRect(r, border);
-      // Skip the text of the cell being edited (the overlay field shows it).
-      if (editing != null &&
-          editing.node == index &&
-          editing.row == cell.row &&
-          editing.col == cell.col) {
-        continue;
-      }
-      cell.painter.paint(canvas, cell.textAt + offset);
-    }
-
-    if (_hoverCode != index) return;
-
-    final handlePaint = Paint()..color = const Color(0xFF94A3B8);
-    final plusColor = EditorTheme.muted;
-
-    // Hovered column border: an accent line so the resize target is obvious.
-    final hb = _hoverColBorder;
-    if (hb != null && hb.node == index) {
-      final b = l.colBorders.where((x) => x.col == hb.col);
-      if (b.isNotEmpty) {
-        final r = b.first.rect.shift(offset);
-        canvas.drawRect(
-          Rect.fromLTWH(r.center.dx - 1, r.top, 2, r.height),
-          Paint()..color = const Color(0x802563EB),
-        );
-      }
-    }
-
-    // Row / column handles: three small dots sitting ON the edge lines
-    // (Notion/AFFiNE style) instead of strips covering cell content.
-    for (final h in l.rowHandles) {
-      final r = h.shift(offset);
-      for (var k = -1; k <= 1; k++) {
-        // Centered ON the left border line (r.left == the line's x).
-        canvas.drawCircle(
-          Offset(r.left, r.center.dy + k * 5.0),
-          1.6,
-          handlePaint,
-        );
-      }
-    }
-    for (final h in l.colHandles) {
-      final r = h.shift(offset);
-      for (var k = -1; k <= 1; k++) {
-        canvas.drawCircle(
-          Offset(r.center.dx + k * 5.0, r.bottom),
-          1.6,
-          handlePaint,
-        );
-      }
-    }
-
-    void plusBar(Rect? rect, bool vertical) {
-      if (rect == null) return;
-      final r = rect.shift(offset);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(r.deflate(2), const Radius.circular(4)),
-        Paint()..color = const Color(0x14000000),
-      );
-      final tp = TextPainter(
-        text: TextSpan(
-          text: String.fromCharCode(Icons.add.codePoint),
-          style: TextStyle(
-            fontFamily: Icons.add.fontFamily,
-            package: Icons.add.fontPackage,
-            fontSize: 14,
-            color: plusColor,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, r.center - Offset(tp.width / 2, tp.height / 2));
-      tp.dispose();
-    }
-
-    plusBar(l.addColBar, true);
-    plusBar(l.addRowBar, false);
-
-    void cornerIcon(Rect? rect, IconData icon, Color color) {
-      if (rect == null) return;
-      final r = rect.shift(offset);
-      final tp = TextPainter(
-        text: TextSpan(
-          text: String.fromCharCode(icon.codePoint),
-          style: TextStyle(
-            fontFamily: icon.fontFamily,
-            package: icon.fontPackage,
-            fontSize: 14,
-            color: color,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, r.center - Offset(tp.width / 2, tp.height / 2));
-      tp.dispose();
-    }
-
-    cornerIcon(l.tableHandle, Icons.drag_indicator, EditorTheme.muted);
-    cornerIcon(l.tableDelete, Icons.delete_outline, const Color(0xFFDC2626));
   }
 
   /// Table cell under [local], or null.
