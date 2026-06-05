@@ -325,8 +325,9 @@ class RenderDocument extends RenderBox {
     markNeedsLayout();
   }
 
-  /// Ask the host pipeline for a preview of [source] under previewer [id].
-  void Function(String id, String source)? onRequestPreview;
+  /// Ask the host pipeline for a preview of [source] under previewer [id],
+  /// to be displayed [targetWidth] logical px wide.
+  void Function(String id, String source, double targetWidth)? onRequestPreview;
 
   /// `file_id`s that failed to load — painted as a broken-image placeholder.
   Set<String> _imageErrors = {};
@@ -1574,7 +1575,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
   /// Rasterized formulas keyed by LaTeX source (captured by the editor via
   /// an offstage flutter_math_fork widget at device pixel ratio).
   final Map<String, Map<String, ui.Image>> previewImages;
-  final void Function(String id, String source)? onRequestPreview;
+  final void Function(String id, String source, double targetWidth)?
+      onRequestPreview;
 
   @override
   RenderDocument createRenderObject(BuildContext context) => RenderDocument(

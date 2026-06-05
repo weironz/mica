@@ -83,7 +83,7 @@ class MathBlockRenderer extends AtomicBlockRenderer {
     if (node.text.trim().isEmpty) return null;
     final img = host._previewImages['math']?[node.text];
     if (img == null) {
-      host.onRequestPreview?.call('math', node.text);
+      host.onRequestPreview?.call('math', node.text, maxWidth);
       return null;
     }
     // Rendered formula: centered, sized from the capture (image is at device
@@ -629,26 +629,28 @@ class MermaidRenderer extends AtomicBlockRenderer {
   ) {
     if ((node.data['language'] as String?) != 'mermaid') return null;
     if (node.text.trim().isEmpty) return null;
-    // Caret inside the block → editable source form.
+    // Caret inside the block → editable source form. Only while the editor
+    // actually owns focus (showCaret): a selection parked in the block after
+    // focus moved to the title/sidebar shouldn't hold the diagram hostage.
     final sel = host._selection;
-    if (sel != null && index >= sel.start.node && index <= sel.end.node) {
+    if (host._showCaret &&
+        sel != null &&
+        index >= sel.start.node &&
+        index <= sel.end.node) {
       return null;
     }
-    final img = host._previewImages['mermaid']?[node.text];
-    if (img == null) {
-      host.onRequestPreview?.call('mermaid', node.text);
-      return null;
-    }
-    // Centered like math; the producer renders at 2x for crispness, so draw
-    // at half the capture's pixel size, downscaled to fit.
-    var w = img.width / 2.0;
-    var h = img.height / 2.0;
     final avail =
         (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
-    if (w > avail) {
-      h *= avail / w;
-      w = avail;
+    final img = host._previewImages['mermaid']?[node.text];
+    if (img == null) {
+      host.onRequestPreview?.call('mermaid', node.text, avail);
+      return null;
     }
+    // Fill the content width: diagrams read better large, so scale UP as
+    // well as down. The producer rasterized at 2x of this width, so the
+    // upscale stays crisp.
+    final w = avail;
+    final h = avail * (img.height / img.width.clamp(1, 1 << 30));
     // The painter must be laid out: code_block is a TEXT kind, so pointer
     // hit-testing runs text-position math against it (unlike the atomic
     // kinds, whose clicks take the block path). Empty text → offset 0 →

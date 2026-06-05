@@ -45,7 +45,7 @@ int _renderSeq = 0;
 /// `<img>` → 2x offscreen canvas → PNG bytes → ui.Image. Any failure (load,
 /// syntax, raster) resolves to null; the preview pipeline records it and the
 /// block stays on its highlighted source form.
-Future<ui.Image?> renderMermaid(String source) async {
+Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
   try {
     await _ensureLoaded();
     final mermaid = globalContext.getProperty('mermaid'.toJS) as JSObject;
@@ -70,9 +70,16 @@ Future<ui.Image?> renderMermaid(String source) async {
       img.src = url;
       await loaded.future;
 
-      // Draw at 2x for crisp text; the renderer draws back at half size.
-      final w = ((img.naturalWidth == 0 ? 600 : img.naturalWidth) * 2);
-      final h = ((img.naturalHeight == 0 ? 400 : img.naturalHeight) * 2);
+      // Rasterize to fill the display width at 2x device pixels: the layout
+      // stretches diagrams to the content width, so scaling must happen HERE
+      // (vector → raster) to stay crisp — a small natural size blown up at
+      // paint time would blur. Scale is capped so a tiny diagram on a huge
+      // page doesn't allocate an absurd canvas.
+      final natW = (img.naturalWidth == 0 ? 600 : img.naturalWidth).toDouble();
+      final natH = (img.naturalHeight == 0 ? 400 : img.naturalHeight).toDouble();
+      final scale = ((targetWidth * 2) / natW).clamp(0.5, 8.0);
+      final w = (natW * scale).round();
+      final h = (natH * scale).round();
       final canvas = html.CanvasElement(width: w, height: h);
       canvas.context2D.drawImageScaled(img, 0, 0, w, h);
       final png = await canvas.toBlob('image/png');
