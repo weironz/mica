@@ -3941,6 +3941,7 @@ class _SearchDialogState extends State<_SearchDialog> {
   final _query = TextEditingController();
   Timer? _debounce;
   bool _loading = false;
+  bool _failed = false;
   List<SearchResult> _results = const [];
   String _lastQuery = '';
 
@@ -3973,9 +3974,19 @@ class _SearchDialogState extends State<_SearchDialog> {
         _results = results;
         _lastQuery = query;
         _loading = false;
+        _failed = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      // Surface the failure — a swallowed error reads as "no results" and
+      // hides real breakage (this dialog masked a 404 for a while).
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _failed = true;
+          _results = const [];
+          _lastQuery = query;
+        });
+      }
     }
   }
 
@@ -4034,7 +4045,9 @@ class _SearchDialogState extends State<_SearchDialog> {
       return EmptyState(
         icon: Icons.search_off,
         title: 'No matches',
-        detail: 'Nothing found for "$_lastQuery".',
+        detail: _failed
+            ? 'Search failed — check your connection and try again.'
+            : 'Nothing found for "$_lastQuery".',
       );
     }
     return ListView.separated(
@@ -5893,9 +5906,21 @@ class ApiClient {
     return ImportJobStatus.fromJson(response);
   }
 
+  /// Build the request URI. [path] may carry a query string
+  /// ('/x/search?q=…') — `Uri.replace(path:)` would percent-encode the '?',
+  /// shipping the whole query as part of the path (and 404ing).
+  Uri _apiUri(String path) {
+    final q = path.indexOf('?');
+    if (q < 0) return _baseUri.replace(path: path);
+    return _baseUri.replace(
+      path: path.substring(0, q),
+      query: path.substring(q + 1),
+    );
+  }
+
   Future<Map<String, dynamic>> _get(String path, String token) async {
     final response = await http.get(
-      _baseUri.replace(path: path),
+      _apiUri(path),
       headers: {'authorization': 'Bearer $token'},
     );
     return _decode(response);
@@ -5907,7 +5932,7 @@ class ApiClient {
     String? token,
   }) async {
     final response = await http.post(
-      _baseUri.replace(path: path),
+      _apiUri(path),
       headers: _headers(token),
       body: jsonEncode(body),
     );
@@ -5920,7 +5945,7 @@ class ApiClient {
     required String token,
   }) async {
     final response = await http.patch(
-      _baseUri.replace(path: path),
+      _apiUri(path),
       headers: _headers(token),
       body: jsonEncode(body),
     );
@@ -5929,7 +5954,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> _delete(String path, String token) async {
     final response = await http.delete(
-      _baseUri.replace(path: path),
+      _apiUri(path),
       headers: {'authorization': 'Bearer $token'},
     );
     return _decode(response);
