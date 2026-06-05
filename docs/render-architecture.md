@@ -1,7 +1,14 @@
 # Block rendering architecture (P2 refactor design)
 
-Status: DESIGN — implement after `feat/editor-interactions` and
-`fix/table-inline-code` merge (the refactor touches the same files).
+Status: IMPLEMENTED (Phase 1+2). The renderer registry lives in
+`lib/editor/block_renderers.dart` (a part-file of render.dart — renderers
+stay inside the library boundary instead of forcing layout internals
+public); the preview pipeline in `lib/editor/preview_raster.dart`. Body
+paint dispatches on the layout's producer (`renderedBy`); backdrops
+dispatch by kind (block identity, shown on the fallen-through source form
+too). Still open: collapsing _NodeLayout's per-kind fields into a
+rendererData slot, and hit-test dispatch — both deferred until a renderer
+actually needs them.
 
 ## Problem
 
