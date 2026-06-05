@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
+import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
 
@@ -42,6 +43,34 @@ void main() {
       }),
     ]);
     expect(c.selectionText(), '**hi** there');
+  });
+
+  test('a quote group copies as ONE blockquote and round-trips intact', () {
+    final c = _doc([
+      EditorNode(id: 'a', kind: 'quote', text: 'first line'),
+      EditorNode(id: 'b', kind: 'quote', text: 'second line'),
+      EditorNode(id: 'c', kind: 'quote', text: 'third line'),
+    ]);
+    final md = c.selectionText();
+    expect(md, '> first line\n> second line\n> third line',
+        reason: 'a blank line would SPLIT the blockquote on re-parse and '
+            'shatter the quote bar');
+
+    // Re-parsing folds the group into one multi-line quote block — still a
+    // single continuous bar, which is the point.
+    final blocks = markdownToBlocks(md);
+    expect(blocks.map((b) => b.kind), ['quote']);
+    expect(blocks.single.text, 'first line\nsecond line\nthird line');
+    expect(blocks.where((b) => b.data['qbreak'] == true), isEmpty,
+        reason: 'pasted back, the group must stay one continuous bar');
+  });
+
+  test('separate blockquotes (qbreak) keep their blank line apart', () {
+    final c = _doc([
+      EditorNode(id: 'a', kind: 'quote', text: 'group one'),
+      EditorNode(id: 'b', kind: 'quote', text: 'group two', data: {'qbreak': true}),
+    ]);
+    expect(c.selectionText(), '> group one\n\n> group two');
   });
 
   test('partial single-block selection has no block marker', () {

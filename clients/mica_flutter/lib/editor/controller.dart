@@ -644,14 +644,22 @@ class EditorController extends ChangeNotifier {
     if (s.node == e.node) {
       return nodeText(s.node, s.offset, e.offset);
     }
-    final parts = <String>[
-      nodeText(s.node, s.offset, nodes[s.node].text.length),
-      for (var i = s.node + 1; i < e.node; i++)
-        nodeText(i, 0, nodes[i].text.length),
-      nodeText(e.node, 0, e.offset),
-    ];
-    // Blank line between blocks so headings/lists/quotes parse as Markdown.
-    return parts.join('\n\n');
+    // Blank line between blocks so headings/lists parse as Markdown — but
+    // consecutive quote blocks of one group join with a SINGLE newline: a
+    // blank line is the Markdown boundary between blockquotes, so the
+    // round-trip would mark every line `qbreak` and the quote bar shatters.
+    final buf = StringBuffer(
+        nodeText(s.node, s.offset, nodes[s.node].text.length));
+    for (var i = s.node + 1; i <= e.node; i++) {
+      final sameQuoteGroup = nodes[i].kind == 'quote' &&
+          nodes[i - 1].kind == 'quote' &&
+          nodes[i].data['qbreak'] != true;
+      buf.write(sameQuoteGroup ? '\n' : '\n\n');
+      buf.write(i == e.node
+          ? nodeText(e.node, 0, e.offset)
+          : nodeText(i, 0, nodes[i].text.length));
+    }
+    return buf.toString();
   }
 
   /// The leading Markdown marker for a block kind (heading/list/quote/todo).
@@ -665,7 +673,8 @@ class EditorController extends ChangeNotifier {
       case 'numbered_list':
         return '${pad}1. ';
       case 'quote':
-        return '> ';
+        // Nested quotes repeat the marker, matching the Rust exporter.
+        return '> ' * node.quoteDepth.clamp(1, 16);
       case 'todo':
         return node.todoChecked ? '$pad- [x] ' : '$pad- [ ] ';
       case 'footnote_def':
