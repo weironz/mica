@@ -534,25 +534,6 @@ class EditorController extends ChangeNotifier {
       return true;
     }
 
-    // Backspace at the start of a non-empty heading strips the heading
-    // IN PLACE (text and caret stay) — merging it straight into the line
-    // above silently destroyed the title. A second Backspace, now on a
-    // paragraph, merges as usual.
-    if (cur.kind == 'heading') {
-      cur.kind = 'paragraph';
-      cur.data = {...cur.data}..remove('level');
-      _sendNow([
-        {
-          'type': 'update_block',
-          'block_id': cur.id,
-          'kind': 'paragraph',
-          'data': cur.data,
-        },
-      ]);
-      notifyListeners();
-      return true;
-    }
-
     // Nothing before the first block to merge into.
     if (i == 0) return false;
     final prev = nodes[i - 1];
@@ -560,6 +541,19 @@ class EditorController extends ChangeNotifier {
     // An atomic neighbor (divider/table) can't absorb text — delete it instead
     // of merging, keeping the current node and its caret.
     if (prev.isAtomic) {
+      nodes.removeAt(i - 1);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': prev.id},
+      ]);
+      collapseTo(DocPosition(i - 1, 0));
+      return true;
+    }
+
+    // An EMPTY line above is consumed whole: the current block rises one
+    // line keeping its identity. (Merging would pour the block's text into
+    // the empty paragraph's kind — one Backspace at a heading's start
+    // silently destroyed the title.)
+    if (prev.text.isEmpty) {
       nodes.removeAt(i - 1);
       _sendNow([
         {'type': 'delete_block', 'block_id': prev.id},

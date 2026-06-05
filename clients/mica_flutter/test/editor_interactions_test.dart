@@ -29,22 +29,23 @@ void main() {
     expect(c.nodes[0].data['level'], 3);
   });
 
-  test('Backspace at the start of a heading strips it in place, not merge', () {
+  test('Backspace at a heading start rises over an empty line, format kept', () {
     final c = _fresh([
-      EditorNode(id: 'p', kind: 'paragraph', text: 'first line'),
+      EditorNode(id: 'p1', kind: 'paragraph', text: 'first line'),
+      EditorNode(id: 'p2', kind: 'paragraph', text: ''),
       EditorNode(id: 'h', kind: 'heading', text: 'My Title', data: {'level': 2}),
     ]);
-    c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+    c.selection = DocSelection.collapsed(const DocPosition(2, 0));
 
-    // First Backspace: the heading downgrades IN PLACE — text and caret stay.
+    // The empty line above is consumed; the heading moves up UNCHANGED.
     expect(c.mergeBackward(), isTrue);
-    expect(c.nodes.length, 2, reason: 'no merge yet');
-    expect(c.nodes[1].kind, 'paragraph');
+    expect(c.nodes.length, 2);
+    expect(c.nodes[1].kind, 'heading');
     expect(c.nodes[1].text, 'My Title');
-    expect(c.nodes[1].data.containsKey('level'), isFalse);
+    expect(c.nodes[1].data['level'], 2, reason: 'format survives');
     expect(c.selection!.focus, const DocPosition(1, 0));
 
-    // Second Backspace: now a paragraph, it merges into the line above.
+    // Against a NON-empty line, the standard text merge applies.
     expect(c.mergeBackward(), isTrue);
     expect(c.nodes.length, 1);
     expect(c.nodes[0].text, 'first lineMy Title');
