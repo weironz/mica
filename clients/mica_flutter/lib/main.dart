@@ -5260,10 +5260,17 @@ class _DocumentListItemState extends State<DocumentListItem> {
                             onPressed: widget.onToggle,
                             padding: EdgeInsets.zero,
                             iconSize: 18,
-                            icon: Icon(
-                              widget.isCollapsed
-                                  ? Icons.chevron_right
-                                  : Icons.expand_more,
+                            // The chevron's ink is a narrow band centered in
+                            // its em-box, reading ~6px right of the doc icon
+                            // — nudge it back so both variants keep one
+                            // optical left edge.
+                            icon: Transform.translate(
+                              offset: const Offset(-6, 0),
+                              child: Icon(
+                                widget.isCollapsed
+                                    ? Icons.chevron_right
+                                    : Icons.expand_more,
+                              ),
                             ),
                           )
                         : Icon(
