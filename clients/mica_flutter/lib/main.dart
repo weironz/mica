@@ -126,6 +126,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   bool _showFormatBar = false;
   // Page title block at the top of the page (on by default).
   bool _showPageTitle = true;
+  // AI features (off by default). The Ask AI entry points show only when
+  // this is on AND a provider is actually configured on the server.
+  bool _aiEnabled = false;
+  bool _aiConfigured = false;
 
   DocumentSyncClient? _sync;
   List<PresenceUser> _presence = const [];
@@ -158,6 +162,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _reHostImages = loadPref('reHostImages') != 'false';
     _showFormatBar = loadPref('showFormatBar') == 'true';
     _showPageTitle = loadPref('showPageTitle') != 'false';
+    _aiEnabled = loadPref('aiEnabled') == 'true';
   }
 
   void _savePrefs() {
@@ -167,6 +172,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     savePref('reHostImages', _reHostImages.toString());
     savePref('showFormatBar', _showFormatBar.toString());
     savePref('showPageTitle', _showPageTitle.toString());
+    savePref('aiEnabled', _aiEnabled.toString());
   }
 
   /// Sign in with the dev account on startup. Falls back to registering it the
@@ -318,6 +324,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedWorkspace = workspaces.firstOrNull;
       });
 
+      unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
     });
@@ -625,6 +632,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.getAiSettings(session.accessToken);
   }
 
+  /// Whether an AI provider is configured server-side (an API key, or a
+  /// model for keyless local providers). Failure leaves AI hidden.
+  Future<void> _refreshAiConfigured() async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final s = await _api.getAiSettings(session.accessToken);
+      if (mounted) {
+        setState(() {
+          _aiConfigured =
+              s['has_key'] == true || (s['model'] as String? ?? '').isNotEmpty;
+        });
+      }
+    } catch (_) {}
+  }
+
   Future<void> _saveAiSettings({
     required String provider,
     required String baseUrl,
@@ -639,6 +662,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       model: model,
       apiKey: apiKey,
     );
+    if (mounted) setState(() => _aiConfigured = true);
   }
 
   String _titleFromMarkdown(String markdown, String fallback) {
@@ -1398,6 +1422,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   setState(() => _showPageTitle = value);
                   _savePrefs();
                 },
+                showAi: _aiEnabled && _aiConfigured,
+                aiEnabled: _aiEnabled,
+                onAiEnabledChanged: (value) {
+                  setState(() => _aiEnabled = value);
+                  _savePrefs();
+                },
                 onAppearanceChanged: (appearance, pageWidth) {
                   setState(() {
                     _appearance = appearance;
@@ -1652,6 +1682,9 @@ class WorkspaceView extends StatefulWidget {
     required this.onShowFormatBarChanged,
     required this.showPageTitle,
     required this.onShowPageTitleChanged,
+    required this.showAi,
+    required this.aiEnabled,
+    required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onSearch,
     required this.onOpenSearchResult,
@@ -1746,6 +1779,9 @@ class WorkspaceView extends StatefulWidget {
   final void Function(bool value) onShowFormatBarChanged;
   final bool showPageTitle;
   final void Function(bool value) onShowPageTitleChanged;
+  final bool showAi;
+  final bool aiEnabled;
+  final void Function(bool value) onAiEnabledChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<List<SearchResult>> Function(String query) onSearch;
@@ -1988,15 +2024,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             const SizedBox(height: 4),
             Expanded(child: _pageTree(context, canEdit)),
             const Divider(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.tonalIcon(
-                onPressed: _openAiDialog,
-                icon: const Icon(Icons.auto_awesome, size: 18),
-                label: const Text('Ask AI'),
+            // AI entry points exist only when the feature is enabled in
+            // Settings AND a provider is configured.
+            if (widget.showAi) ...[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.tonalIcon(
+                  onPressed: _openAiDialog,
+                  icon: const Icon(Icons.auto_awesome, size: 18),
+                  label: const Text('Ask AI'),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
             _accountTile(context),
           ],
         ),
@@ -2626,8 +2666,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             child: TextField(
                               controller: _pageTitle,
                               focusNode: _pageTitleFocus,
-                              style:
-                                  Theme.of(context).textTheme.headlineMedium,
+                              style: Theme.of(context).textTheme.headlineMedium,
                               textInputAction: TextInputAction.next,
                               onChanged: (_) => _schedulePageTitleSave(),
                               // Enter in the title: the text after the caret
@@ -2732,7 +2771,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     onImportImageUrl: widget.onImportImageUrl,
                     onLoadImageBytes: widget.onLoadImageBytes,
                     onResolveImageUrls: widget.onResolveImageUrls,
-                    onAiStream: widget.onAiStream,
+                    onAiStream: widget.showAi ? widget.onAiStream : null,
                     reHostImages: widget.reHostImages,
                     scrollHook: _scrollHook,
                     commandHook: _commandHook,
@@ -3268,6 +3307,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         showFormatBar: widget.showFormatBar,
         showPageTitle: widget.showPageTitle,
         onShowPageTitleChanged: widget.onShowPageTitleChanged,
+        aiEnabled: widget.aiEnabled,
+        onAiEnabledChanged: widget.onAiEnabledChanged,
         onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
@@ -4154,6 +4195,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.onShowFormatBarChanged,
     required this.showPageTitle,
     required this.onShowPageTitleChanged,
+    required this.aiEnabled,
+    required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
   });
@@ -4178,6 +4221,8 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(bool value) onShowFormatBarChanged;
   final bool showPageTitle;
   final void Function(bool value) onShowPageTitleChanged;
+  final bool aiEnabled;
+  final void Function(bool value) onAiEnabledChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
@@ -4210,6 +4255,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late bool _reHostImages = widget.reHostImages;
   late bool _showFormatBar = widget.showFormatBar;
   late bool _showPageTitle = widget.showPageTitle;
+  late bool _aiEnabled = widget.aiEnabled;
 
   @override
   void initState() {
@@ -4489,6 +4535,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       Icons.auto_awesome,
       'AI provider',
       const Color(0xFF7C3AED),
+    ),
+    SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: _aiEnabled,
+      title: const Text('Enable AI features'),
+      subtitle: const Text(
+        'Show the Ask AI button and the /ai command. They appear only '
+        'when this is on and a provider below is configured.',
+      ),
+      onChanged: (value) {
+        setState(() => _aiEnabled = value);
+        widget.onAiEnabledChanged(value);
+      },
     ),
     const SizedBox(height: 12),
     DropdownButtonFormField<_AiPreset>(
