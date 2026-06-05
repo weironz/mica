@@ -285,6 +285,7 @@ class RenderDocument extends RenderBox {
   /// paint passes. New block types register here (docs/render-architecture.md).
   static const List<AtomicBlockRenderer> atomicRenderers = [
     DividerRenderer(),
+    MathBlockRenderer(),
   ];
 
   static final Map<String, AtomicBlockRenderer> _renderersByKind = {
@@ -525,39 +526,6 @@ class RenderDocument extends RenderBox {
         y += layout.boxHeight;
         prevKind = node.kind;
         continue;
-      }
-
-      if (node.kind == 'math_block' && node.text.trim().isNotEmpty) {
-        final img = _mathImages[node.text];
-        if (img == null) {
-          onRequestMath?.call(node.text);
-        } else {
-          // Rendered formula: centered, sized from the capture (image is at
-          // device pixel ratio; draw at logical size, downscale to fit).
-          const dpr = EditorTheme.mathPixelRatio;
-          var w = img.width / dpr;
-          var h = img.height / dpr;
-          final avail = (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
-          if (w > avail) {
-            h *= avail / w;
-            w = avail;
-          }
-          final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
-            ..kind = 'math_block'
-            ..nodeId = node.id
-            ..boxLeft = EditorTheme.gutter
-            ..contentLeft = EditorTheme.gutter + ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
-            ..mathImage = img
-            ..mathSize = Size(w, h)
-            ..boxTop = y
-            ..textTop = y + 10
-            ..textHeight = h
-            ..boxHeight = h + 20;
-          _layouts.add(layout);
-          y += layout.boxHeight;
-          prevKind = node.kind;
-          continue;
-        }
       }
 
       final style = _appearance.applyTo(
@@ -1004,16 +972,9 @@ class RenderDocument extends RenderBox {
   void _paintBlockBackgrounds(Canvas canvas, Offset offset) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
-      if (l.kind == 'math_block') {
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop - 6,
-                size.width - l.boxLeft, l.boxHeight + 12),
-            const Radius.circular(6),
-          ),
-          Paint()..color = const Color(0xFFF5F3FF),
-        );
-      }
+      // Atomic-block backdrops dispatch by kind: a block's identity tint
+      // (math's lavender) shows on its fallen-through source form too.
+      _renderersByKind[l.kind]?.paintBackground(this, canvas, offset, l, i);
       if (l.kind == 'code_block') {
         final bgLeft = l.boxLeft + 16.0 * l.quoteDepth;
         canvas.drawRRect(
@@ -1301,18 +1262,6 @@ class RenderDocument extends RenderBox {
     }
     if (l.kind == 'table') {
       _paintTable(canvas, offset, l, i);
-      return;
-    }
-    if (l.kind == 'math_block' && l.mathImage != null) {
-      final dst = Rect.fromLTWH(
-          offset.dx + l.contentLeft, offset.dy + l.textTop, l.mathSize.width, l.mathSize.height);
-      final img = l.mathImage!;
-      canvas.drawImageRect(
-        img,
-        Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
-        dst,
-        Paint()..filterQuality = FilterQuality.medium,
-      );
       return;
     }
     if (l.kind == 'image') {

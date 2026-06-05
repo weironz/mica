@@ -35,7 +35,10 @@ abstract class AtomicBlockRenderer {
   );
 
   /// Paint behind the selection highlight (first pass) — e.g. the math
-  /// block's tinted backdrop. Most renderers need nothing here.
+  /// block's tinted backdrop. Dispatched by *kind* (unlike [paint], which
+  /// dispatches on the layout's producer): the backdrop marks the block's
+  /// identity and shows on the fallen-through source form too. Most
+  /// renderers need nothing here.
   void paintBackground(
     RenderDocument host,
     Canvas canvas,
@@ -53,6 +56,95 @@ abstract class AtomicBlockRenderer {
     _NodeLayout l,
     int index,
   ) {}
+}
+
+// -----------------------------------------------------------------------------
+// Math block
+// -----------------------------------------------------------------------------
+
+class MathBlockRenderer extends AtomicBlockRenderer {
+  const MathBlockRenderer();
+
+  @override
+  String get kind => 'math_block';
+
+  @override
+  _NodeLayout? layout(
+    RenderDocument host,
+    EditorNode node,
+    double y,
+    double maxWidth,
+  ) {
+    // Empty source, or raster not captured yet: request it and decline — the
+    // text pipeline shows the editable LaTeX source meanwhile.
+    if (node.text.trim().isEmpty) return null;
+    final img = host._mathImages[node.text];
+    if (img == null) {
+      host.onRequestMath?.call(node.text);
+      return null;
+    }
+    // Rendered formula: centered, sized from the capture (image is at device
+    // pixel ratio; draw at logical size, downscale to fit).
+    const dpr = EditorTheme.mathPixelRatio;
+    var w = img.width / dpr;
+    var h = img.height / dpr;
+    final avail =
+        (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
+    if (w > avail) {
+      h *= avail / w;
+      w = avail;
+    }
+    return _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+      ..kind = 'math_block'
+      ..nodeId = node.id
+      ..boxLeft = EditorTheme.gutter
+      ..contentLeft = EditorTheme.gutter +
+          ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
+      ..mathImage = img
+      ..mathSize = Size(w, h)
+      ..boxTop = y
+      ..textTop = y + 10
+      ..textHeight = h
+      ..boxHeight = h + 20;
+  }
+
+  @override
+  void paintBackground(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l,
+    int index,
+  ) {
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop - 6,
+            host.size.width - l.boxLeft, l.boxHeight + 12),
+        const Radius.circular(6),
+      ),
+      Paint()..color = const Color(0xFFF5F3FF),
+    );
+  }
+
+  @override
+  void paint(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l,
+    int index,
+  ) {
+    final img = l.mathImage;
+    if (img == null) return;
+    final dst = Rect.fromLTWH(offset.dx + l.contentLeft, offset.dy + l.textTop,
+        l.mathSize.width, l.mathSize.height);
+    canvas.drawImageRect(
+      img,
+      Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+      dst,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------
