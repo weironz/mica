@@ -748,8 +748,9 @@ class RenderDocument extends RenderBox {
         if (codeLang == 'mermaid') {
           final tabY = iconY + (iconBox - 20) / 2;
           final right = layout.langLabel!.left - 8;
-          layout.viewPreviewTab = Rect.fromLTWH(right - 56, tabY, 56, 20);
-          layout.viewCodeTab = Rect.fromLTWH(right - 56 - 2 - 44, tabY, 44, 20);
+          layout.viewCodeTab = Rect.fromLTWH(right - 44, tabY, 44, 20);
+          layout.viewPreviewTab =
+              Rect.fromLTWH(right - 44 - 2 - 56, tabY, 56, 20);
         }
       }
 
@@ -1000,9 +1001,9 @@ class RenderDocument extends RenderBox {
       tp.dispose();
     }
 
-    tab(l.viewCodeTab, 'code', _CodeIcon.viewCode, active == 'code');
     tab(l.viewPreviewTab, 'preview', _CodeIcon.viewPreview,
         active == 'preview');
+    tab(l.viewCodeTab, 'code', _CodeIcon.viewCode, active == 'code');
   }
 
   void _paintIconButton(
@@ -1094,14 +1095,17 @@ class RenderDocument extends RenderBox {
   }
 
   /// The mermaid view tab under [local]: switch to 'code' or 'preview'.
+  /// Only the HOVERED block's tabs are live — they are only painted on
+  /// hover, and an invisible hit target silently flipped blocks to the code
+  /// view when a click landed in the corner.
   ({int node, String view})? viewTabAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      if (_layouts[i].viewCodeTab?.contains(local) ?? false) {
-        return (node: i, view: 'code');
-      }
-      if (_layouts[i].viewPreviewTab?.contains(local) ?? false) {
-        return (node: i, view: 'preview');
-      }
+    final i = _hoverCode;
+    if (i == null || i >= _layouts.length) return null;
+    if (_layouts[i].viewCodeTab?.contains(local) ?? false) {
+      return (node: i, view: 'code');
+    }
+    if (_layouts[i].viewPreviewTab?.contains(local) ?? false) {
+      return (node: i, view: 'preview');
     }
     return null;
   }

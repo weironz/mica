@@ -633,7 +633,13 @@ class MermaidRenderer extends AtomicBlockRenderer {
     // or selecting the rendered diagram must not flip it into source (that
     // visual jump was terrible). data.view == 'code' shows the source;
     // absent means preview, the default.
-    if ((node.data['view'] as String?) == 'code') return null;
+    if ((node.data['view'] as String?) == 'code') {
+      // Source form: drop any transient zoom/pan so the preview returns at
+      // its natural size (a leftover zoom read as "the diagram shrank").
+      host._previewZoom.remove(node.id);
+      host._previewPan.remove(node.id);
+      return null;
+    }
     final avail =
         (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
     final img = host._previewImages['mermaid']?[node.text];
@@ -676,10 +682,10 @@ class MermaidRenderer extends AtomicBlockRenderer {
       ..boxHeight = h + 4
       // Bottom-right, mirroring the source form's toolbar corner: diagram
       // content usually anchors top-left, so this corner overlaps least.
-      ..viewPreviewTab =
-          Rect.fromLTWH(maxWidth - 8 - 56, y + h + 4 - 26, 56, 20)
-      ..viewCodeTab =
-          Rect.fromLTWH(maxWidth - 8 - 56 - 2 - 44, y + h + 4 - 26, 44, 20);
+      // Preview (the default) leads, code follows.
+      ..viewCodeTab = Rect.fromLTWH(maxWidth - 8 - 44, y + h + 4 - 26, 44, 20)
+      ..viewPreviewTab = Rect.fromLTWH(
+          maxWidth - 8 - 44 - 2 - 56, y + h + 4 - 26, 56, 20);
   }
 
   @override
