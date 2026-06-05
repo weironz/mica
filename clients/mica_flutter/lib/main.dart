@@ -1819,6 +1819,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
   bool _draggingTree = false;
+  // Pointer is over the navigation sidebar — reveals the tree's expand
+  // toggles (AppFlowy-style: they live in their own slim column, opacity 0
+  // at rest so the page icons keep one aligned column).
+  bool _navHovered = false;
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
   bool _navCollapsed = false;
@@ -1919,126 +1923,134 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
     return ColoredBox(
       color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // App header — top-left, grouped with the sidebar (no global AppBar).
-            Row(
-              children: [
-                const MicaLogo(size: 24),
-                const SizedBox(width: 8),
-                const Text(
-                  'Mica',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                ),
-                const Spacer(),
-                if (widget.isBusy)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 4),
-                    child: SizedBox(
-                      height: 16,
-                      width: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _navHovered = true),
+        onExit: (_) => setState(() => _navHovered = false),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // App header — top-left, grouped with the sidebar (no global AppBar).
+              Row(
+                children: [
+                  const MicaLogo(size: 24),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Mica',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  ),
+                  const Spacer(),
+                  if (widget.isBusy)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 4),
+                      child: SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: 'Collapse sidebar',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => _navCollapsed = true),
+                    icon: const Icon(
+                      Icons.keyboard_double_arrow_left,
+                      size: 20,
                     ),
                   ),
-                IconButton(
-                  tooltip: 'Collapse sidebar',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () => setState(() => _navCollapsed = true),
-                  icon: const Icon(Icons.keyboard_double_arrow_left, size: 20),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: _WorkspaceSelector(
-                    workspaces: widget.workspaces,
-                    selected: widget.selectedWorkspace,
-                    onSelect: widget.onSelectWorkspace,
-                    onRename: _promptRenameWorkspace,
-                    onDelete: _confirmDeleteWorkspace,
-                    onExport: _exportWorkspaceFile,
-                    onCreate: _promptCreateWorkspace,
-                    onImport: (notion) => _importWorkspaceFile(notion: notion),
-                    onImportFilesInto: _importFilesIntoWorkspace,
-                    onImportFolderInto: _importFolderIntoWorkspace,
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: _WorkspaceSelector(
+                      workspaces: widget.workspaces,
+                      selected: widget.selectedWorkspace,
+                      onSelect: widget.onSelectWorkspace,
+                      onRename: _promptRenameWorkspace,
+                      onDelete: _confirmDeleteWorkspace,
+                      onExport: _exportWorkspaceFile,
+                      onCreate: _promptCreateWorkspace,
+                      onImport: (notion) =>
+                          _importWorkspaceFile(notion: notion),
+                      onImportFilesInto: _importFilesIntoWorkspace,
+                      onImportFolderInto: _importFolderIntoWorkspace,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  tooltip: 'Workspace settings',
-                  visualDensity: VisualDensity.compact,
-                  isSelected: _workspaceSettingsOpen,
-                  onPressed: widget.selectedWorkspace == null
-                      ? null
-                      : () => setState(
-                          () =>
-                              _workspaceSettingsOpen = !_workspaceSettingsOpen,
-                        ),
-                  icon: const Icon(Icons.tune, size: 20),
-                ),
-              ],
-            ),
-            if (_workspaceSettingsOpen) _workspaceSettings(context),
-            if (widget.message != null) ...[
-              const SizedBox(height: 12),
-              ErrorBanner(widget.message!),
-            ],
-            const SizedBox(height: 12),
-            _searchBox(context),
-            // Slim, label-free action strip above the tree — the tree itself
-            // is the section, it doesn't need a name.
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  tooltip: 'Refresh',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: widget.onRefresh,
-                  icon: const Icon(Icons.refresh, size: 20),
-                ),
-                if (canEdit) ...[
+                  const SizedBox(width: 4),
                   IconButton(
-                    tooltip: 'Recycle bin',
+                    tooltip: 'Workspace settings',
                     visualDensity: VisualDensity.compact,
-                    onPressed: _openRecycleBin,
-                    icon: const Icon(Icons.delete_outline, size: 20),
-                  ),
-                  IconButton(
-                    tooltip: 'New page',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () {
-                      widget.onCreateDocument('Untitled');
-                    },
-                    icon: const Icon(Icons.note_add_outlined, size: 20),
+                    isSelected: _workspaceSettingsOpen,
+                    onPressed: widget.selectedWorkspace == null
+                        ? null
+                        : () => setState(
+                            () => _workspaceSettingsOpen =
+                                !_workspaceSettingsOpen,
+                          ),
+                    icon: const Icon(Icons.tune, size: 20),
                   ),
                 ],
-              ],
-            ),
-            const SizedBox(height: 4),
-            Expanded(child: _pageTree(context, canEdit)),
-            const Divider(height: 24),
-            // AI entry points exist only when the feature is enabled in
-            // Settings AND a provider is configured.
-            if (widget.showAi) ...[
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.tonalIcon(
-                  onPressed: _openAiDialog,
-                  icon: const Icon(Icons.auto_awesome, size: 18),
-                  label: const Text('Ask AI'),
-                ),
               ),
+              if (_workspaceSettingsOpen) _workspaceSettings(context),
+              if (widget.message != null) ...[
+                const SizedBox(height: 12),
+                ErrorBanner(widget.message!),
+              ],
               const SizedBox(height: 12),
+              _searchBox(context),
+              // Slim, label-free action strip above the tree — the tree itself
+              // is the section, it doesn't need a name.
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton(
+                    tooltip: 'Refresh',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onRefresh,
+                    icon: const Icon(Icons.refresh, size: 20),
+                  ),
+                  if (canEdit) ...[
+                    IconButton(
+                      tooltip: 'Recycle bin',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _openRecycleBin,
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: 'New page',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () {
+                        widget.onCreateDocument('Untitled');
+                      },
+                      icon: const Icon(Icons.note_add_outlined, size: 20),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 4),
+              Expanded(child: _pageTree(context, canEdit)),
+              const Divider(height: 24),
+              // AI entry points exist only when the feature is enabled in
+              // Settings AND a provider is configured.
+              if (widget.showAi) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: _openAiDialog,
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: const Text('Ask AI'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              _accountTile(context),
             ],
-            _accountTile(context),
-          ],
+          ),
         ),
       ),
     );
@@ -2219,6 +2231,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           view: item.view,
           depth: item.depth,
           hasChildren: item.hasChildren,
+          revealToggle: _navHovered,
           isCollapsed: _collapsedViewIds.contains(item.view.id),
           isSelected: item.view.id == widget.selectedView?.id,
           canEdit: canEdit,
@@ -5192,11 +5205,12 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
   }
 }
 
-class DocumentListItem extends StatefulWidget {
+class DocumentListItem extends StatelessWidget {
   const DocumentListItem({
     required this.view,
     required this.depth,
     required this.hasChildren,
+    required this.revealToggle,
     required this.isCollapsed,
     required this.isSelected,
     required this.canEdit,
@@ -5211,6 +5225,9 @@ class DocumentListItem extends StatefulWidget {
   final DocumentView view;
   final int depth;
   final bool hasChildren;
+
+  /// Pointer is over the sidebar: parents' expand toggles fade in.
+  final bool revealToggle;
   final bool isCollapsed;
   final bool isSelected;
   final bool canEdit;
@@ -5221,115 +5238,97 @@ class DocumentListItem extends StatefulWidget {
   final VoidCallback onDelete;
 
   @override
-  State<DocumentListItem> createState() => _DocumentListItemState();
-}
-
-class _DocumentListItemState extends State<DocumentListItem> {
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
-    final view = widget.view;
-    final isSelected = widget.isSelected;
-    final canEdit = widget.canEdit;
-    // Notion-style shared slot: the doc icon and the expand chevron occupy
-    // the same 22px — hovering a row with children swaps icon → chevron.
-    // No blank chevron column, so rows hug the sidebar's left edge.
-    final showChevron = widget.hasChildren && (_hovered || widget.isCollapsed);
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: Material(
-        color: isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
+    return Material(
+      color: isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
+      borderRadius: BorderRadius.circular(6),
+      child: InkWell(
         borderRadius: BorderRadius.circular(6),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: widget.onPressed,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 38),
-            child: Padding(
-              padding: EdgeInsets.only(left: 4 + (widget.depth * 16), right: 4),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 22,
-                    height: 30,
-                    child: showChevron
-                        ? IconButton(
-                            tooltip: widget.isCollapsed ? 'Expand' : 'Collapse',
-                            onPressed: widget.onToggle,
+        onTap: onPressed,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 38),
+          child: Padding(
+            padding: EdgeInsets.only(left: 2 + (depth * 16), right: 4),
+            child: Row(
+              children: [
+                // AppFlowy-style expand column: always present so every page
+                // icon shares one column; the toggle is invisible until the
+                // pointer enters the sidebar (and only parents have one).
+                SizedBox(
+                  width: 18,
+                  height: 30,
+                  child: hasChildren
+                      ? Opacity(
+                          opacity: revealToggle ? 1.0 : 0.0,
+                          child: IconButton(
+                            tooltip: isCollapsed ? 'Expand' : 'Collapse',
+                            onPressed: onToggle,
                             padding: EdgeInsets.zero,
                             iconSize: 18,
-                            // The chevron's ink is a narrow band centered in
-                            // its em-box, reading ~6px right of the doc icon
-                            // — nudge it back so both variants keep one
-                            // optical left edge.
-                            icon: Transform.translate(
-                              offset: const Offset(-6, 0),
-                              child: Icon(
-                                widget.isCollapsed
-                                    ? Icons.chevron_right
-                                    : Icons.expand_more,
-                              ),
+                            icon: Icon(
+                              isCollapsed
+                                  ? Icons.chevron_right
+                                  : Icons.expand_more,
                             ),
-                          )
-                        : Icon(
-                            Icons.description_outlined,
-                            size: 18,
-                            color: isSelected
-                                ? const Color(0xFF2563EB)
-                                : const Color(0xFF64748B),
                           ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      view.name,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                Icon(
+                  Icons.description_outlined,
+                  size: 18,
+                  color: isSelected
+                      ? const Color(0xFF2563EB)
+                      : const Color(0xFF64748B),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    view.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w400,
                     ),
                   ),
-                  if (canEdit) ...[
-                    SizedBox(
-                      width: 30,
-                      height: 30,
-                      child: IconButton(
-                        tooltip: 'Create child page',
-                        onPressed: widget.onCreateChild,
-                        padding: EdgeInsets.zero,
-                        iconSize: 17,
-                        icon: const Icon(Icons.add),
-                      ),
+                ),
+                if (canEdit) ...[
+                  SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: IconButton(
+                      tooltip: 'Create child page',
+                      onPressed: onCreateChild,
+                      padding: EdgeInsets.zero,
+                      iconSize: 17,
+                      icon: const Icon(Icons.add),
                     ),
-                    SizedBox(
-                      width: 30,
-                      height: 30,
-                      child: IconButton(
-                        tooltip: 'Rename',
-                        onPressed: widget.onRename,
-                        padding: EdgeInsets.zero,
-                        iconSize: 17,
-                        icon: const Icon(Icons.edit_outlined),
-                      ),
+                  ),
+                  SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: IconButton(
+                      tooltip: 'Rename',
+                      onPressed: onRename,
+                      padding: EdgeInsets.zero,
+                      iconSize: 17,
+                      icon: const Icon(Icons.edit_outlined),
                     ),
-                    SizedBox(
-                      width: 30,
-                      height: 30,
-                      child: IconButton(
-                        tooltip: 'Delete',
-                        onPressed: widget.onDelete,
-                        padding: EdgeInsets.zero,
-                        iconSize: 17,
-                        icon: const Icon(Icons.delete_outline),
-                      ),
+                  ),
+                  SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: IconButton(
+                      tooltip: 'Delete',
+                      onPressed: onDelete,
+                      padding: EdgeInsets.zero,
+                      iconSize: 17,
+                      icon: const Icon(Icons.delete_outline),
                     ),
-                  ],
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
