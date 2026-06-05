@@ -1787,15 +1787,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 if (singleText) ...[
                   markBtn(Icons.format_bold, 'bold', 'Bold'),
                   markBtn(Icons.format_italic, 'italic', 'Italic'),
+                ],
+                // Code block sits just before inline code — the two code
+                // affordances read as one group.
+                blockBtn(Icons.terminal, 'code_block', 'Code block'),
+                if (singleText) ...[
                   markBtn(Icons.code, 'code', 'Inline code'),
                   markBtn(Icons.strikethrough_s, 'strike', 'Strikethrough'),
                   markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
                   const VerticalDivider(width: 9, indent: 8, endIndent: 8),
                 ],
-                // Code block leads the block group (it earns its keep), the
-                // three everyday heading levels are one click, and the rare
+                // The three everyday heading levels are one click; the rare
                 // H4–H6 hide behind the chevron.
-                blockBtn(Icons.terminal, 'code_block', 'Code block'),
                 for (var level = 1; level <= 3; level++)
                   headingBtn(level),
                 moreHeadingsBtn(),
