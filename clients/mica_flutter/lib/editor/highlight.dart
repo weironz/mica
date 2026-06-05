@@ -24,6 +24,7 @@ const List<String> kCodeLanguages = [
   'bash',
   'html',
   'css',
+  'mermaid',
 ];
 
 // Light-theme token palette.
@@ -178,6 +179,19 @@ final Map<String, _Lang> _langs = {
   ),
   'html': const _Lang(keywords: {}, lineComments: [], blockComments: false),
   'plaintext': const _Lang(keywords: {}, lineComments: [], blockComments: false),
+  // Mermaid source (shown while the block is focused; unfocused blocks render
+  // as a diagram). Diagram-type and structure words; `%%` line comments.
+  'mermaid': const _Lang(
+    keywords: {
+      'graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'stateDiagram',
+      'erDiagram', 'gantt', 'pie', 'journey', 'mindmap', 'timeline',
+      'gitGraph', 'quadrantChart', 'subgraph', 'end', 'participant', 'actor',
+      'loop', 'alt', 'else', 'opt', 'par', 'note', 'over', 'TD', 'TB', 'LR',
+      'RL', 'BT', 'title', 'section', 'class', 'state', 'direction',
+    },
+    lineComments: ['%%'],
+    blockComments: false,
+  ),
 };
 
 /// Resolve the effective language: explicit choice, or auto-detected when the
