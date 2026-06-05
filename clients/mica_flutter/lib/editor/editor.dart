@@ -1754,18 +1754,29 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
-    // T1/T2/T3 as labeled buttons — heavier label for bigger headings.
+    // The focused block's heading level lights up the matching control, so
+    // a selected title tells you its level at a glance.
+    final focused = _controller.focusedNode;
+    final currentLevel =
+        focused != null && focused.kind == 'heading' ? focused.headingLevel : 0;
+
+    // T1/T2/T3 as labeled buttons — heavier label for bigger headings, a
+    // tinted pill when it is the selection's current level.
     Widget headingBtn(int level) {
+      final active = level == currentLevel;
       return IconButton(
         iconSize: 18,
         visualDensity: VisualDensity.compact,
         tooltip: 'Heading $level',
+        style: active
+            ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
+            : null,
         icon: Text(
           'T$level',
           style: TextStyle(
             fontSize: 13,
             fontWeight: level == 1 ? FontWeight.w800 : FontWeight.w600,
-            color: EditorTheme.muted,
+            color: active ? EditorTheme.text : EditorTheme.muted,
           ),
         ),
         onPressed: () => _controller
@@ -1773,22 +1784,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
-    // The rare H4–H6 live behind a chevron dropdown.
+    // The rare H4–H6 live behind a chevron dropdown; the chevron tints when
+    // one of them is current, and the menu checks it.
     Widget moreHeadingsBtn() {
+      final activeDeep = currentLevel >= 4;
       return Builder(
         builder: (btnContext) => IconButton(
           iconSize: 16,
           visualDensity: VisualDensity.compact,
-          tooltip: 'More headings',
-          icon: const Icon(Icons.expand_more, color: EditorTheme.muted),
+          tooltip:
+              activeDeep ? 'Heading $currentLevel' : 'More headings',
+          style: activeDeep
+              ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
+              : null,
+          icon: Icon(Icons.expand_more,
+              color: activeDeep ? EditorTheme.text : EditorTheme.muted),
           onPressed: () async {
             final box = btnContext.findRenderObject() as RenderBox?;
             if (box == null) return;
             final at = box.localToGlobal(Offset(0, box.size.height));
-            final pick = await _showSmallMenu(at, const [
-              ('4', 'Heading 4'),
-              ('5', 'Heading 5'),
-              ('6', 'Heading 6'),
+            final pick = await _showSmallMenu(at, [
+              for (var l = 4; l <= 6; l++)
+                ('$l', '${l == currentLevel ? '✓ ' : '   '}Heading $l'),
             ]);
             if (pick != null) {
               _controller.setSelectedBlocksKind('heading',
