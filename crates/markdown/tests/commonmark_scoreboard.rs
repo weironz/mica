@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// Passing examples must never decrease. Raise this when the engine improves
 /// (P4 work); the per-section detail lives in docs/commonmark-scoreboard.md.
-const BASELINE_PASS: usize = 620; // 96.4% of 643 — GFM dialect, 2026-06-05
+const BASELINE_PASS: usize = 618; // 96.4% of 641 — GFM dialect, 2026-06-05
 
 /// CommonMark examples our GFM target dialect intentionally breaks —
 /// cmark-gfm with extensions enabled fails these identically:
@@ -23,7 +23,13 @@ const BASELINE_PASS: usize = 620; // 96.4% of 643 — GFM dialect, 2026-06-05
 ///   wants plain text);
 /// - 170–175: the tagfilter escapes `<script>`/`<style>`/`<textarea>`
 ///   blocks that CommonMark passes through raw (security wins).
-const GFM_DIALECT_WAIVERS: &[u64] = &[608, 611, 612, 170, 171, 172, 173, 174, 175];
+/// Plus our YAML front matter extension (Jekyll/GFM-frontmatter dialect),
+/// which claims a leading `---…---` fence the bare spec reads as thematic
+/// breaks / setext headings:
+/// - 96: `---\nFoo\n---\nBar…` — spec sees setext H2s, we see front matter;
+/// - 98: `---\n---` — spec sees two thematic breaks, we see empty front matter.
+const GFM_DIALECT_WAIVERS: &[u64] =
+  &[608, 611, 612, 170, 171, 172, 173, 174, 175, 96, 98];
 
 fn normalize(html: &str) -> String {
   // The official runner compares exact HTML; we only forgive trailing

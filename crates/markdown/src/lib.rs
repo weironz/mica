@@ -91,6 +91,21 @@ pub fn export_markdown_with_assets(
   let root_index = block_index(snapshot, &snapshot.root_block_id)
     .ok_or_else(|| DocumentOperationError::BlockNotFound(snapshot.root_block_id.clone()))?;
   let root = &snapshot.blocks[root_index];
+
+  // Front matter, if the importer stashed it, is restored verbatim ahead of
+  // everything else, fenced with `---`. Stored as the raw inner text, so the
+  // fences are ours to (re)apply — `import` of this output recovers the same
+  // string (round-trip identity).
+  if let Some(fm) = root.data.get("front_matter").and_then(Value::as_str) {
+    lines.push("---".to_string());
+    // Empty front matter has no inner lines — `"".split('\n')` would yield a
+    // spurious blank one, breaking round-trip identity against `---\n---`.
+    if !fm.is_empty() {
+      lines.extend(fm.split('\n').map(str::to_string));
+    }
+    lines.push("---".to_string());
+  }
+
   if !root.text.trim().is_empty() {
     append_markdown_block_content(root, 0, &mut lines, images);
   }
@@ -153,7 +168,13 @@ fn append_footnotes_section(snapshot: &DocumentSnapshotPayload, out: &mut String
 /// block; structural nesting beyond fenced code is intentionally out of scope
 /// for the MVP importer.
 pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotPayload {
-  let raw_lines: Vec<&str> = markdown.lines().collect();
+  // YAML front matter: a leading `---` fence with a later `---`/`...` close.
+  // We don't parse the YAML — just lift the raw inner text off the block
+  // stream so it can't degrade into thematic breaks / paragraphs, and stash
+  // it on the root for verbatim round-trip on export.
+  let (front_matter, body) = split_front_matter(markdown);
+
+  let raw_lines: Vec<&str> = body.lines().collect();
   let mut blocks: Vec<Block> = Vec::new();
   let mut root_children: Vec<String> = Vec::new();
 
@@ -1213,11 +1234,15 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     }
   }
 
+  let mut root_data = Value::Null;
+  if let Some(fm) = front_matter {
+    data_insert(&mut root_data, "front_matter", json!(fm));
+  }
   let root = Block {
     id: root_block_id.to_string(),
     kind: "paragraph".to_string(),
     text: String::new(),
-    data: Value::Null,
+    data: root_data,
     children: root_children,
   };
   let mut all_blocks = Vec::with_capacity(blocks.len() + 1);
@@ -1229,6 +1254,49 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     root_block_id: root_block_id.to_string(),
     blocks: all_blocks,
   }
+}
+
+/// Detect a leading YAML front matter block: the *first* line is exactly `---`
+/// and some later line is exactly `---` or `...`. Returns `(Some(inner), body)`
+/// where `inner` is the verbatim text between the fences (fence lines excluded,
+/// no surrounding newlines) and `body` is the remaining Markdown after the
+/// close fence. When there's no well-formed front matter the whole input is the
+/// body — an unterminated `---` is then just an ordinary first line, so the
+/// parser will treat it as a thematic break / setext underline as usual.
+fn split_front_matter(markdown: &str) -> (Option<String>, &str) {
+  // The opener must own the entire first line (no indentation, no trailing
+  // content); `---x` or ` ---` are not front matter.
+  let mut lines = markdown.split('\n');
+  let first = lines.next().unwrap_or_default();
+  if first.trim_end_matches('\r') != "---" {
+    return (None, markdown);
+  }
+
+  // Byte cursor advances line by line so we can slice the body verbatim
+  // (split('\n') drops the separators we still need to account for).
+  let inner_start = first.len() + 1; // past the opener + its '\n'
+  let mut cursor = inner_start;
+  for line in lines {
+    let stripped = line.trim_end_matches('\r');
+    if stripped == "---" || stripped == "..." {
+      // inner = everything between opener and this close fence, minus the
+      // trailing '\n' that precedes the fence (none for an empty body).
+      let inner_end = cursor.saturating_sub(1).max(inner_start);
+      let inner = &markdown[inner_start..inner_end.min(markdown.len())];
+      // Body starts after the close fence line and its '\n' (if any).
+      let after_fence = cursor + line.len();
+      let body = if after_fence < markdown.len() {
+        &markdown[after_fence + 1..]
+      } else {
+        ""
+      };
+      return (Some(inner.to_string()), body);
+    }
+    cursor += line.len() + 1; // line plus the '\n' that split() consumed
+  }
+
+  // No close fence — not front matter; let the parser see the raw text.
+  (None, markdown)
 }
 
 /// A Markdown thematic break: 3+ of the same `-`, `*`, or `_` (already trimmed).

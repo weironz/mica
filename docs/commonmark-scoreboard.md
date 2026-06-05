@@ -5,7 +5,7 @@ Measures the `import_markdown` → `export_html` pipeline against the official s
 examples (exact-match HTML, trailing whitespace forgiven). The number is a
 baseline for P4 — see docs/editor-engine.md Milestone 8.
 
-**Total: 620/643 (96.4%)** — 9 GFM dialect waivers (bare autolinks, tagfilter) excluded.
+**Total: 618/641 (96.4%)** — 11 GFM dialect waivers (bare autolinks, tagfilter) excluded.
 
 | Section | Passed | Total | % |
 |---|---|---|---|
@@ -30,7 +30,7 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Paragraphs | 8 | 8 | 100% |
 | Precedence | 1 | 1 | 100% |
 | Raw HTML | 20 | 20 | 100% |
-| Setext headings | 27 | 27 | 100% |
+| Setext headings | 25 | 25 | 100% |
 | Soft line breaks | 2 | 2 | 100% |
 | Tabs | 9 | 11 | 82% |
 | Textual content | 3 | 3 | 100% |
