@@ -8,6 +8,8 @@ import 'marks.dart';
 import 'model.dart';
 import 'table.dart';
 
+part 'block_renderers.dart';
+
 /// User-adjustable editor appearance (document font). Page width is applied by
 /// the surrounding page layout, not here.
 class EditorAppearance {
@@ -152,6 +154,13 @@ class _NodeLayout {
   _NodeLayout(this.painter);
 
   final TextPainter painter;
+
+  /// The atomic renderer that produced this layout, if any. Paint passes
+  /// dispatch on this (not on [kind]): a math/mermaid block whose preview
+  /// isn't ready falls through to the text pipeline and must be painted as
+  /// text even though its kind says otherwise.
+  AtomicBlockRenderer? renderedBy;
+
   double contentLeft = 0; // x where text starts
   double textTop = 0; // y of text top
   double textHeight = 0;
@@ -271,6 +280,16 @@ class RenderDocument extends RenderBox {
     _appearance = value;
     markNeedsLayout();
   }
+
+  /// Registered atomic-block renderers, dispatched by kind in the layout and
+  /// paint passes. New block types register here (docs/render-architecture.md).
+  static const List<AtomicBlockRenderer> atomicRenderers = [
+    DividerRenderer(),
+  ];
+
+  static final Map<String, AtomicBlockRenderer> _renderersByKind = {
+    for (final r in atomicRenderers) r.kind: r,
+  };
 
   final List<_NodeLayout> _layouts = [];
 
@@ -477,27 +496,23 @@ class RenderDocument extends RenderBox {
     for (final node in _nodes) {
       y += EditorTheme.gapAbove(node.kind, prevKind);
 
-      if (node.kind == 'table') {
-        final layout = _layoutTable(node, y, maxWidth);
-        _layouts.add(layout);
-        y += layout.boxHeight;
-        prevKind = node.kind;
-        continue;
+      // Atomic blocks dispatch to their registered renderer; a null return
+      // (math waiting on its raster, empty source) falls through to the text
+      // pipeline so the source stays visible and editable.
+      final renderer = _renderersByKind[node.kind];
+      if (renderer != null) {
+        final layout = renderer.layout(this, node, y, maxWidth);
+        if (layout != null) {
+          layout.renderedBy = renderer;
+          _layouts.add(layout);
+          y += layout.boxHeight;
+          prevKind = node.kind;
+          continue;
+        }
       }
 
-      if (node.kind == 'divider') {
-        final dLiInset =
-            node.liLevel != null ? 26.0 + 24.0 * node.liLevel! : 0.0;
-        final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
-          ..kind = 'divider'
-          ..nodeId = node.id
-          ..quoteDepth = node.quoteDepth
-          ..boxLeft = EditorTheme.gutter + dLiInset
-          ..contentLeft = EditorTheme.gutter + dLiInset + 16.0 * node.quoteDepth
-          ..boxTop = y
-          ..textTop = y
-          ..textHeight = _dividerHeight
-          ..boxHeight = _dividerHeight;
+      if (node.kind == 'table') {
+        final layout = _layoutTable(node, y, maxWidth);
         _layouts.add(layout);
         y += layout.boxHeight;
         prevKind = node.kind;
@@ -1276,6 +1291,14 @@ class RenderDocument extends RenderBox {
 
   void _paintNode(Canvas canvas, Offset offset, int i) {
     final l = _layouts[i];
+    // Layouts produced by an atomic renderer paint through it; everything
+    // else (including a math block that fell through while its raster is
+    // pending) is text-pipeline output.
+    final renderer = l.renderedBy;
+    if (renderer != null) {
+      renderer.paint(this, canvas, offset, l, i);
+      return;
+    }
     if (l.kind == 'table') {
       _paintTable(canvas, offset, l, i);
       return;
@@ -1289,17 +1312,6 @@ class RenderDocument extends RenderBox {
         Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
         dst,
         Paint()..filterQuality = FilterQuality.medium,
-      );
-      return;
-    }
-    if (l.kind == 'divider') {
-      final cy = offset.dy + l.boxTop + l.boxHeight / 2;
-      canvas.drawLine(
-        Offset(offset.dx + l.contentLeft, cy),
-        Offset(offset.dx + size.width, cy),
-        Paint()
-          ..color = EditorTheme.quoteBar
-          ..strokeWidth = 1.5,
       );
       return;
     }
