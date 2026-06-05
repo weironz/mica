@@ -436,6 +436,41 @@ class EditorController extends ChangeNotifier {
       return;
     }
 
+    // Enter on the EMPTY FIRST LINE of a multi-line quote/list block (a
+    // pasted quote split leaves the old soft break leading the new block):
+    // that line leaves the group, Typora-style — it becomes a plain empty
+    // paragraph ABOVE the remainder and the caret stays on it. Without this
+    // the generic start-of-block branch below just stacks paragraphs above
+    // while the caret sits forever on a barred empty line.
+    if (before.isEmpty &&
+        after.startsWith('\n') &&
+        _continuesOnEnter(node.kind)) {
+      final remainder = after.substring(1);
+      final marks = shiftMarks(
+        marksFromData(node.data),
+        0,
+        1,
+        -1,
+        remainder.length,
+      );
+      node.text = remainder;
+      node.data = {...node.data, 'marks': marksToJson(marks)};
+      final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+      nodes.insert(i, created);
+      _dirty.remove(node.id);
+      _sendNow([
+        _insertOp(created, i),
+        {
+          'type': 'update_block',
+          'block_id': node.id,
+          'text': node.text,
+          'data': node.data,
+        },
+      ]);
+      collapseTo(DocPosition(i, 0));
+      return;
+    }
+
     // Enter at the start of a non-empty block (IME newline path): same
     // insert-paragraph-above behavior as splitAtCaret.
     if (before.isEmpty && after.isNotEmpty && after == node.text) {

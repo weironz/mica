@@ -48,6 +48,31 @@ void main() {
         reason: 'the opener itself keeps starting its group');
   });
 
+  test('second Enter inside a pasted multi-line quote exits in place', () {
+    // Paste folds a quote group into ONE multi-line block. Enter at the end
+    // of its first line splits off a block LEADING with the old soft break
+    // — a "barred empty line". The next Enter must turn THAT line into a
+    // plain paragraph (caret staying put), not stack paragraphs above it.
+    final c = _fresh([
+      EditorNode(id: 'q', kind: 'quote', text: 'a\nb'),
+    ]);
+    // First Enter at the end of line "a" (caret offset 1).
+    c.selection = DocSelection.collapsed(const DocPosition(0, 1));
+    c.applyNewlineSplit('a', '\nb');
+    expect(c.nodes.map((n) => n.text), ['a', '\nb']);
+    expect(c.nodes[1].kind, 'quote');
+    expect(c.selection!.focus, const DocPosition(1, 0),
+        reason: 'caret sits on the barred empty line');
+
+    // Second Enter on that empty line.
+    c.applyNewlineSplit('', '\nb');
+    expect(c.nodes.map((n) => n.kind), ['quote', 'paragraph', 'quote'],
+        reason: 'the empty line leaves the quote as a plain paragraph');
+    expect(c.nodes.map((n) => n.text), ['a', '', 'b']);
+    expect(c.selection!.focus, const DocPosition(1, 0),
+        reason: 'the caret STAYS on the now-plain line');
+  });
+
   test('Enter on an empty quote line exits to a paragraph', () {
     final c = _fresh([EditorNode(id: 'q', kind: 'quote', text: '')]);
     c.selection = const DocSelection.collapsed(DocPosition(0, 0));
