@@ -843,9 +843,12 @@ class RenderDocument extends RenderBox {
 
   void _drawAtomicHighlight(Canvas canvas, Offset offset, int i, {required bool border}) {
     final l = _layouts[i];
+    // Start at the block's own left edge — drawing from x=0 spilled the
+    // tint into the drag-handle gutter, left of the page's text column.
     final box = (l.kind == 'image' && l.imageDst != null)
         ? l.imageDst!.shift(offset)
-        : Rect.fromLTWH(offset.dx, offset.dy + l.boxTop, size.width, l.boxHeight);
+        : Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop,
+            size.width - l.boxLeft, l.boxHeight);
     final rr = RRect.fromRectAndRadius(
       box.inflate(border ? 2 : 0),
       const Radius.circular(6),

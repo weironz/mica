@@ -455,6 +455,7 @@ class TableRenderer extends AtomicBlockRenderer {
         ..layout(),
     )
       ..kind = 'table'
+      ..boxLeft = EditorTheme.gutter
       ..nodeId = node.id
       ..contentLeft = 0
       ..boxTop = top
