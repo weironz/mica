@@ -334,6 +334,16 @@ class RenderDocument extends RenderBox {
     markNeedsPaint();
   }
 
+  /// Restore every diagram to its natural view (zoom and pan) — the page
+  /// host calls this when a click lands outside the editor canvas entirely
+  /// (the page margins), extending the click-outside reset below.
+  void resetAllPreviewViews() {
+    if (_previewZoom.isEmpty && _previewPan.isEmpty) return;
+    _previewZoom.clear();
+    _previewPan.clear();
+    markNeedsLayout();
+  }
+
   /// A click anywhere OUTSIDE the diagram blocks restores their natural
   /// view (zoom and pan). Walking the pointer away no longer resets — a
   /// zoomed/panned diagram stays put until the user clicks elsewhere.

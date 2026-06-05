@@ -53,6 +53,7 @@ class EditorCommandHook {
   VoidCallback? _redo;
   VoidCallback? _focusFirstLine;
   void Function(String text)? _insertTopParagraph;
+  VoidCallback? _resetDiagramViews;
 
   void toggleMark(String type) => _toggleMark?.call(type);
   void setBlock(String kind, [Map<String, dynamic> data = const {}]) =>
@@ -69,6 +70,10 @@ class EditorCommandHook {
   /// Insert a new paragraph at the very top (Enter in the page title pushes
   /// the body down; [text] is the title remainder after the caret).
   void insertTopParagraph(String text) => _insertTopParagraph?.call(text);
+
+  /// Restore all diagram previews to their natural zoom/pan — the page host
+  /// calls this when a click lands outside the editor canvas (page margins).
+  void resetDiagramViews() => _resetDiagramViews?.call();
 }
 
 class MicaEditor extends StatefulWidget {
@@ -367,6 +372,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _focus.requestFocus();
         _controller.insertParagraphAtTop(text);
         _syncImeFromSelection(force: true);
+      }
+      .._resetDiagramViews = () {
+        if (!mounted) return;
+        _render?.resetAllPreviewViews();
       };
   }
 

@@ -1772,6 +1772,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   double _navWidth = 280;
   double _toolsWidth = 300;
   final EditorScrollHook _scrollHook = EditorScrollHook();
+  final GlobalKey _editorSurfaceKey = GlobalKey();
   final EditorCommandHook _commandHook = EditorCommandHook();
 
   @override
@@ -2462,7 +2463,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     bool canEdit,
     DocumentBootstrap bootstrap,
   ) {
-    return SingleChildScrollView(
+    return Listener(
+      // A press anywhere on the page that is NOT inside the editor canvas
+      // (margins beside/above the page column) resets diagram zoom/pan —
+      // clicks INSIDE the canvas are judged by the editor itself.
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (e) {
+        final box =
+            _editorSurfaceKey.currentContext?.findRenderObject() as RenderBox?;
+        if (box == null || !box.attached) return;
+        final local = box.globalToLocal(e.position);
+        if (!(Offset.zero & box.size).contains(local)) {
+          _commandHook.resetDiagramViews();
+        }
+      },
+      child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
         child: Center(
           child: ConstrainedBox(
@@ -2583,6 +2598,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ),
                 const SizedBox(height: 8),
                 Padding(
+                  key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
                   child: MicaEditor(
                       key: ValueKey(bootstrap.document.id),
@@ -2655,7 +2671,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
           ),
         ),
-      );
+      ),
+    );
   }
 
   /// Tappable outline entries for the current page's headings (no section
