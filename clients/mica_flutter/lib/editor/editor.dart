@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
-import 'package:flutter_math_fork/flutter_math.dart';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +14,7 @@ import 'marks.dart';
 import 'clipboard_copy.dart';
 import 'image_actions.dart';
 import 'model.dart';
+import 'preview_raster.dart';
 import 'open_url.dart';
 import 'pick_image.dart';
 import 'render.dart';
@@ -198,89 +197,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _blockDrag; // block index being moved via its gutter drag handle
 
-  // Math rasterization: formulas render in an offstage flutter_math_fork
-  // widget, get captured as ui.Image post-frame, and paint like images.
-  final Map<String, ui.Image> _mathCache = {};
-  final Set<String> _mathPending = {};
-  final Map<String, GlobalKey> _mathKeys = {};
-
-  void _requestMath(String source) {
-    if (_mathCache.containsKey(source) || _mathPending.contains(source)) {
-      return;
-    }
-    // Called from the render object's layout — defer the rebuild.
-    _mathPending.add(source);
-    _mathKeys[source] = GlobalKey();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() {});
-      WidgetsBinding.instance.addPostFrameCallback((_) => _captureMath());
-    });
-  }
-
-  final Map<String, int> _mathTries = {};
-
-  Future<void> _captureMath() async {
-    if (_mathPending.isEmpty) return;
-    final captured = <String>[];
-    for (final source in _mathPending.toList()) {
-      final boundary = _mathKeys[source]?.currentContext?.findRenderObject();
-      if (boundary is! RenderRepaintBoundary) {
-        continue; // not built yet — retry next frame
-      }
-      try {
-        final img =
-            await boundary.toImage(pixelRatio: EditorTheme.mathPixelRatio);
-        _mathCache[source] = img;
-        captured.add(source);
-      } catch (_) {
-        // Not painted yet — retry a few frames, then give up (source style).
-        final tries = (_mathTries[source] ?? 0) + 1;
-        _mathTries[source] = tries;
-        if (tries > 20) {
-          captured.add(source);
-        }
-      }
-    }
-    if (captured.isNotEmpty && mounted) {
-      setState(() {
-        for (final s in captured) {
-          _mathPending.remove(s);
-          _mathKeys.remove(s);
-          _mathTries.remove(s);
-        }
-      });
-    }
-    if (_mathPending.isNotEmpty && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _captureMath());
-    }
-  }
-
-  /// Raster host: positioned far off-screen so it PAINTS (Offstage skips
-  /// painting entirely and toImage would never capture anything).
-  Widget _mathRasterHost() => Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final source in _mathPending)
-            RepaintBoundary(
-              key: _mathKeys[source],
-              child: Math.tex(
-                source,
-                textStyle:
-                    const TextStyle(fontSize: 18, color: EditorTheme.text),
-                onErrorFallback: (e) => Text(
-                  source,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                    color: Color(0xFFB91C1C),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      );
+  // Source → picture previews (math today, mermaid later): the pipeline owns
+  // the cache / pending / off-screen-capture lifecycle, the previewers say
+  // how one source becomes a picture (docs/render-architecture.md).
+  late final RasterPreviewPipeline _previews = RasterPreviewPipeline(
+    previewers: const [MathPreviewer()],
+    requestRebuild: (fn) {
+      if (mounted) setState(fn);
+    },
+  );
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
   // Auto-scroll the surrounding page while drag-selecting near the viewport edge.
@@ -3032,12 +2957,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   appearance: widget.appearance,
                   images: _imageCache,
                   imageErrors: _imageErrors,
-                  mathImages: _mathCache,
-                  onRequestMath: _requestMath,
+                  mathImages: _previews.imagesOf('math'),
+                  onRequestMath: (source) => _previews.request('math', source),
                   onRequestImage: _requestImage,
                 ),
                 // Far off-screen: painted (capturable) but never visible.
-                Positioned(left: -100000, top: 0, child: _mathRasterHost()),
+                Positioned(left: -100000, top: 0, child: _previews.offstageHost()),
               ],
             ),
           ),
