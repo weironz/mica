@@ -1322,8 +1322,12 @@ class RenderDocument extends RenderBox {
         }
         continue;
       }
+      // BoxHeightStyle.max stretches every run's box to the full line
+      // height: CJK and Latin glyphs run at different intrinsic heights, and
+      // per-run boxes give the highlight a jagged top edge on mixed lines.
       final boxes = l.painter.getBoxesForSelection(
         TextSelection(baseOffset: from, extentOffset: to),
+        boxHeightStyle: ui.BoxHeightStyle.max,
       );
       if (isCode) {
         final visible = (size.width - l.contentLeft - EditorTheme.codePadH)
