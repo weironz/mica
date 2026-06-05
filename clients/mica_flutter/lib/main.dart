@@ -2470,7 +2470,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
+                // The editor canvas reserves EditorTheme.gutter on the left
+                // for the block drag handles, so its text starts at x=gutter.
+                // Inset the title + meta rows by the same amount to keep the
+                // page's text column aligned (handles float in the margin).
+                Padding(
+                  padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                  child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
@@ -2557,19 +2563,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       ),
                     ),
                   ],
+                  ),
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Text(
-                      'seq ${bootstrap.document.currentSeq} · snapshot ${bootstrap.snapshot.versionSeq}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF64748B),
+                Padding(
+                  padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                  child: Row(
+                    children: [
+                      Text(
+                        'seq ${bootstrap.document.currentSeq} · snapshot ${bootstrap.snapshot.versionSeq}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF64748B),
+                        ),
                       ),
-                    ),
-                    const Spacer(),
-                    _PresenceBar(presence: widget.presence),
-                  ],
+                      const Spacer(),
+                      _PresenceBar(presence: widget.presence),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Padding(

@@ -25,7 +25,7 @@ import 'table.dart';
 export 'controller.dart' show DocOp, ApplyOps;
 export 'markdown.dart' show markdownToBlocks, BlockSpec;
 export 'model.dart' show EditorNode;
-export 'render.dart' show EditorAppearance;
+export 'render.dart' show EditorAppearance, EditorTheme;
 
 /// The in-house editor: one editing surface for the whole document.
 ///
