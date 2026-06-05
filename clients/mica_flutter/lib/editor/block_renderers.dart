@@ -643,10 +643,14 @@ class MermaidRenderer extends AtomicBlockRenderer {
     }
     // Fill the content width: diagrams read better large, so scale UP as
     // well as down (the producer rasterized at 2x of this width, so the
-    // upscale stays crisp). Ctrl+wheel zoom scales the block, centered.
+    // upscale stays crisp). The BLOCK keeps its zoom=1 size — ctrl+wheel
+    // zoom only rescales the picture inside this fixed viewport (paint
+    // clips and centers), so zooming never reflows the page.
     final zoom = host._previewZoom[node.id] ?? 1.0;
-    final w = (avail * zoom).clamp(40.0, avail);
+    final w = avail;
     final h = w * (img.height / img.width.clamp(1, 1 << 30));
+    final wz = w * zoom;
+    final hz = h * zoom;
     // The painter must be laid out: code_block is a TEXT kind, so pointer
     // hit-testing runs text-position math against it (unlike the atomic
     // kinds, whose clicks take the block path). Empty text → offset 0 →
@@ -664,7 +668,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
       ..contentLeft = EditorTheme.gutter +
           ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
       ..mathImage = img
-      ..mathSize = Size(w, h)
+      ..mathSize = Size(wz, hz)
       ..boxTop = y
       // Visually it IS the picture: no card, near-zero block padding.
       ..textTop = y + 2
@@ -686,15 +690,25 @@ class MermaidRenderer extends AtomicBlockRenderer {
     final img = l.mathImage;
     if (img == null) return;
     // No backdrop, no card: the user is here for the diagram, so the block
-    // chrome disappears and the picture sits directly on the page.
-    final dst = Rect.fromLTWH(offset.dx + l.contentLeft, offset.dy + l.textTop,
-        l.mathSize.width, l.mathSize.height);
+    // chrome disappears and the picture sits directly on the page. The block
+    // rect is a fixed viewport — the (possibly zoomed) picture centers in it
+    // and clips to it, so zoom never moves surrounding content.
+    final viewport = Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop,
+        host.size.width - l.boxLeft, l.boxHeight);
+    final dst = Rect.fromCenter(
+      center: viewport.center,
+      width: l.mathSize.width,
+      height: l.mathSize.height,
+    );
+    canvas.save();
+    canvas.clipRect(viewport);
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
       dst,
       Paint()..filterQuality = FilterQuality.medium,
     );
+    canvas.restore();
   }
 
   @override
