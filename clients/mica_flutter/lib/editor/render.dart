@@ -413,6 +413,21 @@ class RenderDocument extends RenderBox {
         }
       }
     }
+    // Leaving a zoomed diagram restores its natural size: the ctrl+wheel
+    // zoom is a transient magnifier, and nudging it back to exactly 1.0 by
+    // hand is fiddly — walking away is the reset gesture.
+    if (node != _hoverCode) {
+      final prev = _hoverCode;
+      if (prev != null && prev < _layouts.length) {
+        final pl = _layouts[prev];
+        if (pl.renderedBy is MermaidRenderer &&
+            _previewZoom.containsKey(pl.nodeId)) {
+          _previewZoom.remove(pl.nodeId);
+          markNeedsLayout();
+        }
+      }
+    }
+
     final border = local == null ? null : tableColBorderAt(local);
     int? block;
     if (local != null) {
