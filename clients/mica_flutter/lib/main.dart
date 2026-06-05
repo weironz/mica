@@ -2114,13 +2114,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   /// Wrap a page row so it can be dragged to reorder among its siblings (its
-  /// subtree follows, since children render under their parent). Long-press to
-  /// start dragging; the top/bottom half of each sibling row is a drop slot
-  /// (insert before / after).
+  /// subtree follows, since children render under their parent). Press and
+  /// move to start dragging — Draggable fires as soon as the pointer clears
+  /// touch slop, while a motionless click still opens the page. (Long-press
+  /// felt broken with a mouse: moving during the 500ms hold cancels it.)
+  /// The top/bottom half of each sibling row is a drop slot (before/after).
   Widget _draggableTreeRow(DocumentView view, Widget row) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: LongPressDraggable<DocumentView>(
+      child: Draggable<DocumentView>(
         data: view,
         dragAnchorStrategy: pointerDragAnchorStrategy,
         onDragStarted: () => setState(() => _draggingTree = true),
