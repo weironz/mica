@@ -165,6 +165,17 @@ class MicaEditor extends StatefulWidget {
   State<MicaEditor> createState() => _MicaEditorState();
 }
 
+/// The bare LaTeX of a pasted line that is *entirely* one **display** formula
+/// (`$$…$$` or `\[…\]`), or null. Display formulas become their own math block;
+/// inline forms (`$…$`, `\(…\)`) are handled separately so they stay in the
+/// text flow (see [parseInlineMath]). A line with surrounding prose fails the
+/// full-line anchors and returns null, staying literal text.
+String? pastedFormulaSource(String line) {
+  final m = RegExp(r'^\$\$(.+)\$\$$').firstMatch(line) ??
+      RegExp(r'^\\\[(.+)\\\]$').firstMatch(line);
+  return m?.group(1)?.trim();
+}
+
 /// A linkable page for the `[[` picker.
 class PageLinkTarget {
   const PageLinkTarget({required this.id, required this.title});
@@ -601,17 +612,40 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return true;
     }
 
-    // A pasted one-line formula ($$source$$ or \[source\]) becomes a math
-    // block — the single-line fast path below would keep it literal text.
+    // A pasted line that is entirely one *display* formula ($$…$$ or \[…\])
+    // becomes its own math block — a display formula is, by definition, set on
+    // its own line. (The single-line fast path below would keep it literal.)
     if (node != null && !node.isAtomic && node.kind != 'table') {
-      final m = RegExp(r'^\$\$(.+)\$\$$').firstMatch(trimmed) ??
-          RegExp(r'^\\\[(.+)\\\]$').firstMatch(trimmed);
-      final src = m?.group(1)?.trim() ?? '';
-      if (m != null && src.isNotEmpty && !src.contains('\n')) {
+      final src = pastedFormulaSource(trimmed);
+      if (src != null && src.isNotEmpty && !src.contains('\n')) {
         _controller
             .insertBlocksAfterFocus([(kind: 'math_block', text: src, data: {})]);
         _syncImeFromSelection(force: true);
         return true;
+      }
+    }
+
+    // Inline math ($…$ / \(…\)) anywhere in a single pasted line is woven into
+    // the text as inline-math marks at the caret — so "see $x$ here" keeps its
+    // prose and the formula renders inline instead of jumping onto its own
+    // line. Only fires when the line actually carries a formula; plain text
+    // falls through to the literal single-line paste below.
+    if (node != null &&
+        !node.isAtomic &&
+        !node.isCode &&
+        node.kind != 'table' &&
+        !plain.contains('\n')) {
+      final parsed = parseInlineMath(plain);
+      if (parsed.marks.isNotEmpty) {
+        final sel = _controller.selection;
+        if (sel != null) {
+          final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
+          final to = sel.end.node == sel.focus.node ? sel.end.offset : from;
+          _controller.insertInlineSpan(
+              sel.focus.node, from, to, parsed.text, parsed.marks);
+          _syncImeFromSelection(force: true);
+          return true;
+        }
       }
     }
 

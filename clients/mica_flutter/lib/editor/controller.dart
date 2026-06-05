@@ -1347,6 +1347,59 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(i, s + text.length));
   }
 
+  /// Insert [text] at the caret (replacing any ranged selection), carrying
+  /// [spans] — marks whose offsets are relative to [text]. Existing marks shift
+  /// across the replacement; the caret lands after the inserted run. Used to
+  /// paste inline content (e.g. inline math `$…$`) into the text flow without
+  /// breaking the line.
+  void insertInlineSpan(int i, int start, int end, String text, List<Mark> spans) {
+    if (i < 0 || i >= nodes.length) return;
+    final node = nodes[i];
+    if (node.isAtomic || node.kind == 'code_block' || node.kind == 'table') {
+      return;
+    }
+    final s = start.clamp(0, node.text.length);
+    final e = end.clamp(s, node.text.length);
+    final newText = node.text.substring(0, s) + text + node.text.substring(e);
+    final delta = text.length - (e - s);
+    final next = <Mark>[];
+    // Shift existing marks across the [s, e) → text replacement (same rule as
+    // replaceLink: marks inside the replaced range collapse to its start).
+    for (final m in marksFromData(node.data)) {
+      var ms = m.start, me = m.end;
+      if (ms >= e) {
+        ms += delta;
+      } else if (ms > s) {
+        ms = s;
+      }
+      if (me > e) {
+        me += delta;
+      } else if (me > s) {
+        me = s;
+      }
+      if (me > ms) {
+        next.add(Mark(ms, me, m.type, href: m.href, title: m.title));
+      }
+    }
+    // Add the inserted spans, offset to the insertion point.
+    for (final m in spans) {
+      next.add(Mark(s + m.start, s + m.end, m.type, href: m.href, title: m.title));
+    }
+    node
+      ..text = newText
+      ..data = {...node.data, 'marks': marksToJson(next)};
+    _dirty.remove(node.id);
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': newText,
+        'data': node.data,
+      },
+    ]);
+    collapseTo(DocPosition(i, s + text.length));
+  }
+
   /// Insert a paragraph as the new first block (Enter in the page title
   /// pushes the body down). Caret lands at its start.
   void insertParagraphAtTop(String text) {

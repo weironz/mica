@@ -292,6 +292,54 @@ int _findMathCloser(String src, int contentStart) {
   return -1;
 }
 
+/// Weave inline math (`$…$` per Pandoc rules, and `\(…\)`) out of [src] into
+/// `math` marks, leaving every other character VERBATIM — no other Markdown is
+/// interpreted. The returned text has the delimiters stripped and the marks
+/// cover each formula's run.
+///
+/// This is the inline counterpart to the display delimiters (`$$…$$`, `\[…\]`)
+/// the paste path turns into a standalone math block: a pasted `$E=mc^2$`
+/// belongs in the text flow as an inline formula, not on its own line.
+({String text, List<Mark> marks}) parseInlineMath(String src) {
+  final out = StringBuffer();
+  final marks = <Mark>[];
+  var i = 0;
+  while (i < src.length) {
+    // Inline math, LaTeX form: \( … \).
+    if (src[i] == r'\' && i + 1 < src.length && src[i + 1] == '(') {
+      final close = src.indexOf(r'\)', i + 2);
+      if (close > i) {
+        final inner = src.substring(i + 2, close).trim();
+        if (inner.isNotEmpty) {
+          final start = out.length;
+          out.write(inner);
+          marks.add(Mark(start, out.length, 'math'));
+          i = close + 2;
+          continue;
+        }
+      }
+    }
+    // Inline math, dollar form (not `$$`, which is a display block — the
+    // opener must neither follow nor precede another `$`).
+    if (src[i] == kDollar &&
+        (i == 0 || src[i - 1] != kDollar) &&
+        (i + 1 >= src.length || src[i + 1] != kDollar)) {
+      final close = _findMathCloser(src, i + 1);
+      if (close > 0) {
+        final inner = src.substring(i + 1, close);
+        final start = out.length;
+        out.write(inner);
+        marks.add(Mark(start, out.length, 'math'));
+        i = close + 1;
+        continue;
+      }
+    }
+    out.write(src[i]);
+    i++;
+  }
+  return (text: out.toString(), marks: marks);
+}
+
 /// GFM extended autolink starting at src[i] (caller checks the word
 /// boundary): bare http(s)/ftp URLs, `www.` (href gains http://), bare
 /// emails. Returns (consumed chars, href), or null.
