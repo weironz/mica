@@ -1767,6 +1767,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   bool _draggingTree = false;
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
+  bool _navCollapsed = false;
   bool _workspaceSettingsOpen = false;
   // Pane widths, drag-resizable via the splitters (long page names need room).
   double _navWidth = 280;
@@ -1815,12 +1816,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(width: _navWidth, child: _navigationPane(context)),
-        _resizeHandle(
-          onDrag: (dx) => setState(
-            () => _navWidth = (_navWidth + dx).clamp(220.0, 480.0),
+        if (_navCollapsed)
+          _collapsedNavRail(context)
+        else ...[
+          SizedBox(width: _navWidth, child: _navigationPane(context)),
+          _resizeHandle(
+            onDrag: (dx) => setState(
+              () => _navWidth = (_navWidth + dx).clamp(220.0, 480.0),
+            ),
           ),
-        ),
+        ],
         Expanded(child: _editorPane(context)),
         if (_toolsExpanded) ...[
           _resizeHandle(
@@ -1880,28 +1885,32 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ),
                   ),
                 IconButton(
-                  tooltip: 'Refresh',
+                  tooltip: 'Collapse sidebar',
                   visualDensity: VisualDensity.compact,
-                  onPressed: widget.onRefresh,
-                  icon: const Icon(Icons.refresh, size: 20),
+                  onPressed: () => setState(() => _navCollapsed = true),
+                  icon: const Icon(Icons.keyboard_double_arrow_left, size: 20),
                 ),
               ],
             ),
             const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.tonalIcon(
-                onPressed: _openAiDialog,
-                icon: const Icon(Icons.auto_awesome, size: 18),
-                label: const Text('Ask AI'),
-              ),
-            ),
-            const SizedBox(height: 16),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text('Workspace',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
+                Expanded(
+                  child: _WorkspaceSelector(
+              workspaces: widget.workspaces,
+              selected: widget.selectedWorkspace,
+              onSelect: widget.onSelectWorkspace,
+              onRename: _promptRenameWorkspace,
+              onDelete: _confirmDeleteWorkspace,
+              onExport: _exportWorkspaceFile,
+              onCreate: _promptCreateWorkspace,
+              onImport: (notion) => _importWorkspaceFile(notion: notion),
+                    onImportFilesInto: _importFilesIntoWorkspace,
+                    onImportFolderInto: _importFolderIntoWorkspace,
+                  ),
+                ),
+                const SizedBox(width: 4),
                 IconButton(
                   tooltip: 'Workspace settings',
                   visualDensity: VisualDensity.compact,
@@ -1914,45 +1923,31 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            _WorkspaceSelector(
-              workspaces: widget.workspaces,
-              selected: widget.selectedWorkspace,
-              onSelect: widget.onSelectWorkspace,
-              onRename: _promptRenameWorkspace,
-              onDelete: _confirmDeleteWorkspace,
-              onExport: _exportWorkspaceFile,
-              onCreate: _promptCreateWorkspace,
-              onImport: (notion) => _importWorkspaceFile(notion: notion),
-              onImportFilesInto: _importFilesIntoWorkspace,
-              onImportFolderInto: _importFolderIntoWorkspace,
-            ),
             if (_workspaceSettingsOpen) _workspaceSettings(context),
             if (widget.message != null) ...[
               const SizedBox(height: 12),
               ErrorBanner(widget.message!),
             ],
-            const SizedBox(height: 20),
+            const SizedBox(height: 12),
+            _searchBox(context),
+            // Slim, label-free action strip above the tree — the tree itself
+            // is the section, it doesn't need a name.
+            const SizedBox(height: 8),
             Row(
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                const Icon(Icons.account_tree_outlined),
-                const SizedBox(width: 8),
-                Text('Pages', style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
                 IconButton(
-                  tooltip: 'Search',
+                  tooltip: 'Refresh',
                   visualDensity: VisualDensity.compact,
-                  onPressed: widget.selectedWorkspace == null
-                      ? null
-                      : _openSearch,
-                  icon: const Icon(Icons.search),
+                  onPressed: widget.onRefresh,
+                  icon: const Icon(Icons.refresh, size: 20),
                 ),
                 if (canEdit) ...[
                   IconButton(
                     tooltip: 'Recycle bin',
                     visualDensity: VisualDensity.compact,
                     onPressed: _openRecycleBin,
-                    icon: const Icon(Icons.delete_outline),
+                    icon: const Icon(Icons.delete_outline, size: 20),
                   ),
                   IconButton(
                     tooltip: 'New page',
@@ -1960,15 +1955,82 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     onPressed: () {
                       widget.onCreateDocument('Untitled');
                     },
-                    icon: const Icon(Icons.note_add_outlined),
+                    icon: const Icon(Icons.note_add_outlined, size: 20),
                   ),
                 ],
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 4),
             Expanded(child: _pageTree(context, canEdit)),
             const Divider(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonalIcon(
+                onPressed: _openAiDialog,
+                icon: const Icon(Icons.auto_awesome, size: 18),
+                label: const Text('Ask AI'),
+              ),
+            ),
+            const SizedBox(height: 12),
             _accountTile(context),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Search-box-shaped button: looks like an input, opens the search dialog
+  /// (Notion-style — the real query field lives in the dialog).
+  Widget _searchBox(BuildContext context) {
+    final enabled = widget.selectedWorkspace != null;
+    return InkWell(
+      onTap: enabled ? _openSearch : null,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.search,
+                size: 18,
+                color: enabled
+                    ? const Color(0xFF64748B)
+                    : const Color(0xFFCBD5E1)),
+            const SizedBox(width: 8),
+            Text(
+              'Search…',
+              style: TextStyle(
+                color: enabled
+                    ? const Color(0xFF64748B)
+                    : const Color(0xFFCBD5E1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The sidebar collapsed to a slim rail: just the logo and an expand button.
+  Widget _collapsedNavRail(BuildContext context) {
+    return ColoredBox(
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 16),
+        child: Column(
+          children: [
+            const MicaLogo(size: 24),
+            const SizedBox(height: 12),
+            IconButton(
+              tooltip: 'Expand sidebar',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => setState(() => _navCollapsed = false),
+              icon: const Icon(Icons.keyboard_double_arrow_right, size: 20),
+            ),
           ],
         ),
       ),
