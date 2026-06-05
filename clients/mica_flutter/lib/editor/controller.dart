@@ -165,6 +165,9 @@ class EditorController extends ChangeNotifier {
     final i = sel.focus.node;
     if (i >= nodes.length) return;
     final node = nodes[i];
+    // Atomic blocks (math, image, divider, table) hold no caret-editable
+    // text; a stale IME echo landing here must not clobber the block.
+    if (node.isAtomic) return;
     final old = node.text;
 
     if (old != text) {
@@ -1239,7 +1242,7 @@ class EditorController extends ChangeNotifier {
       ..data = Map<String, dynamic>.from(data)
       ..text = newText;
     _dirty.remove(node.id);
-    _sendNow([
+    final ops = <DocOp>[
       {
         'type': 'update_block',
         'block_id': node.id,
@@ -1247,7 +1250,22 @@ class EditorController extends ChangeNotifier {
         'data': node.data,
         'text': newText,
       },
-    ]);
+    ];
+    if (node.isAtomic) {
+      // Atomic block: the caret can't live inside it (an IME echo would
+      // clobber the block). Park it on a paragraph after, as the `$$…$$`
+      // input rule does.
+      final after = i + 1;
+      if (after >= nodes.length || nodes[after].isAtomic) {
+        final p = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+        nodes.insert(after, p);
+        ops.add(_insertOp(p, after));
+      }
+      _sendNow(ops);
+      collapseTo(DocPosition(after, 0));
+      return;
+    }
+    _sendNow(ops);
     collapseTo(DocPosition(i, s));
   }
 

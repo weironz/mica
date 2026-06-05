@@ -2485,8 +2485,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         return;
       }
     }
+    // Spaces are allowed inside the query — menu labels contain them ("Math
+    // formula"); the no-match close below ends the session once the text
+    // stops looking like a command. A leading space ("/ …") is prose, not a
+    // command, so it still dismisses.
     final query = before.substring(slash + 1);
-    if (query.contains(' ')) {
+    if (query.startsWith(' ')) {
       _closeSlash();
       return;
     }
@@ -2543,12 +2547,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final data = opt.kind == 'table'
         ? TableData.empty().toBlockData()
         : opt.data;
+    // The converted block's index: the caret parks on a trailing paragraph
+    // when the target kind is atomic, so remember where the block itself is.
+    final converted = _controller.selection?.focus.node;
     _controller.applySlashCommand(_slashStart, caret, opt.kind, data);
     _closeSlash();
     _syncImeFromSelection(force: true);
-    if (opt.kind == 'math_block') {
+    if (opt.kind == 'math_block' && converted != null) {
       // Straight into source editing — an empty formula shows nothing.
-      final node = _controller.focusedNode;
+      final node = converted < _controller.nodes.length
+          ? _controller.nodes[converted]
+          : null;
       if (node != null && node.kind == 'math_block') {
         _editMathBlock(node);
       }
@@ -2589,8 +2598,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ),
     );
     if (source != null) {
-      _controller.setBlockText(node.id, source.trim());
+      _controller.setBlockText(node.id, _stripMathDelimiters(source));
     }
+  }
+
+  /// LaTeX sources are stored bare; users habitually paste `$$…$$`-wrapped
+  /// formulas (the app's own convention) which the typesetter can't parse.
+  static String _stripMathDelimiters(String source) {
+    var src = source.trim();
+    final m = RegExp(r'^\$\$(.*)\$\$$', dotAll: true).firstMatch(src) ??
+        RegExp(r'^\\\[(.*)\\\]$', dotAll: true).firstMatch(src) ??
+        RegExp(r'^\\\((.*)\\\)$', dotAll: true).firstMatch(src) ??
+        RegExp(r'^\$([^$]+)\$$', dotAll: true).firstMatch(src);
+    if (m != null) src = m.group(1)!.trim();
+    return src;
   }
 
   /// Right-click on an image → context menu (copy / download / delete).
