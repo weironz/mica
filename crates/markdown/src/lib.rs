@@ -120,8 +120,33 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
   }
 
   append_html_children(snapshot, &snapshot.root_block_id, &mut html)?;
+  append_footnotes_section(snapshot, &mut html);
 
   Ok(html.trim_end().to_string())
+}
+
+/// GFM footnotes are collected to a single trailing section: an ordered list,
+/// one item per `footnote_def` (in document order), each item ending with a
+/// backlink (`↩`) to its reference. Emits nothing when the document has none.
+fn append_footnotes_section(snapshot: &DocumentSnapshotPayload, out: &mut String) {
+  let defs: Vec<&Block> = snapshot
+    .blocks
+    .iter()
+    .filter(|b| b.kind == "footnote_def")
+    .collect();
+  if defs.is_empty() {
+    return;
+  }
+  out.push_str("<section class=\"footnotes\">\n<ol>\n");
+  for def in defs {
+    let label = block_data_str(def, "label").unwrap_or("");
+    let id = escape_html(label);
+    let body = html_inline(def);
+    out.push_str(&format!(
+      "<li id=\"fn-{id}\">\n<p>{body} <a href=\"#fnref-{id}\" class=\"footnote-backref\">↩</a></p>\n</li>\n"
+    ));
+  }
+  out.push_str("</ol>\n</section>\n");
 }
 
 /// Parse Markdown into a flat document snapshot. Each line maps to a top-level
@@ -498,6 +523,56 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         continue;
       }
       // Unclosed: fall through and let the line parse normally.
+    }
+
+    // Footnote definition: `[^label]: content` at the line start (GFM). The
+    // block carries the inline-parsed content as text and the label in
+    // `data.label`; export restores the `[^label]: ` leader. Continuation
+    // lines indented 4+ columns join the definition (a paragraph break inside
+    // a footnote keeps the same block — we join with a newline, matching how
+    // multi-line paragraphs carry their breaks).
+    if col < 4
+      && list_stack.is_empty()
+      && open_item.is_none()
+      && let Some((label, first)) = parse_footnote_def(content)
+    {
+      let mut body: Vec<String> = if first.is_empty() {
+        Vec::new()
+      } else {
+        vec![first]
+      };
+      index += 1;
+      while index < raw_lines.len() {
+        let l = raw_lines[index];
+        let lt = l.trim_start();
+        if lt.is_empty() {
+          // A blank line ends the definition unless an indented line resumes
+          // it; peek ahead, and if so keep the blank as a paragraph break.
+          let resumes = raw_lines
+            .get(index + 1)
+            .is_some_and(|n| !n.trim().is_empty() && column_of(n) >= 4);
+          if !resumes {
+            break;
+          }
+          body.push(String::new());
+          index += 1;
+          continue;
+        }
+        if column_of(l) < 4 {
+          break; // a non-indented line starts a new block
+        }
+        body.push(deindent_columns(l, 4));
+        index += 1;
+      }
+      let (text, data) =
+        apply_inline_marks(body.join("\n"), json!({ "label": label }), &defs);
+      push_block(&mut blocks, &mut root_children, "footnote_def", text, data);
+      list_stack.clear();
+      open_item = None;
+      last_list = None;
+      pending_loose = false;
+      item_children = false;
+      continue;
     }
 
     // HTML block (CommonMark types 1–7) → a raw html code block: the
@@ -1209,6 +1284,41 @@ fn deindent_columns(line: &str, columns: usize) -> String {
     }
   }
   String::new()
+}
+
+/// The visual column where a line's content begins (tabs to 4-stops).
+fn column_of(line: &str) -> usize {
+  let mut col = 0usize;
+  for c in line.chars() {
+    match c {
+      ' ' => col += 1,
+      '\t' => col = (col / 4 + 1) * 4,
+      _ => break,
+    }
+  }
+  col
+}
+
+/// A GFM footnote definition leader `[^label]: rest`. Returns the label (no
+/// caret) and the remaining first-line content (may be empty). The label
+/// holds no whitespace or brackets — same shape as the inline reference.
+fn parse_footnote_def(content: &str) -> Option<(String, String)> {
+  let chars: Vec<char> = content.chars().collect();
+  if chars.first() != Some(&'[') || chars.get(1) != Some(&'^') {
+    return None;
+  }
+  let close = matching_bracket(&chars, 0)?;
+  if close < 3 || chars.get(close + 1) != Some(&':') {
+    return None;
+  }
+  let label: String = chars[2..close].iter().collect();
+  if label.is_empty()
+    || label.chars().any(|c| c.is_whitespace() || matches!(c, '[' | ']' | '^'))
+  {
+    return None;
+  }
+  let rest: String = chars[close + 2..].iter().collect();
+  Some((label, rest.trim_start().to_string()))
 }
 
 /// `===`/`---` underline (≤3 leading spaces) → setext heading level, if any.
@@ -2388,6 +2498,17 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       pos = e;
       continue;
     }
+    if m.kind == "footnote" {
+      // GFM reference shape: superscript backlink-anchored to the definition.
+      // The label is the href; the visible text is the label too.
+      let label = m.href.clone().unwrap_or_else(|| String::from_utf16_lossy(&units[s..e]));
+      let id = escape_html(&label);
+      out.push_str(&format!(
+        "<sup id=\"fnref-{id}\"><a href=\"#fn-{id}\">{id}</a></sup>"
+      ));
+      pos = e;
+      continue;
+    }
     if m.kind == "image" {
       // The alt attribute is the PLAIN text of the span — inner marks flatten.
       let alt = String::from_utf16_lossy(&units[s..e]);
@@ -2551,6 +2672,10 @@ fn append_html_block(
     }
     "math_block" => {
       out.push_str(&format!("<div class=\"math\">{}</div>\n", escape_html(&block.text)));
+    }
+    "footnote_def" => {
+      // Definitions are not rendered in document order — they are gathered
+      // into a single trailing <section class="footnotes"> by export_html.
     }
     "divider" => {
       out.push_str("<hr />\n");
@@ -2897,6 +3022,22 @@ fn append_markdown_block_content(
       lines.push("$$".to_string());
       lines.push(String::new());
     }
+    "footnote_def" => {
+      // `[^label]: content`; continuation lines indent 4 columns (GFM). The
+      // content carries inline marks, so use the rich render, not raw text.
+      let label = block_data_str(block, "label").unwrap_or("");
+      let mut body = rich.lines();
+      let first = body.next().unwrap_or("");
+      lines.push(format!("[^{label}]: {first}"));
+      for cont in body {
+        lines.push(if cont.is_empty() {
+          String::new()
+        } else {
+          format!("    {cont}")
+        });
+      }
+      lines.push(String::new());
+    }
     "divider" => {
       lines.push("---".to_string());
       lines.push(String::new());
@@ -3043,6 +3184,11 @@ fn parse_ref_definition_multi(
   };
   let label: String = chars[1..close].iter().collect();
   if label.trim().is_empty() {
+    return None;
+  }
+  // `[^label]:` is a GFM footnote definition, a block of its own — never a
+  // link reference definition. Leave it for the main block scanner.
+  if label.starts_with('^') {
     return None;
   }
   for (k, &c) in chars[1..close].iter().enumerate() {
@@ -3560,6 +3706,34 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
             }
           }
         }
+      }
+    }
+    // Footnote reference: `[^label]` (GFM). The brackets and caret are
+    // stripped to bare TEXT (the label) under a `footnote` mark carrying the
+    // label as `href` — the same delimiter-strip + mark shape inline math
+    // uses. Labels hold no whitespace or brackets; checked before the link
+    // arm so `[^x]` never parses as a shortcut link. Whether a matching
+    // definition exists is decided at render time, not here (an undefined
+    // reference round-trips to `[^x]` regardless and degrades to literal HTML).
+    if chars[i] == '['
+      && chars.get(i + 1) == Some(&'^')
+      && let Some(close) = matching_bracket(&chars, i)
+      && close > i + 2
+    {
+      let label: String = chars[i + 2..close].iter().collect();
+      if !label.chars().any(|c| c.is_whitespace() || matches!(c, '[' | ']' | '^')) {
+        let start = out_len;
+        out.push_str(&label);
+        out_len += label.encode_utf16().count();
+        marks.push(InlineMark {
+          start,
+          end: out_len,
+          kind: "footnote".into(),
+          href: Some(label),
+          title: None,
+        });
+        i = close + 1;
+        continue;
       }
     }
     // Link: [text](dest "title") | [text][label] | [text][] | [shortcut]
@@ -4112,6 +4286,14 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
     if m.kind == "math" {
       // LaTeX source is literal — canonical dollar form.
       out.push_str(&format!("${}$", String::from_utf16_lossy(&units[s..e])));
+      pos = e;
+      continue;
+    }
+    if m.kind == "footnote" {
+      // The span text IS the label; the `[^…]` reference syntax is restored
+      // from the mark's href (the label survives even if the span was edited).
+      let label = m.href.clone().unwrap_or_else(|| String::from_utf16_lossy(&units[s..e]));
+      out.push_str(&format!("[^{label}]"));
       pos = e;
       continue;
     }
