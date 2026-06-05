@@ -242,6 +242,35 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Soft newline inside a code block with auto-indent: insert `\n` at [caret]
+  /// (the offset just AFTER the break, in the post-newline text) followed by the
+  /// leading whitespace of the line the break ends, so nested code keeps its
+  /// column. The caret lands after the copied indent.
+  void insertCodeNewline(int caret) {
+    final sel = selection;
+    if (sel == null) return;
+    final i = sel.focus.node;
+    if (i >= nodes.length) return;
+    final node = nodes[i];
+    if (!node.isCode) return;
+    // [caret] indexes the text WITH the newline; the break sits at caret-1, so
+    // the old (newline-free) text splits at the same offset.
+    final at = (caret - 1).clamp(0, node.text.length);
+    final before = node.text.substring(0, at);
+    final after = node.text.substring(at);
+    // Leading whitespace of the current line (the run after the last newline).
+    final lineStart = before.lastIndexOf('\n') + 1;
+    final line = before.substring(lineStart);
+    final indent = line.substring(0, line.length - line.trimLeft().length);
+    final text = '$before\n$indent$after';
+    final pos = at + 1 + indent.length;
+    node.text = text;
+    selection = DocSelection.collapsed(DocPosition(i, pos));
+    goalX = null;
+    _markDirty(node.id);
+    notifyListeners();
+  }
+
   /// Toggle an inline mark over the current ranged (single-node) selection.
   /// For links, pass [href] to add; call without href on a linked range to remove.
   void toggleMark(String type, {String? href}) {
@@ -1753,7 +1782,12 @@ class EditorController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   bool _continuesOnEnter(String kind) =>
-      kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
+      kind == 'bulleted_list' ||
+      kind == 'numbered_list' ||
+      kind == 'todo' ||
+      // Enter inside a quote stays in the quote (carrying its depth); a second
+      // Enter on an empty quote line exits to a paragraph, like the lists.
+      kind == 'quote';
 
   /// Replace a block's text wholesale (math source editing etc.).
   void setBlockText(String id, String text) {

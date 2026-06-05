@@ -828,8 +828,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
 
+    // A newline typed inside a code block is a soft break that copies the
+    // previous line's leading whitespace (auto-indent), so nested code keeps
+    // its column. Detect the single `\n` the IME just inserted at the caret.
     final base = value.selection.baseOffset;
     final ext = value.selection.extentOffset;
+    if (node.isCode &&
+        text.contains('\n') &&
+        base == ext &&
+        base > 0 &&
+        text.length == node.text.length + 1 &&
+        text[base - 1] == '\n') {
+      _controller.insertCodeNewline(base);
+      _lastSentIme = _imeValue();
+      _syncImeFromSelection(force: true);
+      return;
+    }
+
     _controller.setFocusedText(
       text,
       base < 0 ? text.length : base,
