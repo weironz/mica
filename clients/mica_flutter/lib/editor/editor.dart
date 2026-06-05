@@ -729,7 +729,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!force && value == _lastSentIme) return;
     _lastSentIme = value;
     conn.setEditingState(value);
-    final rect = _render?.caretRectFor(_controller.selection!.focus);
+    final sel = _controller.selection;
+    final rect = sel == null ? null : _render?.caretRectFor(sel.focus);
     if (rect != null) conn.setCaretRect(rect);
   }
 
@@ -846,6 +847,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   @override
   void connectionClosed() {
     _conn = null;
+    // The engine drops the connection on its own at times (web rebuilds its
+    // hidden textarea; overlay TextFields borrow the singleton TextInput and
+    // hand it back closed). Our FocusNode never blinked, so _onFocusChange
+    // will NOT re-attach — without this the editor keeps a blinking caret
+    // that hears nothing until the next focus round-trip.
+    if (mounted && _focus.hasFocus && widget.canEdit) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _focus.hasFocus && widget.canEdit && _conn == null) {
+          _attachIme();
+        }
+      });
+    }
   }
 
   @override
@@ -1338,6 +1351,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     _focus.requestFocus();
+    // Re-arm a dead IME connection (engine-side closes leave the caret
+    // blinking but deaf; requestFocus is a no-op when focus never moved).
+    _attachIme();
     final cb = r.checkboxAt(local);
     if (cb != null) {
       _controller.toggleTodo(cb);
@@ -2283,6 +2299,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     _focus.requestFocus();
+    // requestFocus is a no-op when we already own focus, so a dead IME
+    // connection (engine-side close) would stay dead — re-arm explicitly;
+    // attach is idempotent when the connection is healthy.
+    _attachIme();
     final p = r.positionAt(local);
     _dragAnchor = p;
     _controller.setSelection(DocSelection.collapsed(p));
