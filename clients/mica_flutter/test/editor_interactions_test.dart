@@ -22,6 +22,32 @@ void main() {
     expect(c.selection!.focus.node, 1);
   });
 
+  test('Enter at the end of a group-opening quote keeps the bar continuous',
+      () {
+    // The first block of a SECOND blockquote group carries qbreak. Pressing
+    // Enter at its end must NOT hand qbreak (or the parent marks) to the
+    // continuation line — that severed the bar exactly at the split.
+    final c = _fresh([
+      EditorNode(id: 'q1', kind: 'quote', text: 'group one'),
+      EditorNode(
+        id: 'q2',
+        kind: 'quote',
+        text: 'group two opener',
+        data: {'qbreak': true, 'marks': []},
+      ),
+    ]);
+    c.selection = DocSelection.collapsed(
+        DocPosition(1, c.nodes[1].text.length));
+    c.applyNewlineSplit('group two opener', '');
+
+    expect(c.nodes[2].kind, 'quote');
+    expect(c.nodes[2].data['qbreak'], isNull,
+        reason: 'the continuation stays in the same group — no bar break');
+    expect(c.nodes[2].data['marks'], isNull);
+    expect(c.nodes[1].data['qbreak'], true,
+        reason: 'the opener itself keeps starting its group');
+  });
+
   test('Enter on an empty quote line exits to a paragraph', () {
     final c = _fresh([EditorNode(id: 'q', kind: 'quote', text: '')]);
     c.selection = const DocSelection.collapsed(DocPosition(0, 0));

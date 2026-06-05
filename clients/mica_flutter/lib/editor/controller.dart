@@ -1982,7 +1982,15 @@ class EditorController extends ChangeNotifier {
     if (node.kind == 'todo') {
       return {'checked': false, if (node.indent > 0) 'indent': node.indent};
     }
-    return Map<String, dynamic>.from(node.data);
+    return Map<String, dynamic>.from(node.data)
+      // The continuation stays in the SAME quote group: inheriting the
+      // group-opener's qbreak visually severed the quote bar right where
+      // Enter was pressed (Typora semantics: only Enter on an EMPTY quote
+      // line leaves the group).
+      ..remove('qbreak')
+      // The split recomputes each half's marks; the parent's full set must
+      // not ride along.
+      ..remove('marks');
   }
 
   DocOp _insertOp(EditorNode node, int index) => {
