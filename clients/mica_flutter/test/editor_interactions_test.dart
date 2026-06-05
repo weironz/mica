@@ -9,6 +9,26 @@ EditorController _fresh(List<EditorNode> nodes) {
 }
 
 void main() {
+  test('typing `# ` on an existing heading re-levels it', () {
+    final c = _fresh([
+      EditorNode(id: 'h', kind: 'heading', text: 'My Title', data: {'level': 2}),
+    ]);
+    // Type "# " at the start of the H2: text becomes "# My Title".
+    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.nodes[0].text = '# My Title';
+    c.selection = DocSelection.collapsed(const DocPosition(0, 2));
+    expect(c.applyInputRules(), isTrue);
+    expect(c.nodes[0].kind, 'heading');
+    expect(c.nodes[0].data['level'], 1, reason: 'H2 re-levels to H1');
+    expect(c.nodes[0].text, 'My Title', reason: 'the marker is consumed');
+
+    // And deeper: "### " on the (now) H1.
+    c.nodes[0].text = '### My Title';
+    c.selection = DocSelection.collapsed(const DocPosition(0, 4));
+    expect(c.applyInputRules(), isTrue);
+    expect(c.nodes[0].data['level'], 3);
+  });
+
   // ---------------------------------------------------------------------------
   // Quote continues on Enter
   // ---------------------------------------------------------------------------

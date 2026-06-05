@@ -1187,13 +1187,18 @@ class EditorController extends ChangeNotifier {
       return true;
     }
 
-    if (node.kind == 'paragraph') {
+    // `# ` works on paragraphs AND existing headings — typing the marker on
+    // a title re-levels it (Typora), instead of doing nothing.
+    if (node.kind == 'paragraph' || node.kind == 'heading') {
       for (var lvl = 6; lvl >= 1; lvl--) {
         final marker = '${'#' * lvl} ';
         if (caret == marker.length && text.startsWith(marker)) {
           return convert('heading', {'level': lvl}, marker.length);
         }
       }
+    }
+
+    if (node.kind == 'paragraph') {
       if (caret == 2 &&
           (text.startsWith('- ') || text.startsWith('* ') || text.startsWith('+ '))) {
         return convert('bulleted_list', {}, 2);
