@@ -18,9 +18,12 @@ dev-api:
     bash -c 'set -a && . ./.env && set +a && cargo run -p mica-api-server'
 
 # Rebuild the web bundle — the compose `web` (nginx) serves the bind-mounted
-# build dir live; just refresh the browser afterwards.
+# build dir live; just refresh the browser afterwards. The chmod matters:
+# flutter recreates build/web with 750 and the nginx container (different
+# uid) 403s on the whole bundle.
 dev-web:
     cd clients/mica_flutter && {{flutter}} build web --no-tree-shake-icons
+    chmod -R a+rX clients/mica_flutter/build/web
 
 # Container-parity check: run the REAL images locally before a release —
 # catches container-only bugs (e.g. loopback binds) that host dev can't.
