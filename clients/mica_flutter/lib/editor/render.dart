@@ -1318,10 +1318,10 @@ class RenderDocument extends RenderBox {
     final paint = Paint()..color = EditorTheme.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
       final l = _layouts[i];
-      // Atomic nodes (image/table/divider) are opaque and painted after the
-      // selection layer, so their highlight is drawn on top in
-      // _paintAtomicSelection instead — skip them here.
-      if (EditorNode.isAtomicKind(l.kind)) continue;
+      // Atomic nodes (image/table/divider) and renderer-claimed layouts
+      // (rendered mermaid) are opaque and painted after the selection layer,
+      // so their highlight is drawn on top in _paintAtomicSelection instead.
+      if (EditorNode.isAtomicKind(l.kind) || l.renderedBy != null) continue;
       final from = i == start.node ? start.offset : 0;
       final to = i == end.node ? end.offset : _nodes[i].text.length;
       final isCode = l.kind == 'code_block';
@@ -1587,8 +1587,15 @@ class RenderDocument extends RenderBox {
         DocPosition(last, _nodes[last].text.length);
   }
 
+  /// Whole-block nodes for selection/caret purposes: atomic kinds, plus any
+  /// node whose layout a renderer claimed (a rendered ```mermaid block is a
+  /// code_block by kind but behaves as a picture — drag-selection paints the
+  /// block tint and the caret steps over it as one stop).
   bool _isAtomicNode(int index) =>
-      index >= 0 && index < _nodes.length && _nodes[index].isAtomic;
+      index >= 0 &&
+      index < _nodes.length &&
+      (_nodes[index].isAtomic ||
+          (index < _layouts.length && _layouts[index].renderedBy != null));
 
   /// Land the caret on node [index] when crossing a node boundary: an atomic
   /// node becomes a whole-block stop (offset 0); a text node gets the line
