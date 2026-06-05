@@ -1060,6 +1060,26 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Switch a diagram code block (```mermaid) between its rendered preview
+  /// and source editing. Stored as data.view ('code'); absent = preview, the
+  /// default — readers want the picture, not the source.
+  void setCodeView(int index, String view) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'code_block') return;
+    final data = {...node.data};
+    if (view == 'code') {
+      data['view'] = 'code';
+    } else {
+      data.remove('view');
+    }
+    node.data = data;
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   void toggleTodo(int index) {
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];

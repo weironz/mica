@@ -1262,6 +1262,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _onImageAction(imageAction.node, imageAction.action);
       return;
     }
+    final viewTab = r.viewTabAt(local);
+    if (viewTab != null) {
+      _controller.setCodeView(viewTab.node, viewTab.view);
+      return;
+    }
     final wrapNode = r.codeWrapAt(local);
     if (wrapNode != null) {
       _controller.toggleCodeWrap(wrapNode);
@@ -2098,9 +2103,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPointerSignal(PointerSignalEvent event) {
-    if (event is! PointerScrollEvent) return;
     final r = _render;
     if (r == null) return;
+    // Ctrl+wheel over a rendered diagram zooms it (AFFiNE-style). The web
+    // engine surfaces ctrl+wheel as a SCALE signal; desktops keep it a
+    // scroll with the ctrl modifier down — accept both.
+    if (event is PointerScaleEvent) {
+      r.zoomPreviewBy(r.globalToLocal(event.position), event.scale);
+      return;
+    }
+    if (event is! PointerScrollEvent) return;
+    if (HardwareKeyboard.instance.isControlPressed) {
+      if (r.zoomPreviewBy(r.globalToLocal(event.position),
+          event.scrollDelta.dy > 0 ? 0.9 : 1.1)) {
+        return;
+      }
+    }
     final shift = HardwareKeyboard.instance.isShiftPressed;
     final dx = event.scrollDelta.dx != 0
         ? event.scrollDelta.dx

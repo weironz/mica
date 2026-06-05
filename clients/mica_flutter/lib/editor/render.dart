@@ -179,6 +179,8 @@ class _NodeLayout {
   Rect? langLabel; // code-block language selector rect (local), if any
   Rect? copyButton; // code-block copy button rect (local), if any
   Rect? wrapButton; // code-block wrap toggle rect (local), if any
+  Rect? viewCodeTab; // mermaid view switch: source tab (local), if any
+  Rect? viewPreviewTab; // mermaid view switch: preview tab (local), if any
   String langText = ''; // resolved code language
   String footnoteLabel = ''; // `[label]` gutter marker (kind == 'footnote_def')
   String nodeId = '';
@@ -236,7 +238,7 @@ class _TableCell {
 }
 
 /// Which code-block toolbar icon the pointer is hovering.
-enum _CodeIcon { none, lang, copy, wrap }
+enum _CodeIcon { none, lang, copy, wrap, viewCode, viewPreview }
 
 /// The single editing surface: one leaf render object that lays out and paints
 /// every node, the caret, and the selection, and maps screen points to document
@@ -308,6 +310,24 @@ class RenderDocument extends RenderBox {
   /// Per-code-block horizontal scroll offset, keyed by node id. Code blocks do
   /// not wrap; long lines scroll left/right within the block.
   final Map<String, double> _codeScroll = {};
+
+  /// Per-block diagram preview zoom (ctrl+wheel), keyed by node id. View
+  /// state only — never written to the document.
+  final Map<String, double> _previewZoom = {};
+
+  /// Ctrl+wheel / pinch over a rendered diagram: zoom it by [factor].
+  /// Returns true when consumed.
+  bool zoomPreviewBy(Offset local, double factor) {
+    for (final l in _layouts) {
+      if (l.renderedBy is! MermaidRenderer) continue;
+      if (local.dy < l.boxTop || local.dy > l.boxTop + l.boxHeight) continue;
+      final cur = _previewZoom[l.nodeId] ?? 1.0;
+      _previewZoom[l.nodeId] = (cur * factor).clamp(0.3, 3.0);
+      markNeedsLayout();
+      return true;
+    }
+    return false;
+  }
 
   /// Decoded images keyed by `file_id`, painted directly onto the canvas. The
   /// host (`MicaEditor`) populates this as images load and calls [setImages].
@@ -384,6 +404,10 @@ class RenderDocument extends RenderBox {
             icon = _CodeIcon.wrap;
           } else if (l.langLabel?.contains(local) ?? false) {
             icon = _CodeIcon.lang;
+          } else if (l.viewCodeTab?.contains(local) ?? false) {
+            icon = _CodeIcon.viewCode;
+          } else if (l.viewPreviewTab?.contains(local) ?? false) {
+            icon = _CodeIcon.viewPreview;
           }
           break;
         }
@@ -685,6 +709,14 @@ class RenderDocument extends RenderBox {
           labelW,
           labelH,
         );
+        // Diagram blocks: [code|preview] switch at the TOP-LEFT (AFFiNE-style)
+        // on both forms; here (source form) "code" is the active tab.
+        if (codeLang == 'mermaid') {
+          layout.viewCodeTab =
+              Rect.fromLTWH(contentLeft, layout.boxTop + 4, 44, 20);
+          layout.viewPreviewTab =
+              Rect.fromLTWH(contentLeft + 46, layout.boxTop + 4, 56, 20);
+        }
       }
 
       _layouts.add(layout);
@@ -898,6 +930,45 @@ class RenderDocument extends RenderBox {
         tooltip: 'Copy',
       );
     }
+
+    _paintViewTabs(canvas, offset, l, active: 'code');
+  }
+
+  /// The [code|preview] switch shown on diagram blocks while hovered — the
+  /// same control on both forms, with the current form's tab highlighted.
+  void _paintViewTabs(Canvas canvas, Offset offset, _NodeLayout l,
+      {required String active}) {
+    void tab(Rect? r0, String text, _CodeIcon icon, bool isActive) {
+      if (r0 == null) return;
+      final r = r0.shift(offset);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(r, const Radius.circular(5)),
+        Paint()
+          ..color = isActive
+              ? const Color(0xFF1E293B)
+              : (_hoverIcon == icon
+                  ? const Color(0xFFCBD5E1)
+                  : const Color(0xFFE2E8F0)),
+      );
+      final tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            fontSize: 11,
+            color: isActive ? const Color(0xFFF8FAFC) : EditorTheme.muted,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(
+          canvas,
+          r.center - Offset(tp.width / 2, tp.height / 2));
+      tp.dispose();
+    }
+
+    tab(l.viewCodeTab, 'code', _CodeIcon.viewCode, active == 'code');
+    tab(l.viewPreviewTab, 'preview', _CodeIcon.viewPreview,
+        active == 'preview');
   }
 
   void _paintIconButton(
@@ -984,6 +1055,19 @@ class RenderDocument extends RenderBox {
   int? codeWrapAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       if (_layouts[i].wrapButton?.contains(local) ?? false) return i;
+    }
+    return null;
+  }
+
+  /// The mermaid view tab under [local]: switch to 'code' or 'preview'.
+  ({int node, String view})? viewTabAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      if (_layouts[i].viewCodeTab?.contains(local) ?? false) {
+        return (node: i, view: 'code');
+      }
+      if (_layouts[i].viewPreviewTab?.contains(local) ?? false) {
+        return (node: i, view: 'preview');
+      }
     }
     return null;
   }

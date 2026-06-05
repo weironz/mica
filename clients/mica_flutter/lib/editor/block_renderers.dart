@@ -629,16 +629,11 @@ class MermaidRenderer extends AtomicBlockRenderer {
   ) {
     if ((node.data['language'] as String?) != 'mermaid') return null;
     if (node.text.trim().isEmpty) return null;
-    // Caret inside the block → editable source form. Only while the editor
-    // actually owns focus (showCaret): a selection parked in the block after
-    // focus moved to the title/sidebar shouldn't hold the diagram hostage.
-    final sel = host._selection;
-    if (host._showCaret &&
-        sel != null &&
-        index >= sel.start.node &&
-        index <= sel.end.node) {
-      return null;
-    }
+    // The form is an EXPLICIT choice via the [code|preview] tabs — clicking
+    // or selecting the rendered diagram must not flip it into source (that
+    // visual jump was terrible). data.view == 'code' shows the source;
+    // absent means preview, the default.
+    if ((node.data['view'] as String?) == 'code') return null;
     final avail =
         (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
     final img = host._previewImages['mermaid']?[node.text];
@@ -647,10 +642,11 @@ class MermaidRenderer extends AtomicBlockRenderer {
       return null;
     }
     // Fill the content width: diagrams read better large, so scale UP as
-    // well as down. The producer rasterized at 2x of this width, so the
-    // upscale stays crisp.
-    final w = avail;
-    final h = avail * (img.height / img.width.clamp(1, 1 << 30));
+    // well as down (the producer rasterized at 2x of this width, so the
+    // upscale stays crisp). Ctrl+wheel zoom scales the block, centered.
+    final zoom = host._previewZoom[node.id] ?? 1.0;
+    final w = (avail * zoom).clamp(40.0, avail);
+    final h = w * (img.height / img.width.clamp(1, 1 << 30));
     // The painter must be laid out: code_block is a TEXT kind, so pointer
     // hit-testing runs text-position math against it (unlike the atomic
     // kinds, whose clicks take the block path). Empty text → offset 0 →
@@ -670,9 +666,13 @@ class MermaidRenderer extends AtomicBlockRenderer {
       ..mathImage = img
       ..mathSize = Size(w, h)
       ..boxTop = y
-      ..textTop = y + 10
+      // Visually it IS the picture: no card, near-zero block padding.
+      ..textTop = y + 2
       ..textHeight = h
-      ..boxHeight = h + 20;
+      ..boxHeight = h + 4
+      ..viewCodeTab = Rect.fromLTWH(EditorTheme.gutter + 4, y + 6, 44, 20)
+      ..viewPreviewTab =
+          Rect.fromLTWH(EditorTheme.gutter + 50, y + 6, 56, 20);
   }
 
   @override
@@ -685,16 +685,8 @@ class MermaidRenderer extends AtomicBlockRenderer {
   ) {
     final img = l.mathImage;
     if (img == null) return;
-    // Card backdrop drawn here, not in paintBackground: that hook fires by
-    // kind and would tint every code block, mermaid or not.
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop - 4,
-            host.size.width - l.boxLeft, l.boxHeight + 8),
-        const Radius.circular(6),
-      ),
-      Paint()..color = const Color(0xFFF8FAFC),
-    );
+    // No backdrop, no card: the user is here for the diagram, so the block
+    // chrome disappears and the picture sits directly on the page.
     final dst = Rect.fromLTWH(offset.dx + l.contentLeft, offset.dy + l.textTop,
         l.mathSize.width, l.mathSize.height);
     canvas.drawImageRect(
@@ -703,6 +695,20 @@ class MermaidRenderer extends AtomicBlockRenderer {
       dst,
       Paint()..filterQuality = FilterQuality.medium,
     );
+  }
+
+  @override
+  void paintOverlay(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l,
+    int index,
+  ) {
+    // The [code|preview] switch only surfaces on hover, so at rest the
+    // block reads as a plain picture.
+    if (host._hoverCode != index) return;
+    host._paintViewTabs(canvas, offset, l, active: 'preview');
   }
 }
 
