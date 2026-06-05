@@ -96,6 +96,55 @@ class DocPosition implements Comparable<DocPosition> {
   String toString() => 'DocPosition($node, $offset)';
 }
 
+/// Character classes for word selection (double-click). Grouping classes
+/// (CJK / alnum) expand over their whole run; the rest are per-character.
+enum _CharClass { cjk, alnum, whitespace, other }
+
+_CharClass _classOf(int code) {
+  // Whitespace.
+  if (code == 0x20 || code == 0x09 || code == 0x0A || code == 0x0D) {
+    return _CharClass.whitespace;
+  }
+  // ASCII letters / digits / underscore → an identifier-ish run.
+  final isDigit = code >= 0x30 && code <= 0x39;
+  final isUpper = code >= 0x41 && code <= 0x5A;
+  final isLower = code >= 0x61 && code <= 0x7A;
+  if (isDigit || isUpper || isLower || code == 0x5F) return _CharClass.alnum;
+  // CJK ideographs (Unified + Ext-A) and common Hiragana/Katakana/Hangul, plus
+  // any non-ASCII letter-ish code point — treated as one grouping run so a
+  // double-click in 中文 grabs the contiguous CJK string.
+  if (code >= 0x3400 && code <= 0x9FFF) return _CharClass.cjk; // CJK ideographs
+  if (code >= 0x3040 && code <= 0x30FF) return _CharClass.cjk; // kana
+  if (code >= 0xAC00 && code <= 0xD7A3) return _CharClass.cjk; // hangul
+  if (code >= 0xF900 && code <= 0xFAFF) return _CharClass.cjk; // compat ideographs
+  if (code > 0x7F) return _CharClass.cjk; // other non-ASCII: group it
+  return _CharClass.other;
+}
+
+/// The bounds of the "word" containing [offset] in [text] (for double-click
+/// selection). Grouping classes (CJK / alphanumeric) expand over the whole run;
+/// whitespace and punctuation are boundaries and select a single character.
+/// Returns `(start, end)`; `start == end` means nothing selectable.
+(int, int) wordBoundsAt(String text, int offset) {
+  if (text.isEmpty) return (0, 0);
+  // Look at the character to the right of the caret; at the very end, fall back
+  // to the one on the left so a click past the last glyph still grabs it.
+  final probe = offset < text.length ? offset : text.length - 1;
+  final cls = _classOf(text.codeUnitAt(probe));
+  if (cls == _CharClass.whitespace || cls == _CharClass.other) {
+    return (probe, probe + 1); // boundary char: select just it
+  }
+  var start = probe;
+  while (start > 0 && _classOf(text.codeUnitAt(start - 1)) == cls) {
+    start--;
+  }
+  var end = probe + 1;
+  while (end < text.length && _classOf(text.codeUnitAt(end)) == cls) {
+    end++;
+  }
+  return (start, end);
+}
+
 /// A selection range from [anchor] (where the drag/extend started) to [focus]
 /// (the moving end / caret). A collapsed selection (anchor == focus) is the
 /// caret. The document owns one selection that may span multiple nodes.

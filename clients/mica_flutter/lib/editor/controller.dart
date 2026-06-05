@@ -153,6 +153,40 @@ class EditorController extends ChangeNotifier {
     return nodes[sel.focus.node];
   }
 
+  /// Double-click: select the "word" straddling [pos]. A word is a maximal run
+  /// of like characters — CJK ideographs grouped together, ASCII letters/digits
+  /// together — so a click in 中文 grabs the CJK run and a click in `foo_bar`
+  /// grabs an identifier. Whitespace and punctuation are boundaries; clicking
+  /// directly on one selects just that single character (Notion/browser feel).
+  /// No-op on atomic blocks (they carry no inline text). Returns true on a select.
+  bool selectWordAt(DocPosition pos) {
+    if (pos.node < 0 || pos.node >= nodes.length) return false;
+    final node = nodes[pos.node];
+    if (node.isAtomic) return false;
+    final text = node.text;
+    if (text.isEmpty) return false;
+    final (start, end) = wordBoundsAt(text, pos.offset.clamp(0, text.length));
+    if (start == end) return false;
+    setSelection(DocSelection(
+      anchor: DocPosition(pos.node, start),
+      focus: DocPosition(pos.node, end),
+    ));
+    return true;
+  }
+
+  /// Triple-click: select the whole text of block [index]. No-op on atomic
+  /// blocks. Returns true on a select.
+  bool selectBlockText(int index) {
+    if (index < 0 || index >= nodes.length) return false;
+    final node = nodes[index];
+    if (node.isAtomic || node.text.isEmpty) return false;
+    setSelection(DocSelection(
+      anchor: DocPosition(index, 0),
+      focus: DocPosition(index, node.text.length),
+    ));
+    return true;
+  }
+
   // ---------------------------------------------------------------------------
   // Text editing (from IME / typing)
   // ---------------------------------------------------------------------------
