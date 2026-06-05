@@ -36,6 +36,15 @@ class EditorNode {
       kind == 'table' || kind == 'divider' || kind == 'image' || kind == 'math_block';
   bool get isAtomic => isAtomicKind(kind);
 
+  /// Edits as ONE unit even when the kind is textual: a diagram code block
+  /// in its preview form. A selection touching it consumes the whole block —
+  /// merging its source text into neighbors leaves stray code on the page.
+  bool get isUnitBlock =>
+      isAtomic ||
+      (kind == 'code_block' &&
+          data['language'] == 'mermaid' &&
+          (data['view'] as String?) != 'code');
+
   /// Nesting level for list/todo items (0 = top level), clamped for safety.
   int get indent => ((data['indent'] as num?)?.toInt() ?? 0).clamp(0, 8);
 

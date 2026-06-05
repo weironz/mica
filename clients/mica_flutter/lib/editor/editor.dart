@@ -203,6 +203,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _blockDrag; // block index being moved via its gutter drag handle
   int? _diagramPan; // diagram block index being panned by drag
+  int? _panDownDiagram; // diagram under the REAL pointer-down position
 
   // Source → picture previews (math, mermaid): the pipeline owns the cache /
   // pending / off-screen-capture lifecycle, the previewers say how one source
@@ -2156,6 +2157,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
+  void _onPanDown(DragDownDetails d) {
+    // Captured at the REAL pointer-down spot: by the time onPanStart fires
+    // the pointer has already travelled past the touch slop, and a drag that
+    // STARTED on a paragraph above a diagram would read as inside it —
+    // hijacking the text selection into a pan and yanking the picture out
+    // of its viewport.
+    final r = _render;
+    _panDownDiagram =
+        r == null ? null : r.diagramAt(r.globalToLocal(d.globalPosition));
+  }
+
   void _onPanStart(DragStartDetails d) {
     if (!widget.canEdit) return;
     _tapCount = 0; // a drag ends any tap sequence (no stray triple-click)
@@ -2185,8 +2197,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
       return;
     }
-    // Dragging a rendered diagram pans it inside its fixed viewport.
-    final diagram = r.diagramAt(local);
+    // Dragging a rendered diagram pans it inside its fixed viewport — only
+    // when the gesture truly began on the diagram (see _onPanDown).
+    final diagram = _panDownDiagram;
     if (diagram != null) {
       _diagramPan = diagram;
       return;
@@ -2285,6 +2298,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _onPanEnd(DragEndDetails d) {
     _diagramPan = null;
+    _panDownDiagram = null;
     if (_blockDrag != null) {
       final r = _render;
       final from = _blockDrag!;
@@ -2996,6 +3010,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             behavior: HitTestBehavior.opaque,
             onTapDown: _onTapDown,
             onSecondaryTapDown: _onSecondaryTapDown,
+            onPanDown: _onPanDown,
             onPanStart: _onPanStart,
             onPanUpdate: _onPanUpdate,
             onPanEnd: _onPanEnd,

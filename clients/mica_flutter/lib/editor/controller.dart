@@ -718,22 +718,40 @@ class EditorController extends ChangeNotifier {
 
     final startNode = nodes[start.node];
     final endNode = nodes[end.node];
-    final s = start.offset.clamp(0, startNode.text.length);
+    // Unit blocks (atomic kinds, rendered diagrams) are consumed whole by a
+    // selection that touches them: their text must never merge into a
+    // neighbor (a diagram's source spilling into a paragraph reads as stray
+    // code), and a unit start block is reborn as the plain paragraph that
+    // carries whatever survives the cut.
+    final startIsUnit = startNode.isUnitBlock;
+    final endIsUnit = endNode.isUnitBlock;
+    final s = startIsUnit ? 0 : start.offset.clamp(0, startNode.text.length);
     final e = end.offset.clamp(0, endNode.text.length);
-    final merged = startNode.text.substring(0, s) + endNode.text.substring(e);
+    final prefix = startIsUnit ? '' : startNode.text.substring(0, s);
+    final suffix = endIsUnit ? '' : endNode.text.substring(e);
+    final merged = prefix + suffix;
     final removed = [for (var i = start.node + 1; i <= end.node; i++) nodes[i].id];
 
     // Start node keeps marks strictly before the cut (clip, don't stretch —
     // the joined tail must not inherit them); the end node's surviving tail
     // brings its own marks along, remapped to the junction.
-    final (startMarks, _) = splitMarks(marksFromData(startNode.data), s);
+    final (startMarks, _) = startIsUnit
+        ? (const <Mark>[], const <Mark>[])
+        : splitMarks(marksFromData(startNode.data), s);
     final tailMarks = <Mark>[];
-    for (final m in marksFromData(endNode.data)) {
-      final ms = (m.start - e + s).clamp(s, merged.length);
-      final me = (m.end - e + s).clamp(s, merged.length);
-      if (me > ms) tailMarks.add(Mark(ms, me, m.type, href: m.href));
+    if (!endIsUnit) {
+      for (final m in marksFromData(endNode.data)) {
+        final ms = (m.start - e + s).clamp(s, merged.length);
+        final me = (m.end - e + s).clamp(s, merged.length);
+        if (me > ms) tailMarks.add(Mark(ms, me, m.type, href: m.href));
+      }
     }
 
+    if (startIsUnit) {
+      startNode
+        ..kind = 'paragraph'
+        ..data = {};
+    }
     startNode.text = merged;
     startNode.data = {
       ...startNode.data,
@@ -745,6 +763,7 @@ class EditorController extends ChangeNotifier {
       {
         'type': 'update_block',
         'block_id': startNode.id,
+        if (startIsUnit) 'kind': 'paragraph',
         'text': merged,
         'data': startNode.data,
       },
