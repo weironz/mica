@@ -197,6 +197,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   DocPosition? _dragAnchor;
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _blockDrag; // block index being moved via its gutter drag handle
+  int? _diagramPan; // diagram block index being panned by drag
 
   // Source → picture previews (math, mermaid): the pipeline owns the cache /
   // pending / off-screen-capture lifecycle, the previewers say how one source
@@ -1262,6 +1263,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _onImageAction(imageAction.node, imageAction.action);
       return;
     }
+    // A click anywhere outside the diagram blocks restores their natural
+    // zoom/pan (the explicit reset gesture — hover-leave was too eager).
+    r.resetPreviewViewsOutside(local);
     final viewTab = r.viewTabAt(local);
     if (viewTab != null) {
       _controller.setCodeView(viewTab.node, viewTab.view);
@@ -2085,6 +2089,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           ? SystemMouseCursors.grabbing
           : SystemMouseCursors.grab;
     }
+    // Rendered diagrams pan by drag (AFFiNE-style): hand cursor invites it.
+    if (_diagramPan != null) return SystemMouseCursors.grabbing;
+    if (r.diagramAt(local) != null && r.viewTabAt(local) == null) {
+      return SystemMouseCursors.grab;
+    }
     if (r.tableColBorderAt(local) != null || r.imageResizeAt(local) != null) {
       return SystemMouseCursors.resizeLeftRight;
     }
@@ -2167,6 +2176,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
       return;
     }
+    // Dragging a rendered diagram pans it inside its fixed viewport.
+    final diagram = r.diagramAt(local);
+    if (diagram != null) {
+      _diagramPan = diagram;
+      return;
+    }
     // Dragging an image's right-edge handle resizes it.
     final imageResize = r.imageResizeAt(local);
     if (imageResize != null) {
@@ -2193,6 +2208,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final local = r.globalToLocal(d.globalPosition);
     if (_blockDrag != null) {
       r.setDropIndicator(r.dropIndexAt(local.dy));
+      return;
+    }
+    final panning = _diagramPan;
+    if (panning != null) {
+      r.panPreviewBy(panning, d.delta);
       return;
     }
     final resize = _colResize;
@@ -2255,6 +2275,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPanEnd(DragEndDetails d) {
+    _diagramPan = null;
     if (_blockDrag != null) {
       final r = _render;
       final from = _blockDrag!;

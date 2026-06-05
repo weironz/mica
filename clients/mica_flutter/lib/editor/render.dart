@@ -311,9 +311,42 @@ class RenderDocument extends RenderBox {
   /// not wrap; long lines scroll left/right within the block.
   final Map<String, double> _codeScroll = {};
 
-  /// Per-block diagram preview zoom (ctrl+wheel), keyed by node id. View
-  /// state only — never written to the document.
+  /// Per-block diagram preview zoom (ctrl+wheel) and pan (drag), keyed by
+  /// node id. View state only — never written to the document.
   final Map<String, double> _previewZoom = {};
+  final Map<String, Offset> _previewPan = {};
+
+  /// The rendered-diagram block under [local], if any.
+  int? diagramAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      if (l.renderedBy is! MermaidRenderer) continue;
+      if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) return i;
+    }
+    return null;
+  }
+
+  /// Drag a diagram by [delta] inside its fixed viewport.
+  void panPreviewBy(int node, Offset delta) {
+    if (node < 0 || node >= _layouts.length) return;
+    final id = _layouts[node].nodeId;
+    _previewPan[id] = (_previewPan[id] ?? Offset.zero) + delta;
+    markNeedsPaint();
+  }
+
+  /// A click anywhere OUTSIDE the diagram blocks restores their natural
+  /// view (zoom and pan). Walking the pointer away no longer resets — a
+  /// zoomed/panned diagram stays put until the user clicks elsewhere.
+  void resetPreviewViewsOutside(Offset local) {
+    var changed = false;
+    for (final l in _layouts) {
+      if (l.renderedBy is! MermaidRenderer) continue;
+      if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) continue;
+      if (_previewZoom.remove(l.nodeId) != null) changed = true;
+      if (_previewPan.remove(l.nodeId) != null) changed = true;
+    }
+    if (changed) markNeedsLayout();
+  }
 
   /// Ctrl+wheel / pinch over a rendered diagram: zoom it by [factor].
   /// Returns true when consumed.
@@ -413,21 +446,6 @@ class RenderDocument extends RenderBox {
         }
       }
     }
-    // Leaving a zoomed diagram restores its natural size: the ctrl+wheel
-    // zoom is a transient magnifier, and nudging it back to exactly 1.0 by
-    // hand is fiddly — walking away is the reset gesture.
-    if (node != _hoverCode) {
-      final prev = _hoverCode;
-      if (prev != null && prev < _layouts.length) {
-        final pl = _layouts[prev];
-        if (pl.renderedBy is MermaidRenderer &&
-            _previewZoom.containsKey(pl.nodeId)) {
-          _previewZoom.remove(pl.nodeId);
-          markNeedsLayout();
-        }
-      }
-    }
-
     final border = local == null ? null : tableColBorderAt(local);
     int? block;
     if (local != null) {

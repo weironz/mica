@@ -695,8 +695,9 @@ class MermaidRenderer extends AtomicBlockRenderer {
     // and clips to it, so zoom never moves surrounding content.
     final viewport = Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop,
         host.size.width - l.boxLeft, l.boxHeight);
+    final pan = host._previewPan[l.nodeId] ?? Offset.zero;
     final dst = Rect.fromCenter(
-      center: viewport.center,
+      center: viewport.center + pan,
       width: l.mathSize.width,
       height: l.mathSize.height,
     );
