@@ -790,6 +790,16 @@ class RenderDocument extends RenderBox {
     return layout;
   }
 
+  /// A table cell's display span. Cells store raw inline-Markdown source
+  /// (`` `code` ``, `**bold**`, …); painting shows the rendered form while the
+  /// overlay editor keeps showing the source (Typora-style). Parse failures
+  /// can't happen — unmatched markers simply stay literal text.
+  static TextSpan cellDisplaySpan(String raw, TextStyle base) {
+    if (raw.isEmpty) return TextSpan(text: ' ', style: base);
+    final parsed = parseInline(raw);
+    return buildMarkedSpan(parsed.text, parsed.marks, base);
+  }
+
   _NodeLayout _layoutTable(EditorNode node, double top, double maxWidth) {
     final table = TableData.fromBlock(node.data);
     final cols = table.columns.clamp(1, 64);
@@ -833,9 +843,9 @@ class RenderDocument extends RenderBox {
       for (var c = 0; c < cols; c++) {
         final raw = c < table.rows[r].length ? table.rows[r][c] : '';
         final tp = TextPainter(
-          text: TextSpan(
-            text: raw.isEmpty ? ' ' : raw,
-            style: _appearance.applyTo(
+          text: cellDisplaySpan(
+            raw,
+            _appearance.applyTo(
               TextStyle(
                 color: EditorTheme.text,
                 fontSize: 15,
