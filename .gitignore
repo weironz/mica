@@ -38,3 +38,15 @@
 .env.prod
 deploy/web/
 dist/
+.env
+.mcp.json
+
+# Local tooling state
+.playwright-cli/
+.claude/settings.local.json
+.claude/worktrees/
+
+# Local tooling state
+.playwright-cli/
+.claude/settings.local.json
+.claude/worktrees/
