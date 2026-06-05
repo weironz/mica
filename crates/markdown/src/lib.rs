@@ -182,7 +182,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   // spanning lines) — they resolve case-insensitively and vanish from the
   // output. Definitions inside fences don't count, and a definition can't
   // interrupt a paragraph.
-  let (defs, def_lines) = collect_ref_definitions(&raw_lines);
+  let (defs, def_lines, quote_def_lines) = collect_ref_definitions(&raw_lines);
 
   let mut index = 0;
   // Stack of open list items' CONTENT columns (tabs count as 4): a new item
@@ -203,7 +203,6 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     base: Value,
     had_blank: bool,
     qdepth: usize,
-    ends_hard: bool,
   }
   let mut open_item: Option<OpenItem> = None;
   // Last pushed list item (index, level, marker char) — anchors loose-list
@@ -229,11 +228,24 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       index += 1;
       continue;
     }
-    let line = raw_lines[index].trim_end();
+    if let Some(&qd) = quote_def_lines.get(&index) {
+      // The definition was consumed; the line still opens/continues its
+      // blockquote as a contentless `>` marker (spec ex. 218).
+      if !quote_active && pending_empty_quote.is_none() {
+        pending_empty_quote = Some(qd);
+      }
+      open_item = None;
+      quote_active = true;
+      index += 1;
+      continue;
+    }
+    let expanded = expand_marker_tabs(raw_lines[index]);
+    let line = expanded.trim_end();
     let content = line.trim_start();
-    // Two or more trailing spaces on the source line = a hard line break if
-    // a continuation joins (canonicalized to a backslash break).
-    let ends_hard = raw_lines[index].ends_with("  ");
+    // Paragraph text keeps the source line's trailing spaces — hard-break
+    // detection happens at inline-parse time (it must see code spans), so
+    // the block layer must not destroy the evidence.
+    let body = expanded.trim_end_matches(['\n', '\r']).trim_start();
 
     if content.is_empty() {
       // Blank lines between items keep the list context, end the open
@@ -276,9 +288,8 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       && let Some(open) = open_item.as_mut()
       && !open.had_blank
     {
-      open.raw.push_str(if open.ends_hard { "\\\n" } else { "\n" });
-      open.raw.push_str(content);
-      open.ends_hard = ends_hard;
+      open.raw.push('\n');
+      open.raw.push_str(body);
       let (joined, joined_data) = apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
       blocks[open.block_idx].text = joined;
       blocks[open.block_idx].data = joined_data;
@@ -391,6 +402,29 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         open_item = None;
         continue;
       }
+      // Setext underline of the OPEN item's text: the text becomes a
+      // heading CHILD (`- Bar\n  ---` → <li><h2>Bar</h2>, spec ex. 300).
+      // Checked before the divider — with an open texted item, `---` is
+      // an underline, not an <hr> (same precedence as at top level).
+      if let Some(hl) = setext_level(content)
+        && let Some(open) = open_item.as_ref()
+        && matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo")
+        && !open.raw.is_empty()
+        && !open.had_blank
+      {
+        let raw_text = open.raw.clone();
+        let idx = open.block_idx;
+        let (it, id) = apply_inline_marks(String::new(), open.base.clone(), &defs);
+        blocks[idx].text = it;
+        blocks[idx].data = id;
+        let (ht, mut hd) = apply_inline_marks(raw_text, json!({ "level": hl }), &defs);
+        data_insert(&mut hd, "li", json!(level));
+        push_block(&mut blocks, &mut root_children, "heading", ht, hd);
+        item_children = true;
+        open_item = None;
+        index += 1;
+        continue;
+      }
       // Divider child.
       if is_divider(content) {
         let mut data = json!({ "li": level });
@@ -426,11 +460,10 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
           block_idx: blocks.len() - 1,
           kind: "paragraph".to_string(),
           content_col: cc,
-          raw: content.to_string(),
+          raw: body.to_string(),
           base,
           had_blank: false,
           qdepth: 0,
-          ends_hard,
         });
         index += 1;
         continue;
@@ -601,9 +634,12 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     // exporters write it back verbatim. Type 7 can't interrupt a paragraph.
     if col < 4
       && let Some(html_kind) = html_block_start(content)
-      && list_stack.is_empty()
+      // Outside any open item's content column, an HTML block INTERRUPTS
+      // the list (spec ex. 308/309: `<!-- -->` splits two lists).
+      && (list_stack.is_empty() || col < *list_stack.last().unwrap())
       && !(html_kind == 7 && open_item.is_some())
     {
+      list_stack.clear();
       let mut html_lines: Vec<String> = vec![raw_lines[index].to_string()];
       let ends_by_marker = html_kind <= 5;
       let mut done = ends_by_marker && html_block_ends(html_kind, content);
@@ -787,6 +823,17 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       // `>` with nothing after: a paragraph break inside the quote — or,
       // if the group never gets content, an empty blockquote.
       if qrest_trim.is_empty() {
+        // A blank inside a quoted LIST ITEM keeps the item open — an
+        // indented continuation may follow (spec ex. 259).
+        if let Some(open) = open_item.as_mut()
+          && matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo")
+          && open.qdepth == qdepth
+        {
+          open.had_blank = true;
+          quote_active = true;
+          index += 1;
+          continue;
+        }
         if !quote_active && pending_empty_quote.is_none() {
           pending_empty_quote = Some(qdepth);
         }
@@ -805,9 +852,8 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         && open.qdepth >= qdepth
         && !open.had_blank
       {
-        open.raw.push_str(if open.ends_hard { "\\\n" } else { "\n" });
-        open.raw.push_str(qrest_trim);
-        open.ends_hard = ends_hard;
+        open.raw.push('\n');
+        open.raw.push_str(strip_quote_markers(body).1.trim_start());
         let (joined, joined_data) =
           apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
         blocks[open.block_idx].text = joined;
@@ -858,8 +904,28 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         continue;
       }
 
-      // Indented code inside the quote (per marked line).
       let qcol = qrest.len() - qrest_trim.len();
+      // After a `>` gap, a line at the quoted item's content column is its
+      // SECOND paragraph — the item turns loose (spec ex. 259).
+      if let Some(open) = open_item.as_mut()
+        && matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo")
+        && open.had_blank
+        && open.qdepth == qdepth
+        && qcol >= open.content_col
+      {
+        open.had_blank = false;
+        open.raw.push_str("\n\n");
+        open.raw.push_str(qrest_trim);
+        data_insert(&mut open.base, "loose", json!(true));
+        let (joined, joined_data) =
+          apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
+        blocks[open.block_idx].text = joined;
+        blocks[open.block_idx].data = joined_data;
+        quote_active = true;
+        index += 1;
+        continue;
+      }
+      // Indented code inside the quote (per marked line).
       if qcol >= 4 {
         let mut data = json!({ "quote": qdepth });
         if qbreak {
@@ -911,6 +977,50 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         data_insert(&mut data, "li", json!(level));
         item_children = true;
       }
+      // A quoted list item: track its content column (marker + up to 3
+      // consumed spaces) so blanks/continuations can address it, and let a
+      // `>`-opening text become a nested quote CHILD (`> 1. > q`).
+      let mut text = text;
+      let mut item_ccol = 0usize;
+      if matches!(kind, "bulleted_list" | "numbered_list" | "todo") {
+        let marker_width =
+          if kind == "todo" { 2 } else { qrest_trim.len() - text.len() };
+        let extra = text.len() - text.trim_start_matches(' ').len();
+        if extra <= 3 {
+          text = text[extra..].to_string();
+          item_ccol = qcol + marker_width + extra;
+        } else {
+          item_ccol = qcol + marker_width;
+        }
+        let (inner_depth, inner_rest) = strip_quote_markers(&text);
+        if inner_depth > 0 {
+          // Empty item + quote child at ABSOLUTE depth; the child stays
+          // open so lazy lines continue it (spec ex. 292/293).
+          let (it, id) = apply_inline_marks(String::new(), data, &defs);
+          push_block(&mut blocks, &mut root_children, kind, it, id);
+          let raw = inner_rest.trim_start().to_string();
+          let mut qdata = json!({ "quote": qdepth + inner_depth, "li": 0 });
+          if qbreak {
+            data_insert(&mut qdata, "qbreak", json!(true));
+          }
+          let base = qdata.clone();
+          let (qt, qd) = apply_inline_marks(raw.clone(), qdata, &defs);
+          push_block(&mut blocks, &mut root_children, "quote", qt, qd);
+          open_item = Some(OpenItem {
+            block_idx: blocks.len() - 1,
+            kind: "quote".to_string(),
+            content_col: 0,
+            raw,
+            base,
+            had_blank: false,
+            qdepth: qdepth + inner_depth,
+          });
+          item_children = true;
+          quote_active = true;
+          index += 1;
+          continue;
+        }
+      }
       let raw = text.clone();
       let base = data.clone();
       let (text, data) = if kind == "image" {
@@ -923,12 +1033,11 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         Some(OpenItem {
           block_idx: blocks.len() - 1,
           kind: kind.to_string(),
-          content_col: 0,
+          content_col: item_ccol,
           raw,
           base,
           had_blank: false,
           qdepth,
-          ends_hard,
         })
       } else {
         None
@@ -943,7 +1052,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     // the line is paragraph continuation or code, never a new item.
     let (kind, text, data) = if matches!(kind, "bulleted_list" | "numbered_list" | "todo")
       && col >= 4
-      && list_stack.is_empty()
+      // ... at top level, or indented past EVERY open item's content column
+      // (spec ex. 312: the 4-space `- e` is lazy text of item `d`).
+      && list_stack.iter().all(|&cc| col < cc)
     {
       ("paragraph", content.to_string(), Value::Null)
     } else {
@@ -966,7 +1077,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
           if col >= open.content_col && !open.raw.is_empty() && !item_children {
             open.had_blank = false;
             open.raw.push_str("\n\n");
-            open.raw.push_str(content);
+            open.raw.push_str(body);
             data_insert(&mut open.base, "loose", json!(true));
             pending_loose = false;
             let (joined, joined_data) =
@@ -976,15 +1087,41 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
             index += 1;
             continue;
           }
+          // The blank closed the DEEP item — but the line may still sit
+          // inside an ANCESTOR item's content column: it becomes that
+          // item's continuation paragraph, rendered after the sublist
+          // (spec ex. 325). Flat model: a paragraph child (`data.li`).
+          if kind == "paragraph"
+            && let Some(anc) = list_stack.iter().rposition(|&cc| col >= cc)
+            && anc + 1 < list_stack.len()
+          {
+            list_stack.truncate(anc + 1);
+            // Owner: the last list block at that level.
+            let owner = blocks.iter().rposition(|b| {
+              list_tag_for(&b.kind).is_some()
+                && li_of(b).is_none()
+                && list_indent(b) == anc
+            });
+            if let Some(owner) = owner {
+              data_insert(&mut blocks[owner].data, "loose", json!(true));
+              let (pt, mut pd) = apply_inline_marks(body.to_string(), Value::Null, &defs);
+              data_insert(&mut pd, "li", json!(anc));
+              push_block(&mut blocks, &mut root_children, "paragraph", pt, pd);
+              pending_loose = false;
+              item_children = true;
+              open_item = None;
+              index += 1;
+              continue;
+            }
+          }
           // The blank closed the item; whatever follows is a new block.
         } else {
           if open.raw.is_empty() {
-            open.raw = content.to_string();
+            open.raw = body.to_string();
           } else {
-            open.raw.push_str(if open.ends_hard { "\\\n" } else { "\n" });
-            open.raw.push_str(content);
+            open.raw.push('\n');
+            open.raw.push_str(body);
           }
-          open.ends_hard = ends_hard;
           let (joined, joined_data) =
             apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
           blocks[open.block_idx].text = joined;
@@ -998,6 +1135,68 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     // List/todo items: nesting level from the indentation stack, loose and
     // <ol start> bookkeeping, then the item stays open for continuations.
     if matches!(kind, "bulleted_list" | "numbered_list" | "todo") {
+      // `- - foo` / `1. - 2. foo`: an item whose text is ITSELF a list
+      // marker is a chain — every outer link becomes an EMPTY item one
+      // level deeper (spec ex. 298/299); only the innermost text is real
+      // content. The HTML exporter already renders empty-item nesting.
+      let marker_char_of = |kind: &str, content: &str| -> char {
+        if kind == "numbered_list" {
+          content.as_bytes()[content.bytes().position(|b| !b.is_ascii_digit()).unwrap()] as char
+        } else {
+          content.as_bytes()[0] as char
+        }
+      };
+      let mut kind = kind;
+      let mut text = text;
+      let mut data = data;
+      let mut content_owned = content.to_string();
+      let mut col = col;
+      loop {
+        // A divider outranks a marker chain: `- * * *` is an <hr> child
+        // (spec ex. 61), not three nested bullets.
+        if text.is_empty() || is_divider(&text) {
+          break;
+        }
+        let inner = classify_markdown_line(&text);
+        if !matches!(inner.0, "bulleted_list" | "numbered_list" | "todo") {
+          break;
+        }
+        let marker_width =
+          if kind == "todo" { 2 } else { content_owned.len() - text.len() };
+        let extra = text.len() - text.trim_start_matches(' ').len();
+        if extra > 3 {
+          break; // 4+ spaces = an indented-code child, not a chain
+        }
+        while list_stack.last().is_some_and(|&cc| col < cc) {
+          list_stack.pop();
+        }
+        let level = list_stack.len();
+        let ccol = col + marker_width + extra;
+        list_stack.push(ccol);
+        let mut idata = Value::Null;
+        if level > 0 {
+          data_insert(&mut idata, "indent", json!(level));
+        }
+        if kind == "numbered_list"
+          && let Some(st) = data.get("start")
+        {
+          data_insert(&mut idata, "start", st.clone());
+        }
+        if pending_loose {
+          data_insert(&mut idata, "loose", json!(true));
+          pending_loose = false;
+        }
+        push_block(&mut blocks, &mut root_children, kind, String::new(), idata);
+        last_list = Some((blocks.len() - 1, level, marker_char_of(kind, &content_owned)));
+        item_children = false;
+        content_owned = text[extra..].to_string();
+        col = ccol;
+        let (k3, t3, d3) = classify_markdown_line(&content_owned);
+        kind = k3;
+        text = t3;
+        data = d3;
+      }
+      let content: &str = &content_owned;
       // Content column: marker width plus up to 3 extra spaces consumed
       // (more than that means the item starts with indented code — the
       // spaces stay in the text and the column sits right after the
@@ -1064,7 +1263,8 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       let starts_fence = fence_open(&text).map(|(c, n, info)| (c, n, info.to_string()));
       let starts_divider = is_divider(&text) && !text.is_empty();
       let starts_code = extra > 3;
-      if starts_fence.is_some() || starts_divider || starts_code {
+      let starts_heading = heading_prefix_level(&text);
+      if starts_fence.is_some() || starts_divider || starts_code || starts_heading.is_some() {
         let (item_text, item_data) = apply_inline_marks(String::new(), data, &defs);
         push_block(&mut blocks, &mut root_children, kind, item_text, item_data);
         let block_idx = blocks.len() - 1;
@@ -1079,6 +1279,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
           let language =
             unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
           let mut code_lines = Vec::new();
+          let mut closed = false;
           index += 1;
           while index < raw_lines.len() {
             let l = raw_lines[index];
@@ -1092,14 +1293,19 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
               break;
             }
             if fence_close(lt, fence_char, fence_len) {
+              closed = true;
               index += 1;
               break;
             }
             code_lines.push(deindent_columns(l, content_col));
             index += 1;
           }
-          while code_lines.last().is_some_and(|l| l.is_empty()) {
-            code_lines.pop();
+          // Blank lines BEFORE a real closing fence are content (spec ex.
+          // 318); only an unterminated fence sheds the overshoot.
+          if !closed {
+            while code_lines.last().is_some_and(|l| l.is_empty()) {
+              code_lines.pop();
+            }
           }
           let mut cdata = if language.is_empty() {
             json!({})
@@ -1118,6 +1324,14 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
             String::new(),
             json!({ "li": level }),
           );
+          index += 1;
+          continue;
+        }
+        if let Some(hl) = starts_heading {
+          let htext = strip_atx_closing(text[hl..].trim_start()).to_string();
+          let (htext, mut hdata) = apply_inline_marks(htext, json!({ "level": hl }), &defs);
+          data_insert(&mut hdata, "li", json!(level));
+          push_block(&mut blocks, &mut root_children, "heading", htext, hdata);
           index += 1;
           continue;
         }
@@ -1147,7 +1361,6 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         base,
         had_blank: false,
         qdepth: 0,
-        ends_hard,
       });
       index += 1;
       continue;
@@ -1164,7 +1377,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       apply_inline_marks(text, data, &defs)
     };
     let raw = if kind == "paragraph" {
-      Some(content.to_string())
+      Some(body.to_string())
     } else {
       None
     };
@@ -1178,7 +1391,6 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       base: Value::Null,
       had_blank: false,
       qdepth: 0,
-      ends_hard,
     });
     index += 1;
   }
@@ -2159,6 +2371,84 @@ fn fence_close(content: &str, fence_char: u8, fence_len: usize) -> bool {
 /// Strip leading `>` quote markers: each consumes one optional following
 /// space, and up to 3 spaces may precede the next nested marker. Returns the
 /// marker depth and the remaining content.
+/// A `>` / list marker followed by a TAB: expand the marker-trailing
+/// whitespace into spaces using ABSOLUTE columns (tabs advance to 4-column
+/// stops from line start), so the byte-oriented marker/indent logic sees
+/// what the spec sees (ex. 6: `>\t\tfoo` is code "  foo" in a quote; ex. 7:
+/// `-\t\tfoo` is code in a list item). Other lines pass through untouched.
+fn expand_marker_tabs(line: &str) -> String {
+  let b = line.as_bytes();
+  let mut out = String::new();
+  let mut col = 0usize;
+  let mut i = 0usize;
+  let mut changed = false;
+  loop {
+    // leading spaces
+    let ws_start = i;
+    while i < b.len() && b[i] == b' ' {
+      i += 1;
+      col += 1;
+    }
+    // marker: `>` (chainable) or a single list marker
+    let marker_len = if b.get(i) == Some(&b'>') {
+      1
+    } else if matches!(b.get(i), Some(b'-' | b'*' | b'+'))
+      && matches!(b.get(i + 1), Some(b'\t' | b' ')) {
+      1
+    } else if b.get(i).is_some_and(u8::is_ascii_digit) {
+      let mut j = i;
+      while j < b.len() && b[j].is_ascii_digit() && j - i < 9 {
+        j += 1;
+      }
+      if matches!(b.get(j), Some(b'.' | b')'))
+        && matches!(b.get(j + 1), Some(b'\t' | b' ')) {
+        j + 1 - i
+      } else {
+        0
+      }
+    } else {
+      0
+    };
+    if marker_len == 0 {
+      break;
+    }
+    out.push_str(&line[ws_start..i + marker_len]);
+    i += marker_len;
+    col += marker_len;
+    // expand the whitespace run after the marker if it contains a tab
+    let run_start = i;
+    let mut run_has_tab = false;
+    let mut run_col = col;
+    while i < b.len() && matches!(b[i], b' ' | b'\t') {
+      if b[i] == b'\t' {
+        run_has_tab = true;
+        run_col = (run_col / 4 + 1) * 4;
+      } else {
+        run_col += 1;
+      }
+      i += 1;
+    }
+    if run_has_tab {
+      for _ in col..run_col {
+        out.push(' ');
+      }
+      changed = true;
+    } else {
+      out.push_str(&line[run_start..i]);
+    }
+    col = run_col;
+    // only `>` chains; a list marker ends the scan
+    if b[run_start.saturating_sub(marker_len)] != b'>' {
+      break;
+    }
+  }
+  if !changed {
+    return line.to_string();
+  }
+  out.push_str(&line[i..]);
+  out
+}
+
 fn strip_quote_markers(content: &str) -> (usize, &str) {
   let b = content.as_bytes();
   let mut i = 0;
@@ -2290,23 +2580,26 @@ fn render_quote_group(
   out.push_str("<blockquote>\n");
   let mut i = 0;
   while i < items.len() {
+    // A list run first — it swallows the items' container children
+    // (`data.li` members, including DEEPER-quoted ones: `> 1. > q`).
+    if quote_depth_of(items[i]) == depth && list_tag_for(&items[i].kind).is_some() {
+      let s = i;
+      while i < items.len()
+        && ((quote_depth_of(items[i]) == depth && list_tag_for(&items[i].kind).is_some())
+          || li_of(items[i]).is_some()
+          || li_level(items[i]) > 0)
+      {
+        i += 1;
+      }
+      render_html_list(snapshot, &items[s..i], 0, out)?;
+      continue;
+    }
     if quote_depth_of(items[i]) > depth {
       let s = i;
       while i < items.len() && quote_depth_of(items[i]) > depth {
         i += 1;
       }
       render_quote_group(snapshot, &items[s..i], depth + 1, out)?;
-      continue;
-    }
-    if list_tag_for(&items[i].kind).is_some() {
-      let s = i;
-      while i < items.len()
-        && quote_depth_of(items[i]) == depth
-        && list_tag_for(&items[i].kind).is_some()
-      {
-        i += 1;
-      }
-      render_html_list(snapshot, &items[s..i], 0, out)?;
       continue;
     }
     if items[i].kind == "quote" {
@@ -2414,7 +2707,7 @@ fn render_html_list(
           out.push_str(&format!("<p>{para}</p>\n"));
         }
         if has_children {
-          render_li_children(snapshot, &items[head + 1..end], level, out)?;
+          render_li_children(snapshot, &items[head + 1..end], level, true, out)?;
         }
         out.push_str("</li>\n");
       } else {
@@ -2422,7 +2715,7 @@ fn render_html_list(
         out.push_str(&body);
         if has_children {
           out.push('\n');
-          render_li_children(snapshot, &items[head + 1..end], level, out)?;
+          render_li_children(snapshot, &items[head + 1..end], level, false, out)?;
         }
         out.push_str("</li>\n");
       }
@@ -2440,6 +2733,7 @@ fn render_li_children(
   snapshot: &DocumentSnapshotPayload,
   items: &[&Block],
   level: usize,
+  loose: bool,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
   let mut i = 0;
@@ -2458,13 +2752,25 @@ fn render_li_children(
           }
           i += 1;
         }
-        render_quote_group(snapshot, &items[s..i], 1, out)?;
+        // Base depth = the group head's own depth: inside a quoted list
+        // (`> 1. > q`) the child carries the ABSOLUTE depth, but the
+        // enclosing <blockquote>s are already open around the list.
+        render_quote_group(snapshot, &items[s..i], quote_depth_of(items[s]), out)?;
         continue;
       }
       if b.kind == "paragraph" {
+        // In a TIGHT item a paragraph child renders bare (spec ex. 300:
+        // `<h2>Bar</h2>\nbaz</li>`); only loose lists wrap it in <p>.
         let text = html_inline(b);
         if !text.is_empty() {
-          out.push_str(&format!("<p>{text}</p>\n"));
+          if loose {
+            out.push_str(&format!("<p>{text}</p>\n"));
+          } else {
+            out.push_str(&text);
+            if i + 1 < items.len() {
+              out.push('\n');
+            }
+          }
         }
       } else {
         append_html_block(snapshot, b, out)?;
@@ -3165,9 +3471,15 @@ type RefDefs = std::collections::HashMap<String, (String, Option<String>)>;
 /// destination may sit on the line after `[label]:`, and a (quoted) title
 /// may follow on its own line(s). Returns the defs and the set of consumed
 /// line indices.
-fn collect_ref_definitions(raw_lines: &[&str]) -> (RefDefs, std::collections::HashSet<usize>) {
+fn collect_ref_definitions(
+  raw_lines: &[&str],
+) -> (RefDefs, std::collections::HashSet<usize>, std::collections::HashMap<usize, usize>) {
   let mut defs = RefDefs::new();
   let mut def_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
+  // Definitions inside blockquotes (`> [foo]: /url`) — line → quote depth.
+  // They define globally; the line itself renders as a contentless `>`
+  // (spec ex. 218: the quote ends up empty, the def still resolves).
+  let mut quote_def_lines: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
   let mut in_fence: Option<(u8, usize)> = None;
   let mut prev_para = false; // an open paragraph means a def can't start
   let mut i = 0;
@@ -3208,13 +3520,30 @@ fn collect_ref_definitions(raw_lines: &[&str]) -> (RefDefs, std::collections::Ha
       i += used;
       continue; // a definition doesn't open a paragraph
     }
+    // A single-line definition inside a blockquote (multi-line defs would
+    // need marker-stripped continuation — not a real-world shape).
+    if !prev_para && col < 4 && content.starts_with('>') {
+      let (qd, qrest) = strip_quote_markers(content);
+      let qrest = qrest.trim_start();
+      if qd > 0
+        && qrest.starts_with('[')
+        && let Some((label, dest, title, used)) =
+          parse_ref_definition_multi(&[qrest], 0)
+        && used == 1
+      {
+        defs.entry(normalize_label(&label)).or_insert((dest, title));
+        quote_def_lines.insert(i, qd);
+        i += 1;
+        continue;
+      }
+    }
     // Only true paragraph text can lazily absorb a following def line. Single
     // line blocks (ATX headings, thematic breaks) don't, so a def on the next
     // line still counts — `# [Foo]\n[foo]: /url` defines `foo`.
     prev_para = heading_prefix_level(content).is_none() && !is_divider(content);
     i += 1;
   }
-  (defs, def_lines)
+  (defs, def_lines, quote_def_lines)
 }
 
 /// `[label]:` at lines[i]; destination on the same or next line; optional
@@ -3351,6 +3680,11 @@ fn parse_def_title(
     extra += 1;
     let l = raw_lines.get(line_idx + extra)?;
     let lt = l.trim_end();
+    // A blank line may not interrupt a title — it voids the definition
+    // (spec ex. 197: everything renders back as paragraphs).
+    if lt.trim().is_empty() {
+      return None;
+    }
     if let Some(pos) = find_unescaped_char(lt, close) {
       if !lt[pos + close.len_utf8()..].trim().is_empty() {
         return None;
@@ -3376,7 +3710,14 @@ fn find_unescaped_char(s: &str, target: char) -> Option<usize> {
 }
 
 fn normalize_label(label: &str) -> String {
-  label.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+  // Reference labels match under Unicode CASE FOLDING, not mere lowercase:
+  // ẞ/ß and SS all collapse to "ss" (the only 1:N fold real labels hit).
+  label
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase()
+    .replace('ß', "ss")
 }
 
 /// Unescape backslash-escaped ASCII punctuation (destinations/titles).
@@ -3403,8 +3744,13 @@ fn unescape_md(s: &str) -> String {
 /// Parse an inline-link suffix `(dest "title")` starting right AFTER the `(`.
 /// Returns (href, title, index just past the closing `)`).
 fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<String>, usize)> {
+  // Only ASCII whitespace separates destination and title — U+00A0 and
+  // friends are CONTENT (spec ex. 507: the whole thing becomes the href).
+  fn md_ws(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000B}' | '\u{000C}')
+  }
   let n = chars.len();
-  while i < n && chars[i].is_whitespace() {
+  while i < n && md_ws(chars[i]) {
     i += 1;
   }
   // Destination: <may contain spaces> or bare with balanced parens.
@@ -3426,7 +3772,7 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
     let start = i;
     while i < n {
       let c = chars[i];
-      if c.is_whitespace() {
+      if md_ws(c) {
         break;
       }
       if c == '\\' && i + 1 < n {
@@ -3450,7 +3796,7 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
     }
     dest = unescape_md(&chars[start..i].iter().collect::<String>());
   }
-  while i < n && chars[i].is_whitespace() {
+  while i < n && md_ws(chars[i]) {
     i += 1;
   }
   // Optional title: "..." / '...' / (...)
@@ -3474,7 +3820,7 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
     // Titles decode backslash escapes AND entity references (`&quot;` → `"`).
     title = Some(unescape_md(&chars[start..j].iter().collect::<String>()));
     i = j + 1;
-    while i < n && chars[i].is_whitespace() {
+    while i < n && md_ws(chars[i]) {
       i += 1;
     }
   }
@@ -3574,7 +3920,63 @@ fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
 /// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
 /// marks over it, with offsets in UTF-16 code units.
 fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
-  let chars: Vec<char> = src.chars().collect();
+  // Line-ending canonicalization (§6.7/6.9/6.12) with span awareness: a run
+  // of 2+ trailing spaces before '\n' OUTSIDE code spans / autolinks / raw
+  // inline HTML is a hard break — canonicalized to the "\\\n" stored-text
+  // convention (html_text renders it as <br/>); soft breaks just drop the
+  // trailing spaces. INSIDE those spans every byte is content: `code  ⏎span`
+  // keeps its spaces (the code-span handler maps '\n' to ' ') and raw HTML
+  // keeps its literal line break. The block layer no longer pre-judges hard
+  // breaks — it can't see code spans.
+  let src_chars: Vec<char> = src.chars().collect();
+  let mut chars: Vec<char> = Vec::with_capacity(src_chars.len());
+  {
+    let n = src_chars.len();
+    let mut i = 0;
+    while i < n {
+      let c = src_chars[i];
+      // Escaped char (incl. "\\`"): never a span opener; copy as-is. A
+      // backslash directly before '\n' falls through — it IS a hard break.
+      if c == '\\' && i + 1 < n && src_chars[i + 1] != '\n' {
+        chars.push(c);
+        chars.push(src_chars[i + 1]);
+        i += 2;
+        continue;
+      }
+      if c == '`' || c == '<' {
+        if let Some(end) = inline_span_end(&src_chars, i) {
+          chars.extend_from_slice(&src_chars[i..end]);
+          i = end;
+          continue;
+        }
+      }
+      if c == '\n' {
+        // Hard break = 2+ SPACES immediately before the newline; any other
+        // trailing whitespace (tabs included) just drops with a soft break.
+        let mut spaces = 0;
+        while spaces < chars.len() && chars[chars.len() - 1 - spaces] == ' ' {
+          spaces += 1;
+        }
+        let mut ws = spaces;
+        while ws < chars.len() && matches!(chars[chars.len() - 1 - ws], ' ' | '\t') {
+          ws += 1;
+        }
+        chars.truncate(chars.len() - ws);
+        if spaces >= 2 {
+          chars.push('\\');
+        }
+        chars.push('\n');
+        i += 1;
+        continue;
+      }
+      chars.push(c);
+      i += 1;
+    }
+    // End-of-text trailing whitespace is outside spans by construction.
+    while matches!(chars.last(), Some(' ') | Some('\t')) {
+      chars.pop();
+    }
+  }
   let mut out = String::new();
   let mut out_len: usize = 0; // UTF-16 length of `out`
   let mut marks: Vec<InlineMark> = Vec::new();
@@ -4014,8 +4416,22 @@ struct Delim {
 }
 
 fn is_md_punct(c: char) -> bool {
+  // CommonMark 0.31: "Unicode punctuation" = general categories P* AND S*
+  // (symbols — currency, math, arrows — count too). std has no category
+  // tables, so cover the blocks that occur in real text; extend on demand.
   c.is_ascii_punctuation()
-    || matches!(c, '\u{2018}'..='\u{201F}' | '\u{2010}'..='\u{2027}')
+    || matches!(c,
+      '\u{00A1}'..='\u{00A9}'   // ¡¢£¤¥¦§¨© Latin-1 punct/symbols
+        | '\u{00AB}'..='\u{00B1}' // «¬®¯°± (skip ª, a letter)
+        | '\u{00B4}' | '\u{00B6}'..='\u{00B8}' | '\u{00BB}' | '\u{00BF}'
+        | '\u{00D7}' | '\u{00F7}' // × ÷
+        | '\u{2000}'..='\u{206F}' // general punctuation
+        | '\u{20A0}'..='\u{20CF}' // currency symbols (€ …)
+        | '\u{2100}'..='\u{2BFF}' // letterlike, arrows, math, misc symbols
+        | '\u{3000}'..='\u{303F}' // CJK punctuation
+        | '\u{FE30}'..='\u{FE4F}' // CJK compat forms
+        | '\u{FF01}'..='\u{FF0F}' // fullwidth punct
+        | '\u{FF1A}'..='\u{FF20}' | '\u{FF3B}'..='\u{FF40}' | '\u{FF5B}'..='\u{FF65}')
 }
 
 /// Left/right flanking → (can_open, can_close) per the spec, including the

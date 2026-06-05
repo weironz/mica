@@ -1174,8 +1174,28 @@ class _Delim {
 
 bool _isMdPunct(String? c) {
   if (c == null) return false;
-  return _asciiPunct.contains(c) ||
-      (c.codeUnitAt(0) >= 0x2010 && c.codeUnitAt(0) <= 0x2027);
+  if (_asciiPunct.contains(c)) return true;
+  // CommonMark 0.31: "Unicode punctuation" = categories P* AND S* (symbols
+  // — currency, math, arrows). Mirrors the Rust engine's block coverage so
+  // the editor's emphasis matches the exporter's (`*€*x` is NOT <em>).
+  final u = c.codeUnitAt(0);
+  return (u >= 0x00A1 && u <= 0x00A9) ||
+      (u >= 0x00AB && u <= 0x00B1) ||
+      u == 0x00B4 ||
+      (u >= 0x00B6 && u <= 0x00B8) ||
+      u == 0x00BB ||
+      u == 0x00BF ||
+      u == 0x00D7 ||
+      u == 0x00F7 ||
+      (u >= 0x2000 && u <= 0x206F) ||
+      (u >= 0x20A0 && u <= 0x20CF) ||
+      (u >= 0x2100 && u <= 0x2BFF) ||
+      (u >= 0x3000 && u <= 0x303F) ||
+      (u >= 0xFE30 && u <= 0xFE4F) ||
+      (u >= 0xFF01 && u <= 0xFF0F) ||
+      (u >= 0xFF1A && u <= 0xFF20) ||
+      (u >= 0xFF3B && u <= 0xFF40) ||
+      (u >= 0xFF5B && u <= 0xFF65);
 }
 
 ({bool open, bool close}) _flanking(String c, String? prev, String? next) {
