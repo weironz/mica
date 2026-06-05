@@ -233,6 +233,20 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   final result = <BlockSpec>[];
   final lines = markdown.replaceAll('\r\n', '\n').split('\n');
 
+  // YAML front matter: a leading `---` fence closed by a later `---`/`...`.
+  // Paste/import is a fragment flow — metadata must never surface as visible
+  // blocks, so we simply drop the fenced region (the Rust importer preserves
+  // it on the document root; here there's no root to carry it). Mirrors
+  // `split_front_matter` in crates/markdown/src/lib.rs.
+  if (lines.isNotEmpty && lines.first == '---') {
+    for (var i = 1; i < lines.length; i++) {
+      if (lines[i] == '---' || lines[i] == '...') {
+        lines.removeRange(0, i + 1);
+        break;
+      }
+    }
+  }
+
   // Pass 1: link reference definitions (possibly spanning lines) — they
   // resolve case-insensitively and vanish. Definitions inside fences don't
   // count, and a definition can't interrupt a paragraph.
