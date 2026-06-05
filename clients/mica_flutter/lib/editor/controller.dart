@@ -668,6 +668,10 @@ class EditorController extends ChangeNotifier {
         return '> ';
       case 'todo':
         return node.todoChecked ? '$pad- [x] ' : '$pad- [ ] ';
+      case 'footnote_def':
+        // GFM definition leader; continuation lines indent 4 columns, but the
+        // copy path is line-oriented so the prefix covers the first line.
+        return '[^${node.data['label'] ?? ''}]: ';
       default:
         return '';
     }

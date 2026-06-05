@@ -210,6 +210,22 @@ int setextLevel(String raw) {
   return 0;
 }
 
+/// A GFM footnote definition leader `[^label]: rest`. Returns the label (no
+/// caret) and the first-line content (may be empty), or null. The label holds
+/// no whitespace or brackets — same shape as the inline reference.
+({String label, String rest})? parseFootnoteDef(String content) {
+  if (!content.startsWith('[^')) return null;
+  final close = matchingBracket(content, 0);
+  if (close < 3 ||
+      close + 1 >= content.length ||
+      content[close + 1] != ':') {
+    return null;
+  }
+  final label = content.substring(2, close);
+  if (label.isEmpty || label.contains(RegExp(r'[\s\[\]^]'))) return null;
+  return (label: label, rest: content.substring(close + 2).trimLeft());
+}
+
 /// Strip [columns] of leading indentation (tabs = 4-column stops).
 String deindentColumns(String line, int columns) {
   var col = 0;
@@ -596,6 +612,40 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         continue;
       }
       // Unclosed: fall through and let the line parse normally.
+    }
+
+    // Footnote definition: `[^label]: content` at the line start (GFM). The
+    // block carries the inline-parsed content as text and the label in
+    // `data.label`; continuation lines indented 4+ columns join it. Mirrors
+    // the Rust importer.
+    if (col < 4 && listStack.isEmpty && open == null) {
+      final fn = parseFootnoteDef(line);
+      if (fn != null) {
+        final body = <String>[if (fn.rest.isNotEmpty) fn.rest];
+        var j = i + 1;
+        while (j < lines.length) {
+          final l = lines[j];
+          final lt = l.trimLeft();
+          if (lt.isEmpty) {
+            final next = j + 1 < lines.length ? lines[j + 1] : '';
+            final resumes =
+                next.trim().isNotEmpty && leadCol(next, next.trimLeft()) >= 4;
+            if (!resumes) break;
+            body.add('');
+            j++;
+            continue;
+          }
+          if (leadCol(l, lt) < 4) break;
+          body.add(deindentColumns(l, 4));
+          j++;
+        }
+        result.add(_inline(
+            'footnote_def', body.join('\n'), {'label': fn.label},
+            defs: defs));
+        i = j;
+        resetListState();
+        continue;
+      }
     }
 
     // HTML block (CommonMark types 1–7) → a raw html code block: the
@@ -1091,6 +1141,9 @@ void _collectRefDefinitions(List<String> lines,
   }
   final label = first.substring(1, close);
   if (label.trim().isEmpty) return null;
+  // `[^label]:` is a GFM footnote definition (its own block), never a link
+  // reference definition — leave it for the main block scanner.
+  if (label.startsWith('^')) return null;
   for (var k = 1; k < close; k++) {
     if ((first[k] == '[' || first[k] == ']') && first[k - 1] != r'\') return null;
   }

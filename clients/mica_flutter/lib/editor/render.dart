@@ -92,6 +92,10 @@ class EditorTheme {
         }
       case 'quote':
         return const TextStyle(color: muted, fontSize: 16, height: 1.5, fontStyle: FontStyle.italic);
+      case 'footnote_def':
+        // Small muted body, mirroring quote — the `[label]` marker is painted
+        // in the gutter (see _paintNode), so the text itself stays plain.
+        return const TextStyle(color: muted, fontSize: 13, height: 1.5);
       case 'code_block':
         return const TextStyle(color: text, fontSize: 14, height: 1.5, fontFamily: 'monospace');
       case 'math_block':
@@ -127,6 +131,9 @@ class EditorTheme {
         return 30;
       case 'quote':
         return 16;
+      case 'footnote_def':
+        // Room for the `[label]` marker painted in the gutter.
+        return 34;
       case 'code_block':
         return codePadH;
       case 'math_block':
@@ -173,6 +180,7 @@ class _NodeLayout {
   Rect? copyButton; // code-block copy button rect (local), if any
   Rect? wrapButton; // code-block wrap toggle rect (local), if any
   String langText = ''; // resolved code language
+  String footnoteLabel = ''; // `[label]` gutter marker (kind == 'footnote_def')
   String nodeId = '';
   bool codeWrap = false; // whether this code block wraps
   double codeWidth = 0; // natural (unwrapped) text width, for code blocks
@@ -561,6 +569,9 @@ class RenderDocument extends RenderBox {
         ..boxLeft = EditorTheme.gutter + liInset
         ..todoChecked = node.todoChecked
         ..langText = codeLang ?? ''
+        ..footnoteLabel = node.kind == 'footnote_def'
+            ? (node.data['label'] as String? ?? '')
+            : ''
         ..codeWrap = codeWrap
         ..codeWidth = isCode ? painter.width : 0;
 
@@ -1091,6 +1102,23 @@ class RenderDocument extends RenderBox {
               color: EditorTheme.text,
               fontSize: 16 * _appearance.fontScale,
               height: 1.5,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        marker.paint(canvas, origin + Offset(-marker.width - 6, 0));
+        marker.dispose();
+      case 'footnote_def':
+        // `[label]` gutter marker, mirroring the numbered-list marker — a
+        // small muted chip that reads as the footnote's number.
+        final marker = TextPainter(
+          text: TextSpan(
+            text: '[${l.footnoteLabel}]',
+            style: TextStyle(
+              color: EditorTheme.muted,
+              fontSize: 12 * _appearance.fontScale,
+              height: 1.5,
+              fontWeight: FontWeight.w600,
             ),
           ),
           textDirection: TextDirection.ltr,
