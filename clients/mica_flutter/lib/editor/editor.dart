@@ -2765,7 +2765,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             autofocus: true,
             maxLines: 4,
             minLines: 1,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+            style: const TextStyle(fontFamily: kMonoFont, fontSize: 14),
             decoration: const InputDecoration(
               hintText: r'E = mc^2',
               isDense: true,

@@ -25,3 +25,9 @@ flutter:
     - family: CJKFallback
       fonts:
         - asset: fonts/DroidSansFallback.ttf
+    # Real monospace for code. The generic 'monospace' family does NOT
+    # resolve on Flutter web (CanvasKit falls back to Roboto), which made
+    # code-block indentation almost invisible.
+    - family: RobotoMono
+      fonts:
+        - asset: fonts/RobotoMono-Regular.ttf

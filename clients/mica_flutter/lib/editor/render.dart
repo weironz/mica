@@ -97,13 +97,13 @@ class EditorTheme {
         // in the gutter (see _paintNode), so the text itself stays plain.
         return const TextStyle(color: muted, fontSize: 13, height: 1.5);
       case 'code_block':
-        return const TextStyle(color: text, fontSize: 14, height: 1.5, fontFamily: 'monospace');
+        return const TextStyle(color: text, fontSize: 14, height: 1.5, fontFamily: kMonoFont);
       case 'math_block':
         return const TextStyle(
           color: Color(0xFF7C3AED),
           fontSize: 15,
           height: 1.6,
-          fontFamily: 'monospace',
+          fontFamily: kMonoFont,
           fontStyle: FontStyle.italic,
         );
       case 'todo':

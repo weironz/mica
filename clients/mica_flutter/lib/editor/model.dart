@@ -9,6 +9,12 @@
 /// map per node, string node kinds matching the backend).
 library;
 
+/// The bundled monospace face for code (block + inline). The generic
+/// `'monospace'` family does not resolve on Flutter web — CanvasKit falls
+/// back to Roboto, a proportional face whose narrow spaces made code
+/// indentation (YAML!) nearly invisible.
+const String kMonoFont = 'RobotoMono';
+
 /// A single block-level node. `kind` matches the backend block `type`
 /// (`paragraph`, `heading`, `bulleted_list`, `numbered_list`, `todo`, `quote`,
 /// `code_block`). `data` mirrors the backend block `data` map (heading level,

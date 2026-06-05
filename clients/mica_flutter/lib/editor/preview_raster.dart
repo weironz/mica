@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
 import 'mermaid_preview.dart';
+import 'model.dart' show kMonoFont;
 import 'render.dart' show EditorTheme;
 
 /// A "source → picture" preview producer for one previewer id ('math',
@@ -191,7 +192,7 @@ class MathPreviewer extends RasterPreviewer {
         onErrorFallback: (e) => Text(
           source,
           style: const TextStyle(
-            fontFamily: 'monospace',
+            fontFamily: kMonoFont,
             fontSize: 14,
             color: Color(0xFFB91C1C),
           ),

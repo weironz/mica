@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'model.dart' show kMonoFont;
 
 /// Inline rich-text marks stored additively over a block's plain text (in
 /// `data.marks`). The text stays clean; a mark is a `[start, end)` range with a
@@ -85,7 +86,7 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
           style = style.copyWith(fontStyle: FontStyle.italic);
         case 'code':
           style = style.copyWith(
-            fontFamily: 'monospace',
+            fontFamily: kMonoFont,
             color: _codeColor,
             backgroundColor: _codeBg,
           );
@@ -97,7 +98,7 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
         case 'math':
           // LaTeX source shown styled until real typesetting lands.
           style = style.copyWith(
-            fontFamily: 'monospace',
+            fontFamily: kMonoFont,
             fontStyle: FontStyle.italic,
             color: _mathColor,
             backgroundColor: _mathBg,

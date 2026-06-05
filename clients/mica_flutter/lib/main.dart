@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
+import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
@@ -3867,7 +3868,7 @@ class BlockListItem extends StatelessWidget {
       case DocumentBlockKind.codeBlock:
         return SelectableText(
           text,
-          style: const TextStyle(fontFamily: 'monospace'),
+          style: const TextStyle(fontFamily: kMonoFont),
         );
       case DocumentBlockKind.paragraph:
         return SelectableText(
@@ -3920,7 +3921,7 @@ class _ExportDialog extends StatelessWidget {
             child: SelectableText(
               markdown.isEmpty ? '(empty)' : markdown,
               style: const TextStyle(
-                fontFamily: 'monospace',
+                fontFamily: kMonoFont,
                 fontSize: 13,
                 height: 1.5,
               ),
@@ -4432,7 +4433,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             children: [
               _fontChip('System', null),
               _fontChip('Serif', 'serif'),
-              _fontChip('Mono', 'monospace'),
+              _fontChip('Mono', kMonoFont),
             ],
           ),
         ),

@@ -79,6 +79,25 @@ void main() {
     expect(c.nodes[1].data.containsKey('checked'), isFalse);
   });
 
+  test('```yaml⏎ — first-line language tag becomes the block language', () {
+    final c = _fresh([
+      EditorNode(id: 'c', kind: 'code_block', text: 'yaml'),
+    ]);
+    // The IME inserted "yaml\n"; insertCodeNewline sees caret 5.
+    c.selection = DocSelection.collapsed(const DocPosition(0, 4));
+    c.insertCodeNewline(5);
+    expect(c.nodes[0].data['language'], 'yaml');
+    expect(c.nodes[0].text, '', reason: 'the tag line is consumed');
+    expect(c.selection!.focus, const DocPosition(0, 0));
+
+    // Plain text that is NOT a language stays a soft newline.
+    c.nodes[0].text = 'hello';
+    c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+    c.insertCodeNewline(6);
+    expect(c.nodes[0].text, 'hello\n');
+    expect(c.nodes[0].data['language'], 'yaml', reason: 'unchanged');
+  });
+
   // ---------------------------------------------------------------------------
   // Quote continues on Enter
   // ---------------------------------------------------------------------------

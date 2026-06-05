@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'highlight.dart' show kCodeLanguages;
 import 'marks.dart';
 import 'model.dart';
 import 'table.dart';
@@ -258,6 +259,32 @@ class EditorController extends ChangeNotifier {
     final at = (caret - 1).clamp(0, node.text.length);
     final before = node.text.substring(0, at);
     final after = node.text.substring(at);
+
+    // First Enter, and the whole first line is a known language name: the
+    // user typed ```yaml⏎ — the fence rule converted on the third backtick,
+    // leaving "yaml" as text. Claim it as the block's language instead.
+    final tag = before.trim().toLowerCase();
+    if (after.isEmpty &&
+        !before.contains('\n') &&
+        node.data['language'] == null &&
+        tag != 'auto' &&
+        kCodeLanguages.contains(tag)) {
+      node.text = '';
+      node.data = {...node.data, 'language': tag};
+      selection = DocSelection.collapsed(DocPosition(i, 0));
+      goalX = null;
+      _dirty.remove(node.id);
+      _sendNow([
+        {
+          'type': 'update_block',
+          'block_id': node.id,
+          'text': '',
+          'data': node.data,
+        },
+      ]);
+      notifyListeners();
+      return;
+    }
     // Leading whitespace of the current line (the run after the last newline).
     final lineStart = before.lastIndexOf('\n') + 1;
     final line = before.substring(lineStart);
