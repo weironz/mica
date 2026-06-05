@@ -29,6 +29,27 @@ void main() {
     expect(c.nodes[0].data['level'], 3);
   });
 
+  test('Backspace at the start of a heading strips it in place, not merge', () {
+    final c = _fresh([
+      EditorNode(id: 'p', kind: 'paragraph', text: 'first line'),
+      EditorNode(id: 'h', kind: 'heading', text: 'My Title', data: {'level': 2}),
+    ]);
+    c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+
+    // First Backspace: the heading downgrades IN PLACE — text and caret stay.
+    expect(c.mergeBackward(), isTrue);
+    expect(c.nodes.length, 2, reason: 'no merge yet');
+    expect(c.nodes[1].kind, 'paragraph');
+    expect(c.nodes[1].text, 'My Title');
+    expect(c.nodes[1].data.containsKey('level'), isFalse);
+    expect(c.selection!.focus, const DocPosition(1, 0));
+
+    // Second Backspace: now a paragraph, it merges into the line above.
+    expect(c.mergeBackward(), isTrue);
+    expect(c.nodes.length, 1);
+    expect(c.nodes[0].text, 'first lineMy Title');
+  });
+
   // ---------------------------------------------------------------------------
   // Quote continues on Enter
   // ---------------------------------------------------------------------------

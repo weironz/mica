@@ -534,6 +534,25 @@ class EditorController extends ChangeNotifier {
       return true;
     }
 
+    // Backspace at the start of a non-empty heading strips the heading
+    // IN PLACE (text and caret stay) — merging it straight into the line
+    // above silently destroyed the title. A second Backspace, now on a
+    // paragraph, merges as usual.
+    if (cur.kind == 'heading') {
+      cur.kind = 'paragraph';
+      cur.data = {...cur.data}..remove('level');
+      _sendNow([
+        {
+          'type': 'update_block',
+          'block_id': cur.id,
+          'kind': 'paragraph',
+          'data': cur.data,
+        },
+      ]);
+      notifyListeners();
+      return true;
+    }
+
     // Nothing before the first block to merge into.
     if (i == 0) return false;
     final prev = nodes[i - 1];
