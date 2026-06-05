@@ -674,9 +674,12 @@ class MermaidRenderer extends AtomicBlockRenderer {
       ..textTop = y + 2
       ..textHeight = h
       ..boxHeight = h + 4
-      ..viewCodeTab = Rect.fromLTWH(EditorTheme.gutter + 4, y + 6, 44, 20)
+      // Bottom-right, mirroring the source form's toolbar corner: diagram
+      // content usually anchors top-left, so this corner overlaps least.
       ..viewPreviewTab =
-          Rect.fromLTWH(EditorTheme.gutter + 50, y + 6, 56, 20);
+          Rect.fromLTWH(maxWidth - 8 - 56, y + h + 4 - 26, 56, 20)
+      ..viewCodeTab =
+          Rect.fromLTWH(maxWidth - 8 - 56 - 2 - 44, y + h + 4 - 26, 44, 20);
   }
 
   @override

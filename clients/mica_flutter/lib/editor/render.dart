@@ -742,13 +742,14 @@ class RenderDocument extends RenderBox {
           labelW,
           labelH,
         );
-        // Diagram blocks: [code|preview] switch at the TOP-LEFT (AFFiNE-style)
-        // on both forms; here (source form) "code" is the active tab.
+        // Diagram blocks: the [code|preview] switch joins the bottom-right
+        // toolbar, left of the language label — the top-left overlapped the
+        // first line of source. Same corner on both forms.
         if (codeLang == 'mermaid') {
-          layout.viewCodeTab =
-              Rect.fromLTWH(contentLeft, layout.boxTop + 4, 44, 20);
-          layout.viewPreviewTab =
-              Rect.fromLTWH(contentLeft + 46, layout.boxTop + 4, 56, 20);
+          final tabY = iconY + (iconBox - 20) / 2;
+          final right = layout.langLabel!.left - 8;
+          layout.viewPreviewTab = Rect.fromLTWH(right - 56, tabY, 56, 20);
+          layout.viewCodeTab = Rect.fromLTWH(right - 56 - 2 - 44, tabY, 44, 20);
         }
       }
 
