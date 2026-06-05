@@ -534,6 +534,28 @@ class EditorController extends ChangeNotifier {
       return true;
     }
 
+    // A list item sheds its marker first — the bullet/number/checkbox is
+    // visible format, and Backspace at the start is how you remove it
+    // (Typora/Notion). Rising/merging only applies to the resulting
+    // paragraph on the NEXT Backspace. (Nested items outdent in the key
+    // handler before this runs.)
+    if (cur.isListKind) {
+      cur.kind = 'paragraph';
+      cur.data = {...cur.data}
+        ..remove('checked')
+        ..remove('indent');
+      _sendNow([
+        {
+          'type': 'update_block',
+          'block_id': cur.id,
+          'kind': 'paragraph',
+          'data': cur.data,
+        },
+      ]);
+      notifyListeners();
+      return true;
+    }
+
     // Nothing before the first block to merge into.
     if (i == 0) return false;
     final prev = nodes[i - 1];

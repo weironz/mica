@@ -51,6 +51,34 @@ void main() {
     expect(c.nodes[0].text, 'first lineMy Title');
   });
 
+  test('Backspace at a list item start sheds the marker, then merges', () {
+    final c = _fresh([
+      EditorNode(id: 'p', kind: 'paragraph', text: ''),
+      EditorNode(id: 'li', kind: 'numbered_list', text: 'item one'),
+      EditorNode(id: 'td', kind: 'todo', text: 'task', data: {'checked': true}),
+    ]);
+
+    // Numbered item: first Backspace strips the number IN PLACE.
+    c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+    expect(c.mergeBackward(), isTrue);
+    expect(c.nodes.length, 3, reason: 'no structural change yet');
+    expect(c.nodes[1].kind, 'paragraph');
+    expect(c.nodes[1].text, 'item one');
+    expect(c.selection!.focus, const DocPosition(1, 0));
+
+    // Second Backspace: now a paragraph, it rises over the empty line.
+    expect(c.mergeBackward(), isTrue);
+    expect(c.nodes.length, 2);
+    expect(c.nodes[0].kind, 'paragraph');
+    expect(c.nodes[0].text, 'item one');
+
+    // Todo: the checkbox state goes with the marker.
+    c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+    expect(c.mergeBackward(), isTrue);
+    expect(c.nodes[1].kind, 'paragraph');
+    expect(c.nodes[1].data.containsKey('checked'), isFalse);
+  });
+
   // ---------------------------------------------------------------------------
   // Quote continues on Enter
   // ---------------------------------------------------------------------------
