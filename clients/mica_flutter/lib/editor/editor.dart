@@ -1727,6 +1727,51 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
+    // T1/T2/T3 as labeled buttons — heavier label for bigger headings.
+    Widget headingBtn(int level) {
+      return IconButton(
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Heading $level',
+        icon: Text(
+          'T$level',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: level == 1 ? FontWeight.w800 : FontWeight.w600,
+            color: EditorTheme.muted,
+          ),
+        ),
+        onPressed: () => _controller
+            .setSelectedBlocksKind('heading', data: {'level': level}),
+      );
+    }
+
+    // The rare H4–H6 live behind a chevron dropdown.
+    Widget moreHeadingsBtn() {
+      return Builder(
+        builder: (btnContext) => IconButton(
+          iconSize: 16,
+          visualDensity: VisualDensity.compact,
+          tooltip: 'More headings',
+          icon: const Icon(Icons.expand_more, color: EditorTheme.muted),
+          onPressed: () async {
+            final box = btnContext.findRenderObject() as RenderBox?;
+            if (box == null) return;
+            final at = box.localToGlobal(Offset(0, box.size.height));
+            final pick = await _showSmallMenu(at, const [
+              ('4', 'Heading 4'),
+              ('5', 'Heading 5'),
+              ('6', 'Heading 6'),
+            ]);
+            if (pick != null) {
+              _controller.setSelectedBlocksKind('heading',
+                  data: {'level': int.parse(pick)});
+            }
+          },
+        ),
+      );
+    }
+
     return Positioned(
       left: left,
       top: top,
@@ -1747,13 +1792,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
                   const VerticalDivider(width: 9, indent: 8, endIndent: 8),
                 ],
+                // Code block leads the block group (it earns its keep), the
+                // three everyday heading levels are one click, and the rare
+                // H4–H6 hide behind the chevron.
+                blockBtn(Icons.terminal, 'code_block', 'Code block'),
+                for (var level = 1; level <= 3; level++)
+                  headingBtn(level),
+                moreHeadingsBtn(),
                 blockBtn(Icons.notes, 'paragraph', 'Text'),
-                blockBtn(Icons.title, 'heading', 'Heading', data: {'level': 2}),
                 blockBtn(Icons.format_list_bulleted, 'bulleted_list', 'Bulleted list'),
                 blockBtn(Icons.format_list_numbered, 'numbered_list', 'Numbered list'),
                 blockBtn(Icons.check_box_outlined, 'todo', 'To-do', data: {'checked': false}),
                 blockBtn(Icons.format_quote, 'quote', 'Quote'),
-                blockBtn(Icons.terminal, 'code_block', 'Code block'),
               ],
             ),
           ),
