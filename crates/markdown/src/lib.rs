@@ -1106,13 +1106,27 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     if full == 0 {
       continue;
     }
-    let promoted = b.data.get("marks").and_then(Value::as_array).and_then(|ms| {
-      ms.iter().find(|m| {
-        m.get("type").and_then(Value::as_str) == Some("image")
+    let marks = b.data.get("marks").and_then(Value::as_array);
+    // A whole-line image promotes to a standalone image block — unless it is
+    // wrapped in a link (`[![alt](img)](url)`), which must stay an inline
+    // anchored image inside the paragraph.
+    let wrapped_in_link = marks.is_some_and(|ms| {
+      ms.iter().any(|m| {
+        m.get("type").and_then(Value::as_str) == Some("link")
           && m.get("start").and_then(Value::as_u64) == Some(0)
           && m.get("end").and_then(Value::as_u64) == Some(full as u64)
       })
     });
+    let promoted = (!wrapped_in_link)
+      .then_some(marks)
+      .flatten()
+      .and_then(|ms| {
+        ms.iter().find(|m| {
+          m.get("type").and_then(Value::as_str) == Some("image")
+            && m.get("start").and_then(Value::as_u64) == Some(0)
+            && m.get("end").and_then(Value::as_u64) == Some(full as u64)
+        })
+      });
     if let Some(image) = promoted {
       let url = image.get("href").and_then(Value::as_str).unwrap_or_default();
       let mut data = json!({ "url": url });
@@ -2304,9 +2318,29 @@ fn html_inline(block: &Block) -> String {
   }
   let marks = marks_from_block(block);
   if marks.is_empty() {
-    return html_text(block.text.trim());
+    // No trimming here: the block text is already edge-trimmed at construction,
+    // and a decoded entity such as `&nbsp;`/`&#9;` is real content that must
+    // survive at the line's start or end.
+    return html_text(&block.text);
   }
   let units: Vec<u16> = block.text.encode_utf16().collect();
+  // An empty-text link (`[](/url)`) is a zero-width mark the span walker skips
+  // because it only steps over non-empty ranges; emit its empty anchor here.
+  if units.is_empty()
+    && let Some(m) = marks.iter().find(|m| m.kind == "link")
+  {
+    return match &m.title {
+      Some(t) => format!(
+        "<a href=\"{}\" title=\"{}\"></a>",
+        escape_html(&escape_href(m.href.as_deref().unwrap_or(""))),
+        escape_html(t)
+      ),
+      None => format!(
+        "<a href=\"{}\"></a>",
+        escape_html(&escape_href(m.href.as_deref().unwrap_or("")))
+      ),
+    };
+  }
   let refs: Vec<&InlineMark> = marks.iter().collect();
   html_span(&units, 0, units.len(), &refs)
 }
@@ -2323,7 +2357,11 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
         let e = m.end.min(hi);
         (e > s).then_some((s, e, i))
       })
-      .min_by_key(|&(s, e, _)| (s, usize::MAX - e));
+      // Earliest start, then widest span. On an exact range tie (e.g. the
+      // strong+em pair of `***foo***`, whose delimiters all collapse to the
+      // same edges) the mark matched LAST in `process_emphasis` is the outer
+      // one, so prefer the higher index to nest it on the outside.
+      .min_by_key(|&(s, e, i)| (s, usize::MAX - e, usize::MAX - i));
     let Some((s, e, picked)) = next else {
       out.push_str(&html_text(&String::from_utf16_lossy(&units[pos..hi])));
       break;
@@ -2427,8 +2465,17 @@ fn append_html_block(
     }
     "code_block" | "code" => {
       if block_data_bool(block, "raw") {
-        // A raw HTML block passes through (GFM tagfilter applied).
-        out.push_str(&tagfilter(&block.text));
+        // A raw HTML block passes through. Type-1 blocks (script/style/pre/
+        // textarea) are literal and bypass the tagfilter; every other kind
+        // gets it (so loose `<title>`/`<xmp>` etc. are still neutralized).
+        // The kind is re-derived from the block's own opening line rather than
+        // persisted, keeping the cross-language block shape unchanged.
+        let first_line = block.text.lines().next().unwrap_or("").trim_start();
+        if html_block_start(first_line) == Some(1) {
+          out.push_str(&block.text);
+        } else {
+          out.push_str(&tagfilter(&block.text));
+        }
         out.push('\n');
         return Ok(());
       }
@@ -2952,7 +2999,10 @@ fn collect_ref_definitions(raw_lines: &[&str]) -> (RefDefs, std::collections::Ha
       i += used;
       continue; // a definition doesn't open a paragraph
     }
-    prev_para = true;
+    // Only true paragraph text can lazily absorb a following def line. Single
+    // line blocks (ATX headings, thematic breaks) don't, so a def on the next
+    // line still counts — `# [Foo]\n[foo]: /url` defines `foo`.
+    prev_para = heading_prefix_level(content).is_none() && !is_divider(content);
     i += 1;
   }
   (defs, def_lines)
@@ -2966,12 +3016,31 @@ fn parse_ref_definition_multi(
   raw_lines: &[&str],
   i: usize,
 ) -> Option<(String, String, Option<String>, usize)> {
-  let first = raw_lines[i].trim();
-  let chars: Vec<char> = first.chars().collect();
-  let close = matching_bracket(&chars, 0)?;
-  if chars.get(close + 1) != Some(&':') {
-    return None;
-  }
+  // The label may wrap across lines (`[Foo\n  bar]: /url`): join consecutive
+  // lines until the `]:` closer appears, counting how many we spanned.
+  let first = raw_lines[i].trim_start();
+  let mut joined = first.to_string();
+  let mut label_lines = 1;
+  let (close, chars) = loop {
+    let chars: Vec<char> = joined.chars().collect();
+    if let Some(close) = matching_bracket(&chars, 0)
+      && chars.get(close + 1) == Some(&':')
+    {
+      break (close, chars);
+    }
+    // No closer yet — pull in the next line (label-only blank lines are not
+    // allowed inside a definition label).
+    let next = raw_lines.get(i + label_lines)?;
+    if next.trim().is_empty() {
+      return None;
+    }
+    joined.push('\n');
+    joined.push_str(next.trim());
+    label_lines += 1;
+    if label_lines > 8 {
+      return None; // a runaway label is not a definition
+    }
+  };
   let label: String = chars[1..close].iter().collect();
   if label.trim().is_empty() {
     return None;
@@ -2983,14 +3052,14 @@ fn parse_ref_definition_multi(
   }
   let after_colon: String = chars[close + 2..].iter().collect();
   let after_colon = after_colon.trim();
-  let mut used = 1;
+  let mut used = label_lines;
   let dest_line = if after_colon.is_empty() {
-    // destination on the next line
-    let l2 = raw_lines.get(i + 1)?.trim();
+    // destination on the line after the (possibly multi-line) label
+    let l2 = raw_lines.get(i + label_lines)?.trim();
     if l2.is_empty() {
       return None;
     }
-    used = 2;
+    used = label_lines + 1;
     l2.to_string()
   } else {
     after_colon.to_string()
@@ -3128,8 +3197,10 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
   let dest: String;
   if i < n && chars[i] == '<' {
     let mut j = i + 1;
+    // A backslash escapes the next char, so `<foo\>` is unterminated (the
+    // `\>` is a literal `>`, not the closer) — keep scanning past it.
     while j < n && chars[j] != '>' && chars[j] != '\n' && chars[j] != '<' {
-      j += 1;
+      j += if chars[j] == '\\' && j + 1 < n { 2 } else { 1 };
     }
     if j >= n || chars[j] != '>' {
       return None;
@@ -3173,20 +3244,21 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
   if i < n && matches!(chars[i], '"' | '\'' | '(') {
     let close = if chars[i] == '(' { ')' } else { chars[i] };
     let mut j = i + 1;
-    let mut buf = String::new();
+    let start = j;
     while j < n && chars[j] != close {
+      // A backslash escapes the next char (so an escaped close delimiter does
+      // not end the title); keep the raw span and decode it once at the end.
       if chars[j] == '\\' && j + 1 < n {
-        buf.push(chars[j + 1]);
         j += 2;
         continue;
       }
-      buf.push(chars[j]);
       j += 1;
     }
     if j >= n {
       return None;
     }
-    title = Some(buf);
+    // Titles decode backslash escapes AND entity references (`&quot;` → `"`).
+    title = Some(unescape_md(&chars[start..j].iter().collect::<String>()));
     i = j + 1;
     while i < n && chars[i].is_whitespace() {
       i += 1;
@@ -3195,14 +3267,81 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
   if i < n && chars[i] == ')' { Some((dest, title, i + 1)) } else { None }
 }
 
+/// Does this link-label content already contain a link (inline, reference,
+/// or autolink)? CommonMark forbids links nested inside link text, so when
+/// this is true the surrounding brackets must stay literal. Images are fine
+/// (`[![alt](img)](url)` is a valid linked image), so we ignore those.
+fn label_contains_link(inner: &[char], defs: &RefDefs) -> bool {
+  let src: String = inner.iter().collect();
+  parse_inline_with(&src, defs).marks.iter().any(|m| m.kind == "link")
+}
+
+/// If a code span, autolink, or raw inline HTML span starts at `chars[i]`,
+/// return its exclusive end index. These spans bind tighter than link
+/// brackets, so a bracket-matcher must skip over them as a unit.
+fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
+  let n = chars.len();
+  match chars[i] {
+    '`' => {
+      // N-backtick run closes only on a run of exactly N.
+      let mut run = 0;
+      while i + run < n && chars[i + run] == '`' {
+        run += 1;
+      }
+      let mut j = i + run;
+      while j < n {
+        if chars[j] == '`' {
+          let mut m = 0;
+          while j + m < n && chars[j + m] == '`' {
+            m += 1;
+          }
+          if m == run {
+            return Some(j + m);
+          }
+          j += m;
+        } else {
+          j += 1;
+        }
+      }
+      None
+    }
+    '<' => {
+      // Autolink first (it constrains the closing `>`), then raw HTML.
+      let mut j = i + 1;
+      while j < n && chars[j] != '>' {
+        j += 1;
+      }
+      if j < n {
+        let inner: String = chars[i + 1..j].iter().collect();
+        if autolink_target(&inner).is_some() {
+          return Some(j + 1);
+        }
+      }
+      inline_html_end(chars, i)
+    }
+    _ => None,
+  }
+}
+
 /// Find the `]` matching the `[` at [open], honoring nesting and escapes.
+///
+/// Code spans, autolinks and raw inline HTML bind tighter than link brackets
+/// (CommonMark §6.5), so a `]` inside one of those does not close the link:
+/// we skip over such spans while scanning. `[foo`](/uri)`` therefore keeps
+/// its backtick span intact instead of forming a bogus link.
 fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
+  let n = chars.len();
   let mut depth = 0i32;
   let mut j = open;
-  while j < chars.len() {
+  while j < n {
     let c = chars[j];
-    if c == '\\' && j + 1 < chars.len() {
+    if c == '\\' && j + 1 < n {
       j += 2;
+      continue;
+    }
+    // A code span / autolink / raw-HTML region swallows any brackets inside.
+    if let Some(end) = inline_span_end(chars, j) {
+      j = end;
       continue;
     }
     if c == '[' {
@@ -3427,8 +3566,13 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
     if chars[i] == '[' {
       if let Some(close) = matching_bracket(&chars, i) {
         let label: String = chars[i + 1..close].iter().collect();
-        if !label.is_empty() {
-          // Inline form.
+        // A link's text may not itself contain a link (CommonMark §6.3): if
+        // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
+        // brackets stay literal and the inner link wins. `[foo [bar](/uri)]`
+        // is therefore `[foo <a>bar</a>]`, not a nested anchor.
+        let nested_link = label_contains_link(&chars[i + 1..close], defs);
+        if !nested_link {
+          // Inline form — empty text is allowed (`[](/url)` → empty anchor).
           if close + 1 < chars.len() && chars[close + 1] == '(' {
             if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
               push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks);
@@ -3436,6 +3580,8 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
               continue;
             }
           }
+        }
+        if !label.is_empty() && !nested_link {
           // Reference forms (full / collapsed / shortcut).
           if !defs.is_empty() {
             let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
@@ -3844,7 +3990,9 @@ fn marks_from_block(block: &Block) -> Vec<InlineMark> {
     if let (Some(start), Some(end), Some(kind)) = (start, end, kind) {
       let start = start.min(len);
       let end = end.min(len);
-      if end > start {
+      // Empty-text links (`[](/url)`) are a legitimate zero-width mark; every
+      // other kind needs real content to wrap.
+      if end > start || kind == "link" {
         marks.push(InlineMark {
           start,
           end,
