@@ -53,7 +53,7 @@ class TableData {
     if (raw is List) {
       for (final row in raw) {
         if (row is List) {
-          rows.add([for (final cell in row) '$cell']);
+          rows.add([for (final cell in row) _cellText(cell)]);
         }
       }
     }
@@ -128,6 +128,18 @@ class TableData {
       if (at < row.length) row.removeAt(at);
     }
     if (at < widths.length) widths.removeAt(at);
+  }
+
+  /// Coerce a stored cell to its text. A missing/absent cell must become an
+  /// empty string — NOT the stringified placeholder a blind interpolation
+  /// produces (`'$cell'` turns Dart `null` into "null", and on dart2js a
+  /// JS `undefined` array hole into "undefined", which then renders and
+  /// round-trips as that literal word). Real string cells pass through; any
+  /// other JSON scalar (a number, say) keeps its textual form.
+  static String _cellText(Object? cell) {
+    if (cell == null) return '';
+    if (cell is String) return cell;
+    return '$cell';
   }
 
   static List<double> _normalizeWidths(List<double>? widths, int columns) {
