@@ -46,10 +46,7 @@ void main() {
 /// boxes. Kick that download off at startup (during login/loading) so the font
 /// is cached before any document renders.
 void _warmUpFonts() {
-  const samples = [
-    '中文字体预热示例 ABCabc 0123 ，。！',
-    '繁體字預熱 測試',
-  ];
+  const samples = ['中文字体预热示例 ABCabc 0123 ，。！', '繁體字預熱 測試'];
   for (final text in samples) {
     final painter = TextPainter(
       text: TextSpan(text: text, style: const TextStyle(fontSize: 16)),
@@ -151,8 +148,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? null
           : fontFamily,
     );
-    _pageWidth =
-        (double.tryParse(loadPref('pageWidth') ?? '') ?? 1160).clamp(640, 1440);
+    _pageWidth = (double.tryParse(loadPref('pageWidth') ?? '') ?? 1160).clamp(
+      640,
+      1440,
+    );
     _reHostImages = loadPref('reHostImages') != 'false';
     _showFormatBar = loadPref('showFormatBar') == 'true';
   }
@@ -487,9 +486,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         return;
       }
       setState(() {
-        final views = [
-          ...?_viewsByWorkspace[workspace.id],
-        ];
+        final views = [...?_viewsByWorkspace[workspace.id]];
         for (final m in moved) {
           final idx = views.indexWhere((v) => v.id == m.id);
           if (idx >= 0) {
@@ -685,8 +682,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final base = fileName
           .replaceAll(RegExp(r'\.(md|markdown|txt)$', caseSensitive: false), '')
           .trim();
-      final title =
-          _titleFromMarkdown(markdown, base.isEmpty ? 'Imported' : base);
+      final title = _titleFromMarkdown(
+        markdown,
+        base.isEmpty ? 'Imported' : base,
+      );
       final bootstrap = await _api.importMarkdown(
         session.accessToken,
         workspace.id,
@@ -776,7 +775,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// `<uuid>_Export.zip` (prefix) both clean up to "Export".
   String _cleanArchiveName(String fileName) {
     const hex32 = r'[0-9a-fA-F]{32}';
-    const uuid = r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+    const uuid =
+        r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
         r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
     var name = fileName
         .replaceAll(RegExp(r'\.zip$', caseSensitive: false), '')
@@ -1026,7 +1026,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Apply editor operations without toggling the global busy state, so inline
   /// typing in the block editor stays smooth. Errors surface in the banner.
-  Future<void> _applyEditorOperations(List<Map<String, dynamic>> operations) async {
+  Future<void> _applyEditorOperations(
+    List<Map<String, dynamic>> operations,
+  ) async {
     final session = _session;
     final workspace = _selectedWorkspace;
     final bootstrap = _selectedBootstrap;
@@ -1041,7 +1043,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         bootstrap.document.id,
         operations,
       );
-      if (!mounted || _selectedBootstrap?.document.id != bootstrap.document.id) {
+      if (!mounted ||
+          _selectedBootstrap?.document.id != bootstrap.document.id) {
         return;
       }
       setState(() {
@@ -1735,7 +1738,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String viewId) onOpenSearchResult;
   final Future<String> Function() onExportPageMarkdown;
   final Future<Uint8List> Function() onExportPageZip;
-  final Future<void> Function(String fileName, String markdown) onImportMarkdown;
+  final Future<void> Function(String fileName, String markdown)
+  onImportMarkdown;
   final Future<String> Function() onExportWorkspaceMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
@@ -1898,14 +1902,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               children: [
                 Expanded(
                   child: _WorkspaceSelector(
-              workspaces: widget.workspaces,
-              selected: widget.selectedWorkspace,
-              onSelect: widget.onSelectWorkspace,
-              onRename: _promptRenameWorkspace,
-              onDelete: _confirmDeleteWorkspace,
-              onExport: _exportWorkspaceFile,
-              onCreate: _promptCreateWorkspace,
-              onImport: (notion) => _importWorkspaceFile(notion: notion),
+                    workspaces: widget.workspaces,
+                    selected: widget.selectedWorkspace,
+                    onSelect: widget.onSelectWorkspace,
+                    onRename: _promptRenameWorkspace,
+                    onDelete: _confirmDeleteWorkspace,
+                    onExport: _exportWorkspaceFile,
+                    onCreate: _promptCreateWorkspace,
+                    onImport: (notion) => _importWorkspaceFile(notion: notion),
                     onImportFilesInto: _importFilesIntoWorkspace,
                     onImportFolderInto: _importFolderIntoWorkspace,
                   ),
@@ -1918,7 +1922,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   onPressed: widget.selectedWorkspace == null
                       ? null
                       : () => setState(
-                          () => _workspaceSettingsOpen = !_workspaceSettingsOpen),
+                          () =>
+                              _workspaceSettingsOpen = !_workspaceSettingsOpen,
+                        ),
                   icon: const Icon(Icons.tune, size: 20),
                 ),
               ],
@@ -1995,11 +2001,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
         child: Row(
           children: [
-            Icon(Icons.search,
-                size: 18,
-                color: enabled
-                    ? const Color(0xFF64748B)
-                    : const Color(0xFFCBD5E1)),
+            Icon(
+              Icons.search,
+              size: 18,
+              color: enabled
+                  ? const Color(0xFF64748B)
+                  : const Color(0xFFCBD5E1),
+            ),
             const SizedBox(width: 8),
             Text(
               'Search…',
@@ -2165,10 +2173,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onDelete: () => widget.onDeleteView(item.view),
         );
         if (!canEdit) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: row,
-          );
+          return Padding(padding: const EdgeInsets.only(bottom: 8), child: row);
         }
         return _draggableTreeRow(item.view, row);
       }).toList(),
@@ -2486,32 +2491,53 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
             divider(),
             btn(Icons.notes, 'Text', () => h.setBlock('paragraph')),
-            btn(Icons.looks_one_outlined, 'Heading 1',
-                () => h.setBlock('heading', {'level': 1})),
-            btn(Icons.looks_two_outlined, 'Heading 2',
-                () => h.setBlock('heading', {'level': 2})),
-            btn(Icons.looks_3_outlined, 'Heading 3',
-                () => h.setBlock('heading', {'level': 3})),
+            btn(
+              Icons.looks_one_outlined,
+              'Heading 1',
+              () => h.setBlock('heading', {'level': 1}),
+            ),
+            btn(
+              Icons.looks_two_outlined,
+              'Heading 2',
+              () => h.setBlock('heading', {'level': 2}),
+            ),
+            btn(
+              Icons.looks_3_outlined,
+              'Heading 3',
+              () => h.setBlock('heading', {'level': 3}),
+            ),
             divider(),
-            btn(Icons.format_bold, 'Bold (Ctrl+B)',
-                () => h.toggleMark('bold')),
-            btn(Icons.format_italic, 'Italic (Ctrl+I)',
-                () => h.toggleMark('italic')),
-            btn(Icons.format_strikethrough, 'Strikethrough',
-                () => h.toggleMark('strike')),
-            btn(Icons.code, 'Inline code (Ctrl+E)',
-                () => h.toggleMark('code')),
+            btn(Icons.format_bold, 'Bold (Ctrl+B)', () => h.toggleMark('bold')),
+            btn(
+              Icons.format_italic,
+              'Italic (Ctrl+I)',
+              () => h.toggleMark('italic'),
+            ),
+            btn(
+              Icons.format_strikethrough,
+              'Strikethrough',
+              () => h.toggleMark('strike'),
+            ),
+            btn(Icons.code, 'Inline code (Ctrl+E)', () => h.toggleMark('code')),
             btn(Icons.link, 'Link (Ctrl+K)', h.editLink),
             divider(),
-            btn(Icons.format_list_bulleted, 'Bulleted list',
-                () => h.setBlock('bulleted_list')),
-            btn(Icons.format_list_numbered, 'Numbered list',
-                () => h.setBlock('numbered_list')),
-            btn(Icons.check_box_outlined, 'To-do list',
-                () => h.setBlock('todo', {'checked': false})),
+            btn(
+              Icons.format_list_bulleted,
+              'Bulleted list',
+              () => h.setBlock('bulleted_list'),
+            ),
+            btn(
+              Icons.format_list_numbered,
+              'Numbered list',
+              () => h.setBlock('numbered_list'),
+            ),
+            btn(
+              Icons.check_box_outlined,
+              'To-do list',
+              () => h.setBlock('todo', {'checked': false}),
+            ),
             btn(Icons.format_quote, 'Quote', () => h.setBlock('quote')),
-            btn(Icons.terminal, 'Code block',
-                () => h.setBlock('code_block')),
+            btn(Icons.terminal, 'Code block', () => h.setBlock('code_block')),
             divider(),
             btn(Icons.horizontal_rule, 'Divider', () => h.insert('divider')),
             btn(Icons.grid_on, 'Table', () => h.insert('table')),
@@ -2556,92 +2582,92 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 Padding(
                   padding: const EdgeInsets.only(left: EditorTheme.gutter),
                   child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Focus(
-                        // Intercepts keys bubbling from the title field:
-                        // ArrowDown moves into the first body line.
-                        canRequestFocus: false,
-                        skipTraversal: true,
-                        onKeyEvent: (node, event) {
-                          if (event is KeyDownEvent &&
-                              event.logicalKey ==
-                                  LogicalKeyboardKey.arrowDown) {
-                            _commandHook.focusFirstLine();
-                            return KeyEventResult.handled;
-                          }
-                          return KeyEventResult.ignored;
-                        },
-                        child: TextField(
-                          controller: _pageTitle,
-                          focusNode: _pageTitleFocus,
-                          style: Theme.of(context).textTheme.headlineMedium,
-                          textInputAction: TextInputAction.next,
-                          onChanged: (_) => _schedulePageTitleSave(),
-                          // Enter in the title: the text after the caret (or
-                          // nothing) becomes a NEW first body line, pushing
-                          // the body down. onEditingComplete (not
-                          // onSubmitted) — it REPLACES the default
-                          // TextInputAction.next finalize, which would
-                          // otherwise nextFocus() away from the editor.
-                          onEditingComplete: _titleEnter,
-                          decoration: const InputDecoration(
-                            hintText: 'Untitled',
-                            border: InputBorder.none,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: Focus(
+                          // Intercepts keys bubbling from the title field:
+                          // ArrowDown moves into the first body line.
+                          canRequestFocus: false,
+                          skipTraversal: true,
+                          onKeyEvent: (node, event) {
+                            if (event is KeyDownEvent &&
+                                event.logicalKey ==
+                                    LogicalKeyboardKey.arrowDown) {
+                              _commandHook.focusFirstLine();
+                              return KeyEventResult.handled;
+                            }
+                            return KeyEventResult.ignored;
+                          },
+                          child: TextField(
+                            controller: _pageTitle,
+                            focusNode: _pageTitleFocus,
+                            style: Theme.of(context).textTheme.headlineMedium,
+                            textInputAction: TextInputAction.next,
+                            onChanged: (_) => _schedulePageTitleSave(),
+                            // Enter in the title: the text after the caret (or
+                            // nothing) becomes a NEW first body line, pushing
+                            // the body down. onEditingComplete (not
+                            // onSubmitted) — it REPLACES the default
+                            // TextInputAction.next finalize, which would
+                            // otherwise nextFocus() away from the editor.
+                            onEditingComplete: _titleEnter,
+                            decoration: const InputDecoration(
+                              hintText: 'Untitled',
+                              border: InputBorder.none,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    PopupMenuButton<String>(
-                      tooltip: 'Page menu',
-                      icon: const Icon(Icons.expand_more),
-                      onSelected: _onPageMenu,
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'export-md',
-                          child: ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(Icons.download_outlined),
-                            title: Text('Export Markdown'),
+                      PopupMenuButton<String>(
+                        tooltip: 'Page menu',
+                        icon: const Icon(Icons.expand_more),
+                        onSelected: _onPageMenu,
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'export-md',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.download_outlined),
+                              title: Text('Export Markdown'),
+                            ),
                           ),
-                        ),
-                        PopupMenuItem(
-                          value: 'export-zip',
-                          child: ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(Icons.folder_zip_outlined),
-                            title: Text('Export ZIP (with images)'),
+                          PopupMenuItem(
+                            value: 'export-zip',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.folder_zip_outlined),
+                              title: Text('Export ZIP (with images)'),
+                            ),
                           ),
-                        ),
-                        PopupMenuDivider(),
-                        PopupMenuItem(
-                          value: 'import-md',
-                          child: ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(Icons.upload_file_outlined),
-                            title: Text('Import Markdown…'),
+                          PopupMenuDivider(),
+                          PopupMenuItem(
+                            value: 'import-md',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.upload_file_outlined),
+                              title: Text('Import Markdown…'),
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      tooltip: _toolsExpanded
-                          ? 'Hide side panel'
-                          : 'Show side panel',
-                      onPressed: () =>
-                          setState(() => _toolsExpanded = !_toolsExpanded),
-                      icon: Icon(
-                        _toolsExpanded
-                            ? Icons.chevron_right
-                            : Icons.chevron_left,
+                        ],
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: _toolsExpanded
+                            ? 'Hide side panel'
+                            : 'Show side panel',
+                        onPressed: () =>
+                            setState(() => _toolsExpanded = !_toolsExpanded),
+                        icon: Icon(
+                          _toolsExpanded
+                              ? Icons.chevron_right
+                              : Icons.chevron_left,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -2665,52 +2691,52 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
                   child: MicaEditor(
-                      key: ValueKey(bootstrap.document.id),
-                      focusNode: _editorFocus,
-                      rootBlockId: bootstrap.document.rootBlockId,
-                      nodes: [
-                        for (final b in bootstrap.childBlocks)
-                          EditorNode(
-                            id: b.id,
-                            kind: b.kind,
-                            text: b.text,
-                            data: Map<String, dynamic>.from(b.data),
-                          ),
-                      ],
-                      version: bootstrap.snapshot.versionSeq,
-                      canEdit: canEdit,
-                      onApplyOperations: widget.onApplyOperations,
-                      onUploadImage: widget.onUploadImage,
-                      onImportImageUrl: widget.onImportImageUrl,
-                      onLoadImageBytes: widget.onLoadImageBytes,
-                      onResolveImageUrls: widget.onResolveImageUrls,
-                      onAiStream: widget.onAiStream,
-                      reHostImages: widget.reHostImages,
-                      scrollHook: _scrollHook,
-                      commandHook: _commandHook,
-                      onExitTop: () {
-                        _pageTitleFocus.requestFocus();
-                        // The web TextField select-alls when focused
-                        // programmatically; that happens in the focus
-                        // microtask, so queue ours right behind it — the
-                        // caret is collapsed before the next frame paints
-                        // (a post-frame callback here flashed the
-                        // selection for one frame).
-                        Future.microtask(() {
-                          if (!mounted) return;
-                          _pageTitle.selection = TextSelection.collapsed(
-                            offset: _pageTitle.text.length,
-                          );
-                        });
-                      },
-                      appearance: widget.appearance,
-                      onOpenPage: _openPageLink,
-                      pageLinks: () => [
-                        for (final v in widget.views)
-                          if (v.objectType == 'document')
-                            PageLinkTarget(id: v.id, title: v.name),
-                      ],
-                    ),
+                    key: ValueKey(bootstrap.document.id),
+                    focusNode: _editorFocus,
+                    rootBlockId: bootstrap.document.rootBlockId,
+                    nodes: [
+                      for (final b in bootstrap.childBlocks)
+                        EditorNode(
+                          id: b.id,
+                          kind: b.kind,
+                          text: b.text,
+                          data: Map<String, dynamic>.from(b.data),
+                        ),
+                    ],
+                    version: bootstrap.snapshot.versionSeq,
+                    canEdit: canEdit,
+                    onApplyOperations: widget.onApplyOperations,
+                    onUploadImage: widget.onUploadImage,
+                    onImportImageUrl: widget.onImportImageUrl,
+                    onLoadImageBytes: widget.onLoadImageBytes,
+                    onResolveImageUrls: widget.onResolveImageUrls,
+                    onAiStream: widget.onAiStream,
+                    reHostImages: widget.reHostImages,
+                    scrollHook: _scrollHook,
+                    commandHook: _commandHook,
+                    onExitTop: () {
+                      _pageTitleFocus.requestFocus();
+                      // The web TextField select-alls when focused
+                      // programmatically; that happens in the focus
+                      // microtask, so queue ours right behind it — the
+                      // caret is collapsed before the next frame paints
+                      // (a post-frame callback here flashed the
+                      // selection for one frame).
+                      Future.microtask(() {
+                        if (!mounted) return;
+                        _pageTitle.selection = TextSelection.collapsed(
+                          offset: _pageTitle.text.length,
+                        );
+                      });
+                    },
+                    appearance: widget.appearance,
+                    onOpenPage: _openPageLink,
+                    pageLinks: () => [
+                      for (final v in widget.views)
+                        if (v.objectType == 'document')
+                          PageLinkTarget(id: v.id, title: v.name),
+                    ],
+                  ),
                 ),
                 if (widget.selectedMarkdown != null) ...[
                   const SizedBox(height: 28),
@@ -2762,8 +2788,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: _headingLevel(b) <= 1 ? 14 : 13,
-                  fontWeight:
-                      _headingLevel(b) <= 1 ? FontWeight.w600 : FontWeight.w400,
+                  fontWeight: _headingLevel(b) <= 1
+                      ? FontWeight.w600
+                      : FontWeight.w400,
                   color: const Color(0xFF334155),
                 ),
               ),
@@ -2799,8 +2826,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     children: [
                       const Icon(Icons.toc, size: 18),
                       const SizedBox(width: 8),
-                      Text('Outline',
-                          style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Outline',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -2859,8 +2888,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           if (canManage) _compactAddMemberForm(),
           if (canManage) const SizedBox(height: 14),
           if (widget.members.isEmpty)
-            const Text('No members loaded.',
-                style: TextStyle(color: Color(0xFF94A3B8)))
+            const Text(
+              'No members loaded.',
+              style: TextStyle(color: Color(0xFF94A3B8)),
+            )
           else
             Column(
               children: widget.members
@@ -3117,9 +3148,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: $error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
       }
     }
   }
@@ -3134,13 +3165,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _exportWorkspaceFile(Workspace workspace) async {
     try {
       final bytes = await widget.onExportWorkspaceZip(workspace.id);
-      final name = workspace.name.trim().isEmpty ? 'workspace' : workspace.name.trim();
+      final name = workspace.name.trim().isEmpty
+          ? 'workspace'
+          : workspace.name.trim();
       downloadImage(bytes, '$name.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: $error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
       }
     }
   }
@@ -3152,9 +3185,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         downloadImage(bytes, 'page.zip', 'application/zip');
       } catch (error) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Export failed: $error')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
         }
       }
       return;
@@ -3169,9 +3202,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       markdown = await future;
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: $error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
       }
       return;
     }
@@ -3238,8 +3271,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (fromSettings) {
       Navigator.of(context).pop(); // close settings before the import flow runs
     }
-    await widget.onImportWorkspaceZip(picked.name, picked.bytes,
-        notion: notion);
+    await widget.onImportWorkspaceZip(
+      picked.name,
+      picked.bytes,
+      notion: notion,
+    );
   }
 
   /// Multi-select import into an existing workspace: .md files (plus images
@@ -3263,10 +3299,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // The picker includes the chosen folder itself as the first segment —
       // drop it so the folder's contents land at the workspace root.
       final parts = f.path.split('/');
-      entries.add(ArchiveFile(
-        parts.length > 1 ? parts.sublist(1).join('/') : f.path,
-        f.bytes,
-      ));
+      entries.add(
+        ArchiveFile(
+          parts.length > 1 ? parts.sublist(1).join('/') : f.path,
+          f.bytes,
+        ),
+      );
     }
     await widget.onImportWorkspaceTreeInto(workspace, entries);
   }
@@ -3536,7 +3574,11 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     Color? color,
   }) {
     return MenuItemButton(
-      leadingIcon: Icon(icon, size: 18, color: color ?? const Color(0xFF475569)),
+      leadingIcon: Icon(
+        icon,
+        size: 18,
+        color: color ?? const Color(0xFF475569),
+      ),
       onPressed: () {
         _menu.close();
         onTap();
@@ -3557,10 +3599,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         _menu.close();
         widget.onImport(notion);
       },
-      child: Text(
-        label,
-        style: const TextStyle(color: Color(0xFF475569)),
-      ),
+      child: Text(label, style: const TextStyle(color: Color(0xFF475569))),
     );
   }
 }
@@ -3856,7 +3895,11 @@ class _ExportDialog extends StatelessWidget {
           child: SingleChildScrollView(
             child: SelectableText(
               markdown.isEmpty ? '(empty)' : markdown,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.5),
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                height: 1.5,
+              ),
             ),
           ),
         ),
@@ -4005,7 +4048,11 @@ class _SearchDialogState extends State<_SearchDialog> {
           title: Text(result.name, overflow: TextOverflow.ellipsis),
           subtitle: result.snippet.isEmpty
               ? (result.titleMatch ? const Text('Title match') : null)
-              : Text(result.snippet, maxLines: 2, overflow: TextOverflow.ellipsis),
+              : Text(
+                  result.snippet,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
           onTap: () => widget.onOpen(result.viewId),
         );
       },
@@ -4034,8 +4081,7 @@ extension _AiPresetInfo on _AiPreset {
     _AiPreset.custom => 'Local / Custom',
   };
 
-  String get provider =>
-      this == _AiPreset.anthropic ? 'anthropic' : 'openai';
+  String get provider => this == _AiPreset.anthropic ? 'anthropic' : 'openai';
 
   String get baseUrl => switch (this) {
     _AiPreset.deepseek => 'https://api.deepseek.com',
@@ -4200,7 +4246,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   Future<void> _changeAccountPassword() async {
     if (_newPass.text.length < 8) {
-      setState(() => _accountMsg = 'New password must be at least 8 characters');
+      setState(
+        () => _accountMsg = 'New password must be at least 8 characters',
+      );
       return;
     }
     setState(() {
@@ -4292,7 +4340,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     }
   }
 
-  Widget _sectionTitle(BuildContext context, IconData icon, String label, Color color) {
+  Widget _sectionTitle(
+    BuildContext context,
+    IconData icon,
+    String label,
+    Color color,
+  ) {
     return Row(
       children: [
         Icon(icon, size: 18, color: color),
@@ -4374,73 +4427,73 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   List<Widget> _aiSection(BuildContext context) => [
-    _sectionTitle(context, Icons.auto_awesome, 'AI provider', const Color(0xFF7C3AED)),
+    _sectionTitle(
+      context,
+      Icons.auto_awesome,
+      'AI provider',
+      const Color(0xFF7C3AED),
+    ),
     const SizedBox(height: 12),
     DropdownButtonFormField<_AiPreset>(
-                      initialValue: _preset,
-                      decoration: const InputDecoration(
-                        labelText: 'Provider',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _AiPreset.values
-                          .map(
-                            (preset) => DropdownMenuItem(
-                              value: preset,
-                              child: Text(preset.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: _saving
-                          ? null
-                          : (preset) {
-                              if (preset != null) _applyPreset(preset);
-                            },
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _baseUrl,
-                      enabled: !_saving,
-                      decoration: const InputDecoration(
-                        labelText: 'API base URL',
-                        hintText: 'https://api.deepseek.com',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _model,
-                      enabled: !_saving,
-                      decoration: const InputDecoration(
-                        labelText: 'Model',
-                        hintText: 'deepseek-chat',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _apiKey,
-                      enabled: !_saving,
-                      obscureText: true,
-                      decoration: InputDecoration(
-                        labelText: 'API key',
-                        hintText: _hasKey
-                            ? '•••••••• (leave blank to keep)'
-                            : 'Required for hosted providers',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Local models (Ollama, LM Studio) usually need no key. '
-                      'The key is stored on the server and never returned.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-    if (_error != null) ...[
-      const SizedBox(height: 12),
-      ErrorBanner(_error!),
-    ],
+      initialValue: _preset,
+      decoration: const InputDecoration(
+        labelText: 'Provider',
+        border: OutlineInputBorder(),
+      ),
+      items: _AiPreset.values
+          .map(
+            (preset) =>
+                DropdownMenuItem(value: preset, child: Text(preset.label)),
+          )
+          .toList(),
+      onChanged: _saving
+          ? null
+          : (preset) {
+              if (preset != null) _applyPreset(preset);
+            },
+    ),
+    const SizedBox(height: 12),
+    TextField(
+      controller: _baseUrl,
+      enabled: !_saving,
+      decoration: const InputDecoration(
+        labelText: 'API base URL',
+        hintText: 'https://api.deepseek.com',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 12),
+    TextField(
+      controller: _model,
+      enabled: !_saving,
+      decoration: const InputDecoration(
+        labelText: 'Model',
+        hintText: 'deepseek-chat',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 12),
+    TextField(
+      controller: _apiKey,
+      enabled: !_saving,
+      obscureText: true,
+      decoration: InputDecoration(
+        labelText: 'API key',
+        hintText: _hasKey
+            ? '•••••••• (leave blank to keep)'
+            : 'Required for hosted providers',
+        border: const OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 6),
+    Text(
+      'Local models (Ollama, LM Studio) usually need no key. '
+      'The key is stored on the server and never returned.',
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+    ),
+    if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
     if (_saved != null) ...[
       const SizedBox(height: 12),
       Row(
@@ -4454,13 +4507,18 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   List<Widget> _accountSection(BuildContext context) => [
-    _sectionTitle(context, Icons.person_outline, 'Account', const Color(0xFF2563EB)),
+    _sectionTitle(
+      context,
+      Icons.person_outline,
+      'Account',
+      const Color(0xFF2563EB),
+    ),
     const SizedBox(height: 4),
     Text(
       widget.userEmail,
-      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-        color: const Color(0xFF64748B),
-      ),
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
     ),
     const SizedBox(height: 12),
     TextField(
@@ -4519,7 +4577,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   List<Widget> _dataSection(BuildContext context) => [
-    _sectionTitle(context, Icons.import_export, 'Data', const Color(0xFF0EA5E9)),
+    _sectionTitle(
+      context,
+      Icons.import_export,
+      'Data',
+      const Color(0xFF0EA5E9),
+    ),
     const SizedBox(height: 12),
     const Text(
       'Import a workspace from a ZIP — a Mica export or a Notion '
@@ -4540,9 +4603,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     Text(
       'Tip: export a single page or a whole workspace from the page menu (▾) '
       'or a workspace’s ⋯ menu.',
-      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-        color: const Color(0xFF94A3B8),
-      ),
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
     ),
   ];
 
@@ -4686,32 +4749,34 @@ class _AiDialogState extends State<_AiDialog> {
       _error = null;
       _buffer.clear();
     });
-    _sub = widget.onStream(prompt, system: system).listen(
-      (delta) {
-        setState(() => _buffer.write(delta));
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scroll.hasClients) {
-            _scroll.jumpTo(_scroll.position.maxScrollExtent);
-          }
-        });
-      },
-      onError: (Object error) {
-        if (mounted) {
-          setState(() {
-            _streaming = false;
-            _error = error.toString();
-          });
-        }
-      },
-      onDone: () {
-        if (mounted) {
-          setState(() {
-            _streaming = false;
-            _done = true;
-          });
-        }
-      },
-    );
+    _sub = widget
+        .onStream(prompt, system: system)
+        .listen(
+          (delta) {
+            setState(() => _buffer.write(delta));
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) {
+                _scroll.jumpTo(_scroll.position.maxScrollExtent);
+              }
+            });
+          },
+          onError: (Object error) {
+            if (mounted) {
+              setState(() {
+                _streaming = false;
+                _error = error.toString();
+              });
+            }
+          },
+          onDone: () {
+            if (mounted) {
+              setState(() {
+                _streaming = false;
+                _done = true;
+              });
+            }
+          },
+        );
   }
 
   Future<void> _apply() async {
@@ -4786,7 +4851,8 @@ class _AiDialogState extends State<_AiDialog> {
                     selected: _target == _AiTarget.currentPage,
                     onSelected: _busy
                         ? null
-                        : (_) => setState(() => _target = _AiTarget.currentPage),
+                        : (_) =>
+                              setState(() => _target = _AiTarget.currentPage),
                   ),
                 ChoiceChip(
                   label: const Text('New workspace'),
@@ -4948,11 +5014,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
           ),
         ],
       ),
-      content: SizedBox(
-        width: 420,
-        height: 360,
-        child: _buildBody(context),
-      ),
+      content: SizedBox(width: 420, height: 360, child: _buildBody(context)),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -5013,7 +5075,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
   }
 }
 
-class DocumentListItem extends StatelessWidget {
+class DocumentListItem extends StatefulWidget {
   const DocumentListItem({
     required this.view,
     required this.depth,
@@ -5042,91 +5104,108 @@ class DocumentListItem extends StatelessWidget {
   final VoidCallback onDelete;
 
   @override
+  State<DocumentListItem> createState() => _DocumentListItemState();
+}
+
+class _DocumentListItemState extends State<DocumentListItem> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
+    final view = widget.view;
+    final isSelected = widget.isSelected;
+    final canEdit = widget.canEdit;
+    // Notion-style shared slot: the doc icon and the expand chevron occupy
+    // the same 22px — hovering a row with children swaps icon → chevron.
+    // No blank chevron column, so rows hug the sidebar's left edge.
+    final showChevron = widget.hasChildren && (_hovered || widget.isCollapsed);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Material(
+        color: isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
         borderRadius: BorderRadius.circular(6),
-        onTap: onPressed,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 38),
-          child: Padding(
-            padding: EdgeInsets.only(left: 8 + (depth * 18), right: 4),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 24,
-                  height: 30,
-                  child: hasChildren
-                      ? IconButton(
-                          tooltip: isCollapsed ? 'Expand' : 'Collapse',
-                          onPressed: onToggle,
-                          padding: EdgeInsets.zero,
-                          iconSize: 18,
-                          icon: Icon(
-                            isCollapsed
-                                ? Icons.chevron_right
-                                : Icons.expand_more,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: widget.onPressed,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 38),
+            child: Padding(
+              padding: EdgeInsets.only(left: 4 + (widget.depth * 16), right: 4),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 30,
+                    child: showChevron
+                        ? IconButton(
+                            tooltip: widget.isCollapsed ? 'Expand' : 'Collapse',
+                            onPressed: widget.onToggle,
+                            padding: EdgeInsets.zero,
+                            iconSize: 18,
+                            icon: Icon(
+                              widget.isCollapsed
+                                  ? Icons.chevron_right
+                                  : Icons.expand_more,
+                            ),
+                          )
+                        : Icon(
+                            Icons.description_outlined,
+                            size: 18,
+                            color: isSelected
+                                ? const Color(0xFF2563EB)
+                                : const Color(0xFF64748B),
                           ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                Icon(
-                  Icons.description_outlined,
-                  size: 18,
-                  color: isSelected
-                      ? const Color(0xFF2563EB)
-                      : const Color(0xFF64748B),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    view.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: isSelected
-                          ? FontWeight.w600
-                          : FontWeight.w400,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      view.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: isSelected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                      ),
                     ),
                   ),
-                ),
-                if (canEdit) ...[
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: IconButton(
-                      tooltip: 'Create child page',
-                      onPressed: onCreateChild,
-                      padding: EdgeInsets.zero,
-                      iconSize: 17,
-                      icon: const Icon(Icons.add),
+                  if (canEdit) ...[
+                    SizedBox(
+                      width: 30,
+                      height: 30,
+                      child: IconButton(
+                        tooltip: 'Create child page',
+                        onPressed: widget.onCreateChild,
+                        padding: EdgeInsets.zero,
+                        iconSize: 17,
+                        icon: const Icon(Icons.add),
+                      ),
                     ),
-                  ),
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: IconButton(
-                      tooltip: 'Rename',
-                      onPressed: onRename,
-                      padding: EdgeInsets.zero,
-                      iconSize: 17,
-                      icon: const Icon(Icons.edit_outlined),
+                    SizedBox(
+                      width: 30,
+                      height: 30,
+                      child: IconButton(
+                        tooltip: 'Rename',
+                        onPressed: widget.onRename,
+                        padding: EdgeInsets.zero,
+                        iconSize: 17,
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
                     ),
-                  ),
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: IconButton(
-                      tooltip: 'Delete',
-                      onPressed: onDelete,
-                      padding: EdgeInsets.zero,
-                      iconSize: 17,
-                      icon: const Icon(Icons.delete_outline),
+                    SizedBox(
+                      width: 30,
+                      height: 30,
+                      child: IconButton(
+                        tooltip: 'Delete',
+                        onPressed: widget.onDelete,
+                        padding: EdgeInsets.zero,
+                        iconSize: 17,
+                        icon: const Icon(Icons.delete_outline),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -5506,7 +5585,11 @@ class ApiClient {
         .toList();
   }
 
-  Future<void> purgeView(String token, String workspaceId, String viewId) async {
+  Future<void> purgeView(
+    String token,
+    String workspaceId,
+    String viewId,
+  ) async {
     await _delete('/api/workspaces/$workspaceId/trash/$viewId', token);
   }
 
@@ -5537,9 +5620,7 @@ class ApiClient {
     );
     final channel = WebSocketChannel.connect(uri);
     try {
-      channel.sink.add(
-        jsonEncode({'prompt': prompt, 'system': ?system}),
-      );
+      channel.sink.add(jsonEncode({'prompt': prompt, 'system': ?system}));
       await for (final raw in channel.stream) {
         final message = jsonDecode(raw as String) as Map<String, dynamic>;
         switch (message['type']) {
@@ -5686,16 +5767,12 @@ class ApiClient {
     required Uint8List bytes,
   }) async {
     final hash = sha256Hex(bytes);
-    final presign = await _post(
-      '/api/workspaces/$workspaceId/files/presign',
-      {
-        'file_name': fileName,
-        'mime_type': mimeType,
-        'byte_size': bytes.length,
-        'content_hash': hash,
-      },
-      token: token,
-    );
+    final presign = await _post('/api/workspaces/$workspaceId/files/presign', {
+      'file_name': fileName,
+      'mime_type': mimeType,
+      'byte_size': bytes.length,
+      'content_hash': hash,
+    }, token: token);
     final objectKey = presign['object_key'] as String;
     final uploadUrl = presign['upload_url'] as String;
 
@@ -5708,16 +5785,13 @@ class ApiClient {
       throw ApiException('upload failed (HTTP ${put.statusCode})');
     }
 
-    final complete = await _post(
-      '/api/workspaces/$workspaceId/files/complete',
-      {
-        'object_key': objectKey,
-        'file_name': fileName,
-        'mime_type': mimeType,
-        'byte_size': bytes.length,
-      },
-      token: token,
-    );
+    final complete =
+        await _post('/api/workspaces/$workspaceId/files/complete', {
+          'object_key': objectKey,
+          'file_name': fileName,
+          'mime_type': mimeType,
+          'byte_size': bytes.length,
+        }, token: token);
     return UploadedFile.fromResponse(complete);
   }
 
@@ -5774,11 +5848,9 @@ class ApiClient {
     List<String> ids,
   ) async {
     if (ids.isEmpty) return {};
-    final response = await _post(
-      '/api/workspaces/$workspaceId/files/resolve',
-      {'ids': ids},
-      token: token,
-    );
+    final response = await _post('/api/workspaces/$workspaceId/files/resolve', {
+      'ids': ids,
+    }, token: token);
     final files = (response['files'] as List<dynamic>? ?? []);
     final out = <String, String>{};
     for (final raw in files) {
@@ -5798,11 +5870,14 @@ class ApiClient {
     String? workspaceId,
   }) async {
     final response = await http.post(
-      _baseUri.replace(path: '/api/workspaces/import', queryParameters: {
-        if (name != null && name.isNotEmpty) 'name': name,
-        if (notion) 'notion': 'true',
-        'workspace_id': ?workspaceId,
-      }),
+      _baseUri.replace(
+        path: '/api/workspaces/import',
+        queryParameters: {
+          if (name != null && name.isNotEmpty) 'name': name,
+          if (notion) 'notion': 'true',
+          'workspace_id': ?workspaceId,
+        },
+      ),
       headers: {
         'content-type': 'application/zip',
         'authorization': 'Bearer $token',
@@ -6477,4 +6552,3 @@ Uri documentSocketUri(
     queryParameters: {'token': token},
   );
 }
-
