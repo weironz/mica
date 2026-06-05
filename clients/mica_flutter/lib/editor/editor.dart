@@ -748,11 +748,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final shift = HardwareKeyboard.instance.isShiftPressed;
     final text = value.text;
 
-    // A multi-line chunk arriving at once is a paste: parse it as Markdown into
-    // structured blocks (headings, lists, code, …) instead of one literal block.
-    if (!node.isCode &&
-        !shift &&
-        ('\n'.allMatches(text).length >= 2 || text.contains('\n\n'))) {
+    // Newline accounting is INCREMENTAL against the node's current text:
+    // pasted multi-line quotes legitimately live as one multi-line block, so
+    // absolute counts misread any edit inside them as a paste (re-parsing
+    // the bare lines stripped their quote identity) and the old
+    // first-newline split cut them at the wrong line.
+    final oldBreaks = '\n'.allMatches(node.text).length;
+    final newBreaks = '\n'.allMatches(text).length;
+
+    // A chunk bringing 2+ NEW newlines at once is a paste: parse it as
+    // Markdown into structured blocks instead of one literal block.
+    if (!node.isCode && !shift && newBreaks >= oldBreaks + 2) {
       _controller.replaceFocusedWithBlocks(markdownToBlocks(text));
       _rehostExternalImages();
       _lastSentIme = _imeValue();
@@ -760,10 +766,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
 
-    // A single newline in a normal block means "split here" (Enter). Code blocks
-    // and Shift+Enter keep the newline as a soft break inside the node.
-    if (text.contains('\n') && !node.isCode && !shift) {
-      final idx = text.indexOf('\n');
+    // Exactly one NEW newline is Enter: split at the just-typed newline (the
+    // one at the caret — NOT the first in the text, which in a multi-line
+    // block is some older soft break). Code blocks and Shift+Enter keep the
+    // newline as a soft break inside the node.
+    if (newBreaks == oldBreaks + 1 && !node.isCode && !shift) {
+      final caret = value.selection.baseOffset.clamp(0, text.length);
+      final idx = (caret > 0 && text[caret - 1] == '\n')
+          ? caret - 1
+          : text.indexOf('\n');
       _controller.applyNewlineSplit(text.substring(0, idx), text.substring(idx + 1));
       _lastSentIme = _imeValue();
       _syncImeFromSelection(force: true);
