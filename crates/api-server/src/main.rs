@@ -20,6 +20,16 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("failed to run database migrations")?;
 
+  // Test-environment convenience: keep the seeded test account's credentials
+  // valid across restarts and DB resets. AppConfig never populates this in
+  // production.
+  if let Some(seed) = &config.seed_test_user {
+    routes::auth::seed_test_user(&db, &seed.email, &seed.password)
+      .await
+      .context("failed to seed the test user")?;
+    tracing::warn!(email = %seed.email, "seeded test user (MICA_SEED_TEST_USER) — test environments only");
+  }
+
   let addr = config.http_addr;
   let state = AppState::new(config, db);
   let app = app_router(state);

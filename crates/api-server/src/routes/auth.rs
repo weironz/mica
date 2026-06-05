@@ -297,6 +297,32 @@ fn hash_password(password: &str) -> ApiResult<String> {
     .map_err(|error| ApiError::Internal(error.to_string()))
 }
 
+/// Startup hook for `MICA_SEED_TEST_USER`: upsert the test account so E2E
+/// runs always have known credentials — created if missing, password reset if
+/// it already exists. Production never reaches here (AppConfig strips the
+/// variable there).
+pub async fn seed_test_user(
+  db: &sqlx::PgPool,
+  email: &str,
+  password: &str,
+) -> anyhow::Result<()> {
+  let password_hash =
+    hash_password(password).map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
+  sqlx::query(
+    r#"
+      INSERT INTO users (email, display_name, password_hash)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+    "#,
+  )
+  .bind(email)
+  .bind("Test User")
+  .bind(password_hash)
+  .execute(db)
+  .await?;
+  Ok(())
+}
+
 fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
   let parsed_hash =
     PasswordHash::new(password_hash).map_err(|error| ApiError::Internal(error.to_string()))?;

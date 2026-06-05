@@ -6,7 +6,7 @@ use mica_app_core::AppState;
 
 mod ai;
 mod ai_ws;
-mod auth;
+pub mod auth;
 mod documents;
 mod files;
 mod health;
