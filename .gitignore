@@ -50,3 +50,6 @@ dist/
 .playwright-cli/
 .claude/settings.local.json
 .claude/worktrees/
+.claude/
+.code-review-graphignore
+skills-lock.json
