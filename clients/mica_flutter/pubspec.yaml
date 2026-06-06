@@ -24,6 +24,9 @@ dependencies:
   # variants for image paste + "copy image". Web keeps its DOM clipboard path.
   # In-house exemption #4 (platform glue). No Rust build (unlike super_clipboard).
   pasteboard: ^0.5.0
+  # Pure-Dart HTML parser — converts pasted clipboard HTML to Markdown on desktop
+  # (web uses dart:html for the same). Not platform glue; a parsing lib.
+  html: ^0.15.0
 
 dev_dependencies:
   flutter_test:

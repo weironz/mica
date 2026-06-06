@@ -627,8 +627,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// the same outcome the web textarea produced.
   Future<void> _pasteFromClipboard() async {
     if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
-    // A bitmap on the clipboard (screenshot / copied image) → upload it as an
-    // image block, the same as the web DOM paste path.
+    // 1) A bitmap (screenshot / copied image) → upload as an image block.
     final img = await readClipboardImage();
     if (img != null && img.isNotEmpty) {
       if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
@@ -636,12 +635,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text == null || text.isEmpty || !mounted || !_focus.hasFocus) return;
-    if (!_handleRichPaste(text, text, false)) {
+    final plain = data?.text ?? '';
+    // 2) Rich HTML (browser/Word) → Markdown so structure survives, like web.
+    final md = await readClipboardHtmlAsMarkdown();
+    if (md != null && mounted && _focus.hasFocus) {
+      if (_handleRichPaste(md, plain, true)) return;
+    }
+    // 3) Plain text: multi-line markdown-parses, single line inserts inline.
+    if (plain.isEmpty || !mounted || !_focus.hasFocus) return;
+    if (!_handleRichPaste(plain, plain, false)) {
       final sel = _controller.selection;
       if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
-      _controller.insertTextAtCaret(text);
+      _controller.insertTextAtCaret(plain);
       _syncImeFromSelection(force: true);
     }
   }
