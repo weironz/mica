@@ -15,15 +15,47 @@
 1. **Phase 1 云端入口**:桌面客户端连现有 API,数据在服务端
 2. **Phase 2 离线优先**:mica 核心 crate 编译成库,Dart FFI 进程内嵌入(AppFlowy rust-lib 模式),本地 SQLite + 同步引擎
 
+> **2026-06-06 优先级(别搞错)**:桌面端**主场 = 在线模式**(连云端 API,与 web 同),**先做扎实**——即 Phase 1 收尾 + M2/M3。**纯离线只是一种场景,属 Phase 2(CRDT,future)**,不是当前开发重点。
+> Phase 2 的完整设计(yrs/SQLite/bigserial 同步/frb v2/本地身份/对象存储/里程碑/红线)已深入调研 AppFlowy + AFFiNE 后**存档**在 `docs/phase2-offline-crdt.md`,**待在线模式成熟后再启动**。
+
 **目标矩阵(6 端,一份代码)**:web(已上线)、Linux、Windows、macOS、iOS、Android。
 桌面包必须各自系统构建(无跨平台编译),CI 用 GitHub Actions 三 OS runner。移动端的增量成本在触屏交互适配(现有编辑器是鼠标中心:hover 工具条、树 hover 浮现箭头、拖拽手柄),不动架构。
+
+## 技术路线定稿(架构分层与依赖边界,2026-06-06)
+
+### 三层架构 — 各层用各自标准语言,没有「额外引入」的编程语言
+
+| 层 | 语言 | 位置 | 职责 |
+|---|---|---|---|
+| 数据/服务面 | **Rust** | `crates/` | 后端服务;Phase 2 编译成库走 Dart FFI |
+| 客户端 UI | **Dart / Flutter** | `clients/mica_flutter/lib/` | 一份代码 6 端,**所有业务逻辑在此** |
+| 各平台原生宿主壳 | 各 OS 语言 | `windows/`·`linux/`=C++,`macos/`·`ios/`=Swift/ObjC,`android/`=Kotlin/Java,web=JS 引导 | `flutter create` 生成的标准样板:开窗口、塞引擎、注册插件。**不写业务逻辑** |
+
+- `windows/runner/` 的 C++ 是 Flutter **强制**的平台宿主壳,**不是新增的开发语言、也不是第三方依赖**;改它仅限平台粘合的几行,本项目尽量不碰。
+- 平台特定 Dart 能力走**条件导入**(`xxx.dart` → `export 'xxx_stub.dart' if (dart.library.html) 'xxx_web.dart'`):桌面/移动用 dart:io 变体,web 用 web 变体;桌面专属包(如 window_manager)靠此**不进 web bundle**。
+
+### 依赖与 in-house 边界(对原则 #1 的校准)
+
+- **in-house 自研**只留给**核心数据面**:CRDT、文档模型、同步引擎、自绘编辑器——值得自研、是护城河。
+- **标准边角/平台功能**(窗口管理、文件对话框、URL 打开…)用成熟社区包或框架内置:自研要背 N 套平台原生层维护,违背原则**初衷**(省心可控)而非贴合它。
+- **依赖豁免清单**(新增需在此登记 + 理由):`flutter_math_fork`(数学公式)、`window_manager`(桌面窗口大小/位置/最小尺寸)。
+  - ⚠️ window_manager 已挂迁移公告 → `libnativeapi/nativeapi-flutter`。但继任者 v0.1.x「Work in Progress」、缺 bounds/min-size/resize-move 监听等我们要的 API,**暂不迁**。已靠 `window_setup.dart` 条件导入隔离,待其出稳定版 + 补齐 API 后评估迁移,**成本约一个文件**。
+- 已 in-house 零依赖实现:`prefs`(JSON 持久化)、`clipboard_copy`(框架 Clipboard)、`open_url`(Process)。
+
+### M2 落定方案
+
+- **标题栏 = 系统原生**(否决无边框自定义:要写大量 Win32 拖拽/snap 或更重依赖,M2 不值当)。
+- **窗口管理(最小尺寸 + 大小/位置记忆)= `window_manager` 包**(Dart),条件导入隔离;窗口边界存 prefs JSON(键 `windowX/Y/Width/Height`)。否决「纯 C++ 注册表自研」(属平台边角功能)。
+- **中文 IME** = 验证既有 `TextInputClient` 路径在 Windows 的候选窗定位/组合态/commit;修 `render.dart caretRectFor()` 漏算文档级滚动导致候选窗错位的 bug。
+- **快捷键** = 顶层 Shortcuts/Actions 加 App 级快捷键,不与编辑器热路径(editor.dart `_onKey`)冲突。
+- **前置**:Windows 装插件需开**开发者模式**(插件用符号链接);详见 `docs/dev-environment.md`。
 
 ## Windows 优先 — Phase 1 计划
 
 | 里程碑 | 内容 | 待决 |
 |---|---|---|
 | **M1 跑起来** | `flutter create --platforms=windows .`;7 个 stub IO 化;连现有云端 API | token 存储(明文 vs DPAPI) |
-| **M2 像桌面应用** | 窗口大小/位置记忆、最小尺寸、快捷键;**中文 IME 专项验证**(自绘编辑器 + TextInputClient,Windows 候选窗定位与 web 路径完全不同) | 标题栏:系统原生 vs 自定义无边框 |
+| **M2 像桌面应用** | 窗口大小/位置记忆、最小尺寸、快捷键;**中文 IME 专项验证**(自绘编辑器 + TextInputClient,Windows 候选窗定位与 web 路径完全不同) | ~~标题栏~~ 已定:系统原生 + window_manager(见上「技术路线定稿」) |
 | **M3 可分发** | mermaid 后端渲染端点(Rust 出 SVG/PNG,六端共享);安装包 | 分发形态:MSIX/winget vs Inno vs 绿色 zip;自动更新 |
 
 **开发模式**:日常开发可留在 Linux(代码 99% 平台无关;Linux 工具链已装好,`flutter build linux` 已验证一次通过),Windows 机用于出包与平台特调。

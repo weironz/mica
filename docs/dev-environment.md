@@ -66,8 +66,14 @@ claude mcp add --transport http --scope user github https://api.githubcopilot.co
 授权前 `claude mcp list` 会显示未连接。本机 `gh` CLI 已登录(`weironz`),也可改用
 带 `gh auth token` 的本地 server 方案。
 
+## Windows 桌面构建前置
+
+- **Flutter SDK**(本机 `C:\flutter`,已入 PATH)、**VS Build Tools + Desktop C++ workload + Win10 SDK**(`flutter build windows` 需要)。
+- **开发者模式(Developer Mode)**:一旦项目含**任何原生插件**(如 `window_manager`),Flutter 在 Windows 上用符号链接管理插件,需开开发者模式,否则 `pub get`/构建报 `Building with plugins requires symlink support`。开法:`start ms-settings:developers` → 打开「开发人员模式」(普通用户即可,无需重启)。M1 无插件时不需要,M2 起需要。
+- **Docker Desktop**:跑本地后端(端口原生发布到 Windows localhost)。
+
 ## 重配顺序(换机)
 
-1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK(见 `docs/desktop-plan.md`)。
+1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK + **开发者模式**(见上「Windows 桌面构建前置」)。
 2. 本文的 MCP(改 `.mcp.json` 的 cwd)、code-review-graph 建图、skills。
 3. 起后端:`docker compose up -d --build postgres api`(详见 `docs/desktop-plan.md` M1 状态)。

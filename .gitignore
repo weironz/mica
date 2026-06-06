@@ -8,6 +8,9 @@
 # Local secrets (AI provider keys)
 /deepseek.conf
 *.key
+/github_token.txt
+*token*.txt
+*.pat
 
 # Local reference checkout of AppFlowy (not part of this project)
 /appflowy-src/
