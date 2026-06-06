@@ -42,7 +42,7 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 ## 项目原则(长期有效,优先级高于默认习惯)
 
-1. **In-house 优先**:最小化第三方依赖,宁可自研(编辑器整个是自绘的)。引入依赖需明确豁免(现有豁免:flutter_math_fork)。
+1. **In-house 优先**:最小化第三方依赖,宁可自研(编辑器整个是自绘的)。引入依赖需明确豁免(现有豁免:flutter_math_fork;window_manager——桌面窗口大小/位置/最小尺寸这种标准边角功能,自研要背三套平台原生层,用成熟包反而对;条件导入隔离,不入 web bundle)。in-house 该留给核心数据面(CRDT/文档模型/同步),不是平台粘合层。
 2. **Rust-first 数据面**:数据处理一律在 Rust 后端;Dart 只做 UI 和编辑器热路径。Markdown 语法逻辑两端必须同步(Rust `crates/markdown` 是权威,Dart `lib/editor/marks.dart`/`markdown.dart` 镜像)。
 3. **渲染架构红线**:新渲染能力先抽象机制(AtomicBlockRenderer 注册表),严禁往 `render.dart` 堆 if 分支。见 `docs/render-architecture.md`。
 4. **Markdown 方言原则**:CommonMark 0.31.2 底座(读侧 641/641=100%)+ GFM 扩展(24/24)+ 方言(脚注、front matter、Pandoc 数学约定);写侧输出规范化子集,round-trip 是不变量。记分牌:`docs/commonmark-scoreboard.md`,回归地板在 `commonmark_scoreboard.rs`。

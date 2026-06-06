@@ -14,6 +14,7 @@ import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
 import 'prefs.dart';
+import 'window_setup.dart';
 import 'upload/sha256.dart';
 import 'upload/zip_writer.dart';
 
@@ -33,8 +34,11 @@ const String kDevPassword = String.fromEnvironment(
   defaultValue: 'password123',
 );
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Desktop: restore window size/position + enforce a min size before the first
+  // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
+  await initDesktopWindow();
   // Suppress the browser's native right-click menu so the editor can show its
   // own (e.g. image actions) on web.
   if (kIsWeb) BrowserContextMenu.disableContextMenu();
