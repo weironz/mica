@@ -39,15 +39,32 @@ MCP 服务端本身由 `.mcp.json` 的 `uvx code-review-graph serve` 拉起。
 ## Skills
 
 ```bash
-# Flutter / Dart 官方 skills(universal agent,全装)
-npx skills add flutter/skills --skill '*' --agent universal --yes
-npx skills add dart-lang/skills --skill '*' --agent universal --yes
+# Flutter / Dart 官方 skills
+npx skills add flutter/skills --skill '*' --agent claude-code --yes
+npx skills add dart-lang/skills --skill '*' --agent claude-code --yes
 
 # Karpathy 编码守则插件市场
 /plugin marketplace add forrestchang/andrej-karpathy-skills
 ```
 
-已装 skills 的锁定清单见仓库根 `skills-lock.json`。
+> ⚠️ **坑(实测 2026-06-06,Windows + Claude Code 2.1.x)**:`npx skills add` 会把
+> skills 装到 `~/.agents/skills/`(或 `--agent universal` 时散写进各 IDE 目录),
+> **Claude Code 并不读这里**——它只读 `~/.claude/skills/`(全局)和项目
+> `.claude/skills/`。所以装完要把 skill 目录**复制进** `~/.claude/skills/` 才能被
+> Skill 工具调用,例如:
+> `Copy-Item ~/.agents/skills/flutter-* ~/.claude/skills/ -Recurse -Force`
+> (复制后下次会话生效)。`--agent universal` 还会在仓库根撒一堆 `AGENTS.md`/
+> `.cursorrules`/`.gemini/` 等,已 gitignore(见 `.gitignore` 末尾)。
+
+## GitHub MCP(用户级,OAuth)
+
+```bash
+claude mcp add --transport http --scope user github https://api.githubcopilot.com/mcp/
+```
+
+加完在 Claude Code 里跑 `/mcp` 选 github 完成 GitHub OAuth 授权(令牌不入配置文件);
+授权前 `claude mcp list` 会显示未连接。本机 `gh` CLI 已登录(`weironz`),也可改用
+带 `gh auth token` 的本地 server 方案。
 
 ## 重配顺序(换机)
 
