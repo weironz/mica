@@ -52,9 +52,8 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 
 ## 遗留事项(不阻塞桌面端)
 
-- Markdown P2:转义、自动链接(CommonMark 还差 ~23 个失败例,见 crates 测试)
+- ~~Markdown P2~~ 已闭环(2026-06-06):CommonMark 641/641 = 100%,GFM 24/24,见 docs/commonmark-scoreboard.md
 - 渲染架构 deferred(docs/render-architecture.md):`_NodeLayout` 字段收敛进 rendererData;hit-test 走 renderer 分发——下个新块类型进来时顺手做
-- "容器介绍"页有测试残留(`dfssdf` 行、一个被降级的 H2,行首敲 `## ` 可恢复)
 
 ## 环境备忘(Linux 开发机)
 
