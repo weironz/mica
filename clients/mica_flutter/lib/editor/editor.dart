@@ -200,6 +200,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // backspace/delete must defer to the IME then, or the composition desyncs and
   // raw pinyin leaks into the document (seen with Microsoft Pinyin).
   bool _imeComposing = false;
+  // The composing (marked-text) range within the focused block. It MUST be
+  // reflected back to the OS via currentTextEditingValue/_imeValue, or a
+  // composition-style IME (Microsoft Pinyin) diverges and accumulates garbage.
+  TextRange _composing = TextRange.empty;
   TextEditingValue _lastSentIme = TextEditingValue.empty;
 
   Timer? _blink;
@@ -774,6 +778,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         baseOffset: base.clamp(0, text.length),
         extentOffset: sel.focus.offset.clamp(0, text.length),
       ),
+      composing: (_composing.isValid && _composing.end <= text.length)
+          ? _composing
+          : TextRange.empty,
     );
   }
 
@@ -802,8 +809,33 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   @override
   void updateEditingValue(TextEditingValue value) {
     _imeComposing = value.composing.isValid;
+    _composing = value.composing.isValid ? value.composing : TextRange.empty;
     final node = _controller.focusedNode;
     if (node == null) return;
+
+    // IME composition in progress (pinyin/kana): mirror the marked text into the
+    // focused block so it shows, and keep our editing value — including the
+    // composing range, via _imeValue/currentTextEditingValue — identical to what
+    // the OS sent. That parity is what stops a composition-style IME (Microsoft
+    // Pinyin) from desyncing and accumulating garbage. Crucially, do NOT run
+    // commit-time logic (newline split, paste detection, Markdown input rules)
+    // on a transient composition — that waits until composing collapses.
+    if (value.composing.isValid && !value.composing.isCollapsed) {
+      final cbase = value.selection.baseOffset;
+      final cext = value.selection.extentOffset;
+      _controller.setFocusedText(
+        value.text,
+        cbase < 0 ? value.text.length : cbase,
+        cext < 0 ? value.text.length : cext,
+      );
+      _lastSentIme = value;
+      _closeLinkBar();
+      final f = _controller.selection?.focus;
+      final rect = f == null ? null : _render?.caretRectFor(f);
+      if (rect != null) _conn?.setCaretRect(rect);
+      return;
+    }
+
     final shift = HardwareKeyboard.instance.isShiftPressed;
     final text = value.text;
 
