@@ -620,6 +620,29 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return false;
   }
 
+  /// Desktop Ctrl+V: pull the clipboard's plain text and run it through the
+  /// shared paste pipeline. _handleRichPaste consumes the rich cases (code,
+  /// URL/image links, formulas, multi-line markdown); a plain single line falls
+  /// through (returns false) and is inserted inline, replacing any selection —
+  /// the same outcome the web textarea produced.
+  Future<void> _pasteFromClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null ||
+        text.isEmpty ||
+        !mounted ||
+        !_focus.hasFocus ||
+        !widget.canEdit) {
+      return;
+    }
+    if (!_handleRichPaste(text, text, false)) {
+      final sel = _controller.selection;
+      if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
+      _controller.insertTextAtCaret(text);
+      _syncImeFromSelection(force: true);
+    }
+  }
+
   static final RegExp _bareUrlRe =
       RegExp(r'^https?://\S+$', caseSensitive: false);
 
@@ -1015,6 +1038,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.deleteSelection();
         _syncImeFromSelection();
       });
+      return KeyEventResult.handled;
+    }
+
+    // Web's DOM paste interceptor (setRichPasteHandler) handles Ctrl+V; on
+    // desktop there is no such hook, so read the clipboard and route it through
+    // the same paste logic ourselves.
+    if (accel && key == LogicalKeyboardKey.keyV && !kIsWeb) {
+      _pasteFromClipboard();
       return KeyEventResult.handled;
     }
 

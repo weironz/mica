@@ -16,6 +16,10 @@ dependencies:
   # Desktop-only: window min-size + size/position memory (M2). Gated behind a
   # conditional import so it never enters the web bundle. In-house exemption #2.
   window_manager: ^0.5.0
+  # Native file dialogs (open/save/directory) for desktop+mobile — used only by
+  # the non-web (_stub) variants of pick_file/pick_image/image_actions. Web keeps
+  # its dart:html implementations. In-house exemption #3 (platform glue).
+  file_picker: ^8.0.0
 
 dev_dependencies:
   flutter_test:
