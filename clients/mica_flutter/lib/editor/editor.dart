@@ -626,15 +626,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// through (returns false) and is inserted inline, replacing any selection —
   /// the same outcome the web textarea produced.
   Future<void> _pasteFromClipboard() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text == null ||
-        text.isEmpty ||
-        !mounted ||
-        !_focus.hasFocus ||
-        !widget.canEdit) {
+    if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
+    // A bitmap on the clipboard (screenshot / copied image) → upload it as an
+    // image block, the same as the web DOM paste path.
+    final img = await readClipboardImage();
+    if (img != null && img.isNotEmpty) {
+      if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
+      _handlePasteImage(img, 'image/png', 'pasted-image.png');
       return;
     }
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty || !mounted || !_focus.hasFocus) return;
     if (!_handleRichPaste(text, text, false)) {
       final sel = _controller.selection;
       if (sel != null && !sel.isCollapsed) _controller.deleteSelection();

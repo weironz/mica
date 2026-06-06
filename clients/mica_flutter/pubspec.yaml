@@ -20,6 +20,10 @@ dependencies:
   # the non-web (_stub) variants of pick_file/pick_image/image_actions. Web keeps
   # its dart:html implementations. In-house exemption #3 (platform glue).
   file_picker: ^8.0.0
+  # Rich clipboard (read/write image) for desktop — used only by the non-web
+  # variants for image paste + "copy image". Web keeps its DOM clipboard path.
+  # In-house exemption #4 (platform glue). No Rust build (unlike super_clipboard).
+  pasteboard: ^0.5.0
 
 dev_dependencies:
   flutter_test:

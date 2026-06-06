@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:pasteboard/pasteboard.dart';
 
 /// Save [bytes] to disk via a native "save as" dialog. Fire-and-forget to keep
 /// the void contract; the save runs async.
@@ -27,7 +28,12 @@ Future<void> _save(Uint8List bytes, String filename) async {
   } catch (_) {}
 }
 
-/// Copying a raster image to the system clipboard needs a rich-clipboard
-/// backend; implemented in batch 2 (super_clipboard). Until then, report
-/// failure so the UI falls back to "Download".
-Future<bool> copyImageToClipboard(Uint8List bytes, String mime) async => false;
+/// Copy a raster image to the system clipboard via pasteboard.
+Future<bool> copyImageToClipboard(Uint8List bytes, String mime) async {
+  try {
+    await Pasteboard.writeImage(bytes);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
