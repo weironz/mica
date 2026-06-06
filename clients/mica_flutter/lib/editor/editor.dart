@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -195,6 +196,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   final GlobalKey _surfaceKey = GlobalKey();
 
   TextInputConnection? _conn;
+  // True while an IME composition (e.g. pinyin) is in progress. Desktop
+  // backspace/delete must defer to the IME then, or the composition desyncs and
+  // raw pinyin leaks into the document (seen with Microsoft Pinyin).
+  bool _imeComposing = false;
   TextEditingValue _lastSentIme = TextEditingValue.empty;
 
   Timer? _blink;
@@ -679,13 +684,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // ---------------------------------------------------------------------------
 
   void _attachIme() {
+    // Desktop (Flutter 3.44 multi-view): TextInput.attach resolves the view id
+    // from the focused node. Attaching before requestFocus() has actually
+    // landed (hasFocus still false) yields a zombie connection — the engine
+    // rejects setClient with "view id is null", yet the Dart side reports
+    // attached=true, so every later setEditingState fails "no client set".
+    // Only attach once focus is genuinely held; the focus listener re-runs this.
+    if (!_focus.hasFocus) return;
     if (_conn != null && _conn!.attached) {
       _syncImeFromSelection();
       return;
     }
     _conn = TextInput.attach(
       this,
-      const TextInputConfiguration(
+      TextInputConfiguration(
+        // Multi-view (Flutter 3.4x+): the engine's setClient requires the target
+        // FlutterView's id. Standard EditableText sets it; a raw
+        // TextInput.attach must too, or desktop rejects with "view id is null"
+        // (the connection then silently no-ops every setEditingState).
+        viewId: View.of(context).viewId,
         inputType: TextInputType.multiline,
         inputAction: TextInputAction.newline,
         autocorrect: false,
@@ -701,6 +718,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _conn?.close();
     _conn = null;
   }
+
+  /// Result for keys we want the platform text-input connection to act on
+  /// (typed characters, within-node backspace/delete). On desktop these must
+  /// NOT be marked consumed, or the engine won't route them to the IME
+  /// connection (the character/deletion is silently dropped). On web the hidden
+  /// DOM textarea bypasses this, so skipRemainingHandlers is safe there and also
+  /// stops the key bubbling to app-level shortcuts (Space-scroll, input rules).
+  KeyEventResult get _passToTextInput =>
+      kIsWeb ? KeyEventResult.skipRemainingHandlers : KeyEventResult.ignored;
 
   TextEditingValue _imeValue() {
     final sel = _controller.selection;
@@ -744,6 +770,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   @override
   void updateEditingValue(TextEditingValue value) {
+    _imeComposing = value.composing.isValid;
     final node = _controller.focusedNode;
     if (node == null) return;
     final shift = HardwareKeyboard.instance.isShiftPressed;
@@ -1086,9 +1113,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         }
         return KeyEventResult.skipRemainingHandlers;
       }
-      // Within-node delete is done by the OS input; keep it from the app's
-      // shortcuts but let the platform text field act on it.
-      return KeyEventResult.skipRemainingHandlers;
+      // Within-node backspace. The desktop embedder does NOT route Backspace to
+      // a raw text-input client (only typed characters reach updateEditingValue),
+      // so delete the grapheme before the caret ourselves. Web's hidden textarea
+      // still handles it, so delegate there.
+      if (!kIsWeb && !_imeComposing && sel.isCollapsed) {
+        final n = _controller.focusedNode;
+        final o = sel.focus.offset;
+        if (n != null && o > 0 && o <= n.text.length) {
+          final head = n.text.substring(0, o).characters.skipLast(1).toString();
+          _controller.setFocusedText(
+              head + n.text.substring(o), head.length, head.length);
+          _syncImeFromSelection(force: true);
+          return KeyEventResult.handled;
+        }
+      }
+      return _passToTextInput;
     }
 
     if (key == LogicalKeyboardKey.delete) {
@@ -1100,7 +1140,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         }
         return KeyEventResult.skipRemainingHandlers;
       }
-      return KeyEventResult.skipRemainingHandlers;
+      // Within-node forward delete: same desktop caveat as backspace.
+      if (!kIsWeb && !_imeComposing && sel.isCollapsed) {
+        final n = _controller.focusedNode;
+        final o = sel.focus.offset;
+        if (n != null && o < n.text.length) {
+          final tail = n.text.substring(o).characters.skip(1).toString();
+          _controller.setFocusedText(n.text.substring(0, o) + tail, o, o);
+          _syncImeFromSelection(force: true);
+          return KeyEventResult.handled;
+        }
+      }
+      return _passToTextInput;
     }
 
     if (key == LogicalKeyboardKey.arrowLeft) {
@@ -1132,8 +1183,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // so the character is inserted, but must NOT bubble to the app's default
     // shortcuts — Space is bound to scroll/activate at the app level and would
     // otherwise be swallowed (breaking `# `, `- `, `1. `, `> ` input rules).
+    //
+    // Web vs desktop divergence: on web, skipRemainingHandlers stops the app
+    // shortcuts while the hidden DOM textarea still feeds the character to the
+    // IME connection. On desktop there is no such bypass — skipRemainingHandlers
+    // (like handled) marks the key consumed, so the engine never generates the
+    // text-input event and the character is dropped. Return ignored on desktop
+    // so typing reaches updateEditingValue.
     if (event.character != null && event.character!.isNotEmpty) {
-      return KeyEventResult.skipRemainingHandlers;
+      return _passToTextInput;
     }
     return KeyEventResult.ignored;
   }
