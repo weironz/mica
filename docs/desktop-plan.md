@@ -28,6 +28,15 @@
 
 **开发模式**:日常开发可留在 Linux(代码 99% 平台无关;Linux 工具链已装好,`flutter build linux` 已验证一次通过),Windows 机用于出包与平台特调。
 
+### M1 状态(2026-06-06,核心闭环)
+
+- Windows 工具链就位:Flutter 3.44.1(`C:\flutter`,已入 PATH)、VS Build Tools 2026 + Win10 SDK(本机已有)。`windows/` 已脚手架,debug 构建通过,176 测试全过。
+- prefs / clipboard / open_url 三个 stub 已 in-house IO 化(见上表);pick_file/pick_image/image_actions 暂缓 M2。
+- 修了 `_resolveBaseUri()` 非 web 下的坏 `file://` base(改默认 `http://127.0.0.1:8080`,`--dart-define=MICA_API_BASE_URL` 可覆盖)。
+- **连 API 端到端验证通过**:本机后端 = `docker compose up -d --build postgres api`(**Docker Desktop**,端口原生发布到 Windows `127.0.0.1`)。桌面端默认构建(base `127.0.0.1:8080`)即可连:autologin→自动注册 demo(migrations 无 seed,`_devAutoLogin` 登录失败自动 register)→列 workspace(api 日志 login 401→register 200→workspaces 200)。
+- **网络方案(已定)**:用 **Docker Desktop** 跑栈,容器端口直达 Windows localhost,无需 dart-define、无需 WSL IP。备选:WSL 内原生 docker 时本机 localhost 转发不生效,需连 WSL eth0 IP(随重启变)或 `--dart-define=MICA_API_BASE_URL=http://<wsl-ip>:8080`。
+- 辅助工具(MCP / code-review-graph / skills)重配清单见 `docs/dev-environment.md`。
+
 ### 待用户拍板(M2/M3 前)
 
 1. 标题栏风格:原生(省事)vs 无边框自定义(Notion/AFFiNE 风,Windows 上拖拽/snap 细节坑多)
@@ -39,13 +48,13 @@
 
 | 文件 | 现状 | 桌面实现 |
 |---|---|---|
-| `lib/prefs_stub.dart` | 内存 Map(重启即丢) | 本地 JSON 文件(`~/.config/mica/` 或 `%APPDATA%`) |
-| `lib/editor/clipboard_copy_stub.dart` | no-op | dart:io / 平台通道 |
+| `lib/prefs_stub.dart` | ✅ 已实现 | 本地 JSON `%APPDATA%/mica/prefs.json`(其他 OS 走 XDG/Library),同步读写契约不变 |
+| `lib/editor/clipboard_copy_stub.dart` | ✅ 已实现 | 框架 `Clipboard`(无插件) |
+| `lib/editor/open_url_stub.dart` | ✅ 已实现 | `Process` → `explorer.exe`/`open`/`xdg-open`(无 url_launcher) |
 | `lib/editor/rich_paste_stub.dart` | no-op | 同上(HTML 粘贴可后置) |
-| `lib/editor/pick_file_stub.dart` | no-op | 桌面文件选择器 |
-| `lib/editor/pick_image_stub.dart` | no-op | 同上 |
-| `lib/editor/open_url_stub.dart` | no-op | 系统默认浏览器 |
-| `lib/editor/image_actions_stub.dart` | no-op | dart:io 下载/保存 |
+| `lib/editor/pick_file_stub.dart` | ⏸ 暂缓 M2 | 桌面文件选择器(依赖 file_selector vs 自写 Win32 通道,待决) |
+| `lib/editor/pick_image_stub.dart` | ⏸ 暂缓 M2 | 同上 |
+| `lib/editor/image_actions_stub.dart` | ⏸ 暂缓 M2 | 存盘 + 图片剪贴板(框架不内置图片剪贴板) |
 | `lib/editor/mermaid_preview_stub.dart` | no-op | **不做客户端实现** → 后端渲染端点(M3) |
 
 math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
