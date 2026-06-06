@@ -39,6 +39,8 @@
 
 # production secrets + built web bundle staging
 .env.prod
+docker-compose.override.yml
+clients/mica_flutter/installer/Output/
 deploy/web/
 dist/
 .env
