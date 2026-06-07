@@ -3,6 +3,7 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/document.dart';
 import 'api/simple.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -66,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1849942991;
+  int get rustContentHash => 1024226500;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -78,6 +79,92 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  void crateApiDocumentMicaDocumentDeleteBlock({
+    required MicaDocument that,
+    required String id,
+    required bool bringChildren,
+  });
+
+  Uint8List crateApiDocumentMicaDocumentEncodeState({
+    required MicaDocument that,
+  });
+
+  MicaDocument crateApiDocumentMicaDocumentFromBlocksJson({
+    required String rootId,
+    required String blocksJson,
+  });
+
+  MicaDocument? crateApiDocumentMicaDocumentFromState({
+    required List<int> bytes,
+  });
+
+  void crateApiDocumentMicaDocumentInsertBlockJson({
+    required MicaDocument that,
+    required String parentId,
+    required int index,
+    required String blockJson,
+  });
+
+  void crateApiDocumentMicaDocumentJoinIntoPrev({
+    required MicaDocument that,
+    required String id,
+  });
+
+  void crateApiDocumentMicaDocumentMoveBlock({
+    required MicaDocument that,
+    required String id,
+    required String newParent,
+    required int index,
+  });
+
+  String crateApiDocumentMicaDocumentRootBlockId({required MicaDocument that});
+
+  void crateApiDocumentMicaDocumentSetBlockDataJson({
+    required MicaDocument that,
+    required String id,
+    required String dataJson,
+  });
+
+  void crateApiDocumentMicaDocumentSplitBlock({
+    required MicaDocument that,
+    required String id,
+    required int at,
+    required String newId,
+    required String newKind,
+  });
+
+  void crateApiDocumentMicaDocumentTextDelete({
+    required MicaDocument that,
+    required String id,
+    required int at,
+    required int len,
+  });
+
+  void crateApiDocumentMicaDocumentTextFormat({
+    required MicaDocument that,
+    required String id,
+    required int start,
+    required int end,
+    required String ty,
+    String? href,
+    String? title,
+  });
+
+  void crateApiDocumentMicaDocumentTextInsert({
+    required MicaDocument that,
+    required String id,
+    required int at,
+    required String text,
+  });
+
+  String crateApiDocumentMicaDocumentToBlocksJson({required MicaDocument that});
+
+  void crateApiDocumentMicaDocumentUpdateBlockKind({
+    required MicaDocument that,
+    required String id,
+    required String kind,
+  });
+
   PlatformInt64 crateApiSimpleAdd({
     required PlatformInt64 a,
     required PlatformInt64 b,
@@ -88,6 +175,14 @@ abstract class RustLibApi extends BaseApi {
   String crateApiSimpleGreet({required String name});
 
   Future<void> crateApiSimpleInitApp();
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_MicaDocument;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_MicaDocument;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_MicaDocumentPtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -97,6 +192,525 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required super.generalizedFrbRustBinding,
     required super.portManager,
   });
+
+  @override
+  void crateApiDocumentMicaDocumentDeleteBlock({
+    required MicaDocument that,
+    required String id,
+    required bool bringChildren,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_bool(bringChildren, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentDeleteBlockConstMeta,
+        argValues: [that, id, bringChildren],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentDeleteBlockConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_delete_block",
+        argNames: ["that", "id", "bringChildren"],
+      );
+
+  @override
+  Uint8List crateApiDocumentMicaDocumentEncodeState({
+    required MicaDocument that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentEncodeStateConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentEncodeStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_encode_state",
+        argNames: ["that"],
+      );
+
+  @override
+  MicaDocument crateApiDocumentMicaDocumentFromBlocksJson({
+    required String rootId,
+    required String blocksJson,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(rootId, serializer);
+          sse_encode_String(blocksJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentFromBlocksJsonConstMeta,
+        argValues: [rootId, blocksJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentFromBlocksJsonConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_from_blocks_json",
+        argNames: ["rootId", "blocksJson"],
+      );
+
+  @override
+  MicaDocument? crateApiDocumentMicaDocumentFromState({
+    required List<int> bytes,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(bytes, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentFromStateConstMeta,
+        argValues: [bytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentFromStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_from_state",
+        argNames: ["bytes"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentInsertBlockJson({
+    required MicaDocument that,
+    required String parentId,
+    required int index,
+    required String blockJson,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(parentId, serializer);
+          sse_encode_u_32(index, serializer);
+          sse_encode_String(blockJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentInsertBlockJsonConstMeta,
+        argValues: [that, parentId, index, blockJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentInsertBlockJsonConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_insert_block_json",
+        argNames: ["that", "parentId", "index", "blockJson"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentJoinIntoPrev({
+    required MicaDocument that,
+    required String id,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentJoinIntoPrevConstMeta,
+        argValues: [that, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentJoinIntoPrevConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_join_into_prev",
+        argNames: ["that", "id"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentMoveBlock({
+    required MicaDocument that,
+    required String id,
+    required String newParent,
+    required int index,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_String(newParent, serializer);
+          sse_encode_u_32(index, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentMoveBlockConstMeta,
+        argValues: [that, id, newParent, index],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentMoveBlockConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_move_block",
+        argNames: ["that", "id", "newParent", "index"],
+      );
+
+  @override
+  String crateApiDocumentMicaDocumentRootBlockId({required MicaDocument that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentRootBlockIdConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentRootBlockIdConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_root_block_id",
+        argNames: ["that"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentSetBlockDataJson({
+    required MicaDocument that,
+    required String id,
+    required String dataJson,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_String(dataJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentSetBlockDataJsonConstMeta,
+        argValues: [that, id, dataJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentSetBlockDataJsonConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_set_block_data_json",
+        argNames: ["that", "id", "dataJson"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentSplitBlock({
+    required MicaDocument that,
+    required String id,
+    required int at,
+    required String newId,
+    required String newKind,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_u_32(at, serializer);
+          sse_encode_String(newId, serializer);
+          sse_encode_String(newKind, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentSplitBlockConstMeta,
+        argValues: [that, id, at, newId, newKind],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentSplitBlockConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_split_block",
+        argNames: ["that", "id", "at", "newId", "newKind"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentTextDelete({
+    required MicaDocument that,
+    required String id,
+    required int at,
+    required int len,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_u_32(at, serializer);
+          sse_encode_u_32(len, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentTextDeleteConstMeta,
+        argValues: [that, id, at, len],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentTextDeleteConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_text_delete",
+        argNames: ["that", "id", "at", "len"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentTextFormat({
+    required MicaDocument that,
+    required String id,
+    required int start,
+    required int end,
+    required String ty,
+    String? href,
+    String? title,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_u_32(start, serializer);
+          sse_encode_u_32(end, serializer);
+          sse_encode_String(ty, serializer);
+          sse_encode_opt_String(href, serializer);
+          sse_encode_opt_String(title, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentTextFormatConstMeta,
+        argValues: [that, id, start, end, ty, href, title],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentTextFormatConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_text_format",
+        argNames: ["that", "id", "start", "end", "ty", "href", "title"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentTextInsert({
+    required MicaDocument that,
+    required String id,
+    required int at,
+    required String text,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_u_32(at, serializer);
+          sse_encode_String(text, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentTextInsertConstMeta,
+        argValues: [that, id, at, text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentTextInsertConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_text_insert",
+        argNames: ["that", "id", "at", "text"],
+      );
+
+  @override
+  String crateApiDocumentMicaDocumentToBlocksJson({
+    required MicaDocument that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentToBlocksJsonConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentToBlocksJsonConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_to_blocks_json",
+        argNames: ["that"],
+      );
+
+  @override
+  void crateApiDocumentMicaDocumentUpdateBlockKind({
+    required MicaDocument that,
+    required String id,
+    required String kind,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          sse_encode_String(kind, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDocumentMicaDocumentUpdateBlockKindConstMeta,
+        argValues: [that, id, kind],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDocumentMicaDocumentUpdateBlockKindConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaDocument_update_block_kind",
+        argNames: ["that", "id", "kind"],
+      );
 
   @override
   PlatformInt64 crateApiSimpleAdd({
@@ -109,7 +723,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_64(a, serializer);
           sse_encode_i_64(b, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_64,
@@ -131,7 +745,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -154,7 +768,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -179,7 +793,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 19,
             port: port_,
           );
         },
@@ -197,10 +811,62 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_MicaDocument => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_MicaDocument => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument;
+
+  @protected
+  MicaDocument
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MicaDocumentImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  MicaDocument
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MicaDocumentImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  MicaDocument
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MicaDocumentImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
   @protected
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  bool dco_decode_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
+  }
+
+  @protected
+  MicaDocument
+  dco_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+      raw,
+    );
   }
 
   @protected
@@ -210,9 +876,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as List<int>;
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  MicaDocument?
+  dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null
+        ? null
+        : dco_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+            raw,
+          );
+  }
+
+  @protected
+  int dco_decode_u_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -228,10 +925,69 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt dco_decode_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
+  }
+
+  @protected
+  MicaDocument
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return MicaDocumentImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  MicaDocument
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return MicaDocumentImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  MicaDocument
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return MicaDocumentImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
+  }
+
+  @protected
+  bool sse_decode_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
+  MicaDocument
+  sse_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+      deserializer,
+    ));
   }
 
   @protected
@@ -241,10 +997,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  MicaDocument?
+  sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+        deserializer,
+      ));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint32();
   }
 
   @protected
@@ -259,15 +1055,54 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt sse_decode_usize(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
   }
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer) {
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    MicaDocument self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getUint8() != 0;
+    sse_encode_usize(
+      (self as MicaDocumentImpl).frbInternalSseEncode(move: true),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    MicaDocument self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as MicaDocumentImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    MicaDocument self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as MicaDocumentImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
   }
 
   @protected
@@ -277,9 +1112,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint8(self ? 1 : 0);
+  }
+
+  @protected
+  void
+  sse_encode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    MicaDocument self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+      self,
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putPlatformInt64(self);
+  }
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(
+    List<int> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putUint8List(
+      self is Uint8List ? self : Uint8List.fromList(self),
+    );
   }
 
   @protected
@@ -290,6 +1156,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void
+  sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+    MicaDocument? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
+        self,
+        serializer,
+      );
+    }
+  }
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint32(self);
   }
 
   @protected
@@ -304,14 +1203,140 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_usize(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
   }
+}
 
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putUint8(self ? 1 : 0);
-  }
+@sealed
+class MicaDocumentImpl extends RustOpaque implements MicaDocument {
+  // Not to be used by end users
+  MicaDocumentImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  MicaDocumentImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_MicaDocument,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_MicaDocument,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_MicaDocumentPtr,
+  );
+
+  void deleteBlock({required String id, required bool bringChildren}) =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentDeleteBlock(
+        that: this,
+        id: id,
+        bringChildren: bringChildren,
+      );
+
+  /// Encode the full document state (the base snapshot to persist locally).
+  Uint8List encodeState() =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentEncodeState(that: this);
+
+  void insertBlockJson({
+    required String parentId,
+    required int index,
+    required String blockJson,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentInsertBlockJson(
+    that: this,
+    parentId: parentId,
+    index: index,
+    blockJson: blockJson,
+  );
+
+  void joinIntoPrev({required String id}) => RustLib.instance.api
+      .crateApiDocumentMicaDocumentJoinIntoPrev(that: this, id: id);
+
+  void moveBlock({
+    required String id,
+    required String newParent,
+    required int index,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentMoveBlock(
+    that: this,
+    id: id,
+    newParent: newParent,
+    index: index,
+  );
+
+  String rootBlockId() =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentRootBlockId(that: this);
+
+  void setBlockDataJson({required String id, required String dataJson}) =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentSetBlockDataJson(
+        that: this,
+        id: id,
+        dataJson: dataJson,
+      );
+
+  void splitBlock({
+    required String id,
+    required int at,
+    required String newId,
+    required String newKind,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentSplitBlock(
+    that: this,
+    id: id,
+    at: at,
+    newId: newId,
+    newKind: newKind,
+  );
+
+  void textDelete({required String id, required int at, required int len}) =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentTextDelete(
+        that: this,
+        id: id,
+        at: at,
+        len: len,
+      );
+
+  void textFormat({
+    required String id,
+    required int start,
+    required int end,
+    required String ty,
+    String? href,
+    String? title,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentTextFormat(
+    that: this,
+    id: id,
+    start: start,
+    end: end,
+    ty: ty,
+    href: href,
+    title: title,
+  );
+
+  void textInsert({
+    required String id,
+    required int at,
+    required String text,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentTextInsert(
+    that: this,
+    id: id,
+    at: at,
+    text: text,
+  );
+
+  /// The document as a JSON array of blocks (tree order).
+  String toBlocksJson() =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentToBlocksJson(that: this);
+
+  void updateBlockKind({required String id, required String kind}) =>
+      RustLib.instance.api.crateApiDocumentMicaDocumentUpdateBlockKind(
+        that: this,
+        id: id,
+        kind: kind,
+      );
 }
