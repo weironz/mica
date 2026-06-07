@@ -1,0 +1,14 @@
+[package]
+name = "mica-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+rust-version = "1.85"
+
+# Plain Rust library — the storage/transport-agnostic data plane (Phase 2).
+# Shared by the cloud server and, via a thin flutter_rust_bridge crate
+# (clients/mica_flutter/rust), the desktop client. Kept FFI-agnostic on purpose:
+# no flutter_rust_bridge dependency lives here, so the server never pulls it in.
+[lib]
+
+[dependencies]

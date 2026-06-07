@@ -1127,6 +1127,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-core"
+version = "0.1.0"
+
+[[package]]
 name = "mica-infra"
 version = "0.1.0"
 dependencies = [

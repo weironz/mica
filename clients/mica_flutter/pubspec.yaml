@@ -43,6 +43,9 @@ dependencies:
   # selectors (`#merman .node rect{fill:..}`); merman documents inline-styling as a
   # host-side boundary (Zed does the same). Pure-Dart parsing lib, not platform glue.
   xml: ^6.5.0
+  rust_lib_mica_flutter:
+    path: rust_builder
+  flutter_rust_bridge: 2.12.0
 
 dev_dependencies:
   flutter_test:

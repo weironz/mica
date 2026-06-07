@@ -1,0 +1,22 @@
+[package]
+name = "rust_lib_mica_flutter"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.12.0"
+# The shared, FFI-agnostic data plane. All real logic lives there; this crate is
+# only the flutter_rust_bridge surface over it.
+mica-core = { path = "../../../crates/mica-core" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# This FFI crate physically lives inside the backend cargo workspace tree
+# (D:/codes/mica), so declare its own workspace root — otherwise cargo walks up,
+# finds the backend workspace, and refuses to build a non-member. It still
+# path-depends on crates/mica-core across the boundary.
+[workspace]
