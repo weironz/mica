@@ -195,6 +195,41 @@ pub async fn pull_workspace_updates(
     Ok(rows)
 }
 
+/// A single document's updates after `after_rid` (0 = from the start), ordered
+/// by `rid`, capped at `limit`. Drives the per-document WS catch-up path (rooms
+/// are per-document, so the client keeps a per-document cursor).
+pub async fn pull_document_updates(
+    db: &PgPool,
+    document_id: Uuid,
+    after_rid: i64,
+    limit: i64,
+) -> ApiResult<Vec<StreamUpdate>> {
+    let rows = sqlx::query_as::<_, StreamUpdate>(
+        "SELECT rid, document_id, actor_id, payload
+         FROM workspace_updates
+         WHERE document_id = $1 AND rid > $2
+         ORDER BY rid
+         LIMIT $3",
+    )
+    .bind(document_id)
+    .bind(after_rid)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// The current high-water `rid` of a single document (0 if none yet).
+pub async fn document_head(db: &PgPool, document_id: Uuid) -> ApiResult<i64> {
+    let head: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(rid) FROM workspace_updates WHERE document_id = $1",
+    )
+    .bind(document_id)
+    .fetch_one(db)
+    .await?;
+    Ok(head.unwrap_or(0))
+}
+
 /// The current high-water `rid` of a workspace (0 if it has no updates yet).
 pub async fn workspace_head(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
     let head: Option<i64> = sqlx::query_scalar(

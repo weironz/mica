@@ -9,10 +9,12 @@ use axum::{
   http::header::AUTHORIZATION,
   response::Response,
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use mica_app_core::{
   AppState, PresenceEntry, Room,
   documents::DocumentOperation,
   store::{self, AppliedUpdate},
+  sync,
 };
 use mica_infra::{ApiError, ApiResult};
 use serde::Deserialize;
@@ -328,6 +330,110 @@ async fn handle_client_message(
           error_code(&error),
           &error.to_string(),
         )],
+      }
+    }
+    // ── yrs CRDT sync (P2-M4), parallel to the op path above ───────────────
+    "sync.bootstrap" => {
+      // Fast-forward base for a client opening the doc: full yrs state + the rid
+      // it is current to. The base is built lazily from the op snapshot on first
+      // access, so existing documents work without a migration pass.
+      match sync::bootstrap_base(&state.db, document_id).await {
+        Ok(base) => vec![
+          json!({
+            "type": "sync.base",
+            "ack_id": ack_id,
+            "document_id": document_id,
+            "base": STANDARD.encode(&base.state),
+            "base_rid": base.base_rid,
+          })
+          .to_string(),
+        ],
+        Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+      }
+    }
+    "sync.pull" => {
+      // Incremental catch-up: every update for this doc after the client's cursor
+      // (cold start / offline reconnect). Rooms are per-document, so the cursor is
+      // per-document too.
+      let since_rid = envelope
+        .payload
+        .get("since_rid")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+      match sync::pull_document_updates(&state.db, document_id, since_rid, 1000).await {
+        Ok(updates) => {
+          let head = updates.last().map(|u| u.rid).unwrap_or(since_rid);
+          let encoded: Vec<Value> = updates
+            .iter()
+            .map(|u| {
+              json!({
+                "rid": u.rid,
+                "actor_id": u.actor_id,
+                "update": STANDARD.encode(&u.payload),
+              })
+            })
+            .collect();
+          vec![
+            json!({
+              "type": "sync.updates",
+              "ack_id": ack_id,
+              "document_id": document_id,
+              "updates": encoded,
+              "head": head,
+            })
+            .to_string(),
+          ]
+        }
+        Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+      }
+    }
+    "sync.push" => {
+      if !permissions.can_write {
+        return vec![error_message(
+          ack_id,
+          "permission_denied",
+          "you do not have permission to edit this document",
+        )];
+      }
+      let update_b64 = match envelope.payload.get("update").and_then(Value::as_str) {
+        Some(s) => s.to_string(),
+        None => {
+          return vec![error_message(
+            ack_id,
+            "invalid_payload",
+            "missing `update` (base64 yrs update)",
+          )];
+        }
+      };
+      let update = match STANDARD.decode(update_b64.as_bytes()) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+          return vec![error_message(ack_id, "invalid_payload", "update is not valid base64")];
+        }
+      };
+      match sync::push_update(&state.db, workspace_id, document_id, user_id, &update).await {
+        Ok(rid) => {
+          // Fan the update out to the rest of the room (already-have-it sender
+          // gets only the rid in its ack, below).
+          let event = json!({
+            "type": "sync.update",
+            "document_id": document_id,
+            "rid": rid,
+            "actor_id": user_id,
+            "update": update_b64,
+          });
+          room.broadcast(connection_id, Arc::from(event.to_string()));
+          vec![
+            json!({
+              "type": "sync.ack",
+              "ack_id": ack_id,
+              "document_id": document_id,
+              "rid": rid,
+            })
+            .to_string(),
+          ]
+        }
+        Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
       }
     }
     other => vec![error_message(

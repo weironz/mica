@@ -9,6 +9,9 @@ rust-version.workspace = true
 anyhow.workspace = true
 argon2.workspace = true
 axum.workspace = true
+# yrs sync updates are binary; the WS protocol is JSON text, so they ride as
+# base64 (P2-M4). Standard wire-encoding glue.
+base64 = "0.22"
 chrono.workspace = true
 futures-util.workspace = true
 jsonwebtoken.workspace = true
