@@ -5128,30 +5128,21 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = [
-      'Appearance',
-      'AI provider',
-      'Account',
-      'Server',
-      'Data',
-      'Shortcuts',
+    // Server selection is desktop-only: the web client is served by (and talks
+    // same-origin to) its own backend, and Local-offline needs the native core
+    // that isn't compiled for web. Hide the whole tab on web.
+    final tabs = <({String title, IconData icon, List<Widget> section})>[
+      (title: 'Appearance', icon: Icons.tune, section: _appearanceSection(context)),
+      (title: 'AI provider', icon: Icons.auto_awesome, section: _aiSection(context)),
+      (title: 'Account', icon: Icons.person_outline, section: _accountSection(context)),
+      if (!kIsWeb)
+        (title: 'Server', icon: Icons.dns_outlined, section: _serverSection(context)),
+      (title: 'Data', icon: Icons.import_export, section: _dataSection(context)),
+      (title: 'Shortcuts', icon: Icons.keyboard_outlined, section: _shortcutsSection(context)),
     ];
-    const icons = [
-      Icons.tune,
-      Icons.auto_awesome,
-      Icons.person_outline,
-      Icons.dns_outlined,
-      Icons.import_export,
-      Icons.keyboard_outlined,
-    ];
-    final sections = [
-      _appearanceSection(context),
-      _aiSection(context),
-      _accountSection(context),
-      _serverSection(context),
-      _dataSection(context),
-      _shortcutsSection(context),
-    ];
+    final titles = [for (final t in tabs) t.title];
+    final icons = [for (final t in tabs) t.icon];
+    final sections = [for (final t in tabs) t.section];
     return AlertDialog(
       title: const Row(
         children: [
