@@ -27,6 +27,7 @@
 // Section: imports
 
 use crate::api::document::*;
+use crate::api::store::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
 use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
@@ -39,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
   default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1024226500;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1918940771;
 
 // Section: executor
 
@@ -766,6 +767,313 @@ fn wire__crate__api__document__MicaDocument_update_block_kind_impl(
     },
   )
 }
+fn wire__crate__api__store__MicaStore_client_id_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_client_id",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+      >>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let output_ok =
+          Result::<_, ()>::Ok(crate::api::store::MicaStore::client_id(&*api_that_guard))?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__store__MicaStore_delete_doc_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_delete_doc",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+      >>::sse_decode(&mut deserializer);
+      let api_doc_id = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let output_ok = Result::<_, ()>::Ok({
+          crate::api::store::MicaStore::delete_doc(&*api_that_guard, api_doc_id);
+        })?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__store__MicaStore_device_id_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_device_id",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+      >>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let output_ok =
+          Result::<_, ()>::Ok(crate::api::store::MicaStore::device_id(&*api_that_guard))?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__store__MicaStore_list_docs_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_list_docs",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+      >>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let output_ok =
+          Result::<_, ()>::Ok(crate::api::store::MicaStore::list_docs(&*api_that_guard))?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__store__MicaStore_load_doc_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_load_doc",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+      >>::sse_decode(&mut deserializer);
+      let api_doc_id = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::load_doc(
+          &*api_that_guard,
+          api_doc_id,
+        ))?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__store__MicaStore_open_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_open",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_path = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::open(api_path))?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__store__MicaStore_save_doc_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaStore_save_doc",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+      >>::sse_decode(&mut deserializer);
+      let api_doc_id = <String>::sse_decode(&mut deserializer);
+      let api_doc = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>,
+      >>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let mut api_doc_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_doc, 1, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            1 => api_doc_guard = Some(api_doc.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let api_doc_guard = api_doc_guard.unwrap();
+        let output_ok = Result::<_, ()>::Ok({
+          crate::api::store::MicaStore::save_doc(&*api_that_guard, api_doc_id, &*api_doc_guard);
+        })?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
 fn wire__crate__api__simple__add_impl(
   ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
   rust_vec_len_: i32,
@@ -892,6 +1200,9 @@ fn wire__crate__api__simple__init_app_impl(
 flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
   flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>
 );
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+  flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>
+);
 
 // Section: dart2rust
 
@@ -905,8 +1216,28 @@ impl SseDecode for MicaDocument {
   }
 }
 
+impl SseDecode for MicaStore {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    let mut inner = <RustOpaqueMoi<
+      flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
+    >>::sse_decode(deserializer);
+    return flutter_rust_bridge::for_generated::rust_auto_opaque_decode_owned(inner);
+  }
+}
+
 impl SseDecode
   for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>
+{
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    let mut inner = <usize>::sse_decode(deserializer);
+    return decode_rust_opaque_moi(inner);
+  }
+}
+
+impl SseDecode
+  for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -934,6 +1265,18 @@ impl SseDecode for i64 {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
     deserializer.cursor.read_i64::<NativeEndian>().unwrap()
+  }
+}
+
+impl SseDecode for Vec<String> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    let mut len_ = <i32>::sse_decode(deserializer);
+    let mut ans_ = Vec::with_capacity(len_ as usize);
+    for idx_ in 0..len_ {
+      ans_.push(<String>::sse_decode(deserializer));
+    }
+    return ans_;
   }
 }
 
@@ -971,10 +1314,28 @@ impl SseDecode for Option<MicaDocument> {
   }
 }
 
+impl SseDecode for Option<MicaStore> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    if (<bool>::sse_decode(deserializer)) {
+      return Some(<MicaStore>::sse_decode(deserializer));
+    } else {
+      return None;
+    }
+  }
+}
+
 impl SseDecode for u32 {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
     deserializer.cursor.read_u32::<NativeEndian>().unwrap()
+  }
+}
+
+impl SseDecode for u64 {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    deserializer.cursor.read_u64::<NativeEndian>().unwrap()
   }
 }
 
@@ -1013,7 +1374,7 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
   // Codec=Pde (Serialization + dispatch), see doc to use other codecs
   match func_id {
-    19 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+    26 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -1049,9 +1410,16 @@ fn pde_ffi_dispatcher_sync_impl(
     15 => {
       wire__crate__api__document__MicaDocument_update_block_kind_impl(ptr, rust_vec_len, data_len)
     }
-    16 => wire__crate__api__simple__add_impl(ptr, rust_vec_len, data_len),
-    17 => wire__crate__api__simple__core_version_impl(ptr, rust_vec_len, data_len),
-    18 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+    16 => wire__crate__api__store__MicaStore_client_id_impl(ptr, rust_vec_len, data_len),
+    17 => wire__crate__api__store__MicaStore_delete_doc_impl(ptr, rust_vec_len, data_len),
+    18 => wire__crate__api__store__MicaStore_device_id_impl(ptr, rust_vec_len, data_len),
+    19 => wire__crate__api__store__MicaStore_list_docs_impl(ptr, rust_vec_len, data_len),
+    20 => wire__crate__api__store__MicaStore_load_doc_impl(ptr, rust_vec_len, data_len),
+    21 => wire__crate__api__store__MicaStore_open_impl(ptr, rust_vec_len, data_len),
+    22 => wire__crate__api__store__MicaStore_save_doc_impl(ptr, rust_vec_len, data_len),
+    23 => wire__crate__api__simple__add_impl(ptr, rust_vec_len, data_len),
+    24 => wire__crate__api__simple__core_version_impl(ptr, rust_vec_len, data_len),
+    25 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -1072,6 +1440,20 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<MicaDocument>> for MicaDocumen
   }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<MicaStore> {
+  fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+    flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self.0).into_dart()
+  }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<MicaStore> {}
+
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<MicaStore>> for MicaStore {
+  fn into_into_dart(self) -> FrbWrapper<MicaStore> {
+    self.into()
+  }
+}
+
 impl SseEncode for MicaDocument {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1079,8 +1461,29 @@ impl SseEncode for MicaDocument {
   }
 }
 
+impl SseEncode for MicaStore {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>>::sse_encode(
+      flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self),
+      serializer,
+    );
+  }
+}
+
 impl SseEncode
   for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>
+{
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    let (ptr, size) = self.sse_encode_raw();
+    <usize>::sse_encode(ptr, serializer);
+    <i32>::sse_encode(size, serializer);
+  }
+}
+
+impl SseEncode
+  for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1108,6 +1511,16 @@ impl SseEncode for i64 {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
     serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
+  }
+}
+
+impl SseEncode for Vec<String> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <i32>::sse_encode(self.len() as _, serializer);
+    for item in self {
+      <String>::sse_encode(item, serializer);
+    }
   }
 }
 
@@ -1141,10 +1554,27 @@ impl SseEncode for Option<MicaDocument> {
   }
 }
 
+impl SseEncode for Option<MicaStore> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.is_some(), serializer);
+    if let Some(value) = self {
+      <MicaStore>::sse_encode(value, serializer);
+    }
+  }
+}
+
 impl SseEncode for u32 {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
     serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
+  }
+}
+
+impl SseEncode for u64 {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
   }
 }
 
@@ -1186,6 +1616,7 @@ mod io {
 
   use super::*;
   use crate::api::document::*;
+  use crate::api::store::*;
   use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
   use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
   use flutter_rust_bridge::{Handler, IntoIntoDart};
@@ -1207,6 +1638,20 @@ mod io {
   ) {
     MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>::decrement_strong_count(ptr as _);
   }
+
+  #[unsafe(no_mangle)]
+  pub extern "C" fn frbgen_mica_flutter_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+    ptr: *const std::ffi::c_void,
+  ) {
+    MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>::increment_strong_count(ptr as _);
+  }
+
+  #[unsafe(no_mangle)]
+  pub extern "C" fn frbgen_mica_flutter_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+    ptr: *const std::ffi::c_void,
+  ) {
+    MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>::decrement_strong_count(ptr as _);
+  }
 }
 #[cfg(not(target_family = "wasm"))]
 pub use io::*;
@@ -1221,6 +1666,7 @@ mod web {
 
   use super::*;
   use crate::api::document::*;
+  use crate::api::store::*;
   use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
   use flutter_rust_bridge::for_generated::wasm_bindgen;
   use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
@@ -1243,6 +1689,20 @@ mod web {
     ptr: *const std::ffi::c_void,
   ) {
     MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>::decrement_strong_count(ptr as _);
+  }
+
+  #[wasm_bindgen]
+  pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+    ptr: *const std::ffi::c_void,
+  ) {
+    MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>::increment_strong_count(ptr as _);
+  }
+
+  #[wasm_bindgen]
+  pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+    ptr: *const std::ffi::c_void,
+  ) {
+    MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>::decrement_strong_count(ptr as _);
   }
 }
 #[cfg(target_family = "wasm")]

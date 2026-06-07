@@ -12,7 +12,8 @@ use mica_core::{Block, Mark, MicaDoc};
 
 #[frb(opaque)]
 pub struct MicaDocument {
-    inner: Mutex<MicaDoc>,
+    // crate-visible so the local store (api::store) can save/load it.
+    pub(crate) inner: Mutex<MicaDoc>,
 }
 
 impl MicaDocument {
