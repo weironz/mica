@@ -255,7 +255,7 @@ async fn lock_document_tx(
   .map_err(ApiError::from)
 }
 
-async fn latest_snapshot_tx(
+pub(crate) async fn latest_snapshot_tx(
   tx: &mut Transaction<'_, Postgres>,
   document_id: Uuid,
 ) -> ApiResult<Option<SnapshotRecord>> {

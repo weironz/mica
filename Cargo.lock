@@ -1208,6 +1208,7 @@ name = "mica-app-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "mica-core",
  "mica-infra",
  "mica-markdown",
  "serde",

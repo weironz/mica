@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub mod documents;
 pub mod rooms;
 pub mod store;
+pub mod sync;
 
 pub use rooms::{DocumentHub, PresenceEntry, Room, RoomMessage};
 

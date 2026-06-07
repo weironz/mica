@@ -8,6 +8,9 @@ rust-version.workspace = true
 [dependencies]
 mica-markdown = { path = "../markdown" }
 mica-infra = { path = "../infra" }
+# yrs data plane (no `store` feature → no rusqlite on the server). Used server-side
+# to fold + validate the CRDT update stream (P2-M4).
+mica-core = { path = "../mica-core" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
