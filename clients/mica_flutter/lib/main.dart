@@ -2477,6 +2477,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final EditorCommandHook _commandHook = EditorCommandHook();
 
   @override
+  void initState() {
+    super.initState();
+    // Backfill from the initial selection so the very first frame shows the page
+    // name (and workspace rename field) instead of an empty "Untitled" hint —
+    // didUpdateWidget only fires on later changes, so without this the title
+    // looks blank until the next page switch.
+    final name = widget.selectedBootstrap?.view.name ?? '';
+    if (name.isNotEmpty) _pageTitle.text = name;
+    final workspace = widget.selectedWorkspace;
+    if (workspace != null) _rename.text = workspace.name;
+  }
+
+  @override
   void didUpdateWidget(covariant WorkspaceView oldWidget) {
     super.didUpdateWidget(oldWidget);
     final selected = widget.selectedWorkspace;
