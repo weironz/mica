@@ -16,13 +16,13 @@ import 'dart:convert';
 
 import '../src/rust/api/document.dart';
 import '../src/rust/api/store.dart';
+import 'doc_ops.dart';
 
-/// A block op as the editor emits it (see `editor/controller.dart`).
-typedef DocOp = Map<String, dynamic>;
+export 'doc_ops.dart' show DocOp;
 
 class LocalDocBackend {
   LocalDocBackend._(this._store, this._doc, this.docId, this.rootBlockId) {
-    _seedDataCache();
+    _mirror.seedFrom(_doc);
   }
 
   final MicaStore _store;
@@ -34,12 +34,9 @@ class LocalDocBackend {
   /// The root (page) block id; the editor's nodes are this block's children.
   final String rootBlockId;
 
-  // Last-known `data` map per block id. The editor's debounced text straggler
-  // (`{type:update_block, block_id, text}`) omits `data`, but inline marks live
-  // *inside* data — applying a text-only update would otherwise drop them. We
-  // recover the marks from this cache. Kept in sync from load + every op that
-  // does carry data.
-  final Map<String, Map<String, dynamic>> _dataById = {};
+  // Shared editor-op → yrs translator (also used by the cloud sync session), so
+  // local and cloud interpret edits identically.
+  final DocOpMirror _mirror = DocOpMirror();
 
   Timer? _saveTimer;
   static const _saveDebounce = Duration(milliseconds: 400);
@@ -106,63 +103,14 @@ class LocalDocBackend {
     return {for (final b in all) b['id'] as String: b};
   }
 
-  void _seedDataCache() {
-    for (final b in _blocksById().values) {
-      final d = b['data'];
-      if (d is Map<String, dynamic>) _dataById[b['id'] as String] = d;
-    }
-  }
-
   /// Mirror the editor's op batch into the on-device yrs doc, then persist
   /// (debounced). Returning a Future satisfies the editor's `ApplyOps` contract;
   /// the FFI calls are synchronous so this resolves immediately.
   Future<void> applyOps(List<DocOp> ops) async {
     for (final op in ops) {
-      _applyOne(op);
+      _mirror.apply(_doc, op);
     }
     _scheduleSave();
-  }
-
-  void _applyOne(DocOp op) {
-    switch (op['type'] as String?) {
-      case 'insert_block':
-        final block = (op['block'] as Map).cast<String, dynamic>();
-        final id = block['id'] as String;
-        final data = block['data'];
-        if (data is Map<String, dynamic>) _dataById[id] = data;
-        _doc.insertBlockJson(
-          parentId: op['parent_id'] as String,
-          index: op['index'] as int,
-          blockJson: jsonEncode(block),
-        );
-      case 'update_block':
-        final id = op['block_id'] as String;
-        Map<String, dynamic>? data;
-        if (op['data'] is Map) {
-          data = (op['data'] as Map).cast<String, dynamic>();
-          _dataById[id] = data;
-        } else if (op.containsKey('text')) {
-          // text-only straggler: recover marks from the last-known data.
-          data = _dataById[id];
-        }
-        _doc.updateBlock(
-          id: id,
-          kind: op['kind'] as String?,
-          text: op['text'] as String?,
-          dataJson: data == null ? null : jsonEncode(data),
-        );
-      case 'delete_block':
-        final id = op['block_id'] as String;
-        _dataById.remove(id);
-        // The editor lifts children itself before deleting, so don't re-parent.
-        _doc.deleteBlock(id: id, bringChildren: false);
-      case 'move_block':
-        _doc.moveBlock(
-          id: op['block_id'] as String,
-          newParent: op['parent_id'] as String,
-          index: op['index'] as int,
-        );
-    }
   }
 
   void _scheduleSave() {
