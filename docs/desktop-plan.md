@@ -56,7 +56,7 @@
 |---|---|---|
 | **M1 跑起来** | `flutter create --platforms=windows .`;7 个 stub IO 化;连现有云端 API | token 存储(明文 vs DPAPI) |
 | **M2 像桌面应用** | 窗口大小/位置记忆、最小尺寸、快捷键;**中文 IME 专项验证**(自绘编辑器 + TextInputClient,Windows 候选窗定位与 web 路径完全不同) | ~~标题栏~~ 已定:系统原生 + window_manager(见上「技术路线定稿」) |
-| **M3 可分发** | ~~mermaid 后端渲染端点~~ → **客户端 merman Dart FFI**(纯 Rust、离线,见下「mermaid 桌面渲染」)✅;安装包 | 分发形态:MSIX/winget vs Inno vs 绿色 zip;自动更新 |
+| **M3 可分发** | mermaid 客户端 merman Dart FFI(离线)✅;Inno 安装包 + GitHub release ✅(见下「分发」) | ~~分发形态~~ 定 Inno;~~自动更新/签名~~ 见下决策 |
 
 **开发模式**:日常开发可留在 Linux(代码 99% 平台无关;Linux 工具链已装好,`flutter build linux` 已验证一次通过),Windows 机用于出包与平台特调。
 
@@ -103,6 +103,15 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 **箭头**:flutter_svg 不渲 `<marker>`,所以内联器**自己合成箭头**(`_synthesizeArrowheads`):解析每条边(`<path d>` 或 `<line>`)的端点与切线方向,把 marker 的子图形克隆进一个 `<g transform="translate(端点) rotate(方向) scale(viewBox→markerW) translate(-refX,-refY)">`,再删 marker/defs。flowchart/sequence/state/class 箭头均正确。
 **实测**(Windows runner 集成测试 `integration_test/mermaid_render_test.dart`,带 raster-ink 断言):flowchart / sequence / class / state / pie / gantt 六类均正确渲染主题色、文字、虚实线、**箭头**,离线可用。
 **已知小差异**:class 继承三角是实心(real mermaid 为空心,marker fill 默认 #333);merman 仍 0.x alpha,已锁版本。Web 端保持原 mermaid.min.js 路径不变。
+
+### 分发(M3,2026-06-07)
+
+- **打包**:Inno Setup per-user 安装包(`installer/mica.iss`,`PrivilegesRequired=lowest`,无 UAC)。`SourceDir` 指向 `build/windows/x64/runner/Release`。`AppVersion` 用 `#ifndef`,支持 `ISCC /DAppVersion=x.y.z` 覆盖。安装包 ~16.5MB(merman_ffi.dll 13MB 占大头)。
+- **首份 release**:`v0.1.0` 已发布(`gh release create`,prerelease,asset `Mica-Setup-0.1.0.exe`)。标签**故意指向无 workflow 的 commit**(`5c47bd9`)以免触发 CI 二次构建。
+- **CI**:`.github/workflows/release-windows.yml`,push `v*` 标签在 windows runner 上 `flutter build windows --release` → choco 装 Inno → ISCC → softprops 发布安装包。⚠️ **注意**:tag 触发用的是**标签 commit 处**的 workflow 文件——未来打 tag 的 commit 必须含此 workflow(现在它在 `desktop/m2-windows`,合进 main 后更稳);`workflow_dispatch` 要等 workflow 进默认分支才在 UI 出现。
+- **决策(2026-06-07,用户拍板)**:
+  - **自动更新:先不内置**(LocalSend 路线)——靠 release 页/winget 手动升级。若日后要做,调研已给结论:抄 AppFlowy 的 `auto_updater`(WinSparkle)+ appcast 挂 GitHub release(DSA 更新签名 ≠ 代码签名证书)。
+  - **代码签名:跳过**——未签名,首次运行有 SmartScreen 警告(More info→Run anyway,同 AppFlowy)。证书要 CA 签发,开源免费正路是 SignPath Foundation(需项目所有者申请),日后接进 Inno `SignTool` 指令。
 
 ## 遗留事项(不阻塞桌面端)
 
