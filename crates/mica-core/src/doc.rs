@@ -17,6 +17,7 @@
 use serde_json::Value;
 use yrs::types::{Attrs, GetString};
 use yrs::updates::decoder::Decode;
+use yrs::updates::encoder::Encode;
 use yrs::{
     Any, Array, ArrayPrelim, ArrayRef, ClientID, Doc, Map, MapPrelim, MapRef, OffsetKind, Options,
     Out, ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, TransactionMut, Update,
@@ -193,6 +194,33 @@ impl MicaDoc {
         self.doc
             .transact()
             .encode_state_as_update_v1(&StateVector::default())
+    }
+
+    // ── sync primitives (P2-M4) ──────────────────────────────────────────────
+
+    /// This replica's state vector (what it has observed), v1-encoded. A peer
+    /// sends its own to ask us for the minimal update it is missing.
+    pub fn state_vector(&self) -> Vec<u8> {
+        self.doc.transact().state_vector().encode_v1()
+    }
+
+    /// Encode the update carrying everything THIS doc has that a peer with
+    /// `remote_sv` (their v1-encoded [`Self::state_vector`]) lacks — the minimal
+    /// diff to send them. Passing an empty/`StateVector::default` SV yields the
+    /// full state (same as [`Self::encode_state`]).
+    pub fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError> {
+        let sv = StateVector::decode_v1(remote_sv).map_err(|e| DocError::Decode(e.to_string()))?;
+        Ok(self.doc.transact().encode_state_as_update_v1(&sv))
+    }
+
+    /// Merge a peer's v1-encoded update into this doc (CRDT merge — commutative,
+    /// idempotent, order-independent). No-op-safe on already-seen updates.
+    pub fn apply_update(&mut self, bytes: &[u8]) -> Result<(), DocError> {
+        let update = Update::decode_v1(bytes).map_err(|e| DocError::Decode(e.to_string()))?;
+        let mut txn = self.doc.transact_mut();
+        txn.apply_update(update)
+            .map_err(|e| DocError::Apply(e.to_string()))?;
+        Ok(())
     }
 
     /// Rebuild a document from an encoded v1 update.

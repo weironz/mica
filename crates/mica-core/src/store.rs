@@ -27,6 +27,15 @@ pub struct Identity {
     pub client_id: u64,
 }
 
+/// A document's sync high-water marks against the cloud (P2-M4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SyncCursor {
+    /// Highest cloud stream id (`rid`) this device has pulled and applied.
+    pub last_synced_rid: i64,
+    /// Highest local update `clock` this device has pushed to the cloud.
+    pub pushed_clock: i64,
+}
+
 /// A local workspace (P2-M3): a named container for a page tree. The on-device
 /// store can hold several, mirroring the cloud workspace list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +94,17 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY,
                  name     TEXT NOT NULL,
                  position TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS doc_update(
+                 doc_id  TEXT NOT NULL,
+                 clock   INTEGER NOT NULL,
+                 payload BLOB NOT NULL,
+                 PRIMARY KEY(doc_id, clock)
+             );
+             CREATE TABLE IF NOT EXISTS sync_cursor(
+                 doc_id          TEXT PRIMARY KEY,
+                 last_synced_rid INTEGER NOT NULL DEFAULT 0,
+                 pushed_clock    INTEGER NOT NULL DEFAULT 0
              );",
         )?;
         // Migrate pre-multi-workspace stores: add the workspace_id column and a
@@ -177,7 +197,8 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Load a document by id, decoding it with `client_id` (the device's actor).
+    /// Load a document by id, decoding it with `client_id` (the device's actor)
+    /// and replaying any incremental updates on top of the base snapshot (P2-M4).
     /// Returns `None` if there's no such document.
     pub fn load_doc(&self, doc_id: &str, client_id: u64) -> Result<Option<MicaDoc>, StoreError> {
         let state: Option<Vec<u8>> = self
@@ -188,13 +209,103 @@ impl LocalStore {
                 |r| r.get(0),
             )
             .optional()?;
-        match state {
-            Some(bytes) => Ok(Some(MicaDoc::from_update_with_client_id(
-                &bytes,
-                Some(client_id),
-            )?)),
-            None => Ok(None),
+        let bytes = match state {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+        let mut doc = MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?;
+        for (_clock, update) in self.doc_updates(doc_id)? {
+            doc.apply_update(&update)?;
         }
+        Ok(Some(doc))
+    }
+
+    // ── incremental update log + sync cursor — P2-M4 ─────────────────────────
+
+    /// Append an incremental update to a document's log, returning its `clock`
+    /// (a per-doc monotonic local sequence). The base snapshot is left untouched;
+    /// [`Self::squash`] folds the log back into the base later.
+    pub fn append_update(&self, doc_id: &str, update: &[u8]) -> Result<i64, StoreError> {
+        let next: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(clock),0)+1 FROM doc_update WHERE doc_id=?1",
+            params![doc_id],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO doc_update(doc_id,clock,payload) VALUES(?1,?2,?3)",
+            params![doc_id, next, update],
+        )?;
+        Ok(next)
+    }
+
+    /// All of a document's incremental updates, ordered by `clock`.
+    pub fn doc_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT clock,payload FROM doc_update WHERE doc_id=?1 ORDER BY clock")?;
+        let rows = stmt
+            .query_map(params![doc_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Updates with `clock > after` — the queue still to push to the cloud.
+    pub fn updates_after(&self, doc_id: &str, after: i64) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT clock,payload FROM doc_update WHERE doc_id=?1 AND clock>?2 ORDER BY clock",
+        )?;
+        let rows = stmt
+            .query_map(params![doc_id, after], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Fold the base snapshot + all logged updates into a single new base, then
+    /// drop the log. Coalesces history growth (§4). Caller passes the device
+    /// `client_id` so the squashed doc keeps a consistent actor.
+    pub fn squash(&self, doc_id: &str, client_id: u64) -> Result<(), StoreError> {
+        let doc = match self.load_doc(doc_id, client_id)? {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        let state = doc.encode_state();
+        self.conn.execute(
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
+             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+            params![doc_id, state, now_millis()],
+        )?;
+        self.conn
+            .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        Ok(())
+    }
+
+    /// A document's cloud sync high-water marks (zeroed if never synced).
+    pub fn sync_cursor(&self, doc_id: &str) -> Result<SyncCursor, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT last_synced_rid,pushed_clock FROM sync_cursor WHERE doc_id=?1",
+                params![doc_id],
+                |r| {
+                    Ok(SyncCursor {
+                        last_synced_rid: r.get(0)?,
+                        pushed_clock: r.get(1)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    /// Persist a document's sync high-water marks.
+    pub fn set_sync_cursor(&self, doc_id: &str, cursor: SyncCursor) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,?3)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 last_synced_rid=excluded.last_synced_rid, pushed_clock=excluded.pushed_clock",
+            params![doc_id, cursor.last_synced_rid, cursor.pushed_clock],
+        )?;
+        Ok(())
     }
 
     /// All stored document ids (sorted).
@@ -415,6 +526,60 @@ mod tests {
         assert!(store.list_views().unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
         store.purge_view("v1").unwrap();
         assert!(store.list_views().unwrap().iter().all(|v| v.id != "v1"));
+    }
+
+    #[test]
+    fn update_log_replays_on_load_and_squash_collapses() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
+        store.save_doc("d", &doc).unwrap();
+
+        // Make two edits as incremental updates (capture each as a diff).
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        let sv0 = working.state_vector();
+        working.text_insert("a", 5, " world");
+        let u1 = working.encode_diff(&sv0).unwrap();
+        store.append_update("d", &u1).unwrap();
+        let sv1 = working.state_vector();
+        working.insert_block("r", 1, &Block::new("b", "paragraph").with_text("two"));
+        let u2 = working.encode_diff(&sv1).unwrap();
+        let clock2 = store.append_update("d", &u2).unwrap();
+        assert_eq!(clock2, 2);
+
+        // Loading replays base + updates.
+        let loaded = store.load_doc("d", cid).unwrap().unwrap();
+        let a = loaded.to_blocks().into_iter().find(|b| b.id == "a").unwrap();
+        assert_eq!(a.text, "Hello world");
+        assert_eq!(loaded.to_blocks().iter().find(|b| b.id == "r").unwrap().children, vec!["a", "b"]);
+        assert_eq!(store.doc_updates("d").unwrap().len(), 2);
+
+        // Squash folds them into the base and clears the log; state preserved.
+        store.squash("d", cid).unwrap();
+        assert_eq!(store.doc_updates("d").unwrap().len(), 0);
+        let after = store.load_doc("d", cid).unwrap().unwrap();
+        assert_eq!(after.to_blocks(), loaded.to_blocks());
+    }
+
+    #[test]
+    fn sync_cursor_round_trip() {
+        let store = LocalStore::open_in_memory().unwrap();
+        assert_eq!(store.sync_cursor("d").unwrap(), SyncCursor::default());
+        store
+            .set_sync_cursor("d", SyncCursor { last_synced_rid: 42, pushed_clock: 7 })
+            .unwrap();
+        let c = store.sync_cursor("d").unwrap();
+        assert_eq!(c.last_synced_rid, 42);
+        assert_eq!(c.pushed_clock, 7);
+        // updates_after honours the pushed cursor.
+        let cid = store.identity().unwrap().client_id;
+        let doc = MicaDoc::from_blocks_with_client_id("r", &[Block::new("r", "page")], Some(cid));
+        store.save_doc("d", &doc).unwrap();
+        store.append_update("d", &[1, 2, 3]).unwrap(); // clock 1
+        store.append_update("d", &[4, 5, 6]).unwrap(); // clock 2
+        assert_eq!(store.updates_after("d", 1).unwrap().len(), 1);
+        assert_eq!(store.updates_after("d", 0).unwrap().len(), 2);
     }
 
     #[test]
