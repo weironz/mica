@@ -3,7 +3,10 @@
 ; per-user installer (no admin/UAC). Compile with ISCC.exe.
 
 #define AppName "Mica"
-#define AppVersion "0.1.0"
+; Version can be overridden from the command line: ISCC /DAppVersion=1.2.3
+#ifndef AppVersion
+  #define AppVersion "0.1.0"
+#endif
 #define AppPublisher "weironz"
 #define AppExe "mica_flutter.exe"
 #define SourceDir "..\build\windows\x64\runner\Release"
