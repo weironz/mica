@@ -42,7 +42,7 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 ## 项目原则(长期有效,优先级高于默认习惯)
 
-1. **In-house 优先**:最小化第三方依赖,宁可自研(编辑器整个是自绘的)。引入依赖需明确豁免(现有豁免:flutter_math_fork;window_manager——桌面窗口大小/位置/最小尺寸;file_picker——桌面文件对话框(开/存/目录),只在非 web 的 `_stub` 变体里用。均属标准边角/平台粘合层,自研要背三套平台原生层,用成熟包反而对;条件导入隔离,不入 web bundle)。in-house 该留给核心数据面(CRDT/文档模型/同步),不是平台粘合层。
+1. **In-house 优先**:最小化第三方依赖,宁可自研(编辑器整个是自绘的)。引入依赖需明确豁免(现有豁免:#1 flutter_math_fork——数学渲染;#2 window_manager——桌面窗口大小/位置/最小尺寸;#3 file_picker——桌面文件对话框(开/存/目录);#4 pasteboard——桌面富剪贴板图片读写;#5 merman——纯 Rust headless mermaid 引擎(FFI,桌面/移动离线渲 mermaid,同 flutter_math_fork 类的复杂领域渲染器,自研不现实);#6 flutter_svg——把 merman 的 SVG 栅格成 ui.Image;另 `xml`/`html` 为纯 Dart 解析库。除 flutter_math_fork 外均只在非 web 的 `_stub`/`_web` 变体里用,条件导入隔离不入 web bundle。均属标准边角/平台粘合层或复杂领域渲染器,自研要背三套平台原生层或重写一个引擎,用成熟包反而对)。in-house 该留给核心数据面(CRDT/文档模型/同步),不是平台粘合层。merman 的 mermaid SVG 主题用 CSS,纯 Dart 渲染器不解析 → 自研了 `mermaid_svg_inline.dart` 把 CSS 拍平进属性(merman 文档把这列为 host 边界)。
 2. **Rust-first 数据面**:数据处理一律在 Rust 后端;Dart 只做 UI 和编辑器热路径。Markdown 语法逻辑两端必须同步(Rust `crates/markdown` 是权威,Dart `lib/editor/marks.dart`/`markdown.dart` 镜像)。
 3. **渲染架构红线**:新渲染能力先抽象机制(AtomicBlockRenderer 注册表),严禁往 `render.dart` 堆 if 分支。见 `docs/render-architecture.md`。
 4. **Markdown 方言原则**:CommonMark 0.31.2 底座(读侧 641/641=100%)+ GFM 扩展(24/24)+ 方言(脚注、front matter、Pandoc 数学约定);写侧输出规范化子集,round-trip 是不变量。记分牌:`docs/commonmark-scoreboard.md`,回归地板在 `commonmark_scoreboard.rs`。

@@ -56,7 +56,7 @@
 |---|---|---|
 | **M1 跑起来** | `flutter create --platforms=windows .`;7 个 stub IO 化;连现有云端 API | token 存储(明文 vs DPAPI) |
 | **M2 像桌面应用** | 窗口大小/位置记忆、最小尺寸、快捷键;**中文 IME 专项验证**(自绘编辑器 + TextInputClient,Windows 候选窗定位与 web 路径完全不同) | ~~标题栏~~ 已定:系统原生 + window_manager(见上「技术路线定稿」) |
-| **M3 可分发** | mermaid 后端渲染端点(Rust 出 SVG/PNG,六端共享);安装包 | 分发形态:MSIX/winget vs Inno vs 绿色 zip;自动更新 |
+| **M3 可分发** | ~~mermaid 后端渲染端点~~ → **客户端 merman Dart FFI**(纯 Rust、离线,见下「mermaid 桌面渲染」)✅;安装包 | 分发形态:MSIX/winget vs Inno vs 绿色 zip;自动更新 |
 
 **开发模式**:日常开发可留在 Linux(代码 99% 平台无关;Linux 工具链已装好,`flutter build linux` 已验证一次通过),Windows 机用于出包与平台特调。
 
@@ -87,9 +87,22 @@
 | `lib/editor/pick_file_stub.dart` | ⏸ 暂缓 M2 | 桌面文件选择器(依赖 file_selector vs 自写 Win32 通道,待决) |
 | `lib/editor/pick_image_stub.dart` | ⏸ 暂缓 M2 | 同上 |
 | `lib/editor/image_actions_stub.dart` | ⏸ 暂缓 M2 | 存盘 + 图片剪贴板(框架不内置图片剪贴板) |
-| `lib/editor/mermaid_preview_stub.dart` | no-op | **不做客户端实现** → 后端渲染端点(M3) |
+| `lib/editor/mermaid_preview_stub.dart` | ✅ 已实现 | **客户端 merman Dart FFI**(纯 Rust 引擎)→ SVG → css 内联 → flutter_svg 栅格,离线;见下「mermaid 桌面渲染」 |
 
 math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
+
+### mermaid 桌面渲染(M3,2026-06-07 完成)
+
+**方案(调研 AppFlowy/AFFiNE 后定;详见 CLAUDE.md 原则6 那次教训)**:纯客户端、离线、跨平台一套数据逻辑,无 webview、无后端、无 JS 引擎。
+
+链路(`mermaid_preview_stub.dart`,仅非 web):
+1. **merman**(豁免#5,纯 Rust headless mermaid 引擎,FFI,pub 包自带各平台原生库)`Merman.open().renderSvg(src, pipeline:resvg-safe)` → SVG。
+2. **`mermaid_svg_inline.dart`**(自研 CSS 内联后处理器,用 xml 解析):merman 把主题放在带后代选择器的 `<style>` CSS 里(`#merman .node rect{fill:..}`),而纯 Dart 渲染器都不解析 CSS;把规则拍平成元素 `style` 属性,删 `<style>`/`<marker>`,并把 flutter_svg 会抛错的 `font-weight:bolder/lighter` 归一成 `bold/normal`。merman 文档明确把 inline-styling 列为 **host 边界**(Zed 集成同此),这是预期接缝不是 hack。
+3. **flutter_svg**(豁免#6)栅格化 → ui.Image,按 web 同款「2×目标宽、clamp」缩放;失败静默返回 null → 块保留高亮源码(降级)。
+
+**箭头**:flutter_svg 不渲 `<marker>`,所以内联器**自己合成箭头**(`_synthesizeArrowheads`):解析每条边(`<path d>` 或 `<line>`)的端点与切线方向,把 marker 的子图形克隆进一个 `<g transform="translate(端点) rotate(方向) scale(viewBox→markerW) translate(-refX,-refY)">`,再删 marker/defs。flowchart/sequence/state/class 箭头均正确。
+**实测**(Windows runner 集成测试 `integration_test/mermaid_render_test.dart`,带 raster-ink 断言):flowchart / sequence / class / state / pie / gantt 六类均正确渲染主题色、文字、虚实线、**箭头**,离线可用。
+**已知小差异**:class 继承三角是实心(real mermaid 为空心,marker fill 默认 #333);merman 仍 0.x alpha,已锁版本。Web 端保持原 mermaid.min.js 路径不变。
 
 ## 遗留事项(不阻塞桌面端)
 

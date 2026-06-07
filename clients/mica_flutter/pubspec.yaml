@@ -27,11 +27,31 @@ dependencies:
   # Pure-Dart HTML parser — converts pasted clipboard HTML to Markdown on desktop
   # (web uses dart:html for the same). Not platform glue; a parsing lib.
   html: ^0.15.0
+  # Headless pure-Rust Mermaid engine (FFI, no browser/JS) — desktop/mobile render
+  # mermaid OFFLINE via the non-web (_stub) variant of mermaid_preview. Web keeps
+  # its mermaid.min.js path. In-house exemption #5: a complex domain renderer (same
+  # class as flutter_math_fork), self-authoring a mermaid impl is unrealistic.
+  # Pinned: 0.x alpha, API still churning. Bundles prebuilt native libs per platform.
+  merman: 0.7.0-alpha.1
+  # SVG rasterizer — turns merman's SVG into a ui.Image on desktop/mobile.
+  # In-house exemption #6 (standard rendering capability; self-rolling an SVG
+  # renderer is absurd). Used only by the non-web mermaid path. flutter_svg honors
+  # geometry + presentation attributes but NOT CSS <style>, so merman's themed SVG
+  # is first flattened by our own css inliner (mermaid_svg_inline.dart).
+  flutter_svg: ^2.3.0
+  # XML tree for that css inliner — merman emits theme as scoped CSS with descendant
+  # selectors (`#merman .node rect{fill:..}`); merman documents inline-styling as a
+  # host-side boundary (Zed does the same). Pure-Dart parsing lib, not platform glue.
+  xml: ^6.5.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # Runs on-device (e.g. the Windows runner) so plugin native libs are present —
+  # the only way to exercise the real merman FFI mermaid render path in a test.
+  integration_test:
+    sdk: flutter
 
 flutter:
   uses-material-design: true
