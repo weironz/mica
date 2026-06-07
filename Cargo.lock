@@ -1200,6 +1200,7 @@ dependencies = [
 name = "mica-core"
 version = "0.1.0"
 dependencies = [
+ "mica-markdown",
  "serde",
  "serde_json",
  "thiserror",
