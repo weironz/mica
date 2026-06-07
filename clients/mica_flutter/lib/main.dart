@@ -14,6 +14,7 @@ import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
 import 'prefs.dart';
+import 'window_setup.dart';
 import 'upload/sha256.dart';
 import 'upload/zip_writer.dart';
 
@@ -33,8 +34,11 @@ const String kDevPassword = String.fromEnvironment(
   defaultValue: 'password123',
 );
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Desktop: restore window size/position + enforce a min size before the first
+  // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
+  await initDesktopWindow();
   // Suppress the browser's native right-click menu so the editor can show its
   // own (e.g. image actions) on web.
   if (kIsWeb) BrowserContextMenu.disableContextMenu();
@@ -1876,7 +1880,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
     }
 
-    return Row(
+    return CallbackShortcuts(
+      bindings: _appShortcuts(),
+      child: Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (_navCollapsed)
@@ -1899,7 +1905,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
         ],
       ],
+    ),
     );
+  }
+
+  /// App-level keyboard shortcuts (desktop feel): new page, search, settings.
+  /// The editor handles its own editing shortcuts (Ctrl+B/I/Z/…) and returns the
+  /// rest unhandled, so these fire when a key bubbles past it. Both Control
+  /// (Win/Linux) and Meta (macOS) variants are bound.
+  Map<ShortcutActivator, VoidCallback> _appShortcuts() {
+    void newPage() => widget.onCreateDocument('Untitled');
+    return <ShortcutActivator, VoidCallback>{
+      const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
+      const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true): _openSearch,
+      const SingleActivator(LogicalKeyboardKey.keyF, meta: true): _openSearch,
+      // Ctrl+, is the convention (works on English layouts / macOS Cmd+,), but a
+      // Chinese IME grabs Ctrl+,/Ctrl+. at the OS level (punctuation toggle), so
+      // it won't reach the app while such an IME is active. Settings is also
+      // reachable from the menu.
+      const SingleActivator(LogicalKeyboardKey.comma, control: true):
+          _openSettings,
+      const SingleActivator(LogicalKeyboardKey.comma, meta: true): _openSettings,
+    };
   }
 
   /// A slim draggable splitter between panes (the divider line stays 1px;
@@ -4739,20 +4767,74 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ),
   ];
 
+  Widget _kbd(String text) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: const Color(0xFFCBD5E1)),
+        ),
+        child: Text(text, style: const TextStyle(fontSize: 12)),
+      );
+
+  List<Widget> _shortcutsSection(BuildContext context) {
+    Widget head(String t) => Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 4),
+          child: Text(t,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w600, color: Color(0xFF64748B))),
+        );
+    Widget row(String keys, String desc) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Row(children: [
+            _kbd(keys),
+            const SizedBox(width: 16),
+            Expanded(child: Text(desc)),
+          ]),
+        );
+    return [
+      head('App'),
+      row('Ctrl + N', 'New page'),
+      row('Ctrl + F', 'Search'),
+      row('Ctrl + ,', 'Open settings'),
+      const SizedBox(height: 8),
+      head('Editor'),
+      row('Ctrl + B', 'Bold'),
+      row('Ctrl + I', 'Italic'),
+      row('Ctrl + E', 'Inline code'),
+      row('Ctrl + K', 'Link'),
+      row('Ctrl + Z', 'Undo'),
+      row('Ctrl + Shift + Z', 'Redo'),
+      row('Tab / Shift + Tab', 'Indent / outdent'),
+      row('/', 'Slash command menu'),
+      const SizedBox(height: 12),
+      Text(
+        'Note: Ctrl+, can be swallowed by a Chinese IME (punctuation toggle); '
+        'switch to English input if it doesn’t respond.',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: const Color(0xFF94A3B8)),
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
-    const titles = ['Appearance', 'AI provider', 'Account', 'Data'];
+    const titles = ['Appearance', 'AI provider', 'Account', 'Data', 'Shortcuts'];
     const icons = [
       Icons.tune,
       Icons.auto_awesome,
       Icons.person_outline,
       Icons.import_export,
+      Icons.keyboard_outlined,
     ];
     final sections = [
       _appearanceSection(context),
       _aiSection(context),
       _accountSection(context),
       _dataSection(context),
+      _shortcutsSection(context),
     ];
     return AlertDialog(
       title: const Row(

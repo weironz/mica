@@ -42,11 +42,12 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 ## 项目原则(长期有效,优先级高于默认习惯)
 
-1. **In-house 优先**:最小化第三方依赖,宁可自研(编辑器整个是自绘的)。引入依赖需明确豁免(现有豁免:flutter_math_fork)。
+1. **In-house 优先**:最小化第三方依赖,宁可自研(编辑器整个是自绘的)。引入依赖需明确豁免(现有豁免:#1 flutter_math_fork——数学渲染;#2 window_manager——桌面窗口大小/位置/最小尺寸;#3 file_picker——桌面文件对话框(开/存/目录);#4 pasteboard——桌面富剪贴板图片读写;#5 merman——纯 Rust headless mermaid 引擎(FFI,桌面/移动离线渲 mermaid,同 flutter_math_fork 类的复杂领域渲染器,自研不现实);#6 flutter_svg——把 merman 的 SVG 栅格成 ui.Image;另 `xml`/`html` 为纯 Dart 解析库。除 flutter_math_fork 外均只在非 web 的 `_stub`/`_web` 变体里用,条件导入隔离不入 web bundle。均属标准边角/平台粘合层或复杂领域渲染器,自研要背三套平台原生层或重写一个引擎,用成熟包反而对)。in-house 该留给核心数据面(CRDT/文档模型/同步),不是平台粘合层。merman 的 mermaid SVG 主题用 CSS,纯 Dart 渲染器不解析 → 自研了 `mermaid_svg_inline.dart` 把 CSS 拍平进属性(merman 文档把这列为 host 边界)。
 2. **Rust-first 数据面**:数据处理一律在 Rust 后端;Dart 只做 UI 和编辑器热路径。Markdown 语法逻辑两端必须同步(Rust `crates/markdown` 是权威,Dart `lib/editor/marks.dart`/`markdown.dart` 镜像)。
 3. **渲染架构红线**:新渲染能力先抽象机制(AtomicBlockRenderer 注册表),严禁往 `render.dart` 堆 if 分支。见 `docs/render-architecture.md`。
 4. **Markdown 方言原则**:CommonMark 0.31.2 底座(读侧 641/641=100%)+ GFM 扩展(24/24)+ 方言(脚注、front matter、Pandoc 数学约定);写侧输出规范化子集,round-trip 是不变量。记分牌:`docs/commonmark-scoreboard.md`,回归地板在 `commonmark_scoreboard.rs`。
 5. **修复纪律**:每个 bug 修复配回归测试 + 实测验证(web 端用 playwright-cli 截图);提交信息写根因,不写流水账。
+6. **难决策先调研同类产品**:面对没有明显正确/完美方案的架构或技术决策(或自己的方案有明显代价/取舍)时,拍板前先去同类开源/闭源产品扒一遍实现,当作兜底手段——去别人那里找灵感,而不是凭自己的假设硬推。重点不是"它支不支持",而是"在和我们**相同约束**下它具体怎么实现、又刻意**没用什么**"(排除法往往最有信息量;闭源就从 pubspec/依赖清单、CHANGELOG、issue 等公开痕迹推断)。最该警惕的是自己脑子里"必须 X 才能 Y"那类前提,正是它最值得被别人的实现证伪——给出"几选一"前先自问这些选项的**共同前提**验证过没有。手段:派调研子代理 + GitHub MCP 读对方真实源码。本项目参照系:AppFlowy(Flutter 原生同构)、AFFiNE(web/Yjs 对照)。〔教训:mermaid 桌面渲染曾基于"服务端渲 mermaid 必须 headless 浏览器"的错误前提,差点选 Kroki/Node/Chrome;扒 AppFlowy+AFFiNE 后才发现纯 Rust 渲染器(mermaid-rs-renderer/merman)这条离线+跨平台+无浏览器的更优路径。〕
 
 ## 当前状态(2026-06-06)
 

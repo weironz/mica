@@ -20,6 +20,11 @@ RichPasteHandler? _handler;
 ImagePasteHandler? _imageHandler;
 bool _installed = false;
 
+// Web reads the clipboard through the DOM `paste` event (setRichPasteHandler),
+// not by explicit pull, so these facade pulls are unused on web.
+Future<Uint8List?> readClipboardImage() async => null;
+Future<String?> readClipboardHtmlAsMarkdown() async => null;
+
 void setRichImagePasteHandler(ImagePasteHandler? handler) {
   _imageHandler = handler;
 }
