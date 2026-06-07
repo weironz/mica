@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
-use mica_core::{Block, Mark, MicaDoc};
+use mica_core::{marks_from_data, Block, Mark, MicaDoc};
 
 #[frb(opaque)]
 pub struct MicaDocument {
@@ -66,6 +66,40 @@ impl MicaDocument {
     #[frb(sync)]
     pub fn update_block_kind(&self, id: String, kind: String) {
         self.inner.lock().unwrap().update_block_kind(&id, &kind);
+    }
+
+    /// Mirror the editor's coarse `update_block` op: apply any subset of
+    /// kind/text/data to a block in one call. Inline marks travel *inside* the
+    /// editor's `data` (`data["marks"]`) — when `text` is given they are applied
+    /// to the (replaced) text as yrs formatting; `set_block_data` then stores the
+    /// non-marks props. This is the single chokepoint the desktop op stream funnels
+    /// through, so the on-device yrs doc tracks every edit (P2-M3).
+    #[frb(sync)]
+    pub fn update_block(
+        &self,
+        id: String,
+        kind: Option<String>,
+        text: Option<String>,
+        data_json: Option<String>,
+    ) {
+        let mut doc = self.inner.lock().unwrap();
+        if let Some(k) = kind {
+            doc.update_block_kind(&id, &k);
+        }
+        let data: Option<serde_json::Value> =
+            data_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        if let Some(t) = text {
+            // Text changed: set text + its marks together.
+            let marks = data.as_ref().map(marks_from_data).unwrap_or_default();
+            doc.set_block_text(&id, &t, &marks);
+        } else if let Some(d) = &data {
+            // Data-only update (e.g. a turn-into resetting data): reconcile the
+            // marks to whatever `data` now says — clearing them if it has none.
+            doc.set_block_marks(&id, &marks_from_data(d));
+        }
+        if let Some(d) = &data {
+            doc.set_block_data(&id, d);
+        }
     }
 
     #[frb(sync)]

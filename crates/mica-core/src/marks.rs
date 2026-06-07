@@ -13,6 +13,21 @@ use std::sync::Arc;
 use yrs::types::Attrs;
 use yrs::Any;
 
+/// The inline mark types Mica supports (mirrors the Dart `marks.dart` set).
+/// Used to wipe a text range's formatting before re-applying a block's
+/// authoritative marks.
+pub const MARK_TYPES: [&str; 6] = ["bold", "italic", "code", "strike", "link", "footnote"];
+
+/// An [`Attrs`] that unsets every known mark attribute (each key → `Null`). yrs
+/// treats a `Null` formatting value as "remove this attribute", so applying this
+/// over a range clears all of Mica's inline marks there.
+pub fn clear_all_attrs() -> Attrs {
+    MARK_TYPES
+        .iter()
+        .map(|k| (Arc::from(*k), Any::Null))
+        .collect()
+}
+
 /// A single inline mark over `[start, end)` in UTF-16 offsets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mark {
@@ -139,7 +154,13 @@ pub fn marks_from_runs(runs: &[(u32, Option<Attrs>)]) -> Vec<Mark> {
 
     for (len, attrs) in runs {
         let here: HashMap<String, Meta> = match attrs {
-            Some(a) => a.iter().map(|(k, v)| (k.to_string(), meta_of(v))).collect(),
+            // A `Null` value means the attribute was cleared (yrs reports removed
+            // formatting as `key: Null`), so treat it as absent — not a mark.
+            Some(a) => a
+                .iter()
+                .filter(|(_, v)| !matches!(v, Any::Null))
+                .map(|(k, v)| (k.to_string(), meta_of(v)))
+                .collect(),
             None => HashMap::new(),
         };
 

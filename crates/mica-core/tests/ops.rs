@@ -173,3 +173,25 @@ fn ops_survive_encode_decode() {
     assert_eq!(get(&out, "r").children, vec!["a", "b"]);
     let _ = Value::Null; // silence unused import in some configs
 }
+
+#[test]
+fn set_block_marks_clears_then_reapplies() {
+    // a="HelloWorld" bold over [0,5). Data-only update with empty marks must
+    // clear the bold; a fresh italic over [5,10) must then stick.
+    let a = para("a", "HelloWorld")
+        .with_data(json!({"marks": [{"start": 0, "end": 5, "type": "bold"}]}));
+    let mut d = doc(vec![page(&["a"]), a]);
+    // Clear all marks (the turn-into-reset case): no marks remain.
+    d.set_block_marks("a", &[]);
+    assert!(get(&d.to_blocks(), "a").data.get("marks").is_none());
+    // Re-apply a different mark, surviving encode/decode.
+    d.set_block_marks(
+        "a",
+        &[mica_core::Mark { start: 5, end: 10, ty: "italic".into(), href: None, title: None }],
+    );
+    let restored = MicaDoc::from_update(&d.encode_state()).expect("decode");
+    assert_eq!(
+        get(&restored.to_blocks(), "a").data,
+        json!({"marks": [{"start": 5, "end": 10, "type": "italic"}]})
+    );
+}

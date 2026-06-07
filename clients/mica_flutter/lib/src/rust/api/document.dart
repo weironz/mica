@@ -68,5 +68,18 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// The document as a JSON array of blocks (tree order).
   String toBlocksJson();
 
+  /// Mirror the editor's coarse `update_block` op: apply any subset of
+  /// kind/text/data to a block in one call. Inline marks travel *inside* the
+  /// editor's `data` (`data["marks"]`) — when `text` is given they are applied
+  /// to the (replaced) text as yrs formatting; `set_block_data` then stores the
+  /// non-marks props. This is the single chokepoint the desktop op stream funnels
+  /// through, so the on-device yrs doc tracks every edit (P2-M3).
+  void updateBlock({
+    required String id,
+    String? kind,
+    String? text,
+    String? dataJson,
+  });
+
   void updateBlockKind({required String id, required String kind});
 }

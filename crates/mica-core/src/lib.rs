@@ -16,7 +16,7 @@ pub mod store;
 
 pub use block::Block;
 pub use doc::{DocError, MicaDoc};
-pub use marks::Mark;
+pub use marks::{marks_from_data, Mark};
 #[cfg(feature = "store")]
 pub use store::{Identity, LocalStore, StoreError};
 

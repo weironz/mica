@@ -419,6 +419,26 @@ impl MicaDoc {
         }
     }
 
+    /// Replace a block's inline marks while keeping its text, by clearing all
+    /// known formatting over the whole text and re-applying `block_marks`. Use
+    /// this when the editor's authoritative marks (in `data`) change without a
+    /// text edit — e.g. a turn-into that resets `data` and so should drop marks.
+    pub fn set_block_marks(&mut self, id: &str, block_marks: &[Mark]) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            if let Some(t) = get_text(&txn, &bm) {
+                let len = t.len(&txn);
+                if len > 0 {
+                    t.format(&mut txn, 0, len, marks::clear_all_attrs());
+                    for (start, l, attrs) in marks::marks_to_format_ops(block_marks) {
+                        t.format(&mut txn, start, l, attrs);
+                    }
+                }
+            }
+        }
+    }
+
     /// Set a block's attrs (`props`). Inline marks live on the text, so a
     /// `marks` key in `data` is ignored here.
     pub fn set_block_data(&mut self, id: &str, data: &Value) {
