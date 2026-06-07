@@ -380,10 +380,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     setState(() => _presence = const []);
     sync.connect();
 
-    // Desktop: also open a yrs CRDT session for this doc. It supersedes the op
-    // path once it bootstraps; until then (or against an old server) edits use
-    // REST as before.
-    if (!kIsWeb && _serverConfig.mode != ServerMode.localOffline) {
+    // Open a yrs CRDT session for this doc (desktop = Rust FFI replica, web = JS
+    // yjs replica — both wire-compatible). It supersedes the op path once it
+    // bootstraps; until then (or against an old server) edits use REST as before.
+    if (_serverConfig.mode != ServerMode.localOffline) {
       unawaited(_setupCloudYrs(documentId, workspace, session));
     }
   }
@@ -393,7 +393,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     Workspace workspace,
     AuthSession session,
   ) async {
-    final clientId = _deviceClientId ??= await _local.deviceClientId();
+    // Desktop pins the CRDT actor to the device's stable client id; web has no
+    // on-device store, so it uses a per-session yjs actor (placeholder id here).
+    var clientId = _deviceClientId;
+    if (clientId == null) {
+      clientId = await _local.deviceClientId() ?? (kIsWeb ? BigInt.zero : null);
+      _deviceClientId = clientId;
+    }
     if (clientId == null || !mounted) return;
     // The selection may have moved while we awaited the device id.
     if (_selectedBootstrap?.document.id != documentId || _sync?.documentId != documentId) {

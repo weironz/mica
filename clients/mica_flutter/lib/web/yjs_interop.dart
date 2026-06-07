@@ -38,10 +38,13 @@ extension type MicaYjs._(JSObject _) implements JSObject {
   external void textDelete(JSObject t, int i, int len);
   external void textFormat(JSObject t, int i, int len, JSAny attrs);
   external JSArray<JSAny?> textDelta(JSObject t);
+  external String textDeltaJson(JSObject t);
+  external void textFormatJson(JSObject t, int i, int len, String attrsJson);
 
   external JSArray<JSAny?> arrayToList(JSAny? a);
   external int arrayLength(JSAny? a);
   external void arrayInsert(JSObject a, int i, JSArray<JSAny?> items);
+  external void arrayInsertJson(JSObject a, int i, String itemsJson);
   external void arrayDelete(JSObject a, int i, int len);
 
   external bool isText(JSAny? x);

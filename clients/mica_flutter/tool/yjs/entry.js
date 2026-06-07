@@ -53,11 +53,16 @@ globalThis.micaYjs = {
   textFormat: (t, i, len, attrs) => t.format(i, len, attrs),
   // delta is [{insert, attributes?}, ...] — drives marks reconstruction in Dart.
   textDelta: (t) => t.toDelta(),
+  // JSON-bridged variants so Dart passes/reads structured values as strings
+  // instead of building/inspecting JS objects over js_interop.
+  textDeltaJson: (t) => JSON.stringify(t.toDelta()),
+  textFormatJson: (t, i, len, attrsJson) => t.format(i, len, JSON.parse(attrsJson)),
 
   // ── Y.Array ──
   arrayToList: (a) => (a && typeof a.toArray === 'function' ? a.toArray() : []),
   arrayLength: (a) => (a ? a.length : 0),
   arrayInsert: (a, i, items) => a.insert(i, items),
+  arrayInsertJson: (a, i, itemsJson) => a.insert(i, JSON.parse(itemsJson)),
   arrayDelete: (a, i, len) => a.delete(i, len),
 
   // ── type guards ──
