@@ -118,7 +118,7 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 | 里程碑 | 内容 | 价值 |
 |---|---|---|
 | **P2-M0 骨架** ✅ | `crates/mica-core`(共享数据面)+ `clients/mica_flutter/rust`(薄 frb 包装,独立 `[workspace]`)+ frb v2 2.12.0 + cargokit;Windows round-trip 实测全绿(`integration_test/frb_roundtrip_test.dart`)。`trait Store/ObjectStore/SyncTransport` 留到 M1/M2 随模型一起定。 | 管线已验证 ✅ |
-| **P2-M1 yrs 文档模型** | 块结构 + 块内 Y.Text + **delta↔marks 映射**;Rust 单元测试 round-trip(含 markdown 不变量) | 核心数据面 |
+| **P2-M1 yrs 文档模型** 🟡 | ✅ 块结构(`block.rs`)+ 块内 Y.Text + **marks↔delta 映射**(`marks.rs`)+ `MicaDoc` from/to_blocks + encode/decode(`doc.rs`);8 项 round-trip 测试全绿(重叠 marks 重组 / link / UTF-16+emoji 偏移 / 嵌套树 / encode-decode)。⏭ 剩:编辑操作(insert/update/delete/move/split/join 作为 yrs txn)+ markdown 不变量测试(接 crates/markdown)+ FFI 暴露给 Dart。 | 核心数据面(模型已立)|
 | **P2-M2 本地存储 + 身份** | SQLite(snapshot+update+squash)+ 本地身份 + 桌面无账号纯本地编辑跑通 | **单设备纯离线已可用** ✅ |
 | **P2-M3 编辑器绑定** | 自绘编辑器从 yrs 读写,替换现有 op 路径;中文 IME 仍走 TextInputClient | 桌面编辑闭环 |
 | **P2-M4 云同步** | per-workspace bigserial 流 + 续传 + SV 兜底 + 本地序→Rid;**现有云端文档数据迁移**(snapshot→yrs base) | **双路线打通** |
