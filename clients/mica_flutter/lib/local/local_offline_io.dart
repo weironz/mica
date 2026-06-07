@@ -15,12 +15,16 @@ import 'local_doc.dart';
 /// One page-tree node, as plain data for the UI layer to map onto its own model.
 typedef ViewData = ({
   String id,
+  String workspaceId,
   String? parentId,
   String objectId,
   String name,
   String position,
   bool trashed,
 });
+
+/// One local workspace, as plain data.
+typedef WorkspaceData = ({String id, String name, String position});
 
 /// A loaded document: its root block id and full block list (snapshot payload).
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
@@ -53,6 +57,33 @@ class LocalOffline {
     _store = store;
   }
 
+  // ── workspaces ─────────────────────────────────────────────────────────────
+
+  List<WorkspaceData> listWorkspaces() {
+    final store = _store;
+    if (store == null) return const [];
+    return [
+      for (final w in store.listWorkspaces())
+        (id: w.id, name: w.name, position: w.position),
+    ];
+  }
+
+  void saveWorkspace(WorkspaceData w) {
+    _store?.saveWorkspace(
+      workspace: LocalWorkspace(id: w.id, name: w.name, position: w.position),
+    );
+  }
+
+  /// Delete a workspace, its view rows, and all its documents.
+  void deleteWorkspace(String id) {
+    final store = _store;
+    if (store == null) return;
+    for (final v in store.listViews()) {
+      if (v.workspaceId == id) store.deleteDoc(docId: v.objectId);
+    }
+    store.deleteWorkspace(id: id);
+  }
+
   // ── page tree ──────────────────────────────────────────────────────────────
 
   List<ViewData> listViews() {
@@ -62,6 +93,7 @@ class LocalOffline {
       for (final v in store.listViews())
         (
           id: v.id,
+          workspaceId: v.workspaceId,
           parentId: v.parentId,
           objectId: v.objectId,
           name: v.name,
@@ -75,6 +107,7 @@ class LocalOffline {
     _store?.saveView(
       view: LocalView(
         id: v.id,
+        workspaceId: v.workspaceId,
         parentId: v.parentId,
         objectId: v.objectId,
         name: v.name,

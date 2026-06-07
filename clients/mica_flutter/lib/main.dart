@@ -209,18 +209,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // documents live entirely on-device (SQLite via the LocalOffline facade).
   final LocalOffline _local = LocalOffline();
   bool _localReady = false;
+  List<Workspace> _localWorkspaces = const [];
+  Workspace? _localSelectedWorkspace;
   List<DocumentView> _localViews = const [];
   DocumentView? _localSelectedView;
   DocumentBootstrap? _localBootstrap;
   static const AuthSession _localSession = AuthSession(
     accessToken: 'local-offline',
     user: User(id: 'local', email: '', displayName: '本地'),
-  );
-  static const Workspace _localWorkspace = Workspace(
-    id: 'local',
-    name: '本地工作区',
-    ownerId: 'local',
-    role: 'owner',
   );
 
   @override
@@ -1226,6 +1222,48 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     position: v.position,
   );
 
+  Workspace _workspaceFromData(WorkspaceData w) => Workspace(
+    id: w.id,
+    name: w.name,
+    ownerId: 'local',
+    role: 'owner',
+  );
+
+  /// Reload the workspace list and keep (or re-anchor) the selection. The store
+  /// always has at least one workspace.
+  void _reloadLocalWorkspaces() {
+    _localWorkspaces = [
+      for (final w in _local.listWorkspaces()) _workspaceFromData(w),
+    ];
+    if (_localWorkspaces.isEmpty) {
+      _localSelectedWorkspace = null;
+      return;
+    }
+    final selId = _localSelectedWorkspace?.id;
+    _localSelectedWorkspace = _localWorkspaces.firstWhere(
+      (w) => w.id == selId,
+      orElse: () => _localWorkspaces.first,
+    );
+  }
+
+  String _nextWorkspacePosition() {
+    var max = 0;
+    for (final w in _local.listWorkspaces()) {
+      final n = int.tryParse(w.position) ?? 0;
+      if (n > max) max = n;
+    }
+    return (max + 10).toString().padLeft(10, '0');
+  }
+
+  /// The workspace a stored view belongs to (views carry it; DocumentView does
+  /// not), falling back to the selected workspace.
+  String _workspaceIdOfView(String viewId) {
+    for (final v in _local.listViews()) {
+      if (v.id == viewId) return v.workspaceId;
+    }
+    return _localSelectedWorkspace?.id ?? 'local';
+  }
+
   DocumentBootstrap _localBootstrapFrom(
     String docId,
     String rootBlockId,
@@ -1247,11 +1285,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  /// Reload the live (non-trashed) page tree from the store into [_localViews].
+  /// Reload the live (non-trashed) page tree of the selected workspace.
   void _reloadLocalViews() {
+    final wsId = _localSelectedWorkspace?.id;
     _localViews = [
       for (final v in _local.listViews())
-        if (!v.trashed) _viewFromData(v),
+        if (!v.trashed && v.workspaceId == wsId) _viewFromData(v),
     ];
   }
 
@@ -1276,6 +1315,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (mounted) setState(() => _message = '本地存储打开失败: $error');
       return;
     }
+    _reloadLocalWorkspaces();
     _reloadLocalViews();
     if (_localViews.isEmpty) {
       await _localCreateDocument('欢迎');
@@ -1285,6 +1325,82 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (mounted) setState(() => _localReady = true);
   }
 
+  Future<void> _localCreateWorkspace(String name) async {
+    final title = name.trim().isEmpty ? '工作区' : name.trim();
+    final id = 'ws_${DateTime.now().microsecondsSinceEpoch}';
+    _local.saveWorkspace((id: id, name: title, position: _nextWorkspacePosition()));
+    if (!mounted) return;
+    setState(() {
+      _reloadLocalWorkspaces();
+      _localSelectedWorkspace = _localWorkspaces.firstWhere(
+        (w) => w.id == id,
+        orElse: () => _localWorkspaces.first,
+      );
+      _localSelectedView = null;
+      _localBootstrap = null;
+      _reloadLocalViews();
+    });
+    // A new workspace starts empty — seed a first page.
+    await _localCreateDocument('欢迎');
+  }
+
+  Future<void> _localSelectWorkspace(Workspace workspace) async {
+    setState(() {
+      _localSelectedWorkspace = workspace;
+      _reloadLocalViews();
+      _localSelectedView = null;
+      _localBootstrap = null;
+    });
+    if (_localViews.isNotEmpty) {
+      await _localSelectView(_localViews.first);
+    }
+  }
+
+  Future<void> _localRenameWorkspace(Workspace workspace, String name) async {
+    final title = name.trim().isEmpty ? workspace.name : name.trim();
+    final pos = _local
+        .listWorkspaces()
+        .firstWhere(
+          (w) => w.id == workspace.id,
+          orElse: () => (id: workspace.id, name: title, position: '0000000010'),
+        )
+        .position;
+    _local.saveWorkspace((id: workspace.id, name: title, position: pos));
+    if (mounted) {
+      setState(() {
+        _reloadLocalWorkspaces();
+        if (_localSelectedWorkspace?.id == workspace.id) {
+          _localSelectedWorkspace = _localWorkspaces.firstWhere(
+            (w) => w.id == workspace.id,
+            orElse: () => _localWorkspaces.first,
+          );
+        }
+      });
+    }
+  }
+
+  Future<void> _localDeleteWorkspace(Workspace workspace) async {
+    // Keep at least one workspace on the device.
+    if (_localWorkspaces.length <= 1) {
+      setState(() => _message = '至少保留一个本地工作区。');
+      return;
+    }
+    _local.deleteWorkspace(workspace.id);
+    if (!mounted) return;
+    final wasSelected = _localSelectedWorkspace?.id == workspace.id;
+    setState(() {
+      _reloadLocalWorkspaces();
+      if (wasSelected) {
+        _localSelectedView = null;
+        _localBootstrap = null;
+      }
+      _reloadLocalViews();
+    });
+    if (wasSelected && _localViews.isNotEmpty) {
+      await _localSelectView(_localViews.first);
+    }
+  }
+
   Future<void> _localCreateDocument(String name, {String? parentViewId}) async {
     final title = name.trim().isEmpty ? 'Untitled' : name.trim();
     final created = _local.newDoc();
@@ -1292,6 +1408,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final position = _nextLocalPosition(parentViewId);
     final data = (
       id: viewId,
+      workspaceId: _localSelectedWorkspace?.id ?? 'local',
       parentId: parentViewId,
       objectId: created.docId,
       name: title,
@@ -1346,6 +1463,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final title = name.trim().isEmpty ? 'Untitled' : name.trim();
     _local.saveView((
       id: view.id,
+      workspaceId: _workspaceIdOfView(view.id),
       parentId: view.parentViewId,
       objectId: view.objectId,
       name: title,
@@ -1380,6 +1498,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _localDeleteView(DocumentView view) async {
     _local.saveView((
       id: view.id,
+      workspaceId: _workspaceIdOfView(view.id),
       parentId: view.parentViewId,
       objectId: view.objectId,
       name: view.name,
@@ -1406,6 +1525,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (v.position != position || v.parentViewId != parentViewId) {
         _local.saveView((
           id: v.id,
+          workspaceId: _workspaceIdOfView(v.id),
           parentId: parentViewId,
           objectId: v.objectId,
           name: v.name,
@@ -1418,15 +1538,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<List<DocumentView>> _localLoadTrash() async {
+    final wsId = _localSelectedWorkspace?.id;
     return [
       for (final v in _local.listViews())
-        if (v.trashed) _viewFromData(v),
+        if (v.trashed && v.workspaceId == wsId) _viewFromData(v),
     ];
   }
 
   Future<void> _localRestoreView(DocumentView view) async {
     _local.saveView((
       id: view.id,
+      workspaceId: _workspaceIdOfView(view.id),
       parentId: view.parentViewId,
       objectId: view.objectId,
       name: view.name,
@@ -1839,10 +1961,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         child: WorkspaceView(
           session: _localSession,
           isBusy: false,
-          onRefresh: () => setState(_reloadLocalViews),
+          onRefresh: () => setState(() {
+            _reloadLocalWorkspaces();
+            _reloadLocalViews();
+          }),
           onSignOut: () {},
-          workspaces: const [_localWorkspace],
-          selectedWorkspace: _localWorkspace,
+          workspaces: _localWorkspaces,
+          selectedWorkspace: _localSelectedWorkspace,
           members: const [],
           views: _localViews,
           selectedView: _localSelectedView,
@@ -1850,10 +1975,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           selectedMarkdown: null,
           presence: const [],
           message: _message,
-          onSelectWorkspace: (_) async {},
-          onCreateWorkspace: (_) async {},
-          onRenameWorkspace: (_, _) async {},
-          onDeleteWorkspace: (_) async {},
+          onSelectWorkspace: _localSelectWorkspace,
+          onCreateWorkspace: _localCreateWorkspace,
+          onRenameWorkspace: _localRenameWorkspace,
+          onDeleteWorkspace: _localDeleteWorkspace,
           onCreateDocument: _localCreateDocument,
           onCreateChildDocument: (parent, name) =>
               _localCreateDocument(name, parentViewId: parent.id),

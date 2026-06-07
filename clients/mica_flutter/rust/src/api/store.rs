@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
-use mica_core::{LocalStore, LocalView as CoreView};
+use mica_core::{LocalStore, LocalView as CoreView, LocalWorkspace as CoreWorkspace};
 
 use crate::api::document::MicaDocument;
 
@@ -16,6 +16,7 @@ use crate::api::document::MicaDocument;
 /// `DocumentView`. `object_id` is the document's `doc_id`.
 pub struct LocalView {
     pub id: String,
+    pub workspace_id: String,
     pub parent_id: Option<String>,
     pub object_id: String,
     pub name: String,
@@ -27,6 +28,7 @@ impl From<CoreView> for LocalView {
     fn from(v: CoreView) -> Self {
         LocalView {
             id: v.id,
+            workspace_id: v.workspace_id,
             parent_id: v.parent_id,
             object_id: v.object_id,
             name: v.name,
@@ -40,12 +42,32 @@ impl From<LocalView> for CoreView {
     fn from(v: LocalView) -> Self {
         CoreView {
             id: v.id,
+            workspace_id: v.workspace_id,
             parent_id: v.parent_id,
             object_id: v.object_id,
             name: v.name,
             position: v.position,
             trashed: v.trashed,
         }
+    }
+}
+
+/// A local workspace mirrored to Dart (P2-M3).
+pub struct LocalWorkspace {
+    pub id: String,
+    pub name: String,
+    pub position: String,
+}
+
+impl From<CoreWorkspace> for LocalWorkspace {
+    fn from(w: CoreWorkspace) -> Self {
+        LocalWorkspace { id: w.id, name: w.name, position: w.position }
+    }
+}
+
+impl From<LocalWorkspace> for CoreWorkspace {
+    fn from(w: LocalWorkspace) -> Self {
+        CoreWorkspace { id: w.id, name: w.name, position: w.position }
     }
 }
 
@@ -126,6 +148,31 @@ impl MicaStore {
     #[frb(sync)]
     pub fn purge_view(&self, id: String) {
         let _ = self.inner.lock().unwrap().purge_view(&id);
+    }
+
+    /// All local workspaces (ordered by position).
+    #[frb(sync)]
+    pub fn list_workspaces(&self) -> Vec<LocalWorkspace> {
+        self.inner
+            .lock()
+            .unwrap()
+            .list_workspaces()
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// Upsert a workspace (create / rename / reorder).
+    #[frb(sync)]
+    pub fn save_workspace(&self, workspace: LocalWorkspace) {
+        let _ = self.inner.lock().unwrap().save_workspace(&workspace.into());
+    }
+
+    /// Delete a workspace and all its view rows (delete documents separately).
+    #[frb(sync)]
+    pub fn delete_workspace(&self, id: String) {
+        let _ = self.inner.lock().unwrap().delete_workspace(&id);
     }
 
     /// Load a document by id, decoded with this device's stable client id, or

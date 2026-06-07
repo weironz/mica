@@ -5,12 +5,15 @@
 // bundle. Every method is unavailable.
 typedef ViewData = ({
   String id,
+  String workspaceId,
   String? parentId,
   String objectId,
   String name,
   String position,
   bool trashed,
 });
+
+typedef WorkspaceData = ({String id, String name, String position});
 
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
 
@@ -19,6 +22,12 @@ class LocalOffline {
 
   Future<void> open() async =>
       throw UnsupportedError('local offline is not available on web');
+
+  List<WorkspaceData> listWorkspaces() => const [];
+
+  void saveWorkspace(WorkspaceData w) {}
+
+  void deleteWorkspace(String id) {}
 
   List<ViewData> listViews() => const [];
 

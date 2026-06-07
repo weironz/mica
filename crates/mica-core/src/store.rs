@@ -27,12 +27,23 @@ pub struct Identity {
     pub client_id: u64,
 }
 
+/// A local workspace (P2-M3): a named container for a page tree. The on-device
+/// store can hold several, mirroring the cloud workspace list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalWorkspace {
+    pub id: String,
+    pub name: String,
+    /// Zero-padded ordering among workspaces.
+    pub position: String,
+}
+
 /// A page-tree node (P2-M3): the local mirror of the client's `DocumentView`.
-/// The local workspace is implicit and single, so there's no workspace id. Each
-/// view points at one document (`object_id` = its `doc_id` in `doc_snapshot`).
+/// Scoped to a `workspace_id`. Each view points at one document (`object_id` =
+/// its `doc_id` in `doc_snapshot`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalView {
     pub id: String,
+    pub workspace_id: String,
     pub parent_id: Option<String>,
     pub object_id: String,
     pub name: String,
@@ -69,7 +80,34 @@ impl LocalStore {
                  name      TEXT NOT NULL,
                  position  TEXT NOT NULL,
                  trashed   INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS local_workspace(
+                 id       TEXT PRIMARY KEY,
+                 name     TEXT NOT NULL,
+                 position TEXT NOT NULL
              );",
+        )?;
+        // Migrate pre-multi-workspace stores: add the workspace_id column and a
+        // default workspace that existing views attach to.
+        let has_ws_col: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_view') WHERE name='workspace_id'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_ws_col {
+            conn.execute(
+                "ALTER TABLE local_view ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local'",
+                [],
+            )?;
+        }
+        // Always have a default workspace so migrated views resolve and a fresh
+        // store starts usable.
+        conn.execute(
+            "INSERT OR IGNORE INTO local_workspace(id,name,position) VALUES('local','本地工作区','0000000010')",
+            [],
         )?;
         Ok(LocalStore { conn })
     }
@@ -179,21 +217,24 @@ impl LocalStore {
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
 
-    /// All views (including trashed), ordered by `position`. The client builds
-    /// the tree from `parent_id` and filters trash itself.
+    /// All views across all workspaces (including trashed), ordered by
+    /// `position`. The client filters by workspace + trash and builds the tree
+    /// from `parent_id`.
     pub fn list_views(&self) -> Result<Vec<LocalView>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,parent_id,object_id,name,position,trashed FROM local_view ORDER BY position",
+            "SELECT id,workspace_id,parent_id,object_id,name,position,trashed \
+             FROM local_view ORDER BY position",
         )?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(LocalView {
                     id: r.get(0)?,
-                    parent_id: r.get(1)?,
-                    object_id: r.get(2)?,
-                    name: r.get(3)?,
-                    position: r.get(4)?,
-                    trashed: r.get::<_, i64>(5)? != 0,
+                    workspace_id: r.get(1)?,
+                    parent_id: r.get(2)?,
+                    object_id: r.get(3)?,
+                    name: r.get(4)?,
+                    position: r.get(5)?,
+                    trashed: r.get::<_, i64>(6)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -204,13 +245,15 @@ impl LocalStore {
     /// toggling, all by writing the desired row.
     pub fn save_view(&self, v: &LocalView) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO local_view(id,parent_id,object_id,name,position,trashed)
-             VALUES(?1,?2,?3,?4,?5,?6)
+            "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(id) DO UPDATE SET
-                 parent_id=excluded.parent_id, object_id=excluded.object_id,
-                 name=excluded.name, position=excluded.position, trashed=excluded.trashed",
+                 workspace_id=excluded.workspace_id, parent_id=excluded.parent_id,
+                 object_id=excluded.object_id, name=excluded.name,
+                 position=excluded.position, trashed=excluded.trashed",
             params![
                 v.id,
+                v.workspace_id,
                 v.parent_id,
                 v.object_id,
                 v.name,
@@ -226,6 +269,45 @@ impl LocalStore {
     pub fn purge_view(&self, id: &str) -> Result<(), StoreError> {
         self.conn
             .execute("DELETE FROM local_view WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    // ── workspaces — P2-M3 ───────────────────────────────────────────────────
+
+    /// All local workspaces, ordered by `position`.
+    pub fn list_workspaces(&self) -> Result<Vec<LocalWorkspace>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id,name,position FROM local_workspace ORDER BY position")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(LocalWorkspace {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    position: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Upsert a workspace (create / rename / reorder).
+    pub fn save_workspace(&self, w: &LocalWorkspace) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO local_workspace(id,name,position) VALUES(?1,?2,?3)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, position=excluded.position",
+            params![w.id, w.name, w.position],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a workspace and all its views' rows. Documents are deleted
+    /// separately by the caller (it knows the object ids).
+    pub fn delete_workspace(&self, id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM local_view WHERE workspace_id=?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM local_workspace WHERE id=?1", params![id])?;
         Ok(())
     }
 }
@@ -298,6 +380,7 @@ mod tests {
     fn view(id: &str, parent: Option<&str>, name: &str, pos: &str) -> LocalView {
         LocalView {
             id: id.into(),
+            workspace_id: "local".into(),
             parent_id: parent.map(|s| s.into()),
             object_id: format!("doc-{id}"),
             name: name.into(),
@@ -332,6 +415,33 @@ mod tests {
         assert!(store.list_views().unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
         store.purge_view("v1").unwrap();
         assert!(store.list_views().unwrap().iter().all(|v| v.id != "v1"));
+    }
+
+    #[test]
+    fn workspaces_crud_and_default() {
+        let store = LocalStore::open_in_memory().unwrap();
+        // A default workspace always exists.
+        let all = store.list_workspaces().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "local");
+
+        store
+            .save_workspace(&LocalWorkspace {
+                id: "w2".into(),
+                name: "Work".into(),
+                position: "0000000020".into(),
+            })
+            .unwrap();
+        assert_eq!(store.list_workspaces().unwrap().len(), 2);
+
+        // Views are scoped; deleting a workspace removes only its views.
+        store.save_view(&LocalView { workspace_id: "w2".into(), ..view("a", None, "A", "0000000010") }).unwrap();
+        store.save_view(&LocalView { workspace_id: "local".into(), ..view("b", None, "B", "0000000010") }).unwrap();
+        store.delete_workspace("w2").unwrap();
+        let views = store.list_views().unwrap();
+        assert!(views.iter().any(|v| v.id == "b"));
+        assert!(views.iter().all(|v| v.id != "a"));
+        assert!(store.list_workspaces().unwrap().iter().all(|w| w.id != "w2"));
     }
 
     #[test]

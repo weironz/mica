@@ -88,6 +88,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalView dco_decode_box_autoadd_local_view(dynamic raw);
 
   @protected
+  LocalWorkspace dco_decode_box_autoadd_local_workspace(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
@@ -97,6 +100,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LocalView> dco_decode_list_local_view(dynamic raw);
 
   @protected
+  List<LocalWorkspace> dco_decode_list_local_workspace(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -104,6 +110,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalView dco_decode_local_view(dynamic raw);
+
+  @protected
+  LocalWorkspace dco_decode_local_workspace(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -193,6 +202,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalView sse_decode_box_autoadd_local_view(SseDeserializer deserializer);
 
   @protected
+  LocalWorkspace sse_decode_box_autoadd_local_workspace(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
@@ -202,6 +216,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LocalView> sse_decode_list_local_view(SseDeserializer deserializer);
 
   @protected
+  List<LocalWorkspace> sse_decode_list_local_workspace(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -209,6 +228,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalView sse_decode_local_view(SseDeserializer deserializer);
+
+  @protected
+  LocalWorkspace sse_decode_local_workspace(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -312,6 +334,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_local_workspace(
+    LocalWorkspace self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
@@ -320,6 +348,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_local_view(
     List<LocalView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_local_workspace(
+    List<LocalWorkspace> self,
     SseSerializer serializer,
   );
 
@@ -334,6 +368,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_local_view(LocalView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_local_workspace(
+    LocalWorkspace self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

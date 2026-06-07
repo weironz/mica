@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 645497906;
+  int get rustContentHash => -1880624557;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -181,11 +181,20 @@ abstract class RustLibApi extends BaseApi {
     required String docId,
   });
 
+  void crateApiStoreMicaStoreDeleteWorkspace({
+    required MicaStore that,
+    required String id,
+  });
+
   String crateApiStoreMicaStoreDeviceId({required MicaStore that});
 
   List<String> crateApiStoreMicaStoreListDocs({required MicaStore that});
 
   List<LocalView> crateApiStoreMicaStoreListViews({required MicaStore that});
+
+  List<LocalWorkspace> crateApiStoreMicaStoreListWorkspaces({
+    required MicaStore that,
+  });
 
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
     required MicaStore that,
@@ -208,6 +217,11 @@ abstract class RustLibApi extends BaseApi {
   void crateApiStoreMicaStoreSaveView({
     required MicaStore that,
     required LocalView view,
+  });
+
+  void crateApiStoreMicaStoreSaveWorkspace({
+    required MicaStore that,
+    required LocalWorkspace workspace,
   });
 
   PlatformInt64 crateApiSimpleAdd({
@@ -864,6 +878,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiStoreMicaStoreDeleteWorkspace({
+    required MicaStore that,
+    required String id,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreDeleteWorkspaceConstMeta,
+        argValues: [that, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreDeleteWorkspaceConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_delete_workspace",
+        argNames: ["that", "id"],
+      );
+
+  @override
   String crateApiStoreMicaStoreDeviceId({required MicaStore that}) {
     return handler.executeSync(
       SyncTask(
@@ -873,7 +920,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -899,7 +946,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_String,
@@ -925,7 +972,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_local_view,
@@ -945,6 +992,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<LocalWorkspace> crateApiStoreMicaStoreListWorkspaces({
+    required MicaStore that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_local_workspace,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreListWorkspacesConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreListWorkspacesConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_list_workspaces",
+        argNames: ["that"],
+      );
+
+  @override
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
     required MicaStore that,
     required String docId,
@@ -958,7 +1036,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(docId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -985,7 +1063,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(path, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1016,7 +1094,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(id, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1054,7 +1132,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             doc,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1087,7 +1165,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_box_autoadd_local_view(view, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1107,6 +1185,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiStoreMicaStoreSaveWorkspace({
+    required MicaStore that,
+    required LocalWorkspace workspace,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_local_workspace(workspace, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreSaveWorkspaceConstMeta,
+        argValues: [that, workspace],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreSaveWorkspaceConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_save_workspace",
+        argNames: ["that", "workspace"],
+      );
+
+  @override
   PlatformInt64 crateApiSimpleAdd({
     required PlatformInt64 a,
     required PlatformInt64 b,
@@ -1117,7 +1228,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_64(a, serializer);
           sse_encode_i_64(b, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_64,
@@ -1139,7 +1250,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1162,7 +1273,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1187,7 +1298,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1316,6 +1427,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LocalWorkspace dco_decode_box_autoadd_local_workspace(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_local_workspace(raw);
+  }
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeI64(raw);
@@ -1334,6 +1451,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LocalWorkspace> dco_decode_list_local_workspace(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_local_workspace).toList();
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -1349,15 +1472,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalView dco_decode_local_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return LocalView(
       id: dco_decode_String(arr[0]),
-      parentId: dco_decode_opt_String(arr[1]),
-      objectId: dco_decode_String(arr[2]),
-      name: dco_decode_String(arr[3]),
-      position: dco_decode_String(arr[4]),
-      trashed: dco_decode_bool(arr[5]),
+      workspaceId: dco_decode_String(arr[1]),
+      parentId: dco_decode_opt_String(arr[2]),
+      objectId: dco_decode_String(arr[3]),
+      name: dco_decode_String(arr[4]),
+      position: dco_decode_String(arr[5]),
+      trashed: dco_decode_bool(arr[6]),
+    );
+  }
+
+  @protected
+  LocalWorkspace dco_decode_local_workspace(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return LocalWorkspace(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      position: dco_decode_String(arr[2]),
     );
   }
 
@@ -1537,6 +1674,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LocalWorkspace sse_decode_box_autoadd_local_workspace(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_local_workspace(deserializer));
+  }
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getPlatformInt64();
@@ -1567,6 +1712,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LocalWorkspace> sse_decode_list_local_workspace(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LocalWorkspace>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_local_workspace(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -1584,6 +1743,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalView sse_decode_local_view(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
+    var var_workspaceId = sse_decode_String(deserializer);
     var var_parentId = sse_decode_opt_String(deserializer);
     var var_objectId = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
@@ -1591,12 +1751,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_trashed = sse_decode_bool(deserializer);
     return LocalView(
       id: var_id,
+      workspaceId: var_workspaceId,
       parentId: var_parentId,
       objectId: var_objectId,
       name: var_name,
       position: var_position,
       trashed: var_trashed,
     );
+  }
+
+  @protected
+  LocalWorkspace sse_decode_local_workspace(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_position = sse_decode_String(deserializer);
+    return LocalWorkspace(id: var_id, name: var_name, position: var_position);
   }
 
   @protected
@@ -1803,6 +1973,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_local_workspace(
+    LocalWorkspace self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_local_workspace(self, serializer);
+  }
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putPlatformInt64(self);
@@ -1826,6 +2005,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_local_view(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_local_workspace(
+    List<LocalWorkspace> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_local_workspace(item, serializer);
     }
   }
 
@@ -1855,11 +2046,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_local_view(LocalView self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
+    sse_encode_String(self.workspaceId, serializer);
     sse_encode_opt_String(self.parentId, serializer);
     sse_encode_String(self.objectId, serializer);
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.position, serializer);
     sse_encode_bool(self.trashed, serializer);
+  }
+
+  @protected
+  void sse_encode_local_workspace(
+    LocalWorkspace self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.position, serializer);
   }
 
   @protected
@@ -2113,6 +2316,10 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   void deleteDoc({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreDeleteDoc(that: this, docId: docId);
 
+  /// Delete a workspace and all its view rows (delete documents separately).
+  void deleteWorkspace({required String id}) => RustLib.instance.api
+      .crateApiStoreMicaStoreDeleteWorkspace(that: this, id: id);
+
   /// The persisted device id.
   String deviceId() =>
       RustLib.instance.api.crateApiStoreMicaStoreDeviceId(that: this);
@@ -2125,6 +2332,10 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// tree from `parent_id` and filters trash.
   List<LocalView> listViews() =>
       RustLib.instance.api.crateApiStoreMicaStoreListViews(that: this);
+
+  /// All local workspaces (ordered by position).
+  List<LocalWorkspace> listWorkspaces() =>
+      RustLib.instance.api.crateApiStoreMicaStoreListWorkspaces(that: this);
 
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.
@@ -2144,4 +2355,10 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// Upsert a view (create / rename / move / trash-toggle).
   void saveView({required LocalView view}) => RustLib.instance.api
       .crateApiStoreMicaStoreSaveView(that: this, view: view);
+
+  /// Upsert a workspace (create / rename / reorder).
+  void saveWorkspace({required LocalWorkspace workspace}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStoreSaveWorkspace(that: this, workspace: workspace);
 }

@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
@@ -15,6 +15,9 @@ abstract class MicaStore implements RustOpaqueInterface {
   BigInt clientId();
 
   void deleteDoc({required String docId});
+
+  /// Delete a workspace and all its view rows (delete documents separately).
+  void deleteWorkspace({required String id});
 
   /// The persisted device id.
   String deviceId();
@@ -25,6 +28,9 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// All views (including trashed), ordered by position. The client builds the
   /// tree from `parent_id` and filters trash.
   List<LocalView> listViews();
+
+  /// All local workspaces (ordered by position).
+  List<LocalWorkspace> listWorkspaces();
 
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.
@@ -43,12 +49,16 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Upsert a view (create / rename / move / trash-toggle).
   void saveView({required LocalView view});
+
+  /// Upsert a workspace (create / rename / reorder).
+  void saveWorkspace({required LocalWorkspace workspace});
 }
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
 /// `DocumentView`. `object_id` is the document's `doc_id`.
 class LocalView {
   final String id;
+  final String workspaceId;
   final String? parentId;
   final String objectId;
   final String name;
@@ -57,6 +67,7 @@ class LocalView {
 
   const LocalView({
     required this.id,
+    required this.workspaceId,
     this.parentId,
     required this.objectId,
     required this.name,
@@ -67,6 +78,7 @@ class LocalView {
   @override
   int get hashCode =>
       id.hashCode ^
+      workspaceId.hashCode ^
       parentId.hashCode ^
       objectId.hashCode ^
       name.hashCode ^
@@ -79,9 +91,35 @@ class LocalView {
       other is LocalView &&
           runtimeType == other.runtimeType &&
           id == other.id &&
+          workspaceId == other.workspaceId &&
           parentId == other.parentId &&
           objectId == other.objectId &&
           name == other.name &&
           position == other.position &&
           trashed == other.trashed;
+}
+
+/// A local workspace mirrored to Dart (P2-M3).
+class LocalWorkspace {
+  final String id;
+  final String name;
+  final String position;
+
+  const LocalWorkspace({
+    required this.id,
+    required this.name,
+    required this.position,
+  });
+
+  @override
+  int get hashCode => id.hashCode ^ name.hashCode ^ position.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalWorkspace &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          position == other.position;
 }
