@@ -19,7 +19,7 @@ use yrs::types::{Attrs, GetString};
 use yrs::updates::decoder::Decode;
 use yrs::{
     Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, OffsetKind, Options, Out,
-    ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, Update,
+    ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, TransactionMut, Update,
 };
 
 use crate::block::Block;
@@ -60,20 +60,7 @@ impl MicaDoc {
             meta.insert(&mut txn, ROOT_KEY, root_id.to_string());
 
             for b in blocks {
-                let bm: MapRef = blocks_map.insert(&mut txn, b.id.clone(), MapPrelim::default());
-                bm.insert(&mut txn, "ty", b.kind.clone());
-
-                let text: TextRef = bm.insert(&mut txn, "text", TextPrelim::new(b.text.clone()));
-                let block_marks = marks::marks_from_data(&b.data);
-                for (start, len, attrs) in marks::marks_to_format_ops(&block_marks) {
-                    text.format(&mut txn, start, len, attrs);
-                }
-
-                let props = props_without_marks(&b.data);
-                let props_str = serde_json::to_string(&props).unwrap_or_else(|_| "null".into());
-                bm.insert(&mut txn, "props", props_str);
-
-                bm.insert(&mut txn, "children", ArrayPrelim::from(b.children.clone()));
+                write_block(&mut txn, &blocks_map, b);
             }
         }
         MicaDoc { doc }
@@ -249,4 +236,346 @@ fn rebuild_data(props_str: &str, block_marks: &[Mark]) -> Value {
         }
     }
     data
+}
+
+// ── shared write/read helpers ────────────────────────────────────────────────
+
+/// Create (or overwrite) a block's map entry: `ty`, `text` (+marks as
+/// formatting), `props` (data minus marks, as JSON), `children`.
+fn write_block(txn: &mut TransactionMut, blocks_map: &MapRef, b: &Block) -> MapRef {
+    let bm: MapRef = blocks_map.insert(txn, b.id.clone(), MapPrelim::default());
+    bm.insert(txn, "ty", b.kind.clone());
+    let text: TextRef = bm.insert(txn, "text", TextPrelim::new(b.text.clone()));
+    for (start, len, attrs) in marks::marks_to_format_ops(&marks::marks_from_data(&b.data)) {
+        text.format(txn, start, len, attrs);
+    }
+    let props = props_without_marks(&b.data);
+    let props_str = serde_json::to_string(&props).unwrap_or_else(|_| "null".into());
+    bm.insert(txn, "props", props_str);
+    bm.insert(txn, "children", ArrayPrelim::from(b.children.clone()));
+    bm
+}
+
+fn get_block_map<T: ReadTxn>(txn: &T, blocks_map: &MapRef, id: &str) -> Option<MapRef> {
+    blocks_map.get(txn, id)?.cast().ok()
+}
+
+fn get_children<T: ReadTxn>(txn: &T, bm: &MapRef) -> Option<ArrayRef> {
+    bm.get(txn, "children")?.cast().ok()
+}
+
+fn get_text<T: ReadTxn>(txn: &T, bm: &MapRef) -> Option<TextRef> {
+    bm.get(txn, "text")?.cast().ok()
+}
+
+fn out_string(out: Out) -> Option<String> {
+    match out {
+        Out::Any(Any::String(s)) => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+/// The id at `index` of a children array, if it's a string.
+fn array_get_string<T: ReadTxn>(txn: &T, arr: &ArrayRef, index: u32) -> Option<String> {
+    out_string(arr.get(txn, index)?)
+}
+
+/// Find the parent block of `child_id` and the child's index within it.
+fn find_parent<T: ReadTxn>(
+    txn: &T,
+    blocks_map: &MapRef,
+    child_id: &str,
+) -> Option<(MapRef, u32)> {
+    let keys: Vec<String> = blocks_map.keys(txn).map(|k| k.to_string()).collect();
+    for key in keys {
+        let bm = match get_block_map(txn, blocks_map, &key) {
+            Some(m) => m,
+            None => continue,
+        };
+        if let Some(children) = get_children(txn, &bm) {
+            for (i, v) in children.iter(txn).enumerate() {
+                if out_string(v).as_deref() == Some(child_id) {
+                    return Some((bm, i as u32));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Split a UTF-8 string at UTF-16 offset `at` into `(left, right)`. If `at` lands
+/// inside a surrogate-pair character it snaps to after that char.
+fn utf16_split(s: &str, at: u32) -> (String, String) {
+    let mut count = 0u32;
+    for (byte_idx, ch) in s.char_indices() {
+        if count == at {
+            return (s[..byte_idx].to_string(), s[byte_idx..].to_string());
+        }
+        count += ch.len_utf16() as u32;
+        if count > at {
+            let end = byte_idx + ch.len_utf8();
+            return (s[..end].to_string(), s[end..].to_string());
+        }
+    }
+    (s.to_string(), String::new())
+}
+
+/// Split marks at offset `at`: those fully before go left, those fully after go
+/// right (shifted by `-at`), straddling ones are cut at `at`.
+fn split_marks(all: &[Mark], at: u32) -> (Vec<Mark>, Vec<Mark>) {
+    let mut a = Vec::new();
+    let mut b = Vec::new();
+    for m in all {
+        if m.end <= at {
+            a.push(m.clone());
+        } else if m.start >= at {
+            b.push(Mark { start: m.start - at, end: m.end - at, ..m.clone() });
+        } else {
+            a.push(Mark { start: m.start, end: at, ..m.clone() });
+            b.push(Mark { start: 0, end: m.end - at, ..m.clone() });
+        }
+    }
+    (a, b)
+}
+
+fn set_text_and_marks(txn: &mut TransactionMut, bm: &MapRef, text: &str, block_marks: &[Mark]) {
+    if let Some(t) = get_text(txn, bm) {
+        let len = t.len(txn);
+        if len > 0 {
+            t.remove_range(txn, 0, len);
+        }
+        t.insert(txn, 0, text);
+        for (start, l, attrs) in marks::marks_to_format_ops(block_marks) {
+            t.format(txn, start, l, attrs);
+        }
+    }
+}
+
+// ── editor-intent operations (each one yrs transaction) ──────────────────────
+
+impl MicaDoc {
+    /// Insert `block` as a child of `parent_id` at `index` (clamped to the end).
+    pub fn insert_block(&mut self, parent_id: &str, index: usize, block: &Block) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        write_block(&mut txn, &blocks_map, block);
+        if let Some(parent) = get_block_map(&txn, &blocks_map, parent_id) {
+            if let Some(children) = get_children(&txn, &parent) {
+                let i = (index as u32).min(children.len(&txn));
+                children.insert(&mut txn, i, block.id.clone());
+            }
+        }
+    }
+
+    /// Change a block's kind/flavour.
+    pub fn update_block_kind(&mut self, id: &str, kind: &str) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            bm.insert(&mut txn, "ty", kind.to_string());
+        }
+    }
+
+    /// Replace a block's whole text + marks (coarse; for fine edits use
+    /// [`Self::text_insert`]/[`Self::text_delete`]/[`Self::text_format`]).
+    pub fn set_block_text(&mut self, id: &str, text: &str, block_marks: &[Mark]) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            set_text_and_marks(&mut txn, &bm, text, block_marks);
+        }
+    }
+
+    /// Set a block's attrs (`props`). Inline marks live on the text, so a
+    /// `marks` key in `data` is ignored here.
+    pub fn set_block_data(&mut self, id: &str, data: &Value) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            let props = props_without_marks(data);
+            let props_str = serde_json::to_string(&props).unwrap_or_else(|_| "null".into());
+            bm.insert(&mut txn, "props", props_str);
+        }
+    }
+
+    /// Insert `s` into a block's text at UTF-16 offset `at` (character-level CRDT).
+    pub fn text_insert(&mut self, id: &str, at: u32, s: &str) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            if let Some(t) = get_text(&txn, &bm) {
+                let at = at.min(t.len(&txn));
+                t.insert(&mut txn, at, s);
+            }
+        }
+    }
+
+    /// Delete `len` UTF-16 units from a block's text starting at `at`.
+    pub fn text_delete(&mut self, id: &str, at: u32, len: u32) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            if let Some(t) = get_text(&txn, &bm) {
+                let total = t.len(&txn);
+                let at = at.min(total);
+                let len = len.min(total - at);
+                if len > 0 {
+                    t.remove_range(&mut txn, at, len);
+                }
+            }
+        }
+    }
+
+    /// Apply an inline mark over `[mark.start, mark.end)` of a block's text.
+    pub fn text_format(&mut self, id: &str, mark: &Mark) {
+        if mark.end <= mark.start {
+            return;
+        }
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            if let Some(t) = get_text(&txn, &bm) {
+                for (start, l, attrs) in marks::marks_to_format_ops(std::slice::from_ref(mark)) {
+                    t.format(&mut txn, start, l, attrs);
+                }
+            }
+        }
+    }
+
+    /// Delete a block. With `bring_children_to_parent`, its children are spliced
+    /// into the parent at the block's old position; otherwise they become
+    /// unreachable (M1: their map entries stay as orphans). The block's own map
+    /// entry is removed either way.
+    pub fn delete_block(&mut self, id: &str, bring_children_to_parent: bool) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        let child_ids: Vec<String> = get_block_map(&txn, &blocks_map, id)
+            .and_then(|bm| get_children(&txn, &bm))
+            .map(|c| c.iter(&txn).filter_map(out_string).collect())
+            .unwrap_or_default();
+
+        if let Some((parent, idx)) = find_parent(&txn, &blocks_map, id) {
+            if let Some(pchildren) = get_children(&txn, &parent) {
+                pchildren.remove(&mut txn, idx);
+                if bring_children_to_parent {
+                    for (k, cid) in child_ids.iter().enumerate() {
+                        pchildren.insert(&mut txn, idx + k as u32, cid.clone());
+                    }
+                }
+            }
+        }
+        blocks_map.remove(&mut txn, id);
+    }
+
+    /// Move a block to be a child of `new_parent` at `index`.
+    pub fn move_block(&mut self, id: &str, new_parent: &str, index: usize) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        if let Some((old, oidx)) = find_parent(&txn, &blocks_map, id) {
+            if let Some(oc) = get_children(&txn, &old) {
+                oc.remove(&mut txn, oidx);
+            }
+        }
+        if let Some(np) = get_block_map(&txn, &blocks_map, new_parent) {
+            if let Some(nc) = get_children(&txn, &np) {
+                let i = (index as u32).min(nc.len(&txn));
+                nc.insert(&mut txn, i, id.to_string());
+            }
+        }
+    }
+
+    /// Split block `id` at UTF-16 offset `at` into two: the original keeps
+    /// `[..at]`, a new block `new_id` (kind `new_kind`) takes `[at..]` plus the
+    /// original's children, inserted as the next sibling.
+    ///
+    /// Read-modify-write — it does NOT preserve character identity across the
+    /// split, so a concurrent edit of the moved tail could be lost. Fine for
+    /// single-writer M1; revisit for CRDT fidelity before multi-writer sync (M4).
+    pub fn split_block(&mut self, id: &str, at: u32, new_id: &str, new_kind: &str) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        let orig = match self.read_block(&txn, &blocks_map, id) {
+            Some(b) => b,
+            None => return,
+        };
+        let (text_a, text_b) = utf16_split(&orig.text, at);
+        let (marks_a, marks_b) = split_marks(&marks::marks_from_data(&orig.data), at);
+        let props_str =
+            serde_json::to_string(&props_without_marks(&orig.data)).unwrap_or_else(|_| "null".into());
+
+        // Original keeps the head and loses its children (they go to the tail).
+        if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
+            set_text_and_marks(&mut txn, &bm, &text_a, &marks_a);
+            if let Some(c) = get_children(&txn, &bm) {
+                let cl = c.len(&txn);
+                if cl > 0 {
+                    c.remove_range(&mut txn, 0, cl);
+                }
+            }
+        }
+
+        // New tail block.
+        let tail = Block {
+            id: new_id.to_string(),
+            kind: new_kind.to_string(),
+            text: text_b,
+            data: rebuild_data(&props_str, &marks_b),
+            children: orig.children.clone(),
+        };
+        write_block(&mut txn, &blocks_map, &tail);
+
+        if let Some((parent, idx)) = find_parent(&txn, &blocks_map, id) {
+            if let Some(pc) = get_children(&txn, &parent) {
+                pc.insert(&mut txn, idx + 1, new_id.to_string());
+            }
+        }
+    }
+
+    /// Join block `id` into its previous sibling: append `id`'s text (marks
+    /// shifted) to the previous sibling, move `id`'s children after, and delete
+    /// `id`. No-op if `id` has no previous sibling.
+    pub fn join_into_prev(&mut self, id: &str) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        let (parent, idx) = match find_parent(&txn, &blocks_map, id) {
+            Some(x) => x,
+            None => return,
+        };
+        if idx == 0 {
+            return;
+        }
+        let prev_id = match get_children(&txn, &parent).and_then(|c| array_get_string(&txn, &c, idx - 1)) {
+            Some(s) => s,
+            None => return,
+        };
+        let cur = match self.read_block(&txn, &blocks_map, id) {
+            Some(b) => b,
+            None => return,
+        };
+        let prev = match self.read_block(&txn, &blocks_map, &prev_id) {
+            Some(b) => b,
+            None => return,
+        };
+
+        let prev_len = prev.text.encode_utf16().count() as u32;
+        let merged_text = format!("{}{}", prev.text, cur.text);
+        let mut merged_marks = marks::marks_from_data(&prev.data);
+        for m in marks::marks_from_data(&cur.data) {
+            merged_marks.push(Mark { start: m.start + prev_len, end: m.end + prev_len, ..m });
+        }
+
+        if let Some(pbm) = get_block_map(&txn, &blocks_map, &prev_id) {
+            set_text_and_marks(&mut txn, &pbm, &merged_text, &merged_marks);
+            if let Some(pc) = get_children(&txn, &pbm) {
+                let base = pc.len(&txn);
+                for (k, cid) in cur.children.iter().enumerate() {
+                    pc.insert(&mut txn, base + k as u32, cid.clone());
+                }
+            }
+        }
+        if let Some(pc) = get_children(&txn, &parent) {
+            pc.remove(&mut txn, idx);
+        }
+        blocks_map.remove(&mut txn, id);
+    }
 }
