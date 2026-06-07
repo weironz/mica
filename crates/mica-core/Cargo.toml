@@ -16,8 +16,21 @@ yrs = "0.27.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Local persistence (desktop client only), behind the `store` feature so the
+# server never pulls SQLite. `bundled` compiles SQLite from source — no system
+# dependency. `uuid` mints the persisted device id.
+# Pinned to share `libsqlite3-sys` with the workspace's sqlx-sqlite (<0.38) so
+# the native `sqlite3` link doesn't conflict (the desktop FFI crate is a separate
+# workspace, but `cargo test -p mica-core` resolves the whole workspace).
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The markdown authority — for the round-trip invariant test: md → blocks →
 # MicaDoc → blocks → md must equal md → blocks → md directly.
 mica-markdown = { path = "../markdown" }
+
+[features]
+# Local SQLite store + on-device identity (P2-M2). Enabled by the desktop FFI
+# crate; off for the server.
+store = ["dep:rusqlite", "dep:uuid"]

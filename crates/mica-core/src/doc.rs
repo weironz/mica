@@ -18,8 +18,8 @@ use serde_json::Value;
 use yrs::types::{Attrs, GetString};
 use yrs::updates::decoder::Decode;
 use yrs::{
-    Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, OffsetKind, Options, Out,
-    ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, TransactionMut, Update,
+    Any, Array, ArrayPrelim, ArrayRef, ClientID, Doc, Map, MapPrelim, MapRef, OffsetKind, Options,
+    Out, ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, TransactionMut, Update,
 };
 
 use crate::block::Block;
@@ -43,16 +43,40 @@ pub struct MicaDoc {
 }
 
 impl MicaDoc {
-    fn new_doc() -> Doc {
-        Doc::with_options(Options {
+    /// Create the backing yrs doc. UTF-16 offsets (to match Dart string indices);
+    /// a fixed `client_id` (the persisted on-device identity) keeps CRDT
+    /// authorship stable across restarts — never random per launch (§6).
+    fn new_doc_with(client_id: Option<u64>) -> Doc {
+        let mut options = Options {
             offset_kind: OffsetKind::Utf16,
             ..Default::default()
-        })
+        };
+        if let Some(cid) = client_id {
+            // ClientID is a 53-bit value (Yjs-compatible); callers pass a masked
+            // u64 (see the store's identity minting).
+            options.client_id = ClientID::new(cid & ((1 << 53) - 1));
+        }
+        Doc::with_options(options)
+    }
+
+    /// The yrs client id (53-bit u64) of this doc's local actor.
+    pub fn client_id(&self) -> u64 {
+        self.doc.client_id().get()
     }
 
     /// Build a document from a flat block list rooted at `root_id`.
     pub fn from_blocks(root_id: &str, blocks: &[Block]) -> Self {
-        let doc = Self::new_doc();
+        Self::from_blocks_with_client_id(root_id, blocks, None)
+    }
+
+    /// Like [`Self::from_blocks`] but with a fixed yrs client id (the persisted
+    /// device identity) so all this device's edits share one stable actor.
+    pub fn from_blocks_with_client_id(
+        root_id: &str,
+        blocks: &[Block],
+        client_id: Option<u64>,
+    ) -> Self {
+        let doc = Self::new_doc_with(client_id);
         {
             let blocks_map = doc.get_or_insert_map(BLOCKS);
             let meta = doc.get_or_insert_map(META);
@@ -173,7 +197,16 @@ impl MicaDoc {
 
     /// Rebuild a document from an encoded v1 update.
     pub fn from_update(bytes: &[u8]) -> Result<Self, DocError> {
-        let doc = Self::new_doc();
+        Self::from_update_with_client_id(bytes, None)
+    }
+
+    /// Like [`Self::from_update`] but with a fixed yrs client id (see
+    /// [`Self::from_blocks_with_client_id`]).
+    pub fn from_update_with_client_id(
+        bytes: &[u8],
+        client_id: Option<u64>,
+    ) -> Result<Self, DocError> {
+        let doc = Self::new_doc_with(client_id);
         let update = Update::decode_v1(bytes).map_err(|e| DocError::Decode(e.to_string()))?;
         {
             let mut txn = doc.transact_mut();

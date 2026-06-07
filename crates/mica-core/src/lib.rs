@@ -11,10 +11,14 @@
 pub mod block;
 pub mod doc;
 pub mod marks;
+#[cfg(feature = "store")]
+pub mod store;
 
 pub use block::Block;
 pub use doc::{DocError, MicaDoc};
 pub use marks::Mark;
+#[cfg(feature = "store")]
+pub use store::{Identity, LocalStore, StoreError};
 
 /// The core crate version, so the desktop client can confirm which native build
 /// it is actually bound to (catches stale-dylib mistakes early).
