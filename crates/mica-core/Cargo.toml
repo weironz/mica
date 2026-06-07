@@ -12,3 +12,7 @@ rust-version = "1.85"
 [lib]
 
 [dependencies]
+yrs = "0.27.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
