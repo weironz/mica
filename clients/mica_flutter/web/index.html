@@ -7,6 +7,9 @@
     <meta name="description" content="Mica Flutter client">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Mica</title>
+    <!-- P2-M4 web→yjs: the browser-side CRDT engine (yjs), wire-compatible with
+         the Rust yrs core/server. Loaded before Flutter so js_interop can use it. -->
+    <script src="yjs_bundle.js"></script>
   </head>
   <body>
     <script src="flutter_bootstrap.js" async></script>

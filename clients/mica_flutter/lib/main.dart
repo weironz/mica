@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'editor/clipboard_copy.dart';
 import 'cloud/cloud_sync.dart';
 import 'local/local_offline.dart';
+import 'web/yjs_probe.dart';
 import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
@@ -104,6 +105,8 @@ void main() async {
   // Suppress the browser's native right-click menu so the editor can show its
   // own (e.g. image actions) on web.
   if (kIsWeb) BrowserContextMenu.disableContextMenu();
+  // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
+  registerYjsSelfTest();
   _warmUpFonts();
   runApp(const MicaApp());
 }

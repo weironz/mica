@@ -1,0 +1,14 @@
+{
+  "name": "mica-yjs-bundle",
+  "private": true,
+  "description": "Bundles yjs into a single browser IIFE (globalThis.micaYjs) for the Flutter web client. Output ../../web/yjs_bundle.js is committed; node is not needed at Flutter build time.",
+  "scripts": {
+    "build": "esbuild entry.js --bundle --format=iife --minify --outfile=../../web/yjs_bundle.js"
+  },
+  "dependencies": {
+    "yjs": "^13.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0"
+  }
+}

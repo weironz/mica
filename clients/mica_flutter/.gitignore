@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# yjs bundle build artifacts (the built web/yjs_bundle.js IS committed)
+tool/yjs/node_modules/
