@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
+import 'cloud/cloud_sync.dart';
 import 'local/local_offline.dart';
 import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
@@ -204,6 +205,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   List<PresenceUser> _presence = const [];
   Timer? _syncRefetchTimer;
 
+  // --- Cloud yrs CRDT sync (P2-M4.5c, desktop only) ---
+  // When the server speaks the yrs sync protocol (M4.4+), the desktop cloud
+  // editor edits a CRDT replica instead of POSTing block ops: edits push yrs
+  // diffs, remote updates merge + reconcile. It activates only once bootstrap
+  // succeeds (`isReady`), so against an older server the app falls back to the
+  // op/REST path transparently. `DocumentSyncClient` stays up for presence.
+  CloudSyncSession? _cloudSession;
+  BigInt? _deviceClientId;
+
   // --- Local offline (P2-M3) ---
   // A single implicit local workspace + synthetic identity; the page tree and
   // documents live entirely on-device (SQLite via the LocalOffline facade).
@@ -366,6 +376,66 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _sync = sync;
     setState(() => _presence = const []);
     sync.connect();
+
+    // Desktop: also open a yrs CRDT session for this doc. It supersedes the op
+    // path once it bootstraps; until then (or against an old server) edits use
+    // REST as before.
+    if (!kIsWeb && _serverConfig.mode != ServerMode.localOffline) {
+      unawaited(_setupCloudYrs(documentId, workspace, session));
+    }
+  }
+
+  Future<void> _setupCloudYrs(
+    String documentId,
+    Workspace workspace,
+    AuthSession session,
+  ) async {
+    final clientId = _deviceClientId ??= await _local.deviceClientId();
+    if (clientId == null || !mounted) return;
+    // The selection may have moved while we awaited the device id.
+    if (_selectedBootstrap?.document.id != documentId || _sync?.documentId != documentId) {
+      return;
+    }
+    final yrs = CloudSyncSession(
+      uri: documentSocketUri(
+        _api.baseUri,
+        workspace.id,
+        documentId,
+        session.accessToken,
+      ),
+      clientId: clientId,
+      onReady: (_, _) => _applyCloudBlocks(documentId),
+      onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
+    );
+    _cloudSession = yrs;
+    yrs.connect();
+  }
+
+  /// Rebuild the selected bootstrap from the yrs replica's blocks so the editor
+  /// reconciles to the CRDT state (preserving unsent local edits).
+  void _applyCloudBlocks(String documentId) {
+    final session = _cloudSession;
+    final boot = _selectedBootstrap;
+    if (!mounted ||
+        session == null ||
+        boot == null ||
+        boot.document.id != documentId) {
+      return;
+    }
+    final blocks = session.allBlocks();
+    if (blocks.isEmpty) return;
+    setState(() {
+      _selectedBootstrap = DocumentBootstrap(
+        document: boot.document,
+        view: boot.view,
+        snapshot: DocumentSnapshot(
+          versionSeq: boot.snapshot.versionSeq,
+          schemaVersion: boot.snapshot.schemaVersion,
+          payload: {...boot.snapshot.payload, 'blocks': blocks},
+        ),
+      );
+      _selectedMarkdown = null;
+    });
   }
 
   void _closeDocumentSync() {
@@ -373,6 +443,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _syncRefetchTimer = null;
     _sync?.dispose();
     _sync = null;
+    _cloudSession?.dispose();
+    _cloudSession = null;
     if (_presence.isNotEmpty) {
       setState(() => _presence = const []);
     }
@@ -383,6 +455,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// own edits already updated `currentSeq` via their REST response, so their
   /// echo is ignored here.
   void _handleRemoteSeq(String documentId, int serverSeq) {
+    // When the yrs session owns this doc, op-model seq notifications are stale
+    // noise — remote changes arrive as CRDT updates instead.
+    if (_cloudSession?.isReady ?? false) return;
     final bootstrap = _selectedBootstrap;
     if (bootstrap == null ||
         bootstrap.document.id != documentId ||
@@ -1176,6 +1251,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _applyEditorOperations(
     List<Map<String, dynamic>> operations,
   ) async {
+    // Desktop yrs path: apply + push as a CRDT diff instead of POSTing ops.
+    final yrs = _cloudSession;
+    if (yrs != null && yrs.isReady) {
+      yrs.applyLocalOps(operations);
+      return;
+    }
+
     final session = _session;
     final workspace = _selectedWorkspace;
     final bootstrap = _selectedBootstrap;

@@ -57,6 +57,20 @@ class LocalOffline {
     _store = store;
   }
 
+  /// This device's stable yrs client id, used to pin the CRDT actor for cloud
+  /// sync too (so a device's edits share one actor everywhere). Opens the store
+  /// if needed; returns null if the native bridge is unavailable.
+  Future<BigInt?> deviceClientId() async {
+    if (_store == null) {
+      try {
+        await open();
+      } catch (_) {
+        return null;
+      }
+    }
+    return _store?.clientId();
+  }
+
   // ── workspaces ─────────────────────────────────────────────────────────────
 
   List<WorkspaceData> listWorkspaces() {

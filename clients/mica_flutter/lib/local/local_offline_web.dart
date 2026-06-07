@@ -23,6 +23,8 @@ class LocalOffline {
   Future<void> open() async =>
       throw UnsupportedError('local offline is not available on web');
 
+  Future<BigInt?> deviceClientId() async => null;
+
   List<WorkspaceData> listWorkspaces() => const [];
 
   void saveWorkspace(WorkspaceData w) {}
