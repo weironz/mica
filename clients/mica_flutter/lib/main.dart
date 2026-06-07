@@ -34,6 +34,66 @@ const String kDevPassword = String.fromEnvironment(
   defaultValue: 'password123',
 );
 
+/// The official hosted Mica instance (see docs/deploy.md).
+const String kMicaCloudUrl = 'https://mica.cloudcele.com';
+
+/// Which backend the client talks to.
+/// - [cloud]/[selfHosted]: online — a REST + WebSocket server reached by URL,
+///   authenticated with the normal email/password login.
+/// - [localOffline]: on-device, no server (Phase 2 CRDT engine). Not built yet;
+///   the Settings UI shows it disabled.
+enum ServerMode { cloud, selfHosted, localOffline }
+
+/// User's chosen backend, persisted in prefs. Cloud and self-hosted differ only
+/// in their URL — cloud is a fixed preset, self-hosted is user-entered.
+class ServerConfig {
+  const ServerConfig({required this.mode, required this.url});
+
+  final ServerMode mode;
+
+  /// Base URL for cloud/self-hosted; empty for local-offline.
+  final String url;
+
+  Uri? get baseUri {
+    final trimmed = url.trim();
+    return trimmed.isEmpty ? null : Uri.tryParse(trimmed);
+  }
+
+  ServerConfig copyWith({ServerMode? mode, String? url}) =>
+      ServerConfig(mode: mode ?? this.mode, url: url ?? this.url);
+
+  /// Load the saved config, or fall back to the build-time default (treated as
+  /// self-hosted) so existing dev setups keep working with no migration.
+  static ServerConfig load() {
+    final url = loadPref('serverUrl') ?? '';
+    switch (loadPref('serverMode')) {
+      case 'cloud':
+        return const ServerConfig(mode: ServerMode.cloud, url: kMicaCloudUrl);
+      case 'local':
+        return const ServerConfig(mode: ServerMode.localOffline, url: '');
+      case 'self':
+        return ServerConfig(
+          mode: ServerMode.selfHosted,
+          url: url.isEmpty ? ApiClient.defaultBaseUri().toString() : url,
+        );
+      default:
+        return ServerConfig(
+          mode: ServerMode.selfHosted,
+          url: ApiClient.defaultBaseUri().toString(),
+        );
+    }
+  }
+
+  void save() {
+    savePref('serverMode', switch (mode) {
+      ServerMode.cloud => 'cloud',
+      ServerMode.selfHosted => 'self',
+      ServerMode.localOffline => 'local',
+    });
+    savePref('serverUrl', url);
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Desktop: restore window size/position + enforce a min size before the first
@@ -110,6 +170,10 @@ class WorkspaceShell extends StatefulWidget {
 class _WorkspaceShellState extends State<WorkspaceShell> {
   final ApiClient _api = ApiClient();
 
+  /// Which backend we talk to (cloud / self-hosted / local-offline). Loaded
+  /// from prefs in [_loadPrefs] and applied to [_api] before any request.
+  late ServerConfig _serverConfig;
+
   AuthSession? _session;
   List<Workspace> _workspaces = const [];
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
@@ -143,14 +207,42 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void initState() {
     super.initState();
     _loadPrefs();
-    if (kDevAutoLogin) {
+    // The demo account only exists on the local dev backend — never try it
+    // against cloud/self-hosted servers (it would attempt to register a real
+    // account). Those show the login screen instead.
+    if (kDevAutoLogin && _isLocalBackend()) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _devAutoLogin());
     }
+  }
+
+  /// True when the configured backend is the local dev server (localhost).
+  bool _isLocalBackend() {
+    if (_serverConfig.mode != ServerMode.selfHosted) return false;
+    final host = _api.baseUri.host;
+    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+  }
+
+  /// Persist a new server choice and switch the live client to it. Switching
+  /// invalidates the current session (different backend), so we sign out — the
+  /// login screen then targets the newly selected server.
+  Future<void> _saveServerConfig(ServerConfig config) async {
+    config.save();
+    setState(() => _serverConfig = config);
+    final base = config.baseUri;
+    if (base != null) {
+      _api.baseUri = base;
+    }
+    _signOut();
   }
 
   /// Restore persisted client settings (Settings dialog writes them through
   /// [_savePrefs] on every change).
   void _loadPrefs() {
+    _serverConfig = ServerConfig.load();
+    final base = _serverConfig.baseUri;
+    if (base != null) {
+      _api.baseUri = base;
+    }
     final fontScale = double.tryParse(loadPref('fontScale') ?? '');
     final fontFamily = loadPref('fontFamily');
     _appearance = EditorAppearance(
@@ -1409,6 +1501,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 userEmail: _session?.user.email ?? '',
                 onUpdateProfile: _updateProfile,
                 onChangePassword: _changePassword,
+                serverConfig: _serverConfig,
+                onSaveServerConfig: _saveServerConfig,
                 appearance: _appearance,
                 pageWidth: _pageWidth,
                 reHostImages: _reHostImages,
@@ -1678,6 +1772,8 @@ class WorkspaceView extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
+    required this.serverConfig,
+    required this.onSaveServerConfig,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -1775,6 +1871,8 @@ class WorkspaceView extends StatefulWidget {
   final String userEmail;
   final Future<void> Function(String displayName) onUpdateProfile;
   final Future<void> Function(String current, String next) onChangePassword;
+  final ServerConfig serverConfig;
+  final Future<void> Function(ServerConfig config) onSaveServerConfig;
   final EditorAppearance appearance;
   final double pageWidth;
   final bool reHostImages;
@@ -3341,6 +3439,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         userEmail: widget.userEmail,
         onUpdateProfile: widget.onUpdateProfile,
         onChangePassword: widget.onChangePassword,
+        serverConfig: widget.serverConfig,
+        onSaveServerConfig: widget.onSaveServerConfig,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
         reHostImages: widget.reHostImages,
@@ -4228,6 +4328,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
+    required this.serverConfig,
+    required this.onSaveServerConfig,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -4246,6 +4348,8 @@ class _SettingsDialog extends StatefulWidget {
   final String userEmail;
   final Future<void> Function(String displayName) onUpdateProfile;
   final Future<void> Function(String current, String next) onChangePassword;
+  final ServerConfig serverConfig;
+  final Future<void> Function(ServerConfig config) onSaveServerConfig;
   final Future<Map<String, dynamic>> Function() onLoadAiSettings;
   final Future<void> Function({
     required String provider,
@@ -4297,6 +4401,16 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late bool _showFormatBar = widget.showFormatBar;
   late bool _showPageTitle = widget.showPageTitle;
   late bool _aiEnabled = widget.aiEnabled;
+
+  // Server connection (cloud / self-hosted / local-offline).
+  late ServerMode _serverMode = widget.serverConfig.mode;
+  late final _serverUrl = TextEditingController(
+    text: widget.serverConfig.mode == ServerMode.cloud
+        ? kMicaCloudUrl
+        : widget.serverConfig.url,
+  );
+  bool _serverSaving = false;
+  String? _serverMsg;
 
   @override
   void initState() {
@@ -4356,6 +4470,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _name.dispose();
     _curPass.dispose();
     _newPass.dispose();
+    _serverUrl.dispose();
     super.dispose();
   }
 
@@ -4734,6 +4849,198 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
+  void _selectServerMode(ServerMode mode) {
+    setState(() {
+      _serverMode = mode;
+      _serverMsg = null;
+      if (mode == ServerMode.cloud) {
+        _serverUrl.text = kMicaCloudUrl;
+      } else if (mode == ServerMode.selfHosted) {
+        final cur = _serverUrl.text.trim();
+        if (cur.isEmpty || cur == kMicaCloudUrl) {
+          _serverUrl.text = ApiClient.defaultBaseUri().toString();
+        }
+      }
+    });
+  }
+
+  Widget _serverModeTile(
+    ServerMode mode,
+    IconData icon,
+    String title,
+    String subtitle, {
+    bool enabled = true,
+  }) {
+    final selected = _serverMode == mode;
+    const primary = Color(0xFF2563EB);
+    const muted = Color(0xFF94A3B8);
+    return Opacity(
+      opacity: enabled ? 1 : 0.55,
+      child: InkWell(
+        onTap: enabled ? () => _selectServerMode(mode) : null,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                size: 20,
+                color: selected ? primary : muted,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          icon,
+                          size: 18,
+                          color: enabled ? primary : muted,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          title,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (!enabled) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Coming soon',
+                              style: TextStyle(fontSize: 11, color: muted),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _serverSection(BuildContext context) => [
+    _sectionTitle(context, Icons.dns_outlined, 'Server', const Color(0xFF2563EB)),
+    const SizedBox(height: 8),
+    _serverModeTile(
+      ServerMode.cloud,
+      Icons.cloud_outlined,
+      'Mica Cloud',
+      'Connect to the hosted Mica service.',
+    ),
+    _serverModeTile(
+      ServerMode.selfHosted,
+      Icons.dns_outlined,
+      'Self-hosted',
+      'Connect to your own Mica server by URL.',
+    ),
+    _serverModeTile(
+      ServerMode.localOffline,
+      Icons.offline_bolt_outlined,
+      'Local (offline)',
+      'Work entirely on this device, no server. Planned for a later release.',
+      enabled: false,
+    ),
+    if (_serverMode != ServerMode.localOffline) ...[
+      const SizedBox(height: 12),
+      TextField(
+        controller: _serverUrl,
+        enabled: _serverMode == ServerMode.selfHosted && !_serverSaving,
+        keyboardType: TextInputType.url,
+        autocorrect: false,
+        decoration: const InputDecoration(
+          labelText: 'Server URL',
+          hintText: 'https://mica.example.com',
+          prefixIcon: Icon(Icons.link),
+          border: OutlineInputBorder(),
+        ),
+      ),
+    ],
+    const SizedBox(height: 10),
+    Text(
+      'Switching servers signs you out — sign in again on the selected server. '
+      'Your account and data live on that server, not on this device.',
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+    ),
+    if (_serverMsg != null) ...[
+      const SizedBox(height: 12),
+      ErrorBanner(_serverMsg!),
+    ],
+    const SizedBox(height: 14),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: FilledButton.icon(
+        onPressed: _serverSaving ? null : _saveServer,
+        icon: _serverSaving
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.sync, size: 18),
+        label: const Text('Save & reconnect'),
+      ),
+    ),
+  ];
+
+  Future<void> _saveServer() async {
+    if (_serverMode == ServerMode.localOffline) {
+      setState(() => _serverMsg = 'Local offline mode is not available yet.');
+      return;
+    }
+    final url = _serverMode == ServerMode.cloud
+        ? kMicaCloudUrl
+        : _serverUrl.text.trim();
+    final parsed = Uri.tryParse(url);
+    if (url.isEmpty ||
+        parsed == null ||
+        !parsed.hasScheme ||
+        parsed.host.isEmpty) {
+      setState(
+        () => _serverMsg = 'Enter a valid URL, e.g. https://mica.example.com',
+      );
+      return;
+    }
+    setState(() {
+      _serverSaving = true;
+      _serverMsg = null;
+    });
+    await widget.onSaveServerConfig(
+      ServerConfig(mode: _serverMode, url: url),
+    );
+    // The save signs out and rebuilds the shell to the login screen; close the
+    // dialog so the user lands on it.
+    if (mounted) Navigator.of(context).pop();
+  }
+
   List<Widget> _dataSection(BuildContext context) => [
     _sectionTitle(
       context,
@@ -4821,11 +5128,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Appearance', 'AI provider', 'Account', 'Data', 'Shortcuts'];
+    const titles = [
+      'Appearance',
+      'AI provider',
+      'Account',
+      'Server',
+      'Data',
+      'Shortcuts',
+    ];
     const icons = [
       Icons.tune,
       Icons.auto_awesome,
       Icons.person_outline,
+      Icons.dns_outlined,
       Icons.import_export,
       Icons.keyboard_outlined,
     ];
@@ -4833,6 +5148,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _appearanceSection(context),
       _aiSection(context),
       _accountSection(context),
+      _serverSection(context),
       _dataSection(context),
       _shortcutsSection(context),
     ];
@@ -5576,12 +5892,16 @@ class ImportJobStatus {
 }
 
 class ApiClient {
-  ApiClient() : _baseUri = _resolveBaseUri();
+  ApiClient() : baseUri = _resolveBaseUri();
 
-  final Uri _baseUri;
+  /// HTTP base; also derives the WebSocket endpoint for document rooms. Mutable
+  /// so the server switch in Settings can repoint the client at runtime — all
+  /// subsequent REST + WebSocket calls use the new base.
+  Uri baseUri;
 
-  /// HTTP base used to derive the WebSocket endpoint for document rooms.
-  Uri get baseUri => _baseUri;
+  /// The build-time default base (local dev backend, or the
+  /// --dart-define=MICA_API_BASE_URL override).
+  static Uri defaultBaseUri() => _resolveBaseUri();
 
   Future<AuthSession> register(AuthFormValue form) async {
     final response = await _post('/api/auth/register', {
@@ -5818,8 +6138,8 @@ class ApiClient {
     String prompt, {
     String? system,
   }) async* {
-    final uri = _baseUri.replace(
-      scheme: _baseUri.scheme == 'https' ? 'wss' : 'ws',
+    final uri = baseUri.replace(
+      scheme: baseUri.scheme == 'https' ? 'wss' : 'ws',
       path: '/ws/ai',
       queryParameters: {'token': token},
     );
@@ -6007,7 +6327,7 @@ class ApiClient {
     String documentId,
   ) async {
     final response = await http.get(
-      _baseUri.replace(
+      baseUri.replace(
         path: '/api/workspaces/$workspaceId/documents/$documentId/export.zip',
       ),
       headers: {'authorization': 'Bearer $token'},
@@ -6021,7 +6341,7 @@ class ApiClient {
   /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
   Future<Uint8List> exportWorkspaceZip(String token, String workspaceId) async {
     final response = await http.get(
-      _baseUri.replace(path: '/api/workspaces/$workspaceId/export.zip'),
+      baseUri.replace(path: '/api/workspaces/$workspaceId/export.zip'),
       headers: {'authorization': 'Bearer $token'},
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -6075,7 +6395,7 @@ class ApiClient {
     String? workspaceId,
   }) async {
     final response = await http.post(
-      _baseUri.replace(
+      baseUri.replace(
         path: '/api/workspaces/import',
         queryParameters: {
           if (name != null && name.isNotEmpty) 'name': name,
@@ -6103,8 +6423,8 @@ class ApiClient {
   /// shipping the whole query as part of the path (and 404ing).
   Uri _apiUri(String path) {
     final q = path.indexOf('?');
-    if (q < 0) return _baseUri.replace(path: path);
-    return _baseUri.replace(
+    if (q < 0) return baseUri.replace(path: path);
+    return baseUri.replace(
       path: path.substring(0, q),
       query: path.substring(q + 1),
     );
