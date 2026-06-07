@@ -6095,6 +6095,14 @@ class ApiClient {
       return Uri.parse(configured);
     }
 
+    // Desktop/mobile have no serving origin — Uri.base is a file:// cwd, not a
+    // web page — so the page-relative logic below doesn't apply. Default to the
+    // local dev backend; point at a deployed server with
+    // --dart-define=MICA_API_BASE_URL=https://host.
+    if (!kIsWeb) {
+      return Uri.parse('http://127.0.0.1:8080');
+    }
+
     final page = Uri.base;
     // Served from a standard port (production behind the reverse proxy):
     // the API is same-origin — nginx routes /api and /ws to the backend, so
