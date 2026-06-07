@@ -35,6 +35,16 @@ impl MicaDocument {
             .map(|d| MicaDocument { inner: Mutex::new(d) })
     }
 
+    /// Like [`Self::from_state`] but pins the yrs actor to this device's stable
+    /// `client_id` (from the local store identity) — so all of a device's edits
+    /// share one actor across sessions, which cloud sync (P2-M4.5) relies on.
+    #[frb(sync)]
+    pub fn from_state_with_client_id(bytes: Vec<u8>, client_id: u64) -> Option<MicaDocument> {
+        MicaDoc::from_update_with_client_id(&bytes, Some(client_id))
+            .ok()
+            .map(|d| MicaDocument { inner: Mutex::new(d) })
+    }
+
     /// The document as a JSON array of blocks (tree order).
     #[frb(sync)]
     pub fn to_blocks_json(&self) -> String {
@@ -46,6 +56,34 @@ impl MicaDocument {
     #[frb(sync)]
     pub fn encode_state(&self) -> Vec<u8> {
         self.inner.lock().unwrap().encode_state()
+    }
+
+    // ── sync primitives (P2-M4.5): let Dart compute diffs to push + apply
+    //    remote updates, for cloud CRDT sync. ─────────────────────────────────
+
+    /// This replica's state vector — capture it before an edit batch, then
+    /// [`Self::encode_diff_since`] after to get just that batch's update to push.
+    #[frb(sync)]
+    pub fn state_vector(&self) -> Vec<u8> {
+        self.inner.lock().unwrap().state_vector()
+    }
+
+    /// The minimal update carrying everything added since `state_vector` was
+    /// taken — the bytes to push to the cloud. Empty on a malformed vector.
+    #[frb(sync)]
+    pub fn encode_diff_since(&self, state_vector: Vec<u8>) -> Vec<u8> {
+        self.inner
+            .lock()
+            .unwrap()
+            .encode_diff(&state_vector)
+            .unwrap_or_default()
+    }
+
+    /// Merge a remote yrs update into this doc (CRDT merge). Returns false if the
+    /// bytes don't decode (caller should resync rather than trust local state).
+    #[frb(sync)]
+    pub fn apply_update(&self, update: Vec<u8>) -> bool {
+        self.inner.lock().unwrap().apply_update(&update).is_ok()
     }
 
     #[frb(sync)]

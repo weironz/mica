@@ -8,7 +8,15 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>
 abstract class MicaDocument implements RustOpaqueInterface {
+  /// Merge a remote yrs update into this doc (CRDT merge). Returns false if the
+  /// bytes don't decode (caller should resync rather than trust local state).
+  bool applyUpdate({required List<int> update});
+
   void deleteBlock({required String id, required bool bringChildren});
+
+  /// The minimal update carrying everything added since `state_vector` was
+  /// taken — the bytes to push to the cloud. Empty on a malformed vector.
+  Uint8List encodeDiffSince({required List<int> stateVector});
 
   /// Encode the full document state (the base snapshot to persist locally).
   Uint8List encodeState();
@@ -26,6 +34,17 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// the bytes don't decode.
   static MicaDocument? fromState({required List<int> bytes}) =>
       RustLib.instance.api.crateApiDocumentMicaDocumentFromState(bytes: bytes);
+
+  /// Like [`Self::from_state`] but pins the yrs actor to this device's stable
+  /// `client_id` (from the local store identity) — so all of a device's edits
+  /// share one actor across sessions, which cloud sync (P2-M4.5) relies on.
+  static MicaDocument? fromStateWithClientId({
+    required List<int> bytes,
+    required BigInt clientId,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentFromStateWithClientId(
+    bytes: bytes,
+    clientId: clientId,
+  );
 
   void insertBlockJson({
     required String parentId,
@@ -51,6 +70,10 @@ abstract class MicaDocument implements RustOpaqueInterface {
     required String newId,
     required String newKind,
   });
+
+  /// This replica's state vector — capture it before an edit batch, then
+  /// [`Self::encode_diff_since`] after to get just that batch's update to push.
+  Uint8List stateVector();
 
   void textDelete({required String id, required int at, required int len});
 
