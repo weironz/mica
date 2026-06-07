@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 87772094;
+  int get rustContentHash => 645497906;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -185,6 +185,8 @@ abstract class RustLibApi extends BaseApi {
 
   List<String> crateApiStoreMicaStoreListDocs({required MicaStore that});
 
+  List<LocalView> crateApiStoreMicaStoreListViews({required MicaStore that});
+
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
     required MicaStore that,
     required String docId,
@@ -192,10 +194,20 @@ abstract class RustLibApi extends BaseApi {
 
   MicaStore? crateApiStoreMicaStoreOpen({required String path});
 
+  void crateApiStoreMicaStorePurgeView({
+    required MicaStore that,
+    required String id,
+  });
+
   void crateApiStoreMicaStoreSaveDoc({
     required MicaStore that,
     required String docId,
     required MicaDocument doc,
+  });
+
+  void crateApiStoreMicaStoreSaveView({
+    required MicaStore that,
+    required LocalView view,
   });
 
   PlatformInt64 crateApiSimpleAdd({
@@ -904,6 +916,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "MicaStore_list_docs", argNames: ["that"]);
 
   @override
+  List<LocalView> crateApiStoreMicaStoreListViews({required MicaStore that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_local_view,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreListViewsConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreListViewsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_list_views",
+        argNames: ["that"],
+      );
+
+  @override
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
     required MicaStore that,
     required String docId,
@@ -917,7 +958,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(docId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -944,7 +985,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(path, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -960,6 +1001,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiStoreMicaStoreOpenConstMeta =>
       const TaskConstMeta(debugName: "MicaStore_open", argNames: ["path"]);
+
+  @override
+  void crateApiStoreMicaStorePurgeView({
+    required MicaStore that,
+    required String id,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(id, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStorePurgeViewConstMeta,
+        argValues: [that, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStorePurgeViewConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_purge_view",
+        argNames: ["that", "id"],
+      );
 
   @override
   void crateApiStoreMicaStoreSaveDoc({
@@ -980,7 +1054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             doc,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1000,6 +1074,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiStoreMicaStoreSaveView({
+    required MicaStore that,
+    required LocalView view,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_local_view(view, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreSaveViewConstMeta,
+        argValues: [that, view],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreSaveViewConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_save_view",
+        argNames: ["that", "view"],
+      );
+
+  @override
   PlatformInt64 crateApiSimpleAdd({
     required PlatformInt64 a,
     required PlatformInt64 b,
@@ -1010,7 +1117,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_64(a, serializer);
           sse_encode_i_64(b, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_64,
@@ -1032,7 +1139,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1055,7 +1162,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1080,7 +1187,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1203,6 +1310,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LocalView dco_decode_box_autoadd_local_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_local_view(raw);
+  }
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeI64(raw);
@@ -1215,6 +1328,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LocalView> dco_decode_list_local_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_local_view).toList();
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -1224,6 +1343,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  LocalView dco_decode_local_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return LocalView(
+      id: dco_decode_String(arr[0]),
+      parentId: dco_decode_opt_String(arr[1]),
+      objectId: dco_decode_String(arr[2]),
+      name: dco_decode_String(arr[3]),
+      position: dco_decode_String(arr[4]),
+      trashed: dco_decode_bool(arr[5]),
+    );
   }
 
   @protected
@@ -1396,6 +1531,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LocalView sse_decode_box_autoadd_local_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_local_view(deserializer));
+  }
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getPlatformInt64();
@@ -1414,6 +1555,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LocalView> sse_decode_list_local_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LocalView>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_local_view(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -1425,6 +1578,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  LocalView sse_decode_local_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_parentId = sse_decode_opt_String(deserializer);
+    var var_objectId = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_position = sse_decode_String(deserializer);
+    var var_trashed = sse_decode_bool(deserializer);
+    return LocalView(
+      id: var_id,
+      parentId: var_parentId,
+      objectId: var_objectId,
+      name: var_name,
+      position: var_position,
+      trashed: var_trashed,
+    );
   }
 
   @protected
@@ -1622,6 +1794,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_local_view(
+    LocalView self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_local_view(self, serializer);
+  }
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putPlatformInt64(self);
@@ -1633,6 +1814,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_String(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_local_view(
+    List<LocalView> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_local_view(item, serializer);
     }
   }
 
@@ -1656,6 +1849,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_local_view(LocalView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_opt_String(self.parentId, serializer);
+    sse_encode_String(self.objectId, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.position, serializer);
+    sse_encode_bool(self.trashed, serializer);
   }
 
   @protected
@@ -1917,14 +2121,27 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   List<String> listDocs() =>
       RustLib.instance.api.crateApiStoreMicaStoreListDocs(that: this);
 
+  /// All views (including trashed), ordered by position. The client builds the
+  /// tree from `parent_id` and filters trash.
+  List<LocalView> listViews() =>
+      RustLib.instance.api.crateApiStoreMicaStoreListViews(that: this);
+
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.
   MicaDocument? loadDoc({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreLoadDoc(that: this, docId: docId);
+
+  /// Permanently remove a view row (delete its document via [`Self::delete_doc`]).
+  void purgeView({required String id}) =>
+      RustLib.instance.api.crateApiStoreMicaStorePurgeView(that: this, id: id);
 
   /// Persist a document under `doc_id` (full snapshot).
   void saveDoc({required String docId, required MicaDocument doc}) => RustLib
       .instance
       .api
       .crateApiStoreMicaStoreSaveDoc(that: this, docId: docId, doc: doc);
+
+  /// Upsert a view (create / rename / move / trash-toggle).
+  void saveView({required LocalView view}) => RustLib.instance.api
+      .crateApiStoreMicaStoreSaveView(that: this, view: view);
 }

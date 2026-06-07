@@ -27,6 +27,21 @@ pub struct Identity {
     pub client_id: u64,
 }
 
+/// A page-tree node (P2-M3): the local mirror of the client's `DocumentView`.
+/// The local workspace is implicit and single, so there's no workspace id. Each
+/// view points at one document (`object_id` = its `doc_id` in `doc_snapshot`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalView {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub object_id: String,
+    pub name: String,
+    /// Zero-padded sibling ordering (same convention as the cloud `position`).
+    pub position: String,
+    /// Soft-deleted into the trash; purge removes the row.
+    pub trashed: bool,
+}
+
 /// A local document store backed by one SQLite file.
 pub struct LocalStore {
     conn: Connection,
@@ -46,6 +61,14 @@ impl LocalStore {
              CREATE TABLE IF NOT EXISTS local_meta(
                  key   TEXT PRIMARY KEY,
                  value TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS local_view(
+                 id        TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 object_id TEXT NOT NULL,
+                 name      TEXT NOT NULL,
+                 position  TEXT NOT NULL,
+                 trashed   INTEGER NOT NULL DEFAULT 0
              );",
         )?;
         Ok(LocalStore { conn })
@@ -153,6 +176,58 @@ impl LocalStore {
             .execute("DELETE FROM doc_snapshot WHERE doc_id=?1", params![doc_id])?;
         Ok(())
     }
+
+    // ── page tree (views) — P2-M3 ────────────────────────────────────────────
+
+    /// All views (including trashed), ordered by `position`. The client builds
+    /// the tree from `parent_id` and filters trash itself.
+    pub fn list_views(&self) -> Result<Vec<LocalView>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,parent_id,object_id,name,position,trashed FROM local_view ORDER BY position",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(LocalView {
+                    id: r.get(0)?,
+                    parent_id: r.get(1)?,
+                    object_id: r.get(2)?,
+                    name: r.get(3)?,
+                    position: r.get(4)?,
+                    trashed: r.get::<_, i64>(5)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Upsert a view — covers create, rename, move (parent/position), and trash
+    /// toggling, all by writing the desired row.
+    pub fn save_view(&self, v: &LocalView) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO local_view(id,parent_id,object_id,name,position,trashed)
+             VALUES(?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 parent_id=excluded.parent_id, object_id=excluded.object_id,
+                 name=excluded.name, position=excluded.position, trashed=excluded.trashed",
+            params![
+                v.id,
+                v.parent_id,
+                v.object_id,
+                v.name,
+                v.position,
+                v.trashed as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Permanently remove a view row (the document is deleted separately via
+    /// [`Self::delete_doc`]).
+    pub fn purge_view(&self, id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM local_view WHERE id=?1", params![id])?;
+        Ok(())
+    }
 }
 
 fn now_millis() -> i64 {
@@ -218,6 +293,64 @@ mod tests {
         store.delete_doc("a").unwrap();
         assert_eq!(store.list_docs().unwrap(), vec!["b"]);
         assert!(store.load_doc("a", cid).unwrap().is_none());
+    }
+
+    fn view(id: &str, parent: Option<&str>, name: &str, pos: &str) -> LocalView {
+        LocalView {
+            id: id.into(),
+            parent_id: parent.map(|s| s.into()),
+            object_id: format!("doc-{id}"),
+            name: name.into(),
+            position: pos.into(),
+            trashed: false,
+        }
+    }
+
+    #[test]
+    fn views_crud_and_tree_fields() {
+        let store = LocalStore::open_in_memory().unwrap();
+        store.save_view(&view("v1", None, "Page 1", "0000000010")).unwrap();
+        store.save_view(&view("v2", None, "Page 2", "0000000020")).unwrap();
+        store.save_view(&view("v3", Some("v1"), "Child", "0000000010")).unwrap();
+
+        let all = store.list_views().unwrap();
+        assert_eq!(all.len(), 3);
+        // ordered by position; v3 (child, pos 10) and v1 (pos 10) share pos but
+        // the child carries its parent.
+        let v3 = all.iter().find(|v| v.id == "v3").unwrap();
+        assert_eq!(v3.parent_id.as_deref(), Some("v1"));
+        assert_eq!(v3.object_id, "doc-v3");
+
+        // Rename + move (upsert same id).
+        store.save_view(&LocalView { name: "Renamed".into(), ..view("v2", None, "x", "0000000005") }).unwrap();
+        let v2 = store.list_views().unwrap().into_iter().find(|v| v.id == "v2").unwrap();
+        assert_eq!(v2.name, "Renamed");
+        assert_eq!(v2.position, "0000000005");
+
+        // Trash then purge.
+        store.save_view(&LocalView { trashed: true, ..view("v1", None, "Page 1", "0000000010") }).unwrap();
+        assert!(store.list_views().unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
+        store.purge_view("v1").unwrap();
+        assert!(store.list_views().unwrap().iter().all(|v| v.id != "v1"));
+    }
+
+    #[test]
+    fn views_survive_reopen() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mica_views_test_{}.db", std::process::id()));
+        let p = path.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&p);
+        {
+            let s = LocalStore::open(&p).unwrap();
+            s.save_view(&view("v1", None, "Persisted", "0000000010")).unwrap();
+        }
+        {
+            let s = LocalStore::open(&p).unwrap();
+            let all = s.list_views().unwrap();
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].name, "Persisted");
+        }
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

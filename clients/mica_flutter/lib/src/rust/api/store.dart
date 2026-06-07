@@ -7,6 +7,8 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
   /// The stable yrs client id new/loaded documents should use.
@@ -20,6 +22,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
 
+  /// All views (including trashed), ordered by position. The client builds the
+  /// tree from `parent_id` and filters trash.
+  List<LocalView> listViews();
+
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.
   MicaDocument? loadDoc({required String docId});
@@ -29,6 +35,53 @@ abstract class MicaStore implements RustOpaqueInterface {
   static MicaStore? open({required String path}) =>
       RustLib.instance.api.crateApiStoreMicaStoreOpen(path: path);
 
+  /// Permanently remove a view row (delete its document via [`Self::delete_doc`]).
+  void purgeView({required String id});
+
   /// Persist a document under `doc_id` (full snapshot).
   void saveDoc({required String docId, required MicaDocument doc});
+
+  /// Upsert a view (create / rename / move / trash-toggle).
+  void saveView({required LocalView view});
+}
+
+/// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
+/// `DocumentView`. `object_id` is the document's `doc_id`.
+class LocalView {
+  final String id;
+  final String? parentId;
+  final String objectId;
+  final String name;
+  final String position;
+  final bool trashed;
+
+  const LocalView({
+    required this.id,
+    this.parentId,
+    required this.objectId,
+    required this.name,
+    required this.position,
+    required this.trashed,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      parentId.hashCode ^
+      objectId.hashCode ^
+      name.hashCode ^
+      position.hashCode ^
+      trashed.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalView &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          parentId == other.parentId &&
+          objectId == other.objectId &&
+          name == other.name &&
+          position == other.position &&
+          trashed == other.trashed;
 }

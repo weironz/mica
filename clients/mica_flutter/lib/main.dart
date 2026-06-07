@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
+import 'local/local_offline.dart';
 import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
@@ -40,8 +41,8 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 /// Which backend the client talks to.
 /// - [cloud]/[selfHosted]: online — a REST + WebSocket server reached by URL,
 ///   authenticated with the normal email/password login.
-/// - [localOffline]: on-device, no server (Phase 2 CRDT engine). Not built yet;
-///   the Settings UI shows it disabled.
+/// - [localOffline]: on-device, no server (Phase 2 CRDT engine) — a fully local
+///   workspace + page tree persisted in SQLite, edited offline (P2-M3).
 enum ServerMode { cloud, selfHosted, localOffline }
 
 /// User's chosen backend, persisted in prefs. Cloud and self-hosted differ only
@@ -203,6 +204,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   List<PresenceUser> _presence = const [];
   Timer? _syncRefetchTimer;
 
+  // --- Local offline (P2-M3) ---
+  // A single implicit local workspace + synthetic identity; the page tree and
+  // documents live entirely on-device (SQLite via the LocalOffline facade).
+  final LocalOffline _local = LocalOffline();
+  bool _localReady = false;
+  List<DocumentView> _localViews = const [];
+  DocumentView? _localSelectedView;
+  DocumentBootstrap? _localBootstrap;
+  static const AuthSession _localSession = AuthSession(
+    accessToken: 'local-offline',
+    user: User(id: 'local', email: '', displayName: '本地'),
+  );
+  static const Workspace _localWorkspace = Workspace(
+    id: 'local',
+    name: '本地工作区',
+    ownerId: 'local',
+    role: 'owner',
+  );
+
   @override
   void initState() {
     super.initState();
@@ -210,7 +230,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // The demo account only exists on the local dev backend — never try it
     // against cloud/self-hosted servers (it would attempt to register a real
     // account). Those show the login screen instead.
-    if (kDevAutoLogin && _isLocalBackend()) {
+    if (_serverConfig.mode == ServerMode.localOffline) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _initLocalOffline());
+    } else if (kDevAutoLogin && _isLocalBackend()) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _devAutoLogin());
     }
   }
@@ -233,6 +255,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _api.baseUri = base;
     }
     _signOut();
+    // Switching into local offline opens the on-device store + page tree.
+    if (config.mode == ServerMode.localOffline) {
+      await _initLocalOffline();
+    }
   }
 
   /// Restore persisted client settings (Settings dialog writes them through
@@ -1187,6 +1213,241 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  // ── Local offline (P2-M3) ──────────────────────────────────────────────────
+  // The page tree + documents are on-device. These mirror the cloud callbacks
+  // above but route to the LocalOffline facade (SQLite + yrs) instead of _api.
+
+  DocumentView _viewFromData(ViewData v) => DocumentView(
+    id: v.id,
+    parentViewId: v.parentId,
+    objectId: v.objectId,
+    objectType: 'document',
+    name: v.name,
+    position: v.position,
+  );
+
+  DocumentBootstrap _localBootstrapFrom(
+    String docId,
+    String rootBlockId,
+    List<Map<String, dynamic>> blocks,
+    DocumentView view,
+  ) {
+    return DocumentBootstrap(
+      document: DocumentRecord(
+        id: docId,
+        rootBlockId: rootBlockId,
+        currentSeq: 0,
+      ),
+      view: view,
+      snapshot: DocumentSnapshot(
+        versionSeq: 1,
+        schemaVersion: 1,
+        payload: {'blocks': blocks},
+      ),
+    );
+  }
+
+  /// Reload the live (non-trashed) page tree from the store into [_localViews].
+  void _reloadLocalViews() {
+    _localViews = [
+      for (final v in _local.listViews())
+        if (!v.trashed) _viewFromData(v),
+    ];
+  }
+
+  /// Next sibling position under [parentViewId] (zero-padded, 10-spaced).
+  String _nextLocalPosition(String? parentViewId) {
+    var max = 0;
+    for (final v in _localViews) {
+      if (v.parentViewId == parentViewId) {
+        final n = int.tryParse(v.position) ?? 0;
+        if (n > max) max = n;
+      }
+    }
+    return (max + 10).toString().padLeft(10, '0');
+  }
+
+  /// Open the on-device store, load the page tree, and select (or seed) a page.
+  Future<void> _initLocalOffline() async {
+    if (_localReady) return;
+    try {
+      await _local.open();
+    } catch (error) {
+      if (mounted) setState(() => _message = '本地存储打开失败: $error');
+      return;
+    }
+    _reloadLocalViews();
+    if (_localViews.isEmpty) {
+      await _localCreateDocument('欢迎');
+    } else {
+      await _localSelectView(_localViews.first);
+    }
+    if (mounted) setState(() => _localReady = true);
+  }
+
+  Future<void> _localCreateDocument(String name, {String? parentViewId}) async {
+    final title = name.trim().isEmpty ? 'Untitled' : name.trim();
+    final created = _local.newDoc();
+    final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
+    final position = _nextLocalPosition(parentViewId);
+    final data = (
+      id: viewId,
+      parentId: parentViewId,
+      objectId: created.docId,
+      name: title,
+      position: position,
+      trashed: false,
+    );
+    _local.saveView(data);
+    final view = _viewFromData(data);
+    if (!mounted) return;
+    setState(() {
+      _reloadLocalViews();
+      _localSelectedView = view;
+      _localBootstrap = _localBootstrapFrom(
+        created.docId,
+        created.rootBlockId,
+        created.blocks,
+        view,
+      );
+    });
+  }
+
+  Future<void> _localSelectView(DocumentView view) async {
+    final data = _local.openDoc(view.objectId);
+    if (data == null || !mounted) return;
+    setState(() {
+      _localSelectedView = view;
+      _localBootstrap = _localBootstrapFrom(
+        view.objectId,
+        data.rootBlockId,
+        data.blocks,
+        view,
+      );
+    });
+  }
+
+  Future<void> _localApplyEditorOperations(
+    List<Map<String, dynamic>> operations,
+  ) async {
+    await _local.applyOps(operations);
+    // The editor owns its in-memory nodes; no bootstrap rebuild needed.
+  }
+
+  Future<void> _localUpdateRootBlockText(String text) async {
+    final root = _localBootstrap?.document.rootBlockId;
+    if (root == null) return;
+    await _local.applyOps([
+      {'type': 'update_block', 'block_id': root, 'text': text},
+    ]);
+  }
+
+  Future<void> _localRenameView(DocumentView view, String name) async {
+    final title = name.trim().isEmpty ? 'Untitled' : name.trim();
+    _local.saveView((
+      id: view.id,
+      parentId: view.parentViewId,
+      objectId: view.objectId,
+      name: title,
+      position: view.position,
+      trashed: false,
+    ));
+    if (!mounted) return;
+    setState(() {
+      _reloadLocalViews();
+      if (_localSelectedView?.id == view.id) {
+        final renamed = DocumentView(
+          id: view.id,
+          parentViewId: view.parentViewId,
+          objectId: view.objectId,
+          objectType: 'document',
+          name: title,
+          position: view.position,
+        );
+        _localSelectedView = renamed;
+        final boot = _localBootstrap;
+        if (boot != null && boot.view.id == view.id) {
+          _localBootstrap = DocumentBootstrap(
+            document: boot.document,
+            view: renamed,
+            snapshot: boot.snapshot,
+          );
+        }
+      }
+    });
+  }
+
+  Future<void> _localDeleteView(DocumentView view) async {
+    _local.saveView((
+      id: view.id,
+      parentId: view.parentViewId,
+      objectId: view.objectId,
+      name: view.name,
+      position: view.position,
+      trashed: true,
+    ));
+    if (!mounted) return;
+    setState(() {
+      _reloadLocalViews();
+      if (_localSelectedView?.id == view.id) {
+        _localSelectedView = null;
+        _localBootstrap = null;
+      }
+    });
+  }
+
+  Future<void> _localReorderViews(
+    String? parentViewId,
+    List<DocumentView> ordered,
+  ) async {
+    for (var i = 0; i < ordered.length; i++) {
+      final v = ordered[i];
+      final position = ((i + 1) * 10).toString().padLeft(10, '0');
+      if (v.position != position || v.parentViewId != parentViewId) {
+        _local.saveView((
+          id: v.id,
+          parentId: parentViewId,
+          objectId: v.objectId,
+          name: v.name,
+          position: position,
+          trashed: false,
+        ));
+      }
+    }
+    if (mounted) setState(_reloadLocalViews);
+  }
+
+  Future<List<DocumentView>> _localLoadTrash() async {
+    return [
+      for (final v in _local.listViews())
+        if (v.trashed) _viewFromData(v),
+    ];
+  }
+
+  Future<void> _localRestoreView(DocumentView view) async {
+    _local.saveView((
+      id: view.id,
+      parentId: view.parentViewId,
+      objectId: view.objectId,
+      name: view.name,
+      position: view.position,
+      trashed: false,
+    ));
+    if (mounted) setState(_reloadLocalViews);
+  }
+
+  Future<void> _localPurgeView(DocumentView view) async {
+    _local.purgeView(view.id, view.objectId);
+    if (!mounted) return;
+    setState(() {
+      _reloadLocalViews();
+      if (_localSelectedView?.id == view.id) {
+        _localSelectedView = null;
+        _localBootstrap = null;
+      }
+    });
+  }
+
   /// Upload image bytes for the editor, returning the new file id + name.
   Future<({String fileId, String name})?> _uploadEditorImage(
     Uint8List bytes,
@@ -1417,6 +1678,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   Widget build(BuildContext context) {
+    if (_serverConfig.mode == ServerMode.localOffline) {
+      return _buildLocalShell(context);
+    }
     final session = _session;
 
     return Scaffold(
@@ -1548,6 +1812,118 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onUpdateMember: _updateWorkspaceMember,
                 onRemoveMember: _removeWorkspaceMember,
               ),
+      ),
+    );
+  }
+
+  /// The local-offline shell (P2-M3): the same [WorkspaceView] UI, fed entirely
+  /// from the on-device store via the `_local*` callbacks. No session, no network.
+  Widget _buildLocalShell(BuildContext context) {
+    if (!_localReady) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Scaffold(
+      body: SafeArea(
+        child: WorkspaceView(
+          session: _localSession,
+          isBusy: false,
+          onRefresh: () => setState(_reloadLocalViews),
+          onSignOut: () {},
+          workspaces: const [_localWorkspace],
+          selectedWorkspace: _localWorkspace,
+          members: const [],
+          views: _localViews,
+          selectedView: _localSelectedView,
+          selectedBootstrap: _localBootstrap,
+          selectedMarkdown: null,
+          presence: const [],
+          message: _message,
+          onSelectWorkspace: (_) async {},
+          onCreateWorkspace: (_) async {},
+          onRenameWorkspace: (_, _) async {},
+          onDeleteWorkspace: (_) async {},
+          onCreateDocument: _localCreateDocument,
+          onCreateChildDocument: (parent, name) =>
+              _localCreateDocument(name, parentViewId: parent.id),
+          onReorderViews: _localReorderViews,
+          onLoadTrash: _localLoadTrash,
+          onRestoreView: _localRestoreView,
+          onPurgeView: _localPurgeView,
+          onSelectView: _localSelectView,
+          onRenameView: _localRenameView,
+          onDeleteView: _localDeleteView,
+          onUpdateRootBlockText: _localUpdateRootBlockText,
+          onAddBlock: (_, _) async {},
+          onUpdateBlock: (_, _, _) async {},
+          onDeleteBlock: (_) async {},
+          onMoveBlock: (_, _) async {},
+          onApplyOperations: _localApplyEditorOperations,
+          // Images / AI / collaboration are online-only for now (M5+).
+          onUploadImage: (_, _, _) async => null,
+          onImportImageUrl: (_) async => null,
+          onLoadImageBytes: (_) async => null,
+          onResolveImageUrls: (_) async => const {},
+          onAiStream: (_, {system}) => const Stream<String>.empty(),
+          onAiNewPage: (_) async {},
+          onAiCurrentPage: null,
+          onAiNewWorkspace: (_) async {},
+          onLoadAiSettings: () async => const {},
+          onSaveAiSettings: ({
+            required String provider,
+            required String baseUrl,
+            required String model,
+            String? apiKey,
+          }) async {},
+          userName: _localSession.user.displayName,
+          userEmail: '',
+          onUpdateProfile: (_) async {},
+          onChangePassword: (_, _) async {},
+          serverConfig: _serverConfig,
+          onSaveServerConfig: _saveServerConfig,
+          appearance: _appearance,
+          pageWidth: _pageWidth,
+          reHostImages: _reHostImages,
+          onReHostImagesChanged: (value) {
+            setState(() => _reHostImages = value);
+            _savePrefs();
+          },
+          showFormatBar: _showFormatBar,
+          onShowFormatBarChanged: (value) {
+            setState(() => _showFormatBar = value);
+            _savePrefs();
+          },
+          showPageTitle: _showPageTitle,
+          onShowPageTitleChanged: (value) {
+            setState(() => _showPageTitle = value);
+            _savePrefs();
+          },
+          showAi: false,
+          aiEnabled: false,
+          onAiEnabledChanged: (_) {},
+          onAppearanceChanged: (appearance, pageWidth) {
+            setState(() {
+              _appearance = appearance;
+              _pageWidth = pageWidth;
+            });
+            _savePrefs();
+          },
+          onSearch: (_) async => const <SearchResult>[],
+          onOpenSearchResult: (_) async {},
+          onExportPageMarkdown: () async => '',
+          onExportPageZip: () async => Uint8List(0),
+          onImportMarkdown: (_, _) async {},
+          onExportWorkspaceMarkdown: () async => '',
+          onExportWorkspaceZip: (_) async => Uint8List(0),
+          onImportWorkspaceZip: (_, _, {bool notion = false}) async {},
+          onImportWorkspaceTreeInto: (_, _) async {},
+          onExportAllMarkdown: () async => '',
+          onExportMarkdown: () async {},
+          onAddMember: (_, _) async {},
+          onUpdateMember: (_, _) async {},
+          onRemoveMember: (_) async {},
+        ),
       ),
     );
   }
@@ -4964,8 +5340,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ServerMode.localOffline,
       Icons.offline_bolt_outlined,
       'Local (offline)',
-      'Work entirely on this device, no server. Planned for a later release.',
-      enabled: false,
+      'Work entirely on this device — no account, no network. Notes are stored '
+          'locally and edited offline.',
     ),
     if (_serverMode != ServerMode.localOffline) ...[
       const SizedBox(height: 12),
@@ -5013,7 +5389,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   Future<void> _saveServer() async {
     if (_serverMode == ServerMode.localOffline) {
-      setState(() => _serverMsg = 'Local offline mode is not available yet.');
+      setState(() {
+        _serverSaving = true;
+        _serverMsg = null;
+      });
+      await widget.onSaveServerConfig(
+        const ServerConfig(mode: ServerMode.localOffline, url: ''),
+      );
+      if (mounted) Navigator.of(context).pop();
       return;
     }
     final url = _serverMode == ServerMode.cloud
