@@ -1696,6 +1696,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                       isBusy: _isBusy,
                       onAuthenticate: _authenticate,
                       onCreateWorkspace: _createWorkspace,
+                      // Desktop only: jump straight into a local workspace,
+                      // no account, no server (local offline isn't on web).
+                      onUseLocal: kIsWeb
+                          ? null
+                          : () => _saveServerConfig(
+                              const ServerConfig(
+                                mode: ServerMode.localOffline,
+                                url: '',
+                              ),
+                            ),
                     ),
                   ),
                   const VerticalDivider(width: 1),
@@ -1935,6 +1945,7 @@ class SidePanel extends StatefulWidget {
     required this.isBusy,
     required this.onAuthenticate,
     required this.onCreateWorkspace,
+    this.onUseLocal,
     super.key,
   });
 
@@ -1942,6 +1953,10 @@ class SidePanel extends StatefulWidget {
   final bool isBusy;
   final Future<void> Function(AuthMode mode, AuthFormValue form) onAuthenticate;
   final Future<void> Function(String name) onCreateWorkspace;
+
+  /// Switch to local-offline mode without signing in (desktop only; null hides
+  /// the entry, e.g. on web).
+  final VoidCallback? onUseLocal;
 
   @override
   State<SidePanel> createState() => _SidePanelState();
@@ -2046,6 +2061,30 @@ class _SidePanelState extends State<SidePanel> {
           ),
           label: Text(_mode == AuthMode.register ? 'Register' : 'Login'),
         ),
+        if (widget.onUseLocal != null) ...[
+          const SizedBox(height: 20),
+          const Row(
+            children: [
+              Expanded(child: Divider()),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text('or', style: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              Expanded(child: Divider()),
+            ],
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: widget.isBusy ? null : widget.onUseLocal,
+            icon: const Icon(Icons.offline_bolt_outlined),
+            label: const Text('Use offline on this device'),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'No account needed — your notes stay on this device.',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+          ),
+        ],
       ],
     );
   }
