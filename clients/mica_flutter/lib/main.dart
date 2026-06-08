@@ -301,9 +301,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? null
           : fontFamily,
     );
+    // Ceiling matches the Settings slider's max (the editor measures the real
+    // realizable width and clamps the thumb; this just keeps a wide saved value
+    // from being trimmed on reload).
     _pageWidth = (double.tryParse(loadPref('pageWidth') ?? '') ?? 1160).clamp(
       640,
-      1440,
+      2400,
     );
     _reHostImages = loadPref('reHostImages') != 'false';
     _showFormatBar = loadPref('showFormatBar') == 'true';
@@ -3039,6 +3042,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   double _navWidth = 280;
   double _toolsWidth = 300;
   final EditorScrollHook _scrollHook = EditorScrollHook();
+  // The realizable page-column width (editor pane minus the scroll padding),
+  // measured live so the Settings "Page width" slider maxes at full-bleed
+  // instead of offering px values the window can't show.
+  double _editorAvailWidth = 1160;
   final GlobalKey _editorSurfaceKey = GlobalKey();
   final EditorCommandHook _commandHook = EditorCommandHook();
 
@@ -3746,7 +3753,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (widget.showFormatBar && canEdit) _formatBar(context),
-          Expanded(child: _editorScroll(context, canEdit, bootstrap)),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Track the realizable column width (pane minus the 28px scroll
+                // padding on each side) so the page-width slider's full travel
+                // maps to achievable widths. Plain assignment — no setState, so
+                // no rebuild loop; read lazily when Settings opens.
+                if (constraints.maxWidth.isFinite) {
+                  _editorAvailWidth = (constraints.maxWidth - 56).clamp(
+                    768.0,
+                    2400.0,
+                  );
+                }
+                return _editorScroll(context, canEdit, bootstrap);
+              },
+            ),
+          ),
         ],
       ),
     );
@@ -4627,6 +4650,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onSaveServerConfig: widget.onSaveServerConfig,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
+        maxPageWidth: _editorAvailWidth,
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
         showFormatBar: widget.showFormatBar,
@@ -5526,6 +5550,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
+    required this.maxPageWidth,
   });
 
   final String userName;
@@ -5555,6 +5580,10 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
+
+  /// The realizable full-bleed column width, measured at the editor — the page-
+  /// width slider's max, so its travel maps to widths the window can actually show.
+  final double maxPageWidth;
 
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
@@ -5789,10 +5818,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     _sliderRow(
       label: 'Page width',
-      value: _pageWidth,
+      // Max = the realizable full-bleed width (measured at the editor), so the
+      // slider's whole travel changes the layout instead of the upper half being
+      // a no-op once the column already fills the window. The thumb is clamped
+      // into range without rewriting the stored preference unless the user drags.
+      value: _pageWidth.clamp(640.0, widget.maxPageWidth),
       min: 640,
-      max: 1440,
-      display: '${_pageWidth.round()} px',
+      max: widget.maxPageWidth,
+      display: '${_pageWidth.clamp(640.0, widget.maxPageWidth).round()} px',
       onChanged: (value) {
         setState(() => _pageWidth = value);
         _applyAppearance();
