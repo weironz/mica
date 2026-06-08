@@ -29,6 +29,8 @@ class LocalOffline {
 
   Future<BigInt?> deviceClientId() async => null;
 
+  void rollbackDoc(String docId) {}
+
   String putBlob(Uint8List bytes) => '';
   Uint8List? loadBlob(String fileId) => null;
   bool hasBlob(String fileId) => false;

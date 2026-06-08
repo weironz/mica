@@ -177,6 +177,13 @@ class LocalOffline {
     await _active?.applyOps(ops);
   }
 
+  /// Revert a document to its last on-device checkpoint (§10 recovery). The
+  /// active backend is dropped so the next [openDoc] reloads the restored base.
+  void rollbackDoc(String docId) {
+    _store?.rollbackDoc(docId: docId);
+    if (_active?.docId == docId) _active = null;
+  }
+
   /// Persist any pending edits now (call on page switch / app pause).
   void flush() => _active?.flush();
 

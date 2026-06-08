@@ -227,6 +227,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   List<DocumentView> _localViews = const [];
   DocumentView? _localSelectedView;
   DocumentBootstrap? _localBootstrap;
+  // Bumped on rollback to force the local editor to remount fresh.
+  int _localEditorEpoch = 0;
   static const AuthSession _localSession = AuthSession(
     accessToken: 'local-offline',
     user: User(id: 'local', email: '', displayName: '本地'),
@@ -1542,6 +1544,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // The editor owns its in-memory nodes; no bootstrap rebuild needed.
   }
 
+  /// Restore the open local document to its last checkpoint, then remount the
+  /// editor on the restored content (the bumped epoch forces a fresh editor so
+  /// in-memory session edits are dropped, not reconciled).
+  Future<void> _localRollbackDoc() async {
+    final view = _localSelectedView;
+    if (view == null) return;
+    _local.rollbackDoc(view.objectId);
+    if (!mounted) return;
+    _localEditorEpoch++;
+    await _localSelectView(view);
+  }
+
   // ── local images (P2-M5): on-device content-addressed store, fully offline ──
 
   /// Store an inserted/pasted image in the local CAS; the returned `file_id` is
@@ -2202,6 +2216,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           onAddMember: (_, _) async {},
           onUpdateMember: (_, _) async {},
           onRemoveMember: (_) async {},
+          onRestoreCheckpoint: _localRollbackDoc,
+          editorEpoch: _localEditorEpoch,
         ),
       ),
     );
@@ -2484,6 +2500,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onAddMember,
     required this.onUpdateMember,
     required this.onRemoveMember,
+    this.onRestoreCheckpoint,
+    this.editorEpoch = 0,
     super.key,
   });
 
@@ -2588,6 +2606,14 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(WorkspaceMember member, WorkspaceRole role)
   onUpdateMember;
   final Future<void> Function(WorkspaceMember member) onRemoveMember;
+
+  /// Restore the open document to its last on-device checkpoint (local mode
+  /// only — null elsewhere, which hides the menu item).
+  final Future<void> Function()? onRestoreCheckpoint;
+
+  /// Bumped to force the editor to remount fresh (e.g. after a rollback, so the
+  /// restored content fully replaces the in-memory doc instead of reconciling).
+  final int editorEpoch;
 
   @override
   State<WorkspaceView> createState() => _WorkspaceViewState();
@@ -3523,8 +3549,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         tooltip: 'Page menu',
                         icon: const Icon(Icons.expand_more),
                         onSelected: _onPageMenu,
-                        itemBuilder: (context) => const [
-                          PopupMenuItem(
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
                             value: 'export-md',
                             child: ListTile(
                               dense: true,
@@ -3533,7 +3559,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text('Export Markdown'),
                             ),
                           ),
-                          PopupMenuItem(
+                          const PopupMenuItem(
                             value: 'export-zip',
                             child: ListTile(
                               dense: true,
@@ -3542,8 +3568,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text('Export ZIP (with images)'),
                             ),
                           ),
-                          PopupMenuDivider(),
-                          PopupMenuItem(
+                          const PopupMenuDivider(),
+                          const PopupMenuItem(
                             value: 'import-md',
                             child: ListTile(
                               dense: true,
@@ -3552,6 +3578,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text('Import Markdown…'),
                             ),
                           ),
+                          if (widget.onRestoreCheckpoint != null) ...[
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: 'restore-checkpoint',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.restore_outlined),
+                                title: Text('Restore last checkpoint'),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                       const SizedBox(width: 4),
@@ -3588,7 +3626,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
                   child: MicaEditor(
-                    key: ValueKey(bootstrap.document.id),
+                    key: ValueKey('${bootstrap.document.id}#${widget.editorEpoch}'),
                     focusNode: _editorFocus,
                     rootBlockId: bootstrap.document.rootBlockId,
                     nodes: [
@@ -4030,6 +4068,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         await _onExport('page-zip');
       case 'import-md':
         await _importMarkdownFile();
+      case 'restore-checkpoint':
+        final restore = widget.onRestoreCheckpoint;
+        if (restore == null) return;
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Restore last checkpoint?'),
+            content: const Text(
+              'This reverts the page to its last on-device checkpoint and '
+              'discards changes made since. This cannot be undone.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Restore'),
+              ),
+            ],
+          ),
+        );
+        if (ok == true) await restore();
     }
   }
 
