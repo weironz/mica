@@ -52,6 +52,9 @@ class LocalDocBackend {
   }) {
     final existing = store.loadDoc(docId: docId);
     if (existing != null) {
+      // Snapshot the last-good base before this session mutates it (§10 recovery
+      // point — rollback restores it if an edit/merge later corrupts the doc).
+      store.checkpointDoc(docId: docId);
       return LocalDocBackend._(store, existing, docId, existing.rootBlockId());
     }
     final blocks = seedBlocks ?? emptyPage(rootId);
@@ -60,6 +63,7 @@ class LocalDocBackend {
       blocksJson: jsonEncode(blocks),
     );
     store.saveDoc(docId: docId, doc: doc);
+    store.checkpointDoc(docId: docId);
     return LocalDocBackend._(store, doc, docId, rootId);
   }
 

@@ -115,6 +115,28 @@ impl MicaStore {
         let _ = self.inner.lock().unwrap().delete_doc(&doc_id);
     }
 
+    /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
+    /// points (doc open/close) so a later corruption can be rolled back.
+    #[frb(sync)]
+    pub fn checkpoint_doc(&self, doc_id: String) {
+        let _ = self.inner.lock().unwrap().checkpoint_doc(&doc_id);
+    }
+
+    /// Restore a doc from its last checkpoint, returning the recovered document
+    /// (null if there's no checkpoint).
+    #[frb(sync)]
+    pub fn rollback_doc(&self, doc_id: String) -> Option<MicaDocument> {
+        let loaded = self
+            .inner
+            .lock()
+            .unwrap()
+            .rollback_doc(&doc_id, self.client_id)
+            .ok()??;
+        Some(MicaDocument {
+            inner: Mutex::new(loaded),
+        })
+    }
+
     /// Persist a document under `doc_id` (full snapshot).
     #[frb(sync)]
     pub fn save_doc(&self, doc_id: String, doc: &MicaDocument) {

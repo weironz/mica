@@ -11,6 +11,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
+  /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
+  /// points (doc open/close) so a later corruption can be rolled back.
+  void checkpointDoc({required String docId});
+
   /// The stable yrs client id new/loaded documents should use.
   BigInt clientId();
 
@@ -43,6 +47,10 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Permanently remove a view row (delete its document via [`Self::delete_doc`]).
   void purgeView({required String id});
+
+  /// Restore a doc from its last checkpoint, returning the recovered document
+  /// (null if there's no checkpoint).
+  MicaDocument? rollbackDoc({required String docId});
 
   /// Persist a document under `doc_id` (full snapshot).
   void saveDoc({required String docId, required MicaDocument doc});

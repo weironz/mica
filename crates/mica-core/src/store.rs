@@ -17,7 +17,15 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Doc(#[from] DocError),
+    /// The store was written by a newer app version (§10): refuse to open rather
+    /// than silently corrupt or drop data on a downgrade.
+    #[error("store schema v{found} is newer than supported v{supported}; upgrade the app")]
+    SchemaTooNew { found: i64, supported: i64 },
 }
+
+/// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
+/// the table layout changes and add the migration in [`LocalStore::open`].
+const SCHEMA_VERSION: i64 = 1;
 
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
@@ -105,6 +113,11 @@ impl LocalStore {
                  doc_id          TEXT PRIMARY KEY,
                  last_synced_rid INTEGER NOT NULL DEFAULT 0,
                  pushed_clock    INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS doc_snapshot_backup(
+                 doc_id     TEXT PRIMARY KEY,
+                 state      BLOB NOT NULL,
+                 updated_at INTEGER NOT NULL
              );",
         )?;
         // Migrate pre-multi-workspace stores: add the workspace_id column and a
@@ -129,6 +142,30 @@ impl LocalStore {
             "INSERT OR IGNORE INTO local_workspace(id,name,position) VALUES('local','本地工作区','0000000010')",
             [],
         )?;
+
+        // Schema version gate (§10): refuse to open a store written by a newer
+        // app (downgrade would risk data loss); otherwise stamp the current one.
+        let stored: i64 = conn
+            .query_row(
+                "SELECT value FROM local_meta WHERE key='schema_version'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        if stored > SCHEMA_VERSION {
+            return Err(StoreError::SchemaTooNew {
+                found: stored,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        conn.execute(
+            "INSERT INTO local_meta(key,value) VALUES('schema_version',?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![SCHEMA_VERSION.to_string()],
+        )?;
+
         Ok(LocalStore { conn })
     }
 
@@ -321,9 +358,61 @@ impl LocalStore {
 
     /// Delete a document.
     pub fn delete_doc(&self, doc_id: &str) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM doc_snapshot WHERE doc_id=?1", params![doc_id])?;
+        for table in [
+            "doc_snapshot",
+            "doc_snapshot_backup",
+            "doc_update",
+            "sync_cursor",
+        ] {
+            self.conn
+                .execute(&format!("DELETE FROM {table} WHERE doc_id=?1"), params![doc_id])?;
+        }
         Ok(())
+    }
+
+    // ── snapshot checkpoint / rollback — §10 recovery safety net ─────────────
+
+    /// Save the document's current base snapshot as a recovery checkpoint. Call
+    /// at safe points (doc close, app pause) so a later corruption can be rolled
+    /// back. No-op if the document has no base yet.
+    pub fn checkpoint_doc(&self, doc_id: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at)
+             SELECT doc_id, state, ?2 FROM doc_snapshot WHERE doc_id=?1
+             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+            params![doc_id, now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// Restore a document from its last [`Self::checkpoint_doc`], making it the
+    /// live base and dropping the incremental log. Returns the restored doc, or
+    /// `None` if there's no checkpoint.
+    pub fn rollback_doc(
+        &self,
+        doc_id: &str,
+        client_id: u64,
+    ) -> Result<Option<MicaDoc>, StoreError> {
+        let state: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT state FROM doc_snapshot_backup WHERE doc_id=?1",
+                params![doc_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let bytes = match state {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+        self.conn.execute(
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
+             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+            params![doc_id, &bytes, now_millis()],
+        )?;
+        self.conn
+            .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        Ok(Some(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?))
     }
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
@@ -443,6 +532,119 @@ mod tests {
                 Block::new("a", "paragraph").with_text("Hello"),
             ],
         )
+    }
+
+    fn temp_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("mica_test_{}.db", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn schema_version_stamped_and_downgrade_guarded() {
+        let path = temp_path();
+        let p = path.to_str().unwrap();
+        {
+            let store = LocalStore::open(p).unwrap();
+            let v: String = store
+                .conn
+                .query_row(
+                    "SELECT value FROM local_meta WHERE key='schema_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(v, SCHEMA_VERSION.to_string(), "current version stamped");
+        }
+        // A store written by a future app version must be refused, not corrupted.
+        {
+            let conn = Connection::open(p).unwrap();
+            conn.execute(
+                "UPDATE local_meta SET value='99' WHERE key='schema_version'",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            LocalStore::open(p),
+            Err(StoreError::SchemaTooNew { found: 99, .. })
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn migrates_legacy_schema_without_data_loss() {
+        let path = temp_path();
+        let p = path.to_str().unwrap();
+        // A pre-multi-workspace store: local_view has no workspace_id, no
+        // local_workspace table, no schema_version.
+        {
+            let conn = Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE doc_snapshot(doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+                 CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE local_view(id TEXT PRIMARY KEY, parent_id TEXT, object_id TEXT NOT NULL, name TEXT NOT NULL, position TEXT NOT NULL, trashed INTEGER NOT NULL DEFAULT 0);
+                 INSERT INTO local_view(id,object_id,name,position) VALUES('v1','doc1','Old Page','0000000010');",
+            )
+            .unwrap();
+        }
+        let store = LocalStore::open(p).unwrap();
+        let views = store.list_views().unwrap();
+        let v = views.iter().find(|x| x.id == "v1").expect("legacy view kept");
+        assert_eq!(v.name, "Old Page", "legacy data preserved");
+        assert_eq!(v.workspace_id, "local", "back-filled to default workspace");
+        assert!(
+            store.list_workspaces().unwrap().iter().any(|w| w.id == "local"),
+            "default workspace created"
+        );
+        let sv: String = store
+            .conn
+            .query_row(
+                "SELECT value FROM local_meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sv, SCHEMA_VERSION.to_string());
+        drop(store);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn checkpoint_and_rollback() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        store
+            .save_doc("d", &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)))
+            .unwrap();
+        store.checkpoint_doc("d").unwrap();
+
+        // Overwrite the live base with an edit.
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        working.text_insert("a", 5, " EDIT");
+        store.save_doc("d", &working).unwrap();
+        let has_edit = |d: &MicaDoc| d.to_blocks().iter().any(|b| b.text.contains("EDIT"));
+        assert!(has_edit(&store.load_doc("d", cid).unwrap().unwrap()));
+
+        // Rollback restores the checkpoint (edit gone) and clears the update log.
+        let restored = store.rollback_doc("d", cid).unwrap().unwrap();
+        assert!(!has_edit(&restored));
+        assert!(!has_edit(&store.load_doc("d", cid).unwrap().unwrap()));
+        assert!(store.rollback_doc("missing", cid).unwrap().is_none());
+    }
+
+    #[test]
+    fn load_doc_rejects_corrupt_snapshot() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        // §10: a corrupt base must surface as an error, never a silent bad state.
+        store
+            .conn
+            .execute(
+                "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES('bad',?1,0)",
+                params![vec![9u8, 9, 9, 9]],
+            )
+            .unwrap();
+        assert!(store.load_doc("bad", cid).is_err());
     }
 
     #[test]
