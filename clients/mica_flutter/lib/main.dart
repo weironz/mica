@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
 import 'cloud/cloud_sync.dart';
+import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
 import 'local/local_offline.dart';
 import 'web/yjs_probe.dart';
@@ -218,6 +219,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   CloudSyncSession? _cloudSession;
   BigInt? _deviceClientId;
 
+  // §7 upstream blob differ (desktop only): images inserted while offline land in
+  // the on-device CAS under a sha256 placeholder file_id and queue here. When the
+  // doc is next open online, `_reconcilePendingUploads` uploads the bytes, learns
+  // the cloud UUID, and rewrites the block's file_id sha256→UUID. Persisted in
+  // prefs so the intent survives a restart; `_reconciling` guards re-entrancy.
+  PendingUploads _pending = PendingUploads();
+  bool _reconciling = false;
+
   // Awareness: debounce broadcasting the local caret as presence (P2).
   Timer? _cursorTimer;
 
@@ -300,6 +309,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _showFormatBar = loadPref('showFormatBar') == 'true';
     _showPageTitle = loadPref('showPageTitle') != 'false';
     _aiEnabled = loadPref('aiEnabled') == 'true';
+    if (!kIsWeb) _pending = PendingUploads.fromJson(loadPref('pendingBlobUploads'));
   }
 
   void _savePrefs() {
@@ -419,7 +429,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         session.accessToken,
       ),
       clientId: clientId,
-      onReady: (_, _) => _applyCloudBlocks(documentId),
+      onReady: (_, _) {
+        _applyCloudBlocks(documentId);
+        // Now online for this doc: drain any images inserted offline (§7.1).
+        unawaited(_reconcilePendingUploads(documentId));
+      },
       onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
     );
     _cloudSession = yrs;
@@ -1983,6 +1997,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Upload image bytes for the editor, returning the new file id + name.
+  ///
+  /// Online: uploads and returns the cloud file id (UUID), mirroring the bytes
+  /// into the on-device CAS so later/offline loads skip the network (§7 read
+  /// side). Offline (desktop only): the upload's network call fails, so we land
+  /// the bytes in the CAS under their sha256 and return *that* as a placeholder
+  /// file_id — the block renders immediately from the CAS — and queue the upload
+  /// so `_reconcilePendingUploads` rewrites sha256→UUID once back online (§7
+  /// upstream differ). A server-side rejection (auth/size, surfaced as
+  /// [ApiException]) is a real error: surfaced, not queued.
   Future<({String fileId, String name})?> _uploadEditorImage(
     Uint8List bytes,
     String fileName,
@@ -1999,10 +2022,104 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         mimeType: mimeType,
         bytes: bytes,
       );
+      if (!kIsWeb) _local.putBlobAs(file.id, bytes); // mirror for offline reads
       return (fileId: file.id, name: file.name);
-    } catch (error) {
+    } on ApiException catch (error) {
+      // Server reachable but rejected the upload — a genuine failure.
       if (mounted) setState(() => _message = error.toString());
       return null;
+    } catch (error) {
+      // Network failure (offline): desktop keeps a sha256 CAS placeholder and
+      // queues the upload for reconnect; web has no CAS, so it still fails.
+      final docId = _selectedBootstrap?.document.id;
+      if (!kIsWeb && docId != null) {
+        final sha = _local.putBlob(bytes);
+        _enqueuePendingUpload(
+          sha: sha,
+          workspaceId: workspace.id,
+          docId: docId,
+          name: fileName,
+        );
+        return (fileId: sha, name: fileName);
+      }
+      if (mounted) setState(() => _message = error.toString());
+      return null;
+    }
+  }
+
+  /// Queue an offline image upload (sha256 placeholder) and persist it.
+  void _enqueuePendingUpload({
+    required String sha,
+    required String workspaceId,
+    required String docId,
+    required String name,
+  }) {
+    if (_pending.add((sha: sha, workspaceId: workspaceId, docId: docId, name: name))) {
+      savePref('pendingBlobUploads', _pending.toJson());
+    }
+  }
+
+  /// Reconcile any offline-inserted images for [documentId] (must be the active
+  /// cloud doc, with a ready session). For each queued sha256: load its CAS
+  /// bytes, upload to the cloud, mirror the bytes under the returned UUID, and
+  /// rewrite every image block still referencing the sha256 to the UUID via the
+  /// live CRDT session — then clear the queue entry. Lazy by design (§7.1): only
+  /// the active doc reconciles, so images inserted offline in another doc wait
+  /// until that doc is opened online. Best-effort and re-entrancy-guarded; a
+  /// still-offline upload leaves the entry queued for the next attempt.
+  Future<void> _reconcilePendingUploads(String documentId) async {
+    if (kIsWeb || _reconciling) return;
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    final cloud = _cloudSession;
+    if (session == null || workspace == null || cloud == null || !cloud.isReady) {
+      return;
+    }
+    final entries = _pending.forDoc(workspace.id, documentId);
+    if (entries.isEmpty) return;
+    _reconciling = true;
+    try {
+      var changed = false;
+      for (final entry in entries) {
+        final bytes = _local.loadBlob(entry.sha);
+        if (bytes == null) {
+          // Bytes evicted from the CAS — unrecoverable; drop so we don't retry
+          // forever.
+          if (_pending.remove(workspace.id, documentId, entry.sha)) changed = true;
+          continue;
+        }
+        String uuid;
+        try {
+          final file = await _api.uploadImage(
+            session.accessToken,
+            workspace.id,
+            fileName: entry.name,
+            mimeType: 'image/png',
+            bytes: bytes,
+          );
+          uuid = file.id;
+        } catch (_) {
+          // Still offline (or a transient failure): leave queued, stop the pass.
+          break;
+        }
+        // Mirror the bytes under the cloud id so the rewritten block still reads
+        // from the local CAS, then rewrite sha256→UUID on the live replica.
+        _local.putBlobAs(uuid, bytes);
+        final ops = buildImageIdRewriteOps(
+          blocks: cloud.allBlocks(),
+          fromId: entry.sha,
+          toId: uuid,
+        );
+        if (ops.isNotEmpty) cloud.applyLocalOps(ops);
+        if (_pending.remove(workspace.id, documentId, entry.sha)) changed = true;
+      }
+      if (changed) {
+        savePref('pendingBlobUploads', _pending.toJson());
+        // Refresh the editor from the replica so the rewritten file_ids show.
+        if (mounted) _applyCloudBlocks(documentId);
+      }
+    } finally {
+      _reconciling = false;
     }
   }
 
