@@ -3389,8 +3389,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         switch (value) {
           case 'settings':
             _openSettings();
-          case 'about':
-            _showAbout();
           case 'signout':
             widget.onSignOut();
         }
@@ -3405,17 +3403,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             title: Text('Settings'),
           ),
         ),
-        PopupMenuItem(
-          value: 'about',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.info_outline),
-            title: Text('About Mica'),
-            subtitle: Text('v$kAppVersion'),
-          ),
-        ),
-        PopupMenuDivider(),
         PopupMenuItem(
           value: 'signout',
           child: ListTile(
@@ -4653,17 +4640,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// The built-in About dialog, marking the current app version.
-  void _showAbout() {
-    showAboutDialog(
-      context: context,
-      applicationName: 'Mica',
-      applicationVersion: 'v$kAppVersion',
-      applicationIcon: const MicaLogo(size: 40),
-      applicationLegalese: 'Cloud-first collaborative Markdown workspace.',
-    );
-  }
-
   void _openSettings() {
     showDialog<void>(
       context: context,
@@ -5797,6 +5773,18 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     });
   }
 
+  /// The built-in About popup, marking the current app version. Opened from the
+  /// Settings nav's "About" item (stacks over the Settings dialog).
+  void _showAboutDialog(BuildContext context) {
+    showAboutDialog(
+      context: context,
+      applicationName: 'Mica',
+      applicationVersion: 'v$kAppVersion',
+      applicationIcon: const MicaLogo(size: 40),
+      applicationLegalese: 'Cloud-first collaborative Markdown workspace.',
+    );
+  }
+
   Future<void> _save() async {
     setState(() {
       _saving = true;
@@ -6425,6 +6413,15 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                             title: Text(titles[i]),
                             onTap: () => setState(() => _tab = i),
                           ),
+                        const Divider(height: 1),
+                        // About isn't a content tab — it pops the version dialog.
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.info_outline, size: 20),
+                          title: const Text('About'),
+                          subtitle: const Text('v$kAppVersion'),
+                          onTap: () => _showAboutDialog(context),
+                        ),
                       ],
                     ),
                   ),
