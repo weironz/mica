@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
 import 'cloud/cloud_sync.dart';
+import 'cloud/workspace_migration.dart';
 import 'local/local_offline.dart';
 import 'web/yjs_probe.dart';
 import 'editor/model.dart' show kMonoFont;
@@ -1569,6 +1570,246 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _localSelectView(view);
   }
 
+  // ── §6 本地→云迁移 ──────────────────────────────────────────────────────────
+  //
+  // In-place mount: a local-offline workspace is *copied* up to a new cloud
+  // workspace; the local data is never modified (stays as the offline fallback).
+  // Each page is faithfully recreated on the cloud by replaying its block tree
+  // as ops onto the cloud doc's root (no meta.root collision — see docs §7.1),
+  // and its images are uploaded with their file_ids reconciled sha256 → UUID.
+
+  /// Entry point from the local page menu. Prompts for a cloud account, then
+  /// runs the migration. Re-migration is gated by a `migrated:<localWsId>` pref.
+  Future<void> _migrateLocalWorkspaceToCloud(Workspace localWs) async {
+    if (kIsWeb) return; // local offline is native-only
+    if (loadPref('migrated:${localWs.id}') != null) {
+      setState(() => _message =
+          '“${localWs.name}” 已迁移到云端,切换到云端模式即可打开。');
+      return;
+    }
+    final creds = await _promptCloudAuth(localWs.name);
+    if (creds == null || !mounted) return;
+    await _run(() async {
+      final clientId = await _local.deviceClientId();
+      if (clientId == null) throw StateError('本地身份不可用,无法迁移');
+      final session = creds.$1 == AuthMode.register
+          ? await _api.register(creds.$2)
+          : await _api.login(creds.$2);
+      final result = await _runWorkspaceMigration(session, clientId, localWs);
+      savePref('migrated:${localWs.id}', result.cloudWorkspaceId);
+      if (!mounted) return;
+      setState(() => _message =
+          '已把 “${localWs.name}” 迁移到云端(${result.docCount} 页)。'
+          '切换到云端模式即可打开。');
+    });
+  }
+
+  /// The migration engine (no UI). Creates a cloud workspace, then per local
+  /// page: uploads its blobs (sha256→UUID), creates the cloud doc, and replays
+  /// the block tree onto it via a headless [CloudSyncSession]. Local store is
+  /// read-only here; the previously-active local doc is restored at the end.
+  Future<({String cloudWorkspaceId, int docCount})> _runWorkspaceMigration(
+    AuthSession session,
+    BigInt clientId,
+    Workspace localWs,
+  ) async {
+    final token = session.accessToken;
+    final cloudWs = await _api.createWorkspace(token, localWs.name);
+
+    final views = _local
+        .listViews()
+        .where((v) => v.workspaceId == localWs.id && !v.trashed)
+        .toList();
+    final ordered = _orderViewsParentFirst(views);
+
+    final localToCloudView = <String, String>{};
+    var docCount = 0;
+    try {
+      for (final v in ordered) {
+        final doc = _local.openDoc(v.objectId);
+        if (doc == null) continue;
+        final cloudParent =
+            v.parentId == null ? null : localToCloudView[v.parentId];
+        final created = await _api.createDocument(
+          token,
+          cloudWs.id,
+          v.name,
+          parentViewId: cloudParent,
+        );
+        localToCloudView[v.id] = created.view.id;
+
+        // Upload referenced blobs once each, building the sha256→UUID map.
+        final idMap = <String, String>{};
+        for (final sha in imageBlobIds(doc.blocks)) {
+          final bytes = _local.loadBlob(sha);
+          if (bytes == null) continue; // dangling/pruned → leave ref as-is
+          final up = await _api.uploadImage(
+            token,
+            cloudWs.id,
+            fileName: 'image',
+            mimeType: _sniffImageMime(bytes),
+            bytes: bytes,
+          );
+          idMap[sha] = up.id;
+          _local.putBlobAs(up.id, bytes); // mirror so the cloud copy renders offline
+        }
+
+        // Faithfully replay the local tree onto the cloud doc's root.
+        final yrs = CloudSyncSession(
+          uri: documentSocketUri(
+            _api.baseUri,
+            cloudWs.id,
+            created.document.id,
+            token,
+          ),
+          clientId: clientId,
+          onReady: (_, _) {},
+          onRemoteBlocks: (_) {},
+        );
+        try {
+          yrs.connect();
+          await yrs.ready.timeout(const Duration(seconds: 20));
+          yrs.applyLocalOps(buildMigrationOps(
+            blocks: doc.blocks,
+            localRootId: doc.rootBlockId,
+            cloudRootId: yrs.rootBlockId,
+            idMap: idMap,
+          ));
+          await yrs.drainOutbox();
+        } finally {
+          yrs.dispose();
+        }
+        docCount++;
+      }
+    } finally {
+      // Restore the local editor's active doc (migration's openDoc() calls moved
+      // it). The local store was never mutated — this just re-points the backend.
+      final active = _localSelectedView;
+      if (active != null) _local.openDoc(active.objectId);
+    }
+    return (cloudWorkspaceId: cloudWs.id, docCount: docCount);
+  }
+
+  /// Order views so every parent precedes its children (roots first), stable.
+  List<ViewData> _orderViewsParentFirst(List<ViewData> views) {
+    final byParent = <String?, List<ViewData>>{};
+    for (final v in views) {
+      (byParent[v.parentId] ??= []).add(v);
+    }
+    final ids = {for (final v in views) v.id};
+    final out = <ViewData>[];
+    void emit(String? parent) {
+      for (final v in byParent[parent] ?? const <ViewData>[]) {
+        out.add(v);
+        emit(v.id);
+      }
+    }
+
+    emit(null);
+    // Defensive: surface any view whose parent isn't in this set (orphan) so it
+    // still migrates rather than being silently dropped.
+    for (final v in views) {
+      if (v.parentId != null && !ids.contains(v.parentId)) {
+        out.add(v);
+        emit(v.id);
+      }
+    }
+    return out;
+  }
+
+  /// Sniff an image MIME from magic bytes (local image blocks store only a name,
+  /// not a MIME). A wrong-but-decodable type is cosmetic; default to PNG.
+  String _sniffImageMime(Uint8List b) {
+    if (b.length >= 2 && b[0] == 0x89 && b[1] == 0x50) return 'image/png';
+    if (b.length >= 2 && b[0] == 0xFF && b[1] == 0xD8) return 'image/jpeg';
+    if (b.length >= 3 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) {
+      return 'image/gif';
+    }
+    if (b.length >= 12 &&
+        b[8] == 0x57 &&
+        b[9] == 0x45 &&
+        b[10] == 0x42 &&
+        b[11] == 0x50) {
+      return 'image/webp';
+    }
+    return 'image/png';
+  }
+
+  /// Minimal modal collecting cloud credentials for migration. Returns the auth
+  /// mode + form, or null if cancelled.
+  Future<(AuthMode, AuthFormValue)?> _promptCloudAuth(String wsName) {
+    final email = TextEditingController();
+    final name = TextEditingController();
+    final pass = TextEditingController();
+    var mode = AuthMode.login;
+    return showDialog<(AuthMode, AuthFormValue)?>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('连接云端账号并迁移'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '把本地工作区 “$wsName” 复制到云端(本地数据保留)。',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                SegmentedButton<AuthMode>(
+                  segments: const [
+                    ButtonSegment(value: AuthMode.login, label: Text('登录')),
+                    ButtonSegment(value: AuthMode.register, label: Text('注册')),
+                  ],
+                  selected: {mode},
+                  onSelectionChanged: (s) => setLocal(() => mode = s.first),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: email,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(labelText: '邮箱'),
+                ),
+                if (mode == AuthMode.register)
+                  TextField(
+                    controller: name,
+                    decoration: const InputDecoration(labelText: '显示名'),
+                  ),
+                TextField(
+                  controller: pass,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: '密码'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop((
+                mode,
+                AuthFormValue(
+                  email: email.text.trim(),
+                  displayName: name.text.trim(),
+                  password: pass.text,
+                ),
+              )),
+              child: const Text('迁移'),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(() {
+      email.dispose();
+      name.dispose();
+      pass.dispose();
+    });
+  }
+
   // ── local images (P2-M5): on-device content-addressed store, fully offline ──
 
   /// Store an inserted/pasted image in the local CAS; the returned `file_id` is
@@ -2244,6 +2485,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           onUpdateMember: (_, _) async {},
           onRemoveMember: (_) async {},
           onRestoreCheckpoint: _localRollbackDoc,
+          onMigrateToCloud: _migrateLocalWorkspaceToCloud,
           editorEpoch: _localEditorEpoch,
         ),
       ),
@@ -2528,6 +2770,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onUpdateMember,
     required this.onRemoveMember,
     this.onRestoreCheckpoint,
+    this.onMigrateToCloud,
     this.onCursorChanged,
     this.editorEpoch = 0,
     super.key,
@@ -2638,6 +2881,10 @@ class WorkspaceView extends StatefulWidget {
   /// Restore the open document to its last on-device checkpoint (local mode
   /// only — null elsewhere, which hides the menu item).
   final Future<void> Function()? onRestoreCheckpoint;
+
+  /// Migrate this local workspace up to the cloud (§6). Local mode only — null
+  /// elsewhere, which hides the menu item.
+  final Future<void> Function(Workspace workspace)? onMigrateToCloud;
 
   /// Bumped to force the editor to remount fresh (e.g. after a rollback, so the
   /// restored content fully replaces the in-memory doc instead of reconciling).
@@ -3622,6 +3869,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               ),
                             ),
                           ],
+                          if (widget.onMigrateToCloud != null &&
+                              widget.selectedWorkspace != null) ...[
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: 'migrate-cloud',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.cloud_upload_outlined),
+                                title: Text('连接云端并迁移此工作区…'),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                       const SizedBox(width: 4),
@@ -4135,6 +4395,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           ),
         );
         if (ok == true) await restore();
+      case 'migrate-cloud':
+        final migrate = widget.onMigrateToCloud;
+        final ws = widget.selectedWorkspace;
+        if (migrate == null || ws == null) return;
+        await migrate(ws);
     }
   }
 

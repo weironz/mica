@@ -47,6 +47,13 @@ class CloudSyncSession {
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
 
+  // §6 migration parity (desktop-only feature; present here so main.dart compiles
+  // for web — the web build never drives a migration since local offline is
+  // native-only).
+  final Completer<void> _readyCompleter = Completer<void>();
+  Future<void> get ready => _readyCompleter.future;
+  Future<void> drainOutbox({Duration timeout = const Duration(seconds: 15)}) async {}
+
   List<Map<String, dynamic>> allBlocks() => _doc?.toBlocks() ?? const [];
 
   List<Map<String, dynamic>> childBlocks() {

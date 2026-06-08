@@ -71,6 +71,48 @@ fn text_insert_before_marks_shifts_them() {
     assert_eq!(get(&out, "a").data, json!({"marks": [{"start": 6, "end": 11, "type": "bold"}]}));
 }
 
+/// P2 §6: the local→cloud migration replays the local block tree onto the
+/// *freshly-created cloud doc's root* (strategy (c), docs/phase2-offline-crdt.md
+/// §7.1). The key invariant: it never rewrites `meta.root`, so there is no
+/// concurrent LWW collision and no orphaned subtree — every block stays
+/// reachable from the cloud root. This mirrors exactly what `buildMigrationOps`
+/// emits (update the seeded cloud root with the local root's kind/text, then
+/// insert the local children under it).
+#[test]
+fn migration_replays_onto_cloud_root_without_meta_collision() {
+    // A just-created cloud doc: one block which *is* the root (a paragraph), as
+    // `create_document` seeds it.
+    let cloud_root = "block_cloud";
+    let mut d = MicaDoc::from_blocks(cloud_root, &[Block::new(cloud_root, "paragraph")]);
+    assert_eq!(d.root_block_id(), cloud_root);
+
+    // Replay a local tree: page "Title" → [p1, list L → image I(file_id rewritten)].
+    d.update_block_kind(cloud_root, "page");
+    d.set_block_text(cloud_root, "Title", &[]);
+    d.insert_block(cloud_root, 0, &para("p1", "hello"));
+    d.insert_block(cloud_root, 1, &Block::new("L", "list"));
+    d.insert_block(
+        "L",
+        0,
+        &Block::new("I", "image").with_data(json!({"file_id": "uuid-123", "name": "pic.png"})),
+    );
+
+    // The cloud root id is untouched — meta.root was never rewritten.
+    assert_eq!(d.root_block_id(), cloud_root);
+
+    let out = d.to_blocks();
+    assert_eq!(get(&out, cloud_root).kind, "page");
+    assert_eq!(get(&out, cloud_root).text, "Title");
+    assert_eq!(get(&out, cloud_root).children, vec!["p1", "L"]);
+    assert_eq!(get(&out, "L").children, vec!["I"]);
+    // The reconciled image file_id (sha256→UUID) and other props survive.
+    assert_eq!(get(&out, "I").data, json!({"file_id": "uuid-123", "name": "pic.png"}));
+
+    // No orphans: `to_blocks` is a DFS from the root, appending any unreachable
+    // block last. The full DFS order covering every block proves reachability.
+    assert_eq!(ids(&out), vec!["block_cloud", "p1", "L", "I"]);
+}
+
 #[test]
 fn text_format_adds_mark() {
     let mut d = doc(vec![page(&["a"]), para("a", "Hello")]);

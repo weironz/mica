@@ -50,6 +50,15 @@ class CloudSyncSession {
   bool _ready = false;
   bool _disposed = false;
 
+  /// Completes when the session first becomes ready (cold bootstrap done). Lets
+  /// headless callers (e.g. the §6 migrator) await a usable replica.
+  final Completer<void> _readyCompleter = Completer<void>();
+
+  /// Push/ack accounting so [drainOutbox] knows when the server has folded every
+  /// diff we sent (each `sync.push` is answered by one `sync.ack` carrying a rid).
+  int _pushCount = 0;
+  int _ackCount = 0;
+
   /// Local yrs diffs produced before the socket was ready / while offline,
   /// flushed to the cloud on (re)connect. Survives reconnects since [_doc] is
   /// kept across them (never rebuilt once it holds unpushed edits).
@@ -57,6 +66,24 @@ class CloudSyncSession {
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
+
+  /// Resolves once the session has bootstrapped (cold start complete).
+  Future<void> get ready => _readyCompleter.future;
+
+  /// Resolves once every pushed diff has been acked by the server (or [timeout]
+  /// elapses). The §6 migrator awaits this before disposing, so the server folds
+  /// all replayed migration ops before the socket closes (otherwise a `dispose`
+  /// mid-flight would silently drop the document's tail content).
+  Future<void> drainOutbox({
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!_disposed && DateTime.now().isBefore(deadline)) {
+      if (_channel != null && _ready) _flushOutbox();
+      if (_outbox.isEmpty && _ackCount >= _pushCount) return;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
 
   /// The full document as a flat block list (tree order) — for callers that
   /// rebuild a snapshot/bootstrap from the live replica.
@@ -133,6 +160,7 @@ class CloudSyncSession {
           _cursor = baseRid;
           _mirror.seedFrom(doc);
           _ready = true;
+          if (!_readyCompleter.isCompleted) _readyCompleter.complete();
           onReady(_rootBlockId, childBlocks());
         } else if (baseRid > _cursor) {
           // Re-bootstrap: the stream was pruned past our cursor. Merge the base
@@ -161,6 +189,7 @@ class CloudSyncSession {
       case 'sync.update':
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
       case 'sync.ack':
+        _ackCount++;
         final rid = (m['rid'] as num?)?.toInt();
         if (rid != null && rid > _cursor) _cursor = rid;
     }
@@ -194,10 +223,7 @@ class CloudSyncSession {
 
   void _pushOrQueue(Uint8List diff) {
     if (_channel != null && _ready) {
-      _send({
-        'type': 'sync.push',
-        'payload': {'update': base64.encode(diff)},
-      });
+      _sendPush(diff);
     } else {
       _outbox.add(diff);
     }
@@ -208,11 +234,16 @@ class CloudSyncSession {
     final pending = List<Uint8List>.from(_outbox);
     _outbox.clear();
     for (final diff in pending) {
-      _send({
-        'type': 'sync.push',
-        'payload': {'update': base64.encode(diff)},
-      });
+      _sendPush(diff);
     }
+  }
+
+  void _sendPush(Uint8List diff) {
+    _pushCount++;
+    _send({
+      'type': 'sync.push',
+      'payload': {'update': base64.encode(diff)},
+    });
   }
 
   void _send(Map<String, dynamic> message) {
