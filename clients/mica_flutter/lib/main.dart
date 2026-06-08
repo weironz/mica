@@ -42,6 +42,10 @@ const String kDevPassword = String.fromEnvironment(
 /// The official hosted Mica instance (see docs/deploy.md).
 const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
+/// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
+/// (`version:`) and `crates/api-server/Cargo.toml` on each release.
+const String kAppVersion = '0.1.1';
+
 /// Which backend the client talks to.
 /// - [cloud]/[selfHosted]: online — a REST + WebSocket server reached by URL,
 ///   authenticated with the normal email/password login.
@@ -3385,6 +3389,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         switch (value) {
           case 'settings':
             _openSettings();
+          case 'about':
+            _showAbout();
           case 'signout':
             widget.onSignOut();
         }
@@ -3399,6 +3405,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             title: Text('Settings'),
           ),
         ),
+        PopupMenuItem(
+          value: 'about',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.info_outline),
+            title: Text('About Mica'),
+            subtitle: Text('v$kAppVersion'),
+          ),
+        ),
+        PopupMenuDivider(),
         PopupMenuItem(
           value: 'signout',
           child: ListTile(
@@ -4633,6 +4650,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           widget.onOpenSearchResult(viewId);
         },
       ),
+    );
+  }
+
+  /// The built-in About dialog, marking the current app version.
+  void _showAbout() {
+    showAboutDialog(
+      context: context,
+      applicationName: 'Mica',
+      applicationVersion: 'v$kAppVersion',
+      applicationIcon: const MicaLogo(size: 40),
+      applicationLegalese: 'Cloud-first collaborative Markdown workspace.',
     );
   }
 
