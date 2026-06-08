@@ -13,6 +13,10 @@ on:
       version:
         description: 'Version without the leading v (e.g. 0.1.0)'
         required: true
+      publish:
+        description: 'Publish the installer to a GitHub release (off = dry-run: build + package + upload artifact only)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -59,7 +63,17 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           /DAppVersion=${{ steps.ver.outputs.version }} installer\mica.iss
 
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mica-Setup-${{ steps.ver.outputs.version }}
+          path: clients/mica_flutter/installer/Output/Mica-Setup-${{ steps.ver.outputs.version }}.exe
+          if-no-files-found: error
+
       - name: Publish installer to release
+        # Tag pushes always publish; manual runs only when publish=true (else
+        # it's a dry-run that just builds + uploads the artifact above).
+        if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
