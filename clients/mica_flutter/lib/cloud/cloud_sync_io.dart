@@ -117,20 +117,30 @@ class CloudSyncSession {
     }
     switch (m['type']) {
       case 'sync.base':
-        if (_doc != null) return; // already bootstrapped; ignore late base
         final b64 = m['base'];
         if (b64 is! String) return;
-        final doc = MicaDocument.fromStateWithClientId(
-          bytes: base64.decode(b64),
-          clientId: clientId,
-        );
-        if (doc == null) return;
-        _doc = doc;
-        _rootBlockId = doc.rootBlockId();
-        _cursor = (m['base_rid'] as num?)?.toInt() ?? 0;
-        _mirror.seedFrom(doc);
-        _ready = true;
-        onReady(_rootBlockId, childBlocks());
+        final baseRid = (m['base_rid'] as num?)?.toInt() ?? 0;
+        final existing = _doc;
+        if (existing == null) {
+          // Cold bootstrap.
+          final doc = MicaDocument.fromStateWithClientId(
+            bytes: base64.decode(b64),
+            clientId: clientId,
+          );
+          if (doc == null) return;
+          _doc = doc;
+          _rootBlockId = doc.rootBlockId();
+          _cursor = baseRid;
+          _mirror.seedFrom(doc);
+          _ready = true;
+          onReady(_rootBlockId, childBlocks());
+        } else if (baseRid > _cursor) {
+          // Re-bootstrap: the stream was pruned past our cursor. Merge the base
+          // (CRDT — our unpushed local edits survive) and fast-forward.
+          existing.applyUpdate(update: base64.decode(b64));
+          _cursor = baseRid;
+          if (!_disposed) onRemoteBlocks(childBlocks());
+        }
         // Catch up anything after the base, then push queued local edits.
         _send({
           'type': 'sync.pull',

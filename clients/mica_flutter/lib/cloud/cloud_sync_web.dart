@@ -93,15 +93,23 @@ class CloudSyncSession {
     }
     switch (m['type']) {
       case 'sync.base':
-        if (_doc != null) return;
         final b64 = m['base'];
         if (b64 is! String) return;
-        final doc = MicaYDoc.fromState(base64.decode(b64));
-        _doc = doc;
-        _rootBlockId = doc.rootBlockId();
-        _cursor = (m['base_rid'] as num?)?.toInt() ?? 0;
-        _ready = true;
-        onReady(_rootBlockId, childBlocks());
+        final baseRid = (m['base_rid'] as num?)?.toInt() ?? 0;
+        final existing = _doc;
+        if (existing == null) {
+          final doc = MicaYDoc.fromState(base64.decode(b64));
+          _doc = doc;
+          _rootBlockId = doc.rootBlockId();
+          _cursor = baseRid;
+          _ready = true;
+          onReady(_rootBlockId, childBlocks());
+        } else if (baseRid > _cursor) {
+          // Re-bootstrap after stream pruning: merge the base, keep local edits.
+          existing.applyUpdate(base64.decode(b64));
+          _cursor = baseRid;
+          if (!_disposed) onRemoteBlocks(childBlocks());
+        }
         _send({
           'type': 'sync.pull',
           'payload': {'since_rid': _cursor},

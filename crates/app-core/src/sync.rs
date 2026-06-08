@@ -20,6 +20,21 @@ use uuid::Uuid;
 
 use crate::store::latest_snapshot_tx;
 
+/// Keep at least this many already-folded updates on the stream so a briefly
+/// offline client can catch up incrementally; older ones are pruned (they live
+/// in the base). A client further behind re-bootstraps from the base instead.
+const STREAM_KEEP_MARGIN: i64 = 64;
+/// Prune roughly once every this-many pushes (keeps the prune off the hot path).
+const STREAM_PRUNE_EVERY: i64 = 32;
+
+/// Result of catching a client up from its cursor: either the incremental
+/// updates, or a base to re-bootstrap from when the cursor fell behind the
+/// pruned window (P2-M4 §10 large-doc / stream-growth control).
+pub enum CatchUp {
+    Updates(Vec<StreamUpdate>),
+    Rebootstrap(YrsBase),
+}
+
 /// One update on the per-workspace stream, returned by catch-up pulls.
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct StreamUpdate {
@@ -168,8 +183,54 @@ pub async fn push_update(
     .execute(&mut *tx)
     .await?;
 
+    // Periodically prune updates already folded into the base (keep a margin for
+    // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
+    if rid % STREAM_PRUNE_EVERY == 0 {
+        sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
+            .bind(document_id)
+            .bind(rid - STREAM_KEEP_MARGIN)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     tx.commit().await?;
     Ok(rid)
+}
+
+/// Catch a client up from `since_rid`: the incremental updates, or — when the
+/// cursor fell behind the pruned window (the gap was folded into the base) — a
+/// base to re-bootstrap from. Drives offline reconnect after stream pruning.
+pub async fn catch_up_document(
+    db: &PgPool,
+    document_id: Uuid,
+    since_rid: i64,
+    limit: i64,
+) -> ApiResult<CatchUp> {
+    let min_rid: Option<i64> =
+        sqlx::query_scalar("SELECT MIN(rid) FROM workspace_updates WHERE document_id = $1")
+            .bind(document_id)
+            .fetch_one(db)
+            .await?;
+    let base_rid: i64 =
+        sqlx::query_scalar("SELECT base_rid FROM document_yrs_base WHERE document_id = $1")
+            .bind(document_id)
+            .fetch_optional(db)
+            .await?
+            .unwrap_or(0);
+
+    // A gap exists when the earliest retained update is beyond `since_rid + 1`
+    // (or the stream is empty) AND the base is ahead of the cursor — i.e. the
+    // missing range was pruned. Fast-forward from the base in that case.
+    let gap = match min_rid {
+        Some(m) => since_rid + 1 < m && since_rid < base_rid,
+        None => since_rid < base_rid,
+    };
+    if gap {
+        return Ok(CatchUp::Rebootstrap(bootstrap_base(db, document_id).await?));
+    }
+    Ok(CatchUp::Updates(
+        pull_document_updates(db, document_id, since_rid, limit).await?,
+    ))
 }
 
 /// Everything in a workspace after `after_rid` (0 = from the start), ordered by

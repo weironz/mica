@@ -121,6 +121,53 @@ async fn push_pull_bootstrap_round_trip() {
 }
 
 #[tokio::test]
+async fn stream_prunes_and_stale_cursor_rebootstraps() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping stream_prunes_and_stale_cursor_rebootstraps: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+
+    // Push enough updates that periodic pruning kicks in.
+    let mut last_rid = 0;
+    for _ in 0..90 {
+        let sv = editing.state_vector();
+        editing.text_insert("a", 5, "x");
+        let update = editing.encode_diff(&sv).unwrap();
+        last_rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+    }
+
+    // The stream is bounded — old folded updates were pruned, not all 90 kept.
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM workspace_updates WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(count < 90, "stream pruned (got {count} rows for 90 pushes)");
+
+    // A stale cursor (0) re-bootstraps from the base — the gap was pruned.
+    match sync::catch_up_document(&db, doc, 0, 1000).await.unwrap() {
+        sync::CatchUp::Rebootstrap(b) => {
+            let d = MicaDoc::from_update(&b.state).unwrap();
+            let text = d.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
+            assert!(text.starts_with("Hello") && text.len() >= 95, "base has all edits: {text}");
+        }
+        sync::CatchUp::Updates(_) => panic!("expected rebootstrap for a stale cursor"),
+    }
+
+    // A recent cursor catches up incrementally (no rebootstrap).
+    match sync::catch_up_document(&db, doc, last_rid - 1, 1000).await.unwrap() {
+        sync::CatchUp::Updates(u) => assert_eq!(u.len(), 1),
+        sync::CatchUp::Rebootstrap(_) => panic!("a recent cursor should pull incrementally"),
+    }
+
+    cleanup(&db, ws, user).await;
+}
+
+#[tokio::test]
 async fn rejects_garbage_update() {
     let Some(db) = pool().await else {
         eprintln!("skipping rejects_garbage_update: no DATABASE_URL");

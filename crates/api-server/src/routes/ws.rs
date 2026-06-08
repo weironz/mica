@@ -360,8 +360,19 @@ async fn handle_client_message(
         .get("since_rid")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-      match sync::pull_document_updates(&state.db, document_id, since_rid, 1000).await {
-        Ok(updates) => {
+      match sync::catch_up_document(&state.db, document_id, since_rid, 1000).await {
+        // Cursor fell behind the pruned window → re-bootstrap from the base.
+        Ok(sync::CatchUp::Rebootstrap(base)) => vec![
+          json!({
+            "type": "sync.base",
+            "ack_id": ack_id,
+            "document_id": document_id,
+            "base": STANDARD.encode(&base.state),
+            "base_rid": base.base_rid,
+          })
+          .to_string(),
+        ],
+        Ok(sync::CatchUp::Updates(updates)) => {
           let head = updates.last().map(|u| u.rid).unwrap_or(since_rid);
           let encoded: Vec<Value> = updates
             .iter()
