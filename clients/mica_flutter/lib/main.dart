@@ -1542,6 +1542,59 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // The editor owns its in-memory nodes; no bootstrap rebuild needed.
   }
 
+  // ── local images (P2-M5): on-device content-addressed store, fully offline ──
+
+  /// Store an inserted/pasted image in the local CAS; the returned `file_id` is
+  /// its sha256, which the image block references.
+  Future<({String fileId, String name})?> _localUploadImage(
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  ) async {
+    final id = _local.putBlob(bytes);
+    if (id.isEmpty) return null;
+    return (fileId: id, name: fileName.isEmpty ? 'image' : fileName);
+  }
+
+  /// Re-host an externally-pasted image URL into the local CAS by downloading it.
+  Future<({String fileId, String name})?> _localImportImageUrl(String url) async {
+    try {
+      final resp = await http.get(Uri.parse(url));
+      if (resp.statusCode != 200) return null;
+      final id = _local.putBlob(resp.bodyBytes);
+      if (id.isEmpty) return null;
+      final seg = Uri.parse(url).pathSegments;
+      final name = seg.isNotEmpty && seg.last.isNotEmpty ? seg.last : 'image';
+      return (fileId: id, name: name);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Load an image for the canvas: a `file_id` (sha256) from the local CAS, or an
+  /// external `http(s)` markdown image fetched directly.
+  Future<Uint8List?> _localLoadImageBytes(String key) async {
+    if (key.startsWith('http://') || key.startsWith('https://')) {
+      try {
+        final resp = await http.get(Uri.parse(key));
+        return resp.statusCode == 200 ? resp.bodyBytes : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    return _local.loadBlob(key);
+  }
+
+  /// Map local file ids to `file://` URIs (for copy/export of local images).
+  Future<Map<String, String>> _localResolveImageUrls(List<String> ids) async {
+    final out = <String, String>{};
+    for (final id in ids) {
+      final uri = _local.blobFileUri(id);
+      if (uri != null) out[id] = uri;
+    }
+    return out;
+  }
+
   Future<void> _localUpdateRootBlockText(String text) async {
     final root = _localBootstrap?.document.rootBlockId;
     if (root == null) return;
@@ -2087,10 +2140,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           onMoveBlock: (_, _) async {},
           onApplyOperations: _localApplyEditorOperations,
           // Images / AI / collaboration are online-only for now (M5+).
-          onUploadImage: (_, _, _) async => null,
-          onImportImageUrl: (_) async => null,
-          onLoadImageBytes: (_) async => null,
-          onResolveImageUrls: (_) async => const {},
+          onUploadImage: _localUploadImage,
+          onImportImageUrl: _localImportImageUrl,
+          onLoadImageBytes: _localLoadImageBytes,
+          onResolveImageUrls: _localResolveImageUrls,
           onAiStream: (_, {system}) => const Stream<String>.empty(),
           onAiNewPage: (_) async {},
           onAiCurrentPage: null,

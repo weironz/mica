@@ -7,9 +7,11 @@
 // FFI. The web build gets `local_offline_web.dart` instead, where everything is
 // unavailable.
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../src/rust/api/store.dart';
 import '../src/rust/frb_generated.dart';
+import '../upload/sha256.dart';
 import 'local_doc.dart';
 
 /// One page-tree node, as plain data for the UI layer to map onto its own model.
@@ -30,6 +32,11 @@ typedef WorkspaceData = ({String id, String name, String position});
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
 
 class LocalOffline {
+  /// [rootDirOverride] redirects the data dir (store + blob CAS) — for tests
+  /// only; production uses the per-user app data dir.
+  LocalOffline({String? rootDirOverride}) : _rootOverride = rootDirOverride;
+
+  final String? _rootOverride;
   MicaStore? _store;
   LocalDocBackend? _active;
   int _seq = 0;
@@ -177,7 +184,10 @@ class LocalOffline {
   String _id(String prefix) =>
       '${prefix}_${DateTime.now().microsecondsSinceEpoch}_${_seq++}';
 
-  String _dbPath() {
+  /// The per-user local data dir (`{appdata}/mica/local`). Houses the SQLite
+  /// store and the blob CAS.
+  String _localDir() {
+    if (_rootOverride != null) return '$_rootOverride/local';
     final env = Platform.environment;
     String dir;
     if (Platform.isWindows) {
@@ -191,6 +201,47 @@ class LocalOffline {
           ? '$xdg/mica'
           : '${env['HOME'] ?? '.'}/.local/share/mica';
     }
-    return '$dir/local/store.db';
+    return '$dir/local';
+  }
+
+  String _dbPath() => '${_localDir()}/store.db';
+
+  // ── blob CAS (P2-M5): content-addressed image store, on-device + offline ─────
+  //
+  // Images are stored by sha256 of their bytes under `{localDir}/blobs/{sha256}`
+  // and the document's image block references that sha256 as its `file_id`
+  // (content-addressed = automatic dedup, deterministic, no server). The cloud
+  // path keeps its own UUID file ids; local and cloud documents are separate
+  // universes today, so the two id schemes never collide.
+
+  String _blobsDir() => '${_localDir()}/blobs';
+  String _blobPath(String fileId) => '${_blobsDir()}/$fileId';
+
+  /// Store `bytes` in the local CAS, returning the content id (sha256 hex) to
+  /// use as the image block's `file_id`. Idempotent — re-storing the same bytes
+  /// is a no-op.
+  String putBlob(Uint8List bytes) {
+    final id = sha256Hex(bytes);
+    final file = File(_blobPath(id));
+    if (!file.existsSync()) {
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(bytes, flush: true);
+    }
+    return id;
+  }
+
+  /// Load a blob's bytes by `file_id` (sha256), or null if it isn't stored.
+  Uint8List? loadBlob(String fileId) {
+    final file = File(_blobPath(fileId));
+    return file.existsSync() ? file.readAsBytesSync() : null;
+  }
+
+  /// Whether the local CAS holds a blob for `file_id`.
+  bool hasBlob(String fileId) => File(_blobPath(fileId)).existsSync();
+
+  /// A `file://` URI for a stored blob (for copy/export), or null if absent.
+  String? blobFileUri(String fileId) {
+    final file = File(_blobPath(fileId));
+    return file.existsSync() ? file.uri.toString() : null;
   }
 }
