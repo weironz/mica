@@ -237,7 +237,25 @@ class LocalOffline {
     return id;
   }
 
-  /// Load a blob's bytes by `file_id` (sha256), or null if it isn't stored.
+  /// Cache an already-identified blob under an explicit [fileId] key (rather
+  /// than content-addressing by sha256). The cloud path uses this to mirror a
+  /// downloaded image — whose canonical id is its server file id (a UUID) — into
+  /// the same on-device CAS, so the next load (and any offline session) reads
+  /// the local copy instead of re-fetching. Idempotent; no-op on empty id.
+  ///
+  /// UUID keys and sha256 keys share `blobs/` without colliding (distinct
+  /// formats), giving §7's single on-device blob store across local & cloud docs.
+  void putBlobAs(String fileId, Uint8List bytes) {
+    if (fileId.isEmpty) return;
+    final file = File(_blobPath(fileId));
+    if (!file.existsSync()) {
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(bytes, flush: true);
+    }
+  }
+
+  /// Load a blob's bytes by `file_id` (sha256 for local docs, or a cloud file
+  /// id cached via [putBlobAs]), or null if it isn't stored.
   Uint8List? loadBlob(String fileId) {
     final file = File(_blobPath(fileId));
     return file.existsSync() ? file.readAsBytesSync() : null;

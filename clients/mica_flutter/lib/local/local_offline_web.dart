@@ -32,6 +32,7 @@ class LocalOffline {
   void rollbackDoc(String docId) {}
 
   String putBlob(Uint8List bytes) => '';
+  void putBlobAs(String fileId, Uint8List bytes) {}
   Uint8List? loadBlob(String fileId) => null;
   bool hasBlob(String fileId) => false;
   String? blobFileUri(String fileId) => null;

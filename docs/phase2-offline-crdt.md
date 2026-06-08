@@ -106,6 +106,24 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 - **blob 同步独立于 doc 同步**(借 AFFiNE):`list()` 求差集决定 up/download + `uploaded_at` 游标去重;云端 S3 presigned/multipart 续传。
 - 前端 Dart 加载时 `resolve(file_id)`:在线查云、离线查本地 → 返回对应 URL。逻辑层几乎不改(已是 file_id→resolve)。
 
+### 7.1 实施决策(2026-06-08,调研 AppFlowy + AFFiNE 源码定案)
+
+> 背景:本地 CAS 用 `file_id = sha256`(M5),云端 `files.id = UUID`(`object_key` 内嵌 sha256)。「sha256↔UUID 两套 id 怎么对账」一度被当成 §6 迁移的核心难点。派子代理读两家真实源码后,**核心前提被证伪**——这难点是我们自找的。
+
+- **两家都没有「两套 id 对账」问题,因为它们让内容哈希在本地和云端都直接当 blob id**,从根上消除了 UUID↔sha256 的二义。证据:
+  - **AppFlowy**:云端 `FileId::from_bytes = base64url(sha256)+"."+ext`(`AppFlowy-Collab/.../importer/util.rs`),客户端上传前用 `FileId::from_path` 算出**同一个** id(`flowy-storage/src/manager.rs`)。S3 key = `{ws}/{parent}/{file_id}`。blob 路径里**没有 UUID**。
+  - **AFFiNE**:blob id = `sha256(buffer).digest('base64url')`,`BlobStorage` 抽象(`nbstore/src/storage/blob.ts`)本地/云端**都只按 `key`(=哈希)寻址**;云端 REST/GraphQL 直接收 key。
+- **blob 同步差集机制(抄 AFFiNE 三层,全按哈希)**:① 本地 per-remote `uploaded_at` 表当「待上传」首要信号(免网络);② 批量较大时拉一次 `remote.list()` 做集合差集跳过已存在;③ 服务端上传幂等(`alreadyUploaded`)。**下载 = `difference(remoteList, localList)`**。差集器**永不删 blob**——删除走显式 `delete(key)` + 独立 `release()`/GC,避免「一端删→同步把删除传播→误删他处仍引用的 blob」。blob 同步与 CRDT 同步**完全独立的任务/队列**。
+- **§6 迁移 = 原地挂载,不是「建新 ID+复制+删旧」**。AFFiNE 正是后者(`transform.ts`:`factory.create` 建新云 ws → 拷 doc/blob → `deleteWorkspace` 删旧),其 data-loss 报告(#12155/#13941/#4694)直接来自这条非原子的「拷完删旧」。内容寻址让原地挂载变便宜:「推云」= 枚举本地 blob、把云端没有的上传(同一套差集)、开始同步 doc——**无需重生 ID、无需改写 doc 里的 blob 引用**。
+- **AppFlowy 的反面教训**:它 doc 里存的是**内嵌 host+workspace_id 的完整 URL**(`get_object_url_v1`),迁移重生 ID 时**没改写图片 URL** → 图片全断(AppFlowy-Cloud #1307)。**存 URL 是迁移变难的根因;存裸 id 则安全**。
+
+**Mica 的取舍(已落地方向)**:
+
+- **不动稳定线上云**:线上 web/桌面云端正常,既有云 doc 的图片块已存 UUID `file_id`。把云端整体改成内容寻址(理想终态)会动到稳定产品 + 既有数据迁移,**风险高,暂不做**。
+- **§7 读侧镜像(已实现并测,见 `local_offline_io.dart::putBlobAs` + `main.dart::_loadEditorImageBytes`)**:云端模式下加载图片先查本地 CAS(离线可用、省往返),miss 才 resolve+下载并按云 `file_id`(UUID)缓存进**同一个** `blobs/` 目录(UUID 与 sha256 文件名不冲突)。这就是 §7「在线查云、离线查本地」的下行半。
+- **§6 迁移的 id 对账 = 迁移时一次性改写(可接受)**:因为 **Mica 的块存的是裸 `file_id`(不是 URL)**,把本地 blob 上云拿到 UUID 后改写图片块 `file_id`(sha256→UUID)是**有界、安全**的操作(`controller.dart::setImageSource` 已具备)——正是 AppFlowy 用 URL 才会踩的坑,我们存裸 id 不会踩。**理想是内容寻址消除改写;在「不动线上云」约束下,有界改写是务实解**。
+- **待建(§6 全量迁移)**:本地工作区 attach 云账号的 UX + doc 内容推云(走 `importMarkdown` 或新建 op-push 通道)+ blob 上传/改写 + 原地挂载。需起全套云栈(Postgres+S3+api)做端到端实测(修复纪律),建议带栈实施。
+
 ## 8. FFI 边界(flutter_rust_bridge v2)
 
 - 核心 crate 编译成动态/静态库,**frb v2** 生成 Dart↔Rust 桥(省掉 AppFlowy 自研 .proto + codegen 一大摊)。

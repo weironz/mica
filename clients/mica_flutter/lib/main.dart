@@ -1803,24 +1803,37 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// (markdown image) — fetched directly — or a file id, resolved to a fresh
   /// signed URL first.
   Future<Uint8List?> _loadEditorImageBytes(String key) async {
+    // External markdown URLs: fetch straight through (not content-addressable).
+    if (key.startsWith('http://') || key.startsWith('https://')) {
+      try {
+        final resp = await http.get(Uri.parse(key));
+        return resp.statusCode == 200 ? resp.bodyBytes : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    // Cloud file id (§7 "在线查云、离线查本地"): serve from the on-device CAS
+    // mirror first — works offline and skips the network round-trip — then fall
+    // back to a cloud resolve+download, caching the bytes under the file id so
+    // every later load (and any offline session) hits the local copy.
+    if (!kIsWeb) {
+      final cached = _local.loadBlob(key);
+      if (cached != null) return cached;
+    }
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return null;
     try {
-      String? url;
-      if (key.startsWith('http://') || key.startsWith('https://')) {
-        url = key;
-      } else {
-        final urls = await _api.resolveFiles(
-          session.accessToken,
-          workspace.id,
-          [key],
-        );
-        url = urls[key];
-      }
+      final urls = await _api.resolveFiles(
+        session.accessToken,
+        workspace.id,
+        [key],
+      );
+      final url = urls[key];
       if (url == null) return null;
       final resp = await http.get(Uri.parse(url));
       if (resp.statusCode != 200) return null;
+      if (!kIsWeb) _local.putBlobAs(key, resp.bodyBytes);
       return resp.bodyBytes;
     } catch (_) {
       return null;

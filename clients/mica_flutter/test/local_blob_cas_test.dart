@@ -55,4 +55,34 @@ void main() {
     expect(uri, startsWith('file://'));
     expect(File.fromUri(Uri.parse(uri!)).existsSync(), isTrue);
   });
+
+  // §7 cloud-mode mirror: cache a downloaded cloud image under its server file
+  // id (a UUID, not the content hash) so it re-reads offline from the same CAS.
+  test('putBlobAs caches under an explicit (cloud) id and round-trips', () {
+    final bytes = Uint8List.fromList([10, 20, 30, 40]);
+    const cloudId = 'a1b2c3d4-1111-2222-3333-444455556666'; // UUID-shaped
+    expect(local.hasBlob(cloudId), isFalse);
+
+    local.putBlobAs(cloudId, bytes);
+    expect(local.hasBlob(cloudId), isTrue);
+    expect(local.loadBlob(cloudId), equals(bytes));
+    expect(File('${tmp.path}/local/blobs/$cloudId').existsSync(), isTrue);
+
+    // Idempotent: re-caching the same id keeps the original bytes (first wins).
+    local.putBlobAs(cloudId, Uint8List.fromList([99]));
+    expect(local.loadBlob(cloudId), equals(bytes));
+  });
+
+  test('putBlobAs ignores an empty id', () {
+    local.putBlobAs('', Uint8List.fromList([1]));
+    expect(local.hasBlob(''), isFalse);
+  });
+
+  test('UUID-keyed and sha256-keyed blobs coexist without colliding', () {
+    final shaId = local.putBlob(Uint8List.fromList([1, 2, 3]));
+    const uuid = 'ffffffff-0000-1111-2222-333344445555';
+    local.putBlobAs(uuid, Uint8List.fromList([4, 5, 6]));
+    expect(local.loadBlob(shaId), equals(Uint8List.fromList([1, 2, 3])));
+    expect(local.loadBlob(uuid), equals(Uint8List.fromList([4, 5, 6])));
+  });
 }
