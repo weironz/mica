@@ -119,7 +119,7 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 
 - ~~Markdown P2~~ 已闭环(2026-06-06):CommonMark 641/641 = 100%,GFM 24/24,见 docs/commonmark-scoreboard.md
 - **§7 离线态上行 blob differ**(云端断网插图→重连上传改写):Phase 2 窄边角增强,主离线面=本地模式已全覆盖、迁移期 blob 上行已实现。设计见 `phase2-offline-crdt.md §7.1`。
-- **CI release pipeline 未实跑验证**:`.github/workflows/release-windows.yml` 已在 main,但 `v0.1.0` 故意指向无 workflow 的 commit,**Windows runner 上从未真跑过一次**——下次打 `v*` tag 才首验(ISCC/choco/softprops 链路理论通,未实测)。
+- ~~**CI release pipeline 未实跑验证**~~ **已首验(2026-06-08)**:给 workflow 加了 dry-run(`workflow_dispatch` 的 `publish` 开关,默认 false → 只 build+package+传 artifact、不发 release)。dispatch `version=0.1.1-rc publish=false` 在 Windows runner 上**全绿**:flutter build windows release → 装 Inno → ISCC 打包 → 产出 `Mica-Setup-0.1.1-rc.exe`(17.9MB)artifact,publish 步骤正确 skip。**唯一未实跑** = `softprops` 发布上传(dry-run 跳过,成熟 action,tag 推送会走到)。正式发版:推 `v*` tag 或 dispatch `publish=true`。
 - **window_manager → nativeapi-flutter 迁移**:watch list,卡上游 v0.1.x WIP,暂不迁(成本约一个文件,见「技术路线定稿」依赖边界)。
 - **渲染架构 deferred**(docs/render-architecture.md):`_NodeLayout` 字段收敛进 rendererData;hit-test 走 renderer 分发——下个新块类型进来时顺手做。
 - **token 存储**:当前明文 JSON;DPAPI 加密留作后续(M1 待决项,非阻塞)。
