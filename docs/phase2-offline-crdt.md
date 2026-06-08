@@ -121,8 +121,9 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 
 - **不动稳定线上云**:线上 web/桌面云端正常,既有云 doc 的图片块已存 UUID `file_id`。把云端整体改成内容寻址(理想终态)会动到稳定产品 + 既有数据迁移,**风险高,暂不做**。
 - **§7 读侧镜像(已实现并测,见 `local_offline_io.dart::putBlobAs` + `main.dart::_loadEditorImageBytes`)**:云端模式下加载图片先查本地 CAS(离线可用、省往返),miss 才 resolve+下载并按云 `file_id`(UUID)缓存进**同一个** `blobs/` 目录(UUID 与 sha256 文件名不冲突)。这就是 §7「在线查云、离线查本地」的下行半。
-- **§6 迁移的 id 对账 = 迁移时一次性改写(可接受)**:因为 **Mica 的块存的是裸 `file_id`(不是 URL)**,把本地 blob 上云拿到 UUID 后改写图片块 `file_id`(sha256→UUID)是**有界、安全**的操作(`controller.dart::setImageSource` 已具备)——正是 AppFlowy 用 URL 才会踩的坑,我们存裸 id 不会踩。**理想是内容寻址消除改写;在「不动线上云」约束下,有界改写是务实解**。
-- **待建(§6 全量迁移)**:本地工作区 attach 云账号的 UX + doc 内容推云(走 `importMarkdown` 或新建 op-push 通道)+ blob 上传/改写 + 原地挂载。需起全套云栈(Postgres+S3+api)做端到端实测(修复纪律),建议带栈实施。
+- **§6 迁移的 id 对账 = 迁移时一次性改写(已落地)**:因为 **Mica 的块存的是裸 `file_id`(不是 URL)**,把本地 blob 上云拿到 UUID 后改写图片块 `file_id`(sha256→UUID)是**有界、安全**的操作——正是 AppFlowy 用 URL 才会踩的坑,我们存裸 id 不会踩。**理想是内容寻址消除改写;在「不动线上云」约束下,有界改写是务实解**。
+- **§6 全量迁移(已实现并端到端实测)**:`cloud/workspace_migration.dart`(纯核心,headless 可测)+ `main.dart::_runWorkspaceMigration`(编排)。**原地挂载**(本地数据只读、不删):建云工作区 → 逐页(父先于子)上传 blob(`uploadImage`,sha256→UUID 映射 + `putBlobAs` 本地镜像)→ 建云 doc → headless `CloudSyncSession` 把本地块树**重放为 ops 挂到云端 doc 的 root**(策略c:跳过本地 root、内容落云 root、子树重挂、图片 file_id 改写;**不写 meta** → 规避 `meta.root` LWW 冲突+孤儿块,非 AFFiNE「建新ID+拷+删旧」的 data-loss 路径)→ `drainOutbox` 等 ack 后 dispose。触发:本地页菜单「连接云端并迁移此工作区」+ 登录/注册对话框;`migrated:<wsId>` pref 防重。测:`test/workspace_migration_test.dart` 9 项 + `crates/mica-core/tests/ops.rs::migration_replays_onto_cloud_root_without_meta_collision` + `integration_test/migration_sync_test.dart`(起全栈:重放→服务端 fold→第二客户端读回,验证 file_id 已对账、子树完整)。
+- **待建(§7 上行 differ,非阻塞增强)**:云端**离线**态下新插图片目前仍走云上传(离线会失败)。完整 §7 三层差集(本地 `uploaded_at` 标记 → `remote.list()` 集合差 → 服务端幂等)+ 离线插图落 CAS、重连后上传改写,属窄边角增强(主离线面是本地模式,已全覆盖;迁移期的 blob 上行已实现)。设计见上「blob 同步差集机制」,留作后续。
 
 ## 8. FFI 边界(flutter_rust_bridge v2)
 
