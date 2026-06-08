@@ -661,9 +661,17 @@ impl MicaDoc {
     /// `[..at]`, a new block `new_id` (kind `new_kind`) takes `[at..]` plus the
     /// original's children, inserted as the next sibling.
     ///
-    /// Read-modify-write — it does NOT preserve character identity across the
-    /// split, so a concurrent edit of the moved tail could be lost. Fine for
-    /// single-writer M1; revisit for CRDT fidelity before multi-writer sync (M4).
+    /// Read-modify-write: the tail is re-inserted as new text, so it does NOT
+    /// keep the moved characters' CRDT item identity — a *simultaneous* edit by
+    /// another writer to the exact tail being split off can be lost (it still
+    /// CONVERGES; no divergence/corruption). This is an ACCEPTED limitation, not
+    /// a TODO: yrs/Yjs cannot transplant text items across `Text` instances (an
+    /// item's parent is fixed at integration), so identity-preserving split is
+    /// impossible in a block-owns-its-own-`Text` model without a doc-wide
+    /// single-sequence redesign. The closest analogs deliberately accept the same
+    /// trade — AppFlowy (`appflowy-editor` `insertNewLine`/`mergeText`, same
+    /// yrs+Flutter+per-block-`TextRef` stack) and BlockSuite/AFFiNE
+    /// (`Text.split`/`join`) both do read-modify-write. (P2: researched, decided.)
     pub fn split_block(&mut self, id: &str, at: u32, new_id: &str, new_kind: &str) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
         let mut txn = self.doc.transact_mut();
