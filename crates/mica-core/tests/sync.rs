@@ -2,6 +2,7 @@
 //! diff exchange, and merges are idempotent + order-independent.
 
 use mica_core::{Block, MicaDoc};
+use serde_json::json;
 
 fn para(id: &str, text: &str) -> Block {
     Block::new(id, "paragraph").with_text(text)
@@ -69,6 +70,38 @@ fn concurrent_text_into_same_block_converges() {
     let text = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
     assert!(text.contains("[A]") && text.contains("[B]"), "both edits survive: {text}");
     assert!(text.starts_with("Hello"));
+}
+
+#[test]
+fn concurrent_props_fields_converge() {
+    // A block whose data already has one prop key.
+    let state = MicaDoc::from_blocks_with_client_id(
+        "r",
+        &[
+            page(&["a"]),
+            Block::new("a", "paragraph")
+                .with_text("x")
+                .with_data(json!({ "indent": 1 })),
+        ],
+        Some(1),
+    )
+    .encode_state();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+
+    // Concurrent edits to DIFFERENT props fields of the SAME block. With the old
+    // whole-blob string props this was last-write-wins (one edit lost); with the
+    // field-level MapRef (P2-M4.7) both survive.
+    a.set_block_data("a", &json!({ "indent": 1, "checked": true }));
+    b.set_block_data("a", &json!({ "indent": 1, "level": 2 }));
+
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+    let data = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().data;
+    assert_eq!(data["indent"], 1, "untouched field kept");
+    assert_eq!(data["checked"], true, "A's field survives");
+    assert_eq!(data["level"], 2, "B's field survives");
 }
 
 #[test]

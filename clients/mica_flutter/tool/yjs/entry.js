@@ -39,6 +39,11 @@ globalThis.micaYjs = {
   mapHas: (m, k) => m.has(k),
   mapDelete: (m, k) => m.delete(k),
   mapKeys: (m) => Array.from(m.keys()),
+  // Field-level props (P2-M4.7): set/read a nested Y.Map's entries as JSON, so
+  // concurrent edits to different props keys converge. JSON.parse yields plain
+  // JS values (yjs stores them like yrs `Any`).
+  mapSetJson: (m, k, jsonStr) => m.set(k, JSON.parse(jsonStr)),
+  mapEntriesJson: (m) => JSON.stringify(Object.fromEntries(m.entries())),
 
   // ── nested-type constructors (write side, for W2) ──
   newMap: () => new Y.Map(),

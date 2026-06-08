@@ -109,15 +109,7 @@ class MicaYDoc {
       final hasText = textAny != null && micaYjs.isText(textAny);
       final text = hasText ? micaYjs.textToString(textAny) : '';
 
-      final propsAny = micaYjs.mapGet(block, 'props');
-      final propsStr = (propsAny != null && propsAny.isA<JSString>())
-          ? (propsAny as JSString).toDart
-          : null;
-      var data = <String, dynamic>{};
-      if (propsStr != null && propsStr.isNotEmpty && propsStr != 'null') {
-        final decoded = jsonDecode(propsStr);
-        if (decoded is Map<String, dynamic>) data = decoded;
-      }
+      var data = _readProps(block);
       if (hasText) {
         final marks = _marksFromText(textAny as JSObject);
         if (marks.isNotEmpty) data = {...data, 'marks': marks};
@@ -293,11 +285,42 @@ class MicaYDoc {
     return out;
   }
 
-  /// `props` string for a block (mirrors `props_without_marks` + serialize):
-  /// "null" when nothing remains after dropping `marks`, else the JSON object.
-  String _propsJson(Map<String, dynamic> data) {
-    final m = Map<String, dynamic>.from(data)..remove('marks');
-    return m.isEmpty ? 'null' : jsonEncode(m);
+  /// Read a block's `props` into a data map — field-level Y.Map (P2-M4.7) or the
+  /// legacy JSON-string form (pre-M4.7 data), mirroring the Rust `read_props`.
+  Map<String, dynamic> _readProps(JSObject block) {
+    final p = micaYjs.mapGet(block, 'props');
+    if (p == null) return {};
+    if (micaYjs.isMap(p)) {
+      final decoded = jsonDecode(micaYjs.mapEntriesJson(p as JSObject));
+      return decoded is Map<String, dynamic> ? decoded : {};
+    }
+    if (p.isA<JSString>()) {
+      final s = (p as JSString).toDart;
+      if (s.isEmpty || s == 'null') return {};
+      final decoded = jsonDecode(s);
+      return decoded is Map<String, dynamic> ? decoded : {};
+    }
+    return {};
+  }
+
+  /// Write a block's `data` (minus `marks`) into a nested Y.Map `props`,
+  /// reconciling keys in place so concurrent edits to different keys converge
+  /// (field-level CRDT, mirrors the Rust `set_props`).
+  void _setProps(JSObject bm, Map<String, dynamic> data) {
+    final existing = micaYjs.mapGet(bm, 'props');
+    JSObject props;
+    if (existing != null && micaYjs.isMap(existing)) {
+      props = existing as JSObject;
+    } else {
+      props = micaYjs.newMap();
+      micaYjs.mapSet(bm, 'props', props);
+    }
+    final desired = Map<String, dynamic>.from(data)..remove('marks');
+    for (final k in micaYjs.mapKeys(props).toDart) {
+      final key = k.toDart;
+      if (!desired.containsKey(key)) micaYjs.mapDelete(props, key);
+    }
+    desired.forEach((k, v) => micaYjs.mapSetJson(props, k, jsonEncode(v)));
   }
 
   void _applyMarks(JSObject text, List<Map<String, dynamic>> marks) {
@@ -308,7 +331,7 @@ class MicaYDoc {
       final href = m['href'] as String?;
       final title = m['title'] as String?;
       final Object value = (href != null || title != null)
-          ? {if (href != null) 'href': href, if (title != null) 'title': title}
+          ? <String, String>{'href': ?href, 'title': ?title}
           : true;
       micaYjs.textFormatJson(
         text,
@@ -345,7 +368,7 @@ class MicaYDoc {
     micaYjs.mapSet(bm, 'text', text);
     final data = (block['data'] as Map?)?.cast<String, dynamic>() ?? const {};
     _applyMarks(text, _marksFromData(data));
-    micaYjs.mapSet(bm, 'props', _propsJson(data).toJS);
+    _setProps(bm, data);
     final children = micaYjs.newArray();
     micaYjs.mapSet(bm, 'children', children);
     final childIds = (block['children'] as List?)?.cast<String>() ?? const [];
@@ -371,7 +394,7 @@ class MicaYDoc {
       _setTextAndMarks(bm, text, marks);
     }
     if (data != null) {
-      micaYjs.mapSet(bm, 'props', _propsJson(data).toJS);
+      _setProps(bm, data);
     }
   }
 

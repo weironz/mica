@@ -14,6 +14,9 @@
 //! single-device M1/M2, but must become a `MapRef` before multi-writer sync
 //! (P2-M4). Marks + text already get proper character-level CRDT via `Text`.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde_json::Value;
 use yrs::types::{Attrs, GetString};
 use yrs::updates::decoder::Decode;
@@ -160,11 +163,7 @@ impl MicaDoc {
         };
         let block_marks: Vec<Mark> = marks::marks_from_runs(&runs);
 
-        let props_str = match bm.get(txn, "props") {
-            Some(Out::Any(Any::String(s))) => s.to_string(),
-            _ => "null".to_string(),
-        };
-        let data = rebuild_data(&props_str, &block_marks);
+        let data = merge_marks(read_props(txn, &bm), &block_marks);
 
         let children = match bm.get(txn, "children") {
             Some(out) => match out.cast::<ArrayRef>() {
@@ -266,10 +265,12 @@ fn text_runs<T: ReadTxn>(txn: &T, text: &TextRef) -> Vec<(u32, Option<Attrs>)> {
         .collect()
 }
 
-fn props_without_marks(data: &Value) -> Value {
+/// `data` with the inline `marks` key dropped (marks live on the text, not in
+/// props). Returns the remaining object, or `Null` if there's nothing else.
+fn data_without_marks(data: &Value) -> Value {
     match data {
-        Value::Object(map) => {
-            let mut m = map.clone();
+        Value::Object(o) => {
+            let mut m = o.clone();
             m.remove("marks");
             if m.is_empty() {
                 Value::Null
@@ -277,12 +278,107 @@ fn props_without_marks(data: &Value) -> Value {
                 Value::Object(m)
             }
         }
-        _ => data.clone(),
+        _ => Value::Null,
     }
 }
 
-fn rebuild_data(props_str: &str, block_marks: &[Mark]) -> Value {
-    let mut data: Value = serde_json::from_str(props_str).unwrap_or(Value::Null);
+/// serde_json::Value → yrs `Any` (the embeddable JSON-like value type). Integers
+/// stay integers (`BigInt`), so block props like `indent: 1` round-trip exactly.
+fn json_to_any(v: &Value) -> Any {
+    match v {
+        Value::Null => Any::Null,
+        Value::Bool(b) => Any::Bool(*b),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => Any::BigInt(i),
+            None => Any::Number(n.as_f64().unwrap_or(0.0)),
+        },
+        Value::String(s) => Any::String(s.as_str().into()),
+        Value::Array(a) => Any::Array(a.iter().map(json_to_any).collect::<Vec<_>>().into()),
+        Value::Object(o) => Any::Map(Arc::new(
+            o.iter().map(|(k, v)| (k.clone(), json_to_any(v))).collect(),
+        )),
+    }
+}
+
+/// yrs `Any` → serde_json::Value (inverse of [`json_to_any`]).
+fn any_to_json(a: &Any) -> Value {
+    match a {
+        Any::Null | Any::Undefined => Value::Null,
+        Any::Bool(b) => Value::Bool(*b),
+        // JS (yjs) has no int/float split, so an integer-valued prop like
+        // `level: 2` can arrive as a float. Normalise it back to an int so it
+        // matches what the desktop writes (and what the editor expects).
+        Any::Number(f) if f.is_finite() && f.fract() == 0.0 && f.abs() < 9.007e15 => {
+            Value::Number((*f as i64).into())
+        }
+        Any::Number(f) => serde_json::Number::from_f64(*f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        Any::BigInt(i) => Value::Number((*i).into()),
+        Any::String(s) => Value::String(s.to_string()),
+        Any::Buffer(_) => Value::Null,
+        Any::Array(arr) => Value::Array(arr.iter().map(any_to_json).collect()),
+        Any::Map(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), any_to_json(v))).collect()),
+    }
+}
+
+/// Read a block's `props` into a data object, handling BOTH the field-level
+/// `MapRef` form (P2-M4.7) and the legacy JSON-string form (pre-M4.7 data, read
+/// for migration). Inline marks are NOT here — they're reconstructed from text.
+fn read_props<T: ReadTxn>(txn: &T, bm: &MapRef) -> Value {
+    match bm.get(txn, "props") {
+        // Legacy: props stored as a JSON string.
+        Some(Out::Any(Any::String(s))) => serde_json::from_str(&s).unwrap_or(Value::Null),
+        // Field-level: props stored as a nested map (one entry per top-level key).
+        Some(Out::YMap(m)) => {
+            let mut obj = serde_json::Map::new();
+            let keys: Vec<String> = m.keys(txn).map(|k| k.to_string()).collect();
+            for k in keys {
+                if let Some(Out::Any(a)) = m.get(txn, &k) {
+                    obj.insert(k, any_to_json(&a));
+                }
+            }
+            if obj.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(obj)
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
+/// Write a block's `data` (minus inline `marks`) into a nested `props` MapRef so
+/// concurrent edits to DIFFERENT props keys converge (field-level CRDT) instead
+/// of last-write-wins on the whole blob. Reconciles in place — sets desired
+/// keys, drops absent ones — migrating a legacy string `props` to a map on the
+/// first write.
+fn set_props(txn: &mut TransactionMut, bm: &MapRef, data: &Value) {
+    let props: MapRef = match bm.get(txn, "props") {
+        Some(Out::YMap(m)) => m,
+        _ => bm.insert(txn, "props", MapPrelim::default()),
+    };
+    let desired: HashMap<&str, &Value> = match data {
+        Value::Object(o) => o
+            .iter()
+            .filter(|(k, _)| k.as_str() != "marks")
+            .map(|(k, v)| (k.as_str(), v))
+            .collect(),
+        _ => HashMap::new(),
+    };
+    let existing: Vec<String> = props.keys(txn).map(|k| k.to_string()).collect();
+    for k in existing {
+        if !desired.contains_key(k.as_str()) {
+            props.remove(txn, &k);
+        }
+    }
+    for (k, v) in desired {
+        props.insert(txn, k.to_string(), json_to_any(v));
+    }
+}
+
+
+fn merge_marks(mut data: Value, block_marks: &[Mark]) -> Value {
     if !block_marks.is_empty() {
         let marks_json = marks::marks_to_json(block_marks);
         match &mut data {
@@ -310,9 +406,7 @@ fn write_block(txn: &mut TransactionMut, blocks_map: &MapRef, b: &Block) -> MapR
     for (start, len, attrs) in marks::marks_to_format_ops(&marks::marks_from_data(&b.data)) {
         text.format(txn, start, len, attrs);
     }
-    let props = props_without_marks(&b.data);
-    let props_str = serde_json::to_string(&props).unwrap_or_else(|_| "null".into());
-    bm.insert(txn, "props", props_str);
+    set_props(txn, &bm, &b.data);
     bm.insert(txn, "children", ArrayPrelim::from(b.children.clone()));
     bm
 }
@@ -473,9 +567,7 @@ impl MicaDoc {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
         let mut txn = self.doc.transact_mut();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
-            let props = props_without_marks(data);
-            let props_str = serde_json::to_string(&props).unwrap_or_else(|_| "null".into());
-            bm.insert(&mut txn, "props", props_str);
+            set_props(&mut txn, &bm, data);
         }
     }
 
@@ -581,8 +673,7 @@ impl MicaDoc {
         };
         let (text_a, text_b) = utf16_split(&orig.text, at);
         let (marks_a, marks_b) = split_marks(&marks::marks_from_data(&orig.data), at);
-        let props_str =
-            serde_json::to_string(&props_without_marks(&orig.data)).unwrap_or_else(|_| "null".into());
+        let tail_props = data_without_marks(&orig.data);
 
         // Original keeps the head and loses its children (they go to the tail).
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
@@ -600,7 +691,7 @@ impl MicaDoc {
             id: new_id.to_string(),
             kind: new_kind.to_string(),
             text: text_b,
-            data: rebuild_data(&props_str, &marks_b),
+            data: merge_marks(tail_props, &marks_b),
             children: orig.children.clone(),
         };
         write_block(&mut txn, &blocks_map, &tail);

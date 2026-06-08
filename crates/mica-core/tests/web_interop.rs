@@ -35,6 +35,10 @@ fn rust_reads_yjs_written_marks() {
     assert_eq!(link["end"], 5);
     assert_eq!(link["href"], "http://x");
     assert_eq!(link["title"], "T");
+    // Field-level props written by the web (P2-M4.7 Y.Map) read back in Rust,
+    // ints preserved.
+    assert_eq!(w2new.data["role"], "note", "web-written string prop present");
+    assert_eq!(w2new.data["level"], 2, "web-written int prop preserved");
 
     // Some existing block now carries a bold mark over [0,5) written by the web.
     let has_bold = blocks.iter().any(|b| {

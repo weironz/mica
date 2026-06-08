@@ -27,6 +27,8 @@ extension type MicaYjs._(JSObject _) implements JSObject {
   external bool mapHas(JSObject m, String k);
   external void mapDelete(JSObject m, String k);
   external JSArray<JSString> mapKeys(JSObject m);
+  external void mapSetJson(JSObject m, String k, String jsonStr);
+  external String mapEntriesJson(JSObject m);
 
   external JSObject newMap();
   external JSObject newText(String s);

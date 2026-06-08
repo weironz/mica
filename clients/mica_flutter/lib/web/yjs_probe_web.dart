@@ -71,6 +71,8 @@ void registerYjsSelfTest() {
           'type': 'paragraph',
           'text': 'hello link',
           'data': {
+            'role': 'note',
+            'level': 2,
             'marks': [
               {'start': 0, 'end': 5, 'type': 'link', 'href': 'http://x', 'title': 'T'},
             ],
