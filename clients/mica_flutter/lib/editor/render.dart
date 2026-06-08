@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -267,6 +268,13 @@ class RenderDocument extends RenderBox {
   set selection(DocSelection? value) {
     if (_selection == value) return;
     _selection = value;
+    markNeedsPaint();
+  }
+
+  List<RemoteCursor> _remoteCursors = const [];
+  set remoteCursors(List<RemoteCursor> value) {
+    if (listEquals(_remoteCursors, value)) return;
+    _remoteCursors = value;
     markNeedsPaint();
   }
 
@@ -820,6 +828,7 @@ class RenderDocument extends RenderBox {
     _paintAtomicSelection(canvas, offset);
     _paintScrollbars(canvas, offset);
     _paintCaret(canvas, offset);
+    _paintRemoteCursors(canvas, offset);
   }
 
   /// Highlight selected atomic nodes (image/divider/table) on top of their
@@ -1491,6 +1500,47 @@ class RenderDocument extends RenderBox {
     );
   }
 
+  /// Paint other collaborators' carets (a colored bar + a small name flag).
+  void _paintRemoteCursors(Canvas canvas, Offset offset) {
+    if (_remoteCursors.isEmpty) return;
+    for (final rc in _remoteCursors) {
+      final idx = _nodes.indexWhere((n) => n.id == rc.blockId);
+      if (idx < 0 || idx >= _layouts.length) continue;
+      final rect = caretRectFor(DocPosition(idx, rc.offset));
+      if (rect == null) continue;
+      final caret = rect.shift(offset);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(caret, const Radius.circular(1)),
+        Paint()..color = rc.color,
+      );
+      final tp = TextPainter(
+        text: TextSpan(
+          text: rc.label,
+          style: const TextStyle(
+            color: Color(0xFFFFFFFF),
+            fontSize: 10,
+            height: 1.0,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      const padH = 4.0;
+      const padV = 2.0;
+      final flag = Rect.fromLTWH(
+        caret.left,
+        caret.top - (tp.height + padV * 2) - 1,
+        tp.width + padH * 2,
+        tp.height + padV * 2,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(flag, const Radius.circular(3)),
+        Paint()..color = rc.color,
+      );
+      tp.paint(canvas, Offset(flag.left + padH, flag.top + padV));
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Geometry / hit testing (used by the widget for caret nav and pointers)
   // ---------------------------------------------------------------------------
@@ -1694,6 +1744,10 @@ class RenderDocument extends RenderBox {
 }
 
 /// Widget wrapper for [RenderDocument].
+/// A remote collaborator's caret to paint: block id + UTF-16 offset + color +
+/// name label (P2 awareness).
+typedef RemoteCursor = ({String blockId, int offset, Color color, String label});
+
 class DocumentSurface extends LeafRenderObjectWidget {
   const DocumentSurface({
     required this.nodes,
@@ -1706,6 +1760,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.onRequestImage,
     this.previewImages = const {},
     this.onRequestPreview,
+    this.remoteCursors = const [],
     super.key,
   });
 
@@ -1717,6 +1772,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final Map<String, ui.Image> images;
   final Set<String> imageErrors;
   final void Function(String fileId)? onRequestImage;
+  final List<RemoteCursor> remoteCursors;
 
   /// Rasterized formulas keyed by LaTeX source (captured by the editor via
   /// an offstage flutter_math_fork widget at device pixel ratio).
@@ -1736,6 +1792,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     ..onRequestPreview = onRequestPreview
     ..imageErrors = imageErrors
     ..previewImages = previewImages
+    ..remoteCursors = remoteCursors
     ..images = images;
 
   @override
@@ -1750,6 +1807,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..onRequestPreview = onRequestPreview
       ..imageErrors = imageErrors
       ..previewImages = previewImages
+      ..remoteCursors = remoteCursors
       ..images = images;
   }
 }

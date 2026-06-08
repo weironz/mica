@@ -84,6 +84,8 @@ class MicaEditor extends StatefulWidget {
     required this.version,
     required this.canEdit,
     required this.onApplyOperations,
+    this.onSelectionChanged,
+    this.remoteCursors = const [],
     this.onAiStream,
     this.onUploadImage,
     this.onImportImageUrl,
@@ -111,6 +113,14 @@ class MicaEditor extends StatefulWidget {
   final int version;
   final bool canEdit;
   final ApplyOps onApplyOperations;
+
+  /// Fired (debounced by the host) when the local caret moves — `(blockId,
+  /// offset)`, or `(null, null)` when there's no selection — so the host can
+  /// broadcast it as awareness.
+  final void Function(String? blockId, int? offset)? onSelectionChanged;
+
+  /// Other collaborators' carets to paint on the canvas (awareness).
+  final List<RemoteCursor> remoteCursors;
 
   /// Streams Markdown from a prompt for the in-editor "Ask AI" command (deltas
   /// shown live). When null, the AI slash entry is hidden.
@@ -480,6 +490,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // Controller / focus plumbing
   // ---------------------------------------------------------------------------
 
+  String? _lastCursorKey;
+
+  /// Report the local caret (block id + offset) to the host for awareness, when
+  /// it actually moved.
+  void _reportCursor() {
+    final cb = widget.onSelectionChanged;
+    if (cb == null) return;
+    final sel = _controller.selection;
+    String? blockId;
+    int? offset;
+    if (sel != null &&
+        sel.focus.node >= 0 &&
+        sel.focus.node < _controller.nodes.length) {
+      blockId = _controller.nodes[sel.focus.node].id;
+      offset = sel.focus.offset;
+    }
+    final key = '$blockId:$offset';
+    if (key == _lastCursorKey) return;
+    _lastCursorKey = key;
+    cb(blockId, offset);
+  }
+
   void _onControllerChanged() {
     // Repaint only. The OS input connection is the source of truth while
     // typing, so we never push editing state back from here — that is done
@@ -492,6 +524,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _restartBlink();
       _refreshMarkBar();
       _cacheImageUrls();
+      _reportCursor();
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).
@@ -3259,6 +3292,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   previewImages: _previews.images,
                   onRequestPreview: _previews.request,
                   onRequestImage: _requestImage,
+                  remoteCursors: widget.remoteCursors,
                 ),
                 // Far off-screen: painted (capturable) but never visible.
                 Positioned(left: -100000, top: 0, child: _previews.offstageHost()),

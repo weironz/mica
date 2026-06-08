@@ -217,6 +217,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   CloudSyncSession? _cloudSession;
   BigInt? _deviceClientId;
 
+  // Awareness: debounce broadcasting the local caret as presence (P2).
+  Timer? _cursorTimer;
+
   // --- Local offline (P2-M3) ---
   // A single implicit local workspace + synthetic identity; the page tree and
   // documents live entirely on-device (SQLite via the LocalOffline facade).
@@ -449,9 +452,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// The editor's caret moved — broadcast it (debounced) as awareness so other
+  /// collaborators see this user's cursor.
+  void _onEditorSelection(String? blockId, int? offset) {
+    _cursorTimer?.cancel();
+    _cursorTimer = Timer(const Duration(milliseconds: 120), () {
+      _sync?.sendCursor(blockId, offset);
+    });
+  }
+
   void _closeDocumentSync() {
     _syncRefetchTimer?.cancel();
     _syncRefetchTimer = null;
+    _cursorTimer?.cancel();
     _sync?.dispose();
     _sync = null;
     _cloudSession?.dispose();
@@ -2101,6 +2114,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onAddMember: _addWorkspaceMember,
                 onUpdateMember: _updateWorkspaceMember,
                 onRemoveMember: _removeWorkspaceMember,
+                onCursorChanged: _onEditorSelection,
               ),
       ),
     );
@@ -2501,6 +2515,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onUpdateMember,
     required this.onRemoveMember,
     this.onRestoreCheckpoint,
+    this.onCursorChanged,
     this.editorEpoch = 0,
     super.key,
   });
@@ -2614,6 +2629,10 @@ class WorkspaceView extends StatefulWidget {
   /// Bumped to force the editor to remount fresh (e.g. after a rollback, so the
   /// restored content fully replaces the in-memory doc instead of reconciling).
   final int editorEpoch;
+
+  /// Local caret moved (block id + offset) — broadcast as awareness. Null in
+  /// single-user (local) mode.
+  final void Function(String? blockId, int? offset)? onCursorChanged;
 
   @override
   State<WorkspaceView> createState() => _WorkspaceViewState();
@@ -3640,6 +3659,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ],
                     version: bootstrap.snapshot.versionSeq,
                     canEdit: canEdit,
+                    onSelectionChanged: widget.onCursorChanged,
+                    remoteCursors: [
+                      for (final p in widget.presence)
+                        if (p.hasCursor)
+                          (
+                            blockId: p.cursorBlockId!,
+                            offset: p.cursorOffset!,
+                            color: p.color,
+                            label: p.name,
+                          ),
+                    ],
                     onApplyOperations: widget.onApplyOperations,
                     onUploadImage: widget.onUploadImage,
                     onImportImageUrl: widget.onImportImageUrl,
@@ -7697,17 +7727,38 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-/// A collaborator currently connected to the same document room.
+/// Stable collaborator colors (avatar + remote caret share one per connection).
+const List<Color> kPresencePalette = [
+  Color(0xFF2563EB),
+  Color(0xFF16A34A),
+  Color(0xFFDB2777),
+  Color(0xFFD97706),
+  Color(0xFF7C3AED),
+  Color(0xFF0891B2),
+];
+
+Color presenceColor(String connectionId) =>
+    kPresencePalette[connectionId.hashCode.abs() % kPresencePalette.length];
+
+/// A collaborator currently connected to the same document room, with their
+/// live caret position (block id + UTF-16 offset) for awareness rendering.
 class PresenceUser {
   const PresenceUser({
     required this.connectionId,
     required this.userId,
     required this.name,
+    this.cursorBlockId,
+    this.cursorOffset,
   });
 
   final String connectionId;
   final String userId;
   final String name;
+  final String? cursorBlockId;
+  final int? cursorOffset;
+
+  Color get color => presenceColor(connectionId);
+  bool get hasCursor => cursorBlockId != null && cursorOffset != null;
 }
 
 typedef RemoteSeqCallback = void Function(String documentId, int serverSeq);
@@ -7802,15 +7853,24 @@ class DocumentSyncClient {
     }
 
     var name = userId;
+    String? cursorBlock;
+    int? cursorOffset;
     final data = message['data'];
-    if (data is Map<String, dynamic> && data['name'] is String) {
-      name = data['name'] as String;
+    if (data is Map<String, dynamic>) {
+      if (data['name'] is String) name = data['name'] as String;
+      final cursor = data['cursor'];
+      if (cursor is Map && cursor['block'] is String && cursor['offset'] is int) {
+        cursorBlock = cursor['block'] as String;
+        cursorOffset = cursor['offset'] as int;
+      }
     }
 
     _presence[connectionId] = PresenceUser(
       connectionId: connectionId,
       userId: userId,
       name: name,
+      cursorBlockId: cursorBlock,
+      cursorOffset: cursorOffset,
     );
   }
 
@@ -7824,11 +7884,21 @@ class DocumentSyncClient {
     onPresence(others);
   }
 
+  Map<String, dynamic>? _cursor;
+
+  /// Broadcast the local caret (block id + offset) as awareness; null clears it.
+  void sendCursor(String? blockId, int? offset) {
+    _cursor = (blockId != null && offset != null)
+        ? {'block': blockId, 'offset': offset}
+        : null;
+    _sendPresence();
+  }
+
   void _sendPresence() {
     _channel?.sink.add(
       jsonEncode({
         'type': 'presence.update',
-        'payload': {'name': selfName},
+        'payload': {'name': selfName, if (_cursor != null) 'cursor': _cursor},
       }),
     );
   }
