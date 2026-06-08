@@ -16,7 +16,9 @@
 2. **Phase 2 离线优先**:mica 核心 crate 编译成库,Dart FFI 进程内嵌入(AppFlowy rust-lib 模式),本地 SQLite + 同步引擎
 
 > **2026-06-06 优先级(别搞错)**:桌面端**主场 = 在线模式**(连云端 API,与 web 同),**先做扎实**——即 Phase 1 收尾 + M2/M3。**纯离线只是一种场景,属 Phase 2(CRDT,future)**,不是当前开发重点。
-> Phase 2 的完整设计(yrs/SQLite/bigserial 同步/frb v2/本地身份/对象存储/里程碑/红线)已深入调研 AppFlowy + AFFiNE 后**存档**在 `docs/phase2-offline-crdt.md`,**待在线模式成熟后再启动**。
+> Phase 2 的完整设计(yrs/SQLite/bigserial 同步/frb v2/本地身份/对象存储/里程碑/红线)已深入调研 AppFlowy + AFFiNE 后**存档**在 `docs/phase2-offline-crdt.md`。
+>
+> **2026-06-08 更新(收官)**:Phase 1(M1–M3,在线)+ Phase 2(M4 云同步 / M5 对象存储 / polish:流截断·回滚 UI·协同光标·split-join 定案·blob 离线镜像·本地→云迁移)**均已完成**。桌面端核心开发收官,`v0.1.0` 安装包已发。剩余皆非阻塞,见文末「遗留事项」。
 
 **目标矩阵(6 端,一份代码)**:web(已上线)、Linux、Windows、macOS、iOS、Android。
 桌面包必须各自系统构建(无跨平台编译),CI 用 GitHub Actions 三 OS runner。移动端的增量成本在触屏交互适配(现有编辑器是鼠标中心:hover 工具条、树 hover 浮现箭头、拖拽手柄),不动架构。
@@ -50,13 +52,13 @@
 - **快捷键** = 顶层 Shortcuts/Actions 加 App 级快捷键,不与编辑器热路径(editor.dart `_onKey`)冲突。
 - **前置**:Windows 装插件需开**开发者模式**(插件用符号链接);详见 `docs/dev-environment.md`。
 
-## Windows 优先 — Phase 1 计划
+## Windows 优先 — Phase 1 计划(M1–M3 ✅ 全部完成)
 
-| 里程碑 | 内容 | 待决 |
+| 里程碑 | 内容 | 状态 |
 |---|---|---|
-| **M1 跑起来** | `flutter create --platforms=windows .`;7 个 stub IO 化;连现有云端 API | token 存储(明文 vs DPAPI) |
-| **M2 像桌面应用** | 窗口大小/位置记忆、最小尺寸、快捷键;**中文 IME 专项验证**(自绘编辑器 + TextInputClient,Windows 候选窗定位与 web 路径完全不同) | ~~标题栏~~ 已定:系统原生 + window_manager(见上「技术路线定稿」) |
-| **M3 可分发** | mermaid 客户端 merman Dart FFI(离线)✅;Inno 安装包 + GitHub release ✅(见下「分发」) | ~~分发形态~~ 定 Inno;~~自动更新/签名~~ 见下决策 |
+| **M1 跑起来** | `flutter create --platforms=windows .`;7 个 stub IO 化;连现有云端 API | ✅(token 存储:明文 JSON,DPAPI 留作后续) |
+| **M2 像桌面应用** | 窗口大小/位置记忆、最小尺寸、快捷键;**中文 IME 专项验证**(自绘编辑器 + TextInputClient);文件对话框 + 富剪贴板 + IME 组合区(批次1/2/3) | ✅(标题栏=系统原生 + window_manager) |
+| **M3 可分发** | mermaid 客户端 merman Dart FFI(离线);Inno 安装包 + GitHub release `v0.1.0` | ✅(自动更新/签名:见下决策,均先不做) |
 
 **开发模式**:日常开发可留在 Linux(代码 99% 平台无关;Linux 工具链已装好,`flutter build linux` 已验证一次通过),Windows 机用于出包与平台特调。
 
@@ -69,10 +71,10 @@
 - **网络方案(已定)**:用 **Docker Desktop** 跑栈,容器端口直达 Windows localhost,无需 dart-define、无需 WSL IP。备选:WSL 内原生 docker 时本机 localhost 转发不生效,需连 WSL eth0 IP(随重启变)或 `--dart-define=MICA_API_BASE_URL=http://<wsl-ip>:8080`。
 - 辅助工具(MCP / code-review-graph / skills)重配清单见 `docs/dev-environment.md`。
 
-### 待用户拍板(M2/M3 前)
+### ~~待用户拍板(M2/M3 前)~~ 已拍板(2026-06-07)
 
-1. 标题栏风格:原生(省事)vs 无边框自定义(Notion/AFFiNE 风,Windows 上拖拽/snap 细节坑多)
-2. 分发形态与是否要自动更新
+1. 标题栏风格:**定系统原生**(否决无边框自定义,见「技术路线定稿」)
+2. 分发形态:**定 Inno per-user 安装包 + GitHub release**;**自动更新先不内置**、**代码签名跳过**(见「分发」决策)
 
 ## Stub → IO 清单(Phase 1 核心工作量)
 
@@ -83,10 +85,10 @@
 | `lib/prefs_stub.dart` | ✅ 已实现 | 本地 JSON `%APPDATA%/mica/prefs.json`(其他 OS 走 XDG/Library),同步读写契约不变 |
 | `lib/editor/clipboard_copy_stub.dart` | ✅ 已实现 | 框架 `Clipboard`(无插件) |
 | `lib/editor/open_url_stub.dart` | ✅ 已实现 | `Process` → `explorer.exe`/`open`/`xdg-open`(无 url_launcher) |
-| `lib/editor/rich_paste_stub.dart` | no-op | 同上(HTML 粘贴可后置) |
-| `lib/editor/pick_file_stub.dart` | ⏸ 暂缓 M2 | 桌面文件选择器(依赖 file_selector vs 自写 Win32 通道,待决) |
-| `lib/editor/pick_image_stub.dart` | ⏸ 暂缓 M2 | 同上 |
-| `lib/editor/image_actions_stub.dart` | ⏸ 暂缓 M2 | 存盘 + 图片剪贴板(框架不内置图片剪贴板) |
+| `lib/editor/rich_paste_stub.dart` | ✅ 已实现(批次2c) | HTML 富文本粘贴(pasteboard 富剪贴板) |
+| `lib/editor/pick_file_stub.dart` | ✅ 已实现(批次1) | 桌面文件对话框(file_picker,豁免#3) |
+| `lib/editor/pick_image_stub.dart` | ✅ 已实现(批次1) | 同上 |
+| `lib/editor/image_actions_stub.dart` | ✅ 已实现(批次2a/2b) | 存盘 + 图片剪贴板读写(pasteboard,豁免#4) |
 | `lib/editor/mermaid_preview_stub.dart` | ✅ 已实现 | **客户端 merman Dart FFI**(纯 Rust 引擎)→ SVG → css 内联 → flutter_svg 栅格,离线;见下「mermaid 桌面渲染」 |
 
 math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
@@ -113,10 +115,14 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
   - **自动更新:先不内置**(LocalSend 路线)——靠 release 页/winget 手动升级。若日后要做,调研已给结论:抄 AppFlowy 的 `auto_updater`(WinSparkle)+ appcast 挂 GitHub release(DSA 更新签名 ≠ 代码签名证书)。
   - **代码签名:跳过**——未签名,首次运行有 SmartScreen 警告(More info→Run anyway,同 AppFlowy)。证书要 CA 签发,开源免费正路是 SignPath Foundation(需项目所有者申请),日后接进 Inno `SignTool` 指令。
 
-## 遗留事项(不阻塞桌面端)
+## 遗留事项(均不阻塞,2026-06-08 复核)
 
 - ~~Markdown P2~~ 已闭环(2026-06-06):CommonMark 641/641 = 100%,GFM 24/24,见 docs/commonmark-scoreboard.md
-- 渲染架构 deferred(docs/render-architecture.md):`_NodeLayout` 字段收敛进 rendererData;hit-test 走 renderer 分发——下个新块类型进来时顺手做
+- **§7 离线态上行 blob differ**(云端断网插图→重连上传改写):Phase 2 窄边角增强,主离线面=本地模式已全覆盖、迁移期 blob 上行已实现。设计见 `phase2-offline-crdt.md §7.1`。
+- **CI release pipeline 未实跑验证**:`.github/workflows/release-windows.yml` 已在 main,但 `v0.1.0` 故意指向无 workflow 的 commit,**Windows runner 上从未真跑过一次**——下次打 `v*` tag 才首验(ISCC/choco/softprops 链路理论通,未实测)。
+- **window_manager → nativeapi-flutter 迁移**:watch list,卡上游 v0.1.x WIP,暂不迁(成本约一个文件,见「技术路线定稿」依赖边界)。
+- **渲染架构 deferred**(docs/render-architecture.md):`_NodeLayout` 字段收敛进 rendererData;hit-test 走 renderer 分发——下个新块类型进来时顺手做。
+- **token 存储**:当前明文 JSON;DPAPI 加密留作后续(M1 待决项,非阻塞)。
 
 ## 环境备忘(Linux 开发机)
 
