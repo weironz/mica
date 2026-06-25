@@ -44,7 +44,7 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.1.2';
+const String kAppVersion = '0.1.3';
 
 /// Which backend the client talks to.
 /// - [cloud]/[selfHosted]: online — a REST + WebSocket server reached by URL,
