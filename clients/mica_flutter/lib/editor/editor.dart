@@ -55,6 +55,7 @@ class EditorCommandHook {
   VoidCallback? _focusFirstLine;
   void Function(String text)? _insertTopParagraph;
   VoidCallback? _resetDiagramViews;
+  Future<void> Function()? _flush;
 
   void toggleMark(String type) => _toggleMark?.call(type);
   void setBlock(String kind, [Map<String, dynamic> data = const {}]) =>
@@ -75,6 +76,12 @@ class EditorCommandHook {
   /// Restore all diagram previews to their natural zoom/pan — the page host
   /// calls this when a click lands outside the editor canvas (page margins).
   void resetDiagramViews() => _resetDiagramViews?.call();
+
+  /// Flush any debounced/pending text edits to the backend NOW. The host calls
+  /// this before navigating away (page/workspace switch) so the last <=400ms of
+  /// typing isn't dropped when the editor is torn down. Returns when the edits
+  /// have been emitted (and, for the cloud path, the round-trip is in flight).
+  Future<void> flush() => _flush?.call() ?? Future.value();
 }
 
 class MicaEditor extends StatefulWidget {
@@ -396,7 +403,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       .._resetDiagramViews = () {
         if (!mounted) return;
         _render?.resetAllPreviewViews();
-      };
+      }
+      .._flush = _controller.flushPending;
   }
 
   /// Scroll the surrounding page so the block [blockId] is near the top.

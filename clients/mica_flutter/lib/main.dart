@@ -465,7 +465,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         document: boot.document,
         view: boot.view,
         snapshot: DocumentSnapshot(
-          versionSeq: boot.snapshot.versionSeq,
+          // Bump the version so the editor actually reconciles to this CRDT
+          // state. The editor only re-reads `nodes` when `version` changes
+          // (editor.dart didUpdateWidget); keeping it equal meant the yrs
+          // content — the source of truth for a doc whose op snapshot is stale
+          // (e.g. edited via the yrs path) — was silently NOT applied, so on
+          // (re)opening the page it showed the empty op snapshot = "lost".
+          // Monotonic +1 per rebuild; `versionSeq` isn't sent back to the
+          // server on the yrs path, and remote-seq tracking uses
+          // `document.currentSeq`, so bumping it here is local-only and safe.
+          versionSeq: boot.snapshot.versionSeq + 1,
           schemaVersion: boot.snapshot.schemaVersion,
           payload: {...boot.snapshot.payload, 'blocks': blocks},
         ),
@@ -1113,6 +1122,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _selectView(DocumentView view) {
     return _run(() async {
+      // The editor's pending edits were just flushed (see _navigateToView) into
+      // the current doc's cloud session. Drain it — wait for those pushes to be
+      // acked/folded server-side — BEFORE loading the next doc, because
+      // _reconcileSync will dispose this session right after, and a still
+      // in-flight push would be dropped (= lost content). Short timeout so a
+      // slow/offline server can't wedge the page switch.
+      await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
       final session = _requireSession();
       final workspace = _requireWorkspace();
       final bootstrap = await _api.bootstrapDocument(
@@ -3492,7 +3508,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           isSelected: item.view.id == widget.selectedView?.id,
           canEdit: canEdit,
           onToggle: () => _toggleViewCollapse(item.view),
-          onPressed: () => widget.onSelectView(item.view),
+          onPressed: () => _navigateToView(item.view),
           onCreateChild: () {
             setState(() => _collapsedViewIds.remove(item.view.id));
             widget.onCreateChildDocument(item.view, 'Untitled');
@@ -4669,11 +4685,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
+  /// Switch to [view], flushing the editor's pending (debounced) edits first so
+  /// the last typing reaches the backend before the editor is torn down on the
+  /// document change. Awaits the flush so the local backend has applied the ops
+  /// (and the cloud session has pushed them) BEFORE the host loads the next doc
+  /// — otherwise the switch races the async apply and drops the edits. The host
+  /// then drains the cloud session before disposing it.
+  Future<void> _navigateToView(DocumentView view) async {
+    await _commandHook.flush();
+    if (!mounted) return;
+    widget.onSelectView(view);
+  }
+
   /// Navigate to a page targeted by an internal `mica://page/<viewId>` link.
   void _openPageLink(String viewId) {
     for (final v in widget.views) {
       if (v.id == viewId) {
-        widget.onSelectView(v);
+        _navigateToView(v);
         return;
       }
     }
