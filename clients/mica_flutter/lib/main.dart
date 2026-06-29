@@ -46,6 +46,25 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
 const String kAppVersion = '0.1.3';
 
+/// The `exp` (expiry) claim of a JWT as a UTC time, or null if it can't be
+/// parsed. Used to cheaply reject an expired persisted token on startup before
+/// hitting the network.
+DateTime? jwtExpiry(String token) {
+  try {
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+    payload = payload.padRight((payload.length + 3) ~/ 4 * 4, '=');
+    final map =
+        jsonDecode(utf8.decode(base64.decode(payload))) as Map<String, dynamic>;
+    final exp = map['exp'];
+    if (exp is! int) return null;
+    return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Which backend the client talks to.
 /// - [cloud]/[selfHosted]: online — a REST + WebSocket server reached by URL,
 ///   authenticated with the normal email/password login.
@@ -260,8 +279,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // account). Those show the login screen instead.
     if (_serverConfig.mode == ServerMode.localOffline) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _initLocalOffline());
-    } else if (kDevAutoLogin && _isLocalBackend()) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _devAutoLogin());
+    } else {
+      // Cloud / self-hosted: restore a persisted session so the user isn't
+      // forced to re-login every launch; only fall back to dev auto-login (on a
+      // local backend) or the login screen when there's no valid saved session.
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await _restoreSession();
+        if (mounted &&
+            _session == null &&
+            kDevAutoLogin &&
+            _isLocalBackend()) {
+          await _devAutoLogin();
+        }
+      });
     }
   }
 
@@ -343,6 +373,74 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _authenticate(AuthMode.login, form);
     if (mounted && _session == null) {
       await _authenticate(AuthMode.register, form);
+    }
+  }
+
+  /// Persist the access token + user so a restart restores the session instead
+  /// of forcing re-login. Plaintext in the same prefs store as other settings
+  /// (desktop only; web keeps its own per-tab session). DPAPI encryption is a
+  /// noted hardening follow-up. The token is server-specific — [_signOut]
+  /// (which a server switch also calls) clears it, so a saved token always
+  /// matches the configured backend.
+  void _persistSession(AuthSession session) {
+    if (kIsWeb) return;
+    savePref('authToken', session.accessToken);
+    savePref('authUser', jsonEncode(session.user.toJson()));
+  }
+
+  void _clearPersistedSession() {
+    if (kIsWeb) return;
+    savePref('authToken', '');
+    savePref('authUser', '');
+  }
+
+  /// Restore a persisted cloud/self-hosted session on startup so the user isn't
+  /// forced to re-login every launch. Cheaply rejects an expired token by its
+  /// JWT `exp`, then validates the rest by loading workspaces: a 401 (revoked /
+  /// server JWT-secret changed) drops the token; a transient network error keeps
+  /// it (this launch shows login, the next retries).
+  Future<void> _restoreSession() async {
+    if (kIsWeb || _session != null) return;
+    final token = loadPref('authToken');
+    final userJson = loadPref('authUser');
+    if (token == null ||
+        token.isEmpty ||
+        userJson == null ||
+        userJson.isEmpty) {
+      return;
+    }
+    final exp = jwtExpiry(token);
+    if (exp != null && !exp.isAfter(DateTime.now().toUtc())) {
+      _clearPersistedSession();
+      return;
+    }
+    final AuthSession session;
+    try {
+      session = AuthSession(
+        accessToken: token,
+        user: User.fromJson(jsonDecode(userJson) as Map<String, dynamic>),
+      );
+    } catch (_) {
+      _clearPersistedSession();
+      return;
+    }
+    try {
+      final workspaces = await _api.listWorkspaces(token);
+      if (!mounted) return;
+      setState(() {
+        _session = session;
+        _workspaces = workspaces;
+        _selectedWorkspace = workspaces.firstOrNull;
+      });
+      unawaited(_refreshAiConfigured());
+      await _loadSelectedWorkspaceMembers();
+      await _loadSelectedWorkspaceViews();
+    } catch (error) {
+      // Revoked/invalid token → drop it. Transient (network) → keep for a retry.
+      if (mounted &&
+          error.toString().toLowerCase().contains('unauthorized')) {
+        _clearPersistedSession();
+      }
     }
   }
 
@@ -571,6 +669,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _workspaces = workspaces;
         _selectedWorkspace = workspaces.firstOrNull;
       });
+      _persistSession(session);
 
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
@@ -864,9 +963,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _requireSession();
     final user = await _api.updateMe(session.accessToken, displayName);
     if (mounted) {
-      setState(() {
-        _session = AuthSession(accessToken: session.accessToken, user: user);
-      });
+      final updated = AuthSession(accessToken: session.accessToken, user: user);
+      setState(() => _session = updated);
+      _persistSession(updated); // keep the saved display name fresh for restart
     }
   }
 
@@ -2322,6 +2421,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   void _signOut() {
     _closeDocumentSync();
+    _clearPersistedSession();
     setState(() {
       _session = null;
       _workspaces = const [];
@@ -7846,6 +7946,12 @@ class User {
   final String id;
   final String email;
   final String displayName;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'email': email,
+    'display_name': displayName,
+  };
 }
 
 class Workspace {
