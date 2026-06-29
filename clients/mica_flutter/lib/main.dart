@@ -44,7 +44,7 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.1.3';
+const String kAppVersion = '0.1.4';
 
 /// The `exp` (expiry) claim of a JWT as a UTC time, or null if it can't be
 /// parsed. Used to cheaply reject an expired persisted token on startup before

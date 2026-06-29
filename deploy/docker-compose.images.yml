@@ -43,7 +43,7 @@ services:
       - mica-prod-rustfs:/data
 
   api:
-    image: willdockerhub/mica-api:${MICA_VERSION:-v0.1.3}
+    image: willdockerhub/mica-api:${MICA_VERSION:-v0.1.4}
     restart: unless-stopped
     environment:
       HTTP_ADDR: 0.0.0.0:8080
@@ -62,7 +62,7 @@ services:
         condition: service_started
 
   web:
-    image: willdockerhub/mica-web:${MICA_VERSION:-v0.1.3}
+    image: willdockerhub/mica-web:${MICA_VERSION:-v0.1.4}
     restart: unless-stopped
     ports:
       - "80:80"
