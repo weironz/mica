@@ -157,6 +157,32 @@ void main() {
     session.dispose();
     await server.stop();
   });
+
+  test('reconnect: a dropped socket auto-reconnects on its own', () async {
+    final server = await _FakeSyncServer.start(_buildBase());
+
+    var ready = false;
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: BigInt.from(21),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (_) {},
+    );
+    session.connect();
+
+    await _until(() => ready, reason: 'first bootstrap');
+    expect(server.connectionCount, 1);
+
+    // The server drops the socket — the client must reconnect by itself (backoff),
+    // not stay dead until the doc is reopened.
+    await server.dropCurrentSocket();
+    await _until(() => server.connectionCount >= 2,
+        reason: 'client auto-reconnects after a drop',
+        timeout: const Duration(seconds: 8));
+
+    session.dispose();
+    await server.stop();
+  });
 }
 
 /// A minimal valid yrs base (folded document state) built through the FFI.
@@ -210,6 +236,7 @@ class _FakeSyncServer {
   final Uint8List _base;
   final bool ackPushes;
   WebSocket? _socket;
+  int connectionCount = 0;
   int bootstrapCount = 0;
   int pullCount = 0;
   final List<_Push> pushed = [];
@@ -234,6 +261,7 @@ class _FakeSyncServer {
       if (WebSocketTransformer.isUpgradeRequest(req)) {
         final ws = await WebSocketTransformer.upgrade(req);
         self._socket = ws;
+        self.connectionCount++;
         ws.listen(self._onMessage);
       } else {
         req.response.statusCode = HttpStatus.badRequest;
@@ -287,6 +315,13 @@ class _FakeSyncServer {
   }
 
   void _send(Map<String, dynamic> m) => _socket?.add(jsonEncode(m));
+
+  /// Close the current socket without stopping the server — models a transient
+  /// drop the client must reconnect through.
+  Future<void> dropCurrentSocket() async {
+    await _socket?.close();
+    _socket = null;
+  }
 
   Future<void> stop() async {
     await _socket?.close();

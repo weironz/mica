@@ -85,6 +85,13 @@ class CloudSyncSession {
   int _faultCount = 0;
   static const int _maxAutoReheal = 3;
 
+  /// Auto-reconnect (capped exponential backoff): a dropped socket / transient
+  /// network loss re-syncs on its own instead of staying dead until the doc is
+  /// reopened. No connectivity package — the backoff just retries until the
+  /// network returns (in-house-first). Reset once a frame proves the link live.
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+
   /// Completes when the session first becomes ready (cold bootstrap done). Lets
   /// headless callers (e.g. the §6 migrator) await a usable replica.
   final Completer<void> _readyCompleter = Completer<void>();
@@ -150,6 +157,9 @@ class CloudSyncSession {
 
   void connect() {
     if (_disposed) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _sub?.cancel();
     _restoreUnackedOnce();
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
@@ -194,6 +204,8 @@ class CloudSyncSession {
     } catch (_) {
       return;
     }
+    // A valid frame means the link is live — reset the reconnect backoff.
+    _reconnectAttempts = 0;
     switch (m['type']) {
       case 'sync.base':
         final b64 = m['base'];
@@ -376,8 +388,23 @@ class CloudSyncSession {
 
   void _onDone() {
     _channel = null;
-    // Edits keep flowing into [_doc] + [_unacked]; a future connect() resumes
-    // and resends whatever is still unacked.
+    // Socket dropped (server close / network loss). Edits keep flowing into
+    // [_doc] + [_unacked]; auto-reconnect resumes and resends what's unacked.
+    _scheduleReconnect();
+  }
+
+  /// Schedule a reconnect with capped exponential backoff (0.5s → 30s). No-op if
+  /// disposed, already connected, or a retry is already pending.
+  void _scheduleReconnect() {
+    if (_disposed || _channel != null || _reconnectTimer != null) return;
+    final shift = _reconnectAttempts.clamp(0, 6);
+    _reconnectAttempts++;
+    final ms = (500 << shift).clamp(500, 30000).toInt();
+    _reconnectTimer = Timer(Duration(milliseconds: ms), () {
+      _reconnectTimer = null;
+      if (_disposed || _channel != null) return;
+      connect();
+    });
   }
 
   /// Graceful teardown (C2): flush + await acks (up to [timeout]) before closing,
@@ -403,6 +430,7 @@ class CloudSyncSession {
     }
     _persistNow();
     _disposed = true;
+    _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
