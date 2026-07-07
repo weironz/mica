@@ -17,12 +17,25 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../local/doc_ops.dart';
 import '../src/rust/api/document.dart';
 
+/// A local yrs diff awaiting the server's ack. Tagged with a client id the
+/// server echoes in `sync.ack` so an ack matches its specific diff even across
+/// reconnect resends; `sent` avoids re-transmitting while a push is in flight.
+class _Pending {
+  _Pending(this.id, this.bytes);
+  final String id;
+  final Uint8List bytes;
+  bool sent = false;
+}
+
 class CloudSyncSession {
   CloudSyncSession({
     required this.uri,
     required this.clientId,
     required this.onReady,
     required this.onRemoteBlocks,
+    this.onFault,
+    this.restoreUnacked,
+    this.onPersistUnacked,
   });
 
   /// The document WebSocket URI (already carrying the auth token).
@@ -39,6 +52,22 @@ class CloudSyncSession {
   /// Fired after remote updates are merged, with the refreshed editor nodes.
   final void Function(List<Map<String, dynamic>> blocks) onRemoteBlocks;
 
+  /// Fired on an integrity fault the replica must not silently absorb — a remote
+  /// update that won't apply, or a corrupt base (red line #1: never diverge
+  /// silently). `reason` is a short code; `count` is the running fault total. The
+  /// session self-heals by re-bootstrapping up to [_maxAutoReheal] times, then
+  /// stops (circuit-break) and leaves it to the UI to prompt a reload.
+  final void Function(String reason, int count)? onFault;
+
+  /// Unacked diffs (raw yrs bytes) restored from local persistence at startup,
+  /// so a crash / hard close doesn't lose edits the server never acked (C1).
+  /// Replayed after (re)connect; the server folds duplicates idempotently.
+  final List<Uint8List>? restoreUnacked;
+
+  /// Persists the current unacked queue whenever it changes (debounced), so it
+  /// survives a restart. Desktop wires this to the local store / prefs.
+  final void Function(List<Uint8List> unacked)? onPersistUnacked;
+
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   MicaDocument? _doc;
@@ -50,19 +79,25 @@ class CloudSyncSession {
   bool _ready = false;
   bool _disposed = false;
 
+  /// Integrity-fault accounting (red line #1). After [_maxAutoReheal] failed
+  /// applies we stop auto-re-bootstrapping and rely on [onFault] → UI, rather
+  /// than looping forever on a persistently bad base.
+  int _faultCount = 0;
+  static const int _maxAutoReheal = 3;
+
   /// Completes when the session first becomes ready (cold bootstrap done). Lets
   /// headless callers (e.g. the §6 migrator) await a usable replica.
   final Completer<void> _readyCompleter = Completer<void>();
 
-  /// Push/ack accounting so [drainOutbox] knows when the server has folded every
-  /// diff we sent (each `sync.push` is answered by one `sync.ack` carrying a rid).
-  int _pushCount = 0;
-  int _ackCount = 0;
-
-  /// Local yrs diffs produced before the socket was ready / while offline,
-  /// flushed to the cloud on (re)connect. Survives reconnects since [_doc] is
-  /// kept across them (never rebuilt once it holds unpushed edits).
-  final List<Uint8List> _outbox = [];
+  /// Diffs applied locally but not yet acked by the server. Sent when ready,
+  /// re-sent on reconnect, removed when their id is acked — so [drainOutbox]
+  /// knows exactly what's still in flight, and the queue is the unit of crash
+  /// recovery (C1) and graceful drain (C2). Replaces the old fire-and-count
+  /// outbox (which couldn't tell a specific diff apart from its ack).
+  final List<_Pending> _unacked = [];
+  int _pushSeq = 0;
+  bool _restored = false;
+  Timer? _persistTimer;
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
@@ -74,15 +109,19 @@ class CloudSyncSession {
   /// elapses). The §6 migrator awaits this before disposing, so the server folds
   /// all replayed migration ops before the socket closes (otherwise a `dispose`
   /// mid-flight would silently drop the document's tail content).
-  Future<void> drainOutbox({
+  /// Returns `true` if every pushed diff was acked (fully drained), `false` if
+  /// [timeout] elapsed with edits still in flight — so callers gating a
+  /// close/switch on the drain can tell success from a timed-out drop (B4).
+  Future<bool> drainOutbox({
     Duration timeout = const Duration(seconds: 15),
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (!_disposed && DateTime.now().isBefore(deadline)) {
-      if (_channel != null && _ready) _flushOutbox();
-      if (_outbox.isEmpty && _ackCount >= _pushCount) return;
+      if (_channel != null && _ready) _flushUnacked();
+      if (_unacked.isEmpty) return true;
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
+    return _unacked.isEmpty;
   }
 
   /// The full document as a flat block list (tree order) — for callers that
@@ -111,6 +150,7 @@ class CloudSyncSession {
 
   void connect() {
     if (_disposed) return;
+    _restoreUnackedOnce();
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
     _sub = channel.stream.listen(
@@ -121,16 +161,28 @@ class CloudSyncSession {
     );
     if (_doc == null) {
       // Cold start: fetch the yrs base (the server also auto-sends a
-      // `document.bootstrap` op snapshot first, which we ignore).
+      // `document.bootstrap` op snapshot first, which we ignore). Any recovered
+      // unacked diffs are replayed once the base arrives (see `sync.base`).
       _send({'type': 'sync.bootstrap'});
     } else {
       // Reconnect: keep our replica (it may hold unpushed edits), just catch up
-      // from our cursor and flush the outbox.
+      // from our cursor and resend everything still unacked.
       _send({
         'type': 'sync.pull',
         'payload': {'since_rid': _cursor},
       });
-      _flushOutbox();
+      _flushUnacked(resendAll: true);
+    }
+  }
+
+  /// Seed the unacked queue from persisted state exactly once (crash recovery).
+  void _restoreUnackedOnce() {
+    if (_restored) return;
+    _restored = true;
+    final restore = restoreUnacked;
+    if (restore == null || restore.isEmpty) return;
+    for (final bytes in restore) {
+      _unacked.add(_Pending('${_pushSeq++}', bytes));
     }
   }
 
@@ -154,7 +206,12 @@ class CloudSyncSession {
             bytes: base64.decode(b64),
             clientId: clientId,
           );
-          if (doc == null) return;
+          if (doc == null) {
+            // A base we can't decode is an integrity fault, not a no-op — surface
+            // it (and retry, capped) instead of leaving the session stuck empty.
+            _onIntegrityFault('bad_base');
+            return;
+          }
           _doc = doc;
           _rootBlockId = doc.rootBlockId();
           _cursor = baseRid;
@@ -165,18 +222,28 @@ class CloudSyncSession {
         } else if (baseRid > _cursor) {
           // Re-bootstrap: the stream was pruned past our cursor. Merge the base
           // (CRDT — our unpushed local edits survive) and fast-forward.
-          existing.applyUpdate(update: base64.decode(b64));
+          final ok = existing.applyUpdate(update: base64.decode(b64));
+          if (!ok) {
+            _onIntegrityFault('bad_base');
+            return;
+          }
           _cursor = baseRid;
           if (!_disposed) onRemoteBlocks(childBlocks());
         }
-        // Catch up anything after the base, then push queued local edits.
+        // A good base means recovery worked — reset the consecutive-fault count
+        // so the circuit-breaker (B3) measures a genuine stuck streak, not
+        // transient faults spread across a healthy session.
+        _faultCount = 0;
+        // Catch up anything after the base, then push queued local edits
+        // (including any recovered from a prior crash).
         _send({
           'type': 'sync.pull',
           'payload': {'since_rid': _cursor},
         });
-        _flushOutbox();
+        _flushUnacked(resendAll: true);
       case 'sync.updates':
         final ups = m['updates'];
+        final before = _cursor;
         var changed = false;
         if (ups is List) {
           for (final u in ups) {
@@ -186,10 +253,30 @@ class CloudSyncSession {
           }
         }
         if (changed && !_disposed) onRemoteBlocks(childBlocks());
+        // B2 (verified catch-up): the server caps each pull, so a non-empty batch
+        // may be truncated. If we made forward progress, keep pulling until the
+        // stream after our cursor is empty — no silently-dropped tail. Gated on
+        // cursor advancing so a batch that all failed to apply (B1 re-bootstraps)
+        // can't loop.
+        if (ups is List &&
+            ups.isNotEmpty &&
+            _cursor > before &&
+            _channel != null &&
+            !_disposed) {
+          _send({
+            'type': 'sync.pull',
+            'payload': {'since_rid': _cursor},
+          });
+        }
       case 'sync.update':
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
       case 'sync.ack':
-        _ackCount++;
+        final ackId = m['ack_id'];
+        if (ackId is String) {
+          final before = _unacked.length;
+          _unacked.removeWhere((p) => p.id == ackId);
+          if (_unacked.length != before) _persistSoon();
+        }
         final rid = (m['rid'] as num?)?.toInt();
         if (rid != null && rid > _cursor) _cursor = rid;
     }
@@ -201,9 +288,31 @@ class CloudSyncSession {
     final b64 = u['update'];
     if (b64 is! String) return false;
     final ok = doc.applyUpdate(update: base64.decode(b64));
+    if (!ok) {
+      // Red line #1: a remote update we can't apply is an integrity fault, not
+      // something to skip. Do NOT advance the cursor past it — that would
+      // silently drop the content it carried and leave a hole in the stream.
+      // Self-heal by re-bootstrapping from the server's folded base (which
+      // already incorporates this update), which CRDT-merges so unpushed local
+      // edits survive. Capped so a persistently bad base can't loop.
+      _onIntegrityFault('bad_remote_update');
+      return false;
+    }
     final rid = (u['rid'] as num?)?.toInt();
     if (rid != null && rid > _cursor) _cursor = rid;
-    return ok;
+    return true;
+  }
+
+  /// Handle an integrity fault (red line #1): count it, notify [onFault], and —
+  /// up to [_maxAutoReheal] times — request a fresh folded base to self-heal.
+  /// Past the cap we stop retrying (circuit-break) and rely on the UI to prompt
+  /// a reload, rather than diverging silently or looping on a bad base.
+  void _onIntegrityFault(String reason) {
+    _faultCount++;
+    onFault?.call(reason, _faultCount);
+    if (_channel != null && !_disposed && _faultCount <= _maxAutoReheal) {
+      _send({'type': 'sync.bootstrap'});
+    }
   }
 
   /// Apply the editor's op batch to the local replica and push the resulting yrs
@@ -218,32 +327,47 @@ class CloudSyncSession {
     }
     final diff = doc.encodeDiffSince(stateVector: sv);
     if (diff.isEmpty) return;
-    _pushOrQueue(diff);
+    _enqueue(diff);
   }
 
-  void _pushOrQueue(Uint8List diff) {
-    if (_channel != null && _ready) {
-      _sendPush(diff);
-    } else {
-      _outbox.add(diff);
-    }
+  /// Queue a diff as unacked, persist the queue, and send it if we're connected.
+  void _enqueue(Uint8List diff) {
+    final p = _Pending('${_pushSeq++}', diff);
+    _unacked.add(p);
+    _persistSoon();
+    if (_channel != null && _ready) _sendPush(p);
   }
 
-  void _flushOutbox() {
+  /// Push unacked diffs. [resendAll] re-sends everything (after a (re)connect,
+  /// where in-flight pushes may have been lost); otherwise only the not-yet-sent
+  /// ones go out, so a live drain doesn't spam duplicates.
+  void _flushUnacked({bool resendAll = false}) {
     if (_channel == null || !_ready) return;
-    final pending = List<Uint8List>.from(_outbox);
-    _outbox.clear();
-    for (final diff in pending) {
-      _sendPush(diff);
+    for (final p in _unacked) {
+      if (resendAll || !p.sent) _sendPush(p);
     }
   }
 
-  void _sendPush(Uint8List diff) {
-    _pushCount++;
+  void _sendPush(_Pending p) {
+    p.sent = true;
     _send({
       'type': 'sync.push',
-      'payload': {'update': base64.encode(diff)},
+      'id': p.id,
+      'payload': {'update': base64.encode(p.bytes)},
     });
+  }
+
+  /// Debounced persistence of the unacked queue (crash recovery, C1).
+  void _persistSoon() {
+    if (onPersistUnacked == null) return;
+    _persistTimer?.cancel();
+    _persistTimer = Timer(const Duration(milliseconds: 300), _persistNow);
+  }
+
+  void _persistNow() {
+    _persistTimer?.cancel();
+    _persistTimer = null;
+    onPersistUnacked?.call([for (final p in _unacked) p.bytes]);
   }
 
   void _send(Map<String, dynamic> message) {
@@ -252,10 +376,32 @@ class CloudSyncSession {
 
   void _onDone() {
     _channel = null;
-    // Edits keep flowing into [_doc] + [_outbox]; a future connect() resumes.
+    // Edits keep flowing into [_doc] + [_unacked]; a future connect() resumes
+    // and resends whatever is still unacked.
+  }
+
+  /// Graceful teardown (C2): flush + await acks (up to [timeout]) before closing,
+  /// so a doc switch / workspace change / sign-out doesn't hard-drop unacked
+  /// edits. Returns whether the outbox fully drained. Fire-and-forget from
+  /// synchronous teardown paths; the un-awaitable app-close case still needs the
+  /// local-snapshot fallback (C1) for a hard guarantee.
+  Future<bool> drainAndDispose({
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final drained = await drainOutbox(timeout: timeout);
+    dispose();
+    return drained;
   }
 
   void dispose() {
+    // Best-effort: if the socket is still live, transmit anything not yet sent
+    // before we close. Does not wait for acks — [drainAndDispose] is the
+    // awaitable path. Then flush the unacked queue to persistence synchronously
+    // so a hard close still leaves a recoverable record (C1).
+    if (!_disposed && _channel != null && _ready) {
+      _flushUnacked();
+    }
+    _persistNow();
     _disposed = true;
     _sub?.cancel();
     _channel?.sink.close();

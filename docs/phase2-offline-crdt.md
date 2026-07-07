@@ -165,3 +165,33 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 - **最大风险 = delta↔marks 映射 + 跨块操作合并语义**(§3)。Y.Text 字符级只在单块内成立;跨块拆/并/选区删是结构操作组合,需专门设计 + 充分测试。
 - 存量云端数据迁移到 yrs 的正确性(P2-M4)。
 - frb v2 对自绘编辑器热路径的调用频率/延迟(IME、逐字输入);需 benchmark,必要时把热路径留在 Dart、只把结构/持久化过 FFI。
+
+## 13. M-R:云端主路径可靠性 + 丢数据熔断(2026-07-07 定,P2-M6 的聚焦切片)
+
+> 落实红线 #1(坏状态熔断、绝不静默)+ #2(本地快照兜底):把它们从「写在纸上」变成「代码成立且有测试锁死」。验收 bar:写字中途随机切页 / 断连 / kill 进程,重连后服务端 fold、第二 client 读回**零字丢失**;坏 update / 流断裂触发**熔断**而非静默跳过;崩溃重启后未推送编辑从本地恢复。
+
+**代码里现存的丢数据 / 静默失败点(`clients/mica_flutter/lib/cloud/cloud_sync_io.dart`):**
+1. `dispose()` 不 drain → 切 doc / 关 app 丢 `_outbox` + 未 ack 的推送。
+2. `_applyRemote` 坏 update(`applyUpdate`=false)时 cursor 照样前进 → 永不重试 → 静默分叉。
+3. `_doc` / `_outbox` 纯内存不落盘 → 进程崩 = 未推送编辑蒸发。
+4. `drainOutbox` 超时静默 return;`onError` / catch 全 `{}` 吞掉 → 零信号。
+
+**Workstream A 主路径回归**:A1 切页保真 e2e、A2 dispose-drain 断言、A3 会话持久化 e2e。
+**Workstream B 完整性校验 + 熔断(红线 #1)**:B1 坏 update 不静默前进 cursor + 自愈 re-bootstrap(封顶后熔断)、B2 同步后 SV 对账、B3 熔断 + UI 信号、B4 `drainOutbox` 返回成败。
+**Workstream C 本地快照兜底(红线 #2)**:C1 云端 replica 周期 + 关闭前落盘、C2 `dispose` 前 flush+drain、C3 坏 update 载入截断自愈 + schema 版本号。
+**Workstream D 可观测性**:D1 静默 catch 换计数 / 日志、D2 同步健康内部态。
+
+**顺序**:P0 堵洞 = C2 → C1 → B1 → A1 → B4;P1 红线成真 = B2 → B3 → A3;P2 = C3 → D1 → D2。
+**刻意不做**:多人同块高级协同 UX、refresh-token、重写 op 模型、碰 web bundle 隔离。
+
+**进度**:
+- ✅ **B1** —— `_applyRemote` 坏 update 不再前进 cursor,改为自愈 re-bootstrap(封顶 `_maxAutoReheal`=3 次后停,熔断交给 `onFault` → UI);冷 bootstrap / re-bootstrap 的坏 base 同样触发 fault 而非静默 `return`。
+- ✅ **B4** —— `drainOutbox` 返回 `bool`(drained / timed-out),调用方可据此决定是否放行关闭。
+- ✅ **C2** —— 新增 `drainAndDispose`;`dispose()` 关 socket 前对未 ack 队列做 best-effort flush;`_closeDocumentSync` 改 fire-and-forget `drainAndDispose`(切 doc / 切 workspace / 登出的在途编辑不再被硬 dispose 丢弃)。
+- ✅ **C1** —— outbox 重构为**按 id 标记的「未 ack 队列」**(`_Pending{id,bytes,sent}`),利用协议已有的 `ack_id`:push 带 `id` → 服务端 `sync.ack` 回传 → 按 id 精确出队(跨重连重发也幂等)。队列**持久化到 prefs**(`cloudUnacked:<docId>`,`savePref` 同步落盘,防抖 300ms + dispose 时同步 flush),重启/崩溃后 `restoreUnacked` 载入 → 连上服务端重放。io + web 两引擎同步改。**崩溃/硬关闭不再丢未推送编辑。** 测:`integration_test/cloud_sync_integrity_test.dart` 三例真机过(B1 坏 update 自愈 + C1 恢复重放/ack 清队 + C1 实时编辑 push 且未 ack 时已持久化)。
+- ✅ **B2(验证式追赶)** —— `sync.pull` 服务端分页有上限(ws.rs `limit:1000`),原来 client **只 pull 一次就当追赶完** → 积压 >1000 条时静默截断丢尾。改为:`sync.updates` 批非空且 cursor 前进就**继续 pull 到空为止**(gated on cursor 前进,坏批不循环)。这是「验证 caught up 而非假设」的红线 #1 精神,client-only。io + web 同步改。〔注:真正的**双向 state-vector 协商**(服务端算 `diff(clientSV)`)需后端加 WS 消息;当前 B1(坏 update 不越 cursor)+ 正确 cursor + pull-to-empty 已覆盖绝大多数缺口,SV 协商留作后续增强。〕测:`B2: catch-up keeps pulling until the update stream drains`(假服务端首 pull 给一批、次 pull 给空 → 断言 client 重 pull 且应用)。
+- ✅ **B3(fault → 用户可见)** —— `_faultCount` 连续失败超 `_maxAutoReheal`(3,成功拿到 base 即清零 → measures 连续 stuck 而非一生累计)后,`onFault` → `main.dart` 弹 `MaterialBanner`(「云同步已暂停…请重试或刷新」+ 重试/忽略;重试 = 关会话重连冷 bootstrap)。恢复(新会话 `onReady`)自动清 banner。替掉原来只 `debugPrint` 的静默。
+- ✅ **A1(切页保真全栈 e2e)** —— `integration_test/page_switch_fidelity_test.dart`:起真后端,复现「编辑 A → 切走(drain+dispose) → 编辑 B → 重开 A」,断言 A 内容仍在(服务端 fold 后新会话读回)+ B 内容没漏进 A。这周「切页丢内容」bug 的直接回归,真机过。同时 `migration_sync_test` / `cloud_sync_test` 对真服务端重跑全绿 —— 证明 id 标记 push + 真服务端 `ack_id` 回传 + 队列式 drain 的重构不破既有同步。
+- **仍缺(后续增强,非丢数据)**:真正的**双向 state-vector 协商**(需后端加 WS 消息,见 B2 注);B3 的 banner 目前只在连续熔断后弹,更细的「离线/重连中」状态提示可后续做。
+
+**M-R 小结**:P0(B1/B4/C2/C1)+ P1(B2/B3/A1)客户端能做的全部完成,7 个集成测试(4 假 WS + 3 真后端)覆盖,「崩溃/切页/坏 update/流截断」四类丢数据面在会话层封死。

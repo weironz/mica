@@ -242,6 +242,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   CloudSyncSession? _cloudSession;
   BigInt? _deviceClientId;
 
+  /// B3: whether the "cloud sync paused" banner is up, so it shows once per
+  /// stuck episode and clears on recovery.
+  bool _syncBannerShown = false;
+
   // §7 upstream blob differ (desktop only): images inserted while offline land in
   // the on-device CAS under a sha256 placeholder file_id and queue here. When the
   // doc is next open online, `_reconcilePendingUploads` uploads the bytes, learns
@@ -526,6 +530,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (_selectedBootstrap?.document.id != documentId || _sync?.documentId != documentId) {
       return;
     }
+    // C1: unacked local diffs persist per-document, so a crash / hard close
+    // recovers edits the server never acked. Restored here; re-pushed on connect.
+    final unackedKey = 'cloudUnacked:$documentId';
     final yrs = CloudSyncSession(
       uri: documentSocketUri(
         _api.baseUri,
@@ -535,11 +542,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ),
       clientId: clientId,
       onReady: (_, _) {
+        _clearSyncBanner(); // B3: a fresh bootstrap means sync recovered.
         _applyCloudBlocks(documentId);
         // Now online for this doc: drain any images inserted offline (§7.1).
         unawaited(_reconcilePendingUploads(documentId));
       },
       onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
+      onFault: (reason, count) => _onCloudSyncFault(documentId, reason, count),
+      restoreUnacked: _loadUnacked(unackedKey),
+      onPersistUnacked: (unacked) => _saveUnacked(unackedKey, unacked),
     );
     _cloudSession = yrs;
     yrs.connect();
@@ -596,11 +607,81 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _cursorTimer?.cancel();
     _sync?.dispose();
     _sync = null;
-    _cloudSession?.dispose();
+    final cloud = _cloudSession;
     _cloudSession = null;
+    // C2: let the outgoing session flush + drain its outbox before closing, so a
+    // doc switch / workspace change / sign-out doesn't hard-drop unacked edits.
+    // Fire-and-forget — the page-switch path (_selectView) still awaits an
+    // explicit drainOutbox first; the app-close hard case needs C1 (outbox
+    // persistence) for a full guarantee.
+    if (cloud != null) unawaited(cloud.drainAndDispose());
     if (_presence.isNotEmpty) {
       setState(() => _presence = const []);
     }
+  }
+
+  /// A cloud replica hit an integrity fault it wouldn't silently absorb (red line
+  /// #1). The session already self-heals with a capped re-bootstrap; here we log
+  /// it. Surfacing it to the user (a "sync paused — reload" banner) + resetting
+  /// on recovery is B3, the next M-R item.
+  void _onCloudSyncFault(String documentId, String reason, int count) {
+    debugPrint('[cloud-sync] integrity fault ($reason) on $documentId — #$count');
+    // The session auto-heals (capped re-bootstrap) for the first few consecutive
+    // faults; past that it's genuinely stuck (B3). Surface it once so the user
+    // knows edits may not be reaching the cloud — with a one-tap retry — instead
+    // of failing silently (red line #1).
+    if (count <= 3 || _syncBannerShown || !mounted) return;
+    _syncBannerShown = true;
+    ScaffoldMessenger.maybeOf(context)?.showMaterialBanner(
+      MaterialBanner(
+        content: const Text(
+          '云同步已暂停，最近的编辑可能还没保存到云端。请重试或刷新页面。',
+        ),
+        leading: const Icon(Icons.cloud_off_outlined),
+        actions: [
+          TextButton(onPressed: _retryCloudSync, child: const Text('重试')),
+          TextButton(onPressed: _clearSyncBanner, child: const Text('忽略')),
+        ],
+      ),
+    );
+  }
+
+  /// Clear the sync-paused banner (B3) — recovery succeeded, doc switched, or the
+  /// user dismissed it.
+  void _clearSyncBanner() {
+    if (!_syncBannerShown) return;
+    _syncBannerShown = false;
+    if (mounted) ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
+  }
+
+  /// Retry a stuck cloud sync (B3): tear the session down and reconcile, which
+  /// cold-bootstraps a fresh replica (unacked edits persist and replay).
+  void _retryCloudSync() {
+    _clearSyncBanner();
+    _closeDocumentSync();
+    _reconcileSync();
+  }
+
+  /// Load a document's persisted unacked-diff queue (C1 crash recovery). Stored
+  /// as a JSON array of base64 diffs under `cloudUnacked:<docId>`.
+  List<Uint8List> _loadUnacked(String key) {
+    final raw = loadPref(key);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return [for (final s in list) base64.decode(s as String)];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  void _saveUnacked(String key, List<Uint8List> unacked) {
+    savePref(
+      key,
+      unacked.isEmpty
+          ? ''
+          : jsonEncode([for (final b in unacked) base64.encode(b)]),
+    );
   }
 
   /// A remote (or our own, echoed) accepted update advanced the server

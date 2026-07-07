@@ -16,12 +16,24 @@ import '../web/mica_ydoc.dart';
 
 typedef DocOp = Map<String, dynamic>;
 
+/// A local diff awaiting the server's ack, tagged with a client id the server
+/// echoes in `sync.ack`. Parity with the desktop session.
+class _Pending {
+  _Pending(this.id, this.bytes);
+  final String id;
+  final Uint8List bytes;
+  bool sent = false;
+}
+
 class CloudSyncSession {
   CloudSyncSession({
     required this.uri,
     required this.clientId,
     required this.onReady,
     required this.onRemoteBlocks,
+    this.onFault,
+    this.restoreUnacked,
+    this.onPersistUnacked,
   });
 
   final Uri uri;
@@ -35,6 +47,14 @@ class CloudSyncSession {
   onReady;
   final void Function(List<Map<String, dynamic>> blocks) onRemoteBlocks;
 
+  /// Integrity-fault hook — parity with the desktop session (red line #1).
+  final void Function(String reason, int count)? onFault;
+
+  /// Crash-recovery parity (C1): unacked diffs restored at startup + a persist
+  /// callback fired when the queue changes.
+  final List<Uint8List>? restoreUnacked;
+  final void Function(List<Uint8List> unacked)? onPersistUnacked;
+
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   MicaYDoc? _doc;
@@ -42,7 +62,12 @@ class CloudSyncSession {
   int _cursor = 0;
   bool _ready = false;
   bool _disposed = false;
-  final List<Uint8List> _outbox = [];
+  int _faultCount = 0;
+  static const int _maxAutoReheal = 3;
+  final List<_Pending> _unacked = [];
+  int _pushSeq = 0;
+  bool _restored = false;
+  Timer? _persistTimer;
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
@@ -52,7 +77,26 @@ class CloudSyncSession {
   // native-only).
   final Completer<void> _readyCompleter = Completer<void>();
   Future<void> get ready => _readyCompleter.future;
-  Future<void> drainOutbox({Duration timeout = const Duration(seconds: 15)}) async {}
+
+  /// Best-effort flush + report whether the unacked queue is empty (B4 parity).
+  Future<bool> drainOutbox({Duration timeout = const Duration(seconds: 15)}) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!_disposed && DateTime.now().isBefore(deadline)) {
+      if (_channel != null && _ready) _flushUnacked();
+      if (_unacked.isEmpty) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    return _unacked.isEmpty;
+  }
+
+  /// Graceful teardown (C2 parity): flush before closing.
+  Future<bool> drainAndDispose({
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final drained = await drainOutbox(timeout: timeout);
+    dispose();
+    return drained;
+  }
 
   List<Map<String, dynamic>> allBlocks() => _doc?.toBlocks() ?? const [];
 
@@ -71,6 +115,7 @@ class CloudSyncSession {
 
   void connect() {
     if (_disposed) return;
+    _restoreUnackedOnce();
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
     _sub = channel.stream.listen(
@@ -86,7 +131,17 @@ class CloudSyncSession {
         'type': 'sync.pull',
         'payload': {'since_rid': _cursor},
       });
-      _flushOutbox();
+      _flushUnacked(resendAll: true);
+    }
+  }
+
+  void _restoreUnackedOnce() {
+    if (_restored) return;
+    _restored = true;
+    final restore = restoreUnacked;
+    if (restore == null || restore.isEmpty) return;
+    for (final bytes in restore) {
+      _unacked.add(_Pending('${_pushSeq++}', bytes));
     }
   }
 
@@ -113,17 +168,24 @@ class CloudSyncSession {
           onReady(_rootBlockId, childBlocks());
         } else if (baseRid > _cursor) {
           // Re-bootstrap after stream pruning: merge the base, keep local edits.
-          existing.applyUpdate(base64.decode(b64));
+          final ok = existing.applyUpdate(base64.decode(b64));
+          if (!ok) {
+            _onIntegrityFault('bad_base');
+            return;
+          }
           _cursor = baseRid;
           if (!_disposed) onRemoteBlocks(childBlocks());
         }
+        // Recovery worked — reset the consecutive-fault count (B3 parity).
+        _faultCount = 0;
         _send({
           'type': 'sync.pull',
           'payload': {'since_rid': _cursor},
         });
-        _flushOutbox();
+        _flushUnacked(resendAll: true);
       case 'sync.updates':
         final ups = m['updates'];
+        final before = _cursor;
         var changed = false;
         if (ups is List) {
           for (final u in ups) {
@@ -133,9 +195,28 @@ class CloudSyncSession {
           }
         }
         if (changed && !_disposed) onRemoteBlocks(childBlocks());
+        // B2 (verified catch-up): keep pulling until the stream after our cursor
+        // drains, so a server-capped batch can't silently truncate. Mirrors the
+        // desktop session.
+        if (ups is List &&
+            ups.isNotEmpty &&
+            _cursor > before &&
+            _channel != null &&
+            !_disposed) {
+          _send({
+            'type': 'sync.pull',
+            'payload': {'since_rid': _cursor},
+          });
+        }
       case 'sync.update':
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
       case 'sync.ack':
+        final ackId = m['ack_id'];
+        if (ackId is String) {
+          final before = _unacked.length;
+          _unacked.removeWhere((p) => p.id == ackId);
+          if (_unacked.length != before) _persistSoon();
+        }
         final rid = (m['rid'] as num?)?.toInt();
         if (rid != null && rid > _cursor) _cursor = rid;
     }
@@ -147,9 +228,24 @@ class CloudSyncSession {
     final b64 = u['update'];
     if (b64 is! String) return false;
     final ok = doc.applyUpdate(base64.decode(b64));
+    if (!ok) {
+      // Red line #1: don't advance the cursor past an update we couldn't apply
+      // (silent divergence). Self-heal via a capped re-bootstrap; surface the
+      // fault. Mirrors the desktop session.
+      _onIntegrityFault('bad_remote_update');
+      return false;
+    }
     final rid = (u['rid'] as num?)?.toInt();
     if (rid != null && rid > _cursor) _cursor = rid;
-    return ok;
+    return true;
+  }
+
+  void _onIntegrityFault(String reason) {
+    _faultCount++;
+    onFault?.call(reason, _faultCount);
+    if (_channel != null && !_disposed && _faultCount <= _maxAutoReheal) {
+      _send({'type': 'sync.bootstrap'});
+    }
   }
 
   void applyLocalOps(List<DocOp> ops) {
@@ -161,30 +257,42 @@ class CloudSyncSession {
     }
     final diff = doc.encodeDiffSince(sv);
     if (diff.isEmpty) return;
-    _pushOrQueue(diff);
+    _enqueue(diff);
   }
 
-  void _pushOrQueue(Uint8List diff) {
-    if (_channel != null && _ready) {
-      _send({
-        'type': 'sync.push',
-        'payload': {'update': base64.encode(diff)},
-      });
-    } else {
-      _outbox.add(diff);
-    }
+  void _enqueue(Uint8List diff) {
+    final p = _Pending('${_pushSeq++}', diff);
+    _unacked.add(p);
+    _persistSoon();
+    if (_channel != null && _ready) _sendPush(p);
   }
 
-  void _flushOutbox() {
+  void _flushUnacked({bool resendAll = false}) {
     if (_channel == null || !_ready) return;
-    final pending = List<Uint8List>.from(_outbox);
-    _outbox.clear();
-    for (final diff in pending) {
-      _send({
-        'type': 'sync.push',
-        'payload': {'update': base64.encode(diff)},
-      });
+    for (final p in _unacked) {
+      if (resendAll || !p.sent) _sendPush(p);
     }
+  }
+
+  void _sendPush(_Pending p) {
+    p.sent = true;
+    _send({
+      'type': 'sync.push',
+      'id': p.id,
+      'payload': {'update': base64.encode(p.bytes)},
+    });
+  }
+
+  void _persistSoon() {
+    if (onPersistUnacked == null) return;
+    _persistTimer?.cancel();
+    _persistTimer = Timer(const Duration(milliseconds: 300), _persistNow);
+  }
+
+  void _persistNow() {
+    _persistTimer?.cancel();
+    _persistTimer = null;
+    onPersistUnacked?.call([for (final p in _unacked) p.bytes]);
   }
 
   void _send(Map<String, dynamic> message) {
@@ -196,6 +304,11 @@ class CloudSyncSession {
   }
 
   void dispose() {
+    // Best-effort flush + synchronous persist before closing (C1/C2 parity).
+    if (!_disposed && _channel != null && _ready) {
+      _flushUnacked();
+    }
+    _persistNow();
     _disposed = true;
     _sub?.cancel();
     _channel?.sink.close();
