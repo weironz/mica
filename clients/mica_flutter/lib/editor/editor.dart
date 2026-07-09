@@ -1567,6 +1567,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _closeCellEditor() {
+    // Commit the active editor (saves the edit + disposes safely) rather than
+    // just yanking the overlay, which would drop the edit and orphan its
+    // controller. `commit` guards re-entry and clears `_cellEntry` itself.
+    _commitCellEditor?.call();
     _cellEntry?.remove();
     _cellEntry = null;
     _render?.editingCell = null;
@@ -1596,12 +1600,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       committed = true;
       _render?.editingCell = null;
       _controller.setTableCell(node, row, col, controller.text);
-      controller.dispose();
       focus.removeListener(_cellFocusListener!);
-      focus.dispose();
-      entry.remove();
+      // Tear the field down FIRST, then dispose its controller/focus after this
+      // frame. Disposing them synchronously here races the removed TextField's
+      // own teardown (which still reads them) → "used after being disposed".
+      if (entry.mounted) entry.remove();
       if (identical(_cellEntry, entry)) _cellEntry = null;
       _commitCellEditor = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        controller.dispose();
+        focus.dispose();
+      });
     }
     _commitCellEditor = commit;
 
@@ -1669,24 +1678,29 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         width: localRect.width,
         child: Focus(
           onKeyEvent: onKey,
-          child: Container(
-            constraints: BoxConstraints(minHeight: localRect.height),
-            color: Colors.transparent,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-            child: TextField(
-              controller: controller,
-              focusNode: focus,
-              autofocus: true,
-              maxLines: null,
-              cursorColor: const Color(0xFF2563EB),
-              style: const TextStyle(fontSize: 15, height: 1.4),
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-                border: InputBorder.none,
-                isCollapsed: true,
+          // The overlay mounts above the app's Material, but TextField needs a
+          // Material ancestor (ink/selection) — a transparent one adds no chrome.
+          child: Material(
+            type: MaterialType.transparency,
+            child: Container(
+              constraints: BoxConstraints(minHeight: localRect.height),
+              color: Colors.transparent,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              child: TextField(
+                controller: controller,
+                focusNode: focus,
+                autofocus: true,
+                maxLines: null,
+                cursorColor: const Color(0xFF2563EB),
+                style: const TextStyle(fontSize: 15, height: 1.4),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                ),
+                onSubmitted: (_) => commit(),
               ),
-              onSubmitted: (_) => commit(),
             ),
           ),
         ),

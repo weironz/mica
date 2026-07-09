@@ -388,9 +388,9 @@ class TableRenderer extends AtomicBlockRenderer {
       colEdges.add(colEdges.last + w);
     }
 
-    const padH = 8.0;
-    const padV = 7.0;
-    const minRowH = 34.0;
+    const padH = 10.0;
+    const padV = 9.0;
+    const minRowH = 42.0;
     final cells = <_TableCell>[];
     final rowHandles = <Rect>[];
     var yy = gridTop;
@@ -513,7 +513,6 @@ class TableRenderer extends AtomicBlockRenderer {
 
     if (host._hoverCode != index) return;
 
-    final handlePaint = Paint()..color = const Color(0xFF94A3B8);
     final plusColor = EditorTheme.muted;
 
     // Hovered column border: an accent line so the resize target is obvious.
@@ -529,28 +528,38 @@ class TableRenderer extends AtomicBlockRenderer {
       }
     }
 
-    // Row / column handles: three small dots sitting ON the edge lines
-    // (Notion/AFFiNE style) instead of strips covering cell content.
+    // Row / column drag grips: a single soft rounded pill centered on the edge
+    // line — a clean handle affordance rather than three scattered dots.
+    final gripPaint = Paint()..color = const Color(0xFFC2CAD6);
     for (final h in l.rowHandles) {
       final r = h.shift(offset);
-      for (var k = -1; k <= 1; k++) {
-        // Centered ON the left border line (r.left == the line's x).
-        canvas.drawCircle(
-          Offset(r.left, r.center.dy + k * 5.0),
-          1.6,
-          handlePaint,
-        );
-      }
+      final len = (r.height * 0.5).clamp(12.0, 18.0);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(r.left, r.center.dy),
+            width: 3.5,
+            height: len,
+          ),
+          const Radius.circular(2),
+        ),
+        gripPaint,
+      );
     }
     for (final h in l.colHandles) {
       final r = h.shift(offset);
-      for (var k = -1; k <= 1; k++) {
-        canvas.drawCircle(
-          Offset(r.center.dx + k * 5.0, r.bottom),
-          1.6,
-          handlePaint,
-        );
-      }
+      final len = (r.width * 0.4).clamp(14.0, 24.0);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(r.center.dx, r.bottom),
+            width: len,
+            height: 3.5,
+          ),
+          const Radius.circular(2),
+        ),
+        gripPaint,
+      );
     }
 
     void plusBar(Rect? rect, bool vertical) {
