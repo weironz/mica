@@ -1092,6 +1092,27 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (mounted) setState(() => _aiConfigured = true);
   }
 
+  Future<List<Map<String, dynamic>>> _loadTokens() async {
+    return _api.listTokens(_requireSession().accessToken);
+  }
+
+  Future<Map<String, dynamic>> _createToken(
+    String name,
+    List<String> scopes,
+    int? expiresInDays,
+  ) async {
+    return _api.createToken(
+      _requireSession().accessToken,
+      name,
+      scopes,
+      expiresInDays,
+    );
+  }
+
+  Future<void> _revokeToken(String id) async {
+    await _api.revokeToken(_requireSession().accessToken, id);
+  }
+
   String _titleFromMarkdown(String markdown, String fallback) {
     for (final line in markdown.split('\n')) {
       final trimmed = line.trim();
@@ -2667,6 +2688,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 onAiNewWorkspace: _aiNewWorkspaceFromMarkdown,
                 onLoadAiSettings: _loadAiSettings,
                 onSaveAiSettings: _saveAiSettings,
+                onLoadTokens: _loadTokens,
+                onCreateToken: _createToken,
+                onRevokeToken: _revokeToken,
                 userName: _session?.user.displayName ?? '',
                 userEmail: _session?.user.email ?? '',
                 onUpdateProfile: _updateProfile,
@@ -3086,6 +3110,9 @@ class WorkspaceView extends StatefulWidget {
     required this.onAiNewWorkspace,
     required this.onLoadAiSettings,
     required this.onSaveAiSettings,
+    this.onLoadTokens,
+    this.onCreateToken,
+    this.onRevokeToken,
     required this.userName,
     required this.userEmail,
     required this.onUpdateProfile,
@@ -3189,6 +3216,14 @@ class WorkspaceView extends StatefulWidget {
     String? apiKey,
   })
   onSaveAiSettings;
+  final Future<List<Map<String, dynamic>>> Function()? onLoadTokens;
+  final Future<Map<String, dynamic>> Function(
+    String name,
+    List<String> scopes,
+    int? expiresInDays,
+  )?
+  onCreateToken;
+  final Future<void> Function(String id)? onRevokeToken;
   final String userName;
   final String userEmail;
   final Future<void> Function(String displayName) onUpdateProfile;
@@ -4894,6 +4929,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       builder: (context) => _SettingsDialog(
         onLoadAiSettings: widget.onLoadAiSettings,
         onSaveAiSettings: widget.onSaveAiSettings,
+        onLoadTokens: widget.onLoadTokens,
+        onCreateToken: widget.onCreateToken,
+        onRevokeToken: widget.onRevokeToken,
         userName: widget.userName,
         userEmail: widget.userEmail,
         onUpdateProfile: widget.onUpdateProfile,
@@ -5796,6 +5834,9 @@ class _SettingsDialog extends StatefulWidget {
   const _SettingsDialog({
     required this.onLoadAiSettings,
     required this.onSaveAiSettings,
+    this.onLoadTokens,
+    this.onCreateToken,
+    this.onRevokeToken,
     required this.userName,
     required this.userEmail,
     required this.onUpdateProfile,
@@ -5831,6 +5872,14 @@ class _SettingsDialog extends StatefulWidget {
     String? apiKey,
   })
   onSaveAiSettings;
+  final Future<List<Map<String, dynamic>>> Function()? onLoadTokens;
+  final Future<Map<String, dynamic>> Function(
+    String name,
+    List<String> scopes,
+    int? expiresInDays,
+  )?
+  onCreateToken;
+  final Future<void> Function(String id)? onRevokeToken;
   final EditorAppearance appearance;
   final double pageWidth;
   final bool reHostImages;
@@ -5862,6 +5911,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   bool _loading = true;
   bool _saving = false;
   bool _hasKey = false;
+  // API Tokens tab state.
+  List<Map<String, dynamic>>? _tokens;
+  bool _tokensLoaded = false;
+  bool _tokenBusy = false;
+  bool _tokenWrite = false;
+  final _tokenName = TextEditingController();
+  final _tokenExpiry = TextEditingController();
+  String? _tokensError;
   String? _error;
 
   late final _name = TextEditingController(text: widget.userName);
@@ -5947,6 +6004,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _curPass.dispose();
     _newPass.dispose();
     _serverUrl.dispose();
+    _tokenName.dispose();
+    _tokenExpiry.dispose();
     super.dispose();
   }
 
@@ -6036,6 +6095,234 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       applicationIcon: const MicaLogo(size: 40),
       applicationLegalese: 'Cloud-first collaborative Markdown workspace.',
     );
+  }
+
+  Future<void> _showTokenSecret(Map<String, dynamic> created) {
+    final token = created['token'] as String? ?? '';
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Token created'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Copy it now — the secret is not shown again.'),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: SelectableText(token, style: const TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy'),
+            onPressed: () => Clipboard.setData(ClipboardData(text: token)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _shortTime(dynamic value) {
+    if (value == null) return 'never';
+    final s = value.toString();
+    return s.length >= 10 ? s.substring(0, 10) : s;
+  }
+
+  List<Widget> _tokensSection(BuildContext context) {
+    final onLoad = widget.onLoadTokens;
+    final onCreate = widget.onCreateToken;
+    final onRevoke = widget.onRevokeToken;
+    if (onLoad == null || onCreate == null || onRevoke == null) {
+      return const [];
+    }
+
+    // Lazy-load the list the first time the tab is shown.
+    if (!_tokensLoaded) {
+      _tokensLoaded = true;
+      onLoad()
+          .then((list) {
+            if (mounted) setState(() => _tokens = list);
+          })
+          .catchError((Object e) {
+            if (mounted) setState(() => _tokensError = e.toString());
+          });
+    }
+
+    Future<void> refresh() async {
+      try {
+        final list = await onLoad();
+        if (mounted) {
+          setState(() {
+            _tokens = list;
+            _tokensError = null;
+          });
+        }
+      } catch (e) {
+        if (mounted) setState(() => _tokensError = e.toString());
+      }
+    }
+
+    return [
+      _sectionTitle(
+        context,
+        Icons.key_outlined,
+        'API Tokens',
+        const Color(0xFF2563EB),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        'Long-lived tokens for the API, the CLI, and scheduled backups. '
+        'The secret is shown once — copy it then. Read-only by default.',
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+      ),
+      const SizedBox(height: 16),
+      TextField(
+        controller: _tokenName,
+        decoration: const InputDecoration(
+          labelText: 'Name',
+          hintText: 'e.g. backup',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+      ),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          Switch(
+            value: _tokenWrite,
+            onChanged: _tokenBusy
+                ? null
+                : (v) => setState(() => _tokenWrite = v),
+          ),
+          const Text('Write access'),
+          const Spacer(),
+          SizedBox(
+            width: 140,
+            child: TextField(
+              controller: _tokenExpiry,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Expires (days)',
+                hintText: 'never',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: FilledButton.icon(
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('Create token'),
+          onPressed: _tokenBusy
+              ? null
+              : () async {
+                  final name = _tokenName.text.trim();
+                  if (name.isEmpty) {
+                    setState(() => _tokensError = 'Name is required');
+                    return;
+                  }
+                  setState(() {
+                    _tokenBusy = true;
+                    _tokensError = null;
+                  });
+                  try {
+                    final scopes = _tokenWrite
+                        ? <String>['read', 'write']
+                        : <String>['read'];
+                    final days = int.tryParse(_tokenExpiry.text.trim());
+                    final created = await onCreate(name, scopes, days);
+                    _tokenName.clear();
+                    _tokenExpiry.clear();
+                    if (mounted) {
+                      setState(() {
+                        _tokenWrite = false;
+                        _tokenBusy = false;
+                      });
+                      await _showTokenSecret(created);
+                    }
+                    await refresh();
+                  } catch (e) {
+                    if (mounted) {
+                      setState(() {
+                        _tokensError = e.toString();
+                        _tokenBusy = false;
+                      });
+                    }
+                  }
+                },
+        ),
+      ),
+      if (_tokensError != null) ...[
+        const SizedBox(height: 12),
+        ErrorBanner(_tokensError!),
+      ],
+      const SizedBox(height: 18),
+      const Divider(height: 1),
+      const SizedBox(height: 8),
+      if (_tokens == null)
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(child: CircularProgressIndicator()),
+        )
+      else if (_tokens!.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            'No tokens yet.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
+          ),
+        )
+      else
+        for (final t in _tokens!)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(t['name'] as String? ?? '(unnamed)'),
+            subtitle: Text(
+              '${(t['scopes'] as List<dynamic>?)?.join(', ') ?? ''}'
+              '  ·  used ${_shortTime(t['last_used_at'])}'
+              '  ·  expires ${_shortTime(t['expires_at'])}',
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20),
+              tooltip: 'Revoke',
+              onPressed: _tokenBusy
+                  ? null
+                  : () async {
+                      setState(() => _tokenBusy = true);
+                      try {
+                        await onRevoke(t['id'] as String);
+                        await refresh();
+                      } catch (e) {
+                        if (mounted) setState(() => _tokensError = e.toString());
+                      } finally {
+                        if (mounted) setState(() => _tokenBusy = false);
+                      }
+                    },
+            ),
+          ),
+    ];
   }
 
   Future<void> _save() async {
@@ -6611,6 +6898,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       (title: 'Appearance', icon: Icons.tune, section: _appearanceSection(context)),
       (title: 'AI provider', icon: Icons.auto_awesome, section: _aiSection(context)),
       (title: 'Account', icon: Icons.person_outline, section: _accountSection(context)),
+      if (widget.onLoadTokens != null)
+        (
+          title: 'API Tokens',
+          icon: Icons.key_outlined,
+          section: _tokensSection(context),
+        ),
       if (!kIsWeb)
         (title: 'Server', icon: Icons.dns_outlined, section: _serverSection(context)),
       (title: 'Data', icon: Icons.import_export, section: _dataSection(context)),
@@ -7394,6 +7687,27 @@ class ApiClient {
       'password': form.password,
     });
     return AuthSession.fromJson(response);
+  }
+
+  Future<List<Map<String, dynamic>>> listTokens(String token) async {
+    final response = await _get('/api/auth/tokens', token);
+    return (response['tokens'] as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
+  /// Returns the created token JSON — the `token` secret is present ONCE here.
+  Future<Map<String, dynamic>> createToken(
+    String token,
+    String name,
+    List<String> scopes,
+    int? expiresInDays,
+  ) async {
+    final body = <String, dynamic>{'name': name, 'scopes': scopes};
+    if (expiresInDays != null) body['expires_in_days'] = expiresInDays;
+    return _post('/api/auth/tokens', body, token: token);
+  }
+
+  Future<void> revokeToken(String token, String id) async {
+    await _delete('/api/auth/tokens/$id', token);
   }
 
   Future<List<Workspace>> listWorkspaces(String token) async {
