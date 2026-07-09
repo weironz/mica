@@ -12,15 +12,12 @@ rust-version = "1.88"
 name = "mica-cli"
 path = "src/main.rs"
 
-[[bin]]
-name = "mica-backup"
-path = "src/bin/mica-backup.rs"
-required-features = ["backup"]
-
 [features]
-# Gated so a default `cargo build` / the `mica-cli` binary / api-server never pull
-# rustic_core's ~128-crate tree — only `mica-backup` (built with --features backup)
-# carries the backup engine.
+# `backup` is ON by default, so a plain `cargo build` yields a mica-cli that
+# already has `mica-cli backup …` (no separate binary to remember). Build with
+# `--no-default-features` for a light client with no backup — and no rustic tree.
+# The api-server is a separate crate and never pulls this either way.
+default = ["backup"]
 backup = ["dep:rustic_core", "dep:rustic_backend", "dep:jiff"]
 
 [dependencies]

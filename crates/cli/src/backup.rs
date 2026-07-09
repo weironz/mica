@@ -1,24 +1,22 @@
-//! `mica-backup` — Mica's built-in, encrypted, deduplicated backup engine.
+//! `mica-cli backup …` — Mica's built-in encrypted, deduplicated backup engine.
 //!
-//! Powered by `rustic_core` (a Rust library, restic repository-format compatible),
-//! embedded IN-PROCESS — no external restic/backrest/cron binary. It snapshots a
-//! directory (typically the tree produced by `mica-cli export`) into a repository
-//! on local disk or an S3-compatible store (Aliyun OSS) via OpenDAL, with client-
-//! side encryption, dedup, incremental transfer, retention, and restore.
+//! Behind the `backup` feature (ON by default; `--no-default-features` for a
+//! light client with no backup). Powered by `rustic_core` (restic
+//! repository-format compatible), embedded IN-PROCESS — no external
+//! restic/backrest/cron. Snapshots a directory (typically `mica-cli export`'s
+//! output) to a repo on local disk or S3/Aliyun OSS (via OpenDAL), with
+//! client-side encryption, dedup, incremental transfer, retention, and restore.
 //!
-//! This whole engine lives behind the crate's `backup` feature, so the default
-//! `mica-cli` and the api-server never pull rustic's dependency tree.
-//!
-//! Repo location is a plain path (local) or `opendal:s3:<bucket>/<path>` (OSS) —
-//! the same code path; OSS just needs `--opt access_key_id=… --opt endpoint=…`.
-//! The repo password (encryption key) comes from `--password-file` or the
-//! `MICA_BACKUP_PASSWORD` env var — never a command-line flag (ps/history leak).
+//! Repo is a plain path (local) or `opendal:s3:/<path>` (OSS) — same code; OSS
+//! just needs backend `--opt`s. The repo password comes from `--password-file`
+//! or `MICA_BACKUP_PASSWORD`; backend options (incl. OSS creds) from `--opt` or
+//! the `MICA_BACKUP_OPTS` env var — never a bare flag (ps/history leak).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Subcommand};
 use rustic_backend::BackendOptions;
 use rustic_core::{
   BackupOptions, CheckOptions, ConfigOptions, Credentials, ForgetGroups, Grouped, KeepOptions,
@@ -26,31 +24,24 @@ use rustic_core::{
   RestoreOptions, SnapshotGroupCriterion, SnapshotOptions,
 };
 
-#[derive(Parser)]
-#[command(
-  name = "mica-backup",
-  version,
-  about = "Encrypted, deduplicated backups for Mica (restic-compatible, powered by rustic_core)"
-)]
-struct Cli {
-  /// Repository: a local path, or `opendal:s3:<bucket>/<path>` for S3 / Aliyun OSS.
-  #[arg(long, global = true, env = "MICA_BACKUP_REPO")]
+#[derive(Args)]
+pub struct BackupArgs {
+  /// Repository: a local path, or `opendal:s3:/<path>` for S3 / Aliyun OSS.
+  #[arg(long, env = "MICA_BACKUP_REPO")]
   repo: Option<String>,
   /// File holding the repository password (encryption key). Or set MICA_BACKUP_PASSWORD.
-  #[arg(long, global = true)]
+  #[arg(long)]
   password_file: Option<PathBuf>,
-  /// Backend option `key=value`, repeatable — e.g. `--opt access_key_id=… --opt endpoint=…`.
-  #[arg(long = "opt", global = true, value_parser = parse_kv)]
+  /// Backend option `key=value`, repeatable — e.g. `--opt access_key_id=…`
+  /// (or provide them all via the MICA_BACKUP_OPTS env var).
+  #[arg(long = "opt", value_parser = parse_kv)]
   opts: Vec<(String, String)>,
-  /// Machine-readable JSON output.
-  #[arg(long, global = true)]
-  json: bool,
   #[command(subcommand)]
-  command: Command,
+  command: BackupCommand,
 }
 
 #[derive(Subcommand)]
-enum Command {
+enum BackupCommand {
   /// Initialize a new (empty) encrypted repository.
   Init,
   /// Snapshot a directory into the repository (incremental).
@@ -108,21 +99,19 @@ fn parse_kv(s: &str) -> Result<(String, String), String> {
     .ok_or_else(|| format!("expected key=value, got '{s}'"))
 }
 
-fn main() {
-  let cli = Cli::parse();
-  let json = cli.json;
-  if let Err(err) = run(cli) {
-    if json {
-      eprintln!("{}", serde_json::json!({ "error": format!("{err:#}") }));
-    } else {
-      eprintln!("error: {err:#}");
-    }
-    std::process::exit(1);
+pub fn run(json: bool, args: &BackupArgs) -> Result<()> {
+  match &args.command {
+    BackupCommand::Init => cmd_init(json, args),
+    BackupCommand::Snapshot(a) => cmd_snapshot(json, args, a),
+    BackupCommand::Snapshots => cmd_snapshots(json, args),
+    BackupCommand::Restore(a) => cmd_restore(json, args, a),
+    BackupCommand::Forget(a) => cmd_forget(json, args, a),
+    BackupCommand::Check => cmd_check(json, args),
   }
 }
 
-fn password(cli: &Cli) -> Result<String> {
-  if let Some(file) = &cli.password_file {
+fn password(args: &BackupArgs) -> Result<String> {
+  if let Some(file) = &args.password_file {
     let raw = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
     return Ok(raw.trim_end_matches(['\r', '\n']).to_string());
   }
@@ -132,14 +121,14 @@ fn password(cli: &Cli) -> Result<String> {
   anyhow::bail!("no repository password — pass --password-file or set MICA_BACKUP_PASSWORD")
 }
 
-fn repo_uri(cli: &Cli) -> Result<String> {
-  cli
+fn repo_uri(args: &BackupArgs) -> Result<String> {
+  args
     .repo
     .clone()
     .context("no repository — pass --repo <path | opendal:s3:…> or set MICA_BACKUP_REPO")
 }
 
-fn backend_options(cli: &Cli) -> Result<BackendOptions> {
+fn backend_options(args: &BackupArgs) -> Result<BackendOptions> {
   // Backend options (incl. S3/OSS credentials) may come from the env var
   // MICA_BACKUP_OPTS ("k=v k2=v2 …") so secrets stay off argv/ps — CLI `--opt`
   // flags override. The systemd unit puts the whole OSS config there.
@@ -151,42 +140,31 @@ fn backend_options(cli: &Cli) -> Result<BackendOptions> {
       }
     }
   }
-  for (k, v) in &cli.opts {
+  for (k, v) in &args.opts {
     map.insert(k.clone(), v.clone());
   }
-  let mut opts = BackendOptions::default().repository(repo_uri(cli)?);
+  let mut opts = BackendOptions::default().repository(repo_uri(args)?);
   if !map.is_empty() {
     opts = opts.options(map);
   }
   Ok(opts)
 }
 
-fn credentials(cli: &Cli) -> Result<Credentials> {
-  Ok(Credentials::password(password(cli)?))
+fn credentials(args: &BackupArgs) -> Result<Credentials> {
+  Ok(Credentials::password(password(args)?))
 }
 
-fn run(cli: Cli) -> Result<()> {
-  match &cli.command {
-    Command::Init => cmd_init(&cli),
-    Command::Snapshot(args) => cmd_snapshot(&cli, args),
-    Command::Snapshots => cmd_snapshots(&cli),
-    Command::Restore(args) => cmd_restore(&cli, args),
-    Command::Forget(args) => cmd_forget(&cli, args),
-    Command::Check => cmd_check(&cli),
-  }
-}
-
-fn cmd_init(cli: &Cli) -> Result<()> {
-  let backends = backend_options(cli)?.to_backends().context("configuring backend")?;
+fn cmd_init(json: bool, args: &BackupArgs) -> Result<()> {
+  let backends = backend_options(args)?.to_backends().context("configuring backend")?;
   Repository::new(&RepositoryOptions::default(), &backends)?
     .init(
-      &credentials(cli)?,
+      &credentials(args)?,
       &KeyOptions::default(),
       &ConfigOptions::default(),
     )
     .context("initializing repository")?;
-  let uri = repo_uri(cli)?;
-  if cli.json {
+  let uri = repo_uri(args)?;
+  if json {
     println!("{}", serde_json::json!({ "repo": uri, "initialized": true }));
   } else {
     println!("Initialized repository at {uri}");
@@ -194,21 +172,21 @@ fn cmd_init(cli: &Cli) -> Result<()> {
   Ok(())
 }
 
-fn cmd_snapshot(cli: &Cli, args: &SnapshotArgs) -> Result<()> {
-  let backends = backend_options(cli)?.to_backends().context("configuring backend")?;
+fn cmd_snapshot(json: bool, args: &BackupArgs, a: &SnapshotArgs) -> Result<()> {
+  let backends = backend_options(args)?.to_backends().context("configuring backend")?;
   let repo = Repository::new(&RepositoryOptions::default(), &backends)?
-    .open(&credentials(cli)?)
+    .open(&credentials(args)?)
     .context("unlocking repository (wrong password?)")?
     .to_indexed_ids()?;
 
-  let source = PathList::from_string(&args.path.to_string_lossy())?.sanitize()?;
-  let snap = SnapshotOptions::default().add_tags(&args.tag)?.to_snapshot()?;
+  let source = PathList::from_string(&a.path.to_string_lossy())?.sanitize()?;
+  let snap = SnapshotOptions::default().add_tags(&a.tag)?.to_snapshot()?;
   let snapshot = repo
     .backup(&BackupOptions::default(), &source, snap)
     .context("running backup")?;
 
   let summary = snapshot.summary.as_ref();
-  if cli.json {
+  if json {
     println!(
       "{}",
       serde_json::json!({
@@ -230,12 +208,12 @@ fn cmd_snapshot(cli: &Cli, args: &SnapshotArgs) -> Result<()> {
   Ok(())
 }
 
-fn cmd_snapshots(cli: &Cli) -> Result<()> {
-  let backends = backend_options(cli)?.to_backends().context("configuring backend")?;
-  let repo = Repository::new(&RepositoryOptions::default(), &backends)?.open(&credentials(cli)?)?;
+fn cmd_snapshots(json: bool, args: &BackupArgs) -> Result<()> {
+  let backends = backend_options(args)?.to_backends().context("configuring backend")?;
+  let repo = Repository::new(&RepositoryOptions::default(), &backends)?.open(&credentials(args)?)?;
   let snaps = repo.get_all_snapshots()?;
 
-  if cli.json {
+  if json {
     let list: Vec<_> = snaps
       .iter()
       .map(|s| {
@@ -258,45 +236,45 @@ fn cmd_snapshots(cli: &Cli) -> Result<()> {
   Ok(())
 }
 
-fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> Result<()> {
-  let backends = backend_options(cli)?.to_backends().context("configuring backend")?;
+fn cmd_restore(json: bool, args: &BackupArgs, a: &RestoreArgs) -> Result<()> {
+  let backends = backend_options(args)?.to_backends().context("configuring backend")?;
   let repo = Repository::new(&RepositoryOptions::default(), &backends)?
-    .open(&credentials(cli)?)?
+    .open(&credentials(args)?)?
     .to_indexed()?;
 
-  let node = repo.node_from_snapshot_path(&args.snapshot, |_| true)?;
+  let node = repo.node_from_snapshot_path(&a.snapshot, |_| true)?;
   let ls = repo.ls(&node, &LsOptions::default())?;
-  let dest = LocalDestination::new(&args.target.to_string_lossy(), true, !node.is_dir())?;
+  let dest = LocalDestination::new(&a.target.to_string_lossy(), true, !node.is_dir())?;
   let opts = RestoreOptions::default();
   let restore_infos = repo.prepare_restore(&opts, ls.clone(), &dest, false)?;
   repo.restore(restore_infos, &opts, ls, &dest).context("restoring")?;
 
-  if cli.json {
-    println!("{}", serde_json::json!({ "restored": args.snapshot, "target": args.target }));
+  if json {
+    println!("{}", serde_json::json!({ "restored": a.snapshot, "target": a.target }));
   } else {
-    println!("Restored {} → {}", args.snapshot, args.target.display());
+    println!("Restored {} → {}", a.snapshot, a.target.display());
   }
   Ok(())
 }
 
-fn cmd_forget(cli: &Cli, args: &ForgetArgs) -> Result<()> {
-  let backends = backend_options(cli)?.to_backends().context("configuring backend")?;
-  let repo = Repository::new(&RepositoryOptions::default(), &backends)?.open(&credentials(cli)?)?;
+fn cmd_forget(json: bool, args: &BackupArgs, a: &ForgetArgs) -> Result<()> {
+  let backends = backend_options(args)?.to_backends().context("configuring backend")?;
+  let repo = Repository::new(&RepositoryOptions::default(), &backends)?.open(&credentials(args)?)?;
 
   let mut keep = KeepOptions::default();
-  if let Some(n) = args.keep_last {
+  if let Some(n) = a.keep_last {
     keep = keep.keep_last(n);
   }
-  if let Some(n) = args.keep_daily {
+  if let Some(n) = a.keep_daily {
     keep = keep.keep_daily(n);
   }
-  if let Some(n) = args.keep_weekly {
+  if let Some(n) = a.keep_weekly {
     keep = keep.keep_weekly(n);
   }
-  if let Some(n) = args.keep_monthly {
+  if let Some(n) = a.keep_monthly {
     keep = keep.keep_monthly(n);
   }
-  if let Some(n) = args.keep_yearly {
+  if let Some(n) = a.keep_yearly {
     keep = keep.keep_yearly(n);
   }
 
@@ -309,7 +287,7 @@ fn cmd_forget(cli: &Cli, args: &ForgetArgs) -> Result<()> {
   repo.delete_snapshots(&forget_ids)?;
 
   let mut pruned = false;
-  if args.prune {
+  if a.prune {
     // `Repository::prune` is the non-deprecated entry but its signature is still
     // in flux across rustic_core minors; the plan+do_prune path is stable.
     let prune_opts = PruneOptions::default();
@@ -319,7 +297,7 @@ fn cmd_forget(cli: &Cli, args: &ForgetArgs) -> Result<()> {
     pruned = true;
   }
 
-  if cli.json {
+  if json {
     println!("{}", serde_json::json!({ "forgotten": forget_count, "pruned": pruned }));
   } else {
     println!(
@@ -330,11 +308,11 @@ fn cmd_forget(cli: &Cli, args: &ForgetArgs) -> Result<()> {
   Ok(())
 }
 
-fn cmd_check(cli: &Cli) -> Result<()> {
-  let backends = backend_options(cli)?.to_backends().context("configuring backend")?;
-  let repo = Repository::new(&RepositoryOptions::default(), &backends)?.open(&credentials(cli)?)?;
+fn cmd_check(json: bool, args: &BackupArgs) -> Result<()> {
+  let backends = backend_options(args)?.to_backends().context("configuring backend")?;
+  let repo = Repository::new(&RepositoryOptions::default(), &backends)?.open(&credentials(args)?)?;
   repo.check(CheckOptions::default()).context("integrity check failed")?;
-  if cli.json {
+  if json {
     println!("{}", serde_json::json!({ "ok": true }));
   } else {
     println!("Repository OK.");

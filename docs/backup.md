@@ -1,15 +1,22 @@
 # Backup & Restore
 
-Mica ships its own backup: `mica-cli export` projects every workspace to a
-Markdown + images tree, and `mica-backup` (an embedded, restic-format,
-encrypted/deduplicated engine — `rustic_core`) snapshots that tree to a local
-repo and/or Aliyun OSS. No external `restic`/`backrest`/`cron` binary.
+Mica ships its own backup as part of the `mica-cli` tool: `mica-cli export`
+projects every workspace to a Markdown + images tree, and `mica-cli backup`
+(an embedded, restic-format, encrypted/deduplicated engine — `rustic_core`)
+snapshots that tree to a local repo and/or Aliyun OSS. No external
+`restic`/`backrest`/`cron` binary.
 
 ```
-[timer] mica-cli export --out <dir>        # content: all workspaces → md + images
-        mica-backup snapshot --path <dir>   # encrypt + dedup + incremental → repo
-        mica-backup forget --keep-… --prune # retention
+[timer] mica-cli export --out <dir>              # content: all workspaces → md + images
+        mica-cli backup snapshot --path <dir>     # encrypt + dedup + incremental → repo
+        mica-cli backup forget --keep-… --prune   # retention
 ```
+
+The `backup` subcommand is compiled in **by default**. It carries a large
+dependency tree (`rustic_core` + OpenDAL); a plain `cargo build -p mica-cli`
+includes it, and `--no-default-features` builds a light client without it. The
+**api-server is a separate crate and never pulls any of this**, so the
+production server binary stays lean regardless.
 
 ## What this is (and isn't)
 
@@ -23,17 +30,14 @@ repo and/or Aliyun OSS. No external `restic`/`backrest`/`cron` binary.
 
 ## Build & install
 
-`mica-cli` is light; the `mica-backup` engine is behind the `backup` feature so
-nothing else (api-server, the default `mica-cli`) pulls its dependency tree.
-
 ```bash
-cargo build -p mica-cli --release                                   # → target/release/mica-cli
-cargo build -p mica-cli --release --features backup --bin mica-backup  # → target/release/mica-backup
-sudo install -m755 target/release/mica-cli target/release/mica-backup /usr/local/bin/
-sudo install -m755 deploy/mica-backup.sh /usr/local/bin/
+cargo build -p mica-cli --release          # → target/release/mica-cli (backup built in)
+# light client, no backup / no rustic:   cargo build -p mica-cli --release --no-default-features
+sudo install -m755 target/release/mica-cli /usr/local/bin/
+sudo install -m755 deploy/mica-backup.sh   /usr/local/bin/
 ```
 
-`mica-backup` needs rustc ≥ 1.88; the rest of the workspace stays at 1.85.
+The backup subcommand needs rustc ≥ 1.88; the rest of the workspace stays at 1.85.
 
 ## Aliyun OSS setup (one-time)
 
@@ -67,7 +71,7 @@ All backend config — including the OSS AccessKey — goes in `MICA_BACKUP_OPTS
 
 ```bash
 set -a; . /etc/mica/backup.env; set +a
-mica-backup init                  # creates the encrypted repo in the bucket
+mica-cli backup init              # creates the encrypted repo in the bucket
 ```
 
 ## Schedule it
@@ -86,16 +90,16 @@ The timer runs `mica-backup.sh` daily at 03:00: export → snapshot → forget+p
 
 ```bash
 set -a; . /etc/mica/backup.env; set +a
-mica-backup snapshots                 # list (add --json for scripts/agents)
-mica-backup check                     # verify repository integrity
-mica-backup snapshot --path /var/lib/mica/export --tag adhoc
+mica-cli backup snapshots              # list (add --json for scripts/agents)
+mica-cli backup check                  # verify repository integrity
+mica-cli backup snapshot --path /var/lib/mica/export --tag adhoc
 ```
 
 ## Restore
 
 ```bash
 set -a; . /etc/mica/backup.env; set +a
-mica-backup restore --snapshot latest --target /tmp/mica-restore
+mica-cli backup restore --snapshot latest --target /tmp/mica-restore
 # → /tmp/mica-restore/<...>/<workspace>/<page>.md  + assets/  + manifest.json
 ```
 
@@ -109,9 +113,9 @@ Periodically restore `latest` into a throwaway dir and assert the content is
 there and byte-intact:
 
 ```bash
-mica-backup restore --snapshot latest --target /tmp/rt && \
+mica-cli backup restore --snapshot latest --target /tmp/rt && \
   find /tmp/rt -name '*.md' | head && \
-  mica-backup check --json
+  mica-cli backup check --json
 rm -rf /tmp/rt
 ```
 
@@ -123,4 +127,4 @@ rm -rf /tmp/rt
 - Keep `/etc/mica/backup.env` root-600. Rotate the RAM key periodically.
 - The local staging dir (`/var/lib/mica/export`) and, if used, a local repo hold
   plaintext content — they share the host's trust boundary (same as the DB).
-  OSS is the real off-site copy; restic encrypts before upload.
+  OSS is the real off-site copy; the engine encrypts before upload.
