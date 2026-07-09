@@ -195,3 +195,8 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 - **仍缺(后续增强,非丢数据)**:真正的**双向 state-vector 协商**(需后端加 WS 消息,见 B2 注);B3 的 banner 目前只在连续熔断后弹,更细的「离线/重连中」状态提示可后续做。
 
 **M-R 小结**:P0(B1/B4/C2/C1)+ P1(B2/B3/A1)客户端能做的全部完成,7 个集成测试(4 假 WS + 3 真后端)覆盖,「崩溃/切页/坏 update/流截断」四类丢数据面在会话层封死。
+
+### 13.1 自动重连(M-R 后续,2026-07-08)
+
+- **客户端自动重连** —— 原来 socket 一断永久失活,offline→online 不自愈,只能重开文档(路线图头号缺口)。现 `CloudSyncSession._onDone` → `_scheduleReconnect`:**封顶指数退避(0.5s→30s)**,收到任一有效帧即重置退避;`connect` 取消挂起重连 + 旧 sub,`dispose` 取消定时器(且先置 `_disposed` 再关 sub,避免幽灵重连)。重连走既有 `_doc!=null` 分支(sync.pull + 重发未 ack),CRDT 幂等。**不引 connectivity 包**(in-house:退避重试足够,网回来自然连上)。io + web 同步改。测:`reconnect: a dropped socket auto-reconnects on its own`(假服务端断 socket → 断言 client 自行重连,connectionCount≥2);`migration_sync` / `page_switch` 真后端回归通过。
+- **后续**:重连成功后触发 blob pending 重传(现仍靠重开文档)、更细的「离线/重连中」状态提示接到 B3 的 banner 通道。

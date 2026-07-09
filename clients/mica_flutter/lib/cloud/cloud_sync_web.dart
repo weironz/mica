@@ -69,6 +69,10 @@ class CloudSyncSession {
   bool _restored = false;
   Timer? _persistTimer;
 
+  /// Auto-reconnect with capped backoff — parity with the desktop session.
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
 
@@ -115,6 +119,9 @@ class CloudSyncSession {
 
   void connect() {
     if (_disposed) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _sub?.cancel();
     _restoreUnackedOnce();
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
@@ -153,6 +160,8 @@ class CloudSyncSession {
     } catch (_) {
       return;
     }
+    // A valid frame means the link is live — reset the reconnect backoff.
+    _reconnectAttempts = 0;
     switch (m['type']) {
       case 'sync.base':
         final b64 = m['base'];
@@ -301,6 +310,20 @@ class CloudSyncSession {
 
   void _onDone() {
     _channel = null;
+    _scheduleReconnect();
+  }
+
+  /// Reconnect with capped exponential backoff (0.5s → 30s) — parity with io.
+  void _scheduleReconnect() {
+    if (_disposed || _channel != null || _reconnectTimer != null) return;
+    final shift = _reconnectAttempts.clamp(0, 6);
+    _reconnectAttempts++;
+    final ms = (500 << shift).clamp(500, 30000).toInt();
+    _reconnectTimer = Timer(Duration(milliseconds: ms), () {
+      _reconnectTimer = null;
+      if (_disposed || _channel != null) return;
+      connect();
+    });
   }
 
   void dispose() {
@@ -310,6 +333,7 @@ class CloudSyncSession {
     }
     _persistNow();
     _disposed = true;
+    _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
