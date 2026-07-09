@@ -64,7 +64,7 @@ pub async fn start_import(
   Query(params): Query<ImportParams>,
   body: Bytes,
 ) -> ApiResult<Json<ImportStartResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   if body.is_empty() {
     return Err(ApiError::BadRequest("empty archive".to_string()));
   }
@@ -107,7 +107,7 @@ pub async fn import_job(
   headers: HeaderMap,
   Path(job_id): Path<Uuid>,
 ) -> ApiResult<Json<ImportJob>> {
-  user_id_from_headers(&state, &headers)?;
+  user_id_from_headers(&state, &headers).await?;
   state
     .import_jobs
     .read()

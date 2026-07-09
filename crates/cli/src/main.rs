@@ -61,6 +61,32 @@ enum AuthCmd {
   Whoami,
   /// Forget the saved token.
   Logout,
+  /// Manage long-lived API tokens (create / list / revoke).
+  #[command(subcommand)]
+  Token(TokenCmd),
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+  /// Create an API token — the secret is printed ONCE.
+  Create(TokenCreateArgs),
+  /// List your API tokens (never the secret).
+  List,
+  /// Revoke a token by id.
+  Revoke { id: Uuid },
+}
+
+#[derive(Args)]
+struct TokenCreateArgs {
+  /// A label for the token.
+  #[arg(long)]
+  name: String,
+  /// Scope, repeatable: `read` and/or `write` (write implies read). Default: read.
+  #[arg(long = "scope")]
+  scopes: Vec<String>,
+  /// Days until the token expires (omit for a token that never expires).
+  #[arg(long)]
+  expires_days: Option<i64>,
 }
 
 #[derive(Args)]
@@ -111,6 +137,9 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Login(args)) => cmd_login(&cli, &mut cfg, args),
     Command::Auth(AuthCmd::Whoami) => cmd_whoami(&cli, &cfg),
     Command::Auth(AuthCmd::Logout) => cmd_logout(&mut cfg),
+    Command::Auth(AuthCmd::Token(TokenCmd::Create(args))) => cmd_token_create(&cli, &cfg, args),
+    Command::Auth(AuthCmd::Token(TokenCmd::List)) => cmd_token_list(&cli, &cfg),
+    Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
     #[cfg(feature = "backup")]
@@ -167,6 +196,58 @@ fn cmd_logout(cfg: &mut Config) -> Result<()> {
   cfg.token = None;
   config::save(cfg)?;
   println!("Logged out (token cleared).");
+  Ok(())
+}
+
+fn cmd_token_create(cli: &Cli, cfg: &Config, args: &TokenCreateArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+  let scopes = if args.scopes.is_empty() {
+    vec!["read".to_string()]
+  } else {
+    args.scopes.clone()
+  };
+  let created = client.create_token(&args.name, &scopes, args.expires_days)?;
+  if cli.json {
+    print_json(&created)?;
+  } else {
+    println!(
+      "Token '{}' created (scopes: {}). Save it now — it will NOT be shown again:\n\n  {}\n",
+      created.name,
+      created.scopes.join(","),
+      created.token
+    );
+  }
+  Ok(())
+}
+
+fn cmd_token_list(cli: &Cli, cfg: &Config) -> Result<()> {
+  let tokens = authed_client(cli, cfg)?.list_tokens()?;
+  if cli.json {
+    print_json(&tokens)?;
+  } else if tokens.is_empty() {
+    println!("(no tokens)");
+  } else {
+    for t in &tokens {
+      println!(
+        "{}  {:<20}  [{}]  used:{}  exp:{}",
+        t.id,
+        t.name,
+        t.scopes.join(","),
+        t.last_used_at.as_deref().unwrap_or("never"),
+        t.expires_at.as_deref().unwrap_or("never"),
+      );
+    }
+  }
+  Ok(())
+}
+
+fn cmd_token_revoke(cli: &Cli, cfg: &Config, id: Uuid) -> Result<()> {
+  authed_client(cli, cfg)?.revoke_token(id)?;
+  if cli.json {
+    print_json(&serde_json::json!({ "revoked": id.to_string() }))?;
+  } else {
+    println!("Revoked {id}.");
+  }
   Ok(())
 }
 

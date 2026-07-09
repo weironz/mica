@@ -69,7 +69,7 @@ pub async fn get_history(
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
   Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<HistoryResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let document = store::fetch_document(&state.db, workspace_id, document_id)
@@ -96,7 +96,7 @@ pub async fn get_version(
   headers: HeaderMap,
   Path((workspace_id, document_id, version_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> ApiResult<Json<VersionDetailResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state, workspace_id, document_id).await?;
 
@@ -119,7 +119,7 @@ pub async fn create_version(
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
   Json(payload): Json<CreateVersionRequest>,
 ) -> ApiResult<Json<VersionResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state, workspace_id, document_id).await?;
 
@@ -139,7 +139,7 @@ pub async fn restore(
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
   Json(payload): Json<RestoreRequest>,
 ) -> ApiResult<Json<RestoreResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state, workspace_id, document_id).await?;
 

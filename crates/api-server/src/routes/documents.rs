@@ -114,7 +114,7 @@ pub async fn list_views(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<Json<ViewListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
@@ -149,7 +149,7 @@ pub async fn search_workspace(
   Path(workspace_id): Path<Uuid>,
   Query(query): Query<SearchQuery>,
 ) -> ApiResult<Json<SearchResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let needle = query.q.trim().to_lowercase();
@@ -214,7 +214,7 @@ pub async fn create_document(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<CreateDocumentRequest>,
 ) -> ApiResult<Json<DocumentCreateResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   let name = normalize_view_name(&payload.name)?;
@@ -293,7 +293,7 @@ pub async fn import_document_markdown(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<ImportMarkdownRequest>,
 ) -> ApiResult<Json<DocumentBootstrapResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   let name = normalize_view_name(&payload.name)?;
@@ -373,7 +373,7 @@ pub async fn update_view(
   Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
   Json(payload): Json<UpdateViewRequest>,
 ) -> ApiResult<Json<ViewResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   let name = normalize_view_name(&payload.name)?;
@@ -412,7 +412,7 @@ pub async fn delete_view(
   headers: HeaderMap,
   Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<ViewListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   // Soft-delete (move to the recycle bin) the page and its whole subtree.
@@ -449,7 +449,7 @@ pub async fn list_trash(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<Json<ViewListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let views = fetch_deleted_workspace_views(&state.db, workspace_id).await?;
@@ -462,7 +462,7 @@ pub async fn restore_view(
   headers: HeaderMap,
   Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<ViewListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   // Restore the page and the subtree that was deleted with it.
@@ -516,7 +516,7 @@ pub async fn purge_view(
   headers: HeaderMap,
   Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<ViewListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   // Permanently remove the page and its subtree from the recycle bin.
@@ -551,7 +551,7 @@ pub async fn move_view(
   Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
   Json(payload): Json<MoveViewRequest>,
 ) -> ApiResult<Json<ViewResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
 
@@ -596,7 +596,7 @@ pub async fn bootstrap_document(
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<DocumentBootstrapResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let document = store::fetch_document(&state.db, workspace_id, document_id)
@@ -624,7 +624,7 @@ pub async fn apply_document_update(
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
   Json(payload): Json<ApplyDocumentUpdateRequest>,
 ) -> ApiResult<Json<DocumentUpdateResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   if payload.operations.is_empty() {
@@ -658,7 +658,7 @@ pub async fn export_document_markdown(
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<MarkdownExportResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
@@ -682,7 +682,7 @@ pub async fn export_document_zip(
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Response> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
@@ -805,7 +805,7 @@ pub async fn export_workspace_zip(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<Response> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
@@ -1073,7 +1073,7 @@ pub async fn export_workspace_markdown(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<Json<MarkdownExportResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   let markdown = workspace_markdown(&state.db, workspace_id, 1).await?;
   Ok(Json(MarkdownExportResponse { markdown }))
@@ -1085,7 +1085,7 @@ pub async fn export_all_markdown(
   State(state): State<AppState>,
   headers: HeaderMap,
 ) -> ApiResult<Json<MarkdownExportResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   let workspaces = sqlx::query_as::<_, (Uuid, String)>(
     r#"
       SELECT w.id, w.name
@@ -1179,7 +1179,7 @@ pub async fn export_document_html(
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<HtmlExportResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;

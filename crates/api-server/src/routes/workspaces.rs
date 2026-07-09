@@ -76,7 +76,7 @@ pub async fn list(
   State(state): State<AppState>,
   headers: HeaderMap,
 ) -> ApiResult<Json<WorkspaceListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
 
   let workspaces = sqlx::query_as::<_, Workspace>(
     r#"
@@ -105,7 +105,7 @@ pub async fn create(
   headers: HeaderMap,
   Json(payload): Json<CreateWorkspaceRequest>,
 ) -> ApiResult<Json<WorkspaceResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   let name = normalize_workspace_name(&payload.name)?;
 
   let mut tx = state.db.begin().await?;
@@ -149,7 +149,7 @@ pub async fn get(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<Json<WorkspaceResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   let workspace = fetch_workspace_for_user(&state.db, workspace_id, user_id)
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -163,7 +163,7 @@ pub async fn update(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<UpdateWorkspaceRequest>,
 ) -> ApiResult<Json<WorkspaceResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   let name = normalize_workspace_name(&payload.name)?;
 
   let role = workspace_role(&state.db, workspace_id, user_id)
@@ -198,7 +198,7 @@ pub async fn delete(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
 
   // Only the owner may delete a workspace; the cascade removes its members,
   // views, documents, and history.
@@ -222,7 +222,7 @@ pub async fn list_members(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
 ) -> ApiResult<Json<WorkspaceMemberListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let members = fetch_workspace_members(&state.db, workspace_id).await?;
@@ -236,7 +236,7 @@ pub async fn add_member(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<AddWorkspaceMemberRequest>,
 ) -> ApiResult<Json<WorkspaceMemberResponse>> {
-  let actor_id = user_id_from_headers(&state, &headers)?;
+  let actor_id = user_id_from_headers(&state, &headers).await?;
   ensure_can_manage_members(&state.db, workspace_id, actor_id).await?;
 
   let email = normalize_email(&payload.email)?;
@@ -274,7 +274,7 @@ pub async fn update_member(
   Path((workspace_id, member_user_id)): Path<(Uuid, Uuid)>,
   Json(payload): Json<UpdateWorkspaceMemberRequest>,
 ) -> ApiResult<Json<WorkspaceMemberResponse>> {
-  let actor_id = user_id_from_headers(&state, &headers)?;
+  let actor_id = user_id_from_headers(&state, &headers).await?;
   ensure_can_manage_members(&state.db, workspace_id, actor_id).await?;
   ensure_not_workspace_owner(&state.db, workspace_id, member_user_id).await?;
 
@@ -309,7 +309,7 @@ pub async fn remove_member(
   headers: HeaderMap,
   Path((workspace_id, member_user_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<WorkspaceMemberListResponse>> {
-  let actor_id = user_id_from_headers(&state, &headers)?;
+  let actor_id = user_id_from_headers(&state, &headers).await?;
   ensure_can_manage_members(&state.db, workspace_id, actor_id).await?;
   ensure_not_workspace_owner(&state.db, workspace_id, member_user_id).await?;
 

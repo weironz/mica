@@ -49,8 +49,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn app_router(state: AppState) -> Router {
+  // Authenticate + enforce token scopes on every /api route (public ones opt out
+  // inside the guard). WebSocket routes keep their own query-token auth.
+  let api = routes::api_router().layer(axum::middleware::from_fn_with_state(
+    state.clone(),
+    routes::auth::scope_guard,
+  ));
   Router::new()
-    .nest("/api", routes::api_router())
+    .nest("/api", api)
     .merge(routes::ws_router())
     .layer(TraceLayer::new_for_http())
     .layer(CorsLayer::permissive())

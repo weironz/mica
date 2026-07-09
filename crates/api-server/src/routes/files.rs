@@ -76,7 +76,7 @@ pub async fn presign(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<PresignRequest>,
 ) -> ApiResult<Json<PresignResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   let storage = storage(&state)?;
 
@@ -105,7 +105,7 @@ pub async fn complete(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<CompleteRequest>,
 ) -> ApiResult<Json<FileResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   let storage = storage(&state)?;
 
@@ -139,7 +139,7 @@ pub async fn resolve(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<ResolveRequest>,
 ) -> ApiResult<Json<ResolveResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   let storage = storage(&state)?;
 
@@ -167,7 +167,7 @@ pub async fn import_url(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<ImportUrlRequest>,
 ) -> ApiResult<Json<FileResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   let storage = storage(&state)?;
 
@@ -291,7 +291,7 @@ pub async fn get_file(
   headers: HeaderMap,
   Path((workspace_id, file_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<FileResponse>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   let storage = storage(&state)?;
 
@@ -309,7 +309,7 @@ pub async fn delete_file(
   headers: HeaderMap,
   Path((workspace_id, file_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<Value>> {
-  let user_id = user_id_from_headers(&state, &headers)?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   let deleted = store::delete_file(&state.db, workspace_id, file_id).await?;

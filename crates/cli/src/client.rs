@@ -51,6 +51,30 @@ struct WorkspaceListResponse {
   workspaces: Vec<Workspace>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreatedToken {
+  pub id: Uuid,
+  pub name: String,
+  pub scopes: Vec<String>,
+  pub token: String,
+  pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TokenInfo {
+  pub id: Uuid,
+  pub name: String,
+  pub scopes: Vec<String>,
+  pub created_at: String,
+  pub last_used_at: Option<String>,
+  pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenListResponse {
+  tokens: Vec<TokenInfo>,
+}
+
 impl Client {
   pub fn new(base: impl Into<String>, token: Option<String>) -> Result<Self> {
     let base = base.into().trim_end_matches('/').to_string();
@@ -118,5 +142,33 @@ impl Client {
       .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/export.zip"))))
       .send()?;
     Ok(Self::ok(resp)?.bytes()?.to_vec())
+  }
+
+  pub fn create_token(
+    &self,
+    name: &str,
+    scopes: &[String],
+    expires_in_days: Option<i64>,
+  ) -> Result<CreatedToken> {
+    let mut body = serde_json::json!({ "name": name, "scopes": scopes });
+    if let Some(days) = expires_in_days {
+      body["expires_in_days"] = serde_json::json!(days);
+    }
+    let resp = self.authed(self.http.post(self.url("/auth/tokens"))).json(&body).send()?;
+    Ok(Self::ok(resp)?.json().context("decoding created token")?)
+  }
+
+  pub fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
+    let resp = self.authed(self.http.get(self.url("/auth/tokens"))).send()?;
+    let list: TokenListResponse = Self::ok(resp)?.json()?;
+    Ok(list.tokens)
+  }
+
+  pub fn revoke_token(&self, id: Uuid) -> Result<()> {
+    let resp = self
+      .authed(self.http.delete(self.url(&format!("/auth/tokens/{id}"))))
+      .send()?;
+    Self::ok(resp)?;
+    Ok(())
   }
 }

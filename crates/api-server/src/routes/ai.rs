@@ -49,7 +49,7 @@ pub async fn complete(
   headers: HeaderMap,
   Json(payload): Json<AiCompleteRequest>,
 ) -> ApiResult<Json<AiCompleteResponse>> {
-  let _user_id = user_id_from_headers(&state, &headers)?;
+  let _user_id = user_id_from_headers(&state, &headers).await?;
 
   let config = state
     .ai
@@ -79,7 +79,7 @@ pub async fn get_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
 ) -> ApiResult<Json<AiSettingsResponse>> {
-  let _user_id = user_id_from_headers(&state, &headers)?;
+  let _user_id = user_id_from_headers(&state, &headers).await?;
   let config = state.ai.read().await.clone();
   Ok(Json(settings_response(config.as_ref())))
 }
@@ -90,7 +90,7 @@ pub async fn update_settings(
   headers: HeaderMap,
   Json(payload): Json<UpdateAiSettingsRequest>,
 ) -> ApiResult<Json<AiSettingsResponse>> {
-  let _user_id = user_id_from_headers(&state, &headers)?;
+  let _user_id = user_id_from_headers(&state, &headers).await?;
 
   let mut guard = state.ai.write().await;
   let current = guard.clone();

@@ -12,6 +12,7 @@ mod files;
 mod health;
 mod history;
 mod import;
+mod tokens;
 mod workspaces;
 pub mod ws;
 
@@ -33,6 +34,11 @@ pub fn api_router() -> Router<AppState> {
     .route("/auth/login", post(auth::login))
     .route("/auth/me", get(auth::me).patch(auth::update_me))
     .route("/auth/password", post(auth::change_password))
+    .route(
+      "/auth/tokens",
+      get(tokens::list_tokens).post(tokens::create_token),
+    )
+    .route("/auth/tokens/{id}", delete(tokens::revoke_token))
     .route("/export/markdown", get(documents::export_all_markdown))
     .route(
       "/workspaces/{workspace_id}/export.zip",
