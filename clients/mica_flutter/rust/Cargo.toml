@@ -11,8 +11,14 @@ flutter_rust_bridge = "=2.12.0"
 # The shared, FFI-agnostic data plane. All real logic lives there; this crate is
 # only the flutter_rust_bridge surface over it.
 mica-core = { path = "../../../crates/mica-core", features = ["store"] }
+# The authoritative Markdown engine (CommonMark 100% + GFM), reused for local
+# vault import so parsing stays Rust-first + round-trip-stable with export. Its
+# `Block` mirrors `mica-core::Block` exactly, so no schema translation is needed.
+mica-markdown = { path = "../../../crates/markdown" }
 # Blocks cross the FFI boundary as JSON strings (Dart already speaks that shape).
 serde_json = "1"
+# Fresh root-block ids for imported documents.
+uuid = { version = "1", features = ["v4"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

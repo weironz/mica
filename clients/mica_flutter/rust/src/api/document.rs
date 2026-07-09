@@ -26,6 +26,31 @@ impl MicaDocument {
         }
     }
 
+    /// Build a document by parsing Markdown with the authoritative engine
+    /// (CommonMark + GFM). Used by local vault import (S-tier): the file stays the
+    /// user's, parsing stays in Rust (and round-trips with `export_markdown`). A
+    /// fresh root id is minted; `mica_markdown::Block` mirrors `mica_core::Block`
+    /// field-for-field, so no schema translation is needed.
+    #[frb(sync)]
+    pub fn from_markdown(markdown: String) -> MicaDocument {
+        let root_id = format!("block_{}", uuid::Uuid::new_v4());
+        let payload = mica_markdown::import_markdown(&markdown, &root_id);
+        let blocks: Vec<Block> = payload
+            .blocks
+            .into_iter()
+            .map(|b| Block {
+                id: b.id,
+                kind: b.kind,
+                text: b.text,
+                data: b.data,
+                children: b.children,
+            })
+            .collect();
+        MicaDocument {
+            inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &blocks)),
+        }
+    }
+
     /// Rebuild from an encoded yrs state (the local snapshot). Returns null if
     /// the bytes don't decode.
     #[frb(sync)]
@@ -201,5 +226,37 @@ impl MicaDocument {
     #[frb(sync)]
     pub fn join_into_prev(&self, id: String) {
         self.inner.lock().unwrap().join_into_prev(&id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_markdown_parses_headings_and_marks() {
+        let doc = MicaDocument::from_markdown("# Title\n\nHello **world**".to_string());
+        let blocks: Vec<serde_json::Value> =
+            serde_json::from_str(&doc.to_blocks_json()).unwrap();
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b["type"] == "heading" && b["text"] == "Title"),
+            "heading imported: {blocks:?}"
+        );
+        // Plain text is clean; the bold is a mark inside `data`, not in `text`.
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b["type"] == "paragraph" && b["text"] == "Hello world"),
+            "paragraph imported with clean text: {blocks:?}"
+        );
+    }
+
+    #[test]
+    fn from_empty_markdown_still_builds_a_doc() {
+        let doc = MicaDocument::from_markdown(String::new());
+        assert!(!doc.root_block_id().is_empty());
+        assert!(!doc.encode_state().is_empty());
     }
 }

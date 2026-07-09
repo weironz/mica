@@ -6,9 +6,11 @@
 // web) can drive a fully local workspace without statically importing the native
 // FFI. The web build gets `local_offline_web.dart` instead, where everything is
 // unavailable.
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../src/rust/api/document.dart';
 import '../src/rust/api/store.dart';
 import '../src/rust/frb_generated.dart';
 import '../upload/sha256.dart';
@@ -30,6 +32,10 @@ typedef WorkspaceData = ({String id, String name, String position});
 
 /// A loaded document: its root block id and full block list (snapshot payload).
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
+
+/// Outcome of a vault import (S-tier read-only scan): documents + folder-pages
+/// created, and any per-file errors (unreadable files, etc.).
+typedef VaultImportResult = ({int docs, int folders, List<String> errors});
 
 class LocalOffline {
   /// [rootDirOverride] redirects the data dir (store + blob CAS) — for tests
@@ -175,6 +181,105 @@ class LocalOffline {
   /// Apply the editor's op batch to the active document.
   Future<void> applyOps(List<Map<String, dynamic>> ops) async {
     await _active?.applyOps(ops);
+  }
+
+  /// Import a pre-walked tree of files as local documents, mirroring the
+  /// directory layout as a page tree — folders on the path to a `.md` become
+  /// empty pages; non-`.md` files and anything under a `.`-dir
+  /// (`.obsidian`/`.git`/`.trash`…) are skipped. Each [entries] item is a
+  /// forward-slashed relative path + its bytes (as the folder picker produces).
+  /// **Read-only w.r.t. the source folder** — nothing is written back. This is
+  /// the S-tier "open my vault" import; parsing is done by the authoritative Rust
+  /// engine (`MicaDocument.fromMarkdown`, round-trip-stable with export).
+  Future<VaultImportResult> importVaultTree(
+    List<({String path, List<int> bytes})> entries,
+    String workspaceId,
+  ) async {
+    final store = _store;
+    if (store == null) {
+      return (docs: 0, folders: 0, errors: const ['local store not open']);
+    }
+    final errors = <String>[];
+
+    // Markdown files only, skipping anything under a dot-dir.
+    final md = [
+      for (final e in entries)
+        if (e.path.toLowerCase().endsWith('.md') &&
+            !e.path.split('/').any((s) => s.startsWith('.')))
+          e,
+    ]..sort((a, b) => a.path.compareTo(b.path));
+
+    // Lazily create folder-pages (only ancestors of a real `.md`, so asset-only
+    // dirs don't clutter the tree).
+    final folderView = <String, String>{}; // relative dir -> view id
+    final posByParent = <String?, int>{};
+    String nextPos(String? parent) {
+      final n = (posByParent[parent] ?? 0) + 1;
+      posByParent[parent] = n;
+      return (n * 10).toString().padLeft(10, '0');
+    }
+
+    var folders = 0;
+    String? ensureFolder(String relDir) {
+      if (relDir.isEmpty) return null;
+      final existing = folderView[relDir];
+      if (existing != null) return existing;
+      final slash = relDir.lastIndexOf('/');
+      final parentRel = slash < 0 ? '' : relDir.substring(0, slash);
+      final name = slash < 0 ? relDir : relDir.substring(slash + 1);
+      final parentView = ensureFolder(parentRel);
+      final docId = _id('doc');
+      final viewId = _id('view');
+      store.saveDoc(docId: docId, doc: MicaDocument.fromMarkdown(markdown: ''));
+      saveView((
+        id: viewId,
+        workspaceId: workspaceId,
+        parentId: parentView,
+        objectId: docId,
+        name: name,
+        position: nextPos(parentView),
+        trashed: false,
+      ));
+      folders++;
+      folderView[relDir] = viewId;
+      return viewId;
+    }
+
+    var docs = 0;
+    for (final e in md) {
+      try {
+        final path = e.path;
+        final slash = path.lastIndexOf('/');
+        final relDir = slash < 0 ? '' : path.substring(0, slash);
+        var fileName = slash < 0 ? path : path.substring(slash + 1);
+        if (fileName.toLowerCase().endsWith('.md')) {
+          fileName = fileName.substring(0, fileName.length - 3);
+        }
+        final parentView = ensureFolder(relDir);
+        final text = utf8.decode(e.bytes, allowMalformed: true);
+        final docId = _id('doc');
+        final viewId = _id('view');
+        store.saveDoc(
+          docId: docId,
+          doc: MicaDocument.fromMarkdown(markdown: text),
+        );
+        saveView((
+          id: viewId,
+          workspaceId: workspaceId,
+          parentId: parentView,
+          objectId: docId,
+          name: fileName.isEmpty ? 'Untitled' : fileName,
+          position: nextPos(parentView),
+          trashed: false,
+        ));
+        docs++;
+        // Yield periodically so a large vault doesn't freeze the UI isolate.
+        if (docs % 20 == 0) await Future<void>.delayed(Duration.zero);
+      } catch (err) {
+        errors.add('${e.path}: $err');
+      }
+    }
+    return (docs: docs, folders: folders, errors: errors);
   }
 
   /// Revert a document to its last on-device checkpoint (§10 recovery). The

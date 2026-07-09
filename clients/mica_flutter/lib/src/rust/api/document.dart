@@ -30,6 +30,16 @@ abstract class MicaDocument implements RustOpaqueInterface {
     blocksJson: blocksJson,
   );
 
+  /// Build a document by parsing Markdown with the authoritative engine
+  /// (CommonMark + GFM). Used by local vault import (S-tier): the file stays the
+  /// user's, parsing stays in Rust (and round-trips with `export_markdown`). A
+  /// fresh root id is minted; `mica_markdown::Block` mirrors `mica_core::Block`
+  /// field-for-field, so no schema translation is needed.
+  static MicaDocument fromMarkdown({required String markdown}) => RustLib
+      .instance
+      .api
+      .crateApiDocumentMicaDocumentFromMarkdown(markdown: markdown);
+
   /// Rebuild from an encoded yrs state (the local snapshot). Returns null if
   /// the bytes don't decode.
   static MicaDocument? fromState({required List<int> bytes}) =>

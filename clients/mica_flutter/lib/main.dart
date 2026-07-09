@@ -1754,6 +1754,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// S-tier vault import: land a picked folder's `.md` files into the local
+  /// store as documents, mirroring the directory tree (read-only — the source
+  /// folder is untouched). Wired to the existing "import folder into workspace"
+  /// menu; the picker + walk are shared with the cloud path.
+  Future<void> _localImportVaultTree(
+    Workspace workspace,
+    List<ArchiveFile> entries,
+  ) async {
+    final files = <({String path, List<int> bytes})>[
+      for (final f in entries) (path: f.name, bytes: f.bytes),
+    ];
+    final result = await _local.importVaultTree(files, workspace.id);
+    if (!mounted) return;
+    setState(_reloadLocalViews);
+    final parts = <String>[
+      if (result.docs > 0) '${result.docs} 篇笔记',
+      if (result.folders > 0) '${result.folders} 个文件夹',
+    ];
+    final msg = parts.isEmpty
+        ? (result.errors.isEmpty
+              ? '没找到 Markdown 文件'
+              : '导入失败:${result.errors.first}')
+        : '已导入 ${parts.join('、')}'
+              '${result.errors.isNotEmpty ? '(${result.errors.length} 个跳过)' : ''}';
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   Future<void> _localSelectView(DocumentView view) async {
     final data = _local.openDoc(view.objectId);
     if (data == null || !mounted) return;
@@ -2799,7 +2828,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           onExportWorkspaceMarkdown: () async => '',
           onExportWorkspaceZip: (_) async => Uint8List(0),
           onImportWorkspaceZip: (_, _, {bool notion = false}) async {},
-          onImportWorkspaceTreeInto: (_, _) async {},
+          onImportWorkspaceTreeInto: _localImportVaultTree,
           onExportAllMarkdown: () async => '',
           onExportMarkdown: () async {},
           onAddMember: (_, _) async {},

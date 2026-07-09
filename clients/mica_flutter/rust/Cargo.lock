@@ -664,6 +664,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-markdown"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -849,7 +859,9 @@ version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
  "mica-core",
+ "mica-markdown",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

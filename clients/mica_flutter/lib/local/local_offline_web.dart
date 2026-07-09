@@ -19,6 +19,8 @@ typedef WorkspaceData = ({String id, String name, String position});
 
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
 
+typedef VaultImportResult = ({int docs, int folders, List<String> errors});
+
 class LocalOffline {
   LocalOffline({String? rootDirOverride});
 
@@ -55,6 +57,12 @@ class LocalOffline {
   DocData? openDoc(String docId) => null;
 
   Future<void> applyOps(List<Map<String, dynamic>> ops) async {}
+
+  Future<VaultImportResult> importVaultTree(
+    List<({String path, List<int> bytes})> entries,
+    String workspaceId,
+  ) async =>
+      (docs: 0, folders: 0, errors: const ['local offline is not available on web']);
 
   void flush() {}
 }
