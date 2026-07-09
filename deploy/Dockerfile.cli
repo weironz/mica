@@ -1,0 +1,25 @@
+# mica-cli with the built-in backup engine (rustic_core + OpenDAL S3), packaged
+# as a small always-on container that backs up every workspace on a daily
+# schedule. Same binary users run by hand — `backup` is a default feature.
+#   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:vX.Y .
+
+FROM rust:1.96-slim AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+# Only mica-cli is compiled (its deps pull rustic); the rest of the workspace is
+# just needed to resolve. `backup` is on by default → binary has `backup …`.
+RUN cargo build --release -p mica-cli
+
+FROM debian:bookworm-slim
+# rustls-tls (see workspace reqwest) needs only the CA roots, not libssl.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
+COPY deploy/mica-backup.sh /usr/local/bin/mica-backup.sh
+COPY deploy/mica-backup-loop.sh /usr/local/bin/mica-backup-loop.sh
+RUN chmod +x /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh
+ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
+# The loop runs mica-backup.sh (export → snapshot → forget) once a day.
+ENTRYPOINT ["/usr/local/bin/mica-backup-loop.sh"]

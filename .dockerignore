@@ -6,3 +6,8 @@ appflowy-src
 !.env.example
 *.log
 
+# Generated Flutter artifacts — never needed in an image build context.
+clients/*/build
+clients/*/.dart_tool
+**/node_modules
+

@@ -53,7 +53,43 @@ The backup subcommand needs rustc ≥ 1.88; the rest of the workspace stays at 1
 > `enable_virtual_host_style=true` is **required** — path style fails with
 > "Path `config` does not exist".
 
-## Configure
+## Deploy inside the Docker stack (recommended)
+
+The production compose ships a `backup` service — mica-cli in a container that
+runs the daily backup over the **internal** network (`MICA_SERVER=http://api:8080`
+is hard-wired), so the token never leaves the host. It is **opt-in** behind the
+`backup` profile; a plain `docker compose up -d` ignores it.
+
+1. **Build & load the image** (the node can't pull from Docker Hub):
+   ```bash
+   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:v0.3 .
+   docker save willdockerhub/mica-cli:v0.3 | gzip | ssh root@<node> 'gunzip | docker load'
+   ```
+2. **Mint a read-scoped token** — app *Settings → API Tokens*, or
+   `mica-cli auth token create --name backup --scope read` — and add it plus the
+   repo/OSS config to the node's `.env` (next to `MICA_VERSION`):
+   ```
+   MICA_BACKUP_TOKEN=mica_pat_…
+   MICA_BACKUP_REPO=opendal:s3:/mica
+   MICA_BACKUP_PASSWORD=…
+   MICA_BACKUP_OPTS=bucket=… endpoint=https://oss-cn-hangzhou.aliyuncs.com region=oss-cn-hangzhou access_key_id=… secret_access_key=… enable_virtual_host_style=true
+   # optional: BACKUP_HOUR=3  KEEP_DAILY=14  KEEP_WEEKLY=8  KEEP_MONTHLY=6
+   ```
+3. **Initialise the repo once, then start the service:**
+   ```bash
+   docker compose --profile backup run --rm backup mica-cli backup init
+   docker compose --profile backup up -d backup
+   docker compose logs -f backup      # BACKUP_ON_START=1 → the first run happens now
+   ```
+
+The container runs `mica-backup.sh` (export → snapshot → forget --prune) at
+`${BACKUP_HOUR}:00` daily and once on (re)start; the staging dir lives in the
+`mica-prod-backup` volume. A **read** token suffices — the export is all GETs.
+
+The systemd-timer setup below is the alternative for hosts **not** running the
+Docker stack.
+
+## Configure (systemd host, alternative)
 
 Copy `deploy/backup.env.example` → `/etc/mica/backup.env`, fill it in, lock it down:
 
