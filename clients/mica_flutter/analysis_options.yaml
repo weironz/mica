@@ -1,5 +1,15 @@
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Vendored cargokit build tool: its own Dart package (own pubspec/deps like
+    # package:version, package:hex, package:github) isn't resolved by the app's
+    # `flutter pub get`, so a fresh CI checkout reports its imports as unresolved.
+    # Not app code — never lint it.
+    - rust_builder/**
+    # Generated FFI bindings.
+    - lib/src/rust/**
+
 linter:
   rules:
     prefer_const_constructors: true
