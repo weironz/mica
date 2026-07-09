@@ -1,0 +1,61 @@
+name: CI
+
+# Fast pre-merge checks: compile the Rust backend workspace + run its pure
+# (no-database) crate tests, and run the Flutter Dart unit tests. Every command
+# here was verified green locally (2026-07-08): cargo test on the pure crates
+# (~45 tests) and `flutter test test` (206 tests).
+#
+# Deliberately NOT covered yet (need infra a headless runner can't trivially
+# provide — left for a reviewer to enable + validate against a real run):
+#   - Postgres-backed tests (crates/app-core/tests/sync_pg.rs, mica-core sync,
+#     api-server) — add a `services: postgres` block + run the migrations.
+#   - The Windows integration_test suite (yrs sync e2e, page-switch fidelity) —
+#     needs a desktop runner + the native FFI (flutter_rust_bridge) build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: Rust (build + pure-crate tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      # rust-toolchain.toml pins `stable` (+ rustfmt, clippy); rustup honors it.
+      # sqlx uses the runtime query API (not compile-time macros), so the
+      # workspace builds without a live database.
+      - name: Build workspace
+        run: cargo build --workspace
+      - name: Test pure crates (no database needed)
+        run: cargo test -p mica-markdown -p mica-core -p mica-interchange
+
+  flutter:
+    name: Flutter (analyze + Dart unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/mica_flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      # Only fail on real errors — the tree still carries pre-existing info/
+      # warning lints that a separate cleanup pass will address.
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Dart unit tests
+        run: flutter test test
