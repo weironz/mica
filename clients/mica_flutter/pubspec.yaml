@@ -2,7 +2,7 @@ name: mica_flutter
 description: Flutter client skeleton for Mica.
 publish_to: none
 
-version: 0.1.4
+version: 0.1.5
 
 environment:
   sdk: ">=3.8.0 <4.0.0"

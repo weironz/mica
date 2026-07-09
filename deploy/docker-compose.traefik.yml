@@ -52,7 +52,7 @@ services:
       traefik.http.services.mica-s3.loadbalancer.server.port: "9000"
 
   api:
-    image: willdockerhub/mica-api:${MICA_VERSION:-v0.1.4}
+    image: willdockerhub/mica-api:${MICA_VERSION:-v0.1.5}
     restart: unless-stopped
     environment:
       HTTP_ADDR: 0.0.0.0:8080
@@ -71,7 +71,7 @@ services:
         condition: service_started
 
   web:
-    image: willdockerhub/mica-web:${MICA_VERSION:-v0.1.4}
+    image: willdockerhub/mica-web:${MICA_VERSION:-v0.1.5}
     restart: unless-stopped
     networks: [default, traefik]
     depends_on:
