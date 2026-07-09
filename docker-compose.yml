@@ -48,7 +48,9 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      # Single source of truth for the API image — same Dockerfile the prod
+      # images are built from (deploy/Dockerfile.api), so dev and prod can't drift.
+      dockerfile: deploy/Dockerfile.api
     container_name: mica-api
     restart: unless-stopped
     depends_on:

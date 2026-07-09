@@ -31,9 +31,9 @@ dev-web:
 parity-check version="dev": (docker-build version)
     docker compose down 2>/dev/null || true
     pkill -x mica-api-server 2>/dev/null || true
-    MICA_VERSION={{version}} docker compose --env-file .env.prod -f deploy/docker-compose.images.yml up -d
+    MICA_VERSION={{version}} docker compose --env-file .env.prod -f deploy/docker-compose.yml up -d
     sleep 8
-    curl -fsS http://127.0.0.1/api/health && echo " ← parity OK (stack: deploy/docker-compose.images.yml)"
+    curl -fsS http://127.0.0.1/api/health && echo " ← parity OK (stack: deploy/docker-compose.yml)"
 
 # Run all tests (Rust workspace + Flutter).
 test:
