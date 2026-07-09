@@ -1,0 +1,18 @@
+[Unit]
+Description=Mica scheduled backup (export all workspaces → restic/OSS snapshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Secrets live here, root-only (chmod 600): MICA_SERVER/MICA_TOKEN,
+# MICA_BACKUP_REPO/PASSWORD/OPTS, KEEP_*. See deploy/backup.env.example.
+EnvironmentFile=/etc/mica/backup.env
+ExecStart=/usr/local/bin/mica-backup.sh
+# Backups should not fight the app for I/O.
+Nice=10
+IOSchedulingClass=idle
+# Light hardening (the job only needs the export staging dir + network).
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mica
+PrivateTmp=true

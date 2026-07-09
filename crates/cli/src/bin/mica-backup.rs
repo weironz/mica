@@ -140,9 +140,22 @@ fn repo_uri(cli: &Cli) -> Result<String> {
 }
 
 fn backend_options(cli: &Cli) -> Result<BackendOptions> {
+  // Backend options (incl. S3/OSS credentials) may come from the env var
+  // MICA_BACKUP_OPTS ("k=v k2=v2 …") so secrets stay off argv/ps — CLI `--opt`
+  // flags override. The systemd unit puts the whole OSS config there.
+  let mut map: BTreeMap<String, String> = BTreeMap::new();
+  if let Ok(env_opts) = std::env::var("MICA_BACKUP_OPTS") {
+    for pair in env_opts.split_whitespace() {
+      if let Some((k, v)) = pair.split_once('=') {
+        map.insert(k.to_string(), v.to_string());
+      }
+    }
+  }
+  for (k, v) in &cli.opts {
+    map.insert(k.clone(), v.clone());
+  }
   let mut opts = BackendOptions::default().repository(repo_uri(cli)?);
-  if !cli.opts.is_empty() {
-    let map: BTreeMap<String, String> = cli.opts.iter().cloned().collect();
+  if !map.is_empty() {
     opts = opts.options(map);
   }
   Ok(opts)

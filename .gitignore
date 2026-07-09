@@ -74,3 +74,6 @@ skills-lock.json
 /QODER.md
 /.github/*.instruction.md
 /.github/copilot-instructions.md
+
+# Local cloud credentials — never commit
+aliyun-ak.txt
