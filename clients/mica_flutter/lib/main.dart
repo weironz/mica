@@ -380,20 +380,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Persist the access token + user so a restart restores the session instead
-  /// of forcing re-login. Plaintext in the same prefs store as other settings
-  /// (desktop only; web keeps its own per-tab session). DPAPI encryption is a
-  /// noted hardening follow-up. The token is server-specific — [_signOut]
-  /// (which a server switch also calls) clears it, so a saved token always
-  /// matches the configured backend.
+  /// Persist the access token + user so a restart (desktop) or browser refresh
+  /// (web) restores the session instead of forcing re-login. Plaintext in the
+  /// same prefs store as other settings — a per-origin `window.localStorage`
+  /// entry on web, a JSON file on desktop (DPAPI encryption is a noted hardening
+  /// follow-up; the localStorage copy is likewise XSS-exposed). The token is
+  /// server-specific — [_signOut] (which a server switch also calls) clears it,
+  /// so a saved token always matches the configured backend.
   void _persistSession(AuthSession session) {
-    if (kIsWeb) return;
     savePref('authToken', session.accessToken);
     savePref('authUser', jsonEncode(session.user.toJson()));
   }
 
   void _clearPersistedSession() {
-    if (kIsWeb) return;
     savePref('authToken', '');
     savePref('authUser', '');
   }
@@ -404,7 +403,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// server JWT-secret changed) drops the token; a transient network error keeps
   /// it (this launch shows login, the next retries).
   Future<void> _restoreSession() async {
-    if (kIsWeb || _session != null) return;
+    if (_session != null) return;
     final token = loadPref('authToken');
     final userJson = loadPref('authUser');
     if (token == null ||
@@ -5864,7 +5863,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   bool _saving = false;
   bool _hasKey = false;
   String? _error;
-  String? _saved;
 
   late final _name = TextEditingController(text: widget.userName);
   final _curPass = TextEditingController();
@@ -5959,7 +5957,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     });
     try {
       await widget.onUpdateProfile(_name.text.trim());
-      if (mounted) setState(() => _accountMsg = 'Profile saved');
+      if (mounted) Navigator.of(context).pop(); // saved → close, like server config
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -5980,13 +5978,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     });
     try {
       await widget.onChangePassword(_curPass.text, _newPass.text);
-      if (mounted) {
-        setState(() {
-          _accountMsg = 'Password changed';
-          _curPass.clear();
-          _newPass.clear();
-        });
-      }
+      if (mounted) Navigator.of(context).pop(); // changed → close, like server config
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -6050,7 +6042,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _saving = true;
       _error = null;
-      _saved = null;
     });
     try {
       await widget.onSaveAiSettings(
@@ -6059,13 +6050,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         model: _model.text.trim(),
         apiKey: _apiKey.text.trim().isEmpty ? null : _apiKey.text.trim(),
       );
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _saved = 'Saved';
-        if (_apiKey.text.trim().isNotEmpty) _hasKey = true;
-        _apiKey.clear();
-      });
+      if (mounted) Navigator.of(context).pop(); // saved → close, like server config
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -6261,16 +6246,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
     ),
     if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
-    if (_saved != null) ...[
-      const SizedBox(height: 12),
-      Row(
-        children: [
-          const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
-          const SizedBox(width: 6),
-          Text(_saved!),
-        ],
-      ),
-    ],
   ];
 
   List<Widget> _accountSection(BuildContext context) => [
