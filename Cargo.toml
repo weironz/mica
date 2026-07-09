@@ -2,6 +2,7 @@
 members = [
   "crates/api-server",
   "crates/app-core",
+  "crates/cli",
   "crates/infra",
   "crates/interchange",
   "crates/markdown",
@@ -20,6 +21,7 @@ argon2 = "0.5"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["json", "tokio", "http1", "http2", "ws"] }
 chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 futures-util = "0.3"
 hmac = "0.12"
