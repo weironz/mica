@@ -3,11 +3,25 @@ name = "mica-cli"
 version = "0.1.5"
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
+# The `backup` feature pulls rustic_core, which needs rustc 1.88. Only this crate
+# opts up; the workspace (api-server etc.) stays at 1.85, and the default
+# `mica-cli` build does not pull rustic at all.
+rust-version = "1.88"
 
 [[bin]]
 name = "mica-cli"
 path = "src/main.rs"
+
+[[bin]]
+name = "mica-backup"
+path = "src/bin/mica-backup.rs"
+required-features = ["backup"]
+
+[features]
+# Gated so a default `cargo build` / the `mica-cli` binary / api-server never pull
+# rustic_core's ~128-crate tree — only `mica-backup` (built with --features backup)
+# carries the backup engine.
+backup = ["dep:rustic_core", "dep:rustic_backend", "dep:jiff"]
 
 [dependencies]
 anyhow.workspace = true
@@ -18,3 +32,8 @@ reqwest = { workspace = true, features = ["blocking", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+# backup-only (optional) — restic-compatible engine + S3/OpenDAL backend.
+rustic_core = { version = "0.12", optional = true }
+rustic_backend = { version = "0.6", default-features = false, features = ["opendal"], optional = true }
+jiff = { version = "0.2", optional = true }
