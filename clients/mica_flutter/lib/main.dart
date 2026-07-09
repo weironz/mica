@@ -3267,7 +3267,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
   bool _navCollapsed = false;
-  bool _workspaceSettingsOpen = false;
   // Pane widths, drag-resizable via the splitters (long page names need room).
   double _navWidth = 280;
   double _toolsWidth = 300;
@@ -3466,18 +3465,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   IconButton(
                     tooltip: 'Workspace settings',
                     visualDensity: VisualDensity.compact,
-                    isSelected: _workspaceSettingsOpen,
                     onPressed: widget.selectedWorkspace == null
                         ? null
-                        : () => setState(
-                            () => _workspaceSettingsOpen =
-                                !_workspaceSettingsOpen,
-                          ),
+                        : _openWorkspaceSettingsDialog,
                     icon: const Icon(Icons.tune, size: 20),
                   ),
                 ],
               ),
-              if (_workspaceSettingsOpen) _workspaceSettings(context),
               if (widget.message != null) ...[
                 const SizedBox(height: 12),
                 ErrorBanner(widget.message!),
@@ -4451,80 +4445,112 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// Inline workspace settings (rename + members), shown in the left panel when
   /// its gear is toggled — kept in the tree so member edits refresh live.
-  Widget _workspaceSettings(BuildContext context) {
+  /// Workspace settings as a centered modal dialog (rename + members), instead
+  /// of expanding inline in the sidebar. Member add/remove/role-change await the
+  /// (async) callback then rebuild the dialog via its own StatefulBuilder, so the
+  /// list stays live without leaning on the parent's setState reaching the route.
+  Future<void> _openWorkspaceSettingsDialog() async {
     final workspace = widget.selectedWorkspace;
-    if (workspace == null) return const SizedBox.shrink();
-    if (_rename.text.isEmpty) _rename.text = workspace.name;
-    final canManage = matchesManageRole(workspace.role);
-    return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          DetailRow(label: 'Role', value: workspace.role),
-          DetailRow(label: 'ID', value: workspace.id),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _rename,
-            decoration: const InputDecoration(
-              labelText: 'Rename workspace',
-              prefixIcon: Icon(Icons.edit),
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 10),
-          FilledButton.icon(
-            onPressed: () => widget.onRenameWorkspace(workspace, _rename.text),
-            icon: const Icon(Icons.save, size: 18),
-            label: const Text('Save'),
-          ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              const Icon(Icons.group, size: 18),
-              const SizedBox(width: 8),
-              Text('Members', style: Theme.of(context).textTheme.titleMedium),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (canManage) _compactAddMemberForm(),
-          if (canManage) const SizedBox(height: 14),
-          if (widget.members.isEmpty)
-            const Text(
-              'No members loaded.',
-              style: TextStyle(color: Color(0xFF94A3B8)),
-            )
-          else
-            Column(
-              children: widget.members
-                  .map(
-                    (member) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: MemberListItem(
-                        member: member,
-                        canManage: canManage,
-                        canRemove: member.role != 'owner',
-                        onRoleChanged: (role) =>
-                            widget.onUpdateMember(member, role),
-                        onRemove: () => widget.onRemoveMember(member),
+    if (workspace == null) return;
+    _rename.text = workspace.name;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setLocal) {
+          final ws = widget.selectedWorkspace ?? workspace;
+          final canManage = matchesManageRole(ws.role);
+          final members = widget.members;
+          return AlertDialog(
+            title: const Text('Workspace settings'),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DetailRow(label: 'Role', value: ws.role),
+                    DetailRow(label: 'ID', value: ws.id),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _rename,
+                      decoration: const InputDecoration(
+                        labelText: 'Rename workspace',
+                        prefixIcon: Icon(Icons.edit),
+                        border: OutlineInputBorder(),
+                        isDense: true,
                       ),
                     ),
-                  )
-                  .toList(),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.icon(
+                        onPressed: () async {
+                          await widget.onRenameWorkspace(ws, _rename.text);
+                          setLocal(() {});
+                        },
+                        icon: const Icon(Icons.save, size: 18),
+                        label: const Text('Save'),
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Row(
+                      children: [
+                        const Icon(Icons.group, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Members',
+                          style: Theme.of(dialogContext).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (canManage) ...[
+                      _addMemberForm(setLocal),
+                      const SizedBox(height: 14),
+                    ],
+                    if (members.isEmpty)
+                      const Text(
+                        'No members loaded.',
+                        style: TextStyle(color: Color(0xFF94A3B8)),
+                      )
+                    else
+                      for (final member in members)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: MemberListItem(
+                            member: member,
+                            canManage: canManage,
+                            canRemove: member.role != 'owner',
+                            onRoleChanged: (role) async {
+                              await widget.onUpdateMember(member, role);
+                              setLocal(() {});
+                            },
+                            onRemove: () async {
+                              await widget.onRemoveMember(member);
+                              setLocal(() {});
+                            },
+                          ),
+                        ),
+                  ],
+                ),
+              ),
             ),
-        ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _compactAddMemberForm() {
+  /// Add-member form for the settings dialog. [setLocal] rebuilds the dialog
+  /// (role dropdown selection + the refreshed member list after an add).
+  Widget _addMemberForm(void Function(void Function()) setLocal) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -4551,19 +4577,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               )
               .toList(),
           onChanged: (role) {
-            if (role == null) {
-              return;
-            }
-            setState(() {
-              _memberRole = role;
-            });
+            if (role == null) return;
+            setLocal(() => _memberRole = role);
           },
         ),
         const SizedBox(height: 10),
         FilledButton.icon(
-          onPressed: () {
-            widget.onAddMember(_memberEmail.text, _memberRole);
+          onPressed: () async {
+            await widget.onAddMember(_memberEmail.text, _memberRole);
             _memberEmail.clear();
+            setLocal(() {});
           },
           icon: const Icon(Icons.person_add),
           label: const Text('Add'),

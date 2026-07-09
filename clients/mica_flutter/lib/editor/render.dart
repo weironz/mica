@@ -50,9 +50,11 @@ class EditorAppearance {
 /// place; per-kind styling only changes inline typography, never block chrome
 /// (see docs/editor.md).
 class EditorTheme {
-  static const Color text = Color(0xFF0F172A);
-  static const Color muted = Color(0xFF475569);
-  static const Color faint = Color(0xFF94A3B8);
+  // A soft near-black (GitHub's ink) rather than a hard, cool slate-900 — reads
+  // as calmer/warmer ink on the page while keeping ~13:1 contrast.
+  static const Color text = Color(0xFF24292F);
+  static const Color muted = Color(0xFF57606A);
+  static const Color faint = Color(0xFF9AA4AF);
   static const Color caret = Color(0xFF2563EB);
   static const Color selection = Color(0x332563EB);
   static const Color codeBg = Color(0xFFF1F5F9);
@@ -83,16 +85,16 @@ class EditorTheme {
       case 'heading':
         switch (node.headingLevel) {
           case 1:
-            return const TextStyle(color: text, fontSize: 30, height: 1.25, fontWeight: FontWeight.w700);
+            return const TextStyle(color: text, fontSize: 30, height: 1.3, fontWeight: FontWeight.w700, letterSpacing: -0.5);
           case 2:
-            return const TextStyle(color: text, fontSize: 24, height: 1.3, fontWeight: FontWeight.w700);
+            return const TextStyle(color: text, fontSize: 24, height: 1.35, fontWeight: FontWeight.w700, letterSpacing: -0.3);
           case 3:
-            return const TextStyle(color: text, fontSize: 20, height: 1.35, fontWeight: FontWeight.w600);
+            return const TextStyle(color: text, fontSize: 20, height: 1.4, fontWeight: FontWeight.w600, letterSpacing: -0.2);
           default:
-            return const TextStyle(color: text, fontSize: 17, height: 1.4, fontWeight: FontWeight.w600);
+            return const TextStyle(color: text, fontSize: 17, height: 1.45, fontWeight: FontWeight.w600, letterSpacing: -0.1);
         }
       case 'quote':
-        return const TextStyle(color: muted, fontSize: 16, height: 1.5, fontStyle: FontStyle.italic);
+        return const TextStyle(color: muted, fontSize: 16, height: 1.6, fontStyle: FontStyle.italic);
       case 'footnote_def':
         // Small muted body, mirroring quote — the `[label]` marker is painted
         // in the gutter (see _paintNode), so the text itself stays plain.
@@ -112,13 +114,13 @@ class EditorTheme {
           return const TextStyle(
             color: faint,
             fontSize: 16,
-            height: 1.5,
+            height: 1.65,
             decoration: TextDecoration.lineThrough,
           );
         }
-        return const TextStyle(color: text, fontSize: 16, height: 1.5);
+        return const TextStyle(color: text, fontSize: 16, height: 1.65);
       default:
-        return const TextStyle(color: text, fontSize: 16, height: 1.5);
+        return const TextStyle(color: text, fontSize: 16, height: 1.65);
     }
   }
 
@@ -150,10 +152,12 @@ class EditorTheme {
   /// Vertical gap above a node, given the previous node's kind.
   static double gapAbove(String kind, String? prevKind) {
     if (prevKind == null) return 0;
-    if (_isList(kind) && _isList(prevKind)) return kind == prevKind ? 2 : 6;
-    if (kind == 'heading') return 22;
-    if (kind == 'code_block' || prevKind == 'code_block') return 12;
-    return 9;
+    if (_isList(kind) && _isList(prevKind)) return kind == prevKind ? 3 : 8;
+    // Headings open a section, so give them air above — a touch less between two
+    // consecutive headings (title + subtitle stay related).
+    if (kind == 'heading') return prevKind == 'heading' ? 20 : 30;
+    if (kind == 'code_block' || prevKind == 'code_block') return 16;
+    return 13; // paragraph breathing room
   }
 }
 
