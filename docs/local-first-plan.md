@@ -81,7 +81,8 @@
 ## 进展
 
 - ✅ **Phase 0 完成**(2026-07-10,commit a77e8ab):`rust/src/api/store.rs` 桥出 `append_update / updates_after / squash / sync_cursor / set_sync_cursor` + `SyncCursor`/`DocUpdate` 类型;frb 重生成;集成测试 `frb_store_test.dart`(-d windows 全过)验证 append-log 往返重建文档 + sync cursor 跨重开持久化。零行为变化。
-- ⏭️ **Phase 1 下一步**(云文档离线只读)。具体子步:
+- ✅ **Phase 1a 完成**(2026-07-10,commit 0840152):`CloudSyncSession` 加可选 `persistence`(`CloudDocStore` 字节接口)——connect 时先 seed 本地副本立即 onReady(离线读)、编辑/远端/ack 后 debounced write-through、dispose 同步 flush;`StoreCloudDocStore`(MicaStore 按云 UUID）。web 变体接受参数但忽略。`null`=零变化(单元 230 绿)。集成测(无服务器)验证离线 seed 渲染 + 适配器往返。**尚未接线 main.dart**。〔注:`cloud_sync_test` 需真服务器,本机 8090 有杂散 HTTP 服务骗过其 health 检查导致 load 失败,与本改动无关。〕
+- ⏭️ **Phase 1b 下一步**(接线 + 页树缓存,让离线读在 app 里真生效)。具体子步:
   1. `CloudSyncSession`(先只 `cloud_sync_io.dart` 桌面,web gate 掉):收到 `sync.base` 时 `store.saveDoc(cloudUUID, doc)`;每次 `_applyRemote` 合并的远端 update `store.appendUpdate`;`sync.ack` 后把 `_cursor` 写进 `sync_cursor.last_synced_rid`。
   2. 打开云文档:**先 `store.loadDoc(cloudUUID)` 渲染**(离线秒开),再联网 `sync.pull{since_rid=last_synced_rid}` 对账;冷启动离线也能读。
   3. 缓存云端页树:`bootstrapDocument`/工作区列表结果镜像进 `local_workspace`/`local_view`(带 origin 标记),离线可列。
