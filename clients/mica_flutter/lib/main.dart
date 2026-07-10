@@ -96,24 +96,47 @@ class ServerConfig {
   /// Load the saved config, migrating the legacy `cloud`/`self` modes into the
   /// unified `online` mode (they only ever differed by URL). Falls back to the
   /// build-time default so existing dev setups keep working.
-  static ServerConfig load() {
-    final url = loadPref('serverUrl') ?? '';
-    switch (loadPref('serverMode')) {
+  static ServerConfig load() => resolve(
+        savedMode: loadPref('serverMode'),
+        savedUrl: loadPref('serverUrl') ?? '',
+        authToken: loadPref('authToken') ?? '',
+        isWeb: kIsWeb,
+      );
+
+  /// Pure resolution of the persisted prefs into a config (no I/O, so it is
+  /// unit-testable). Migrates the legacy `cloud`/`self` modes into `online`
+  /// (they only ever differed by URL), and picks the fresh-install default.
+  @visibleForTesting
+  static ServerConfig resolve({
+    required String? savedMode,
+    required String savedUrl,
+    required String authToken,
+    required bool isWeb,
+  }) {
+    ServerConfig online() => ServerConfig(
+          mode: ServerMode.online,
+          url: savedUrl.isEmpty ? ApiClient.defaultBaseUri().toString() : savedUrl,
+        );
+    switch (savedMode) {
       case 'local':
         return const ServerConfig(mode: ServerMode.localOffline, url: '');
       case 'cloud': // legacy: the fixed Mica Cloud preset is now just a URL
         return const ServerConfig(mode: ServerMode.online, url: kMicaCloudUrl);
       case 'online':
       case 'self': // legacy self-hosted → same online mode, keep its URL
-        return ServerConfig(
-          mode: ServerMode.online,
-          url: url.isEmpty ? ApiClient.defaultBaseUri().toString() : url,
-        );
+        return online();
       default:
-        return ServerConfig(
-          mode: ServerMode.online,
-          url: ApiClient.defaultBaseUri().toString(),
-        );
+        // No saved choice. Desktop is local-first — a fresh install starts
+        // writing immediately, no account or network. But NOT if the user already
+        // signed in (persisted auth token) or set a URL: they were using an online
+        // server, so keep them online rather than stranding their account behind
+        // the new local-first default on upgrade. Web has no on-device store
+        // (local offline is native-only) and is served from the cloud → always
+        // online.
+        final usedOnlineBefore = authToken.isNotEmpty || savedUrl.isNotEmpty;
+        return (isWeb || usedOnlineBefore)
+            ? online()
+            : const ServerConfig(mode: ServerMode.localOffline, url: '');
     }
   }
 
