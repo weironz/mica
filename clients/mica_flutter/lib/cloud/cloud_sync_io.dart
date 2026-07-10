@@ -122,6 +122,15 @@ class CloudSyncSession {
   /// on the current WS connection, so a live re-flush skips still-in-flight diffs
   /// (the append-log has no per-entry `sent` flag). Reset on each (re)connect.
   int _sentThroughClock = 0;
+  /// Append-log path: outbox clocks acked out of contiguous order (a lower clock
+  /// errored / isn't acked yet). `pushed_clock` advances only through the
+  /// contiguous acked prefix, so an un-acked lower clock is never skipped
+  /// (skipping it drops it from `outboxAfter` = silent server-side loss).
+  final Set<int> _ackedAhead = {};
+  /// Consecutive push rejections since the last successful ack — bounds the
+  /// re-push retry so a permanent rejection (e.g. permission) can't spin.
+  int _pushRejects = 0;
+  static const int _maxPushRejects = 5;
   bool _restored = false;
   Timer? _persistTimer;
 
@@ -196,8 +205,11 @@ class CloudSyncSession {
     _reconnectTimer = null;
     _sub?.cancel();
     // New connection: nothing has been (re)sent on it yet, so a resendAll below
-    // pushes the whole un-acked outbox afresh.
+    // pushes the whole un-acked outbox afresh. Out-of-order ack bookkeeping and
+    // the rejection budget are per-connection.
     _sentThroughClock = 0;
+    _ackedAhead.clear();
+    _pushRejects = 0;
     _restoreUnackedOnce();
     // Local-first: render the persisted replica immediately (offline read),
     // BEFORE the socket — so a cold start with no network still shows the doc.
@@ -362,18 +374,27 @@ class CloudSyncSession {
         final rid = (m['rid'] as num?)?.toInt();
         if (_useAppendLog) {
           // The ack id is the pushed diff's monotonic clock. Advance pushed_clock
-          // (max — never regress) so it drops out of `outboxAfter(pushed_clock)`.
-          // In-order acks (server processes pushes sequentially) keep this a
-          // contiguous high-water. The acked entries stay in the log until P2e
-          // trims them; the outbox query already excludes them.
+          // ONLY through the contiguous acked prefix — a push can be answered
+          // with an `error` (below) instead of an ack, so a higher ack does NOT
+          // prove every lower clock was folded. Skipping an un-acked lower clock
+          // would drop it from `outboxAfter(pushed_clock)` = silent server loss.
           final clock = ackId is String ? int.tryParse(ackId) : null;
           if (clock != null) {
-            final cur = persistence!.cursor();
-            persistence!.advance(
-              pushedClock: clock > cur.pushedClock ? clock : cur.pushedClock,
-              lastSyncedRid:
-                  (rid != null && rid > cur.lastSyncedRid) ? rid : cur.lastSyncedRid,
-            );
+            final pushedBefore = persistence!.cursor().pushedClock;
+            if (clock > pushedBefore) {
+              _ackedAhead.add(clock);
+              var pushed = pushedBefore;
+              while (_ackedAhead.remove(pushed + 1)) {
+                pushed++;
+              }
+              if (pushed != pushedBefore) {
+                persistence!.advance(pushedClock: pushed);
+                // Reset the retry budget only on real contiguous PROGRESS — not on
+                // any ack — else a permanent rejection of a low clock would loop
+                // forever while higher clocks keep acking.
+                _pushRejects = 0;
+              }
+            }
           }
         } else if (ackId is String) {
           final before = _unacked.length;
@@ -383,6 +404,25 @@ class CloudSyncSession {
         if (rid != null && rid > _cursor) {
           _cursor = rid;
           _saveLocalSoon(); // persist the cursor our own acked edit advanced
+        }
+      case 'error':
+        // A push we sent was rejected (not acked) — e.g. transient server-side
+        // contention, or a permanent permission error. The rejected clock stays
+        // in the outbox (contiguous pushed_clock never passed it); re-enable and
+        // retry it, bounded so a permanent rejection can't spin, then surface via
+        // onFault. (Web keeps its per-id retry-on-reconnect; nothing to do here.)
+        final errId = m['ack_id'];
+        if (_useAppendLog && errId is String) {
+          final clock = int.tryParse(errId);
+          if (clock != null) {
+            if (clock - 1 < _sentThroughClock) _sentThroughClock = clock - 1;
+            if (_pushRejects < _maxPushRejects) {
+              _pushRejects++;
+              _flushUnacked();
+            } else {
+              onFault?.call('push_rejected', _pushRejects);
+            }
+          }
         }
     }
   }

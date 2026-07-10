@@ -283,6 +283,99 @@ void main() {
     await server2.stop();
     _bestEffortDelete(dir);
   });
+
+  test('P2b: a transiently-rejected push is retried, never dropped (contiguous pushed_clock)',
+      () async {
+    // Regression for the append-log ack bug: a lower clock answered with an
+    // `error` (not an ack) must NOT be skipped when a higher clock later acks —
+    // pushed_clock may only advance through the contiguous acked prefix.
+    final dir = Directory.systemTemp.createTempSync('mica_p2b3');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+    final adapter = StoreCloudDocStore(store, 'doc-rej');
+    final server = await _FakeSyncServer.start(_buildBase());
+
+    var ready = false;
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (_) {},
+      persistence: adapter,
+    );
+    session.connect();
+    await _until(() => ready, reason: 'cold bootstrap');
+
+    // Clock 1's first push is rejected; clock 2 is acked. The buggy max-advance
+    // would jump pushed_clock to 2 and lose clock 1.
+    server.rejectPushOnce('1');
+    session.applyLocalOps([
+      {'type': 'update_block', 'block_id': 'a', 'text': ' one'},
+    ]);
+    session.applyLocalOps([
+      {'type': 'update_block', 'block_id': 'a', 'text': ' two'},
+    ]);
+
+    // Both edits converge: the rejected clock 1 is re-pushed and acked, so
+    // pushed_clock reaches 2 contiguously and the outbox drains — nothing lost.
+    final drained = await session.drainOutbox(timeout: const Duration(seconds: 6));
+    expect(drained, isTrue, reason: 'the retried edit eventually acks');
+    expect(store.syncCursor(docId: 'doc-rej').pushedClock, 2,
+        reason: 'contiguous — reached only after clock 1 is (re)acked');
+    // Clock 1 actually reached the server more than once (rejected then retried),
+    // proving it was never silently skipped.
+    expect(server.pushed.where((p) => p.id == '1').length, greaterThanOrEqualTo(2),
+        reason: 'clock 1 was re-pushed after its error, not dropped');
+
+    session.dispose();
+    await server.stop();
+    _bestEffortDelete(dir);
+  });
+
+  test('P2b: a permanently-rejected push is bound-retried + surfaced, never spins or lost',
+      () async {
+    // Guards the retry budget: a permanent rejection of a low clock must NOT spin
+    // forever even while a higher clock keeps acking (the budget resets only on
+    // real contiguous progress), and the stuck edit is surfaced, not lost.
+    final dir = Directory.systemTemp.createTempSync('mica_p2b4');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+    final adapter = StoreCloudDocStore(store, 'doc-perm');
+    final server = await _FakeSyncServer.start(_buildBase());
+
+    var ready = false;
+    final faults = <String>[];
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (_) {},
+      onFault: (reason, _) => faults.add(reason),
+      persistence: adapter,
+    );
+    session.connect();
+    await _until(() => ready, reason: 'cold bootstrap');
+
+    server.rejectPushAlways('1'); // clock 1 never accepted; clock 2 acks fine
+    session.applyLocalOps([
+      {'type': 'update_block', 'block_id': 'a', 'text': ' one'},
+    ]);
+    session.applyLocalOps([
+      {'type': 'update_block', 'block_id': 'a', 'text': ' two'},
+    ]);
+
+    // The retry is bounded → the rejection is surfaced (would hang forever if the
+    // budget reset on clock 2's acks).
+    await _until(() => faults.contains('push_rejected'),
+        reason: 'permanent rejection surfaced after a bounded number of retries');
+    // pushed_clock never passed the stuck clock 1, and clock 1 is still in the
+    // outbox (not lost — it survives to retry on a later reconnect).
+    expect(store.syncCursor(docId: 'doc-perm').pushedClock, 0);
+    expect(store.updatesAfter(docId: 'doc-perm', after: 0).map((e) => e.clock),
+        contains(1));
+
+    session.dispose();
+    await server.stop();
+    _bestEffortDelete(dir);
+  });
 }
 
 void _bestEffortDelete(Directory dir) {
@@ -349,7 +442,17 @@ class _FakeSyncServer {
   int pullCount = 0;
   final List<_Push> pushed = [];
   final List<Map<String, dynamic>> pullQueue = [];
+  final Set<String> _rejectPushIds = {};
+  final Set<String> _rejectAlways = {};
   int _rid = 1;
+
+  /// Reject the next push carrying [id] with an `error` frame (once), modelling a
+  /// transient server-side push failure the client must retry, not drop.
+  void rejectPushOnce(String id) => _rejectPushIds.add(id);
+
+  /// Always reject pushes carrying [id] — models a permanent rejection (e.g. a
+  /// revoked permission) the client must bound-retry + surface, never spin on.
+  void rejectPushAlways(String id) => _rejectAlways.add(id);
 
   /// Hand a single update out on the next pull, then nothing — models a capped
   /// batch the client must keep pulling past (B2).
@@ -407,7 +510,11 @@ class _FakeSyncServer {
         final update = m['payload']?['update'];
         if (id is String && update is String) {
           pushed.add((id: id, update: update));
-          if (ackPushes) {
+          if (_rejectPushIds.remove(id) || _rejectAlways.contains(id)) {
+            // Rejection (transient or permanent): reply with an error, not an ack
+            // — the client must NOT drop this clock.
+            _send({'type': 'error', 'ack_id': id, 'code': 'internal'});
+          } else if (ackPushes) {
             _send({'type': 'sync.ack', 'ack_id': id, 'rid': ++_rid});
           }
         }
@@ -422,7 +529,16 @@ class _FakeSyncServer {
     });
   }
 
-  void _send(Map<String, dynamic> m) => _socket?.add(jsonEncode(m));
+  void _send(Map<String, dynamic> m) {
+    // The socket may be closing during teardown (a real server tolerates a
+    // send-to-closed-connection; this fake must too, or an in-flight reply during
+    // dispose surfaces as an unhandled sink error).
+    try {
+      _socket?.add(jsonEncode(m));
+    } catch (_) {
+      // connection closing — drop the frame
+    }
+  }
 
   /// Close the current socket without stopping the server — models a transient
   /// drop the client must reconnect through.
