@@ -127,10 +127,17 @@ class CloudSyncSession {
   /// contiguous acked prefix, so an un-acked lower clock is never skipped
   /// (skipping it drops it from `outboxAfter` = silent server-side loss).
   final Set<int> _ackedAhead = {};
-  /// Consecutive push rejections since the last successful ack — bounds the
+  /// Consecutive push rejections without contiguous progress — bounds the
   /// re-push retry so a permanent rejection (e.g. permission) can't spin.
+  /// NOTE: kept > 3 so the UI's fault-banner threshold (main.dart, count > 3)
+  /// still surfaces `push_rejected`; lowering it silently hides the banner.
   int _pushRejects = 0;
   static const int _maxPushRejects = 5;
+  /// Set once the retry budget is exhausted (a push is permanently rejected):
+  /// stop actively pushing so we don't grow `_ackedAhead` / re-flood the server
+  /// with a poison edit that can never ack. Edits still append durably to the
+  /// outbox and are retried on the next (re)connect, which clears this.
+  bool _pushStalled = false;
   bool _restored = false;
   Timer? _persistTimer;
 
@@ -210,6 +217,7 @@ class CloudSyncSession {
     _sentThroughClock = 0;
     _ackedAhead.clear();
     _pushRejects = 0;
+    _pushStalled = false;
     _restoreUnackedOnce();
     // Local-first: render the persisted replica immediately (offline read),
     // BEFORE the socket — so a cold start with no network still shows the doc.
@@ -420,6 +428,9 @@ class CloudSyncSession {
               _pushRejects++;
               _flushUnacked();
             } else {
+              // Give up actively retrying this poison edit: stall pushing (edits
+              // still append durably; a reconnect retries) and surface it.
+              _pushStalled = true;
               onFault?.call('push_rejected', _pushRejects);
             }
           }
@@ -483,7 +494,9 @@ class CloudSyncSession {
       // push id the server echoes in `sync.ack`.
       final clock = persistence!.appendOutbox(diff);
       _saveLocalSoon(); // base snapshot write-through for offline read
-      if (_channel != null && _ready) {
+      // Durable regardless; only actively push if not stalled on a poison edit
+      // (a permanently-rejected earlier clock — it would just pile up unacked).
+      if (_channel != null && _ready && !_pushStalled) {
         _sendPushRaw(clock.toString(), diff);
         _sentThroughClock = clock;
       }
@@ -502,6 +515,9 @@ class CloudSyncSession {
   void _flushUnacked({bool resendAll = false}) {
     if (_channel == null || !_ready) return;
     if (_useAppendLog) {
+      // While stalled on a poison edit, only a (re)connect's resendAll retries —
+      // live/drain flushes don't re-flood the server (bounded by the budget).
+      if (_pushStalled && !resendAll) return;
       // The un-pushed outbox is `clock > pushed_clock`; within a connection,
       // skip what we already sent (> _sentThroughClock). Idempotent regardless —
       // the server folds duplicate updates.
