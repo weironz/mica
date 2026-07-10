@@ -211,6 +211,22 @@ class LocalOffline {
     return (workspaces: workspaces, views: listViews(origin: serverUrl));
   }
 
+  /// Read a cloud document's on-device mirror (written by the cloud session's
+  /// write-through) as (rootBlockId, blocks), for building an offline placeholder
+  /// bootstrap so a cached cloud doc opens with no connectivity (P1c doc-open).
+  /// Null if the doc was never opened online (nothing mirrored) or the store
+  /// isn't open. Read-only: it does NOT become the active local backend — cloud
+  /// docs still sync through [CloudSyncSession], keyed by the same [docId].
+  DocData? openCloudDocMirror(String docId) {
+    final store = _store;
+    if (store == null) return null;
+    final doc = store.loadDoc(docId: docId);
+    if (doc == null) return null;
+    final blocks =
+        (jsonDecode(doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+    return (rootBlockId: doc.rootBlockId(), blocks: blocks);
+  }
+
   /// Permanently remove a view and its document.
   void purgeView(String viewId, String objectId) {
     _store?.purgeView(id: viewId);

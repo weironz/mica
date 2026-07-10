@@ -466,11 +466,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
     } catch (error) {
-      // Revoked/invalid token → drop it. Transient (network) → keep for a retry.
-      if (mounted &&
-          error.toString().toLowerCase().contains('unauthorized')) {
+      if (!mounted) return;
+      // Revoked/invalid token → drop it and show the login screen.
+      if (error.toString().toLowerCase().contains('unauthorized')) {
         _clearPersistedSession();
+        return;
       }
+      // Transient (offline / server down) → keep the token and fall back to the
+      // on-device page-tree mirror so the user still enters the workspace and can
+      // read cached cloud content (P1c). No mirror (never synced / web) → stay on
+      // the login screen as before.
+      _applyOfflineCloudNav(session);
     }
   }
 
@@ -1362,11 +1368,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final bootstrap = await _api.bootstrapDocument(
-        session.accessToken,
-        workspace.id,
-        view.objectId,
-      );
+      DocumentBootstrap? bootstrap;
+      try {
+        bootstrap = await _api.bootstrapDocument(
+          session.accessToken,
+          workspace.id,
+          view.objectId,
+        );
+      } catch (error) {
+        if (error.toString().toLowerCase().contains('unauthorized')) rethrow;
+        // Offline / server down: open the on-device mirror instead so a cached
+        // cloud doc still renders without connectivity (P1c). Null when it was
+        // never opened online → select the view with an empty editor pane; the
+        // yrs session below still tries to seed/connect when the network returns.
+        bootstrap = _offlineCloudBootstrap(view);
+      }
       setState(() {
         _selectedView = view;
         _selectedBootstrap = bootstrap;
@@ -2656,6 +2672,49 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ),
     ];
     _local.mirrorCloudPageTree(origin, workspaces, views);
+  }
+
+  /// The server is unreachable (offline restart / transient outage): fall back to
+  /// the on-device page-tree mirror so the user still enters the workspace and
+  /// reads cached cloud content (P1c offline read). Reconstructs the workspace
+  /// list + views from the mirror, opens the first view's mirrored doc if it was
+  /// previously synced, and kicks off [_reconcileSync] (the WS reconnects and the
+  /// yrs session seeds from disk immediately; both catch up when the network
+  /// returns). Returns true if a cache existed and was applied. Desktop only.
+  bool _applyOfflineCloudNav(AuthSession session) {
+    if (kIsWeb) return false;
+    final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
+    if (cache == null || cache.workspaces.isEmpty) return false;
+    final rebuilt = rebuildCloudNavFromCache(cache, session.user.id);
+    final workspace = rebuilt.workspaces.first;
+    final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
+    final firstView = views.firstOrNull;
+    final bootstrap =
+        firstView == null ? null : _offlineCloudBootstrap(firstView);
+    setState(() {
+      _session = session;
+      _workspaces = rebuilt.workspaces;
+      _selectedWorkspace = workspace;
+      _viewsByWorkspace = rebuilt.views;
+      _selectedView = firstView;
+      _selectedBootstrap = bootstrap;
+      _selectedMarkdown = null;
+    });
+    if (bootstrap != null) _reconcileSync();
+    return true;
+  }
+
+  /// Build a bootstrap for a cloud [view] from its on-device mirror (offline
+  /// doc-open, P1c). The mirrored replica already carries the root block, so a
+  /// complete bootstrap (correct `rootBlockId` + blocks) is built synchronously —
+  /// no wait on the async seed. Null if the doc was never opened online (nothing
+  /// mirrored): the tree still lists the page; opening it shows empty until back
+  /// online. Uses the cloud doc id as the record id so [_reconcileSync] wires the
+  /// same-keyed [CloudSyncSession] for it.
+  DocumentBootstrap? _offlineCloudBootstrap(DocumentView view) {
+    final data = _local.openCloudDocMirror(view.objectId);
+    if (data == null) return null;
+    return _localBootstrapFrom(view.objectId, data.rootBlockId, data.blocks, view);
   }
 
   @override
@@ -8682,6 +8741,37 @@ class DocumentView {
   final String objectType;
   final String name;
   final String position;
+}
+
+/// Rebuild the cloud workspace list + per-workspace views from an on-device
+/// page-tree mirror ([CloudPageTreeCache]) when the server is unreachable —
+/// the P1c offline-read reconstruction. The mirror stores only content
+/// (id/name/position/tree), so provenance metadata is defaulted: `role` is
+/// forced to `'viewer'` (offline is read-only until offline-edit lands in P2,
+/// and this drives the existing `matchesEditRole` gate), `objectType` to
+/// `'document'`, and `ownerId` to [ownerId] (the current user). Pure + testable;
+/// the real values return on the next successful online load. Views are grouped
+/// by their `workspaceId` and keep the mirror's position order.
+({List<Workspace> workspaces, Map<String, List<DocumentView>> views})
+rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
+  final workspaces = [
+    for (final w in cache.workspaces)
+      Workspace(id: w.id, name: w.name, ownerId: ownerId, role: 'viewer'),
+  ];
+  final views = <String, List<DocumentView>>{};
+  for (final v in cache.views) {
+    (views[v.workspaceId] ??= <DocumentView>[]).add(
+      DocumentView(
+        id: v.id,
+        parentViewId: v.parentId,
+        objectId: v.objectId,
+        objectType: 'document',
+        name: v.name,
+        position: v.position,
+      ),
+    );
+  }
+  return (workspaces: workspaces, views: views);
 }
 
 class DocumentRecord {

@@ -67,6 +67,8 @@ class LocalOffline {
 
   CloudPageTreeCache? cachedCloudPageTree(String serverUrl) => null;
 
+  DocData? openCloudDocMirror(String docId) => null;
+
   void purgeView(String viewId, String objectId) {}
 
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})

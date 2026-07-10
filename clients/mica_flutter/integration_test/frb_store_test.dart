@@ -130,6 +130,77 @@ void main() {
     expect(c2.pushedClock, 7);
     _bestEffortDelete(dir);
   });
+
+  // P2 local-first (Phase 1b-2′): one store holds both the on-device page tree
+  // (origin='local') and a cloud page tree mirrored for offline nav
+  // (origin=<server URL>). Listing by origin must never leak one into the other,
+  // and the origin column must be durable across a reopen. This exercises the
+  // full Dart→FFI→SQLite origin round-trip the Rust unit tests can't reach.
+  test('origin scopes views + workspaces through FFI, durable across reopen', () {
+    final dir = Directory.systemTemp.createTempSync('mica_origin');
+    final path = '${dir.path}/s.db';
+    final s = MicaStore.open(path: path)!;
+    const cloud = 'https://mica.example.com';
+
+    // A default 'local' workspace always exists; the cloud origin starts empty.
+    expect(
+      s.listWorkspaces(origin: 'local').map((w) => w.id),
+      contains('local'),
+    );
+    expect(s.listWorkspaces(origin: cloud), isEmpty);
+
+    // Mirror a cloud workspace + view under the server origin, plus a local view.
+    s.saveWorkspace(
+      workspace: const LocalWorkspace(
+        id: 'cw',
+        name: 'Cloud WS',
+        position: '0000000010',
+        origin: cloud,
+      ),
+    );
+    s.saveView(
+      view: const LocalView(
+        id: 'cv',
+        workspaceId: 'cw',
+        parentId: null,
+        objectId: 'cd',
+        name: 'Cloud Page',
+        position: '0000000010',
+        trashed: false,
+        origin: cloud,
+      ),
+    );
+    s.saveView(
+      view: const LocalView(
+        id: 'lv',
+        workspaceId: 'local',
+        parentId: null,
+        objectId: 'ld',
+        name: 'Local Page',
+        position: '0000000010',
+        trashed: false,
+        origin: 'local',
+      ),
+    );
+
+    // Isolation: each origin lists only its own rows.
+    final localViews = s.listViews(origin: 'local');
+    expect(localViews.map((v) => v.id), contains('lv'));
+    expect(localViews.map((v) => v.id), isNot(contains('cv')));
+
+    final cloudViews = s.listViews(origin: cloud);
+    expect(cloudViews.map((v) => v.id), ['cv']);
+    expect(cloudViews.single.origin, cloud);
+    expect(s.listWorkspaces(origin: cloud).map((w) => w.id), ['cw']);
+
+    // Durable: the origin column survives reopening the same db file.
+    final s2 = MicaStore.open(path: path)!;
+    expect(s2.listViews(origin: cloud).map((v) => v.id), ['cv']);
+    expect(s2.listViews(origin: 'local').map((v) => v.id), contains('lv'));
+    expect(s2.listWorkspaces(origin: cloud).map((w) => w.id), ['cw']);
+
+    _bestEffortDelete(dir);
+  });
 }
 
 // On Windows the open SQLite handle (held by the still-alive MicaStore opaque

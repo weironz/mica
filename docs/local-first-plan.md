@@ -80,8 +80,8 @@
 |---|---|---|
 | P0 / P1a / P1b-1 | FFI + 会话持久化 + 文档内容镜像 | ✅ 真东西,保留 |
 | **P1b-2′** | 页树进 store(local_view/workspace 加 origin 标记,镜像云页树)—— 替换 prefs hack,P3 地基 | ✅ 完成 |
-| P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ⏭️ 下一步 |
-| P2 | 离线编辑(append-log outbox 统一,重连 CRDT) | |
+| P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ✅ 完成 |
+| P2 | 离线编辑(append-log outbox 统一,重连 CRDT) | ⏭️ 下一步 |
 | P3 | 溶解双模式为"工作区:本地/已连云"(双向,替代单向迁移)+ UX。**地基提醒**(P1b-2′ 复审):`local_view`/`local_workspace` 主键仍是裸 `id`,本地行与云镜像共表,origin 只在 `WHERE` 过滤不在主键——`save_*` 的 `ON CONFLICT(id)` 理论上可跨 origin 撞键覆盖(当前两侧都 UUID 故碰撞可忽略)。P3 统一 schema 时把主键改 `(origin, id)` 复合键,隔离从"约定"升级为"约束"。 | |
 | P4 | props 字段级 CRDT、web IndexedDB(唯一明确暂缓) | |
 
@@ -108,16 +108,13 @@
 - ✅ **Phase 1b-1 完成**(2026-07-10,commit 829a80d):`LocalOffline.cloudDocStore(docId)`(io→`StoreCloudDocStore`、web→null,封装 `MicaStore`);`_setupCloudYrs` 传 `persistence: _local.cloudDocStore(documentId)`(`deviceClientId()` 已在建会话前开 store)。每个打开过的云文档现镜像到本地库、再打开先 seed 渲染。web 构建过(FFI 不进 bundle)、单元 230 + 离线读集成测试绿。
 - ✅ **Phase 1b-2 地基完成**(2026-07-10,commit e0ca19b):`Workspace`/`DocumentView` 加 `toJson`;纯函数 `cloudPageTreeToJson`/`cloudPageTreeFromJson`(页树↔JSON,可测);`_cacheCloudPageTree()` 视图加载成功后按服务器 URL 写 prefs(避开 `local_view` 表的 id-space 混淆,改用 prefs 缓存;桌面 only)。单测 2 例、套件 232 绿。
 - ✅ **Phase 1b-2′ 完成(原子全栈迁移,2026-07-10)**:`local_view`/`local_workspace` 加 `origin` 列(`SCHEMA_VERSION 1→2`,旧行 `ALTER TABLE … ADD COLUMN` 回填 `'local'`),一个 store 按 origin 同装本地页树 + 云镜像。全栈打通:(1) mica-core `store.rs` `list_views`/`list_workspaces` 加 `origin: &str` 过滤参、`save_*` 带 origin、结构体加字段 —— Rust 测新增 origin 隔离用例、迁移回填断言(16 绿);(2) FFI wrapper 加 `origin` + `From` 双向 + list 参,`flutter_rust_bridge_codegen generate` 重生成;(3) `LocalOffline` io+web:`listViews/saveView/listWorkspaces/saveWorkspace` 穿 origin(默认 `'local'`,本地调用点零改动),加 `mirrorCloudPageTree(serverUrl,ws,views)`(origin 作用域**干净替换**:先 purge 旧镜像再重写)+ `cachedCloudPageTree(serverUrl)`;(4) main.dart `_cacheCloudPageTree()` 改成写 store(origin=baseUri),**删** `cloudPageTreeToJson`/`FromJson` + 两个模型 `toJson`(prefs 那套已被 store 取代,连同其单测一并删)。`origin` 作为 store 方法的作用域参而非 `ViewData`/`WorkspaceData` 字段,保持这两个 record 为纯内容。`flutter analyze` 净(仅存量 info),套件 230 绿(-2 = 删掉的 prefs 缓存单测)。**镜像写入已通,尚无读取方**——P1c 才接离线读回退。
-- ⏭️ **Phase 1c(离线读取回退,微妙,下次谨慎做)**:让缓存真正生效。两处:
-  1. **启动恢复回退**(main.dart ~468 那个 catch):网络错(非 `unauthorized`)时,别停在登录页——用 `_local.cachedCloudPageTree(baseUri)`(读 store 按 origin 镜像)set `_session`+`_workspaces`+`_viewsByWorkspace`,离线也进工作区、列出页树。**注**:store 镜像只存 `WorkspaceData`/`ViewData`(缺 `role`/`ownerId`/`objectType`);重建云模型时用默认(role 视为只读、objectType='document'),够离线读;要精确需给 `local_view`/`local_workspace` 再加列(P1c 时定)。
-  2. **doc-open 的 chicken-and-egg**:`_applyCloudBlocks`(main.dart ~587)复用 `_selectedBootstrap.document`(需已存在);离线无服务器 `bootstrapDocument`,且 `rootBlockId` 要从 `CloudSyncSession` 本地 seed 的 `onReady(rootBlockId,…)` 流回。改法:离线 open 时构一个 placeholder `DocumentBootstrap`(document.id=view.objectId、空 snapshot),并让 `_applyCloudBlocks`/onReady 用 **session 的 rootBlockId** 填(而非 placeholder 的),blocks 由 seed 填。要读全 `_setupCloudYrs` 的调用方(doc-open 编排)再动。
-  - 全部 `kIsWeb` gate。做完即闭环"server 模式断网重启还能读云笔记"。
-  1. `CloudSyncSession`(先只 `cloud_sync_io.dart` 桌面,web gate 掉):收到 `sync.base` 时 `store.saveDoc(cloudUUID, doc)`;每次 `_applyRemote` 合并的远端 update `store.appendUpdate`;`sync.ack` 后把 `_cursor` 写进 `sync_cursor.last_synced_rid`。
-  2. 打开云文档:**先 `store.loadDoc(cloudUUID)` 渲染**(离线秒开),再联网 `sync.pull{since_rid=last_synced_rid}` 对账;冷启动离线也能读。
-  3. 缓存云端页树:`bootstrapDocument`/工作区列表结果镜像进 `local_workspace`/`local_view`(带 origin 标记),离线可列。
-  4. 图片:通用云路径下载后 `putBlobAs` 落 CAS(现只有迁移做)。
-  5. outbox 从 prefs `cloudUnacked` 迁到 `updates_after(pushed_clock)`(Phase 2 再彻底并;P1 可先并存)。
-  - 全部 `kIsWeb` gate,web 保持现有在线路径。
+- ✅ **Phase 1c 完成(离线读取回退,2026-07-10)**:镜像终于有了读取方——server 模式断网/重启还能进工作区、列页树、开已缓存的云笔记。三处接线(全 `kIsWeb` gate,web 保持在线):
+  1. **启动恢复回退**(`_restoreSession` catch):网络错(非 `unauthorized`)→ `_applyOfflineCloudNav(session)`:`_local.cachedCloudPageTree(baseUri)` 读 store 镜像,纯函数 `rebuildCloudNavFromCache(cache, userId)` 重建 `_workspaces`+`_viewsByWorkspace`,set `_session`,并把选中工作区的首个视图离线打开。`unauthorized` 仍清 session 回登录页。
+  2. **doc-open(chicken-and-egg 用同步 load 化解,比原 async 草案更干净)**:新增 `LocalOffline.openCloudDocMirror(docId)`——直接 `store.loadDoc(docId)` 取 `rootBlockId`+blocks(镜像副本已含 root 块),`_offlineCloudBootstrap(view)` **同步**构一个完整 `_localBootstrapFrom` bootstrap(正确 rootBlockId,不是空 placeholder),秒开无需等 `onReady`。随后 `_reconcileSync` 起 `CloudSyncSession`(同 docId)本地 seed + 联网时对账。`rootBlockId` 是渲染承重件(`DocumentBootstrap.childBlocks` 靠它在 payload 里找 root),同步 load 保证它一开始就对,故**不必**改 `_applyCloudBlocks`/onReady。
+  3. **tap 已缓存视图离线打开**(`_selectView` 的 `_run` 内):`bootstrapDocument` 抛错(非 auth)→ `_offlineCloudBootstrap(view)` 兜底;未缓存的 doc → bootstrap=null → 空编辑区(诚实,不伪造空文档)。
+  - **镜像有损**:只存 id/name/position/tree,`role` 离线强制 `'viewer'`(读-only,`matchesEditRole` 门自动挡编辑,离线编辑是 P2)、`objectType='document'`、`ownerId=当前用户`;联网下次成功加载即恢复真值。要精确需给 `local_view`/`local_workspace` 加列(连同 P3 复合主键一起做)。
+  - 测:纯函数 `rebuildCloudNavFromCache` 单测 2 例(分组/顺序/只读角色 + 空视图);FFI 集成测 `origin scopes ... through FFI, durable across reopen`(-d windows 绿,补上 origin 经真实 Dart→FFI→SQLite 往返的覆盖)。`flutter analyze` 净、套件 232 绿。**在线路径逐字未变**(仅异常分支新增兜底)。
+  - 未做(留 P2):离线**编辑**(outbox 从 prefs `cloudUnacked` 迁到 `updates_after(pushed_clock)`、重连 CRDT 对账);通用云图片下载 `putBlobAs` 落 CAS;工作区切换的离线兜底(现仅启动 + tap 已接,切换工作区离线仍走在线报错)。
 
 ## 复用率 / 工作量速估
 
