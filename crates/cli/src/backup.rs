@@ -9,8 +9,9 @@
 //!
 //! Repo is a plain path (local) or `opendal:s3:/<path>` (OSS) — same code; OSS
 //! just needs backend `--opt`s. The repo password comes from `--password-file`
-//! or `MICA_BACKUP_PASSWORD`; backend options (incl. OSS creds) from `--opt` or
-//! the `MICA_BACKUP_OPTS` env var — never a bare flag (ps/history leak).
+//! or `MICA_BACKUP_PASSWORD`; backend options (incl. OSS creds) from `--opt`, a
+//! packed `MICA_BACKUP_OPTS="k=v …"`, or one-per-variable `MICA_OPT_<KEY>=<v>`
+//! (e.g. `MICA_OPT_BUCKET`) — never a bare flag (ps/history leak).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -129,14 +130,27 @@ fn repo_uri(args: &BackupArgs) -> Result<String> {
 }
 
 fn backend_options(args: &BackupArgs) -> Result<BackendOptions> {
-  // Backend options (incl. S3/OSS credentials) may come from the env var
-  // MICA_BACKUP_OPTS ("k=v k2=v2 …") so secrets stay off argv/ps — CLI `--opt`
-  // flags override. The systemd unit puts the whole OSS config there.
+  // Backend options (incl. S3/OSS credentials) come from the environment so
+  // secrets stay off argv/ps. Two styles, lowest-to-highest precedence:
+  //   1. MICA_BACKUP_OPTS="k=v k2=v2 …"  — one packed string (handy for a
+  //      systemd EnvironmentFile).
+  //   2. MICA_OPT_<KEY>=<value>          — one option per variable, so a
+  //      compose/.env reads one-per-line; the key is the suffix lowercased,
+  //      e.g. MICA_OPT_ACCESS_KEY_ID → access_key_id.
+  // CLI `--opt k=v` flags override both.
   let mut map: BTreeMap<String, String> = BTreeMap::new();
   if let Ok(env_opts) = std::env::var("MICA_BACKUP_OPTS") {
     for pair in env_opts.split_whitespace() {
       if let Some((k, v)) = pair.split_once('=') {
         map.insert(k.to_string(), v.to_string());
+      }
+    }
+  }
+  for (k, v) in std::env::vars() {
+    if let Some(key) = k.strip_prefix("MICA_OPT_") {
+      // Skip empties: an unset `${OSS_ROOT:-}` still passes MICA_OPT_ROOT="".
+      if !key.is_empty() && !v.is_empty() {
+        map.insert(key.to_ascii_lowercase(), v);
       }
     }
   }

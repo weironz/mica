@@ -68,8 +68,8 @@ is hard-wired), so the token never leaves the host. It is **opt-in** behind the
 2. **Mint a read-scoped token** — app *Settings → API Tokens*, or
    `mica-cli auth token create --name backup --scope read` — and add it plus the
    repo/OSS config to the node's `.env` (next to `MICA_VERSION`). The compose file
-   assembles the individual `OSS_*` vars into the backend option string, so each
-   value lives on its own line (rotate the AccessKey without touching the rest):
+   maps each `OSS_*` var to one `MICA_OPT_<KEY>` backend option, so every value
+   lives on its own line (rotate the AccessKey without touching the rest):
    ```
    MICA_BACKUP_TOKEN=mica_pat_…
    MICA_BACKUP_REPO=opendal:s3:/mica
@@ -82,8 +82,9 @@ is hard-wired), so the token never leaves the host. It is **opt-in** behind the
    OSS_ROOT=mica                          # object-key prefix; use a fresh one to share a bucket
    # optional: BACKUP_HOUR=3  KEEP_DAILY=14  KEEP_WEEKLY=8  KEEP_MONTHLY=6
    ```
-   (`enable_virtual_host_style=true`, required for OSS, is baked into the compose
-   assembly. The systemd path below instead takes one `MICA_BACKUP_OPTS` string.)
+   (`enable_virtual_host_style=true`, required for OSS, is a literal in the
+   compose. The systemd path below takes the same `MICA_OPT_<KEY>` vars — or a
+   single packed `MICA_BACKUP_OPTS` string if you prefer.)
 3. **Initialise the repo once, then start the service:**
    ```bash
    # One-off mica-cli commands must override the daily-loop ENTRYPOINT:

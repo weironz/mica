@@ -102,18 +102,17 @@ services:
       MICA_TOKEN: ${MICA_BACKUP_TOKEN:-}            # a read-scoped Mica token
       MICA_BACKUP_REPO: ${MICA_BACKUP_REPO:-opendal:s3:/mica}
       MICA_BACKUP_PASSWORD: ${MICA_BACKUP_PASSWORD:-}
-      # OpenDAL S3/OSS backend options, assembled here from the individual
-      # (readable, rotatable-one-at-a-time) vars in .env — so no single crammed
-      # line and secrets never share a value. enable_virtual_host_style is
-      # required for Aliyun OSS; for another provider adjust the opts below.
-      MICA_BACKUP_OPTS: >-
-        bucket=${OSS_BUCKET:-}
-        endpoint=${OSS_ENDPOINT:-}
-        region=${OSS_REGION:-}
-        access_key_id=${OSS_ACCESS_KEY_ID:-}
-        secret_access_key=${OSS_SECRET_ACCESS_KEY:-}
-        enable_virtual_host_style=true
-        root=${OSS_ROOT:-mica}
+      # OpenDAL S3/OSS backend options — one option per line (MICA_OPT_<KEY> maps
+      # to the opendal option <key>), sourced from the readable OSS_* vars in
+      # .env so every value stands alone and the AccessKey rotates without
+      # touching the rest. enable_virtual_host_style is required for Aliyun OSS.
+      MICA_OPT_BUCKET: ${OSS_BUCKET:-}
+      MICA_OPT_ENDPOINT: ${OSS_ENDPOINT:-}
+      MICA_OPT_REGION: ${OSS_REGION:-}
+      MICA_OPT_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
+      MICA_OPT_SECRET_ACCESS_KEY: ${OSS_SECRET_ACCESS_KEY:-}
+      MICA_OPT_ENABLE_VIRTUAL_HOST_STYLE: "true"
+      MICA_OPT_ROOT: ${OSS_ROOT:-mica}
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
       KEEP_DAILY: ${KEEP_DAILY:-14}
       KEEP_WEEKLY: ${KEEP_WEEKLY:-8}
