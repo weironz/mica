@@ -16,6 +16,9 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../local/doc_ops.dart';
 import '../src/rust/api/document.dart';
+import 'cloud_doc_store.dart';
+
+export 'cloud_doc_store.dart';
 
 /// A local yrs diff awaiting the server's ack. Tagged with a client id the
 /// server echoes in `sync.ack` so an ack matches its specific diff even across
@@ -36,6 +39,7 @@ class CloudSyncSession {
     this.onFault,
     this.restoreUnacked,
     this.onPersistUnacked,
+    this.persistence,
   });
 
   /// The document WebSocket URI (already carrying the auth token).
@@ -67,6 +71,11 @@ class CloudSyncSession {
   /// Persists the current unacked queue whenever it changes (debounced), so it
   /// survives a restart. Desktop wires this to the local store / prefs.
   final void Function(List<Uint8List> unacked)? onPersistUnacked;
+
+  /// Local-first mirror for this cloud doc (P2 Phase 1, desktop): seeds the
+  /// replica from the on-device store for offline read, and write-throughs the
+  /// doc + sync cursor so it survives a restart. Null on web / when not mirrored.
+  final CloudDocStore? persistence;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
@@ -105,6 +114,11 @@ class CloudSyncSession {
   int _pushSeq = 0;
   bool _restored = false;
   Timer? _persistTimer;
+
+  /// Local-first mirror state (Phase 1): [_seeded] gates the one-time seed of the
+  /// replica from the on-device store; [_saveTimer] debounces write-through.
+  bool _seeded = false;
+  Timer? _saveTimer;
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
@@ -161,6 +175,9 @@ class CloudSyncSession {
     _reconnectTimer = null;
     _sub?.cancel();
     _restoreUnackedOnce();
+    // Local-first: render the persisted replica immediately (offline read),
+    // BEFORE the socket — so a cold start with no network still shows the doc.
+    _seedFromLocalOnce();
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
     _sub = channel.stream.listen(
@@ -194,6 +211,30 @@ class CloudSyncSession {
     for (final bytes in restore) {
       _unacked.add(_Pending('${_pushSeq++}', bytes));
     }
+  }
+
+  /// Seed the replica from the on-device store exactly once (Phase 1 offline
+  /// read). If a persisted copy exists, decode it, fire [onReady] with its
+  /// content immediately, and resume the stream from the saved cursor — so the
+  /// doc opens with zero connectivity. A corrupt/absent copy falls through to the
+  /// normal server bootstrap (`_doc` stays null → `connect` sends sync.bootstrap).
+  void _seedFromLocalOnce() {
+    if (_seeded || _doc != null || persistence == null) return;
+    _seeded = true;
+    final loaded = persistence!.load();
+    if (loaded == null) return;
+    final doc = MicaDocument.fromStateWithClientId(
+      bytes: loaded.state,
+      clientId: clientId,
+    );
+    if (doc == null) return; // corrupt local copy → cold-bootstrap from server
+    _doc = doc;
+    _rootBlockId = doc.rootBlockId();
+    _cursor = loaded.cursor;
+    _mirror.seedFrom(doc);
+    _ready = true;
+    if (!_readyCompleter.isCompleted) _readyCompleter.complete();
+    onReady(_rootBlockId, childBlocks());
   }
 
   void _onMessage(dynamic raw) {
@@ -253,6 +294,7 @@ class CloudSyncSession {
           'payload': {'since_rid': _cursor},
         });
         _flushUnacked(resendAll: true);
+        _saveLocalSoon(); // persist the fresh/merged base + cursor
       case 'sync.updates':
         final ups = m['updates'];
         final before = _cursor;
@@ -290,7 +332,10 @@ class CloudSyncSession {
           if (_unacked.length != before) _persistSoon();
         }
         final rid = (m['rid'] as num?)?.toInt();
-        if (rid != null && rid > _cursor) _cursor = rid;
+        if (rid != null && rid > _cursor) {
+          _cursor = rid;
+          _saveLocalSoon(); // persist the cursor our own acked edit advanced
+        }
     }
   }
 
@@ -312,6 +357,7 @@ class CloudSyncSession {
     }
     final rid = (u['rid'] as num?)?.toInt();
     if (rid != null && rid > _cursor) _cursor = rid;
+    _saveLocalSoon(); // persist the merged remote update + advanced cursor
     return true;
   }
 
@@ -347,6 +393,7 @@ class CloudSyncSession {
     final p = _Pending('${_pushSeq++}', diff);
     _unacked.add(p);
     _persistSoon();
+    _saveLocalSoon(); // persist the local edit for offline durability
     if (_channel != null && _ready) _sendPush(p);
   }
 
@@ -380,6 +427,24 @@ class CloudSyncSession {
     _persistTimer?.cancel();
     _persistTimer = null;
     onPersistUnacked?.call([for (final p in _unacked) p.bytes]);
+  }
+
+  /// Debounced write-through of the replica + cursor to the on-device store
+  /// (Phase 1). Coalesces edit/remote-update bursts so we re-encode the doc once
+  /// per idle window, not per keystroke — offline durability without I/O churn.
+  void _saveLocalSoon() {
+    if (persistence == null || _doc == null) return;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 400), _saveLocalNow);
+  }
+
+  void _saveLocalNow() {
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    final doc = _doc;
+    final store = persistence;
+    if (doc == null || store == null) return;
+    store.save(doc.encodeState(), _cursor);
   }
 
   void _send(Map<String, dynamic> message) {
@@ -429,6 +494,7 @@ class CloudSyncSession {
       _flushUnacked();
     }
     _persistNow();
+    _saveLocalNow(); // hard-close guarantee: flush the replica to disk (C1)
     _disposed = true;
     _reconnectTimer?.cancel();
     _sub?.cancel();

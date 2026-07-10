@@ -13,6 +13,9 @@ import 'dart:typed_data';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../web/mica_ydoc.dart';
+import 'cloud_doc_store.dart';
+
+export 'cloud_doc_store.dart';
 
 typedef DocOp = Map<String, dynamic>;
 
@@ -34,6 +37,7 @@ class CloudSyncSession {
     this.onFault,
     this.restoreUnacked,
     this.onPersistUnacked,
+    this.persistence,
   });
 
   final Uri uri;
@@ -54,6 +58,10 @@ class CloudSyncSession {
   /// callback fired when the queue changes.
   final List<Uint8List>? restoreUnacked;
   final void Function(List<Uint8List> unacked)? onPersistUnacked;
+
+  /// Accepted for parity with the desktop session; unused on web (CanvasKit has
+  /// no on-device store yet — web cloud stays online, P2 Phase 1). Pass null.
+  final CloudDocStore? persistence;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
