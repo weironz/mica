@@ -241,6 +241,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String? _selectedMarkdown;
   String? _message;
   bool _isBusy = false;
+  // True while the cloud nav was rebuilt from the on-device mirror because the
+  // server was unreachable (P1c). Roles are forced read-only until the server is
+  // reached again; [_recoverOnlineNav] then refetches the authoritative nav.
+  bool _offlineNav = false;
 
   // Editor appearance (in-memory; applied live to the editor).
   EditorAppearance _appearance = const EditorAppearance();
@@ -476,7 +480,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // on-device page-tree mirror so the user still enters the workspace and can
       // read cached cloud content (P1c). No mirror (never synced / web) → stay on
       // the login screen as before.
-      _applyOfflineCloudNav(session);
+      await _applyOfflineCloudNav(session);
     }
   }
 
@@ -581,6 +585,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       },
       onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
       onFault: (reason, count) => _onCloudSyncFault(documentId, reason, count),
+      // Reaching the server means we're back online — leave the P1c offline-nav
+      // fallback (refetch the authoritative workspace list / real roles).
+      onServerConnected: _recoverOnlineNav,
       restoreUnacked: _loadUnacked(unackedKey),
       onPersistUnacked: (unacked) => _saveUnacked(unackedKey, unacked),
       // Local-first (Phase 1): mirror this cloud doc to the on-device store so it
@@ -1369,18 +1376,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final session = _requireSession();
       final workspace = _requireWorkspace();
       DocumentBootstrap? bootstrap;
+      var reachedServer = false;
       try {
         bootstrap = await _api.bootstrapDocument(
           session.accessToken,
           workspace.id,
           view.objectId,
         );
-      } catch (error) {
-        if (error.toString().toLowerCase().contains('unauthorized')) rethrow;
-        // Offline / server down: open the on-device mirror instead so a cached
-        // cloud doc still renders without connectivity (P1c). Null when it was
-        // never opened online → select the view with an empty editor pane; the
-        // yrs session below still tries to seed/connect when the network returns.
+        reachedServer = true;
+      } on ApiException {
+        // The server responded with an error (401/403/404/500 — e.g. the doc was
+        // deleted or access was revoked). Surface it; never mask a live-server
+        // error with a stale local mirror.
+        rethrow;
+      } catch (_) {
+        // Genuine connectivity failure (SocketException / ClientException /
+        // timeout): open the on-device mirror instead so a cached cloud doc still
+        // renders (P1c). Null when it was never opened online → select the view
+        // with an empty editor pane; the yrs session below seeds/connects when
+        // the network returns.
         bootstrap = _offlineCloudBootstrap(view);
       }
       setState(() {
@@ -1388,6 +1402,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedBootstrap = bootstrap;
         _selectedMarkdown = null;
       });
+      // Reaching the server means we're back online — restore the real nav if we
+      // had fallen back to the offline mirror.
+      if (reachedServer) _recoverOnlineNav();
     });
   }
 
@@ -2681,8 +2698,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// previously synced, and kicks off [_reconcileSync] (the WS reconnects and the
   /// yrs session seeds from disk immediately; both catch up when the network
   /// returns). Returns true if a cache existed and was applied. Desktop only.
-  bool _applyOfflineCloudNav(AuthSession session) {
+  Future<bool> _applyOfflineCloudNav(AuthSession session) async {
     if (kIsWeb) return false;
+    // The cloud cold-start path never opened the on-device store (only
+    // localOffline mode and _setupCloudYrs do), so open it here — otherwise the
+    // mirror reads as empty and this fallback silently no-ops. deviceClientId()
+    // opens the store if needed and is a no-op once open.
+    await _local.deviceClientId();
+    if (!mounted) return false;
     final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
     if (cache == null || cache.workspaces.isEmpty) return false;
     final rebuilt = rebuildCloudNavFromCache(cache, session.user.id);
@@ -2699,9 +2722,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
       _selectedMarkdown = null;
+      // Mark degraded-nav mode: roles are forced to 'viewer' and metadata is
+      // defaulted until the server is reachable again (see _recoverOnlineNav).
+      _offlineNav = true;
     });
     if (bootstrap != null) _reconcileSync();
     return true;
+  }
+
+  /// The server became reachable again after an offline start: refetch the real
+  /// workspace list + views so the forced-'viewer' roles (and other defaulted
+  /// metadata) are replaced by the authoritative server values — otherwise an
+  /// owner/editor would stay read-only until a manual refresh (P1c). Idempotent:
+  /// only the first online contact does the work.
+  void _recoverOnlineNav() {
+    if (!_offlineNav || !mounted) return;
+    _offlineNav = false;
+    unawaited(_refreshWorkspaces());
   }
 
   /// Build a bootstrap for a cloud [view] from its on-device mirror (offline

@@ -35,6 +35,7 @@ class CloudSyncSession {
     required this.onReady,
     required this.onRemoteBlocks,
     this.onFault,
+    this.onServerConnected,
     this.restoreUnacked,
     this.onPersistUnacked,
     this.persistence,
@@ -53,6 +54,11 @@ class CloudSyncSession {
 
   /// Integrity-fault hook — parity with the desktop session (red line #1).
   final void Function(String reason, int count)? onFault;
+
+  /// Accepted for parity with the desktop session; unused on web (P1c offline nav
+  /// is desktop-only — web has no on-device store, so it never enters the
+  /// offline-nav fallback that this signal recovers from).
+  final void Function()? onServerConnected;
 
   /// Crash-recovery parity (C1): unacked diffs restored at startup + a persist
   /// callback fired when the queue changes.

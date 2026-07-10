@@ -37,6 +37,7 @@ class CloudSyncSession {
     required this.onReady,
     required this.onRemoteBlocks,
     this.onFault,
+    this.onServerConnected,
     this.restoreUnacked,
     this.onPersistUnacked,
     this.persistence,
@@ -62,6 +63,11 @@ class CloudSyncSession {
   /// session self-heals by re-bootstrapping up to [_maxAutoReheal] times, then
   /// stops (circuit-break) and leaves it to the UI to prompt a reload.
   final void Function(String reason, int count)? onFault;
+
+  /// Fired once per session the first time a valid frame arrives from the server
+  /// — a definitive "we are online" signal. Used to leave the P1c offline-nav
+  /// fallback (refetch the authoritative workspace list once reachable again).
+  final void Function()? onServerConnected;
 
   /// Unacked diffs (raw yrs bytes) restored from local persistence at startup,
   /// so a crash / hard close doesn't lose edits the server never acked (C1).
@@ -118,6 +124,7 @@ class CloudSyncSession {
   /// Local-first mirror state (Phase 1): [_seeded] gates the one-time seed of the
   /// replica from the on-device store; [_saveTimer] debounces write-through.
   bool _seeded = false;
+  bool _sawServerFrame = false;
   Timer? _saveTimer;
 
   String get rootBlockId => _rootBlockId;
@@ -247,6 +254,12 @@ class CloudSyncSession {
     }
     // A valid frame means the link is live — reset the reconnect backoff.
     _reconnectAttempts = 0;
+    // First contact with the server this session → surface "we are online" once
+    // (lets the P1c offline-nav fallback refetch the authoritative nav).
+    if (!_sawServerFrame) {
+      _sawServerFrame = true;
+      onServerConnected?.call();
+    }
     switch (m['type']) {
       case 'sync.base':
         final b64 = m['base'];
