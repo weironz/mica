@@ -296,11 +296,20 @@ impl LocalStore {
     /// (a per-doc monotonic local sequence). The base snapshot is left untouched;
     /// [`Self::squash`] folds the log back into the base later.
     pub fn append_update(&self, doc_id: &str, update: &[u8]) -> Result<i64, StoreError> {
-        let next: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(clock),0)+1 FROM doc_update WHERE doc_id=?1",
+        let max_log: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(clock),0) FROM doc_update WHERE doc_id=?1",
             params![doc_id],
             |r| r.get(0),
         )?;
+        // The clock must be strictly monotonic for the doc's whole lifetime —
+        // even after `trim_updates_through` deletes acked rows — because the cloud
+        // outbox is `updates_after(pushed_clock)`. Deriving it from `MAX(clock)` of
+        // the remaining rows alone would reset to 1 after a full trim, minting a
+        // clock ≤ `pushed_clock` that would never be pushed (silent divergence).
+        // So the high-water is `max(MAX(clock), pushed_clock)`: `pushed_clock`
+        // covers every already-acked-and-trimmed clock (all ≤ it), the remaining
+        // rows cover the un-pushed tail.
+        let next = max_log.max(self.sync_cursor(doc_id)?.pushed_clock) + 1;
         self.conn.execute(
             "INSERT INTO doc_update(doc_id,clock,payload) VALUES(?1,?2,?3)",
             params![doc_id, next, update],
@@ -328,6 +337,24 @@ impl LocalStore {
             .query_map(params![doc_id, after], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Drop acked log entries (`clock ≤ up_to_clock`) to bound the append-log,
+    /// leaving the un-pushed outbox (`clock > pushed_clock`) intact — callers pass
+    /// `up_to_clock = pushed_clock`. Safe: the base snapshot already folds these
+    /// updates, so `load_doc` is unchanged; and `append_update` stays monotonic
+    /// across the trim (its high-water includes `pushed_clock`), so no future
+    /// clock is ever reused below the trimmed range.
+    pub fn trim_updates_through(
+        &self,
+        doc_id: &str,
+        up_to_clock: i64,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
+            params![doc_id, up_to_clock],
+        )?;
+        Ok(())
     }
 
     /// Fold the base snapshot + all logged updates into a single new base, then
@@ -816,10 +843,53 @@ mod tests {
         let cid = store.identity().unwrap().client_id;
         let doc = MicaDoc::from_blocks_with_client_id("r", &[Block::new("r", "page")], Some(cid));
         store.save_doc("d", &doc).unwrap();
-        store.append_update("d", &[1, 2, 3]).unwrap(); // clock 1
-        store.append_update("d", &[4, 5, 6]).unwrap(); // clock 2
-        assert_eq!(store.updates_after("d", 1).unwrap().len(), 1);
-        assert_eq!(store.updates_after("d", 0).unwrap().len(), 2);
+        // append_update is monotonic PAST pushed_clock — a fresh clock always
+        // lands in the outbox (updates_after(pushed_clock)), never ≤ it.
+        let c1 = store.append_update("d", &[1, 2, 3]).unwrap();
+        let c2 = store.append_update("d", &[4, 5, 6]).unwrap();
+        assert_eq!((c1, c2), (8, 9), "clock resumes past pushed_clock=7");
+        assert_eq!(store.updates_after("d", 7).unwrap().len(), 2, "both are the outbox");
+        assert_eq!(store.updates_after("d", 8).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn trim_bounds_log_and_clock_stays_monotonic() {
+        // The P2 outbox invariant: trimming acked entries must never let a later
+        // clock be reused at/below pushed_clock (it would fall outside the outbox
+        // query `updates_after(pushed_clock)` and never be pushed = divergence).
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let doc = MicaDoc::from_blocks_with_client_id("r", &[Block::new("r", "page")], Some(cid));
+        store.save_doc("d", &doc).unwrap();
+        assert_eq!(store.append_update("d", &[1]).unwrap(), 1);
+        assert_eq!(store.append_update("d", &[2]).unwrap(), 2);
+        assert_eq!(store.append_update("d", &[3]).unwrap(), 3);
+
+        // Ack through clock 2, then trim the acked prefix.
+        store
+            .set_sync_cursor("d", SyncCursor { last_synced_rid: 5, pushed_clock: 2 })
+            .unwrap();
+        store.trim_updates_through("d", 2).unwrap();
+        let clocks = |s: &LocalStore| {
+            s.doc_updates("d").unwrap().into_iter().map(|(c, _)| c).collect::<Vec<_>>()
+        };
+        assert_eq!(clocks(&store), vec![3], "only the un-pushed tail survives");
+
+        // A new edit continues past the trimmed range, not back at 1.
+        assert_eq!(store.append_update("d", &[4]).unwrap(), 4, "monotonic past trim");
+        assert_eq!(
+            store.updates_after("d", 2).unwrap().into_iter().map(|(c, _)| c).collect::<Vec<_>>(),
+            vec![3, 4],
+            "outbox = unpushed tail"
+        );
+
+        // Full trim (everything acked) then append still doesn't reset to 1.
+        store
+            .set_sync_cursor("d", SyncCursor { last_synced_rid: 6, pushed_clock: 4 })
+            .unwrap();
+        store.trim_updates_through("d", 4).unwrap();
+        assert!(clocks(&store).is_empty(), "empty after full trim");
+        assert_eq!(store.append_update("d", &[5]).unwrap(), 5, "no reset after full trim");
     }
 
     #[test]

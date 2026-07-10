@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1359826280;
+  int get rustContentHash => 2082453049;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -281,6 +281,12 @@ abstract class RustLibApi extends BaseApi {
   SyncCursor crateApiStoreMicaStoreSyncCursor({
     required MicaStore that,
     required String docId,
+  });
+
+  void crateApiStoreMicaStoreTrimUpdatesThrough({
+    required MicaStore that,
+    required String docId,
+    required PlatformInt64 upToClock,
   });
 
   List<DocUpdate> crateApiStoreMicaStoreUpdatesAfter({
@@ -1650,6 +1656,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiStoreMicaStoreTrimUpdatesThrough({
+    required MicaStore that,
+    required String docId,
+    required PlatformInt64 upToClock,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(docId, serializer);
+          sse_encode_i_64(upToClock, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 41)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreTrimUpdatesThroughConstMeta,
+        argValues: [that, docId, upToClock],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreTrimUpdatesThroughConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_trim_updates_through",
+        argNames: ["that", "docId", "upToClock"],
+      );
+
+  @override
   List<DocUpdate> crateApiStoreMicaStoreUpdatesAfter({
     required MicaStore that,
     required String docId,
@@ -1665,7 +1706,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(docId, serializer);
           sse_encode_i_64(after, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 41)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_doc_update,
@@ -1695,7 +1736,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_64(a, serializer);
           sse_encode_i_64(b, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_64,
@@ -1717,7 +1758,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1740,7 +1781,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1765,7 +1806,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 46,
             port: port_,
           );
         },
@@ -3007,6 +3048,19 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// This doc's sync progress (0/0 if it has never synced).
   SyncCursor syncCursor({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreSyncCursor(that: this, docId: docId);
+
+  /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
+  /// bounding the append-log while leaving the un-pushed tail intact. The base
+  /// snapshot already folds these, so reads are unchanged; the clock stays
+  /// monotonic across this so no future clock is reused below the trim.
+  void trimUpdatesThrough({
+    required String docId,
+    required PlatformInt64 upToClock,
+  }) => RustLib.instance.api.crateApiStoreMicaStoreTrimUpdatesThrough(
+    that: this,
+    docId: docId,
+    upToClock: upToClock,
+  );
 
   /// Log entries with `clock > after`, ordered — the un-pushed outbox when
   /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.

@@ -292,6 +292,19 @@ impl MicaStore {
         let _ = self.inner.lock().unwrap().squash(&doc_id, self.client_id);
     }
 
+    /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
+    /// bounding the append-log while leaving the un-pushed tail intact. The base
+    /// snapshot already folds these, so reads are unchanged; the clock stays
+    /// monotonic across this so no future clock is reused below the trim.
+    #[frb(sync)]
+    pub fn trim_updates_through(&self, doc_id: String, up_to_clock: i64) {
+        let _ = self
+            .inner
+            .lock()
+            .unwrap()
+            .trim_updates_through(&doc_id, up_to_clock);
+    }
+
     /// This doc's sync progress (0/0 if it has never synced).
     #[frb(sync)]
     pub fn sync_cursor(&self, doc_id: String) -> SyncCursor {

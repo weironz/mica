@@ -5,6 +5,7 @@
 //   flutter test integration_test/cloud_offline_read_test.dart -d windows
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -41,6 +42,41 @@ void main() {
     final blocks =
         (jsonDecode(replay.toBlocksJson()) as List).cast<Map<String, dynamic>>();
     expect(blocks.firstWhere((b) => b['id'] == 'a')['text'], 'cloud note');
+    _bestEffortDelete(dir);
+  });
+
+  test('StoreCloudDocStore outbox round-trips + trims monotonically via FFI (P2a)',
+      () {
+    final dir = Directory.systemTemp.createTempSync('mica_outbox');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+    final ob = StoreCloudDocStore(store, 'doc-ob');
+    Uint8List b(int n) => Uint8List.fromList([n]);
+
+    // Fresh doc: empty outbox, zeroed cursor.
+    expect(ob.outboxAfter(0), isEmpty);
+    expect(ob.cursor(), (lastSyncedRid: 0, pushedClock: 0));
+
+    // Append three local edits — monotonic clocks 1,2,3.
+    expect([ob.appendOutbox(b(1)), ob.appendOutbox(b(2)), ob.appendOutbox(b(3))],
+        [1, 2, 3]);
+    expect(ob.outboxAfter(0).map((e) => e.clock), [1, 2, 3]);
+    expect(ob.outboxAfter(0).first.bytes, b(1));
+
+    // Ack through clock 2, then trim the acked prefix.
+    ob.advance(lastSyncedRid: 5, pushedClock: 2);
+    expect(ob.cursor(), (lastSyncedRid: 5, pushedClock: 2));
+    ob.trimOutboxThrough(2);
+    // Only the un-pushed tail (clock 3) remains; it's still the outbox.
+    expect(ob.outboxAfter(ob.cursor().pushedClock).map((e) => e.clock), [3]);
+
+    // A new edit continues past the trim, never reused below pushed_clock.
+    expect(ob.appendOutbox(b(4)), 4, reason: 'clock monotonic across trim');
+    expect(ob.outboxAfter(2).map((e) => e.clock), [3, 4]);
+
+    // advance() preserves the field not passed (pushed_clock here).
+    ob.advance(lastSyncedRid: 9);
+    expect(ob.cursor(), (lastSyncedRid: 9, pushedClock: 2));
+
     _bestEffortDelete(dir);
   });
 

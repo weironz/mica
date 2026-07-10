@@ -16,4 +16,31 @@ abstract class CloudDocStore {
   /// Persist the current replica bytes + synced cursor. The session debounces
   /// calls, so this can write straight through.
   void save(Uint8List state, int cursor);
+
+  // ── outbox: durable un-pushed local edits (P2 offline edit) ────────────────
+  //
+  // Each local edit is appended here as a yrs diff keyed by a monotonic `clock`;
+  // the un-pushed queue is `outboxAfter(cursor().pushedClock)`. This replaces the
+  // prefs `cloudUnacked` queue with an append-log that survives a restart and a
+  // crash mid-push (re-pushed idempotently, since yrs updates fold). Wired only
+  // to the desktop store; the P2a additions have no caller yet.
+
+  /// Append a local yrs `diff` to the outbox; returns its monotonic `clock`
+  /// (strictly increasing for the doc's lifetime, even across [trimOutboxThrough]).
+  int appendOutbox(Uint8List diff);
+
+  /// Un-pushed outbox entries with `clock > pushedClock`, ordered — what to
+  /// (re)send on connect. Pass `cursor().pushedClock`.
+  List<({int clock, Uint8List bytes})> outboxAfter(int pushedClock);
+
+  /// This doc's sync progress: the highest stream `rid` applied and the highest
+  /// local `clock` the server has acked.
+  ({int lastSyncedRid, int pushedClock}) cursor();
+
+  /// Advance the sync cursor (only the passed fields; the rest keep their value).
+  void advance({int? lastSyncedRid, int? pushedClock});
+
+  /// Drop acked outbox entries (`clock ≤ pushedClock`) to bound the log; the
+  /// un-pushed tail is kept and the clock stays monotonic.
+  void trimOutboxThrough(int pushedClock);
 }

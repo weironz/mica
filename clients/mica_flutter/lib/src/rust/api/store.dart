@@ -79,6 +79,15 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// This doc's sync progress (0/0 if it has never synced).
   SyncCursor syncCursor({required String docId});
 
+  /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
+  /// bounding the append-log while leaving the un-pushed tail intact. The base
+  /// snapshot already folds these, so reads are unchanged; the clock stays
+  /// monotonic across this so no future clock is reused below the trim.
+  void trimUpdatesThrough({
+    required String docId,
+    required PlatformInt64 upToClock,
+  });
+
   /// Log entries with `clock > after`, ordered — the un-pushed outbox when
   /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
   List<DocUpdate> updatesAfter({

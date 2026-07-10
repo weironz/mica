@@ -31,9 +31,43 @@ class StoreCloudDocStore implements CloudDocStore {
     final doc = MicaDocument.fromState(bytes: state);
     if (doc == null) return;
     _store.saveDoc(docId: _docId, doc: doc);
+    // Preserve pushed_clock (the outbox high-water); only advance the synced rid.
+    final cur = _store.syncCursor(docId: _docId);
     _store.setSyncCursor(
       docId: _docId,
-      cursor: SyncCursor(lastSyncedRid: cursor, pushedClock: 0),
+      cursor: SyncCursor(lastSyncedRid: cursor, pushedClock: cur.pushedClock),
     );
   }
+
+  @override
+  int appendOutbox(Uint8List diff) =>
+      _store.appendUpdate(docId: _docId, update: diff);
+
+  @override
+  List<({int clock, Uint8List bytes})> outboxAfter(int pushedClock) => [
+    for (final u in _store.updatesAfter(docId: _docId, after: pushedClock))
+      (clock: u.clock, bytes: u.payload),
+  ];
+
+  @override
+  ({int lastSyncedRid, int pushedClock}) cursor() {
+    final c = _store.syncCursor(docId: _docId);
+    return (lastSyncedRid: c.lastSyncedRid, pushedClock: c.pushedClock);
+  }
+
+  @override
+  void advance({int? lastSyncedRid, int? pushedClock}) {
+    final c = _store.syncCursor(docId: _docId);
+    _store.setSyncCursor(
+      docId: _docId,
+      cursor: SyncCursor(
+        lastSyncedRid: lastSyncedRid ?? c.lastSyncedRid,
+        pushedClock: pushedClock ?? c.pushedClock,
+      ),
+    );
+  }
+
+  @override
+  void trimOutboxThrough(int pushedClock) =>
+      _store.trimUpdatesThrough(docId: _docId, upToClock: pushedClock);
 }
