@@ -15,35 +15,35 @@ import 'package:flutter/foundation.dart';
 /// system fonts by name, and its on-demand Noto download would break offline
 /// mode + flash `.notdef` boxes on the custom-painted editor.
 List<String> get cjkFontFallback {
-  if (kIsWeb) return const ['CJKFallback'];
+  // Web can only use bundled families: crisp Noto Sans SC, then the broad
+  // DroidSansFallback tail for any glyph Noto lacks (JP/KR/rare).
+  if (kIsWeb) return const ['NotoSansSC', 'CJKFallback'];
+  // Desktop leads with the OS CJK font; the two bundled families are only the
+  // last-resort tail (a glyph never goes tofu).
+  const tail = ['NotoSansSC', 'CJKFallback'];
   switch (defaultTargetPlatform) {
     case TargetPlatform.windows:
       return const [
         'Microsoft YaHei UI',
         'Microsoft YaHei',
         'Microsoft JhengHei UI', // Traditional
-        'CJKFallback',
+        ...tail,
       ];
     case TargetPlatform.macOS:
-      return const [
-        'PingFang SC',
-        'PingFang TC',
-        'Hiragino Sans',
-        'CJKFallback',
-      ];
+      return const ['PingFang SC', 'PingFang TC', 'Hiragino Sans', ...tail];
     case TargetPlatform.linux:
       return const [
         'Noto Sans CJK SC',
         'Source Han Sans SC',
         'WenQuanYi Micro Hei',
-        'CJKFallback',
+        ...tail,
       ];
     default: // iOS / Android — the system CJK font is already good.
       return const [
         'PingFang SC',
         'Microsoft YaHei UI',
         'Noto Sans CJK SC',
-        'CJKFallback',
+        ...tail,
       ];
   }
 }

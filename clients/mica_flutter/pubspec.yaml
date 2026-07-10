@@ -59,6 +59,12 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   fonts:
+    # Crisp CJK for the web (CanvasKit can't use system fonts by name, unlike
+    # desktop which defers to 微软雅黑/苹方 — see lib/cjk_fonts.dart). Noto Sans
+    # SC Regular, SIL OFL 1.1. DroidSansFallback stays as the broad-coverage tail.
+    - family: NotoSansSC
+      fonts:
+        - asset: fonts/NotoSansSC-Regular.otf
     - family: CJKFallback
       fonts:
         - asset: fonts/DroidSansFallback.ttf
