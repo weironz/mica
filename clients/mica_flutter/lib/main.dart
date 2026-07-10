@@ -2746,8 +2746,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
       _selectedMarkdown = null;
-      // Mark degraded-nav mode: roles are forced to 'viewer' and metadata is
-      // defaulted until the server is reachable again (see _recoverOnlineNav).
+      // Mark degraded-nav mode: roles come from the (possibly stale) mirror and
+      // ownerId/objectType are defaulted until the server is reachable again
+      // (see _recoverOnlineNav). The server re-checks the real role on every
+      // push, so a stale mirrored role is a UX gate only, never an authority.
       _offlineNav = true;
     });
     if (bootstrap != null) _reconcileSync();
@@ -2755,10 +2757,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// The server became reachable again after an offline start: refetch the real
-  /// workspace list + views so the forced-'viewer' roles (and other defaulted
-  /// metadata) are replaced by the authoritative server values — otherwise an
-  /// owner/editor would stay read-only until a manual refresh (P1c). Idempotent:
-  /// only the first online contact does the work.
+  /// workspace list + views so the mirrored (possibly stale) roles and defaulted
+  /// metadata are replaced by the authoritative server values — e.g. a role
+  /// changed while offline takes effect, and ownerId/objectType become real
+  /// again. Idempotent: only the first online contact does the work.
   void _recoverOnlineNav() {
     if (!_offlineNav || !mounted) return;
     _offlineNav = false;
