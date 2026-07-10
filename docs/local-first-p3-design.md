@@ -1,6 +1,8 @@
 # Mica P3 设计:溶解双模式 —— 「工作区:本地 / 已连云」共存
 
-> 状态:**待开发者审批**(2026-07-10)。调研 provenance:**AFFiNE 实证**(子代理读真实源码 toeverything/AFFiNE@a868f54:`workspace/metadata.ts`、`workspace-engine/impls/{local,cloud}.ts`、`workspace-selector/*`、`services/transform.ts`);**AppFlowy 复用 2026-06 已有实读**(AppFlowy-IO/AppFlowy@4af02cdc:`AuthType{Local|AppFlowyCloud}` 切同一服务 trait、匿名用户假 email 反模式、`AnonUserWorkspaceTableMigration` 教训);**mica-current 全部关键行号已由主代理直接核实**(main.dart:75/99-141/303/343/912/1595/1936/2785-2812/3048、store.rs:28/104-135/524-617、FRB store.rs:220-253)。
+> 状态:**已审批开工**(2026-07-11)。§9 决策已拍板:①单活跃服务器 ②**已登录则默认云**(未登录默认本地——开发者改推荐)③detach 进 P3f 可砍 ④上云后默认删除+可选保留 ⑤origin 保持 URL。
+>
+> 原状态:待开发者审批(2026-07-10)。调研 provenance:**AFFiNE 实证**(子代理读真实源码 toeverything/AFFiNE@a868f54:`workspace/metadata.ts`、`workspace-engine/impls/{local,cloud}.ts`、`workspace-selector/*`、`services/transform.ts`);**AppFlowy 复用 2026-06 已有实读**(AppFlowy-IO/AppFlowy@4af02cdc:`AuthType{Local|AppFlowyCloud}` 切同一服务 trait、匿名用户假 email 反模式、`AnonUserWorkspaceTableMigration` 教训);**mica-current 全部关键行号已由主代理直接核实**(main.dart:75/99-141/303/343/912/1595/1936/2785-2812/3048、store.rs:28/104-135/524-617、FRB store.rs:220-253)。
 >
 > 结论沿用 `local-first-plan.md` 拍板:P0-P2 已备好地基(单 store、origin+role 镜像、append-log outbox、离线读写、CloudSyncSession 对账),**P3 是纯客户端 nav/UI/身份/schema 重构,不动同步协议、不动服务端**。
 
@@ -66,7 +68,7 @@ AppFlowy 补一条反模式警告:匿名本地身份硬编码假 email `anon@app
 
 ### 1.4 新建工作区:一个对话框,类型二选一
 
-现在本地/云各有 `_createWorkspace`/`_localCreateWorkspace`。P3 合并为一个对话框:名字 + 类型选择(本地 / 云)。默认值:**桌面默认「本地」**(与 fresh-install local-first 默认一致;AFFiNE 默认 cloud 是它的商业选择,不学),web 恒「云」且无选择器。选云但未登录 → 先走登录(AFFiNE 同款 reroute)。
+现在本地/云各有 `_createWorkspace`/`_localCreateWorkspace`。P3 合并为一个对话框:名字 + 类型选择(本地 / 云)。默认值(拍板):**未登录默认「本地」,已登录默认「云」**(登录这个动作本身表达了协作意图;未登录仍是 local-first 哲学),web 恒「云」且无选择器。选云但未登录 → 先走登录(AFFiNE 同款 reroute)。
 
 ### 1.5 双向入口
 
