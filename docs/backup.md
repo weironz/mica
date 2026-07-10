@@ -77,10 +77,15 @@ is hard-wired), so the token never leaves the host. It is **opt-in** behind the
    ```
 3. **Initialise the repo once, then start the service:**
    ```bash
-   docker compose --profile backup run --rm backup mica-cli backup init
+   # One-off mica-cli commands must override the daily-loop ENTRYPOINT:
+   docker compose --profile backup run --rm --entrypoint mica-cli backup backup init
    docker compose --profile backup up -d backup
    docker compose logs -f backup      # BACKUP_ON_START=1 → the first run happens now
+   # inspect later: … run --rm --entrypoint mica-cli backup backup snapshots
    ```
+   > Sharing a bucket with an existing repo? Point this one at its own prefix by
+   > adding `root=<prefix>` to `MICA_BACKUP_OPTS` (else init fails with "Config
+   > file already exists").
 
 The container runs `mica-backup.sh` (export → snapshot → forget --prune) at
 `${BACKUP_HOUR}:00` daily and once on (re)start; the staging dir lives in the

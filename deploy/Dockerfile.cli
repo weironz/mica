@@ -24,7 +24,10 @@ RUN apt-get update \
 COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
 COPY deploy/mica-backup.sh /usr/local/bin/mica-backup.sh
 COPY deploy/mica-backup-loop.sh /usr/local/bin/mica-backup-loop.sh
-RUN chmod +x /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh
+# Strip any CR (Windows checkout) before chmod — a `\r` in the shebang makes the
+# container fail with `/usr/bin/env: 'bash\r': No such file or directory`.
+RUN sed -i 's/\r$//' /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh \
+ && chmod +x /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh
 ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
 # The loop runs mica-backup.sh (export → snapshot → forget) once a day.
 ENTRYPOINT ["/usr/local/bin/mica-backup-loop.sh"]

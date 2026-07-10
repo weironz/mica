@@ -1,0 +1,5 @@
+# Shell scripts must be LF — they run in Linux containers and on the server.
+# With core.autocrlf=true (Windows default) git would otherwise check them out
+# CRLF, corrupting the shebang inside a Docker image:
+#   /usr/bin/env: 'bash\r': No such file or directory
+*.sh text eol=lf
