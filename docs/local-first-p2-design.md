@@ -142,7 +142,7 @@ void advance({int? lastSyncedRid, int? pushedClock}); // → store.setSyncCursor
 - `CloudSyncSession` persistence 分支:编辑→`appendOutbox`(同步)+push;ack→`advance(pushedClock=max, lastSyncedRid=max)`(单调);重连→`_flushUnacked` 重发 `outboxAfter(pushed_clock)`(连内 `_sentThroughClock` 跳过在途);`drainOutbox` 判据 `_outboxEmpty`;`_restoreUnackedOnce` no-op。prefs `cloudUnacked` 在 `_setupCloudYrs` 一次性迁移(先追加后删)。web(`persistence==null`)**逐字保留** prefs 路径,`cloud_sync_web.dart` 未动。
 - 验证:FFI 集成(-d windows,复用 `_FakeSyncServer`)—— ①编辑落 outbox→push→ack→`pushed_clock` 推进、outbox 排空;②未 ack 编辑跨会话重启仍在 outbox、重连按同 clock 重推。既有 B1/C1/B2/reconnect 无回归;单元 232 绿(web 不变)。
 - 丢失点(均已处理):①迁移**先追加后删 pref**(反了=丢在途)。②`appendOutbox` 在 push 前**同步**完成。
-- 正确性依据:server WS 循环顺序处理(`recv→handle.await→ack`)→ ack 顺序回来、`pushed_clock` 连续高水位;advance 取 max 兜底。
+- **对抗复审抓到高危丢数据(已修 e6a0ce9)**:原 ack 用 `max(cur, ackId)` 推 `pushed_clock`,但一条 push 可能被服务端回 `error`(非 ack,如 `push_update` 并发争用瞬时失败)→ clock 3 error、clock 4 ack → `pushed_clock` 跳到 4、outboxAfter(4) 永久漏 clock 3 = 静默分叉。「ack 顺序到→连续高水位」的假设漏了 push 可能回 error 打破连续。修:ack **只连续前缀推进**(`_ackedAhead` 存乱序 ack、只 `while remove(pushed+1)` 抬水位);新增 `case 'error'` 重推被拒 clock,`_pushRejects` 有界(仅连续进展清零,防高 clock 的 ack 让永久失败低 clock 死循环)。再复审(e3644a6):budget 耗尽 `_pushStalled` 熔断主动推送,止住永久拒推下 `_ackedAhead` 增长/重发风暴(编辑仍持久落 outbox、reconnect 重试)。测:`_FakeSyncServer` 加 rejectPushOnce/Always,瞬时拒推不丢 + 永久拒推有界+surfaced;9 集成测绿。
 
 **P2c — 重连对账 pull-then-push 走通(无损收敛)**
 - 落实 §1 顺序:`connect` 热重连先 `pull{since_rid=last_synced_rid}` 全量 catch-up,再 `outboxAfter` 推;远端 update 只进 base + `last_synced_rid`,不进 log。
