@@ -1754,7 +1754,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _localCreateWorkspace(String name) async {
     final title = name.trim().isEmpty ? '工作区' : name.trim();
     final id = 'ws_${DateTime.now().microsecondsSinceEpoch}';
-    _local.saveWorkspace((id: id, name: title, position: _nextWorkspacePosition()));
+    _local.saveWorkspace(
+      (id: id, name: title, position: _nextWorkspacePosition(), role: 'owner'),
+    );
     if (!mounted) return;
     setState(() {
       _reloadLocalWorkspaces();
@@ -1788,10 +1790,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         .listWorkspaces()
         .firstWhere(
           (w) => w.id == workspace.id,
-          orElse: () => (id: workspace.id, name: title, position: '0000000010'),
+          orElse: () =>
+              (id: workspace.id, name: title, position: '0000000010', role: 'owner'),
         )
         .position;
-    _local.saveWorkspace((id: workspace.id, name: title, position: pos));
+    _local.saveWorkspace(
+      (id: workspace.id, name: title, position: pos, role: 'owner'),
+    );
     if (mounted) {
       setState(() {
         _reloadLocalWorkspaces();
@@ -2691,6 +2696,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           id: w.id,
           name: w.name,
           position: ((i + 1) * 10).toString().padLeft(10, '0'),
+          role: w.role, // mirror the real role so offline editing knows its rights
         ),
     ];
     final views = <ViewData>[
@@ -8800,18 +8806,18 @@ class DocumentView {
 
 /// Rebuild the cloud workspace list + per-workspace views from an on-device
 /// page-tree mirror ([CloudPageTreeCache]) when the server is unreachable —
-/// the P1c offline-read reconstruction. The mirror stores only content
-/// (id/name/position/tree), so provenance metadata is defaulted: `role` is
-/// forced to `'viewer'` (offline is read-only until offline-edit lands in P2,
-/// and this drives the existing `matchesEditRole` gate), `objectType` to
-/// `'document'`, and `ownerId` to [ownerId] (the current user). Pure + testable;
-/// the real values return on the next successful online load. Views are grouped
-/// by their `workspaceId` and keep the mirror's position order.
+/// the P1c offline-read reconstruction. `role` is the real mirrored membership
+/// role (P2d), so an editor can edit a cached cloud doc offline (its edits queue
+/// in the append-log outbox and push on reconnect); a viewer stays read-only via
+/// the existing `matchesEditRole` gate. `objectType` is defaulted to `'document'`
+/// and `ownerId` to [ownerId] (the current user) — still not mirrored; the real
+/// values return on the next successful online load. Views are grouped by their
+/// `workspaceId` and keep the mirror's position order. Pure + testable.
 ({List<Workspace> workspaces, Map<String, List<DocumentView>> views})
 rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
   final workspaces = [
     for (final w in cache.workspaces)
-      Workspace(id: w.id, name: w.name, ownerId: ownerId, role: 'viewer'),
+      Workspace(id: w.id, name: w.name, ownerId: ownerId, role: w.role),
   ];
   final views = <String, List<DocumentView>>{};
   for (final v in cache.views) {

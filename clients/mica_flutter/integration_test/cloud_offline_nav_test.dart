@@ -31,7 +31,7 @@ void main() {
     final online = LocalOffline(rootDirOverride: dir.path);
     await online.open();
 
-    const ws = (id: 'w1', name: 'Cloud WS', position: '0000000010');
+    const ws = (id: 'w1', name: 'Cloud WS', position: '0000000010', role: 'editor');
     const view = (
       id: 'v1',
       workspaceId: 'w1',

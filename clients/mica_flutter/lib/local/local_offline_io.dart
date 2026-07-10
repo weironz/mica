@@ -29,8 +29,10 @@ typedef ViewData = ({
   bool trashed,
 });
 
-/// One local workspace, as plain data.
-typedef WorkspaceData = ({String id, String name, String position});
+/// One local workspace, as plain data. [role] is the user's membership role,
+/// mirrored from the server so an offline start knows whether editing is allowed
+/// (P2d); local workspaces are the user's own (owner).
+typedef WorkspaceData = ({String id, String name, String position, String role});
 
 /// A mirrored page tree read back from the store for one `origin` (a server
 /// URL) — workspaces + views, for offline navigation (P2 option C, P1c).
@@ -113,7 +115,7 @@ class LocalOffline {
     if (store == null) return const [];
     return [
       for (final w in store.listWorkspaces(origin: origin))
-        (id: w.id, name: w.name, position: w.position),
+        (id: w.id, name: w.name, position: w.position, role: w.role),
     ];
   }
 
@@ -124,6 +126,7 @@ class LocalOffline {
         name: w.name,
         position: w.position,
         origin: origin,
+        role: w.role,
       ),
     );
   }

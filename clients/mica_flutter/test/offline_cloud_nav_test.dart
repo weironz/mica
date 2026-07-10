@@ -8,8 +8,8 @@ void main() {
   test('rebuildCloudNavFromCache reconstructs workspaces + grouped views', () {
     final CloudPageTreeCache cache = (
       workspaces: <WorkspaceData>[
-        (id: 'w1', name: 'Work', position: '0000000010'),
-        (id: 'w2', name: '文档', position: '0000000020'),
+        (id: 'w1', name: 'Work', position: '0000000010', role: 'editor'),
+        (id: 'w2', name: '文档', position: '0000000020', role: 'viewer'),
       ],
       views: <ViewData>[
         (
@@ -44,13 +44,16 @@ void main() {
 
     final rebuilt = rebuildCloudNavFromCache(cache, 'user-1');
 
-    // Workspace list preserved in order; provenance defaulted.
+    // Workspace list preserved in order; ownerId defaulted to the current user.
     expect(rebuilt.workspaces.map((w) => w.id).toList(), ['w1', 'w2']);
     expect(rebuilt.workspaces[1].name, '文档');
     expect(rebuilt.workspaces[0].ownerId, 'user-1');
-    // Offline is read-only: role='viewer' drives matchesEditRole to block edits.
-    expect(rebuilt.workspaces.every((w) => w.role == 'viewer'), isTrue);
-    expect(matchesEditRole(rebuilt.workspaces[0].role), isFalse);
+    // P2d: the MIRRORED role is used — an editor can edit its cached docs offline,
+    // a viewer stays read-only (via matchesEditRole).
+    expect(rebuilt.workspaces[0].role, 'editor');
+    expect(matchesEditRole(rebuilt.workspaces[0].role), isTrue);
+    expect(rebuilt.workspaces[1].role, 'viewer');
+    expect(matchesEditRole(rebuilt.workspaces[1].role), isFalse);
 
     // Views grouped by workspace, order + tree fields preserved.
     expect(rebuilt.views['w1']!.map((v) => v.objectId).toList(), ['d1', 'd2']);
@@ -62,7 +65,9 @@ void main() {
 
   test('rebuildCloudNavFromCache handles a workspace with no views', () {
     final CloudPageTreeCache cache = (
-      workspaces: <WorkspaceData>[(id: 'w1', name: 'W', position: '0000000010')],
+      workspaces: <WorkspaceData>[
+        (id: 'w1', name: 'W', position: '0000000010', role: 'owner'),
+      ],
       views: <ViewData>[],
     );
     final rebuilt = rebuildCloudNavFromCache(cache, 'u');

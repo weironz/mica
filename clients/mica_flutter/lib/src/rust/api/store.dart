@@ -177,16 +177,25 @@ class LocalWorkspace {
   /// Provenance: "local" or a server URL — same scoping as [`LocalView`].
   final String origin;
 
+  /// The user's role in this workspace (mirrored from the server so offline
+  /// editing knows whether it's allowed — P2d). Local workspaces: owner.
+  final String role;
+
   const LocalWorkspace({
     required this.id,
     required this.name,
     required this.position,
     required this.origin,
+    required this.role,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ name.hashCode ^ position.hashCode ^ origin.hashCode;
+      id.hashCode ^
+      name.hashCode ^
+      position.hashCode ^
+      origin.hashCode ^
+      role.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -196,7 +205,8 @@ class LocalWorkspace {
           id == other.id &&
           name == other.name &&
           position == other.position &&
-          origin == other.origin;
+          origin == other.origin &&
+          role == other.role;
 }
 
 /// A document's sync progress against the cloud update stream (P2 local-first).

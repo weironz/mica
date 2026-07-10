@@ -150,11 +150,11 @@ void advance({int? lastSyncedRid, int? pushedClock}); // → store.setSyncCursor
 - **测试教训**(纸面推不出,建两副本测才现形):①三个副本必须**共享同一份 base 字节**——每副本各自 `fromBlocksJson` 会给相同文本铸不同 yrs item id,diff 引用对方没有的 item → 永久 pending 不合并;②两「设备」必须 **client_id 相异**——同 id 下 A、B 的并发编辑撞同一 `(client_id, clock)`,yrs 当重复跳过。生产天然满足(单一 server base + 各设备独立 client_id)。
 - **顺带修的真产品缺口**:`_send` 原来 `sink.add` 无 try/catch —— 离线(socket refused/unreachable)时编辑→`_enqueue` 因 `_ready`(本地 seed 置的、非真连接)为真而尝试推送→`sink.add` 抛未捕获异常崩会话。加 try/catch 容错(帧丢弃安全,durable outbox 重连重推)。
 
-**P2d — 溶解 op 路由 + 放开离线编辑门**
-- `_applyEditorOperations` 统一走一个 local-first backend 的 `applyOps`(cloud 分支即 append-log,localOffline 分支即无 WS 配置);删 REST 兜底热路径依赖。
-- 放开离线编辑角色门:P1c 离线 nav 强制 `role='viewer'`(`_applyOfflineCloudNav`),P2 对**已缓存且本人有权**的 doc 允许离线编辑(编辑落 outbox,`_recoverOnlineNav` 联网后推)。
-- 验证:widget/集成——离线态编辑云文档→ `outboxAfter` 增长→模拟联网→推送清空。
-- 丢失点:门开得太宽会让「服务端已撤权」的 doc 产生永不被接受的离线编辑;沿用 P1c 的 `ApiException rethrow` 边界,只对真连接失败放行。
+**P2d — 放开离线编辑门** ✅ **完成(commit 见 git log)**
+- **op 路由已够用,无需改**:`_applyEditorOperations` 在 `_cloudSession.isReady` 时走 `applyLocalOps`(→ append-log outbox,P2b),而 `isReady` 由本地 seed 置真 → 离线(含冷启)编辑天然落 outbox。**全 op 路由单一化(删 REST 兜底 + ServerMode 硬分支)随 P3 模式统一同批做**(§3c),P2d 不碰。
+- **唯一卡点是编辑器只读门** `matchesEditRole(_selectedWorkspace.role)`:P1c 冷启离线强制 `role='viewer'`(镜像没存 role)。P2d **把 workspace `role` 持久进镜像**(`local_workspace` 加 `role` 列,`SCHEMA_VERSION 2→3`,`ALTER … DEFAULT 'viewer'`;全栈 mica-core→FFI→facade `WorkspaceData.role`→main.dart),`_cacheCloudPageTree` 写真 role、`rebuildCloudNavFromCache` 用存的 role(不再强制 viewer)→ editor 冷启离线也能编辑(落 outbox、联网推),viewer 仍只读。本地 workspace UI 恒 owner(不读存的 role)。
+- **丢失点(已由 P2b 覆盖)**:门开太宽让「服务端已撤权」doc 产生永不被接受的离线编辑 —— 联网重推时服务端回 `error`,走 P2b 的连续 `pushed_clock` + `_pushStalled` 熔断 + 「同步已暂停」横幅(不丢、不死循环、有提示);`_selectView` 的 `ApiException rethrow`(P1c)让 403/404 撤权 doc 上抛而非静默镜像。
+- 测:mica-core 18 测(role 迁移回填 'viewer'、save/list 往返);FFI 集成 `frb_store_test`(role 经真实 Dart→FFI→SQLite 往返)、`cloud_offline_nav`(镜像带 role);单元 `offline_cloud_nav`(editor→可编辑、viewer→只读)。`flutter analyze` 净、套件 232 绿。
 
 **P2e — 压实**
 - ack 后 `trim_updates_through(pushed_clock)`(或有界 squash),log 有界。

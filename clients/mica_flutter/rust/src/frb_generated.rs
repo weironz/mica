@@ -2289,11 +2289,13 @@ impl SseDecode for crate::api::store::LocalWorkspace {
     let mut var_name = <String>::sse_decode(deserializer);
     let mut var_position = <String>::sse_decode(deserializer);
     let mut var_origin = <String>::sse_decode(deserializer);
+    let mut var_role = <String>::sse_decode(deserializer);
     return crate::api::store::LocalWorkspace {
       id: var_id,
       name: var_name,
       position: var_position,
       origin: var_origin,
+      role: var_role,
     };
   }
 }
@@ -2548,6 +2550,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::store::LocalWorkspace {
       self.name.into_into_dart().into_dart(),
       self.position.into_into_dart().into_dart(),
       self.origin.into_into_dart().into_dart(),
+      self.role.into_into_dart().into_dart(),
     ]
     .into_dart()
   }
@@ -2721,6 +2724,7 @@ impl SseEncode for crate::api::store::LocalWorkspace {
     <String>::sse_encode(self.name, serializer);
     <String>::sse_encode(self.position, serializer);
     <String>::sse_encode(self.origin, serializer);
+    <String>::sse_encode(self.role, serializer);
   }
 }
 

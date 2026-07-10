@@ -25,7 +25,7 @@ pub enum StoreError {
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
 /// the table layout changes and add the migration in [`LocalStore::open`].
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
@@ -56,6 +56,11 @@ pub struct LocalWorkspace {
     /// cloud workspace mirrored for offline navigation (P2 option C). Scopes a
     /// store that holds both.
     pub origin: String,
+    /// The user's membership role in this workspace (`"owner"`/`"admin"`/
+    /// `"editor"`/`"viewer"`), mirrored from the server so an offline (re)start
+    /// knows whether editing is allowed (P2d). Local workspaces are the user's
+    /// own; the client treats them as owner regardless.
+    pub role: String,
 }
 
 /// A page-tree node (P2-M3): the local mirror of the client's `DocumentView`.
@@ -109,7 +114,8 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY,
                  name     TEXT NOT NULL,
                  position TEXT NOT NULL,
-                 origin   TEXT NOT NULL DEFAULT 'local'
+                 origin   TEXT NOT NULL DEFAULT 'local',
+                 role     TEXT NOT NULL DEFAULT 'viewer'
              );
              CREATE TABLE IF NOT EXISTS doc_update(
                  doc_id  TEXT NOT NULL,
@@ -174,6 +180,25 @@ impl LocalStore {
                     [],
                 )?;
             }
+        }
+
+        // v3 (P2d): persist each mirrored cloud workspace's `role` so an offline
+        // (re)start knows whether this user may edit it — otherwise the offline
+        // nav forces read-only. Local workspaces are the user's own (the UI treats
+        // them as owner); the default only affects rows until they're re-mirrored.
+        let has_role: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_workspace') WHERE name='role'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_role {
+            conn.execute(
+                "ALTER TABLE local_workspace ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
+                [],
+            )?;
         }
 
         // Schema version gate (§10): refuse to open a store written by a newer
@@ -555,7 +580,7 @@ impl LocalStore {
     /// All local workspaces, ordered by `position`.
     pub fn list_workspaces(&self, origin: &str) -> Result<Vec<LocalWorkspace>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,name,position,origin FROM local_workspace WHERE origin=?1 ORDER BY position",
+            "SELECT id,name,position,origin,role FROM local_workspace WHERE origin=?1 ORDER BY position",
         )?;
         let rows = stmt
             .query_map(params![origin], |r| {
@@ -564,6 +589,7 @@ impl LocalStore {
                     name: r.get(1)?,
                     position: r.get(2)?,
                     origin: r.get(3)?,
+                    role: r.get(4)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -573,9 +599,9 @@ impl LocalStore {
     /// Upsert a workspace (create / rename / reorder).
     pub fn save_workspace(&self, w: &LocalWorkspace) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO local_workspace(id,name,position,origin) VALUES(?1,?2,?3,?4)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, position=excluded.position, origin=excluded.origin",
-            params![w.id, w.name, w.position, w.origin],
+            "INSERT INTO local_workspace(id,name,position,origin,role) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, position=excluded.position, origin=excluded.origin, role=excluded.role",
+            params![w.id, w.name, w.position, w.origin, w.role],
         )?;
         Ok(())
     }
@@ -671,10 +697,10 @@ mod tests {
         assert_eq!(v.name, "Old Page", "legacy data preserved");
         assert_eq!(v.workspace_id, "local", "back-filled to default workspace");
         assert_eq!(v.origin, "local", "legacy rows back-filled to local origin");
-        assert!(
-            store.list_workspaces("local").unwrap().iter().any(|w| w.id == "local"),
-            "default workspace created"
-        );
+        let local_ws = store.list_workspaces("local").unwrap();
+        let default_ws = local_ws.iter().find(|w| w.id == "local");
+        assert!(default_ws.is_some(), "default workspace created");
+        assert_eq!(default_ws.unwrap().role, "viewer", "role column back-filled");
         let sv: String = store
             .conn
             .query_row(
@@ -981,9 +1007,15 @@ mod tests {
                 name: "Work".into(),
                 position: "0000000020".into(),
                 origin: "local".into(),
+                role: "owner".into(),
             })
             .unwrap();
         assert_eq!(store.list_workspaces("local").unwrap().len(), 2);
+        assert_eq!(
+            store.list_workspaces("local").unwrap().iter().find(|w| w.id == "w2").unwrap().role,
+            "owner",
+            "role round-trips",
+        );
 
         // Views are scoped; deleting a workspace removes only its views.
         store.save_view(&LocalView { workspace_id: "w2".into(), ..view("a", None, "A", "0000000010") }).unwrap();
@@ -1009,6 +1041,7 @@ mod tests {
                 name: "Cloud WS".into(),
                 position: "0000000010".into(),
                 origin: cloud.into(),
+                role: "editor".into(),
             })
             .unwrap();
         store
@@ -1031,6 +1064,7 @@ mod tests {
         let cloud_ws = store.list_workspaces(cloud).unwrap();
         assert_eq!(cloud_ws.len(), 1);
         assert_eq!(cloud_ws[0].id, "cw");
+        assert_eq!(cloud_ws[0].role, "editor", "mirrored role available offline");
     }
 
     #[test]

@@ -2022,13 +2022,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalWorkspace dco_decode_local_workspace(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return LocalWorkspace(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
       position: dco_decode_String(arr[2]),
       origin: dco_decode_String(arr[3]),
+      role: dco_decode_String(arr[4]),
     );
   }
 
@@ -2341,11 +2342,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_name = sse_decode_String(deserializer);
     var var_position = sse_decode_String(deserializer);
     var var_origin = sse_decode_String(deserializer);
+    var var_role = sse_decode_String(deserializer);
     return LocalWorkspace(
       id: var_id,
       name: var_name,
       position: var_position,
       origin: var_origin,
+      role: var_role,
     );
   }
 
@@ -2684,6 +2687,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.position, serializer);
     sse_encode_String(self.origin, serializer);
+    sse_encode_String(self.role, serializer);
   }
 
   @protected

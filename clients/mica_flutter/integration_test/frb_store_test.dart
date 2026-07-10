@@ -156,6 +156,7 @@ void main() {
         name: 'Cloud WS',
         position: '0000000010',
         origin: cloud,
+        role: 'editor',
       ),
     );
     s.saveView(
@@ -191,7 +192,9 @@ void main() {
     final cloudViews = s.listViews(origin: cloud);
     expect(cloudViews.map((v) => v.id), ['cv']);
     expect(cloudViews.single.origin, cloud);
-    expect(s.listWorkspaces(origin: cloud).map((w) => w.id), ['cw']);
+    final cloudWs = s.listWorkspaces(origin: cloud);
+    expect(cloudWs.map((w) => w.id), ['cw']);
+    expect(cloudWs.single.role, 'editor', reason: 'role mirrored for offline edit (P2d)');
 
     // Durable: the origin column survives reopening the same db file.
     final s2 = MicaStore.open(path: path)!;

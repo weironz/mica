@@ -96,17 +96,32 @@ pub struct LocalWorkspace {
     pub position: String,
     /// Provenance: "local" or a server URL — same scoping as [`LocalView`].
     pub origin: String,
+    /// The user's role in this workspace (mirrored from the server so offline
+    /// editing knows whether it's allowed — P2d). Local workspaces: owner.
+    pub role: String,
 }
 
 impl From<CoreWorkspace> for LocalWorkspace {
     fn from(w: CoreWorkspace) -> Self {
-        LocalWorkspace { id: w.id, name: w.name, position: w.position, origin: w.origin }
+        LocalWorkspace {
+            id: w.id,
+            name: w.name,
+            position: w.position,
+            origin: w.origin,
+            role: w.role,
+        }
     }
 }
 
 impl From<LocalWorkspace> for CoreWorkspace {
     fn from(w: LocalWorkspace) -> Self {
-        CoreWorkspace { id: w.id, name: w.name, position: w.position, origin: w.origin }
+        CoreWorkspace {
+            id: w.id,
+            name: w.name,
+            position: w.position,
+            origin: w.origin,
+            role: w.role,
+        }
     }
 }
 

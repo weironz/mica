@@ -17,7 +17,7 @@ typedef ViewData = ({
   bool trashed,
 });
 
-typedef WorkspaceData = ({String id, String name, String position});
+typedef WorkspaceData = ({String id, String name, String position, String role});
 
 typedef CloudPageTreeCache = ({
   List<WorkspaceData> workspaces,
