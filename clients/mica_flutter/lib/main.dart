@@ -19,6 +19,7 @@ import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
 import 'prefs.dart';
+import 'updater.dart';
 import 'window_setup.dart';
 import 'upload/sha256.dart';
 import 'upload/zip_writer.dart';
@@ -6094,6 +6095,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       applicationVersion: 'v$kAppVersion',
       applicationIcon: const MicaLogo(size: 40),
       applicationLegalese: 'Cloud-first collaborative Markdown workspace.',
+      // Self-update lives here on desktop; hidden where it can't apply (web, and
+      // platforms with no packaged installer).
+      children: updateSupported
+          ? const [SizedBox(height: 20), UpdateChecker()]
+          : null,
     );
   }
 
@@ -8932,4 +8938,187 @@ Uri documentSocketUri(
     path: '/ws/workspaces/$workspaceId/documents/$documentId',
     queryParameters: {'token': token},
   );
+}
+
+/// About-dialog control: "check for updates", and when a newer GitHub release
+/// exists, download + launch the installer (which force-closes and relaunches
+/// Mica). Only shown where [updateSupported] is true (the Windows installer).
+class UpdateChecker extends StatefulWidget {
+  const UpdateChecker({super.key});
+
+  @override
+  State<UpdateChecker> createState() => _UpdateCheckerState();
+}
+
+enum _UpdateStage { idle, checking, upToDate, available, downloading, error }
+
+class _UpdateCheckerState extends State<UpdateChecker> {
+  _UpdateStage _stage = _UpdateStage.idle;
+  UpdateInfo? _info;
+  double _progress = 0;
+  String? _error;
+
+  Future<void> _check() async {
+    setState(() {
+      _stage = _UpdateStage.checking;
+      _error = null;
+    });
+    try {
+      final info = await checkForUpdate(kAppVersion);
+      if (!mounted) return;
+      setState(() {
+        _info = info;
+        _stage = info == null ? _UpdateStage.upToDate : _UpdateStage.available;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _stage = _UpdateStage.error;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _update() async {
+    final info = _info;
+    if (info == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('更新到 v${info.version}'),
+        content: const Text('将下载安装包，然后自动关闭并重启 Mica 完成更新。是否继续?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('更新并重启'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() {
+      _stage = _UpdateStage.downloading;
+      _progress = 0;
+    });
+    try {
+      // On success this calls exit(0) (the installer takes over) and never returns.
+      await downloadAndApplyUpdate(
+        info,
+        onProgress: (p) {
+          if (mounted) setState(() => _progress = p);
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _stage = _UpdateStage.error;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    switch (_stage) {
+      case _UpdateStage.idle:
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.system_update_alt, size: 18),
+            label: const Text('检查更新'),
+            onPressed: _check,
+          ),
+        );
+      case _UpdateStage.checking:
+        return const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 10),
+            Text('检查中…'),
+          ],
+        );
+      case _UpdateStage.upToDate:
+        return Row(
+          children: [
+            const Icon(Icons.check_circle_outline,
+                size: 18, color: Color(0xFF16A34A)),
+            const SizedBox(width: 8),
+            const Text('已是最新版本 (v$kAppVersion)'),
+            const Spacer(),
+            TextButton(onPressed: _check, child: const Text('重新检查')),
+          ],
+        );
+      case _UpdateStage.available:
+        final info = _info!;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.new_releases_outlined,
+                    size: 18, color: Color(0xFF2563EB)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('发现新版本 v${info.version}（当前 v$kAppVersion）'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.download, size: 18),
+                label: const Text('立即更新'),
+                onPressed: _update,
+              ),
+            ),
+          ],
+        );
+      case _UpdateStage.downloading:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('下载中 ${(_progress * 100).round()}%…'),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: _progress > 0 ? _progress : null),
+            const SizedBox(height: 6),
+            const Text(
+              '完成后会自动关闭并重启 Mica。',
+              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
+          ],
+        );
+      case _UpdateStage.error:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.error_outline,
+                    size: 18, color: Color(0xFFDC2626)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('操作失败：${_error ?? ''}',
+                      style: const TextStyle(fontSize: 13)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(onPressed: _check, child: const Text('重试')),
+            ),
+          ],
+        );
+    }
+  }
 }
