@@ -72,6 +72,19 @@
 - 可选 state-vector 快速对账(超陈旧副本首连更省)。
 - **Web**:见下方决策。
 
+## 方向拍板(2026-07-10,用户"要完美不要难就不做")
+
+**完整做到统一 local-first 端态,不停在 P1b-1。** 离线读/写是 local-first 的自然结果,不单独论证。修正:**页树进统一 store(不是 prefs hack)**——`local_view`/`local_workspace` 加 origin 标记区分本地/云,store 成为导航权威源;P1b-2 的 prefs 缓存(commit e0ca19b)降级为**将被替换的临时步**(`toJson`/纯序列化函数留用)。每步仍增量+测试,但建真东西不建将来要拆的。修正路线:
+
+| 阶段 | 内容 | 态 |
+|---|---|---|
+| P0 / P1a / P1b-1 | FFI + 会话持久化 + 文档内容镜像 | ✅ 真东西,保留 |
+| **P1b-2′** | 页树进 store(local_view/workspace 加 origin 标记,镜像云页树)—— 替换 prefs hack,P3 地基 | ⏭️ 进行中 |
+| P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | |
+| P2 | 离线编辑(append-log outbox 统一,重连 CRDT) | |
+| P3 | 溶解双模式为"工作区:本地/已连云"(双向,替代单向迁移)+ UX | |
+| P4 | props 字段级 CRDT、web IndexedDB(唯一明确暂缓) | |
+
 ## 决策(2026-07-10 已定)
 
 1. **Web 范围** —— ✅ **桌面/移动先行 local-first,web 暂留在线**。`local_offline_web` 是空桩、web 云走内存 yjs;Phase 0-2 只碰桌面/移动(它们有 SQLite 本地库)。web 的 IndexedDB nbstore 后端(可复用 yjs `y-indexeddb`)后续再评估,**不在本轮范围**。含义:Phase 1/2 的 write-through、backend 合并都要 `kIsWeb` gate,web 保持现有在线路径。
