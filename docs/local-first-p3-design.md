@@ -189,7 +189,7 @@ DROP TABLE local_view;
 ALTER TABLE local_view_v4 RENAME TO local_view;
 ```
 
-整段包在一个事务里;`schema_version` 降级门(store.rs:215)已挡新库老 app。`doc_snapshot`/`doc_update`/`sync_cursor` **不动**——doc 以云 UUID/本地 id 直接 key,两个空间都是自生成 UUID 且 detach 时 doc 行是**同一份内容**(刻意共享,见 §6.2),不需要 origin 维度。
+整段包在一个事务里。**降级门必须在任何迁移之前跑**(P3a 复审 Attack-7 抓到:原门在 rebuild 之后,probe-driven 的破坏性重建会先把未来 schema 的表按 v4 列表阉割再被拒——已修:门挪到 CREATE IF NOT EXISTS 批之后、一切 ALTER/rebuild 之前,配伪 v5 库回归测钉死「拒绝时结构未动」)。`doc_snapshot`/`doc_update`/`sync_cursor` **不动**——doc 以云 UUID/本地 id 直接 key,两个空间都是自生成 UUID 且 detach 时 doc 行是**同一份内容**(刻意共享,见 §6.2),不需要 origin 维度。
 
 ### 3.3 SQL / FFI / facade 波及面
 

@@ -137,6 +137,31 @@ impl LocalStore {
                  updated_at INTEGER NOT NULL
              );",
         )?;
+        // Schema version gate (§10) — checked BEFORE any migration below, so a
+        // store written by a newer app is refused while still untouched. The
+        // migrations are probe-driven (column/PK shape, not version), and the v4
+        // rebuild is destructive (DROP + recreate from a hard-coded column list):
+        // run against a future schema it would silently strip columns the newer
+        // app added, and only THEN would a trailing gate reject — too late. The
+        // stamp still happens at the end, after every migration succeeded.
+        // (Everything above this point is CREATE IF NOT EXISTS / PRAGMA — no-ops
+        // on an existing store.)
+        let stored: i64 = conn
+            .query_row(
+                "SELECT value FROM local_meta WHERE key='schema_version'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        if stored > SCHEMA_VERSION {
+            return Err(StoreError::SchemaTooNew {
+                found: stored,
+                supported: SCHEMA_VERSION,
+            });
+        }
+
         // Migrate pre-multi-workspace stores: add the workspace_id column and a
         // default workspace that existing views attach to.
         let has_ws_col: bool = conn
@@ -268,23 +293,8 @@ impl LocalStore {
             )?;
         }
 
-        // Schema version gate (§10): refuse to open a store written by a newer
-        // app (downgrade would risk data loss); otherwise stamp the current one.
-        let stored: i64 = conn
-            .query_row(
-                "SELECT value FROM local_meta WHERE key='schema_version'",
-                [],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        if stored > SCHEMA_VERSION {
-            return Err(StoreError::SchemaTooNew {
-                found: stored,
-                supported: SCHEMA_VERSION,
-            });
-        }
+        // Every migration succeeded — stamp the version this app writes. (The
+        // too-new gate ran up top, before anything could mutate the store.)
         conn.execute(
             "INSERT INTO local_meta(key,value) VALUES('schema_version',?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -748,6 +758,71 @@ mod tests {
             LocalStore::open(p),
             Err(StoreError::SchemaTooNew { found: 99, .. })
         ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn too_new_store_is_refused_before_any_destructive_migration() {
+        // The gate must run BEFORE the probe-driven migrations: a future schema
+        // whose PK shape differs would otherwise trip the v4 rebuild, which DROPs
+        // and recreates from a hard-coded column list — silently stripping the
+        // newer app's columns before the trailing gate could reject. Craft a fake
+        // v5 store (3-column PK + a v5-only column) and assert open() refuses it
+        // with the structure untouched.
+        let path = temp_path();
+        let p = path.to_str().unwrap();
+        {
+            let conn = Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO local_meta VALUES('schema_version','5');
+                 CREATE TABLE local_view(
+                     origin TEXT NOT NULL, device TEXT NOT NULL, id TEXT NOT NULL,
+                     workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
+                     object_id TEXT NOT NULL, name TEXT NOT NULL, position TEXT NOT NULL,
+                     trashed INTEGER NOT NULL DEFAULT 0,
+                     v5_only TEXT,
+                     PRIMARY KEY(origin, device, id));
+                 CREATE TABLE local_workspace(
+                     origin TEXT NOT NULL, device TEXT NOT NULL, id TEXT NOT NULL,
+                     name TEXT NOT NULL, position TEXT NOT NULL,
+                     role TEXT NOT NULL DEFAULT 'viewer',
+                     v5_only TEXT,
+                     PRIMARY KEY(origin, device, id));
+                 INSERT INTO local_view(origin,device,id,object_id,name,position,v5_only)
+                     VALUES('local','dev1','v1','d1','Future Page','0000000010','keep-me');",
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            LocalStore::open(p),
+            Err(StoreError::SchemaTooNew { found: 5, .. })
+        ));
+        // Structure untouched: the v5-only column and 3-column PK are intact, and
+        // no rebuild artifacts (backup / _v4 temp tables) were created.
+        {
+            let conn = Connection::open(p).unwrap();
+            let v5_kept: String = conn
+                .query_row("SELECT v5_only FROM local_view WHERE id='v1'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(v5_kept, "keep-me");
+            let pk: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('local_view') WHERE pk>0",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(pk, 3, "future PK shape untouched");
+            let artifacts: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%_v3_backup' OR name LIKE '%_v4'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(artifacts, 0, "no migration artifacts on a refused store");
+        }
         std::fs::remove_file(p).ok();
     }
 
