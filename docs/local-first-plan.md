@@ -79,11 +79,21 @@
 | 阶段 | 内容 | 态 |
 |---|---|---|
 | P0 / P1a / P1b-1 | FFI + 会话持久化 + 文档内容镜像 | ✅ 真东西,保留 |
-| **P1b-2′** | 页树进 store(local_view/workspace 加 origin 标记,镜像云页树)—— 替换 prefs hack,P3 地基 | ⏭️ 进行中 |
+| **P1b-2′** | 页树进 store(local_view/workspace 加 origin 标记,镜像云页树)—— 替换 prefs hack,P3 地基 | ⏭️ 已 scope,是原子全栈迁移 |
 | P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | |
 | P2 | 离线编辑(append-log outbox 统一,重连 CRDT) | |
 | P3 | 溶解双模式为"工作区:本地/已连云"(双向,替代单向迁移)+ UX | |
 | P4 | props 字段级 CRDT、web IndexedDB(唯一明确暂缓) | |
+
+### P1b-2′ 精确步骤(原子全栈迁移,一次提交)
+
+`origin` 列区分本地/云页树条目('local' vs 云 URL),让一个 store 同装两者、按 origin 隔离(P3 统一 schema 的地基)。因改 `LocalView`/`LocalWorkspace` 结构体会连锁 FFI+Dart,**必须一起改**:
+
+1. **mica-core `store.rs`**:`SCHEMA_VERSION 1→2`;`local_view`/`local_workspace` 的 CREATE TABLE 加 `origin TEXT NOT NULL DEFAULT 'local'`;迁移块按现有 pragma 模式 `ALTER TABLE … ADD COLUMN origin`(两表);`LocalWorkspace`/`LocalView` 加 `origin: String`;`save_view`/`save_workspace` INSERT 带 origin;`list_views`/`list_workspaces` **加 `origin: &str` 过滤参** `WHERE origin=?1` + SELECT origin(local 模式传 `"local"`,云镜像传 serverUrl)。Rust 测:迁移给旧行填 'local'、按 origin 隔离 list。
+2. **FFI `rust/src/api/store.rs`**:`LocalView`/`LocalWorkspace` 加 `origin` + `From` 双向映射;`list_views`/`list_workspaces` wrapper 加 origin 参。`flutter_rust_bridge_codegen generate` 重生成。
+3. **LocalOffline**(io+web):`listViews/saveView/listWorkspaces/saveWorkspace` 穿 origin;加 `mirrorCloudPageTree(serverUrl, workspaces, views)`(按 origin 写)+ `cachedCloudPageTree(serverUrl)`(按 origin 读)。web 桩 no-op。
+4. **main.dart**:`_cacheCloudPageTree()` 改成写 store(origin=baseUri),替换 prefs;删 `cloudPageTreeToJson`/prefs 那套(或留 toJson)。本地模式 list 传 origin='local'(现有行为不变)。
+5. 之后 **P1c** 才接离线读取回退(启动 catch 用 `cachedCloudPageTree` + doc-open chicken-and-egg)。
 
 ## 决策(2026-07-10 已定)
 
