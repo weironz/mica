@@ -10,6 +10,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../cloud/cloud_doc_store.dart';
+import '../cloud/store_cloud_doc_store.dart';
 import '../src/rust/api/document.dart';
 import '../src/rust/api/store.dart';
 import '../src/rust/frb_generated.dart';
@@ -82,6 +84,17 @@ class LocalOffline {
       }
     }
     return _store?.clientId();
+  }
+
+  /// A [CloudDocStore] over this on-device store for a cloud document (P2 option
+  /// C — Phase 1): the local-first mirror so a cloud doc reads offline across a
+  /// restart. Null if the store isn't open (native bridge unavailable) — the
+  /// cloud session then just runs online, as before. The store is opened for
+  /// online mode as a side effect of [deviceClientId] (called before the session
+  /// is built), so this returns a live store there.
+  CloudDocStore? cloudDocStore(String docId) {
+    final store = _store;
+    return store == null ? null : StoreCloudDocStore(store, docId);
   }
 
   // ── workspaces ─────────────────────────────────────────────────────────────

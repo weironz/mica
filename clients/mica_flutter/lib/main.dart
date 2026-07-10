@@ -577,6 +577,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onFault: (reason, count) => _onCloudSyncFault(documentId, reason, count),
       restoreUnacked: _loadUnacked(unackedKey),
       onPersistUnacked: (unacked) => _saveUnacked(unackedKey, unacked),
+      // Local-first (Phase 1): mirror this cloud doc to the on-device store so it
+      // reads offline across a restart. Null on web / if the store isn't open →
+      // online-only, as before. deviceClientId() above opened the store.
+      persistence: _local.cloudDocStore(documentId),
     );
     _cloudSession = yrs;
     yrs.connect();

@@ -5,6 +5,8 @@
 // bundle. Every method is unavailable.
 import 'dart:typed_data';
 
+import '../cloud/cloud_doc_store.dart';
+
 typedef ViewData = ({
   String id,
   String workspaceId,
@@ -30,6 +32,9 @@ class LocalOffline {
       throw UnsupportedError('local offline is not available on web');
 
   Future<BigInt?> deviceClientId() async => null;
+
+  /// Web has no on-device store — cloud docs stay online (P2 Phase 1).
+  CloudDocStore? cloudDocStore(String docId) => null;
 
   void rollbackDoc(String docId) {}
 
