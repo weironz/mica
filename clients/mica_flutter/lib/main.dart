@@ -2622,6 +2622,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _selectedBootstrap = bootstrap;
       _selectedMarkdown = null;
     });
+    _cacheCloudPageTree();
+  }
+
+  /// Cache the cloud page tree (workspace list + per-workspace views) so a future
+  /// offline start can still list and navigate cloud content (P2 option C —
+  /// Phase 1b). Keyed by server URL so switching servers doesn't cross over.
+  /// Desktop only for now (web has no on-device store; it stays online).
+  void _cacheCloudPageTree() {
+    if (kIsWeb) return;
+    savePref(
+      'cloudTree:${_api.baseUri}',
+      cloudPageTreeToJson(_workspaces, _viewsByWorkspace),
+    );
   }
 
   @override
@@ -8427,6 +8440,15 @@ class Workspace {
     );
   }
 
+  /// Round-trips with [fromJson] — used to cache the cloud workspace list for
+  /// offline navigation (P2 option C — Phase 1b).
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'owner_id': ownerId,
+    'role': role,
+  };
+
   final String id;
   final String name;
   final String ownerId;
@@ -8642,12 +8664,59 @@ class DocumentView {
     );
   }
 
+  /// Round-trips with [fromJson] — used to cache a workspace's page tree for
+  /// offline navigation (P2 option C — Phase 1b).
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'parent_view_id': parentViewId,
+    'object_id': objectId,
+    'object_type': objectType,
+    'name': name,
+    'position': position,
+  };
+
   final String id;
   final String? parentViewId;
   final String objectId;
   final String objectType;
   final String name;
   final String position;
+}
+
+/// Serialize the cloud page tree — the workspace list + each workspace's views —
+/// for the offline-navigation cache (P2 option C — Phase 1b). Pure (no prefs I/O)
+/// so it is unit-testable; [cloudPageTreeFromJson] reverses it.
+String cloudPageTreeToJson(
+  List<Workspace> workspaces,
+  Map<String, List<DocumentView>> views,
+) => jsonEncode({
+  'workspaces': [for (final w in workspaces) w.toJson()],
+  'views': {
+    for (final e in views.entries) e.key: [for (final v in e.value) v.toJson()],
+  },
+});
+
+/// Reverse of [cloudPageTreeToJson]; null on absent/corrupt input.
+({List<Workspace> workspaces, Map<String, List<DocumentView>> views})?
+cloudPageTreeFromJson(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  try {
+    final m = jsonDecode(raw) as Map<String, dynamic>;
+    final ws = [
+      for (final w in (m['workspaces'] as List))
+        Workspace.fromJson(w as Map<String, dynamic>),
+    ];
+    final views = <String, List<DocumentView>>{
+      for (final e in (m['views'] as Map<String, dynamic>).entries)
+        e.key: [
+          for (final v in (e.value as List))
+            DocumentView.fromJson(v as Map<String, dynamic>),
+        ],
+    };
+    return (workspaces: ws, views: views);
+  } catch (_) {
+    return null;
+  }
 }
 
 class DocumentRecord {
