@@ -112,7 +112,7 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 - **首份 release**:`v0.1.0` 已发布(`gh release create`,prerelease,asset `Mica-Setup-0.1.0.exe`)。标签**故意指向无 workflow 的 commit**(`5c47bd9`)以免触发 CI 二次构建。
 - **CI**:`.github/workflows/release-windows.yml`,push `v*` 标签在 windows runner 上 `flutter build windows --release` → choco 装 Inno → ISCC → softprops 发布安装包。⚠️ **注意**:tag 触发用的是**标签 commit 处**的 workflow 文件——未来打 tag 的 commit 必须含此 workflow(现在它在 `desktop/m2-windows`,合进 main 后更稳);`workflow_dispatch` 要等 workflow 进默认分支才在 UI 出现。
 - **决策(2026-06-07,用户拍板)**:
-  - **自动更新:先不内置**(LocalSend 路线)——靠 release 页/winget 手动升级。若日后要做,调研已给结论:抄 AppFlowy 的 `auto_updater`(WinSparkle)+ appcast 挂 GitHub release(DSA 更新签名 ≠ 代码签名证书)。
+  - **自动更新:~~先不内置~~ → 已内置(2026-07-10,自研方案 B)**。当初调研结论是抄 AppFlowy 的 `auto_updater`(WinSparkle)+ appcast,但重(第三方框架 + CI 生成 appcast + DSA 密钥);实现时改走更轻的自研路:`lib/updater*.dart` 查 GitHub Releases API 拿最新 tag + `Mica-Setup-*.exe` 链,下载后 `Process.start` 拉起 Inno 安装器 `/VERYSILENT /CLOSEAPPLICATIONS`(强制关掉当前程序→装→由 `mica.iss` 的 `[Run]` 重启;为此 `[Run]` 去掉了 `skipifsilent`,对 **v0.1.6+** 安装包生效)。入口在 About(`UpdateChecker`,仅 `updateSupported`=Windows 显示,条件导入使 `dart:io` 不进 web bundle)。**取舍:无 DSA 更新签名**,信任 = 从 GitHub 走 HTTPS(与"程序未签名"一致)。要更强校验再上 WinSparkle。
   - **代码签名:跳过**——未签名,首次运行有 SmartScreen 警告(More info→Run anyway,同 AppFlowy)。证书要 CA 签发,开源免费正路是 SignPath Foundation(需项目所有者申请),日后接进 Inno `SignTool` 指令。
 
 ## 遗留事项(均不阻塞,2026-06-08 复核)
