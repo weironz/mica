@@ -41,7 +41,11 @@ void main() {
       EditorNode(id: 'a', kind: 'paragraph', text: line),
     ]);
     final box = tester.getTopLeft(find.byType(MicaEditor));
-    final p = box + const Offset(40, 130); // inside the 5th prose line
+    // Inside the 5th prose line. NB: flutter_test has no Roboto, so prose falls
+    // to a bundled fallback font — its line height sets where each line sits, so
+    // this y is calibrated to that (with the CJK-fallback fonts the 5th line is
+    // at ~y165–180; recalibrate if the bundled fallback ever changes).
+    final p = box + const Offset(40, 170);
 
     // One tap, fresh pointer id each time so the gesture arena fully resolves
     // between taps; small pumps keep them inside the multi-tap window (400ms).
