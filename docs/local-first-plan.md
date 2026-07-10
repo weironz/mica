@@ -83,7 +83,11 @@
 - ✅ **Phase 0 完成**(2026-07-10,commit a77e8ab):`rust/src/api/store.rs` 桥出 `append_update / updates_after / squash / sync_cursor / set_sync_cursor` + `SyncCursor`/`DocUpdate` 类型;frb 重生成;集成测试 `frb_store_test.dart`(-d windows 全过)验证 append-log 往返重建文档 + sync cursor 跨重开持久化。零行为变化。
 - ✅ **Phase 1a 完成**(2026-07-10,commit 0840152):`CloudSyncSession` 加可选 `persistence`(`CloudDocStore` 字节接口)——connect 时先 seed 本地副本立即 onReady(离线读)、编辑/远端/ack 后 debounced write-through、dispose 同步 flush;`StoreCloudDocStore`(MicaStore 按云 UUID）。web 变体接受参数但忽略。`null`=零变化(单元 230 绿)。集成测(无服务器)验证离线 seed 渲染 + 适配器往返。**尚未接线 main.dart**。〔注:`cloud_sync_test` 需真服务器,本机 8090 有杂散 HTTP 服务骗过其 health 检查导致 load 失败,与本改动无关。〕
 - ✅ **Phase 1b-1 完成**(2026-07-10,commit 829a80d):`LocalOffline.cloudDocStore(docId)`(io→`StoreCloudDocStore`、web→null,封装 `MicaStore`);`_setupCloudYrs` 传 `persistence: _local.cloudDocStore(documentId)`(`deviceClientId()` 已在建会话前开 store)。每个打开过的云文档现镜像到本地库、再打开先 seed 渲染。web 构建过(FFI 不进 bundle)、单元 230 + 离线读集成测试绿。
-- ⏭️ **Phase 1b-2 下一步**(页树缓存,冷启动离线"导航"):把云端 workspace/view 列表镜像进本地库(带 origin 标记区分本地/云,避免与本地模式页树混淆——id-space,谨慎),让离线启动也能列出并打开云文档。剩余子步:
+- ✅ **Phase 1b-2 地基完成**(2026-07-10,commit e0ca19b):`Workspace`/`DocumentView` 加 `toJson`;纯函数 `cloudPageTreeToJson`/`cloudPageTreeFromJson`(页树↔JSON,可测);`_cacheCloudPageTree()` 视图加载成功后按服务器 URL 写 prefs(避开 `local_view` 表的 id-space 混淆,改用 prefs 缓存;桌面 only)。单测 2 例、套件 232 绿。
+- ⏭️ **Phase 1b-2 收尾(离线读取回退,微妙,下次谨慎做)**:让缓存真正生效。两处:
+  1. **启动恢复回退**(main.dart ~468 那个 catch):网络错(非 `unauthorized`)时,别停在登录页——用 `cloudPageTreeFromJson(loadPref('cloudTree:$baseUri'))` set `_session`+`_workspaces`+`_viewsByWorkspace`,离线也进工作区、列出页树。
+  2. **doc-open 的 chicken-and-egg**:`_applyCloudBlocks`(main.dart ~587)复用 `_selectedBootstrap.document`(需已存在);离线无服务器 `bootstrapDocument`,且 `rootBlockId` 要从 `CloudSyncSession` 本地 seed 的 `onReady(rootBlockId,…)` 流回。改法:离线 open 时构一个 placeholder `DocumentBootstrap`(document.id=view.objectId、空 snapshot),并让 `_applyCloudBlocks`/onReady 用 **session 的 rootBlockId** 填(而非 placeholder 的),blocks 由 seed 填。要读全 `_setupCloudYrs` 的调用方(doc-open 编排)再动。
+  - 全部 `kIsWeb` gate。做完即闭环"server 模式断网重启还能读云笔记"。
   1. `CloudSyncSession`(先只 `cloud_sync_io.dart` 桌面,web gate 掉):收到 `sync.base` 时 `store.saveDoc(cloudUUID, doc)`;每次 `_applyRemote` 合并的远端 update `store.appendUpdate`;`sync.ack` 后把 `_cursor` 写进 `sync_cursor.last_synced_rid`。
   2. 打开云文档:**先 `store.loadDoc(cloudUUID)` 渲染**(离线秒开),再联网 `sync.pull{since_rid=last_synced_rid}` 对账;冷启动离线也能读。
   3. 缓存云端页树:`bootstrapDocument`/工作区列表结果镜像进 `local_workspace`/`local_view`(带 origin 标记),离线可列。
