@@ -2780,6 +2780,212 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _localBootstrapFrom(view.objectId, data.rootBlockId, data.blocks, view);
   }
 
+  // ── P3b: unified workspace layer ───────────────────────────────────────────
+  //
+  // One [WorkspaceView] wiring for both worlds. Every prop that used to differ
+  // between the cloud shell and the local shell is dispatched here on
+  // [_activeIsLocal]; the two build paths now feed the SAME handler set, so
+  // P3c can dissolve the mode switch by only changing the dispatch criterion
+  // and the shell chrome — not the wiring. Function bodies are the pre-P3b
+  // ones, unmodified (mechanical merge).
+
+  /// Whether the ACTIVE world is the local one. Until P3c dissolves the global
+  /// mode this mirrors [ServerMode] — each shell only ever ran under its mode,
+  /// so dispatching on it is behavior-identical. P3c replaces this with the
+  /// selected [WorkspaceEntry]'s origin (mixed lists).
+  bool get _activeIsLocal => _serverConfig.mode == ServerMode.localOffline;
+
+  /// The unified workspace list (P3): cloud entries (with their roles) followed
+  /// by local entries. Derived — the underlying per-world state stays the
+  /// source of truth until P3c renders grouped sections from this.
+  // ignore: unused_element — consumed by P3c's grouped switcher.
+  List<WorkspaceEntry> get _workspaceEntries {
+    final cloudOrigin = _api.baseUri.toString();
+    return [
+      for (final w in _workspaces)
+        WorkspaceEntry(origin: cloudOrigin, workspace: w, role: w.role),
+      for (final w in _localWorkspaces)
+        WorkspaceEntry(origin: 'local', workspace: w, role: 'owner'),
+    ];
+  }
+
+  /// The selected workspace as a unified entry (null when nothing is selected).
+  // ignore: unused_element — consumed by P3c's per-entry dispatch.
+  WorkspaceEntry? get _selectedEntry {
+    if (_activeIsLocal) {
+      final w = _localSelectedWorkspace;
+      return w == null
+          ? null
+          : WorkspaceEntry(origin: 'local', workspace: w, role: 'owner');
+    }
+    final w = _selectedWorkspace;
+    return w == null
+        ? null
+        : WorkspaceEntry(
+            origin: _api.baseUri.toString(),
+            workspace: w,
+            role: w.role,
+          );
+  }
+
+  /// The one [WorkspaceView] instantiation both shells share. Props that
+  /// diverge between worlds dispatch on [_activeIsLocal]; identical props are
+  /// passed straight through. Capability rule (P3 §2.3): a world without a
+  /// feature passes the same stub the old shell passed — P3c turns these into
+  /// nullable props that hide the UI.
+  Widget _unifiedWorkspaceView(AuthSession session) {
+    final local = _activeIsLocal;
+    return WorkspaceView(
+      session: session,
+      isBusy: local ? false : _isBusy,
+      onRefresh: local
+          ? () => setState(() {
+              _reloadLocalWorkspaces();
+              _reloadLocalViews();
+            })
+          : () {
+              if (!_isBusy) _refreshWorkspaces();
+            },
+      onSignOut: local
+          ? () {}
+          : () {
+              if (!_isBusy) _signOut();
+            },
+      workspaces: local ? _localWorkspaces : _workspaces,
+      selectedWorkspace: local ? _localSelectedWorkspace : _selectedWorkspace,
+      members: local || _selectedWorkspace == null
+          ? const []
+          : _membersByWorkspace[_selectedWorkspace!.id] ?? const [],
+      views: local
+          ? _localViews
+          : _selectedWorkspace == null
+          ? const []
+          : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
+      selectedView: local ? _localSelectedView : _selectedView,
+      selectedBootstrap: local ? _localBootstrap : _selectedBootstrap,
+      selectedMarkdown: local ? null : _selectedMarkdown,
+      presence: local ? const [] : _presence,
+      message: _message,
+      onSelectWorkspace: local ? _localSelectWorkspace : _selectWorkspace,
+      onCreateWorkspace: local ? _localCreateWorkspace : _createWorkspace,
+      onRenameWorkspace: local ? _localRenameWorkspace : _renameWorkspace,
+      onDeleteWorkspace: local ? _localDeleteWorkspace : _deleteWorkspace,
+      onCreateDocument: local ? _localCreateDocument : _createDocument,
+      onCreateChildDocument: local
+          ? (parent, name) => _localCreateDocument(name, parentViewId: parent.id)
+          : _createChildDocument,
+      onReorderViews: local ? _localReorderViews : _reorderViews,
+      onLoadTrash: local ? _localLoadTrash : _loadTrash,
+      onRestoreView: local ? _localRestoreView : _restoreView,
+      onPurgeView: local ? _localPurgeView : _purgeView,
+      onSelectView: local ? _localSelectView : _selectView,
+      onRenameView: local ? _localRenameView : _renameView,
+      onDeleteView: local ? _localDeleteView : _deleteView,
+      onUpdateRootBlockText: local
+          ? _localUpdateRootBlockText
+          : _updateRootBlockText,
+      onAddBlock: local ? (_, _) async {} : _addBlock,
+      onUpdateBlock: local ? (_, _, _) async {} : _updateBlock,
+      onDeleteBlock: local ? (_) async {} : _deleteBlock,
+      onMoveBlock: local ? (_, _) async {} : _moveBlock,
+      onApplyOperations: local
+          ? _localApplyEditorOperations
+          : _applyEditorOperations,
+      onUploadImage: local ? _localUploadImage : _uploadEditorImage,
+      onImportImageUrl: local ? _localImportImageUrl : _importEditorImageUrl,
+      onLoadImageBytes: local ? _localLoadImageBytes : _loadEditorImageBytes,
+      onResolveImageUrls: local
+          ? _localResolveImageUrls
+          : _resolveEditorImageUrls,
+      onAiStream: local
+          ? (_, {system}) => const Stream<String>.empty()
+          : _aiStream,
+      onAiNewPage: local ? (_) async {} : _aiNewPageFromMarkdown,
+      onAiCurrentPage: local || _selectedBootstrap == null
+          ? null
+          : _aiCurrentFromMarkdown,
+      onAiNewWorkspace: local ? (_) async {} : _aiNewWorkspaceFromMarkdown,
+      onLoadAiSettings: local ? () async => const {} : _loadAiSettings,
+      onSaveAiSettings: local
+          ? ({
+              required String provider,
+              required String baseUrl,
+              required String model,
+              String? apiKey,
+            }) async {}
+          : _saveAiSettings,
+      onLoadTokens: local ? null : _loadTokens,
+      onCreateToken: local ? null : _createToken,
+      onRevokeToken: local ? null : _revokeToken,
+      userName: local
+          ? _localSession.user.displayName
+          : _session?.user.displayName ?? '',
+      userEmail: local ? '' : _session?.user.email ?? '',
+      onUpdateProfile: local ? (_) async {} : _updateProfile,
+      onChangePassword: local ? (_, _) async {} : _changePassword,
+      serverConfig: _serverConfig,
+      onSaveServerConfig: _saveServerConfig,
+      appearance: _appearance,
+      pageWidth: _pageWidth,
+      reHostImages: _reHostImages,
+      onReHostImagesChanged: (value) {
+        setState(() => _reHostImages = value);
+        _savePrefs();
+      },
+      showFormatBar: _showFormatBar,
+      onShowFormatBarChanged: (value) {
+        setState(() => _showFormatBar = value);
+        _savePrefs();
+      },
+      showPageTitle: _showPageTitle,
+      onShowPageTitleChanged: (value) {
+        setState(() => _showPageTitle = value);
+        _savePrefs();
+      },
+      showAi: local ? false : _aiEnabled && _aiConfigured,
+      aiEnabled: local ? false : _aiEnabled,
+      onAiEnabledChanged: local
+          ? (_) {}
+          : (value) {
+              setState(() => _aiEnabled = value);
+              _savePrefs();
+            },
+      onAppearanceChanged: (appearance, pageWidth) {
+        setState(() {
+          _appearance = appearance;
+          _pageWidth = pageWidth;
+        });
+        _savePrefs();
+      },
+      onSearch: local ? (_) async => const <SearchResult>[] : _searchWorkspace,
+      onOpenSearchResult: local ? (_) async {} : _openViewById,
+      onExportPageMarkdown: local ? () async => '' : _exportPageMarkdown,
+      onExportPageZip: local ? () async => Uint8List(0) : _exportPageZip,
+      onImportMarkdown: local ? (_, _) async {} : _importMarkdownAsPage,
+      onExportWorkspaceMarkdown: local
+          ? () async => ''
+          : _exportWorkspaceMarkdown,
+      onExportWorkspaceZip: local
+          ? (_) async => Uint8List(0)
+          : _exportWorkspaceZip,
+      onImportWorkspaceZip: local
+          ? (_, _, {bool notion = false}) async {}
+          : _importWorkspaceZip,
+      onImportWorkspaceTreeInto: local
+          ? _localImportVaultTree
+          : _importTreeIntoWorkspace,
+      onExportAllMarkdown: local ? () async => '' : _exportAllMarkdown,
+      onExportMarkdown: local ? () async {} : _exportSelectedMarkdown,
+      onAddMember: local ? (_, _) async {} : _addWorkspaceMember,
+      onUpdateMember: local ? (_, _) async {} : _updateWorkspaceMember,
+      onRemoveMember: local ? (_) async {} : _removeWorkspaceMember,
+      onRestoreCheckpoint: local ? _localRollbackDoc : null,
+      onMigrateToCloud: local ? _migrateLocalWorkspaceToCloud : null,
+      editorEpoch: local ? _localEditorEpoch : 0,
+      onCursorChanged: local ? null : _onEditorSelection,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_serverConfig.mode == ServerMode.localOffline) {
@@ -2822,114 +3028,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   ),
                 ],
               )
-            : WorkspaceView(
-                session: session,
-                isBusy: _isBusy,
-                onRefresh: () {
-                  if (!_isBusy) _refreshWorkspaces();
-                },
-                onSignOut: () {
-                  if (!_isBusy) _signOut();
-                },
-                workspaces: _workspaces,
-                selectedWorkspace: _selectedWorkspace,
-                members: _selectedWorkspace == null
-                    ? const []
-                    : _membersByWorkspace[_selectedWorkspace!.id] ?? const [],
-                views: _selectedWorkspace == null
-                    ? const []
-                    : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
-                selectedView: _selectedView,
-                selectedBootstrap: _selectedBootstrap,
-                selectedMarkdown: _selectedMarkdown,
-                presence: _presence,
-                message: _message,
-                onSelectWorkspace: _selectWorkspace,
-                onCreateWorkspace: _createWorkspace,
-                onRenameWorkspace: _renameWorkspace,
-                onDeleteWorkspace: _deleteWorkspace,
-                onCreateDocument: _createDocument,
-                onCreateChildDocument: _createChildDocument,
-                onReorderViews: _reorderViews,
-                onLoadTrash: _loadTrash,
-                onRestoreView: _restoreView,
-                onPurgeView: _purgeView,
-                onSelectView: _selectView,
-                onRenameView: _renameView,
-                onDeleteView: _deleteView,
-                onUpdateRootBlockText: _updateRootBlockText,
-                onAddBlock: _addBlock,
-                onUpdateBlock: _updateBlock,
-                onDeleteBlock: _deleteBlock,
-                onMoveBlock: _moveBlock,
-                onApplyOperations: _applyEditorOperations,
-                onUploadImage: _uploadEditorImage,
-                onImportImageUrl: _importEditorImageUrl,
-                onLoadImageBytes: _loadEditorImageBytes,
-                onResolveImageUrls: _resolveEditorImageUrls,
-                onAiStream: _aiStream,
-                onAiNewPage: _aiNewPageFromMarkdown,
-                onAiCurrentPage: _selectedBootstrap == null
-                    ? null
-                    : _aiCurrentFromMarkdown,
-                onAiNewWorkspace: _aiNewWorkspaceFromMarkdown,
-                onLoadAiSettings: _loadAiSettings,
-                onSaveAiSettings: _saveAiSettings,
-                onLoadTokens: _loadTokens,
-                onCreateToken: _createToken,
-                onRevokeToken: _revokeToken,
-                userName: _session?.user.displayName ?? '',
-                userEmail: _session?.user.email ?? '',
-                onUpdateProfile: _updateProfile,
-                onChangePassword: _changePassword,
-                serverConfig: _serverConfig,
-                onSaveServerConfig: _saveServerConfig,
-                appearance: _appearance,
-                pageWidth: _pageWidth,
-                reHostImages: _reHostImages,
-                onReHostImagesChanged: (value) {
-                  setState(() => _reHostImages = value);
-                  _savePrefs();
-                },
-                showFormatBar: _showFormatBar,
-                onShowFormatBarChanged: (value) {
-                  setState(() => _showFormatBar = value);
-                  _savePrefs();
-                },
-                showPageTitle: _showPageTitle,
-                onShowPageTitleChanged: (value) {
-                  setState(() => _showPageTitle = value);
-                  _savePrefs();
-                },
-                showAi: _aiEnabled && _aiConfigured,
-                aiEnabled: _aiEnabled,
-                onAiEnabledChanged: (value) {
-                  setState(() => _aiEnabled = value);
-                  _savePrefs();
-                },
-                onAppearanceChanged: (appearance, pageWidth) {
-                  setState(() {
-                    _appearance = appearance;
-                    _pageWidth = pageWidth;
-                  });
-                  _savePrefs();
-                },
-                onSearch: _searchWorkspace,
-                onOpenSearchResult: _openViewById,
-                onExportPageMarkdown: _exportPageMarkdown,
-                onExportPageZip: _exportPageZip,
-                onImportMarkdown: _importMarkdownAsPage,
-                onExportWorkspaceMarkdown: _exportWorkspaceMarkdown,
-                onExportWorkspaceZip: _exportWorkspaceZip,
-                onImportWorkspaceZip: _importWorkspaceZip,
-                onImportWorkspaceTreeInto: _importTreeIntoWorkspace,
-                onExportAllMarkdown: _exportAllMarkdown,
-                onExportMarkdown: _exportSelectedMarkdown,
-                onAddMember: _addWorkspaceMember,
-                onUpdateMember: _updateWorkspaceMember,
-                onRemoveMember: _removeWorkspaceMember,
-                onCursorChanged: _onEditorSelection,
-              ),
+            : _unifiedWorkspaceView(session),
       ),
     );
   }
@@ -2943,112 +3042,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
     }
     return Scaffold(
-      body: SafeArea(
-        child: WorkspaceView(
-          session: _localSession,
-          isBusy: false,
-          onRefresh: () => setState(() {
-            _reloadLocalWorkspaces();
-            _reloadLocalViews();
-          }),
-          onSignOut: () {},
-          workspaces: _localWorkspaces,
-          selectedWorkspace: _localSelectedWorkspace,
-          members: const [],
-          views: _localViews,
-          selectedView: _localSelectedView,
-          selectedBootstrap: _localBootstrap,
-          selectedMarkdown: null,
-          presence: const [],
-          message: _message,
-          onSelectWorkspace: _localSelectWorkspace,
-          onCreateWorkspace: _localCreateWorkspace,
-          onRenameWorkspace: _localRenameWorkspace,
-          onDeleteWorkspace: _localDeleteWorkspace,
-          onCreateDocument: _localCreateDocument,
-          onCreateChildDocument: (parent, name) =>
-              _localCreateDocument(name, parentViewId: parent.id),
-          onReorderViews: _localReorderViews,
-          onLoadTrash: _localLoadTrash,
-          onRestoreView: _localRestoreView,
-          onPurgeView: _localPurgeView,
-          onSelectView: _localSelectView,
-          onRenameView: _localRenameView,
-          onDeleteView: _localDeleteView,
-          onUpdateRootBlockText: _localUpdateRootBlockText,
-          onAddBlock: (_, _) async {},
-          onUpdateBlock: (_, _, _) async {},
-          onDeleteBlock: (_) async {},
-          onMoveBlock: (_, _) async {},
-          onApplyOperations: _localApplyEditorOperations,
-          // Images / AI / collaboration are online-only for now (M5+).
-          onUploadImage: _localUploadImage,
-          onImportImageUrl: _localImportImageUrl,
-          onLoadImageBytes: _localLoadImageBytes,
-          onResolveImageUrls: _localResolveImageUrls,
-          onAiStream: (_, {system}) => const Stream<String>.empty(),
-          onAiNewPage: (_) async {},
-          onAiCurrentPage: null,
-          onAiNewWorkspace: (_) async {},
-          onLoadAiSettings: () async => const {},
-          onSaveAiSettings: ({
-            required String provider,
-            required String baseUrl,
-            required String model,
-            String? apiKey,
-          }) async {},
-          userName: _localSession.user.displayName,
-          userEmail: '',
-          onUpdateProfile: (_) async {},
-          onChangePassword: (_, _) async {},
-          serverConfig: _serverConfig,
-          onSaveServerConfig: _saveServerConfig,
-          appearance: _appearance,
-          pageWidth: _pageWidth,
-          reHostImages: _reHostImages,
-          onReHostImagesChanged: (value) {
-            setState(() => _reHostImages = value);
-            _savePrefs();
-          },
-          showFormatBar: _showFormatBar,
-          onShowFormatBarChanged: (value) {
-            setState(() => _showFormatBar = value);
-            _savePrefs();
-          },
-          showPageTitle: _showPageTitle,
-          onShowPageTitleChanged: (value) {
-            setState(() => _showPageTitle = value);
-            _savePrefs();
-          },
-          showAi: false,
-          aiEnabled: false,
-          onAiEnabledChanged: (_) {},
-          onAppearanceChanged: (appearance, pageWidth) {
-            setState(() {
-              _appearance = appearance;
-              _pageWidth = pageWidth;
-            });
-            _savePrefs();
-          },
-          onSearch: (_) async => const <SearchResult>[],
-          onOpenSearchResult: (_) async {},
-          onExportPageMarkdown: () async => '',
-          onExportPageZip: () async => Uint8List(0),
-          onImportMarkdown: (_, _) async {},
-          onExportWorkspaceMarkdown: () async => '',
-          onExportWorkspaceZip: (_) async => Uint8List(0),
-          onImportWorkspaceZip: (_, _, {bool notion = false}) async {},
-          onImportWorkspaceTreeInto: _localImportVaultTree,
-          onExportAllMarkdown: () async => '',
-          onExportMarkdown: () async {},
-          onAddMember: (_, _) async {},
-          onUpdateMember: (_, _) async {},
-          onRemoveMember: (_) async {},
-          onRestoreCheckpoint: _localRollbackDoc,
-          onMigrateToCloud: _migrateLocalWorkspaceToCloud,
-          editorEpoch: _localEditorEpoch,
-        ),
-      ),
+      body: SafeArea(child: _unifiedWorkspaceView(_localSession)),
     );
   }
 }
@@ -8587,6 +8581,32 @@ class Workspace {
   final String name;
   final String ownerId;
   final String role;
+}
+
+/// A workspace's globally-unique reference: [origin] is `'local'` or a server
+/// URL — the store's origin semantics (P1b-2′), now also the client's (P3).
+typedef WorkspaceRef = ({String origin, String id});
+
+/// One entry in the unified workspace list (P3): a workspace plus its
+/// provenance. Local and cloud workspaces coexist in one list, each carrying
+/// where it lives; the UI groups by [origin] and handlers dispatch on it.
+class WorkspaceEntry {
+  const WorkspaceEntry({
+    required this.origin,
+    required this.workspace,
+    required this.role,
+  });
+
+  /// `'local'` or the server URL this workspace lives on.
+  final String origin;
+  final Workspace workspace;
+
+  /// The user's membership role — `'owner'` for local workspaces (they are the
+  /// user's own), the server/mirrored role for cloud ones (P2d).
+  final String role;
+
+  bool get isLocal => origin == 'local';
+  WorkspaceRef get ref => (origin: origin, id: workspace.id);
 }
 
 class WorkspaceMember {
