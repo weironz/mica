@@ -300,39 +300,38 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   DocumentBootstrap? _localBootstrap;
   // Bumped on rollback to force the local editor to remount fresh.
   int _localEditorEpoch = 0;
-  static const AuthSession _localSession = AuthSession(
-    accessToken: 'local-offline',
-    user: User(id: 'local', email: '', displayName: '本地'),
-  );
 
   @override
   void initState() {
     super.initState();
     _loadPrefs();
-    // The demo account only exists on the local dev backend — never try it
-    // against cloud/self-hosted servers (it would attempt to register a real
-    // account). Those show the login screen instead.
-    if (_serverConfig.mode == ServerMode.localOffline) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _initLocalOffline());
-    } else {
-      // Cloud / self-hosted: restore a persisted session so the user isn't
-      // forced to re-login every launch; only fall back to dev auto-login (on a
-      // local backend) or the login screen when there's no valid saved session.
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        await _restoreSession();
-        if (mounted &&
-            _session == null &&
-            kDevAutoLogin &&
-            _isLocalBackend()) {
-          await _devAutoLogin();
-        }
-      });
+    // P3c: both worlds live side by side — the local store always opens (it
+    // backs local workspaces AND the cloud mirrors), and a cloud session is
+    // restored when one was persisted. The active world comes from the
+    // persisted `activeOrigin` (migrated once from the legacy ServerMode).
+    _activeOrigin = loadPref('activeOrigin') ??
+        (_serverConfig.mode == ServerMode.localOffline
+            ? 'local'
+            : _api.baseUri.toString());
+    if (!_local.available && _activeOrigin == 'local') {
+      // Web has no local world — the cloud origin is the only one.
+      _activeOrigin = _api.baseUri.toString();
     }
+    if (_local.available) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _initLocalOffline());
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _restoreSession();
+      // The demo account only exists on the local dev backend — never try it
+      // against cloud/self-hosted servers (it would register a real account).
+      if (mounted && _session == null && kDevAutoLogin && _isLocalBackend()) {
+        await _devAutoLogin();
+      }
+    });
   }
 
   /// True when the configured backend is a local dev server (localhost URL).
   bool _isLocalBackend() {
-    if (_serverConfig.mode == ServerMode.localOffline) return false;
     final host = _api.baseUri.host;
     return host == '127.0.0.1' || host == 'localhost' || host == '::1';
   }
@@ -348,6 +347,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _api.baseUri = base;
     }
     _signOut();
+    // P3c: keep the active world in step with the legacy Settings choice —
+    // "local" activates the local world, a server URL activates (and awaits
+    // sign-in to) that cloud origin.
+    setState(() {
+      _activeOrigin = config.mode == ServerMode.localOffline
+          ? 'local'
+          : _api.baseUri.toString();
+    });
+    savePref('activeOrigin', _activeOrigin);
     // Switching into local offline opens the on-device store + page tree.
     if (config.mode == ServerMode.localOffline) {
       await _initLocalOffline();
@@ -1738,7 +1746,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     try {
       await _local.open();
     } catch (error) {
-      if (mounted) setState(() => _message = '本地存储打开失败: $error');
+      if (mounted) {
+        setState(() {
+          _message = '本地存储打开失败: $error';
+          // Unblock the shell (P3c gates on _localReady) — the local world
+          // shows empty with the error banner; the cloud world still works.
+          _localReady = true;
+        });
+      }
       return;
     }
     _reloadLocalWorkspaces();
@@ -2649,7 +2664,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _selectedBootstrap = null;
       _selectedMarkdown = null;
       _message = null;
+      // P3c: signing out collapses the cloud section, it does NOT clear the
+      // world — on desktop, land in the local world (its workspaces and the
+      // on-device mirrors are untouched). Web has no local world and shows the
+      // sign-in panel again via the empty cloud state.
+      if (_local.available && !_activeIsLocal) {
+        _activeOrigin = 'local';
+      }
     });
+    if (_local.available) savePref('activeOrigin', _activeOrigin);
   }
 
   Future<void> _loadSelectedWorkspaceViews() async {
@@ -2789,16 +2812,78 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // and the shell chrome — not the wiring. Function bodies are the pre-P3b
   // ones, unmodified (mechanical merge).
 
-  /// Whether the ACTIVE world is the local one. Until P3c dissolves the global
-  /// mode this mirrors [ServerMode] — each shell only ever ran under its mode,
-  /// so dispatching on it is behavior-identical. P3c replaces this with the
-  /// selected [WorkspaceEntry]'s origin (mixed lists).
-  bool get _activeIsLocal => _serverConfig.mode == ServerMode.localOffline;
+  /// The origin of the ACTIVE world: `'local'` or the cloud server URL. Both
+  /// worlds' state is loaded side by side (P3c); this picks which one the
+  /// editor pane + page tree show. Persisted (`activeOrigin`) so a restart
+  /// reopens the same world; switched by selecting a workspace entry.
+  late String _activeOrigin;
+
+  /// Whether the ACTIVE world is the local one.
+  bool get _activeIsLocal => _activeOrigin == 'local';
+
+  /// Select a workspace entry from the unified list: flips the active world to
+  /// the entry's origin (persisted), then routes to that world's selector.
+  Future<void> _selectEntry(WorkspaceEntry entry) async {
+    if (_activeOrigin != entry.origin) {
+      setState(() => _activeOrigin = entry.origin);
+      savePref('activeOrigin', entry.origin);
+    }
+    if (entry.isLocal) {
+      await _localSelectWorkspace(entry.workspace);
+    } else {
+      await _selectWorkspace(entry.workspace);
+    }
+  }
+
+  // Per-entry workspace actions (P3c): the switcher lists BOTH worlds, so row
+  // actions must dispatch on the ROW's origin, not the active one.
+  Future<void> _renameEntry(WorkspaceEntry e, String name) => e.isLocal
+      ? _localRenameWorkspace(e.workspace, name)
+      : _renameWorkspace(e.workspace, name);
+
+  Future<void> _deleteEntry(WorkspaceEntry e) =>
+      e.isLocal ? _localDeleteWorkspace(e.workspace) : _deleteWorkspace(e.workspace);
+
+  Future<Uint8List> _exportEntryZip(WorkspaceEntry e) => e.isLocal
+      ? Future.value(Uint8List(0)) // parity with the old local-shell stub
+      : _exportWorkspaceZip(e.workspace.id);
+
+  Future<void> _importTreeIntoEntry(
+    WorkspaceEntry e,
+    List<ArchiveFile> entries,
+  ) => e.isLocal
+      ? _localImportVaultTree(e.workspace, entries)
+      : _importTreeIntoWorkspace(e.workspace, entries);
+
+  /// Create a workspace of the chosen kind (P3c unified create dialog).
+  Future<void> _createWorkspaceTyped(String name, {required bool local}) =>
+      local ? _localCreateWorkspace(name) : _createWorkspace(name);
+
+  /// Sign in to the configured cloud server from the switcher / account UI
+  /// (desktop: the login gate is gone — auth is a dialog, P3c §1.3).
+  Future<void> _promptSignIn() async {
+    final creds = await _promptCloudAuth('云端工作区');
+    if (creds == null || !mounted) return;
+    await _run(() async {
+      final session = creds.$1 == AuthMode.register
+          ? await _api.register(creds.$2)
+          : await _api.login(creds.$2);
+      final workspaces = await _api.listWorkspaces(session.accessToken);
+      setState(() {
+        _session = session;
+        _workspaces = workspaces;
+        _selectedWorkspace = workspaces.firstOrNull;
+      });
+      _persistSession(session);
+      unawaited(_refreshAiConfigured());
+      await _loadSelectedWorkspaceMembers();
+      await _loadSelectedWorkspaceViews();
+    });
+  }
 
   /// The unified workspace list (P3): cloud entries (with their roles) followed
   /// by local entries. Derived — the underlying per-world state stays the
   /// source of truth until P3c renders grouped sections from this.
-  // ignore: unused_element — consumed by P3c's grouped switcher.
   List<WorkspaceEntry> get _workspaceEntries {
     final cloudOrigin = _api.baseUri.toString();
     return [
@@ -2810,7 +2895,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// The selected workspace as a unified entry (null when nothing is selected).
-  // ignore: unused_element — consumed by P3c's per-entry dispatch.
   WorkspaceEntry? get _selectedEntry {
     if (_activeIsLocal) {
       final w = _localSelectedWorkspace;
@@ -2833,10 +2917,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// passed straight through. Capability rule (P3 §2.3): a world without a
   /// feature passes the same stub the old shell passed — P3c turns these into
   /// nullable props that hide the UI.
-  Widget _unifiedWorkspaceView(AuthSession session) {
+  Widget _unifiedWorkspaceView(AuthSession? session) {
     final local = _activeIsLocal;
     return WorkspaceView(
       session: session,
+      entries: _workspaceEntries,
+      selectedRef: _selectedEntry?.ref,
+      onSelectEntry: _selectEntry,
+      onRenameEntry: _renameEntry,
+      onDeleteEntry: _deleteEntry,
+      onExportEntryZip: _exportEntryZip,
+      onImportTreeIntoEntry: _importTreeIntoEntry,
+      onCreateWorkspaceTyped: _createWorkspaceTyped,
+      cloudOriginLabel:
+          _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
+              ? 'Mica Cloud'
+              : _api.baseUri.host,
+      onSignIn: session == null ? _promptSignIn : null,
+      localAvailable: _local.available,
       isBusy: local ? false : _isBusy,
       onRefresh: local
           ? () => setState(() {
@@ -2917,10 +3015,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onLoadTokens: local ? null : _loadTokens,
       onCreateToken: local ? null : _createToken,
       onRevokeToken: local ? null : _revokeToken,
-      userName: local
-          ? _localSession.user.displayName
-          : _session?.user.displayName ?? '',
-      userEmail: local ? '' : _session?.user.email ?? '',
+      userName: _session?.user.displayName ?? (local ? '本地' : ''),
+      userEmail: _session?.user.email ?? '',
       onUpdateProfile: local ? (_) async {} : _updateProfile,
       onChangePassword: local ? (_, _) async {} : _changePassword,
       serverConfig: _serverConfig,
@@ -2988,63 +3084,44 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   Widget build(BuildContext context) {
-    if (_serverConfig.mode == ServerMode.localOffline) {
-      return _buildLocalShell(context);
-    }
     final session = _session;
-
-    return Scaffold(
-      body: SafeArea(
-        child: session == null
-            ? Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(
-                    width: 360,
-                    child: SidePanel(
-                      session: session,
-                      isBusy: _isBusy,
-                      onAuthenticate: _authenticate,
-                      onCreateWorkspace: _createWorkspace,
-                      // Desktop only: jump straight into a local workspace,
-                      // no account, no server (local offline isn't on web).
-                      onUseLocal: kIsWeb
-                          ? null
-                          : () => _saveServerConfig(
-                              const ServerConfig(
-                                mode: ServerMode.localOffline,
-                                url: '',
-                              ),
-                            ),
-                    ),
-                  ),
-                  const VerticalDivider(width: 1),
-                  const Expanded(
-                    child: EmptyState(
-                      icon: Icons.description_outlined,
-                      title: 'Mica',
-                      detail: 'Sign in to open your workspace.',
-                    ),
-                  ),
-                ],
-              )
-            : _unifiedWorkspaceView(session),
-      ),
-    );
-  }
-
-  /// The local-offline shell (P2-M3): the same [WorkspaceView] UI, fed entirely
-  /// from the on-device store via the `_local*` callbacks. No session, no network.
-  Widget _buildLocalShell(BuildContext context) {
-    if (!_localReady) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+    // Web has no local world: it stays gated on sign-in, as before (P3c §2.6).
+    if (!_local.available && session == null) {
+      return Scaffold(
+        body: SafeArea(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 360,
+                child: SidePanel(
+                  session: session,
+                  isBusy: _isBusy,
+                  onAuthenticate: _authenticate,
+                  onCreateWorkspace: _createWorkspace,
+                ),
+              ),
+              const VerticalDivider(width: 1),
+              const Expanded(
+                child: EmptyState(
+                  icon: Icons.description_outlined,
+                  title: 'Mica',
+                  detail: 'Sign in to open your workspace.',
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
-    return Scaffold(
-      body: SafeArea(child: _unifiedWorkspaceView(_localSession)),
-    );
+    // Desktop: the local store backs local workspaces AND the cloud mirrors —
+    // wait for it before the shell renders (fast: one SQLite open + list).
+    if (_local.available && !_localReady) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return Scaffold(body: SafeArea(child: _unifiedWorkspaceView(session)));
   }
+
 }
 
 class SidePanel extends StatefulWidget {
@@ -3053,7 +3130,6 @@ class SidePanel extends StatefulWidget {
     required this.isBusy,
     required this.onAuthenticate,
     required this.onCreateWorkspace,
-    this.onUseLocal,
     super.key,
   });
 
@@ -3061,10 +3137,6 @@ class SidePanel extends StatefulWidget {
   final bool isBusy;
   final Future<void> Function(AuthMode mode, AuthFormValue form) onAuthenticate;
   final Future<void> Function(String name) onCreateWorkspace;
-
-  /// Switch to local-offline mode without signing in (desktop only; null hides
-  /// the entry, e.g. on web).
-  final VoidCallback? onUseLocal;
 
   @override
   State<SidePanel> createState() => _SidePanelState();
@@ -3169,30 +3241,6 @@ class _SidePanelState extends State<SidePanel> {
           ),
           label: Text(_mode == AuthMode.register ? 'Register' : 'Login'),
         ),
-        if (widget.onUseLocal != null) ...[
-          const SizedBox(height: 20),
-          const Row(
-            children: [
-              Expanded(child: Divider()),
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8),
-                child: Text('or', style: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              Expanded(child: Divider()),
-            ],
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: widget.isBusy ? null : widget.onUseLocal,
-            icon: const Icon(Icons.offline_bolt_outlined),
-            label: const Text('Use offline on this device'),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'No account needed — your notes stay on this device.',
-            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
-          ),
-        ],
       ],
     );
   }
@@ -3250,6 +3298,17 @@ class _SidePanelState extends State<SidePanel> {
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.session,
+    required this.entries,
+    required this.selectedRef,
+    required this.onSelectEntry,
+    required this.onRenameEntry,
+    required this.onDeleteEntry,
+    required this.onExportEntryZip,
+    required this.onImportTreeIntoEntry,
+    required this.onCreateWorkspaceTyped,
+    required this.cloudOriginLabel,
+    required this.onSignIn,
+    required this.localAvailable,
     required this.isBusy,
     required this.onRefresh,
     required this.onSignOut,
@@ -3334,6 +3393,33 @@ class WorkspaceView extends StatefulWidget {
   });
 
   final AuthSession? session;
+
+  /// The unified workspace list (P3c): local + cloud entries, grouped by
+  /// origin in the switcher. Row actions dispatch on the ROW's entry.
+  final List<WorkspaceEntry> entries;
+  final WorkspaceRef? selectedRef;
+  final Future<void> Function(WorkspaceEntry entry) onSelectEntry;
+  final Future<void> Function(WorkspaceEntry entry, String name) onRenameEntry;
+  final Future<void> Function(WorkspaceEntry entry) onDeleteEntry;
+  final Future<Uint8List> Function(WorkspaceEntry entry) onExportEntryZip;
+  final Future<void> Function(WorkspaceEntry entry, List<ArchiveFile> entries)
+  onImportTreeIntoEntry;
+
+  /// Create a workspace of the chosen kind (`local: true` = on-device).
+  final Future<void> Function(String name, {required bool local})
+  onCreateWorkspaceTyped;
+
+  /// Display label for the cloud section header ("Mica Cloud" or the host).
+  final String cloudOriginLabel;
+
+  /// Non-null when not signed in — the switcher's cloud section shows a
+  /// sign-in row that invokes it (desktop: auth is a dialog, not a gate).
+  final VoidCallback? onSignIn;
+
+  /// Whether this platform has a local world (desktop true, web false — the
+  /// local section and local-workspace creation are hidden without it).
+  final bool localAvailable;
+
   final bool isBusy;
   final VoidCallback onRefresh;
   final VoidCallback onSignOut;
@@ -3540,14 +3626,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.session == null) {
-      return const EmptyState(
-        icon: Icons.login,
-        title: 'Sign in',
-        detail: 'Register or log in to open your workspace list.',
-      );
-    }
-
+    // P3c: no sign-in gate — a null session just means no cloud account is
+    // attached; local workspaces work regardless, and the switcher's cloud
+    // section offers sign-in.
     return CallbackShortcuts(
       bindings: _appShortcuts(),
       child: Row(
@@ -3663,9 +3744,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 children: [
                   Expanded(
                     child: _WorkspaceSelector(
-                      workspaces: widget.workspaces,
-                      selected: widget.selectedWorkspace,
-                      onSelect: widget.onSelectWorkspace,
+                      entries: widget.entries,
+                      selectedRef: widget.selectedRef,
+                      cloudOriginLabel: widget.cloudOriginLabel,
+                      cloudEmail: widget.session?.user.email,
+                      onSignIn: widget.onSignIn,
+                      localAvailable: widget.localAvailable,
+                      onSelect: widget.onSelectEntry,
                       onRename: _promptRenameWorkspace,
                       onDelete: _confirmDeleteWorkspace,
                       onExport: _exportWorkspaceFile,
@@ -3808,12 +3893,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   /// Account row pinned to the bottom of the left sidebar. Tapping opens a menu
-  /// with Settings and Sign out.
+  /// with Settings and (when a cloud account is attached) Sign out, or Sign in.
   Widget _accountTile(BuildContext context) {
     final user = widget.session?.user;
     final name = user?.displayName.isNotEmpty == true
         ? user!.displayName
-        : (user?.email ?? 'Account');
+        : (user?.email ?? '本地');
     final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '?';
     return PopupMenuButton<String>(
       tooltip: 'Account',
@@ -3826,10 +3911,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             _openSettings();
           case 'signout':
             widget.onSignOut();
+          case 'signin':
+            widget.onSignIn?.call();
         }
       },
-      itemBuilder: (context) => const [
-        PopupMenuItem(
+      itemBuilder: (context) => [
+        const PopupMenuItem(
           value: 'settings',
           child: ListTile(
             dense: true,
@@ -3838,15 +3925,26 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             title: Text('Settings'),
           ),
         ),
-        PopupMenuItem(
-          value: 'signout',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.logout),
-            title: Text('Sign out'),
+        if (widget.session != null)
+          const PopupMenuItem(
+            value: 'signout',
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.logout),
+              title: Text('Sign out'),
+            ),
+          )
+        else if (widget.onSignIn != null)
+          const PopupMenuItem(
+            value: 'signin',
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.login),
+              title: Text('登录云端'),
+            ),
           ),
-        ),
       ],
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -4812,42 +4910,93 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   Future<void> _promptCreateWorkspace() async {
     final controller = TextEditingController();
-    final name = await showDialog<String>(
+    // P3c unified create: pick the kind here. Signed-in defaults to cloud
+    // (signing in expresses the collaboration intent); otherwise local. Web
+    // has no local world, so the choice collapses to cloud.
+    final canCloud = widget.session != null;
+    final canLocal = widget.localAvailable;
+    var makeLocal = canLocal && !canCloud;
+    if (!canLocal) makeLocal = false;
+    final result = await showDialog<({String name, bool local})>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('New workspace'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Workspace name',
-              border: OutlineInputBorder(),
+        return StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('New workspace'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Workspace name',
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (value) => Navigator.of(
+                    context,
+                  ).pop((name: value, local: makeLocal)),
+                ),
+                if (canLocal) ...[
+                  const SizedBox(height: 14),
+                  SegmentedButton<bool>(
+                    segments: [
+                      const ButtonSegment(
+                        value: true,
+                        icon: Icon(Icons.computer_outlined),
+                        label: Text('本地'),
+                      ),
+                      ButtonSegment(
+                        value: false,
+                        icon: const Icon(Icons.cloud_outlined),
+                        label: const Text('云端'),
+                        enabled: canCloud,
+                      ),
+                    ],
+                    selected: {makeLocal},
+                    onSelectionChanged: (sel) =>
+                        setDialogState(() => makeLocal = sel.first),
+                  ),
+                  if (!canCloud) ...[
+                    const SizedBox(height: 6),
+                    const Text(
+                      '登录后可创建云端工作区。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF94A3B8),
+                      ),
+                    ),
+                  ],
+                ],
+              ],
             ),
-            onSubmitted: (value) => Navigator.of(context).pop(value),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop((name: controller.text, local: makeLocal)),
+                child: const Text('Create'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              child: const Text('Create'),
-            ),
-          ],
         );
       },
     );
     controller.dispose();
 
-    final trimmed = name?.trim() ?? '';
-    if (trimmed.isNotEmpty) {
-      await widget.onCreateWorkspace(trimmed);
+    final trimmed = result?.name.trim() ?? '';
+    if (trimmed.isNotEmpty && result != null) {
+      await widget.onCreateWorkspaceTyped(trimmed, local: result.local);
     }
   }
 
-  Future<void> _promptRenameWorkspace(Workspace workspace) async {
+  Future<void> _promptRenameWorkspace(WorkspaceEntry entry) async {
+    final workspace = entry.workspace;
     final controller = TextEditingController(text: workspace.name);
     final name = await showDialog<String>(
       context: context,
@@ -4881,7 +5030,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
     final trimmed = name?.trim() ?? '';
     if (trimmed.isNotEmpty && trimmed != workspace.name) {
-      await widget.onRenameWorkspace(workspace, trimmed);
+      await widget.onRenameEntry(entry, trimmed);
     }
   }
 
@@ -4924,7 +5073,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     await widget.onRenameView(view, name);
   }
 
-  Future<void> _confirmDeleteWorkspace(Workspace workspace) async {
+  Future<void> _confirmDeleteWorkspace(WorkspaceEntry entry) async {
+    final workspace = entry.workspace;
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -4956,7 +5106,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       return;
     }
 
-    await widget.onDeleteWorkspace(workspace);
+    await widget.onDeleteEntry(entry);
   }
 
   void _openRecycleBin() {
@@ -5038,12 +5188,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
-  Future<void> _exportWorkspaceFile(Workspace workspace) async {
+  Future<void> _exportWorkspaceFile(WorkspaceEntry entry) async {
     try {
-      final bytes = await widget.onExportWorkspaceZip(workspace.id);
-      final name = workspace.name.trim().isEmpty
+      final bytes = await widget.onExportEntryZip(entry);
+      final name = entry.workspace.name.trim().isEmpty
           ? 'workspace'
-          : workspace.name.trim();
+          : entry.workspace.name.trim();
       downloadImage(bytes, '$name.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
@@ -5179,17 +5329,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Multi-select import into an existing workspace: .md files (plus images
   /// they reference) append pages at the root; ZIPs ride along as-is — the
   /// server expands nested archives.
-  Future<void> _importFilesIntoWorkspace(Workspace workspace) async {
+  Future<void> _importFilesIntoWorkspace(WorkspaceEntry entry) async {
     final picked = await pickImportFiles();
     if (picked.isEmpty || !mounted) return;
-    await widget.onImportWorkspaceTreeInto(workspace, [
+    await widget.onImportTreeIntoEntry(entry, [
       for (final f in picked) ArchiveFile(f.name, f.bytes),
     ]);
   }
 
   /// Folder import (recursive) into an existing workspace: the folder's
   /// contents become pages, its subfolders the page tree.
-  Future<void> _importFolderIntoWorkspace(Workspace workspace) async {
+  Future<void> _importFolderIntoWorkspace(WorkspaceEntry entry) async {
     final picked = await pickImportFolder();
     if (picked.isEmpty || !mounted) return;
     final entries = <ArchiveFile>[];
@@ -5204,7 +5354,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
       );
     }
-    await widget.onImportWorkspaceTreeInto(workspace, entries);
+    await widget.onImportTreeIntoEntry(entry, entries);
   }
 
   void _openAiDialog() {
@@ -5222,13 +5372,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 }
 
-/// Workspace switcher. The anchor button shows the current workspace; the menu
-/// lists every workspace (each row selects it and carries inline rename/delete
-/// actions) and ends with a "New workspace" row.
+/// Workspace switcher (P3c): ONE grouped list mixing both worlds. A cloud
+/// section (server label + account, or a sign-in row when signed out) above a
+/// local section, then a "New workspace" row whose dialog picks the kind.
+/// Row actions dispatch on the ROW's entry, not the active world.
 class _WorkspaceSelector extends StatefulWidget {
   const _WorkspaceSelector({
-    required this.workspaces,
-    required this.selected,
+    required this.entries,
+    required this.selectedRef,
+    required this.cloudOriginLabel,
+    required this.cloudEmail,
+    required this.onSignIn,
+    required this.localAvailable,
     required this.onSelect,
     required this.onRename,
     required this.onDelete,
@@ -5239,16 +5394,22 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onImportFolderInto,
   });
 
-  final List<Workspace> workspaces;
-  final Workspace? selected;
-  final Future<void> Function(Workspace workspace) onSelect;
-  final void Function(Workspace workspace) onRename;
-  final void Function(Workspace workspace) onDelete;
-  final void Function(Workspace workspace) onExport;
+  final List<WorkspaceEntry> entries;
+  final WorkspaceRef? selectedRef;
+  final String cloudOriginLabel;
+
+  /// Signed-in account email, or null when signed out (shows the sign-in row).
+  final String? cloudEmail;
+  final VoidCallback? onSignIn;
+  final bool localAvailable;
+  final Future<void> Function(WorkspaceEntry entry) onSelect;
+  final void Function(WorkspaceEntry entry) onRename;
+  final void Function(WorkspaceEntry entry) onDelete;
+  final void Function(WorkspaceEntry entry) onExport;
   final VoidCallback onCreate;
   final void Function(bool notion) onImport;
-  final void Function(Workspace workspace) onImportFilesInto;
-  final void Function(Workspace workspace) onImportFolderInto;
+  final void Function(WorkspaceEntry entry) onImportFilesInto;
+  final void Function(WorkspaceEntry entry) onImportFolderInto;
 
   @override
   State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
@@ -5257,8 +5418,25 @@ class _WorkspaceSelector extends StatefulWidget {
 class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
   final MenuController _menu = MenuController();
 
+  WorkspaceEntry? get _selectedEntry {
+    final ref = widget.selectedRef;
+    if (ref == null) return null;
+    for (final e in widget.entries) {
+      if (e.ref == ref) return e;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cloud = [
+      for (final e in widget.entries)
+        if (!e.isLocal) e,
+    ];
+    final locals = [
+      for (final e in widget.entries)
+        if (e.isLocal) e,
+    ];
     return MenuAnchor(
       controller: _menu,
       style: const MenuStyle(
@@ -5266,8 +5444,21 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
       ),
       menuChildren: [
-        for (final workspace in widget.workspaces) _row(workspace),
-        if (widget.workspaces.isNotEmpty) const Divider(height: 8),
+        _sectionHeader(
+          Icons.cloud_outlined,
+          widget.cloudOriginLabel,
+          trailing: widget.cloudEmail ?? '未登录',
+        ),
+        if (widget.cloudEmail == null && widget.onSignIn != null)
+          _signInRow()
+        else
+          for (final e in cloud) _row(e),
+        if (widget.localAvailable) ...[
+          const Divider(height: 8),
+          _sectionHeader(Icons.computer_outlined, '本地'),
+          for (final e in locals) _row(e),
+        ],
+        const Divider(height: 8),
         _createRow(),
         SizedBox(
           width: 320,
@@ -5300,7 +5491,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         ),
       ],
       builder: (context, controller, child) {
-        final label = widget.selected?.name ?? 'Select workspace';
+        final label = _selectedEntry?.workspace.name ?? 'Select workspace';
         return SizedBox(
           width: double.infinity,
           child: OutlinedButton(
@@ -5338,8 +5529,74 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  Widget _row(Workspace workspace) {
-    final selected = workspace.id == widget.selected?.id;
+  /// A slim group header: provenance icon + label (+ account email on the
+  /// cloud section).
+  Widget _sectionHeader(IconData icon, String label, {String? trailing}) {
+    return SizedBox(
+      width: 320,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Row(
+          children: [
+            Icon(icon, size: 15, color: const Color(0xFF94A3B8)),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF64748B),
+              ),
+            ),
+            const Spacer(),
+            if (trailing != null)
+              Text(
+                trailing,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFF94A3B8),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Signed out: the cloud section is one sign-in row (its workspaces appear
+  /// after signing in — AFFiNE semantics: signed-out hides, offline keeps).
+  Widget _signInRow() {
+    return SizedBox(
+      width: 320,
+      child: InkWell(
+        onTap: () {
+          _menu.close();
+          widget.onSignIn?.call();
+        },
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Icon(Icons.login, size: 18, color: Color(0xFF2563EB)),
+              SizedBox(width: 10),
+              Text(
+                '登录云端…',
+                style: TextStyle(
+                  color: Color(0xFF2563EB),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _row(WorkspaceEntry entry) {
+    final workspace = entry.workspace;
+    final selected = entry.ref == widget.selectedRef;
     return SizedBox(
       width: 320,
       child: Row(
@@ -5348,7 +5605,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             child: InkWell(
               onTap: () {
                 _menu.close();
-                widget.onSelect(workspace);
+                widget.onSelect(entry);
               },
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -5358,7 +5615,11 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 child: Row(
                   children: [
                     Icon(
-                      selected ? Icons.check : Icons.workspaces_outline,
+                      selected
+                          ? Icons.check
+                          : entry.isLocal
+                          ? Icons.computer_outlined
+                          : Icons.cloud_outlined,
                       size: 18,
                       color: selected
                           ? const Color(0xFF2563EB)
@@ -5387,12 +5648,12 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
               _wsAction(
                 Icons.edit_outlined,
                 'Rename',
-                () => widget.onRename(workspace),
+                () => widget.onRename(entry),
               ),
               _wsAction(
                 Icons.folder_zip_outlined,
                 'Export (ZIP)',
-                () => widget.onExport(workspace),
+                () => widget.onExport(entry),
               ),
               // One Import entry; the native picker can't mix files and
               // folders, so the choice lives in a submenu.
@@ -5406,12 +5667,12 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                   _wsAction(
                     Icons.upload_file_outlined,
                     'Files (.md / .zip)',
-                    () => widget.onImportFilesInto(workspace),
+                    () => widget.onImportFilesInto(entry),
                   ),
                   _wsAction(
                     Icons.drive_folder_upload_outlined,
                     'Folder',
-                    () => widget.onImportFolderInto(workspace),
+                    () => widget.onImportFolderInto(entry),
                   ),
                 ],
                 child: const Text('Import'),
@@ -5419,7 +5680,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
               _wsAction(
                 Icons.delete_outline,
                 'Delete',
-                () => widget.onDelete(workspace),
+                () => widget.onDelete(entry),
                 color: const Color(0xFFDC2626),
               ),
             ],
