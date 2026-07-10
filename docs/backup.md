@@ -67,14 +67,23 @@ is hard-wired), so the token never leaves the host. It is **opt-in** behind the
    ```
 2. **Mint a read-scoped token** — app *Settings → API Tokens*, or
    `mica-cli auth token create --name backup --scope read` — and add it plus the
-   repo/OSS config to the node's `.env` (next to `MICA_VERSION`):
+   repo/OSS config to the node's `.env` (next to `MICA_VERSION`). The compose file
+   assembles the individual `OSS_*` vars into the backend option string, so each
+   value lives on its own line (rotate the AccessKey without touching the rest):
    ```
    MICA_BACKUP_TOKEN=mica_pat_…
    MICA_BACKUP_REPO=opendal:s3:/mica
-   MICA_BACKUP_PASSWORD=…
-   MICA_BACKUP_OPTS=bucket=… endpoint=https://oss-cn-hangzhou.aliyuncs.com region=oss-cn-hangzhou access_key_id=… secret_access_key=… enable_virtual_host_style=true
+   MICA_BACKUP_PASSWORD=…                 # SAVE THIS OFF-HOST — lose it, lose the repo
+   OSS_BUCKET=my-mica-backups
+   OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
+   OSS_REGION=oss-cn-hangzhou
+   OSS_ACCESS_KEY_ID=…
+   OSS_SECRET_ACCESS_KEY=…
+   OSS_ROOT=mica                          # object-key prefix; use a fresh one to share a bucket
    # optional: BACKUP_HOUR=3  KEEP_DAILY=14  KEEP_WEEKLY=8  KEEP_MONTHLY=6
    ```
+   (`enable_virtual_host_style=true`, required for OSS, is baked into the compose
+   assembly. The systemd path below instead takes one `MICA_BACKUP_OPTS` string.)
 3. **Initialise the repo once, then start the service:**
    ```bash
    # One-off mica-cli commands must override the daily-loop ENTRYPOINT:
@@ -83,9 +92,9 @@ is hard-wired), so the token never leaves the host. It is **opt-in** behind the
    docker compose logs -f backup      # BACKUP_ON_START=1 → the first run happens now
    # inspect later: … run --rm --entrypoint mica-cli backup backup snapshots
    ```
-   > Sharing a bucket with an existing repo? Point this one at its own prefix by
-   > adding `root=<prefix>` to `MICA_BACKUP_OPTS` (else init fails with "Config
-   > file already exists").
+   > Sharing a bucket with an existing repo? Give this one its own prefix via
+   > `OSS_ROOT=<prefix>` in `.env` (else init fails with "Config file already
+   > exists").
 
 The container runs `mica-backup.sh` (export → snapshot → forget --prune) at
 `${BACKUP_HOUR}:00` daily and once on (re)start; the staging dir lives in the
