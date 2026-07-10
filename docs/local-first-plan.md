@@ -82,8 +82,19 @@
 | **P1b-2′** | 页树进 store(local_view/workspace 加 origin 标记,镜像云页树)—— 替换 prefs hack,P3 地基 | ✅ 完成 |
 | P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ✅ 完成 |
 | P2 | 离线编辑(append-log outbox 统一,重连 CRDT)—— 设计与逐步进展见 [`local-first-p2-design.md`](local-first-p2-design.md)(P2a 使能 → P2b outbox 切 append-log → P2c 双副本收敛 → P2d 放开离线编辑门 → P2e trim 压实,每步配对抗复审) | ✅ 完成 |
-| P3 | 溶解双模式为"工作区:本地/已连云"(双向,替代单向迁移)+ UX —— **设计见 [`local-first-p3-design.md`](local-first-p3-design.md)**(AFFiNE 实读 + mica 全行号核实;P3a 复合主键 → P3b 状态/handler 统一 → P3c 溶解 ServerMode → P3d op 路由 → P3e 离线切工作区 → P3f 双向收尾,§9 五个开放决策待拍板) | ⏭️ 设计已出,待审批 |
-| P4 | props 字段级 CRDT、web IndexedDB(唯一明确暂缓) | |
+| P3 | 溶解双模式为"工作区:本地/已连云"(双向)+ UX —— 设计与逐步进展见 [`local-first-p3-design.md`](local-first-p3-design.md)(P3a 复合主键 → P3b 统一接线 → P3c-1 溶解核心 → P3d op 路由 → P3e 离线切工作区 → P3f 双向,每步配对抗复审) | ✅ 完成(P3c-2 Settings 改版遗留为打磨项) |
+| P4 | web IndexedDB、props CRDT、state-vector 对账、纯 append-log 落盘 | ⏭️ 已评估未动工(见下) |
+
+### P4 评估(2026-07-11,P3 收尾时)
+
+四项均为 P2b 级以上的独立工程,各自需要完整的「实现→验证→复审→修复」周期,不宜在单夜尾声仓促落码。按成本/收益排序的建议顺序:
+
+1. **纯 append-log 落盘(桌面)**——收益:去掉每 400ms 整档 encode 的 I/O(大文档尤甚);成本:中(持久化节奏重写 + 崩溃安全重推演 + 复审)。**建议下一个做**,与 P2e 的 trim 已是半成品衔接。
+2. **web IndexedDB nbstore**——收益:web 也 local-first(目前 web 明确在线-only);成本:大(JS bundle 侧 y-indexedb 或自研 + web CloudDocStore + playwright e2e)。做之前先确认 web 用户面是否值得。
+3. **state-vector 快对账**——收益:超陈旧副本首连省流量;成本:中大(动服务端协议——P2/P3 全程守住的「服务端不动」边界要打开)。等真实遇到「重连拉全量太慢」再做。
+4. **props 字段级 CRDT**——收益:并发改属性不互斥;成本:最大(Rust+JS 双引擎 + 服务端折叠 + 编辑器)。维持「明确暂缓」。
+
+**P3c-2 遗留打磨**(先于 P4):Settings 服务器节改版(radio tiles → 云服务器节)、ServerMode/ServerConfig 类型退役、auth token per-origin 键。功能均正常(有 activeOrigin 同步垫片),纯打磨。
 
 ### P1b-2′ 精确步骤(原子全栈迁移,一次提交)
 
