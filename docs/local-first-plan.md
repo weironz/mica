@@ -78,9 +78,16 @@
 2. **模式 UX**(Phase 3)—— 会把刚合并的「远程服务器/本地」设置改成「local-first + 连接云工作区」。方向一致(更 AFFiNE)。待 Phase 3 时再细化。
 3. **props CRDT** —— 延后到 Phase 4(核心离线读写不依赖)。
 
-## 状态
+## 进展
 
-**方案已定,暂不动手**(用户 2026-07-10)。开工时从 **Phase 0(FFI 桥接,零风险使能)** 起,阶段性提交验证。
+- ✅ **Phase 0 完成**(2026-07-10,commit a77e8ab):`rust/src/api/store.rs` 桥出 `append_update / updates_after / squash / sync_cursor / set_sync_cursor` + `SyncCursor`/`DocUpdate` 类型;frb 重生成;集成测试 `frb_store_test.dart`(-d windows 全过)验证 append-log 往返重建文档 + sync cursor 跨重开持久化。零行为变化。
+- ⏭️ **Phase 1 下一步**(云文档离线只读)。具体子步:
+  1. `CloudSyncSession`(先只 `cloud_sync_io.dart` 桌面,web gate 掉):收到 `sync.base` 时 `store.saveDoc(cloudUUID, doc)`;每次 `_applyRemote` 合并的远端 update `store.appendUpdate`;`sync.ack` 后把 `_cursor` 写进 `sync_cursor.last_synced_rid`。
+  2. 打开云文档:**先 `store.loadDoc(cloudUUID)` 渲染**(离线秒开),再联网 `sync.pull{since_rid=last_synced_rid}` 对账;冷启动离线也能读。
+  3. 缓存云端页树:`bootstrapDocument`/工作区列表结果镜像进 `local_workspace`/`local_view`(带 origin 标记),离线可列。
+  4. 图片:通用云路径下载后 `putBlobAs` 落 CAS(现只有迁移做)。
+  5. outbox 从 prefs `cloudUnacked` 迁到 `updates_after(pushed_clock)`(Phase 2 再彻底并;P1 可先并存)。
+  - 全部 `kIsWeb` gate,web 保持现有在线路径。
 
 ## 复用率 / 工作量速估
 
