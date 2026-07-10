@@ -156,10 +156,10 @@ void advance({int? lastSyncedRid, int? pushedClock}); // → store.setSyncCursor
 - **丢失点(已由 P2b 覆盖)**:门开太宽让「服务端已撤权」doc 产生永不被接受的离线编辑 —— 联网重推时服务端回 `error`,走 P2b 的连续 `pushed_clock` + `_pushStalled` 熔断 + 「同步已暂停」横幅(不丢、不死循环、有提示);`_selectView` 的 `ApiException rethrow`(P1c)让 403/404 撤权 doc 上抛而非静默镜像。
 - 测:mica-core 18 测(role 迁移回填 'viewer'、save/list 往返);FFI 集成 `frb_store_test`(role 经真实 Dart→FFI→SQLite 往返)、`cloud_offline_nav`(镜像带 role);单元 `offline_cloud_nav`(editor→可编辑、viewer→只读)。`flutter analyze` 净、套件 232 绿。
 
-**P2e — 压实**
-- ack 后 `trim_updates_through(pushed_clock)`(或有界 squash),log 有界。
-- 验证:长会话后 `doc_updates(docId).len` 随 ack 回落;`load_doc` 内容不变。
-- 丢失点:trim 越过 `pushed_clock` = 分叉;单测钉死「只删 ≤ pushed_clock」。
+**P2e — 压实** ✅ **完成(commit 见 git log)**
+- `trimOutboxThrough(pushed_clock)` 接在 **`_saveLocalNow()` 写完 base 之后**(不在 ack 处理器里)——被 trim 的条目此刻「服务器已 ack + 刚折进落盘的 base」双持久,崩溃任意时刻都安全。若在 ack 后立即 trim,会开一个窄丢失窗口:ack→trim→(400ms debounce 内)崩溃→base 没含该编辑→**离线重启**本地不可见(须联网 pull 找回)。挂在 save 后则零额外开销(每 debounce 窗口至多一次;dispose 的硬关闭 flush 也会走到)。
+- 验证:P2b 首测更新为 P2e 语义——drain 后 dispose(flush+trim)→ `updatesAfter(0)` **空**(log 有界)且 `loadDoc` 内容完好;永久拒推测试兼任「trim 不碰未推送尾巴」守卫(pushed=0 时 trim 是 no-op,卡住的 clock 1 仍在)。P2c 收敛测试的 log-purity 断言改为**更锋利的时钟不变式**:`pushedClock == 1`(每设备只 append/push 过自己那条;若远端 update 曾误入 outbox 会拿 clock 2 被推送 ack → pushedClock 变 2)——兼 timing-robust(不受 trim 时机影响)。
+- 丢失点:trim 越过 `pushed_clock` = 分叉——P2a 已焊死(函数内 clamp + Rust 单测钉「只删 ≤ pushed_clock」+ clock 跨 trim 单调)。
 
 ---
 

@@ -119,15 +119,20 @@ void main() {
     await _until(() => converged(blocksB),
         reason: 'B converges to both edits (its own + A via pull)');
 
-    // Drain both outboxes (all acked) and assert the P2c invariant: a device's
-    // doc_update log holds ONLY its own local edit — the remote edit it merged
-    // arrived as a sync.update and must NOT have been appended to the outbox.
+    // Drain both outboxes (all acked) and assert the P2c invariant: a device
+    // only ever appended (and pushed) its OWN single edit — the remote edit it
+    // merged arrived as a sync.update and must NOT have entered the outbox. If
+    // it had, it would have taken clock 2, been pushed, and acked: pushed_clock
+    // would read 2. (Asserted via the clock rather than log length because P2e
+    // compacts acked entries out of the log after the debounced write-through.)
     expect(await sessionA.drainOutbox(timeout: const Duration(seconds: 6)), isTrue);
     expect(await sessionB.drainOutbox(timeout: const Duration(seconds: 6)), isTrue);
-    expect(storeA.updatesAfter(docId: 'doc', after: 0).length, 1,
-        reason: "A's log is only A's edit — remote update not in the outbox");
-    expect(storeB.updatesAfter(docId: 'doc', after: 0).length, 1,
-        reason: "B's log is only B's edit — remote update not in the outbox");
+    expect(storeA.syncCursor(docId: 'doc').pushedClock, 1,
+        reason: "A pushed exactly its own edit — remote update never entered A's outbox");
+    expect(storeB.syncCursor(docId: 'doc').pushedClock, 1,
+        reason: "B pushed exactly its own edit — remote update never entered B's outbox");
+    expect(storeA.updatesAfter(docId: 'doc', after: 1), isEmpty);
+    expect(storeB.updatesAfter(docId: 'doc', after: 1), isEmpty);
 
     sessionA.dispose();
     sessionB.dispose();

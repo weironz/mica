@@ -576,6 +576,15 @@ class CloudSyncSession {
     final store = persistence;
     if (doc == null || store == null) return;
     store.save(doc.encodeState(), _cursor);
+    // Compaction (P2e): acked outbox entries (clock ≤ pushed_clock) are now held
+    // BOTH by the server (acked) and by the base snapshot just written — safe to
+    // drop, bounding the append-log. Deliberately here and not in the ack
+    // handler: trimming before the base write-through lands would open a crash
+    // window where an acked-but-trimmed edit is invisible to an offline restart
+    // (recoverable only by pulling from the server). The un-pushed tail
+    // (> pushed_clock) is never touched, and the clock stays monotonic across
+    // the trim (P2a), so the outbox semantics are unchanged.
+    store.trimOutboxThrough(store.cursor().pushedClock);
   }
 
   void _send(Map<String, dynamic> message) {

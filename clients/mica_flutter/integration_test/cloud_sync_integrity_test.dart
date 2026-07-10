@@ -223,11 +223,19 @@ void main() {
         reason: 'ack advanced pushed_clock');
     expect(store.updatesAfter(docId: 'doc-p2b', after: 1), isEmpty,
         reason: 'nothing left in the outbox');
-    // The acked entry stays in the log until P2e trims it — the outbox query
-    // (updates_after(pushed_clock)) already excludes it.
-    expect(store.updatesAfter(docId: 'doc-p2b', after: 0).length, 1);
 
+    // P2e: dispose flushes the base write-through, after which the acked entry
+    // is compacted out of the log (it lives in the server AND the base now) —
+    // the log stays bounded. Content survives in the base.
     session.dispose();
+    expect(store.updatesAfter(docId: 'doc-p2b', after: 0), isEmpty,
+        reason: 'acked entries trimmed once folded into the base (P2e)');
+    final reloaded = store.loadDoc(docId: 'doc-p2b')!;
+    final blocks = (jsonDecode(reloaded.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
+    expect(blocks.firstWhere((b) => b['id'] == 'a')['text'], 'hi there',
+        reason: 'the edit is intact in the base after compaction');
+
     await server.stop();
     _bestEffortDelete(dir);
   });
