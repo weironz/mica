@@ -36,12 +36,13 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
 
-  /// All views (including trashed), ordered by position. The client builds the
-  /// tree from `parent_id` and filters trash.
-  List<LocalView> listViews();
+  /// All views (including trashed) for `origin` ("local" or a server URL),
+  /// ordered by position. The client builds the tree from `parent_id` and
+  /// filters trash.
+  List<LocalView> listViews({required String origin});
 
-  /// All local workspaces (ordered by position).
-  List<LocalWorkspace> listWorkspaces();
+  /// All workspaces for `origin` ("local" or a server URL), ordered by position.
+  List<LocalWorkspace> listWorkspaces({required String origin});
 
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.
@@ -117,6 +118,10 @@ class LocalView {
   final String position;
   final bool trashed;
 
+  /// Provenance: "local" for on-device pages, or a server URL for a cloud
+  /// page mirrored for offline nav. `list_views` filters by this.
+  final String origin;
+
   const LocalView({
     required this.id,
     required this.workspaceId,
@@ -125,6 +130,7 @@ class LocalView {
     required this.name,
     required this.position,
     required this.trashed,
+    required this.origin,
   });
 
   @override
@@ -135,7 +141,8 @@ class LocalView {
       objectId.hashCode ^
       name.hashCode ^
       position.hashCode ^
-      trashed.hashCode;
+      trashed.hashCode ^
+      origin.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -148,7 +155,8 @@ class LocalView {
           objectId == other.objectId &&
           name == other.name &&
           position == other.position &&
-          trashed == other.trashed;
+          trashed == other.trashed &&
+          origin == other.origin;
 }
 
 /// A local workspace mirrored to Dart (P2-M3).
@@ -157,14 +165,19 @@ class LocalWorkspace {
   final String name;
   final String position;
 
+  /// Provenance: "local" or a server URL — same scoping as [`LocalView`].
+  final String origin;
+
   const LocalWorkspace({
     required this.id,
     required this.name,
     required this.position,
+    required this.origin,
   });
 
   @override
-  int get hashCode => id.hashCode ^ name.hashCode ^ position.hashCode;
+  int get hashCode =>
+      id.hashCode ^ name.hashCode ^ position.hashCode ^ origin.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -173,7 +186,8 @@ class LocalWorkspace {
           runtimeType == other.runtimeType &&
           id == other.id &&
           name == other.name &&
-          position == other.position;
+          position == other.position &&
+          origin == other.origin;
 }
 
 /// A document's sync progress against the cloud update stream (P2 local-first).

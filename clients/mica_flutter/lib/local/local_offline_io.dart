@@ -32,6 +32,13 @@ typedef ViewData = ({
 /// One local workspace, as plain data.
 typedef WorkspaceData = ({String id, String name, String position});
 
+/// A mirrored page tree read back from the store for one `origin` (a server
+/// URL) — workspaces + views, for offline navigation (P2 option C, P1c).
+typedef CloudPageTreeCache = ({
+  List<WorkspaceData> workspaces,
+  List<ViewData> views,
+});
+
 /// A loaded document: its root block id and full block list (snapshot payload).
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
 
@@ -99,26 +106,34 @@ class LocalOffline {
 
   // ── workspaces ─────────────────────────────────────────────────────────────
 
-  List<WorkspaceData> listWorkspaces() {
+  /// Workspaces for [origin] ("local" for on-device, or a server URL for a
+  /// cloud mirror). Defaults to the local set so existing callers are unchanged.
+  List<WorkspaceData> listWorkspaces({String origin = 'local'}) {
     final store = _store;
     if (store == null) return const [];
     return [
-      for (final w in store.listWorkspaces())
+      for (final w in store.listWorkspaces(origin: origin))
         (id: w.id, name: w.name, position: w.position),
     ];
   }
 
-  void saveWorkspace(WorkspaceData w) {
+  void saveWorkspace(WorkspaceData w, {String origin = 'local'}) {
     _store?.saveWorkspace(
-      workspace: LocalWorkspace(id: w.id, name: w.name, position: w.position),
+      workspace: LocalWorkspace(
+        id: w.id,
+        name: w.name,
+        position: w.position,
+        origin: origin,
+      ),
     );
   }
 
-  /// Delete a workspace, its view rows, and all its documents.
+  /// Delete a local workspace, its view rows, and all its documents. Local-only:
+  /// a cloud mirror is a read cache, never user-deleted through this path.
   void deleteWorkspace(String id) {
     final store = _store;
     if (store == null) return;
-    for (final v in store.listViews()) {
+    for (final v in store.listViews(origin: 'local')) {
       if (v.workspaceId == id) store.deleteDoc(docId: v.objectId);
     }
     store.deleteWorkspace(id: id);
@@ -126,11 +141,12 @@ class LocalOffline {
 
   // ── page tree ──────────────────────────────────────────────────────────────
 
-  List<ViewData> listViews() {
+  /// Views for [origin] ("local" or a server URL). Defaults to local.
+  List<ViewData> listViews({String origin = 'local'}) {
     final store = _store;
     if (store == null) return const [];
     return [
-      for (final v in store.listViews())
+      for (final v in store.listViews(origin: origin))
         (
           id: v.id,
           workspaceId: v.workspaceId,
@@ -143,7 +159,7 @@ class LocalOffline {
     ];
   }
 
-  void saveView(ViewData v) {
+  void saveView(ViewData v, {String origin = 'local'}) {
     _store?.saveView(
       view: LocalView(
         id: v.id,
@@ -153,8 +169,46 @@ class LocalOffline {
         name: v.name,
         position: v.position,
         trashed: v.trashed,
+        origin: origin,
       ),
     );
+  }
+
+  // ── cloud page-tree mirror (P2 option C — offline nav cache) ─────────────────
+
+  /// Replace the mirrored page tree for [serverUrl] with [workspaces]+[views]
+  /// (origin-scoped clean replace, so pages removed on the server disappear).
+  /// The cloud is authoritative; this is refreshed after each successful online
+  /// load so the tree survives going offline (read back via [cachedCloudPageTree]).
+  void mirrorCloudPageTree(
+    String serverUrl,
+    List<WorkspaceData> workspaces,
+    List<ViewData> views,
+  ) {
+    final store = _store;
+    if (store == null) return;
+    // Drop the previous mirror for this origin, then rewrite it.
+    for (final v in store.listViews(origin: serverUrl)) {
+      store.purgeView(id: v.id);
+    }
+    for (final w in store.listWorkspaces(origin: serverUrl)) {
+      store.deleteWorkspace(id: w.id);
+    }
+    for (final w in workspaces) {
+      saveWorkspace(w, origin: serverUrl);
+    }
+    for (final v in views) {
+      saveView(v, origin: serverUrl);
+    }
+  }
+
+  /// The mirrored page tree for [serverUrl], or null if nothing is cached.
+  CloudPageTreeCache? cachedCloudPageTree(String serverUrl) {
+    final store = _store;
+    if (store == null) return null;
+    final workspaces = listWorkspaces(origin: serverUrl);
+    if (workspaces.isEmpty) return null;
+    return (workspaces: workspaces, views: listViews(origin: serverUrl));
   }
 
   /// Permanently remove a view and its document.

@@ -25,7 +25,7 @@ pub enum StoreError {
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
 /// the table layout changes and add the migration in [`LocalStore::open`].
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
@@ -52,6 +52,10 @@ pub struct LocalWorkspace {
     pub name: String,
     /// Zero-padded ordering among workspaces.
     pub position: String,
+    /// Provenance: `"local"` for on-device workspaces, or a server URL for a
+    /// cloud workspace mirrored for offline navigation (P2 option C). Scopes a
+    /// store that holds both.
+    pub origin: String,
 }
 
 /// A page-tree node (P2-M3): the local mirror of the client's `DocumentView`.
@@ -68,6 +72,8 @@ pub struct LocalView {
     pub position: String,
     /// Soft-deleted into the trash; purge removes the row.
     pub trashed: bool,
+    /// Provenance: `"local"` or a server URL — same scoping as [`LocalWorkspace`].
+    pub origin: String,
 }
 
 /// A local document store backed by one SQLite file.
@@ -96,12 +102,14 @@ impl LocalStore {
                  object_id TEXT NOT NULL,
                  name      TEXT NOT NULL,
                  position  TEXT NOT NULL,
-                 trashed   INTEGER NOT NULL DEFAULT 0
+                 trashed   INTEGER NOT NULL DEFAULT 0,
+                 origin    TEXT NOT NULL DEFAULT 'local'
              );
              CREATE TABLE IF NOT EXISTS local_workspace(
                  id       TEXT PRIMARY KEY,
                  name     TEXT NOT NULL,
-                 position TEXT NOT NULL
+                 position TEXT NOT NULL,
+                 origin   TEXT NOT NULL DEFAULT 'local'
              );
              CREATE TABLE IF NOT EXISTS doc_update(
                  doc_id  TEXT NOT NULL,
@@ -142,6 +150,31 @@ impl LocalStore {
             "INSERT OR IGNORE INTO local_workspace(id,name,position) VALUES('local','本地工作区','0000000010')",
             [],
         )?;
+
+        // v2 (P2 option C): add `origin` so a cloud page tree can be mirrored into
+        // the same store as local-only workspaces, scoped by server URL ('local'
+        // for on-device content). Existing rows default to 'local' — the
+        // default-only ALTER preserves them. Table names are compile-time literals.
+        for table in ["local_view", "local_workspace"] {
+            let has_origin: bool = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='origin'"
+                    ),
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            if !has_origin {
+                conn.execute(
+                    &format!(
+                        "ALTER TABLE {table} ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'"
+                    ),
+                    [],
+                )?;
+            }
+        }
 
         // Schema version gate (§10): refuse to open a store written by a newer
         // app (downgrade would risk data loss); otherwise stamp the current one.
@@ -420,13 +453,13 @@ impl LocalStore {
     /// All views across all workspaces (including trashed), ordered by
     /// `position`. The client filters by workspace + trash and builds the tree
     /// from `parent_id`.
-    pub fn list_views(&self) -> Result<Vec<LocalView>, StoreError> {
+    pub fn list_views(&self, origin: &str) -> Result<Vec<LocalView>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,workspace_id,parent_id,object_id,name,position,trashed \
-             FROM local_view ORDER BY position",
+            "SELECT id,workspace_id,parent_id,object_id,name,position,trashed,origin \
+             FROM local_view WHERE origin=?1 ORDER BY position",
         )?;
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(params![origin], |r| {
                 Ok(LocalView {
                     id: r.get(0)?,
                     workspace_id: r.get(1)?,
@@ -435,6 +468,7 @@ impl LocalStore {
                     name: r.get(4)?,
                     position: r.get(5)?,
                     trashed: r.get::<_, i64>(6)? != 0,
+                    origin: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -445,12 +479,12 @@ impl LocalStore {
     /// toggling, all by writing the desired row.
     pub fn save_view(&self, v: &LocalView) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)
+            "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed,origin)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(id) DO UPDATE SET
                  workspace_id=excluded.workspace_id, parent_id=excluded.parent_id,
                  object_id=excluded.object_id, name=excluded.name,
-                 position=excluded.position, trashed=excluded.trashed",
+                 position=excluded.position, trashed=excluded.trashed, origin=excluded.origin",
             params![
                 v.id,
                 v.workspace_id,
@@ -458,7 +492,8 @@ impl LocalStore {
                 v.object_id,
                 v.name,
                 v.position,
-                v.trashed as i64
+                v.trashed as i64,
+                v.origin
             ],
         )?;
         Ok(())
@@ -475,16 +510,17 @@ impl LocalStore {
     // ── workspaces — P2-M3 ───────────────────────────────────────────────────
 
     /// All local workspaces, ordered by `position`.
-    pub fn list_workspaces(&self) -> Result<Vec<LocalWorkspace>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id,name,position FROM local_workspace ORDER BY position")?;
+    pub fn list_workspaces(&self, origin: &str) -> Result<Vec<LocalWorkspace>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,name,position,origin FROM local_workspace WHERE origin=?1 ORDER BY position",
+        )?;
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(params![origin], |r| {
                 Ok(LocalWorkspace {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     position: r.get(2)?,
+                    origin: r.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -494,9 +530,9 @@ impl LocalStore {
     /// Upsert a workspace (create / rename / reorder).
     pub fn save_workspace(&self, w: &LocalWorkspace) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO local_workspace(id,name,position) VALUES(?1,?2,?3)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, position=excluded.position",
-            params![w.id, w.name, w.position],
+            "INSERT INTO local_workspace(id,name,position,origin) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, position=excluded.position, origin=excluded.origin",
+            params![w.id, w.name, w.position, w.origin],
         )?;
         Ok(())
     }
@@ -587,12 +623,13 @@ mod tests {
             .unwrap();
         }
         let store = LocalStore::open(p).unwrap();
-        let views = store.list_views().unwrap();
+        let views = store.list_views("local").unwrap();
         let v = views.iter().find(|x| x.id == "v1").expect("legacy view kept");
         assert_eq!(v.name, "Old Page", "legacy data preserved");
         assert_eq!(v.workspace_id, "local", "back-filled to default workspace");
+        assert_eq!(v.origin, "local", "legacy rows back-filled to local origin");
         assert!(
-            store.list_workspaces().unwrap().iter().any(|w| w.id == "local"),
+            store.list_workspaces("local").unwrap().iter().any(|w| w.id == "local"),
             "default workspace created"
         );
         let sv: String = store
@@ -699,6 +736,7 @@ mod tests {
             name: name.into(),
             position: pos.into(),
             trashed: false,
+            origin: "local".into(),
         }
     }
 
@@ -709,7 +747,7 @@ mod tests {
         store.save_view(&view("v2", None, "Page 2", "0000000020")).unwrap();
         store.save_view(&view("v3", Some("v1"), "Child", "0000000010")).unwrap();
 
-        let all = store.list_views().unwrap();
+        let all = store.list_views("local").unwrap();
         assert_eq!(all.len(), 3);
         // ordered by position; v3 (child, pos 10) and v1 (pos 10) share pos but
         // the child carries its parent.
@@ -719,15 +757,15 @@ mod tests {
 
         // Rename + move (upsert same id).
         store.save_view(&LocalView { name: "Renamed".into(), ..view("v2", None, "x", "0000000005") }).unwrap();
-        let v2 = store.list_views().unwrap().into_iter().find(|v| v.id == "v2").unwrap();
+        let v2 = store.list_views("local").unwrap().into_iter().find(|v| v.id == "v2").unwrap();
         assert_eq!(v2.name, "Renamed");
         assert_eq!(v2.position, "0000000005");
 
         // Trash then purge.
         store.save_view(&LocalView { trashed: true, ..view("v1", None, "Page 1", "0000000010") }).unwrap();
-        assert!(store.list_views().unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
+        assert!(store.list_views("local").unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
         store.purge_view("v1").unwrap();
-        assert!(store.list_views().unwrap().iter().all(|v| v.id != "v1"));
+        assert!(store.list_views("local").unwrap().iter().all(|v| v.id != "v1"));
     }
 
     #[test]
@@ -788,27 +826,67 @@ mod tests {
     fn workspaces_crud_and_default() {
         let store = LocalStore::open_in_memory().unwrap();
         // A default workspace always exists.
-        let all = store.list_workspaces().unwrap();
+        let all = store.list_workspaces("local").unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, "local");
+        assert_eq!(all[0].origin, "local", "default workspace is local-origin");
 
         store
             .save_workspace(&LocalWorkspace {
                 id: "w2".into(),
                 name: "Work".into(),
                 position: "0000000020".into(),
+                origin: "local".into(),
             })
             .unwrap();
-        assert_eq!(store.list_workspaces().unwrap().len(), 2);
+        assert_eq!(store.list_workspaces("local").unwrap().len(), 2);
 
         // Views are scoped; deleting a workspace removes only its views.
         store.save_view(&LocalView { workspace_id: "w2".into(), ..view("a", None, "A", "0000000010") }).unwrap();
         store.save_view(&LocalView { workspace_id: "local".into(), ..view("b", None, "B", "0000000010") }).unwrap();
         store.delete_workspace("w2").unwrap();
-        let views = store.list_views().unwrap();
+        let views = store.list_views("local").unwrap();
         assert!(views.iter().any(|v| v.id == "b"));
         assert!(views.iter().all(|v| v.id != "a"));
-        assert!(store.list_workspaces().unwrap().iter().all(|w| w.id != "w2"));
+        assert!(store.list_workspaces("local").unwrap().iter().all(|w| w.id != "w2"));
+    }
+
+    #[test]
+    fn origin_scopes_views_and_workspaces() {
+        // One store holds both on-device data (origin "local") and a cloud
+        // workspace mirrored for offline nav (origin = a server URL). Listing by
+        // origin must never leak one provenance into the other.
+        let store = LocalStore::open_in_memory().unwrap();
+        let cloud = "https://mica.example.com";
+
+        store
+            .save_workspace(&LocalWorkspace {
+                id: "cw".into(),
+                name: "Cloud WS".into(),
+                position: "0000000010".into(),
+                origin: cloud.into(),
+            })
+            .unwrap();
+        store
+            .save_view(&LocalView { origin: cloud.into(), workspace_id: "cw".into(), ..view("cv", None, "Cloud Page", "0000000010") })
+            .unwrap();
+        // A local view/workspace alongside it.
+        store.save_view(&view("lv", None, "Local Page", "0000000010")).unwrap();
+
+        let local_views = store.list_views("local").unwrap();
+        assert!(local_views.iter().any(|v| v.id == "lv"));
+        assert!(local_views.iter().all(|v| v.id != "cv"), "cloud view hidden from local");
+
+        let cloud_views = store.list_views(cloud).unwrap();
+        assert_eq!(cloud_views.len(), 1);
+        assert_eq!(cloud_views[0].id, "cv");
+        assert_eq!(cloud_views[0].origin, cloud);
+
+        // Default "local" workspace exists; cloud origin sees only its own.
+        assert!(store.list_workspaces("local").unwrap().iter().any(|w| w.id == "local"));
+        let cloud_ws = store.list_workspaces(cloud).unwrap();
+        assert_eq!(cloud_ws.len(), 1);
+        assert_eq!(cloud_ws[0].id, "cw");
     }
 
     #[test]
@@ -823,7 +901,7 @@ mod tests {
         }
         {
             let s = LocalStore::open(&p).unwrap();
-            let all = s.list_views().unwrap();
+            let all = s.list_views("local").unwrap();
             assert_eq!(all.len(), 1);
             assert_eq!(all[0].name, "Persisted");
         }

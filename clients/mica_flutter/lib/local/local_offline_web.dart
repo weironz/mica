@@ -19,6 +19,11 @@ typedef ViewData = ({
 
 typedef WorkspaceData = ({String id, String name, String position});
 
+typedef CloudPageTreeCache = ({
+  List<WorkspaceData> workspaces,
+  List<ViewData> views,
+});
+
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
 
 typedef VaultImportResult = ({int docs, int folders, List<String> errors});
@@ -44,15 +49,23 @@ class LocalOffline {
   bool hasBlob(String fileId) => false;
   String? blobFileUri(String fileId) => null;
 
-  List<WorkspaceData> listWorkspaces() => const [];
+  List<WorkspaceData> listWorkspaces({String origin = 'local'}) => const [];
 
-  void saveWorkspace(WorkspaceData w) {}
+  void saveWorkspace(WorkspaceData w, {String origin = 'local'}) {}
 
   void deleteWorkspace(String id) {}
 
-  List<ViewData> listViews() => const [];
+  List<ViewData> listViews({String origin = 'local'}) => const [];
 
-  void saveView(ViewData v) {}
+  void saveView(ViewData v, {String origin = 'local'}) {}
+
+  void mirrorCloudPageTree(
+    String serverUrl,
+    List<WorkspaceData> workspaces,
+    List<ViewData> views,
+  ) {}
+
+  CloudPageTreeCache? cachedCloudPageTree(String serverUrl) => null;
 
   void purgeView(String viewId, String objectId) {}
 

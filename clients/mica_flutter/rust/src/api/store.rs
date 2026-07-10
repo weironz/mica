@@ -54,6 +54,9 @@ pub struct LocalView {
     pub name: String,
     pub position: String,
     pub trashed: bool,
+    /// Provenance: "local" for on-device pages, or a server URL for a cloud
+    /// page mirrored for offline nav. `list_views` filters by this.
+    pub origin: String,
 }
 
 impl From<CoreView> for LocalView {
@@ -66,6 +69,7 @@ impl From<CoreView> for LocalView {
             name: v.name,
             position: v.position,
             trashed: v.trashed,
+            origin: v.origin,
         }
     }
 }
@@ -80,6 +84,7 @@ impl From<LocalView> for CoreView {
             name: v.name,
             position: v.position,
             trashed: v.trashed,
+            origin: v.origin,
         }
     }
 }
@@ -89,17 +94,19 @@ pub struct LocalWorkspace {
     pub id: String,
     pub name: String,
     pub position: String,
+    /// Provenance: "local" or a server URL — same scoping as [`LocalView`].
+    pub origin: String,
 }
 
 impl From<CoreWorkspace> for LocalWorkspace {
     fn from(w: CoreWorkspace) -> Self {
-        LocalWorkspace { id: w.id, name: w.name, position: w.position }
+        LocalWorkspace { id: w.id, name: w.name, position: w.position, origin: w.origin }
     }
 }
 
 impl From<LocalWorkspace> for CoreWorkspace {
     fn from(w: LocalWorkspace) -> Self {
-        CoreWorkspace { id: w.id, name: w.name, position: w.position }
+        CoreWorkspace { id: w.id, name: w.name, position: w.position, origin: w.origin }
     }
 }
 
@@ -178,14 +185,15 @@ impl MicaStore {
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
 
-    /// All views (including trashed), ordered by position. The client builds the
-    /// tree from `parent_id` and filters trash.
+    /// All views (including trashed) for `origin` ("local" or a server URL),
+    /// ordered by position. The client builds the tree from `parent_id` and
+    /// filters trash.
     #[frb(sync)]
-    pub fn list_views(&self) -> Vec<LocalView> {
+    pub fn list_views(&self, origin: String) -> Vec<LocalView> {
         self.inner
             .lock()
             .unwrap()
-            .list_views()
+            .list_views(&origin)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)
@@ -204,13 +212,13 @@ impl MicaStore {
         let _ = self.inner.lock().unwrap().purge_view(&id);
     }
 
-    /// All local workspaces (ordered by position).
+    /// All workspaces for `origin` ("local" or a server URL), ordered by position.
     #[frb(sync)]
-    pub fn list_workspaces(&self) -> Vec<LocalWorkspace> {
+    pub fn list_workspaces(&self, origin: String) -> Vec<LocalWorkspace> {
         self.inner
             .lock()
             .unwrap()
-            .list_workspaces()
+            .list_workspaces(&origin)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)

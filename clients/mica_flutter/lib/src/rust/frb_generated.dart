@@ -224,10 +224,14 @@ abstract class RustLibApi extends BaseApi {
 
   List<String> crateApiStoreMicaStoreListDocs({required MicaStore that});
 
-  List<LocalView> crateApiStoreMicaStoreListViews({required MicaStore that});
+  List<LocalView> crateApiStoreMicaStoreListViews({
+    required MicaStore that,
+    required String origin,
+  });
 
   List<LocalWorkspace> crateApiStoreMicaStoreListWorkspaces({
     required MicaStore that,
+    required String origin,
   });
 
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
@@ -1250,37 +1254,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "MicaStore_list_docs", argNames: ["that"]);
 
   @override
-  List<LocalView> crateApiStoreMicaStoreListViews({required MicaStore that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_local_view,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiStoreMicaStoreListViewsConstMeta,
-        argValues: [that],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiStoreMicaStoreListViewsConstMeta =>
-      const TaskConstMeta(
-        debugName: "MicaStore_list_views",
-        argNames: ["that"],
-      );
-
-  @override
-  List<LocalWorkspace> crateApiStoreMicaStoreListWorkspaces({
+  List<LocalView> crateApiStoreMicaStoreListViews({
     required MicaStore that,
+    required String origin,
   }) {
     return handler.executeSync(
       SyncTask(
@@ -1290,6 +1266,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_local_view,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreListViewsConstMeta,
+        argValues: [that, origin],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreListViewsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_list_views",
+        argNames: ["that", "origin"],
+      );
+
+  @override
+  List<LocalWorkspace> crateApiStoreMicaStoreListWorkspaces({
+    required MicaStore that,
+    required String origin,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(origin, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
         },
         codec: SseCodec(
@@ -1297,7 +1307,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreListWorkspacesConstMeta,
-        argValues: [that],
+        argValues: [that, origin],
         apiImpl: this,
       ),
     );
@@ -1306,7 +1316,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreListWorkspacesConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_list_workspaces",
-        argNames: ["that"],
+        argNames: ["that", "origin"],
       );
 
   @override
@@ -1953,8 +1963,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalView dco_decode_local_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return LocalView(
       id: dco_decode_String(arr[0]),
       workspaceId: dco_decode_String(arr[1]),
@@ -1963,6 +1973,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       name: dco_decode_String(arr[4]),
       position: dco_decode_String(arr[5]),
       trashed: dco_decode_bool(arr[6]),
+      origin: dco_decode_String(arr[7]),
     );
   }
 
@@ -1970,12 +1981,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalWorkspace dco_decode_local_workspace(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return LocalWorkspace(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
       position: dco_decode_String(arr[2]),
+      origin: dco_decode_String(arr[3]),
     );
   }
 
@@ -2268,6 +2280,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_name = sse_decode_String(deserializer);
     var var_position = sse_decode_String(deserializer);
     var var_trashed = sse_decode_bool(deserializer);
+    var var_origin = sse_decode_String(deserializer);
     return LocalView(
       id: var_id,
       workspaceId: var_workspaceId,
@@ -2276,6 +2289,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       name: var_name,
       position: var_position,
       trashed: var_trashed,
+      origin: var_origin,
     );
   }
 
@@ -2285,7 +2299,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_id = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
     var var_position = sse_decode_String(deserializer);
-    return LocalWorkspace(id: var_id, name: var_name, position: var_position);
+    var var_origin = sse_decode_String(deserializer);
+    return LocalWorkspace(
+      id: var_id,
+      name: var_name,
+      position: var_position,
+      origin: var_origin,
+    );
   }
 
   @protected
@@ -2610,6 +2630,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.position, serializer);
     sse_encode_bool(self.trashed, serializer);
+    sse_encode_String(self.origin, serializer);
   }
 
   @protected
@@ -2621,6 +2642,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.position, serializer);
+    sse_encode_String(self.origin, serializer);
   }
 
   @protected
@@ -2927,14 +2949,17 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   List<String> listDocs() =>
       RustLib.instance.api.crateApiStoreMicaStoreListDocs(that: this);
 
-  /// All views (including trashed), ordered by position. The client builds the
-  /// tree from `parent_id` and filters trash.
-  List<LocalView> listViews() =>
-      RustLib.instance.api.crateApiStoreMicaStoreListViews(that: this);
+  /// All views (including trashed) for `origin` ("local" or a server URL),
+  /// ordered by position. The client builds the tree from `parent_id` and
+  /// filters trash.
+  List<LocalView> listViews({required String origin}) => RustLib.instance.api
+      .crateApiStoreMicaStoreListViews(that: this, origin: origin);
 
-  /// All local workspaces (ordered by position).
-  List<LocalWorkspace> listWorkspaces() =>
-      RustLib.instance.api.crateApiStoreMicaStoreListWorkspaces(that: this);
+  /// All workspaces for `origin` ("local" or a server URL), ordered by position.
+  List<LocalWorkspace> listWorkspaces({required String origin}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStoreListWorkspaces(that: this, origin: origin);
 
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.

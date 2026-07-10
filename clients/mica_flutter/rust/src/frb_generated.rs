@@ -1365,6 +1365,7 @@ fn wire__crate__api__store__MicaStore_list_views_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
         let mut api_that_guard = None;
@@ -1379,8 +1380,10 @@ fn wire__crate__api__store__MicaStore_list_views_impl(
           }
         }
         let api_that_guard = api_that_guard.unwrap();
-        let output_ok =
-          Result::<_, ()>::Ok(crate::api::store::MicaStore::list_views(&*api_that_guard))?;
+        let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::list_views(
+          &*api_that_guard,
+          api_origin,
+        ))?;
         Ok(output_ok)
       })())
     },
@@ -1409,6 +1412,7 @@ fn wire__crate__api__store__MicaStore_list_workspaces_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
         let mut api_that_guard = None;
@@ -1425,6 +1429,7 @@ fn wire__crate__api__store__MicaStore_list_workspaces_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::list_workspaces(
           &*api_that_guard,
+          api_origin,
         ))?;
         Ok(output_ok)
       })())
@@ -2212,6 +2217,7 @@ impl SseDecode for crate::api::store::LocalView {
     let mut var_name = <String>::sse_decode(deserializer);
     let mut var_position = <String>::sse_decode(deserializer);
     let mut var_trashed = <bool>::sse_decode(deserializer);
+    let mut var_origin = <String>::sse_decode(deserializer);
     return crate::api::store::LocalView {
       id: var_id,
       workspace_id: var_workspaceId,
@@ -2220,6 +2226,7 @@ impl SseDecode for crate::api::store::LocalView {
       name: var_name,
       position: var_position,
       trashed: var_trashed,
+      origin: var_origin,
     };
   }
 }
@@ -2230,10 +2237,12 @@ impl SseDecode for crate::api::store::LocalWorkspace {
     let mut var_id = <String>::sse_decode(deserializer);
     let mut var_name = <String>::sse_decode(deserializer);
     let mut var_position = <String>::sse_decode(deserializer);
+    let mut var_origin = <String>::sse_decode(deserializer);
     return crate::api::store::LocalWorkspace {
       id: var_id,
       name: var_name,
       position: var_position,
+      origin: var_origin,
     };
   }
 }
@@ -2466,6 +2475,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::store::LocalView {
       self.name.into_into_dart().into_dart(),
       self.position.into_into_dart().into_dart(),
       self.trashed.into_into_dart().into_dart(),
+      self.origin.into_into_dart().into_dart(),
     ]
     .into_dart()
   }
@@ -2485,6 +2495,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::store::LocalWorkspace {
       self.id.into_into_dart().into_dart(),
       self.name.into_into_dart().into_dart(),
       self.position.into_into_dart().into_dart(),
+      self.origin.into_into_dart().into_dart(),
     ]
     .into_dart()
   }
@@ -2647,6 +2658,7 @@ impl SseEncode for crate::api::store::LocalView {
     <String>::sse_encode(self.name, serializer);
     <String>::sse_encode(self.position, serializer);
     <bool>::sse_encode(self.trashed, serializer);
+    <String>::sse_encode(self.origin, serializer);
   }
 }
 
@@ -2656,6 +2668,7 @@ impl SseEncode for crate::api::store::LocalWorkspace {
     <String>::sse_encode(self.id, serializer);
     <String>::sse_encode(self.name, serializer);
     <String>::sse_encode(self.position, serializer);
+    <String>::sse_encode(self.origin, serializer);
   }
 }
 
