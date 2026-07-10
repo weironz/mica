@@ -350,16 +350,29 @@ impl LocalStore {
         doc_id: &str,
         up_to_clock: i64,
     ) -> Result<(), StoreError> {
+        // Clamp to pushed_clock so an over-eager caller can never delete un-pushed
+        // outbox entries (safe-by-construction, not by caller discipline).
+        let up_to = up_to_clock.min(self.sync_cursor(doc_id)?.pushed_clock);
         self.conn.execute(
             "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
-            params![doc_id, up_to_clock],
+            params![doc_id, up_to],
         )?;
         Ok(())
     }
 
     /// Fold the base snapshot + all logged updates into a single new base, then
-    /// drop the log. Coalesces history growth (§4). Caller passes the device
-    /// `client_id` so the squashed doc keeps a consistent actor.
+    /// drop the **acked** log entries (`clock ≤ pushed_clock`). Coalesces history
+    /// growth (§4). Caller passes the device `client_id` so the squashed doc keeps
+    /// a consistent actor.
+    ///
+    /// The un-pushed outbox tail (`clock > pushed_clock`) is deliberately kept:
+    /// deleting it would drop edits the cloud never received (they'd live only in
+    /// the local base, never syncing out) and reset the clock below `pushed_clock`
+    /// — the same silent-divergence hazard [`Self::append_update`] guards against.
+    /// The new base already folds the kept tail, so replaying it on load is
+    /// idempotent. For a pure-local doc (`pushed_clock = 0`, and the log is
+    /// unused — local edits write full snapshots via [`Self::save_doc`]) this
+    /// deletes nothing and is a harmless re-baseline.
     pub fn squash(&self, doc_id: &str, client_id: u64) -> Result<(), StoreError> {
         let doc = match self.load_doc(doc_id, client_id)? {
             Some(d) => d,
@@ -371,8 +384,11 @@ impl LocalStore {
              ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
             params![doc_id, state, now_millis()],
         )?;
-        self.conn
-            .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        let pushed = self.sync_cursor(doc_id)?.pushed_clock;
+        self.conn.execute(
+            "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
+            params![doc_id, pushed],
+        )?;
         Ok(())
     }
 
@@ -822,11 +838,69 @@ mod tests {
         assert_eq!(loaded.to_blocks().iter().find(|b| b.id == "r").unwrap().children, vec!["a", "b"]);
         assert_eq!(store.doc_updates("d").unwrap().len(), 2);
 
-        // Squash folds them into the base and clears the log; state preserved.
+        // Squash re-baselines: it folds the log into the base and drops the acked
+        // prefix. With both edits acked, it clears the log; state is preserved.
+        store
+            .set_sync_cursor("d", SyncCursor { last_synced_rid: 0, pushed_clock: 2 })
+            .unwrap();
         store.squash("d", cid).unwrap();
         assert_eq!(store.doc_updates("d").unwrap().len(), 0);
         let after = store.load_doc("d", cid).unwrap().unwrap();
         assert_eq!(after.to_blocks(), loaded.to_blocks());
+    }
+
+    #[test]
+    fn squash_keeps_unpushed_tail_and_clock_monotonic() {
+        // squash must NOT drop the un-pushed outbox (edits the cloud never got)
+        // nor reset the clock — else those edits never sync and a later clock
+        // collides. Mirror of trim_bounds_log_and_clock_stays_monotonic, for the
+        // squash path (which deletes by a different criterion).
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        store
+            .save_doc("d", &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)))
+            .unwrap();
+
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        let sv0 = working.state_vector();
+        working.text_insert("a", 5, " one");
+        store.append_update("d", &working.encode_diff(&sv0).unwrap()).unwrap(); // clock 1
+        let sv1 = working.state_vector();
+        working.text_insert("a", 9, " two");
+        store.append_update("d", &working.encode_diff(&sv1).unwrap()).unwrap(); // clock 2
+
+        // Clock 1 acked; clock 2 still un-pushed (the offline-edit norm).
+        store
+            .set_sync_cursor("d", SyncCursor { last_synced_rid: 5, pushed_clock: 1 })
+            .unwrap();
+        store.squash("d", cid).unwrap();
+
+        // The un-pushed tail (clock 2) survives so it can still be pushed; the
+        // base folds both edits, so content is intact either way.
+        let clocks = |s: &LocalStore| {
+            s.doc_updates("d").unwrap().into_iter().map(|(c, _)| c).collect::<Vec<_>>()
+        };
+        assert_eq!(clocks(&store), vec![2], "un-pushed clock 2 kept through squash");
+        assert_eq!(
+            store.load_doc("d", cid).unwrap().unwrap().to_blocks().iter()
+                .find(|b| b.id == "a").unwrap().text,
+            "Hello one two",
+        );
+
+        // No clock reset: a new edit continues past what was issued.
+        let sv2 = working.state_vector();
+        working.text_insert("a", 13, "!");
+        assert_eq!(
+            store.append_update("d", &working.encode_diff(&sv2).unwrap()).unwrap(),
+            3,
+            "no reset after squash",
+        );
+        assert_eq!(
+            store.updates_after("d", 1).unwrap().into_iter().map(|(c, _)| c).collect::<Vec<_>>(),
+            vec![2, 3],
+            "outbox still holds the un-pushed edits",
+        );
     }
 
     #[test]

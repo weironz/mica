@@ -40,8 +40,17 @@ class StoreCloudDocStore implements CloudDocStore {
   }
 
   @override
-  int appendOutbox(Uint8List diff) =>
-      _store.appendUpdate(docId: _docId, update: diff);
+  int appendOutbox(Uint8List diff) {
+    final clock = _store.appendUpdate(docId: _docId, update: diff);
+    // A valid clock is ≥ 1; the FFI returns 0 only when the underlying store
+    // errored (which it otherwise swallows). Surface it so a failed append can't
+    // silently drop the edit from the outbox — the caller must not treat it as
+    // pushed. (P2b wires the caller; it decides how to recover.)
+    if (clock == 0) {
+      throw StateError('outbox append failed for doc $_docId');
+    }
+    return clock;
+  }
 
   @override
   List<({int clock, Uint8List bytes})> outboxAfter(int pushedClock) => [

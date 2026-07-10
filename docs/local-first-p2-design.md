@@ -120,16 +120,21 @@ void advance({int? lastSyncedRid, int? pushedClock}); // → store.setSyncCursor
 - ack 用 `ack_id = clock` 精确匹配到具体条目(替代旧 `_Pending.id`),跨重连重发不错配。
 - `drainOutbox`(切文档/登出前排空,`_closeDocumentSync`→`drainAndDispose`)改判据:`persistence.outboxAfter(pushedClock).isEmpty`。
 
-**压实(log 不能无界长)**:acked 条目(`clock ≤ pushed_clock`)在服务器和 base 里都有,可删。**危险点**:现有 `squash()` **无条件清空整条 log**——若 outbox 非空时 squash,未推送本地编辑会被从 outbox 抹掉(base 还在 → 读不丢,但**永不被推 → 与服务器分叉**)。守则二选一(见开放决策):
-- 【推荐】新增有界 `trim_updates_through(docId, pushed_clock)`(`DELETE FROM doc_update WHERE clock ≤ ?`),ack 后调用,只删已 ack 的,不碰 outbox,不重编码整档。
-- 或复用 `squash` 但**加卫**:仅当 `updates_after(pushed_clock).isEmpty`(outbox 排空)才 squash。
+**压实(log 不能无界长)**:acked 条目(`clock ≤ pushed_clock`)在服务器和 base 里都有,可删。~~危险点:squash 无条件清空整条 log~~ **(已在 P2a 加固修掉——见下)**。压实用 P2a 新增的有界 `trim_updates_through(docId, pushed_clock)`(`DELETE ... WHERE clock ≤ pushed_clock`,ack 后调用,不碰未推送 outbox、不重编码整档),这是 §7 决策① 拍板的方案。
+
+> **P2a 加固记(2026-07-10,对抗复审后)**:对 append-log 三个删除/写入原语焊死了 `pushed_clock` 下界,**safe-by-construction**,以防 P2b/P2e 接线时误伤未推送 outbox:
+> - `append_update` clock = `max(MAX(clock), pushed_clock)+1`——跨 trim/squash 严格单调,不会 reset 到 1 撞已删 clock。
+> - `squash` 从「无条件删全表」改为只删 `clock ≤ pushed_clock`(保留未推送尾巴,base 已折叠故 load 幂等不变;pure-local pushed=0 且日志本就没用 = 无害 re-baseline)。原来在有未推送尾巴时 squash 会永久丢那些编辑(只活在本机 base、永不同步出去)——真地雷,零调用方故休眠,已消。
+> - `trim_updates_through` 内部 `clamp(up_to, pushed_clock)`,不寄托调用纪律。
+> - `appendOutbox`(Dart)对 FFI `append_update` 的 `0`(被 `.unwrap_or(0)` 吞掉的 store 错误)抛异常,不静默丢。
+> 回归:`trim_bounds_log_and_clock_stays_monotonic`、`squash_keeps_unpushed_tail_and_clock_monotonic`(mica-core)。
 
 ---
 
 ## 5. 分步实施(每步独立可测可提交,标注数据丢失点)
 
-**P2a — Rust/FFI 使能(零行为变化)**
-- 加 `trim_updates_through(doc_id, up_to_clock)`(mica-core `store.rs`)+ 桥到 FFI `store.dart`;扩 `CloudDocStore` 加 outbox 四方法 + `StoreCloudDocStore` 实现(io),web 桩 no-op。
+**P2a — Rust/FFI 使能(零行为变化)** ✅ **完成(commit 5e6197a + 加固)**
+- 加 `trim_updates_through(doc_id, up_to_clock)`(mica-core `store.rs`)+ 桥到 FFI `store.dart`;扩 `CloudDocStore` 加 outbox 五方法(append/outboxAfter/cursor/advance/trim)+ `StoreCloudDocStore` 实现(io),web 无 impl(`persistence==null`)。附:修 append clock 单调 + squash/trim 焊死 pushed_clock 下界(见上「P2a 加固记」)。mica-core 18 测、FFI 集成测(-d windows)、analyze、web build 全绿。
 - 验证:Rust 单测(追加→`updates_after`→`trim` 保留 `> pushed_clock`、幂等 replay);FFI 集成测(`frb_store_test.dart` 风格,-d windows)往返。
 - 丢失点:无(纯新增,无人调用)。
 
