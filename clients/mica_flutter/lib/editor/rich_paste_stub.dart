@@ -29,6 +29,27 @@ Future<Uint8List?> readClipboardImage() => Pasteboard.image;
 Future<String?> readClipboardHtmlAsMarkdown() async {
   final h = await Pasteboard.html;
   if (h == null || h.trim().isEmpty) return null;
-  final md = htmlToMarkdown(h);
+  final md = htmlToMarkdown(stripCfHtmlHeader(h));
   return md.trim().isEmpty ? null : md;
+}
+
+/// Windows wraps clipboard HTML in the CF_HTML ("HTML Format") clipboard format,
+/// whose plaintext descriptor header (`Version:`, `StartHTML:`, `EndHTML:`,
+/// `StartFragment:`, `EndFragment:`, optional `SourceURL:`) precedes the real
+/// `[!DOCTYPE html]...[html]...` payload. The `pasteboard` plugin returns the
+/// whole buffer verbatim, so strip the header before parsing — otherwise it
+/// leaks in as a literal first line of the pasted content. A no-op on platforms
+/// that hand back bare HTML (macOS/Linux/mobile), where the guard fails.
+///
+/// We cut at the first `<` (start of markup), NOT the Start/EndFragment numbers:
+/// those are UTF-8 *byte* offsets, not Dart char (UTF-16) indices, so a
+/// substring by them would mis-slice any non-ASCII content before the fragment.
+String stripCfHtmlHeader(String html) {
+  // CF_HTML always opens with the `Version:` descriptor; also require a
+  // `StartHTML:` marker so real content that merely starts with "Version:" is
+  // never mistaken for a header.
+  final head = html.length < 256 ? html : html.substring(0, 256);
+  if (!html.startsWith('Version:') || !head.contains('StartHTML:')) return html;
+  final lt = html.indexOf('<');
+  return lt <= 0 ? html : html.substring(lt);
 }
