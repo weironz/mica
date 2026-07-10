@@ -204,6 +204,59 @@ void main() {
 
     _bestEffortDelete(dir);
   });
+
+  // P3a: the (origin,id) composite PK lets the SAME id live under 'local' AND a
+  // server URL (the detach scenario), and purge/delete stay in their namespace —
+  // through the real Dart→FFI→SQLite path.
+  test('composite PK: same id coexists across origins; purge/delete are origin-scoped',
+      () {
+    final dir = Directory.systemTemp.createTempSync('mica_pk');
+    final s = MicaStore.open(path: '${dir.path}/s.db')!;
+    const cloud = 'https://mica.example.com';
+
+    LocalView v(String origin, String name) => LocalView(
+          id: 'x',
+          workspaceId: 'w',
+          parentId: null,
+          objectId: 'd-$origin',
+          name: name,
+          position: '0000000010',
+          trashed: false,
+          origin: origin,
+        );
+    s.saveView(view: v('local', 'Local X'));
+    s.saveView(view: v(cloud, 'Cloud X'));
+    expect(s.listViews(origin: 'local').single.name, 'Local X');
+    expect(s.listViews(origin: cloud).single.name, 'Cloud X',
+        reason: 'same id, both rows coexist');
+
+    // Upsert stays in-namespace.
+    s.saveView(view: v('local', 'Local X2'));
+    expect(s.listViews(origin: cloud).single.name, 'Cloud X');
+
+    // Purge only the local row; the cloud one is untouched.
+    s.purgeView(origin: 'local', id: 'x');
+    expect(s.listViews(origin: 'local'), isEmpty);
+    expect(s.listViews(origin: cloud).single.name, 'Cloud X');
+
+    // delete_workspace is origin-scoped too (same ws id in both namespaces).
+    for (final o in ['local', cloud]) {
+      s.saveWorkspace(
+        workspace: LocalWorkspace(
+          id: 'w',
+          name: 'W $o',
+          position: '0000000010',
+          origin: o,
+          role: 'owner',
+        ),
+      );
+    }
+    s.deleteWorkspace(origin: cloud, id: 'w');
+    expect(s.listWorkspaces(origin: 'local').map((w) => w.id), contains('w'));
+    expect(s.listWorkspaces(origin: cloud).map((w) => w.id), isNot(contains('w')));
+
+    _bestEffortDelete(dir);
+  });
 }
 
 // On Windows the open SQLite handle (held by the still-alive MicaStore opaque

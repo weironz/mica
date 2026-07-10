@@ -139,7 +139,7 @@ class LocalOffline {
     for (final v in store.listViews(origin: 'local')) {
       if (v.workspaceId == id) store.deleteDoc(docId: v.objectId);
     }
-    store.deleteWorkspace(id: id);
+    store.deleteWorkspace(origin: 'local', id: id);
   }
 
   // ── page tree ──────────────────────────────────────────────────────────────
@@ -190,12 +190,14 @@ class LocalOffline {
   ) {
     final store = _store;
     if (store == null) return;
-    // Drop the previous mirror for this origin, then rewrite it.
+    // Drop the previous mirror for this origin, then rewrite it. Explicitly
+    // origin-scoped: with the v4 (origin,id) PK it is structurally impossible
+    // for this clean-replace to touch another origin's rows.
     for (final v in store.listViews(origin: serverUrl)) {
-      store.purgeView(id: v.id);
+      store.purgeView(origin: serverUrl, id: v.id);
     }
     for (final w in store.listWorkspaces(origin: serverUrl)) {
-      store.deleteWorkspace(id: w.id);
+      store.deleteWorkspace(origin: serverUrl, id: w.id);
     }
     for (final w in workspaces) {
       saveWorkspace(w, origin: serverUrl);
@@ -230,9 +232,9 @@ class LocalOffline {
     return (rootBlockId: doc.rootBlockId(), blocks: blocks);
   }
 
-  /// Permanently remove a view and its document.
+  /// Permanently remove a local view and its document.
   void purgeView(String viewId, String objectId) {
-    _store?.purgeView(id: viewId);
+    _store?.purgeView(origin: 'local', id: viewId);
     _store?.deleteDoc(docId: objectId);
   }
 

@@ -221,10 +221,12 @@ impl MicaStore {
         let _ = self.inner.lock().unwrap().save_view(&view.into());
     }
 
-    /// Permanently remove a view row (delete its document via [`Self::delete_doc`]).
+    /// Permanently remove one `origin`'s view row (delete its document via
+    /// [`Self::delete_doc`]). Origin-scoped — can never reach across the
+    /// local/cloud namespaces (v4 composite PK).
     #[frb(sync)]
-    pub fn purge_view(&self, id: String) {
-        let _ = self.inner.lock().unwrap().purge_view(&id);
+    pub fn purge_view(&self, origin: String, id: String) {
+        let _ = self.inner.lock().unwrap().purge_view(&origin, &id);
     }
 
     /// All workspaces for `origin` ("local" or a server URL), ordered by position.
@@ -246,10 +248,11 @@ impl MicaStore {
         let _ = self.inner.lock().unwrap().save_workspace(&workspace.into());
     }
 
-    /// Delete a workspace and all its view rows (delete documents separately).
+    /// Delete one `origin`'s workspace and all its view rows (delete documents
+    /// separately). Origin-scoped (v4 composite PK).
     #[frb(sync)]
-    pub fn delete_workspace(&self, id: String) {
-        let _ = self.inner.lock().unwrap().delete_workspace(&id);
+    pub fn delete_workspace(&self, origin: String, id: String) {
+        let _ = self.inner.lock().unwrap().delete_workspace(&origin, &id);
     }
 
     /// Load a document by id, decoded with this device's stable client id, or

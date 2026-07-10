@@ -25,7 +25,7 @@ pub enum StoreError {
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
 /// the table layout changes and add the migration in [`LocalStore::open`].
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
@@ -102,20 +102,23 @@ impl LocalStore {
                  value TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS local_view(
-                 id        TEXT PRIMARY KEY,
-                 parent_id TEXT,
-                 object_id TEXT NOT NULL,
-                 name      TEXT NOT NULL,
-                 position  TEXT NOT NULL,
-                 trashed   INTEGER NOT NULL DEFAULT 0,
-                 origin    TEXT NOT NULL DEFAULT 'local'
+                 origin       TEXT NOT NULL DEFAULT 'local',
+                 id           TEXT NOT NULL,
+                 workspace_id TEXT NOT NULL DEFAULT 'local',
+                 parent_id    TEXT,
+                 object_id    TEXT NOT NULL,
+                 name         TEXT NOT NULL,
+                 position     TEXT NOT NULL,
+                 trashed      INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY(origin, id)
              );
              CREATE TABLE IF NOT EXISTS local_workspace(
-                 id       TEXT PRIMARY KEY,
+                 origin   TEXT NOT NULL DEFAULT 'local',
+                 id       TEXT NOT NULL,
                  name     TEXT NOT NULL,
                  position TEXT NOT NULL,
-                 origin   TEXT NOT NULL DEFAULT 'local',
-                 role     TEXT NOT NULL DEFAULT 'viewer'
+                 role     TEXT NOT NULL DEFAULT 'viewer',
+                 PRIMARY KEY(origin, id)
              );
              CREATE TABLE IF NOT EXISTS doc_update(
                  doc_id  TEXT NOT NULL,
@@ -198,6 +201,70 @@ impl LocalStore {
             conn.execute(
                 "ALTER TABLE local_workspace ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
                 [],
+            )?;
+        }
+
+        // v4 (P3a): promote the (origin, id) pair to the PRIMARY KEY so the
+        // local/cloud namespace isolation becomes a constraint, not a convention
+        // — a bare-id PK lets `ON CONFLICT(id)` upsert and `purge_view(id)`
+        // reach across origins, which P3's detach ("same id under 'local' AND a
+        // server URL") would turn from a theoretical hazard into a certainty.
+        // SQLite can't ALTER a primary key, so this is the rebuild-table dance,
+        // atomic in one transaction, with a one-time pre-migration snapshot of
+        // both tables (recovery hatch, doc_snapshot_backup-style). Runs after
+        // the column ALTERs above so every SELECTed column exists; detected via
+        // the PK column count (bare id = 1, composite = 2).
+        let view_pk_cols: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('local_view') WHERE pk>0",
+            [],
+            |r| r.get(0),
+        )?;
+        if view_pk_cols < 2 {
+            conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE IF NOT EXISTS local_view_v3_backup AS SELECT * FROM local_view;
+                 DROP TABLE IF EXISTS local_view_v4;
+                 CREATE TABLE local_view_v4(
+                     origin       TEXT NOT NULL DEFAULT 'local',
+                     id           TEXT NOT NULL,
+                     workspace_id TEXT NOT NULL DEFAULT 'local',
+                     parent_id    TEXT,
+                     object_id    TEXT NOT NULL,
+                     name         TEXT NOT NULL,
+                     position     TEXT NOT NULL,
+                     trashed      INTEGER NOT NULL DEFAULT 0,
+                     PRIMARY KEY(origin, id)
+                 );
+                 INSERT INTO local_view_v4(origin,id,workspace_id,parent_id,object_id,name,position,trashed)
+                     SELECT origin,id,workspace_id,parent_id,object_id,name,position,trashed FROM local_view;
+                 DROP TABLE local_view;
+                 ALTER TABLE local_view_v4 RENAME TO local_view;
+                 COMMIT;",
+            )?;
+        }
+        let ws_pk_cols: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('local_workspace') WHERE pk>0",
+            [],
+            |r| r.get(0),
+        )?;
+        if ws_pk_cols < 2 {
+            conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE IF NOT EXISTS local_workspace_v3_backup AS SELECT * FROM local_workspace;
+                 DROP TABLE IF EXISTS local_workspace_v4;
+                 CREATE TABLE local_workspace_v4(
+                     origin   TEXT NOT NULL DEFAULT 'local',
+                     id       TEXT NOT NULL,
+                     name     TEXT NOT NULL,
+                     position TEXT NOT NULL,
+                     role     TEXT NOT NULL DEFAULT 'viewer',
+                     PRIMARY KEY(origin, id)
+                 );
+                 INSERT INTO local_workspace_v4(origin,id,name,position,role)
+                     SELECT origin,id,name,position,role FROM local_workspace;
+                 DROP TABLE local_workspace;
+                 ALTER TABLE local_workspace_v4 RENAME TO local_workspace;
+                 COMMIT;",
             )?;
         }
 
@@ -549,10 +616,10 @@ impl LocalStore {
         self.conn.execute(
             "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed,origin)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-             ON CONFLICT(id) DO UPDATE SET
+             ON CONFLICT(origin,id) DO UPDATE SET
                  workspace_id=excluded.workspace_id, parent_id=excluded.parent_id,
                  object_id=excluded.object_id, name=excluded.name,
-                 position=excluded.position, trashed=excluded.trashed, origin=excluded.origin",
+                 position=excluded.position, trashed=excluded.trashed",
             params![
                 v.id,
                 v.workspace_id,
@@ -567,11 +634,14 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Permanently remove a view row (the document is deleted separately via
-    /// [`Self::delete_doc`]).
-    pub fn purge_view(&self, id: &str) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM local_view WHERE id=?1", params![id])?;
+    /// Permanently remove a view row of one `origin` (the document is deleted
+    /// separately via [`Self::delete_doc`]). Origin-scoped so a purge can never
+    /// reach across the local/cloud namespaces (v4 composite-PK semantics).
+    pub fn purge_view(&self, origin: &str, id: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM local_view WHERE origin=?1 AND id=?2",
+            params![origin, id],
+        )?;
         Ok(())
     }
 
@@ -600,19 +670,25 @@ impl LocalStore {
     pub fn save_workspace(&self, w: &LocalWorkspace) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO local_workspace(id,name,position,origin,role) VALUES(?1,?2,?3,?4,?5)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, position=excluded.position, origin=excluded.origin, role=excluded.role",
+             ON CONFLICT(origin,id) DO UPDATE SET name=excluded.name, position=excluded.position, role=excluded.role",
             params![w.id, w.name, w.position, w.origin, w.role],
         )?;
         Ok(())
     }
 
-    /// Delete a workspace and all its views' rows. Documents are deleted
-    /// separately by the caller (it knows the object ids).
-    pub fn delete_workspace(&self, id: &str) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM local_view WHERE workspace_id=?1", params![id])?;
-        self.conn
-            .execute("DELETE FROM local_workspace WHERE id=?1", params![id])?;
+    /// Delete one `origin`'s workspace and all its views' rows. Documents are
+    /// deleted separately by the caller (it knows the object ids). Origin-scoped
+    /// so removing a cloud mirror can never touch a same-id local workspace
+    /// (v4 composite-PK semantics).
+    pub fn delete_workspace(&self, origin: &str, id: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM local_view WHERE origin=?1 AND workspace_id=?2",
+            params![origin, id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM local_workspace WHERE origin=?1 AND id=?2",
+            params![origin, id],
+        )?;
         Ok(())
     }
 }
@@ -833,7 +909,7 @@ mod tests {
         // Trash then purge.
         store.save_view(&LocalView { trashed: true, ..view("v1", None, "Page 1", "0000000010") }).unwrap();
         assert!(store.list_views("local").unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
-        store.purge_view("v1").unwrap();
+        store.purge_view("local", "v1").unwrap();
         assert!(store.list_views("local").unwrap().iter().all(|v| v.id != "v1"));
     }
 
@@ -1020,7 +1096,7 @@ mod tests {
         // Views are scoped; deleting a workspace removes only its views.
         store.save_view(&LocalView { workspace_id: "w2".into(), ..view("a", None, "A", "0000000010") }).unwrap();
         store.save_view(&LocalView { workspace_id: "local".into(), ..view("b", None, "B", "0000000010") }).unwrap();
-        store.delete_workspace("w2").unwrap();
+        store.delete_workspace("local", "w2").unwrap();
         let views = store.list_views("local").unwrap();
         assert!(views.iter().any(|v| v.id == "b"));
         assert!(views.iter().all(|v| v.id != "a"));
@@ -1065,6 +1141,172 @@ mod tests {
         assert_eq!(cloud_ws.len(), 1);
         assert_eq!(cloud_ws[0].id, "cw");
         assert_eq!(cloud_ws[0].role, "editor", "mirrored role available offline");
+    }
+
+    #[test]
+    fn composite_pk_isolates_same_id_across_origins() {
+        // P3a: the SAME id may exist under 'local' AND a server URL (the detach
+        // scenario). The (origin,id) PK must let both rows coexist, upserts stay
+        // in-namespace, and purge/delete touch only their own origin.
+        let store = LocalStore::open_in_memory().unwrap();
+        let cloud = "https://mica.example.com";
+
+        // Same view id in both namespaces.
+        store.save_view(&view("x", None, "Local X", "0000000010")).unwrap();
+        store
+            .save_view(&LocalView {
+                origin: cloud.into(),
+                name: "Cloud X".into(),
+                ..view("x", None, "ignored", "0000000020")
+            })
+            .unwrap();
+        assert_eq!(store.list_views("local").unwrap().iter().find(|v| v.id == "x").unwrap().name, "Local X");
+        assert_eq!(store.list_views(cloud).unwrap().iter().find(|v| v.id == "x").unwrap().name, "Cloud X");
+
+        // Upsert stays in its namespace (would have clobbered cross-origin
+        // under the old bare-id PK).
+        store.save_view(&view("x", None, "Local X2", "0000000010")).unwrap();
+        assert_eq!(store.list_views(cloud).unwrap().iter().find(|v| v.id == "x").unwrap().name, "Cloud X");
+
+        // Purge one origin's row only.
+        store.purge_view("local", "x").unwrap();
+        assert!(store.list_views("local").unwrap().iter().all(|v| v.id != "x"));
+        assert!(store.list_views(cloud).unwrap().iter().any(|v| v.id == "x"), "cloud row untouched");
+
+        // Same workspace id in both namespaces; delete is origin-scoped and its
+        // view cascade never crosses origins.
+        for (origin, role) in [("local", "owner"), (cloud, "editor")] {
+            store
+                .save_workspace(&LocalWorkspace {
+                    id: "w".into(),
+                    name: format!("{origin} W"),
+                    position: "0000000010".into(),
+                    origin: origin.into(),
+                    role: role.into(),
+                })
+                .unwrap();
+            store
+                .save_view(&LocalView {
+                    origin: origin.into(),
+                    workspace_id: "w".into(),
+                    ..view(&format!("v-{}", role), None, "p", "0000000010")
+                })
+                .unwrap();
+        }
+        store.delete_workspace(cloud, "w").unwrap();
+        assert!(store.list_workspaces("local").unwrap().iter().any(|w| w.id == "w"), "local ws kept");
+        assert!(store.list_views("local").unwrap().iter().any(|v| v.id == "v-owner"), "local view kept");
+        assert!(store.list_workspaces(cloud).unwrap().iter().all(|w| w.id != "w"));
+        assert!(store.list_views(cloud).unwrap().iter().all(|v| v.id != "v-editor"));
+    }
+
+    #[test]
+    fn v3_bare_pk_store_rebuilds_to_composite_without_data_loss() {
+        // A real v3-era store: bare-id PKs, origin/role columns present, data in
+        // both namespaces. Opening must rebuild both tables to the (origin,id)
+        // PK, keep every row, and leave the one-time pre-migration backups.
+        let path = temp_path();
+        let p = path.to_str().unwrap();
+        {
+            let conn = Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE doc_snapshot(doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+                 CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO local_meta VALUES('schema_version','3');
+                 CREATE TABLE local_view(
+                     id TEXT PRIMARY KEY, parent_id TEXT, object_id TEXT NOT NULL,
+                     name TEXT NOT NULL, position TEXT NOT NULL,
+                     trashed INTEGER NOT NULL DEFAULT 0,
+                     origin TEXT NOT NULL DEFAULT 'local',
+                     workspace_id TEXT NOT NULL DEFAULT 'local');
+                 CREATE TABLE local_workspace(
+                     id TEXT PRIMARY KEY, name TEXT NOT NULL, position TEXT NOT NULL,
+                     origin TEXT NOT NULL DEFAULT 'local',
+                     role TEXT NOT NULL DEFAULT 'viewer');
+                 INSERT INTO local_workspace(id,name,position) VALUES('local','本地工作区','0000000010');
+                 INSERT INTO local_workspace(id,name,position,origin,role) VALUES('cw','Cloud','0000000020','https://s','editor');
+                 INSERT INTO local_view(id,object_id,name,position) VALUES('v1','d1','Local Page','0000000010');
+                 INSERT INTO local_view(id,object_id,name,position,origin,workspace_id) VALUES('v2','d2','Cloud Page','0000000010','https://s','cw');",
+            )
+            .unwrap();
+        }
+        let store = LocalStore::open(p).unwrap();
+        // PKs are composite now.
+        for table in ["local_view", "local_workspace"] {
+            let pk: i64 = store
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE pk>0"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(pk, 2, "{table} has the (origin,id) composite PK");
+        }
+        // Every row survived, per namespace.
+        assert_eq!(store.list_views("local").unwrap().iter().find(|v| v.id == "v1").unwrap().name, "Local Page");
+        let cv = store.list_views("https://s").unwrap();
+        assert_eq!(cv.len(), 1);
+        assert_eq!((cv[0].id.as_str(), cv[0].workspace_id.as_str()), ("v2", "cw"));
+        assert_eq!(
+            store.list_workspaces("https://s").unwrap()[0].role,
+            "editor",
+            "cloud role survived the rebuild",
+        );
+        // The one-time pre-migration snapshots exist (recovery hatch).
+        for backup in ["local_view_v3_backup", "local_workspace_v3_backup"] {
+            let n: i64 = store
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {backup}"), [], |r| r.get(0))
+                .unwrap();
+            assert!(n >= 1, "{backup} holds the pre-v4 rows");
+        }
+        // Reopen is a no-op (idempotent — the PK probe skips the rebuild).
+        drop(store);
+        let again = LocalStore::open(p).unwrap();
+        assert_eq!(again.list_views("local").unwrap().len(), 1);
+        drop(again);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// Pre-release migration smoke: point MICA_REAL_STORE at a COPY of a real
+    /// on-device store.db and run with `cargo test --features store -- --ignored`.
+    /// Opens it through the full migration chain and asserts the terminal shape
+    /// (v4 composite PK) plus that existing local rows are still listed.
+    #[test]
+    #[ignore]
+    fn upgrade_real_store_smoke() {
+        let p = match std::env::var("MICA_REAL_STORE") {
+            Ok(p) if !p.is_empty() => p,
+            _ => {
+                eprintln!("MICA_REAL_STORE not set — skipping");
+                return;
+            }
+        };
+        let before_views: i64 = {
+            let conn = Connection::open(&p).unwrap();
+            conn.query_row("SELECT COUNT(*) FROM local_view", [], |r| r.get(0))
+                .unwrap()
+        };
+        let store = LocalStore::open(&p).unwrap();
+        for table in ["local_view", "local_workspace"] {
+            let pk: i64 = store
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE pk>0"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(pk, 2, "{table} migrated to the (origin,id) composite PK");
+        }
+        let after = store.list_views("local").unwrap();
+        assert_eq!(after.len() as i64, before_views, "no view rows lost in the upgrade");
+        eprintln!(
+            "real store upgraded OK: {} views, workspaces={:?}",
+            after.len(),
+            store.list_workspaces("local").unwrap().iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
+        );
     }
 
     #[test]

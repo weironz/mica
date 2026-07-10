@@ -217,6 +217,7 @@ abstract class RustLibApi extends BaseApi {
 
   void crateApiStoreMicaStoreDeleteWorkspace({
     required MicaStore that,
+    required String origin,
     required String id,
   });
 
@@ -243,6 +244,7 @@ abstract class RustLibApi extends BaseApi {
 
   void crateApiStoreMicaStorePurgeView({
     required MicaStore that,
+    required String origin,
     required String id,
   });
 
@@ -1177,6 +1179,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   void crateApiStoreMicaStoreDeleteWorkspace({
     required MicaStore that,
+    required String origin,
     required String id,
   }) {
     return handler.executeSync(
@@ -1187,6 +1190,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(id, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
         },
@@ -1195,7 +1199,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreDeleteWorkspaceConstMeta,
-        argValues: [that, id],
+        argValues: [that, origin, id],
         apiImpl: this,
       ),
     );
@@ -1204,7 +1208,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreDeleteWorkspaceConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_delete_workspace",
-        argNames: ["that", "id"],
+        argNames: ["that", "origin", "id"],
       );
 
   @override
@@ -1386,6 +1390,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   void crateApiStoreMicaStorePurgeView({
     required MicaStore that,
+    required String origin,
     required String id,
   }) {
     return handler.executeSync(
@@ -1396,6 +1401,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(id, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
         },
@@ -1404,7 +1410,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStorePurgeViewConstMeta,
-        argValues: [that, id],
+        argValues: [that, origin, id],
         apiImpl: this,
       ),
     );
@@ -1413,7 +1419,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStorePurgeViewConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_purge_view",
-        argNames: ["that", "id"],
+        argNames: ["that", "origin", "id"],
       );
 
   @override
@@ -2982,9 +2988,14 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   void deleteDoc({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreDeleteDoc(that: this, docId: docId);
 
-  /// Delete a workspace and all its view rows (delete documents separately).
-  void deleteWorkspace({required String id}) => RustLib.instance.api
-      .crateApiStoreMicaStoreDeleteWorkspace(that: this, id: id);
+  /// Delete one `origin`'s workspace and all its view rows (delete documents
+  /// separately). Origin-scoped (v4 composite PK).
+  void deleteWorkspace({required String origin, required String id}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreDeleteWorkspace(
+        that: this,
+        origin: origin,
+        id: id,
+      );
 
   /// The persisted device id.
   String deviceId() =>
@@ -3011,9 +3022,13 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   MicaDocument? loadDoc({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreLoadDoc(that: this, docId: docId);
 
-  /// Permanently remove a view row (delete its document via [`Self::delete_doc`]).
-  void purgeView({required String id}) =>
-      RustLib.instance.api.crateApiStoreMicaStorePurgeView(that: this, id: id);
+  /// Permanently remove one `origin`'s view row (delete its document via
+  /// [`Self::delete_doc`]). Origin-scoped — can never reach across the
+  /// local/cloud namespaces (v4 composite PK).
+  void purgeView({required String origin, required String id}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStorePurgeView(that: this, origin: origin, id: id);
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).

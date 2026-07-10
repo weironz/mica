@@ -27,8 +27,9 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   void deleteDoc({required String docId});
 
-  /// Delete a workspace and all its view rows (delete documents separately).
-  void deleteWorkspace({required String id});
+  /// Delete one `origin`'s workspace and all its view rows (delete documents
+  /// separately). Origin-scoped (v4 composite PK).
+  void deleteWorkspace({required String origin, required String id});
 
   /// The persisted device id.
   String deviceId();
@@ -53,8 +54,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   static MicaStore? open({required String path}) =>
       RustLib.instance.api.crateApiStoreMicaStoreOpen(path: path);
 
-  /// Permanently remove a view row (delete its document via [`Self::delete_doc`]).
-  void purgeView({required String id});
+  /// Permanently remove one `origin`'s view row (delete its document via
+  /// [`Self::delete_doc`]). Origin-scoped — can never reach across the
+  /// local/cloud namespaces (v4 composite PK).
+  void purgeView({required String origin, required String id});
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).
