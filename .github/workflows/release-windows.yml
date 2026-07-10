@@ -77,6 +77,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          prerelease: true
+          # Stable, not prerelease: the in-app updater checks GitHub's
+          # /releases/latest, which SKIPS prereleases — marking releases
+          # prerelease made new versions invisible to auto-update. make_latest
+          # keeps /releases/latest pointing at the newest tag.
+          prerelease: false
+          make_latest: true
           fail_on_unmatched_files: true
           files: clients/mica_flutter/installer/Output/Mica-Setup-${{ steps.ver.outputs.version }}.exe
