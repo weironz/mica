@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import '../cjk_fonts.dart';
 import 'highlight.dart';
 import 'marks.dart';
 import 'model.dart';
@@ -22,10 +23,9 @@ class EditorAppearance {
   /// Optional font family override for prose (code blocks keep monospace).
   final String? fontFamily;
 
-  /// Bundled CJK font, used as a fallback so Chinese/Japanese/Korean glyphs
-  /// render immediately (Flutter Web otherwise downloads them on demand, which
-  /// flashes ".notdef" boxes on the custom-painted surface).
-  static const List<String> cjkFallback = ['CJKFallback'];
+  /// CJK fallback chain: crisp system fonts on desktop (Windows 微软雅黑 etc.),
+  /// the bundled font on web. See [cjkFontFallback].
+  static List<String> get cjkFallback => cjkFontFallback;
 
   TextStyle applyTo(TextStyle base, {required bool isCode}) {
     final scaled = (base.fontSize ?? 16) * fontScale;

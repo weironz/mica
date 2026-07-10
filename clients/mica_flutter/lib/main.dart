@@ -18,6 +18,7 @@ import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
+import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
 import 'window_setup.dart';
@@ -182,9 +183,9 @@ class MicaApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: const Color(0xFFF8FAFC),
         useMaterial3: true,
-        // Bundled CJK fallback so Chinese text never waits on an on-demand
-        // web-font download (which flashed ".notdef" boxes).
-        fontFamilyFallback: const ['CJKFallback'],
+        // Crisp system CJK fonts on desktop (Windows 微软雅黑 / macOS 苹方 /
+        // Linux Noto CJK); the bundled font is the tail + web's only option.
+        fontFamilyFallback: cjkFontFallback,
       ),
       home: const WorkspaceShell(),
     );
