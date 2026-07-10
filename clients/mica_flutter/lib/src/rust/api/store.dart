@@ -7,10 +7,17 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
+  /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic
+  /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
+  PlatformInt64 appendUpdate({
+    required String docId,
+    required List<int> update,
+  });
+
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
   void checkpointDoc({required String docId});
@@ -60,6 +67,43 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Upsert a workspace (create / rename / reorder).
   void saveWorkspace({required LocalWorkspace workspace});
+
+  /// Persist this doc's sync progress.
+  void setSyncCursor({required String docId, required SyncCursor cursor});
+
+  /// Fold the update log into the base snapshot and truncate it (compaction),
+  /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
+  void squash({required String docId});
+
+  /// This doc's sync progress (0/0 if it has never synced).
+  SyncCursor syncCursor({required String docId});
+
+  /// Log entries with `clock > after`, ordered — the un-pushed outbox when
+  /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
+  List<DocUpdate> updatesAfter({
+    required String docId,
+    required PlatformInt64 after,
+  });
+}
+
+/// One entry from a doc's local update log: its monotonic `clock` and the yrs
+/// update bytes. `updates_after(pushed_clock)` yields the un-pushed outbox.
+class DocUpdate {
+  final PlatformInt64 clock;
+  final Uint8List payload;
+
+  const DocUpdate({required this.clock, required this.payload});
+
+  @override
+  int get hashCode => clock.hashCode ^ payload.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DocUpdate &&
+          runtimeType == other.runtimeType &&
+          clock == other.clock &&
+          payload == other.payload;
 }
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
@@ -130,4 +174,28 @@ class LocalWorkspace {
           id == other.id &&
           name == other.name &&
           position == other.position;
+}
+
+/// A document's sync progress against the cloud update stream (P2 local-first).
+/// Persisted per-doc so a locally-stored replica knows where to resume: pull the
+/// cloud tail after `last_synced_rid`, push local log entries past `pushed_clock`.
+class SyncCursor {
+  /// Highest cloud stream id (`rid`) this device has pulled and applied.
+  final PlatformInt64 lastSyncedRid;
+
+  /// Highest local update `clock` this device has pushed to the cloud.
+  final PlatformInt64 pushedClock;
+
+  const SyncCursor({required this.lastSyncedRid, required this.pushedClock});
+
+  @override
+  int get hashCode => lastSyncedRid.hashCode ^ pushedClock.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncCursor &&
+          runtimeType == other.runtimeType &&
+          lastSyncedRid == other.lastSyncedRid &&
+          pushedClock == other.pushedClock;
 }

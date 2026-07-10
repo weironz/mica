@@ -91,10 +91,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace dco_decode_box_autoadd_local_workspace(dynamic raw);
 
   @protected
+  SyncCursor dco_decode_box_autoadd_sync_cursor(dynamic raw);
+
+  @protected
+  DocUpdate dco_decode_doc_update(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<DocUpdate> dco_decode_list_doc_update(dynamic raw);
 
   @protected
   List<LocalView> dco_decode_list_local_view(dynamic raw);
@@ -128,6 +137,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     dynamic raw,
   );
+
+  @protected
+  SyncCursor dco_decode_sync_cursor(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -207,10 +219,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  SyncCursor sse_decode_box_autoadd_sync_cursor(SseDeserializer deserializer);
+
+  @protected
+  DocUpdate sse_decode_doc_update(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<DocUpdate> sse_decode_list_doc_update(SseDeserializer deserializer);
 
   @protected
   List<LocalView> sse_decode_list_local_view(SseDeserializer deserializer);
@@ -246,6 +267,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     SseDeserializer deserializer,
   );
+
+  @protected
+  SyncCursor sse_decode_sync_cursor(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -340,10 +364,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_sync_cursor(
+    SyncCursor self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_doc_update(DocUpdate self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_doc_update(
+    List<DocUpdate> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_local_view(
@@ -391,6 +430,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     MicaStore? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_sync_cursor(SyncCursor self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

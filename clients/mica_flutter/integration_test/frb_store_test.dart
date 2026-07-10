@@ -61,6 +61,75 @@ void main() {
     expect(s.loadDoc(docId: 'nope'), isNull);
     _bestEffortDelete(dir);
   });
+
+  // P2 local-first (Phase 0): the base + append-log + sync-cursor primitives the
+  // cloud path will adopt so cloud docs become offline-durable and resync-able.
+  test('append-log + updates_after round-trip a doc through FFI', () {
+    final dir = Directory.systemTemp.createTempSync('mica_log');
+    final s = MicaStore.open(path: '${dir.path}/s.db')!;
+    final cid = s.clientId();
+
+    final doc = MicaDocument.fromBlocksJson(
+      rootId: 'r',
+      blocksJson: jsonEncode([
+        {'id': 'r', 'type': 'page', 'children': ['a']},
+        {'id': 'a', 'type': 'paragraph', 'text': 'hi'},
+      ]),
+    );
+    s.saveDoc(docId: 'd', doc: doc);
+    final base = doc.encodeState();
+
+    // Two edits, each captured as a yrs diff and appended to the log; the clock
+    // is monotonic per doc.
+    var sv = doc.stateVector();
+    doc.textInsert(id: 'a', at: 2, text: ' there');
+    expect(
+        s.appendUpdate(docId: 'd', update: doc.encodeDiffSince(stateVector: sv)),
+        1);
+
+    sv = doc.stateVector();
+    doc.textInsert(id: 'a', at: 8, text: '!');
+    expect(
+        s.appendUpdate(docId: 'd', update: doc.encodeDiffSince(stateVector: sv)),
+        2);
+
+    // The full log, then only the tail past clock 1 (the "un-pushed outbox" query).
+    final all = s.updatesAfter(docId: 'd', after: 0);
+    expect(all.map((e) => e.clock).toList(), [1, 2]);
+    expect(s.updatesAfter(docId: 'd', after: 1).map((e) => e.clock).toList(), [2]);
+
+    // base + logged updates reconstruct the edited doc — the durable form works.
+    final replay = MicaDocument.fromStateWithClientId(bytes: base, clientId: cid)!;
+    for (final e in all) {
+      replay.applyUpdate(update: e.payload);
+    }
+    final blocks =
+        (jsonDecode(replay.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+    expect(blocks.firstWhere((b) => b['id'] == 'a')['text'], 'hi there!');
+
+    _bestEffortDelete(dir);
+  });
+
+  test('sync cursor round-trips + persists across reopen', () {
+    final dir = Directory.systemTemp.createTempSync('mica_cur');
+    final path = '${dir.path}/s.db';
+    final s1 = MicaStore.open(path: path)!;
+    // Defaults to 0/0 for a doc that has never synced.
+    var c = s1.syncCursor(docId: 'd');
+    expect(c.lastSyncedRid, 0);
+    expect(c.pushedClock, 0);
+    s1.setSyncCursor(
+        docId: 'd', cursor: const SyncCursor(lastSyncedRid: 42, pushedClock: 7));
+    c = s1.syncCursor(docId: 'd');
+    expect(c.lastSyncedRid, 42);
+    expect(c.pushedClock, 7);
+    // Persisted (not in-memory): survives reopening the same db file.
+    final s2 = MicaStore.open(path: path)!;
+    final c2 = s2.syncCursor(docId: 'd');
+    expect(c2.lastSyncedRid, 42);
+    expect(c2.pushedClock, 7);
+    _bestEffortDelete(dir);
+  });
 }
 
 // On Windows the open SQLite handle (held by the still-alive MicaStore opaque

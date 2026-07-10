@@ -8,9 +8,41 @@
 use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
-use mica_core::{LocalStore, LocalView as CoreView, LocalWorkspace as CoreWorkspace};
+use mica_core::{
+    LocalStore, LocalView as CoreView, LocalWorkspace as CoreWorkspace,
+    SyncCursor as CoreSyncCursor,
+};
 
 use crate::api::document::MicaDocument;
+
+/// A document's sync progress against the cloud update stream (P2 local-first).
+/// Persisted per-doc so a locally-stored replica knows where to resume: pull the
+/// cloud tail after `last_synced_rid`, push local log entries past `pushed_clock`.
+pub struct SyncCursor {
+    /// Highest cloud stream id (`rid`) this device has pulled and applied.
+    pub last_synced_rid: i64,
+    /// Highest local update `clock` this device has pushed to the cloud.
+    pub pushed_clock: i64,
+}
+
+impl From<CoreSyncCursor> for SyncCursor {
+    fn from(c: CoreSyncCursor) -> Self {
+        SyncCursor { last_synced_rid: c.last_synced_rid, pushed_clock: c.pushed_clock }
+    }
+}
+
+impl From<SyncCursor> for CoreSyncCursor {
+    fn from(c: SyncCursor) -> Self {
+        CoreSyncCursor { last_synced_rid: c.last_synced_rid, pushed_clock: c.pushed_clock }
+    }
+}
+
+/// One entry from a doc's local update log: its monotonic `clock` and the yrs
+/// update bytes. `updates_after(pushed_clock)` yields the un-pushed outbox.
+pub struct DocUpdate {
+    pub clock: i64,
+    pub payload: Vec<u8>,
+}
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
 /// `DocumentView`. `object_id` is the document's `doc_id`.
@@ -210,5 +242,66 @@ impl MicaStore {
         Some(MicaDocument {
             inner: Mutex::new(loaded),
         })
+    }
+
+    // ── base + append-log + sync cursor (P2 local-first) ─────────────────────
+    //
+    // The nbstore-shaped durable form the cloud path will adopt: a doc is a base
+    // snapshot (save_doc) plus an append-only log of yrs updates. Each local edit
+    // (and each merged remote update) appends here so offline work survives a
+    // restart and can be re-pushed; `sync_cursor` tracks how far this device has
+    // pulled from / pushed to the cloud stream.
+
+    /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic
+    /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
+    #[frb(sync)]
+    pub fn append_update(&self, doc_id: String, update: Vec<u8>) -> i64 {
+        self.inner
+            .lock()
+            .unwrap()
+            .append_update(&doc_id, &update)
+            .unwrap_or(0)
+    }
+
+    /// Log entries with `clock > after`, ordered — the un-pushed outbox when
+    /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
+    #[frb(sync)]
+    pub fn updates_after(&self, doc_id: String, after: i64) -> Vec<DocUpdate> {
+        self.inner
+            .lock()
+            .unwrap()
+            .updates_after(&doc_id, after)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(clock, payload)| DocUpdate { clock, payload })
+            .collect()
+    }
+
+    /// Fold the update log into the base snapshot and truncate it (compaction),
+    /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
+    #[frb(sync)]
+    pub fn squash(&self, doc_id: String) {
+        let _ = self.inner.lock().unwrap().squash(&doc_id, self.client_id);
+    }
+
+    /// This doc's sync progress (0/0 if it has never synced).
+    #[frb(sync)]
+    pub fn sync_cursor(&self, doc_id: String) -> SyncCursor {
+        self.inner
+            .lock()
+            .unwrap()
+            .sync_cursor(&doc_id)
+            .unwrap_or(CoreSyncCursor { last_synced_rid: 0, pushed_clock: 0 })
+            .into()
+    }
+
+    /// Persist this doc's sync progress.
+    #[frb(sync)]
+    pub fn set_sync_cursor(&self, doc_id: String, cursor: SyncCursor) {
+        let _ = self
+            .inner
+            .lock()
+            .unwrap()
+            .set_sync_cursor(&doc_id, cursor.into());
     }
 }
