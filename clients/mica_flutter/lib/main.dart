@@ -550,11 +550,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     sync.connect();
 
     // Open a yrs CRDT session for this doc (desktop = Rust FFI replica, web = JS
-    // yjs replica — both wire-compatible). It supersedes the op path once it
-    // bootstraps; until then (or against an old server) edits use REST as before.
-    if (_serverConfig.mode != ServerMode.localOffline) {
-      unawaited(_setupCloudYrs(documentId, workspace, session));
-    }
+    // yjs replica — both wire-compatible). P3d: _reconcileSync itself only runs
+    // off cloud state (session + _selectedWorkspace + _selectedBootstrap — all
+    // cloud-world fields), so the old mode guard is redundant; a local-world
+    // selection never reaches here.
+    unawaited(_setupCloudYrs(documentId, workspace, session));
   }
 
   Future<void> _setupCloudYrs(
@@ -925,9 +925,48 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedBootstrap = null;
         _selectedMarkdown = null;
       });
-      await _loadSelectedWorkspaceMembers();
-      await _loadSelectedWorkspaceViews();
+      // P3e: offline workspace switching. Already in degraded (offline) nav →
+      // read the mirror directly, no per-switch network timeout. Otherwise try
+      // the server; fall back to the mirror ONLY on connectivity failures —
+      // an ApiException means the server answered (403/404/500) and must
+      // surface, not be masked by stale cache (P1c discipline).
+      if (_offlineNav && !kIsWeb) {
+        _openWorkspaceFromMirror(workspace);
+        return;
+      }
+      try {
+        await _loadSelectedWorkspaceMembers();
+        await _loadSelectedWorkspaceViews();
+      } on ApiException {
+        rethrow;
+      } catch (_) {
+        if (kIsWeb) rethrow; // web has no mirror — surface the failure
+        _openWorkspaceFromMirror(workspace);
+      }
     });
+  }
+
+  /// Populate the selected cloud workspace's nav from the on-device mirror
+  /// (offline switch, P3e — the AFFiNE "signed-in offline opens from cache"
+  /// behavior). Members are unknowable offline (empty); the first cached view
+  /// opens via its mirrored doc, and the sync session reconciles on reconnect.
+  void _openWorkspaceFromMirror(Workspace workspace) {
+    final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
+    if (cache == null) return; // never mirrored — nothing to show
+    final rebuilt = rebuildCloudNavFromCache(cache, _session?.user.id ?? '');
+    final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
+    final firstView = views.firstOrNull;
+    final bootstrap =
+        firstView == null ? null : _offlineCloudBootstrap(firstView);
+    setState(() {
+      _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+      _membersByWorkspace = {..._membersByWorkspace, workspace.id: const []};
+      _selectedView = firstView;
+      _selectedBootstrap = bootstrap;
+      _selectedMarkdown = null;
+      _offlineNav = true;
+    });
+    if (bootstrap != null) _reconcileSync();
   }
 
   Future<void> _createDocument(String name, {String? parentViewId}) {
@@ -1600,10 +1639,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Apply editor operations without toggling the global busy state, so inline
   /// typing in the block editor stays smooth. Errors surface in the banner.
+  /// The ONE editor-op entry point (P3d). Local world → the on-device backend;
+  /// cloud world → the CRDT session once it's ready (a mirrored doc is ready
+  /// even offline — edits land in the durable append-log outbox, P2b). The
+  /// REST fallback below is only reachable in the pre-ready window of a
+  /// never-mirrored doc's cold bootstrap (online): offline-with-mirror never
+  /// gets here (isReady), and offline-without-mirror has no editor to type in
+  /// (P1c shows the empty state) — so it cannot bypass the outbox.
   Future<void> _applyEditorOperations(
     List<Map<String, dynamic>> operations,
   ) async {
-    // Desktop yrs path: apply + push as a CRDT diff instead of POSTing ops.
+    if (_activeIsLocal) {
+      await _local.applyOps(operations);
+      // The editor owns its in-memory nodes; no bootstrap rebuild needed.
+      return;
+    }
     final yrs = _cloudSession;
     if (yrs != null && yrs.isReady) {
       yrs.applyLocalOps(operations);
@@ -1917,13 +1967,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         view,
       );
     });
-  }
-
-  Future<void> _localApplyEditorOperations(
-    List<Map<String, dynamic>> operations,
-  ) async {
-    await _local.applyOps(operations);
-    // The editor owns its in-memory nodes; no bootstrap rebuild needed.
   }
 
   /// Restore the open local document to its last checkpoint, then remount the
@@ -2986,9 +3029,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateBlock: local ? (_, _, _) async {} : _updateBlock,
       onDeleteBlock: local ? (_) async {} : _deleteBlock,
       onMoveBlock: local ? (_, _) async {} : _moveBlock,
-      onApplyOperations: local
-          ? _localApplyEditorOperations
-          : _applyEditorOperations,
+      onApplyOperations: _applyEditorOperations, // P3d: one entry, self-dispatches
       onUploadImage: local ? _localUploadImage : _uploadEditorImage,
       onImportImageUrl: local ? _localImportImageUrl : _importEditorImageUrl,
       onLoadImageBytes: local ? _localLoadImageBytes : _loadEditorImageBytes,
