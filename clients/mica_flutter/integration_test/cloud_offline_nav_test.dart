@@ -81,6 +81,76 @@ void main() {
 
     _bestEffortDelete(dir);
   });
+
+  test('detachCloudWorkspace forks an independent local copy (P3f)', () async {
+    final dir = Directory.systemTemp.createTempSync('mica_detach');
+    const server = 'https://mica.example.com';
+    final local = LocalOffline(rootDirOverride: dir.path);
+    await local.open();
+
+    // Mirror a cloud workspace: two pages (parent + child), one with content.
+    const ws = (id: 'cw', name: 'Team', position: '0000000010', role: 'editor');
+    const parent = (
+      id: 'v1',
+      workspaceId: 'cw',
+      parentId: null,
+      objectId: 'doc-a',
+      name: 'Parent',
+      position: '0000000010',
+      trashed: false,
+    );
+    const child = (
+      id: 'v2',
+      workspaceId: 'cw',
+      parentId: 'v1',
+      objectId: 'doc-b', // never opened online → no mirror content
+      name: 'Child',
+      position: '0000000010',
+      trashed: false,
+    );
+    local.mirrorCloudPageTree(server, const [ws], const [parent, child]);
+    final doc = MicaDocument.fromBlocksJson(
+      rootId: 'r',
+      blocksJson: jsonEncode([
+        {'id': 'r', 'type': 'page', 'children': ['a']},
+        {'id': 'a', 'type': 'paragraph', 'text': 'team notes'},
+      ]),
+    );
+    local.cloudDocStore('doc-a')!.save(doc.encodeState(), 3);
+
+    final result = local.detachCloudWorkspace(server, 'cw', 'Team');
+    expect(result, isNotNull);
+    expect(result!.docs, 1, reason: 'one mirrored doc had content');
+
+    // The fork: a NEW local workspace, role owner, both pages present with the
+    // parent link remapped, and FRESH doc ids (independence).
+    final forkWs = local
+        .listWorkspaces()
+        .where((w) => w.id == result.workspaceId)
+        .single;
+    expect(forkWs.role, 'owner');
+    final forkViews = [
+      for (final v in local.listViews())
+        if (v.workspaceId == result.workspaceId) v,
+    ];
+    expect(forkViews.length, 2);
+    final forkParent = forkViews.singleWhere((v) => v.name == 'Parent');
+    final forkChild = forkViews.singleWhere((v) => v.name == 'Child');
+    expect(forkChild.parentId, forkParent.id, reason: 'tree remapped');
+    expect(forkParent.objectId, isNot('doc-a'), reason: 'fresh doc id');
+
+    // Content copied; the copy is INDEPENDENT of the mirror.
+    final copied = local.openCloudDocMirror(forkParent.objectId);
+    expect(copied, isNotNull);
+    expect(copied!.blocks.any((b) => b['text'] == 'team notes'), isTrue);
+    // The cloud mirror rows are untouched (the cloud original keeps working).
+    expect(
+      local.cachedCloudPageTree(server)!.views.map((v) => v.id),
+      containsAll(['v1', 'v2']),
+    );
+
+    _bestEffortDelete(dir);
+  });
 }
 
 void _bestEffortDelete(Directory dir) {

@@ -441,6 +441,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// JWT `exp`, then validates the rest by loading workspaces: a 401 (revoked /
   /// server JWT-secret changed) drops the token; a transient network error keeps
   /// it (this launch shows login, the next retries).
+  /// Losing the cloud credentials (expired/revoked token) leaves a stale cloud
+  /// activeOrigin behind — fall back to the local world (desktop) so a restart
+  /// doesn't keep opening an empty cloud pane (matches _signOut's semantics).
+  void _fallBackToLocalWorld() {
+    if (!_local.available || _activeIsLocal) return;
+    setState(() => _activeOrigin = 'local');
+    savePref('activeOrigin', _activeOrigin);
+  }
+
   Future<void> _restoreSession() async {
     if (_session != null) return;
     final token = loadPref('authToken');
@@ -454,6 +463,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final exp = jwtExpiry(token);
     if (exp != null && !exp.isAfter(DateTime.now().toUtc())) {
       _clearPersistedSession();
+      _fallBackToLocalWorld();
       return;
     }
     final AuthSession session;
@@ -479,9 +489,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       await _loadSelectedWorkspaceViews();
     } catch (error) {
       if (!mounted) return;
-      // Revoked/invalid token → drop it and show the login screen.
+      // Revoked/invalid token → drop it; desktop falls back to the local world.
       if (error.toString().toLowerCase().contains('unauthorized')) {
         _clearPersistedSession();
+        _fallBackToLocalWorld();
         return;
       }
       // Transient (offline / server down) → keep the token and fall back to the
@@ -1991,28 +2002,121 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Entry point from the local page menu. Prompts for a cloud account, then
   /// runs the migration. Re-migration is gated by a `migrated:<localWsId>` pref.
-  Future<void> _migrateLocalWorkspaceToCloud(Workspace localWs) async {
-    if (kIsWeb) return; // local offline is native-only
-    if (loadPref('migrated:${localWs.id}') != null) {
-      setState(() => _message =
-          '“${localWs.name}” 已迁移到云端,切换到云端模式即可打开。');
-      return;
+  /// Upload a LOCAL workspace to the cloud (P3f §6.1): copy-to-new-cloud-
+  /// workspace (AFFiNE-verified shape), reusing the signed-in session (prompt
+  /// only when signed out). Afterwards the user chooses delete-or-keep for the
+  /// local original (default delete — a kept copy is an independent fork that
+  /// never syncs; the old `migrated:` re-run gate is retired in favor of that
+  /// explicit choice).
+  Future<void> _migrateEntry(WorkspaceEntry entry) async {
+    if (kIsWeb || !entry.isLocal) return;
+    final localWs = entry.workspace;
+    var session = _session;
+    if (session == null) {
+      final creds = await _promptCloudAuth(localWs.name);
+      if (creds == null || !mounted) return;
+      await _run(() async {
+        final s = creds.$1 == AuthMode.register
+            ? await _api.register(creds.$2)
+            : await _api.login(creds.$2);
+        _persistSession(s);
+        setState(() => _session = s);
+      });
+      session = _session;
+      if (session == null || !mounted) return;
     }
-    final creds = await _promptCloudAuth(localWs.name);
-    if (creds == null || !mounted) return;
+    var migrated = false;
     await _run(() async {
       final clientId = await _local.deviceClientId();
       if (clientId == null) throw StateError('本地身份不可用,无法迁移');
-      final session = creds.$1 == AuthMode.register
-          ? await _api.register(creds.$2)
-          : await _api.login(creds.$2);
-      final result = await _runWorkspaceMigration(session, clientId, localWs);
-      savePref('migrated:${localWs.id}', result.cloudWorkspaceId);
+      final result = await _runWorkspaceMigration(session!, clientId, localWs);
+      // Refresh the cloud list so the new workspace appears in the switcher.
+      final workspaces = await _api.listWorkspaces(session.accessToken);
       if (!mounted) return;
-      setState(() => _message =
-          '已把 “${localWs.name}” 迁移到云端(${result.docCount} 页)。'
-          '切换到云端模式即可打开。');
+      migrated = true;
+      setState(() {
+        _workspaces = workspaces;
+        _message = '已把 “${localWs.name}” 上云(${result.docCount} 页)。';
+      });
     });
+    if (!migrated || !mounted) return;
+    // Post-migration choice (P3 决策④): default delete the local original;
+    // keeping it is an explicit escape hatch and creates an independent fork.
+    final delete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('上云完成'),
+        content: Text(
+          '“${localWs.name}” 已复制到云端。本地原件现在是独立副本,'
+          '不会再和云端同步——保留它会出现两个同名但内容会分叉的工作区。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('保留本地原件'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除本地原件'),
+          ),
+        ],
+      ),
+    );
+    if (delete == true && mounted) {
+      await _localDeleteWorkspace(localWs);
+    }
+  }
+
+  /// Detach a CLOUD workspace into an independent local copy (P3f §6.2). The
+  /// cloud original stays (and keeps mirroring/syncing); the local fork shares
+  /// nothing with it (fresh doc ids). Un-pushed offline edits are included in
+  /// the copy AND still push from the mirror on reconnect — no loss either way.
+  Future<void> _detachEntry(WorkspaceEntry entry) async {
+    if (kIsWeb || entry.isLocal) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('转为本地工作区'),
+        content: Text(
+          '把 “${entry.workspace.name}” 复制为一个新的本地工作区?'
+          '云端原工作区保持不变;两者从此独立,不再互相同步。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('复制为本地'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final result = _local.detachCloudWorkspace(
+      entry.origin,
+      entry.workspace.id,
+      entry.workspace.name,
+    );
+    if (result == null) {
+      setState(() => _message = '本地存储不可用,无法转为本地。');
+      return;
+    }
+    setState(() {
+      _reloadLocalWorkspaces();
+      _message =
+          '已把 “${entry.workspace.name}” 复制为本地工作区(${result.docs} 页有内容)。';
+    });
+    // Land in the fresh local copy.
+    final target = _localWorkspaces
+        .where((w) => w.id == result.workspaceId)
+        .firstOrNull;
+    if (target != null) {
+      await _selectEntry(
+        WorkspaceEntry(origin: 'local', workspace: target, role: 'owner'),
+      );
+    }
   }
 
   /// The migration engine (no UI). Creates a cloud workspace, then per local
@@ -2898,9 +3002,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ? _localImportVaultTree(e.workspace, entries)
       : _importTreeIntoWorkspace(e.workspace, entries);
 
-  /// Create a workspace of the chosen kind (P3c unified create dialog).
-  Future<void> _createWorkspaceTyped(String name, {required bool local}) =>
-      local ? _localCreateWorkspace(name) : _createWorkspace(name);
+  /// Create a workspace of the chosen kind (P3c unified create dialog), then
+  /// make its world active — each impl already selects the new workspace inside
+  /// its own world, so without the flip a user creating into the OTHER world
+  /// would see nothing happen.
+  Future<void> _createWorkspaceTyped(String name, {required bool local}) async {
+    await (local ? _localCreateWorkspace(name) : _createWorkspace(name));
+    final origin = local ? 'local' : _api.baseUri.toString();
+    if (_activeOrigin != origin && mounted) {
+      setState(() => _activeOrigin = origin);
+      savePref('activeOrigin', origin);
+    }
+  }
 
   /// Sign in to the configured cloud server from the switcher / account UI
   /// (desktop: the login gate is gone — auth is a dialog, P3c §1.3).
@@ -2987,11 +3100,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           : () {
               if (!_isBusy) _refreshWorkspaces();
             },
-      onSignOut: local
-          ? () {}
-          : () {
-              if (!_isBusy) _signOut();
-            },
+      // Account-level action: dispatches on the SESSION, not the active world —
+      // a signed-in user browsing the local world must still be able to sign
+      // out (the tile only shows Sign out when session != null; _signOut is
+      // safe regardless).
+      onSignOut: () {
+        if (!_isBusy) _signOut();
+      },
       workspaces: local ? _localWorkspaces : _workspaces,
       selectedWorkspace: local ? _localSelectedWorkspace : _selectedWorkspace,
       members: local || _selectedWorkspace == null
@@ -3117,7 +3232,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateMember: local ? (_, _) async {} : _updateWorkspaceMember,
       onRemoveMember: local ? (_) async {} : _removeWorkspaceMember,
       onRestoreCheckpoint: local ? _localRollbackDoc : null,
-      onMigrateToCloud: local ? _migrateLocalWorkspaceToCloud : null,
+      // P3f: both live on the workspace ROW's menu, dispatching per entry —
+      // null on web (no local world / no on-device store).
+      onMigrateEntry: _local.available ? _migrateEntry : null,
+      onDetachEntry: _local.available ? _detachEntry : null,
       editorEpoch: local ? _localEditorEpoch : 0,
       onCursorChanged: local ? null : _onEditorSelection,
     );
@@ -3427,7 +3545,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onUpdateMember,
     required this.onRemoveMember,
     this.onRestoreCheckpoint,
-    this.onMigrateToCloud,
+    this.onMigrateEntry,
+    this.onDetachEntry,
     this.onCursorChanged,
     this.editorEpoch = 0,
     super.key,
@@ -3574,9 +3693,13 @@ class WorkspaceView extends StatefulWidget {
   /// only — null elsewhere, which hides the menu item).
   final Future<void> Function()? onRestoreCheckpoint;
 
-  /// Migrate this local workspace up to the cloud (§6). Local mode only — null
-  /// elsewhere, which hides the menu item.
-  final Future<void> Function(Workspace workspace)? onMigrateToCloud;
+  /// Upload a LOCAL workspace row to the cloud (P3f §6.1). Null on web, which
+  /// hides the row action.
+  final Future<void> Function(WorkspaceEntry entry)? onMigrateEntry;
+
+  /// Detach a CLOUD workspace row into an independent local copy (P3f §6.2).
+  /// Null on web, which hides the row action.
+  final Future<void> Function(WorkspaceEntry entry)? onDetachEntry;
 
   /// Bumped to force the editor to remount fresh (e.g. after a rollback, so the
   /// restored content fully replaces the in-memory doc instead of reconciling).
@@ -3800,6 +3923,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           _importWorkspaceFile(notion: notion),
                       onImportFilesInto: _importFilesIntoWorkspace,
                       onImportFolderInto: _importFolderIntoWorkspace,
+                      onMigrate: widget.onMigrateEntry,
+                      onDetach: widget.onDetachEntry,
                     ),
                   ),
                   const SizedBox(width: 4),
@@ -4587,19 +4712,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               ),
                             ),
                           ],
-                          if (widget.onMigrateToCloud != null &&
-                              widget.selectedWorkspace != null) ...[
-                            const PopupMenuDivider(),
-                            const PopupMenuItem(
-                              value: 'migrate-cloud',
-                              child: ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.cloud_upload_outlined),
-                                title: Text('连接云端并迁移此工作区…'),
-                              ),
-                            ),
-                          ],
                         ],
                       ),
                       const SizedBox(width: 4),
@@ -5194,11 +5306,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           ),
         );
         if (ok == true) await restore();
-      case 'migrate-cloud':
-        final migrate = widget.onMigrateToCloud;
-        final ws = widget.selectedWorkspace;
-        if (migrate == null || ws == null) return;
-        await migrate(ws);
     }
   }
 
@@ -5433,6 +5540,8 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onImport,
     required this.onImportFilesInto,
     required this.onImportFolderInto,
+    required this.onMigrate,
+    required this.onDetach,
   });
 
   final List<WorkspaceEntry> entries;
@@ -5451,6 +5560,11 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(bool notion) onImport;
   final void Function(WorkspaceEntry entry) onImportFilesInto;
   final void Function(WorkspaceEntry entry) onImportFolderInto;
+
+  /// P3f row actions: upload a local row to the cloud / detach a cloud row to
+  /// a local copy. Null hides the item.
+  final void Function(WorkspaceEntry entry)? onMigrate;
+  final void Function(WorkspaceEntry entry)? onDetach;
 
   @override
   State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
@@ -5718,6 +5832,18 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 ],
                 child: const Text('Import'),
               ),
+              if (entry.isLocal && widget.onMigrate != null)
+                _wsAction(
+                  Icons.cloud_upload_outlined,
+                  '上云…',
+                  () => widget.onMigrate!(entry),
+                ),
+              if (!entry.isLocal && widget.onDetach != null)
+                _wsAction(
+                  Icons.computer_outlined,
+                  '转为本地副本…',
+                  () => widget.onDetach!(entry),
+                ),
               _wsAction(
                 Icons.delete_outline,
                 'Delete',

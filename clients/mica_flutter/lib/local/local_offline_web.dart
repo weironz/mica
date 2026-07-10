@@ -69,6 +69,12 @@ class LocalOffline {
 
   DocData? openCloudDocMirror(String docId) => null;
 
+  ({String workspaceId, int docs})? detachCloudWorkspace(
+    String serverUrl,
+    String cloudWorkspaceId,
+    String name,
+  ) => null;
+
   void purgeView(String viewId, String objectId) {}
 
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})

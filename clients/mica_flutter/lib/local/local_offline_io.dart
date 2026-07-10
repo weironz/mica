@@ -62,8 +62,19 @@ class LocalOffline {
   bool get available => true;
 
   /// Open the on-device store (under the per-user app data dir), initialising the
-  /// native bridge once. Idempotent across calls.
-  Future<void> open() async {
+  /// native bridge once. Idempotent AND single-flight — P3c starts the local and
+  /// cloud init chains concurrently, and the cloud one may lazily open the store
+  /// via [deviceClientId] while this is mid-flight; without single-flight both
+  /// would open the same SQLite file and one native handle would leak.
+  Future<void> open() {
+    if (_store != null) return Future.value();
+    return _opening ??= _openOnce().whenComplete(() => _opening = null);
+  }
+
+  Future<void>? _opening;
+
+  Future<void> _openOnce() async {
+    if (_store != null) return;
     if (!_frbReady) {
       try {
         await RustLib.init();
@@ -236,6 +247,81 @@ class LocalOffline {
   void purgeView(String viewId, String objectId) {
     _store?.purgeView(origin: 'local', id: viewId);
     _store?.deleteDoc(docId: objectId);
+  }
+
+  /// Detach a mirrored cloud workspace into a NEW independent local workspace
+  /// (P3f §6.2, the "换 id 版"): copies the workspace + view rows to origin
+  /// 'local' and every mirrored document to a FRESH doc id, so the local fork
+  /// shares nothing with the still-present cloud mirror (no session cross-talk,
+  /// no sync_cursor/doc_update ties — new ids never had any). Blobs are already
+  /// content-addressed in the shared CAS (zero-copy). Un-pushed outbox edits are
+  /// INCLUDED in the copy (loadDoc = base + replay(log)) and still push from
+  /// the mirror on the next connect — nothing is lost on either side. A doc
+  /// never opened online has no mirror: its page is created empty (name kept).
+  /// Returns the new local workspace id + copied doc count, or null if the
+  /// store isn't open / nothing to detach.
+  ({String workspaceId, int docs})? detachCloudWorkspace(
+    String serverUrl,
+    String cloudWorkspaceId,
+    String name,
+  ) {
+    final store = _store;
+    if (store == null) return null;
+    final views = [
+      for (final v in store.listViews(origin: serverUrl))
+        if (v.workspaceId == cloudWorkspaceId) v,
+    ];
+    final wsId = _id('ws');
+    store.saveWorkspace(
+      workspace: LocalWorkspace(
+        id: wsId,
+        name: name,
+        position: _nextLocalWorkspacePosition(),
+        origin: 'local',
+        role: 'owner',
+      ),
+    );
+    // Two passes: mint every view id first so parent links remap correctly
+    // regardless of tree order.
+    final viewIdMap = {for (final v in views) v.id: _id('view')};
+    var docs = 0;
+    for (final v in views) {
+      final doc = store.loadDoc(docId: v.objectId);
+      final newDocId = _id('doc');
+      if (doc != null) {
+        store.saveDoc(docId: newDocId, doc: doc);
+        docs++;
+      } else {
+        // Never mirrored — keep the page node with empty content.
+        store.saveDoc(
+          docId: newDocId,
+          doc: MicaDocument.fromMarkdown(markdown: ''),
+        );
+      }
+      store.saveView(
+        view: LocalView(
+          id: viewIdMap[v.id]!,
+          workspaceId: wsId,
+          parentId: v.parentId == null ? null : viewIdMap[v.parentId],
+          objectId: newDocId,
+          name: v.name,
+          position: v.position,
+          trashed: v.trashed,
+          origin: 'local',
+        ),
+      );
+    }
+    return (workspaceId: wsId, docs: docs);
+  }
+
+  /// Next zero-padded position after the last local workspace.
+  String _nextLocalWorkspacePosition() {
+    var max = 0;
+    for (final w in listWorkspaces()) {
+      final n = int.tryParse(w.position) ?? 0;
+      if (n > max) max = n;
+    }
+    return ((max + 10)).toString().padLeft(10, '0');
   }
 
   // ── documents ────────────────────────────────────────────────────────────
