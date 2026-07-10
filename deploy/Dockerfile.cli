@@ -3,7 +3,12 @@
 # schedule. Same binary users run by hand — `backup` is a default feature.
 #   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:vX.Y .
 
-FROM rust:1.96-slim AS build
+# Pin the builder to bookworm (glibc 2.36) to MATCH the debian:bookworm-slim
+# runtime below. Bare `rust:1.96-slim` tracks Debian stable (now trixie, glibc
+# 2.40); jiff/rustic then reference GLIBC_2.38/2.39 symbols the bookworm runtime
+# lacks, so the binary won't start ("GLIBC_2.38 not found"). Same-release build
+# and runtime keeps the binary's glibc floor ≤ what the runtime provides.
+FROM rust:1.96-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates

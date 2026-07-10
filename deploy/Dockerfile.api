@@ -1,7 +1,10 @@
 # Multi-stage build for the Mica API server.
 # Build: docker compose -f docker-compose.prod.yml build api
 
-FROM rust:1.96-slim AS build
+# Pin the builder to bookworm (glibc 2.36) to match the debian:bookworm-slim
+# runtime — bare `rust:1.96-slim` now tracks trixie (glibc 2.40), which would let
+# the binary pick up GLIBC_2.38+ symbols the runtime lacks. See Dockerfile.cli.
+FROM rust:1.96-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
