@@ -86,6 +86,15 @@ String inlineMermaidCss(String svg) {
       if (d.childElements.isEmpty) d.remove();
     }
 
+    // Materialize the theme's canvas colour. merman puts it in the root <svg>'s
+    // CSS `background-color` (e.g. `background-color:white`), but flutter_svg
+    // only paints SHAPES — it silently drops CSS backgrounds. Without this the
+    // raster is transparent, so the diagram is not self-contained: whatever the
+    // host paints behind the PNG becomes the area "around" the nodes (solid
+    // black on any dark surface). Emit that colour as an opaque <rect> covering
+    // the viewBox, inserted first so it paints behind everything.
+    _materializeBackground(doc.rootElement);
+
     // flutter_svg parses font-weight strictly and THROWS on the relative
     // keywords `bolder`/`lighter` (Mermaid's class/er themes use them). Map them
     // to absolute weights in the serialized output — in style decls and as
@@ -99,6 +108,53 @@ String inlineMermaidCss(String svg) {
   } catch (_) {
     return svg;
   }
+}
+
+/// Paint the root `<svg>`'s CSS `background-color` as an opaque background rect
+/// covering the viewBox (flutter_svg ignores CSS backgrounds). No-op when the
+/// colour is absent/transparent, so themes that intend a see-through canvas are
+/// respected.
+void _materializeBackground(XmlElement root) {
+  final bg = _parseDecls(root.getAttribute('style') ?? '')['background-color'];
+  if (bg == null) return;
+  final color = bg.trim();
+  if (color.isEmpty ||
+      color == 'transparent' ||
+      color == 'none' ||
+      color.startsWith('rgba(0, 0, 0, 0') ||
+      color.startsWith('rgba(0,0,0,0')) {
+    return;
+  }
+  // Cover the viewBox (handles a non-zero min-x/min-y); fall back to width/
+  // height for the rare renderer that omits a viewBox.
+  double x = 0, y = 0, w = 0, h = 0;
+  final vb = root.getAttribute('viewBox');
+  if (vb != null) {
+    final v =
+        _numRe.allMatches(vb).map((m) => double.parse(m.group(0)!)).toList();
+    if (v.length == 4) {
+      x = v[0];
+      y = v[1];
+      w = v[2];
+      h = v[3];
+    }
+  }
+  if (w <= 0 || h <= 0) {
+    w = double.tryParse(root.getAttribute('width') ?? '') ?? 0;
+    h = double.tryParse(root.getAttribute('height') ?? '') ?? 0;
+  }
+  if (w <= 0 || h <= 0) return;
+  String n(double v) => v.toStringAsFixed(3);
+  root.children.insert(
+    0,
+    XmlElement(XmlName('rect'), [
+      XmlAttribute(XmlName('x'), n(x)),
+      XmlAttribute(XmlName('y'), n(y)),
+      XmlAttribute(XmlName('width'), n(w)),
+      XmlAttribute(XmlName('height'), n(h)),
+      XmlAttribute(XmlName('fill'), color),
+    ]),
+  );
 }
 
 class _Rule {
