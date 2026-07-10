@@ -144,10 +144,11 @@ void advance({int? lastSyncedRid, int? pushedClock}); // → store.setSyncCursor
 - 丢失点(均已处理):①迁移**先追加后删 pref**(反了=丢在途)。②`appendOutbox` 在 push 前**同步**完成。
 - **对抗复审抓到高危丢数据(已修 e6a0ce9)**:原 ack 用 `max(cur, ackId)` 推 `pushed_clock`,但一条 push 可能被服务端回 `error`(非 ack,如 `push_update` 并发争用瞬时失败)→ clock 3 error、clock 4 ack → `pushed_clock` 跳到 4、outboxAfter(4) 永久漏 clock 3 = 静默分叉。「ack 顺序到→连续高水位」的假设漏了 push 可能回 error 打破连续。修:ack **只连续前缀推进**(`_ackedAhead` 存乱序 ack、只 `while remove(pushed+1)` 抬水位);新增 `case 'error'` 重推被拒 clock,`_pushRejects` 有界(仅连续进展清零,防高 clock 的 ack 让永久失败低 clock 死循环)。再复审(e3644a6):budget 耗尽 `_pushStalled` 熔断主动推送,止住永久拒推下 `_ackedAhead` 增长/重发风暴(编辑仍持久落 outbox、reconnect 重试)。测:`_FakeSyncServer` 加 rejectPushOnce/Always,瞬时拒推不丢 + 永久拒推有界+surfaced;9 集成测绿。
 
-**P2c — 重连对账 pull-then-push 走通(无损收敛)**
-- 落实 §1 顺序:`connect` 热重连先 `pull{since_rid=last_synced_rid}` 全量 catch-up,再 `outboxAfter` 推;远端 update 只进 base + `last_synced_rid`,不进 log。
-- 验证:**drive-the-flow**(真服务器 + 两副本):A、B 同文档各断网编辑 → 依次重连 → 断言两端 blocks 收敛且各自离线编辑都在;单副本「服务器离线期推进 + 本地离线编辑」重连不丢任一侧。
-- 丢失点:远端 update 误入 `doc_update` 会污染 `pushed_clock` 语义 → 断言 log 纯本地。
+**P2c — 重连对账 pull-then-push 走通(无损收敛)** ✅ **完成(commit 见 git log)**
+- §1 顺序在 P2b 已落地(`connect` 热重连先 `pull{since_rid}` → 再推 `outboxAfter`;远端 update 只进 base+`last_synced_rid`、不进 log 是结构性保证——`appendOutbox` 只被本地编辑调用)。P2c 是**验证**。
+- 验证:`cloud_sync_converge_test.dart` 自建 fold+relay 假服务器(真 FFI 折叠 push、分 rid、广播给其它副本)—— A、B 各断网编辑不同块 → 依次重连 → 断言两端收敛到 `{a:hi A, b:yo B}`(各自离线编辑都在,B 那侧即「服务器离线期推进(A)+ 本地离线编辑(B)」的单副本场景),且**各 store 的 `doc_update` 只含自己的编辑**(远端 update 经 `_applyRemote` 合并、绝不 `appendOutbox`)。-d windows 绿。
+- **测试教训**(纸面推不出,建两副本测才现形):①三个副本必须**共享同一份 base 字节**——每副本各自 `fromBlocksJson` 会给相同文本铸不同 yrs item id,diff 引用对方没有的 item → 永久 pending 不合并;②两「设备」必须 **client_id 相异**——同 id 下 A、B 的并发编辑撞同一 `(client_id, clock)`,yrs 当重复跳过。生产天然满足(单一 server base + 各设备独立 client_id)。
+- **顺带修的真产品缺口**:`_send` 原来 `sink.add` 无 try/catch —— 离线(socket refused/unreachable)时编辑→`_enqueue` 因 `_ready`(本地 seed 置的、非真连接)为真而尝试推送→`sink.add` 抛未捕获异常崩会话。加 try/catch 容错(帧丢弃安全,durable outbox 重连重推)。
 
 **P2d — 溶解 op 路由 + 放开离线编辑门**
 - `_applyEditorOperations` 统一走一个 local-first backend 的 `applyOps`(cloud 分支即 append-log,localOffline 分支即无 WS 配置);删 REST 兜底热路径依赖。

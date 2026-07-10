@@ -579,7 +579,14 @@ class CloudSyncSession {
   }
 
   void _send(Map<String, dynamic> message) {
-    _channel?.sink.add(jsonEncode(message));
+    try {
+      _channel?.sink.add(jsonEncode(message));
+    } catch (_) {
+      // The socket may be mid-drop / refused / not yet settled (e.g. an edit made
+      // while offline before the connection resolves). Dropping the frame is safe:
+      // the durable outbox re-pushes it on the next (re)connect. Never let a send
+      // failure crash the session.
+    }
   }
 
   void _onDone() {
