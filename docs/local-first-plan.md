@@ -82,7 +82,7 @@
 | **P1b-2′** | 页树进 store(local_view/workspace 加 origin 标记,镜像云页树)—— 替换 prefs hack,P3 地基 | ✅ 完成 |
 | P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ⏭️ 下一步 |
 | P2 | 离线编辑(append-log outbox 统一,重连 CRDT) | |
-| P3 | 溶解双模式为"工作区:本地/已连云"(双向,替代单向迁移)+ UX | |
+| P3 | 溶解双模式为"工作区:本地/已连云"(双向,替代单向迁移)+ UX。**地基提醒**(P1b-2′ 复审):`local_view`/`local_workspace` 主键仍是裸 `id`,本地行与云镜像共表,origin 只在 `WHERE` 过滤不在主键——`save_*` 的 `ON CONFLICT(id)` 理论上可跨 origin 撞键覆盖(当前两侧都 UUID 故碰撞可忽略)。P3 统一 schema 时把主键改 `(origin, id)` 复合键,隔离从"约定"升级为"约束"。 | |
 | P4 | props 字段级 CRDT、web IndexedDB(唯一明确暂缓) | |
 
 ### P1b-2′ 精确步骤(原子全栈迁移,一次提交)
