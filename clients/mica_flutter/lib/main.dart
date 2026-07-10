@@ -68,14 +68,15 @@ DateTime? jwtExpiry(String token) {
 }
 
 /// Which backend the client talks to.
-/// - [cloud]/[selfHosted]: online — a REST + WebSocket server reached by URL,
-///   authenticated with the normal email/password login.
+/// - [online]: a REST + WebSocket server reached by URL — Mica Cloud by default,
+///   or any self-hosted Mica server — authenticated with email/password login.
 /// - [localOffline]: on-device, no server (Phase 2 CRDT engine) — a fully local
 ///   workspace + page tree persisted in SQLite, edited offline (P2-M3).
-enum ServerMode { cloud, selfHosted, localOffline }
+enum ServerMode { online, localOffline }
 
-/// User's chosen backend, persisted in prefs. Cloud and self-hosted differ only
-/// in their URL — cloud is a fixed preset, self-hosted is user-entered.
+/// User's chosen backend, persisted in prefs. "Mica Cloud" is not a separate
+/// mode — it is just the default [url] (kMicaCloudUrl) for [ServerMode.online];
+/// self-hosting is the same mode pointed at a different URL.
 class ServerConfig {
   const ServerConfig({required this.mode, required this.url});
 
@@ -92,23 +93,25 @@ class ServerConfig {
   ServerConfig copyWith({ServerMode? mode, String? url}) =>
       ServerConfig(mode: mode ?? this.mode, url: url ?? this.url);
 
-  /// Load the saved config, or fall back to the build-time default (treated as
-  /// self-hosted) so existing dev setups keep working with no migration.
+  /// Load the saved config, migrating the legacy `cloud`/`self` modes into the
+  /// unified `online` mode (they only ever differed by URL). Falls back to the
+  /// build-time default so existing dev setups keep working.
   static ServerConfig load() {
     final url = loadPref('serverUrl') ?? '';
     switch (loadPref('serverMode')) {
-      case 'cloud':
-        return const ServerConfig(mode: ServerMode.cloud, url: kMicaCloudUrl);
       case 'local':
         return const ServerConfig(mode: ServerMode.localOffline, url: '');
-      case 'self':
+      case 'cloud': // legacy: the fixed Mica Cloud preset is now just a URL
+        return const ServerConfig(mode: ServerMode.online, url: kMicaCloudUrl);
+      case 'online':
+      case 'self': // legacy self-hosted → same online mode, keep its URL
         return ServerConfig(
-          mode: ServerMode.selfHosted,
+          mode: ServerMode.online,
           url: url.isEmpty ? ApiClient.defaultBaseUri().toString() : url,
         );
       default:
         return ServerConfig(
-          mode: ServerMode.selfHosted,
+          mode: ServerMode.online,
           url: ApiClient.defaultBaseUri().toString(),
         );
     }
@@ -116,8 +119,7 @@ class ServerConfig {
 
   void save() {
     savePref('serverMode', switch (mode) {
-      ServerMode.cloud => 'cloud',
-      ServerMode.selfHosted => 'self',
+      ServerMode.online => 'online',
       ServerMode.localOffline => 'local',
     });
     savePref('serverUrl', url);
@@ -301,9 +303,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// True when the configured backend is the local dev server (localhost).
+  /// True when the configured backend is a local dev server (localhost URL).
   bool _isLocalBackend() {
-    if (_serverConfig.mode != ServerMode.selfHosted) return false;
+    if (_serverConfig.mode == ServerMode.localOffline) return false;
     final host = _api.baseUri.host;
     return host == '127.0.0.1' || host == 'localhost' || host == '::1';
   }
@@ -5937,10 +5939,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late bool _showPageTitle = widget.showPageTitle;
   late bool _aiEnabled = widget.aiEnabled;
 
-  // Server connection (cloud / self-hosted / local-offline).
+  // Server connection (online remote server / local-offline).
   late ServerMode _serverMode = widget.serverConfig.mode;
   late final _serverUrl = TextEditingController(
-    text: widget.serverConfig.mode == ServerMode.cloud
+    text: widget.serverConfig.url.isEmpty
         ? kMicaCloudUrl
         : widget.serverConfig.url,
   );
@@ -6616,13 +6618,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _serverMode = mode;
       _serverMsg = null;
-      if (mode == ServerMode.cloud) {
+      // Pre-fill Mica Cloud when switching to the online server with a blank URL.
+      if (mode == ServerMode.online && _serverUrl.text.trim().isEmpty) {
         _serverUrl.text = kMicaCloudUrl;
-      } else if (mode == ServerMode.selfHosted) {
-        final cur = _serverUrl.text.trim();
-        if (cur.isEmpty || cur == kMicaCloudUrl) {
-          _serverUrl.text = ApiClient.defaultBaseUri().toString();
-        }
       }
     });
   }
@@ -6712,16 +6710,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _sectionTitle(context, Icons.dns_outlined, 'Server', const Color(0xFF2563EB)),
     const SizedBox(height: 8),
     _serverModeTile(
-      ServerMode.cloud,
+      ServerMode.online,
       Icons.cloud_outlined,
-      'Mica Cloud',
-      'Connect to the hosted Mica service.',
-    ),
-    _serverModeTile(
-      ServerMode.selfHosted,
-      Icons.dns_outlined,
-      'Self-hosted',
-      'Connect to your own Mica server by URL.',
+      'Remote server',
+      'Mica Cloud, or your own self-hosted Mica server — by URL.',
     ),
     _serverModeTile(
       ServerMode.localOffline,
@@ -6730,18 +6722,28 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       'Work entirely on this device — no account, no network. Notes are stored '
           'locally and edited offline.',
     ),
-    if (_serverMode != ServerMode.localOffline) ...[
+    if (_serverMode == ServerMode.online) ...[
       const SizedBox(height: 12),
       TextField(
         controller: _serverUrl,
-        enabled: _serverMode == ServerMode.selfHosted && !_serverSaving,
+        enabled: !_serverSaving,
         keyboardType: TextInputType.url,
         autocorrect: false,
         decoration: const InputDecoration(
           labelText: 'Server URL',
-          hintText: 'https://mica.example.com',
+          hintText: 'https://mica.cloudcele.com',
           prefixIcon: Icon(Icons.link),
           border: OutlineInputBorder(),
+        ),
+      ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: _serverSaving
+              ? null
+              : () => setState(() => _serverUrl.text = kMicaCloudUrl),
+          icon: const Icon(Icons.cloud_outlined, size: 16),
+          label: const Text('Use Mica Cloud'),
         ),
       ),
     ],
@@ -6786,9 +6788,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       if (mounted) Navigator.of(context).pop();
       return;
     }
-    final url = _serverMode == ServerMode.cloud
-        ? kMicaCloudUrl
-        : _serverUrl.text.trim();
+    final url = _serverUrl.text.trim();
     final parsed = Uri.tryParse(url);
     if (url.isEmpty ||
         parsed == null ||
