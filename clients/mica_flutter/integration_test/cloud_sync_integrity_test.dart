@@ -16,7 +16,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:mica_flutter/cloud/cloud_sync.dart';
+import 'package:mica_flutter/cloud/store_cloud_doc_store.dart';
 import 'package:mica_flutter/src/rust/api/document.dart';
+import 'package:mica_flutter/src/rust/api/store.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
@@ -183,6 +185,112 @@ void main() {
     session.dispose();
     await server.stop();
   });
+
+  // ── P2b: cloud outbox on the on-device append-log (desktop persistence) ──────
+
+  test('P2b: a cloud edit lands in the append-log outbox; ack advances pushed_clock',
+      () async {
+    final dir = Directory.systemTemp.createTempSync('mica_p2b');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+    final adapter = StoreCloudDocStore(store, 'doc-p2b');
+    final server = await _FakeSyncServer.start(_buildBase());
+
+    var ready = false;
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (_) {},
+      persistence: adapter, // desktop → append-log outbox, not the prefs queue
+    );
+    session.connect();
+    await _until(() => ready, reason: 'cold bootstrap');
+
+    // Real user path: editor op → local yrs diff → appended to the durable outbox.
+    session.applyLocalOps([
+      {'type': 'update_block', 'block_id': 'a', 'text': 'hi there'},
+    ]);
+
+    await _until(() => server.pushed.isNotEmpty, reason: 'edit pushed');
+    expect(server.pushed.first.id, '1', reason: 'push id is the outbox clock');
+    // Durably in the append-log (survives a crash before ack).
+    expect(store.updatesAfter(docId: 'doc-p2b', after: 0).length, 1);
+
+    // Acked (server acks by id) → pushed_clock advances → outbox drains.
+    final drained = await session.drainOutbox(timeout: const Duration(seconds: 5));
+    expect(drained, isTrue);
+    expect(store.syncCursor(docId: 'doc-p2b').pushedClock, 1,
+        reason: 'ack advanced pushed_clock');
+    expect(store.updatesAfter(docId: 'doc-p2b', after: 1), isEmpty,
+        reason: 'nothing left in the outbox');
+    // The acked entry stays in the log until P2e trims it — the outbox query
+    // (updates_after(pushed_clock)) already excludes it.
+    expect(store.updatesAfter(docId: 'doc-p2b', after: 0).length, 1);
+
+    session.dispose();
+    await server.stop();
+    _bestEffortDelete(dir);
+  });
+
+  test('P2b: an unacked cloud edit survives a session restart and re-pushes',
+      () async {
+    final dir = Directory.systemTemp.createTempSync('mica_p2b2');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+
+    // Session 1 against a server that records but never acks — the edit stays
+    // un-pushed in the durable outbox, exactly the crash-then-restart state.
+    final server1 = await _FakeSyncServer.start(_buildBase(), ackPushes: false);
+    var ready1 = false;
+    final s1 = CloudSyncSession(
+      uri: server1.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready1 = true,
+      onRemoteBlocks: (_) {},
+      persistence: StoreCloudDocStore(store, 'doc-r'),
+    );
+    s1.connect();
+    await _until(() => ready1, reason: 'bootstrap 1');
+    s1.applyLocalOps([
+      {'type': 'update_block', 'block_id': 'a', 'text': 'edited offline'},
+    ]);
+    await _until(() => server1.pushed.isNotEmpty, reason: 'edit pushed (unacked)');
+    expect(store.updatesAfter(docId: 'doc-r', after: 0).length, 1,
+        reason: 'edit durable in the outbox despite no ack');
+    s1.dispose();
+    await server1.stop();
+
+    // "Restart": a fresh session + adapter over the SAME store; a fresh server
+    // that acks. The recovered outbox entry must be re-pushed and then drain.
+    final server2 = await _FakeSyncServer.start(_buildBase());
+    var ready2 = false;
+    final s2 = CloudSyncSession(
+      uri: server2.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready2 = true,
+      onRemoteBlocks: (_) {},
+      persistence: StoreCloudDocStore(store, 'doc-r'),
+    );
+    s2.connect();
+    await _until(() => ready2, reason: 'bootstrap 2 (seeds from the local mirror)');
+    await _until(() => server2.pushed.isNotEmpty, reason: 're-pushed after restart');
+    expect(server2.pushed.first.id, '1', reason: 'same outbox clock re-sent');
+
+    final drained = await s2.drainOutbox(timeout: const Duration(seconds: 5));
+    expect(drained, isTrue);
+    expect(store.syncCursor(docId: 'doc-r').pushedClock, 1);
+
+    s2.dispose();
+    await server2.stop();
+    _bestEffortDelete(dir);
+  });
+}
+
+void _bestEffortDelete(Directory dir) {
+  try {
+    dir.deleteSync(recursive: true);
+  } catch (_) {
+    // ignore: locked db file on Windows
+  }
 }
 
 /// A minimal valid yrs base (folded document state) built through the FFI.

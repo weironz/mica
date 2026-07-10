@@ -138,10 +138,11 @@ void advance({int? lastSyncedRid, int? pushedClock}); // → store.setSyncCursor
 - 验证:Rust 单测(追加→`updates_after`→`trim` 保留 `> pushed_clock`、幂等 replay);FFI 集成测(`frb_store_test.dart` 风格,-d windows)往返。
 - 丢失点:无(纯新增,无人调用)。
 
-**P2b — 桌面云 outbox 切 append-log(仍在线编辑)**
-- `CloudSyncSession` persistence 分支:编辑→`appendOutbox`+push;ack→`advance(pushedClock,lastSyncedRid)`;重连→`outboxAfter`。prefs `cloudUnacked` 一次性迁移 + 删除(桌面);web 保留 prefs。
-- 验证:FFI 集成——建会话(无 socket)喂编辑→断言 `updatesAfter(0)` 有条目;模拟 ack→`pushed_clock` 推进、`outboxAfter(pushed_clock)` 空;模拟 push 后不 ack「重启」→重发同条。单元套件保持绿(web 路径不变)。
-- 丢失点:①迁移必须**先追加后删 pref**(顺序反了=丢在途编辑)。②`append_update` 必须在 push 前**同步**完成。
+**P2b — 桌面云 outbox 切 append-log(仍在线编辑)** ✅ **完成(commit 见 git log)**
+- `CloudSyncSession` persistence 分支:编辑→`appendOutbox`(同步)+push;ack→`advance(pushedClock=max, lastSyncedRid=max)`(单调);重连→`_flushUnacked` 重发 `outboxAfter(pushed_clock)`(连内 `_sentThroughClock` 跳过在途);`drainOutbox` 判据 `_outboxEmpty`;`_restoreUnackedOnce` no-op。prefs `cloudUnacked` 在 `_setupCloudYrs` 一次性迁移(先追加后删)。web(`persistence==null`)**逐字保留** prefs 路径,`cloud_sync_web.dart` 未动。
+- 验证:FFI 集成(-d windows,复用 `_FakeSyncServer`)—— ①编辑落 outbox→push→ack→`pushed_clock` 推进、outbox 排空;②未 ack 编辑跨会话重启仍在 outbox、重连按同 clock 重推。既有 B1/C1/B2/reconnect 无回归;单元 232 绿(web 不变)。
+- 丢失点(均已处理):①迁移**先追加后删 pref**(反了=丢在途)。②`appendOutbox` 在 push 前**同步**完成。
+- 正确性依据:server WS 循环顺序处理(`recv→handle.await→ack`)→ ack 顺序回来、`pushed_clock` 连续高水位;advance 取 max 兜底。
 
 **P2c — 重连对账 pull-then-push 走通(无损收敛)**
 - 落实 §1 顺序:`connect` 热重连先 `pull{since_rid=last_synced_rid}` 全量 catch-up,再 `outboxAfter` 推;远端 update 只进 base + `last_synced_rid`,不进 log。

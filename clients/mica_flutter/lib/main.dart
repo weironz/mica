@@ -569,6 +569,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // C1: unacked local diffs persist per-document, so a crash / hard close
     // recovers edits the server never acked. Restored here; re-pushed on connect.
     final unackedKey = 'cloudUnacked:$documentId';
+    // Local-first (Phase 1): mirror this cloud doc to the on-device store so it
+    // reads offline across a restart. Null on web / if the store isn't open →
+    // online-only, as before. deviceClientId() above opened the store.
+    final persistence = _local.cloudDocStore(documentId);
+    if (persistence != null) {
+      // P2b: the append-log is now the durable outbox. One-time migration — fold
+      // any legacy prefs `cloudUnacked` queue into it (append THEN delete; the
+      // reverse order would drop in-flight edits), so unpushed edits from before
+      // P2b survive and get pushed on connect.
+      final legacy = _loadUnacked(unackedKey);
+      if (legacy.isNotEmpty) {
+        for (final diff in legacy) {
+          persistence.appendOutbox(diff);
+        }
+        savePref(unackedKey, ''); // the log owns the outbox now
+      }
+    }
     final yrs = CloudSyncSession(
       uri: documentSocketUri(
         _api.baseUri,
@@ -588,12 +605,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Reaching the server means we're back online — leave the P1c offline-nav
       // fallback (refetch the authoritative workspace list / real roles).
       onServerConnected: _recoverOnlineNav,
-      restoreUnacked: _loadUnacked(unackedKey),
-      onPersistUnacked: (unacked) => _saveUnacked(unackedKey, unacked),
-      // Local-first (Phase 1): mirror this cloud doc to the on-device store so it
-      // reads offline across a restart. Null on web / if the store isn't open →
-      // online-only, as before. deviceClientId() above opened the store.
-      persistence: _local.cloudDocStore(documentId),
+      // Desktop's durable outbox is the append-log (persistence); web / no store
+      // keeps the in-memory queue + prefs crash-recovery (C1).
+      restoreUnacked: persistence == null ? _loadUnacked(unackedKey) : null,
+      onPersistUnacked: persistence == null
+          ? (unacked) => _saveUnacked(unackedKey, unacked)
+          : null,
+      persistence: persistence,
     );
     _cloudSession = yrs;
     yrs.connect();

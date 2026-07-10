@@ -118,6 +118,10 @@ class CloudSyncSession {
   /// outbox (which couldn't tell a specific diff apart from its ack).
   final List<_Pending> _unacked = [];
   int _pushSeq = 0;
+  /// Append-log path (`persistence != null`): the highest outbox `clock` pushed
+  /// on the current WS connection, so a live re-flush skips still-in-flight diffs
+  /// (the append-log has no per-entry `sent` flag). Reset on each (re)connect.
+  int _sentThroughClock = 0;
   bool _restored = false;
   Timer? _persistTimer;
 
@@ -129,6 +133,16 @@ class CloudSyncSession {
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
+
+  /// Durable-outbox mode: on desktop the on-device store's append-log is the
+  /// outbox (survives restart/crash), replacing the in-memory queue + prefs used
+  /// on web / when no store is available.
+  bool get _useAppendLog => persistence != null;
+
+  /// True when nothing local is still waiting for a server ack.
+  bool get _outboxEmpty => _useAppendLog
+      ? persistence!.outboxAfter(persistence!.cursor().pushedClock).isEmpty
+      : _unacked.isEmpty;
 
   /// Resolves once the session has bootstrapped (cold start complete).
   Future<void> get ready => _readyCompleter.future;
@@ -146,10 +160,10 @@ class CloudSyncSession {
     final deadline = DateTime.now().add(timeout);
     while (!_disposed && DateTime.now().isBefore(deadline)) {
       if (_channel != null && _ready) _flushUnacked();
-      if (_unacked.isEmpty) return true;
+      if (_outboxEmpty) return true;
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
-    return _unacked.isEmpty;
+    return _outboxEmpty;
   }
 
   /// The full document as a flat block list (tree order) — for callers that
@@ -181,6 +195,9 @@ class CloudSyncSession {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _sub?.cancel();
+    // New connection: nothing has been (re)sent on it yet, so a resendAll below
+    // pushes the whole un-acked outbox afresh.
+    _sentThroughClock = 0;
     _restoreUnackedOnce();
     // Local-first: render the persisted replica immediately (offline read),
     // BEFORE the socket — so a cold start with no network still shows the doc.
@@ -210,9 +227,12 @@ class CloudSyncSession {
   }
 
   /// Seed the unacked queue from persisted state exactly once (crash recovery).
+  /// No-op in append-log mode — the on-device log IS the durable outbox, so
+  /// there's nothing to restore from the (unused) prefs queue.
   void _restoreUnackedOnce() {
     if (_restored) return;
     _restored = true;
+    if (_useAppendLog) return;
     final restore = restoreUnacked;
     if (restore == null || restore.isEmpty) return;
     for (final bytes in restore) {
@@ -339,12 +359,27 @@ class CloudSyncSession {
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
       case 'sync.ack':
         final ackId = m['ack_id'];
-        if (ackId is String) {
+        final rid = (m['rid'] as num?)?.toInt();
+        if (_useAppendLog) {
+          // The ack id is the pushed diff's monotonic clock. Advance pushed_clock
+          // (max — never regress) so it drops out of `outboxAfter(pushed_clock)`.
+          // In-order acks (server processes pushes sequentially) keep this a
+          // contiguous high-water. The acked entries stay in the log until P2e
+          // trims them; the outbox query already excludes them.
+          final clock = ackId is String ? int.tryParse(ackId) : null;
+          if (clock != null) {
+            final cur = persistence!.cursor();
+            persistence!.advance(
+              pushedClock: clock > cur.pushedClock ? clock : cur.pushedClock,
+              lastSyncedRid:
+                  (rid != null && rid > cur.lastSyncedRid) ? rid : cur.lastSyncedRid,
+            );
+          }
+        } else if (ackId is String) {
           final before = _unacked.length;
           _unacked.removeWhere((p) => p.id == ackId);
           if (_unacked.length != before) _persistSoon();
         }
-        final rid = (m['rid'] as num?)?.toInt();
         if (rid != null && rid > _cursor) {
           _cursor = rid;
           _saveLocalSoon(); // persist the cursor our own acked edit advanced
@@ -401,8 +436,19 @@ class CloudSyncSession {
     _enqueue(diff);
   }
 
-  /// Queue a diff as unacked, persist the queue, and send it if we're connected.
+  /// Persist a local diff to the outbox and send it if we're connected.
   void _enqueue(Uint8List diff) {
+    if (_useAppendLog) {
+      // Durable append (survives restart/crash); its monotonic `clock` is the
+      // push id the server echoes in `sync.ack`.
+      final clock = persistence!.appendOutbox(diff);
+      _saveLocalSoon(); // base snapshot write-through for offline read
+      if (_channel != null && _ready) {
+        _sendPushRaw(clock.toString(), diff);
+        _sentThroughClock = clock;
+      }
+      return;
+    }
     final p = _Pending('${_pushSeq++}', diff);
     _unacked.add(p);
     _persistSoon();
@@ -410,11 +456,23 @@ class CloudSyncSession {
     if (_channel != null && _ready) _sendPush(p);
   }
 
-  /// Push unacked diffs. [resendAll] re-sends everything (after a (re)connect,
-  /// where in-flight pushes may have been lost); otherwise only the not-yet-sent
-  /// ones go out, so a live drain doesn't spam duplicates.
+  /// Push un-acked diffs. [resendAll] re-sends the whole outbox (after a
+  /// (re)connect, where in-flight pushes may have been lost); otherwise only the
+  /// not-yet-sent ones go out, so a live drain doesn't spam duplicates.
   void _flushUnacked({bool resendAll = false}) {
     if (_channel == null || !_ready) return;
+    if (_useAppendLog) {
+      // The un-pushed outbox is `clock > pushed_clock`; within a connection,
+      // skip what we already sent (> _sentThroughClock). Idempotent regardless —
+      // the server folds duplicate updates.
+      final pushed = persistence!.cursor().pushedClock;
+      final floor = resendAll || pushed > _sentThroughClock ? pushed : _sentThroughClock;
+      for (final e in persistence!.outboxAfter(floor)) {
+        _sendPushRaw(e.clock.toString(), e.bytes);
+        if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;
+      }
+      return;
+    }
     for (final p in _unacked) {
       if (resendAll || !p.sent) _sendPush(p);
     }
@@ -422,10 +480,14 @@ class CloudSyncSession {
 
   void _sendPush(_Pending p) {
     p.sent = true;
+    _sendPushRaw(p.id, p.bytes);
+  }
+
+  void _sendPushRaw(String id, Uint8List bytes) {
     _send({
       'type': 'sync.push',
-      'id': p.id,
-      'payload': {'update': base64.encode(p.bytes)},
+      'id': id,
+      'payload': {'update': base64.encode(bytes)},
     });
   }
 
