@@ -67,4 +67,11 @@ abstract class CloudDocStore {
   /// Fold base + logs into a fresh base snapshot and clear the folded rows
   /// (the un-pushed outbox tail survives). Safe no-op if nothing is stored.
   void compact();
+
+  /// Release any per-session resources when the owning cloud session is
+  /// disposed. Default no-op: the desktop store wraps a shared, longer-lived
+  /// `MicaStore`. The web store overrides this to free its single-writer Web
+  /// Lock + close its IndexedDB connection so a later same-doc session (or
+  /// another tab) can take the writable mirror.
+  void dispose() {}
 }

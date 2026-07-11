@@ -586,6 +586,77 @@ mod tests {
     assert_eq!(event["payload"]["operations"], json!([]));
   }
 
+  // P4-3: the sv glue between the WS layer and sync::diff_from_base. The
+  // reconciliation math itself is covered in app-core; here we pin the frame
+  // shape + fallback decisions the client contract depends on.
+  #[test]
+  fn client_sv_decodes_base64_and_rejects_garbage() {
+    use base64::Engine;
+    let sv = STANDARD.encode([1u8, 2, 3]);
+    assert_eq!(
+      client_sv(&json!({ "sv": sv })),
+      Some(vec![1u8, 2, 3])
+    );
+    // Absent / non-string / non-base64 → None (full-base path).
+    assert_eq!(client_sv(&json!({})), None);
+    assert_eq!(client_sv(&json!({ "sv": 5 })), None);
+    assert_eq!(client_sv(&json!({ "sv": "!!!not base64!!!" })), None);
+  }
+
+  #[test]
+  fn base_message_sends_delta_only_when_sv_yields_one() {
+    use mica_core::{Block, MicaDoc};
+    let doc = MicaDoc::from_blocks(
+      "r",
+      &[
+        Block::new("r", "page").with_children(vec!["a".into()]),
+        Block::new("a", "paragraph").with_text("hello world"),
+      ],
+    );
+    let base = sync::YrsBase {
+      state: doc.encode_state(),
+      state_vector: doc.state_vector(),
+      base_rid: 7,
+    };
+    let doc_id = Uuid::from_u128(1);
+
+    // No sv → full base, delta=false, base bytes are the full state.
+    let full: Value =
+      serde_json::from_str(&base_message(&base, None, Some("c1"), doc_id)).unwrap();
+    assert_eq!(full["type"], "sync.base");
+    assert_eq!(full["delta"], false);
+    assert_eq!(full["base_rid"], 7);
+    assert_eq!(full["ack_id"], "c1");
+    let full_bytes = STANDARD.decode(full["base"].as_str().unwrap()).unwrap();
+    assert_eq!(full_bytes, base.state);
+
+    // A brand-new client's empty sv → the diff equals the full state (nothing to
+    // trim), delta=true. A warm client that already holds the state → a strictly
+    // smaller diff. Either way the client applies it as an ordinary yrs update.
+    let empty_sv = MicaDoc::from_blocks("r", &[]).state_vector();
+    let delta: Value =
+      serde_json::from_str(&base_message(&base, Some(&empty_sv), None, doc_id)).unwrap();
+    assert_eq!(delta["delta"], true);
+    let delta_bytes = STANDARD.decode(delta["base"].as_str().unwrap()).unwrap();
+    let mut applied = MicaDoc::from_update(&empty_sv).unwrap_or_else(|_| MicaDoc::from_blocks("r", &[]));
+    applied.apply_update(&delta_bytes).unwrap();
+    assert_eq!(applied.to_blocks(), doc.to_blocks());
+
+    // A warm client that already has everything → the diff is smaller than the
+    // full base (the P4-3 win).
+    let warm_sv = base.state_vector.clone();
+    let warm: Value =
+      serde_json::from_str(&base_message(&base, Some(&warm_sv), None, doc_id)).unwrap();
+    let warm_bytes = STANDARD.decode(warm["base"].as_str().unwrap()).unwrap();
+    assert!(warm_bytes.len() < base.state.len());
+
+    // Garbage sv → diff_from_base returns None → full-base fallback (delta=false).
+    let bad: Value =
+      serde_json::from_str(&base_message(&base, Some(b"not a state vector"), None, doc_id))
+        .unwrap();
+    assert_eq!(bad["delta"], false);
+  }
+
   #[test]
   fn token_prefers_authorization_header() {
     let mut headers = HeaderMap::new();

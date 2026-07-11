@@ -596,10 +596,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // IndexedDB is unavailable → online-only, as before).
     var persistence = _local.cloudDocStore(documentId);
     persistence ??= await openWebDocStore(_cloudOrigin, documentId);
-    // The selection may have moved while the browser store opened.
+    // The selection may have moved while the browser store opened. If it did,
+    // dispose the store we just opened — on web it holds a single-writer Web
+    // Lock that would otherwise leak (orphaned, never disposed → that doc can
+    // never take the writable mirror again this page load).
     if (!mounted ||
         _selectedBootstrap?.document.id != documentId ||
         _sync?.documentId != documentId) {
+      persistence?.dispose();
       return;
     }
     if (persistence != null) {

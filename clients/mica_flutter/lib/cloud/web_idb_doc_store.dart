@@ -28,6 +28,20 @@ import 'cloud_doc_store.dart';
 @JS('indexedDB')
 external JSObject? get _jsIndexedDb;
 
+/// `navigator.locks` (Web Locks API) — used to enforce ONE writable store per
+/// (origin, doc) across all tabs. Null on the rare browser without it (then we
+/// fall back to best-effort, same as before this guard existed).
+@JS('navigator.locks')
+external JSObject? get _jsLockManager;
+
+extension type _LockManager(JSObject _) implements JSObject {
+  external JSPromise<JSAny?> request(
+    String name,
+    JSObject options,
+    JSFunction callback,
+  );
+}
+
 extension type _IdbFactory(JSObject _) implements JSObject {
   external _IdbRequest open(String name, int version);
   external _IdbRequest deleteDatabase(String name);
@@ -109,7 +123,7 @@ Uint8List _yjsReplay(Uint8List base, List<Uint8List> updates) {
 }
 
 class WebIdbDocStore implements CloudDocStore {
-  WebIdbDocStore._(this._db, this._key, this._replay);
+  WebIdbDocStore._(this._db, this._key, this._replay, this._releaseLock);
 
   final _IdbDatabase _db;
 
@@ -118,6 +132,10 @@ class WebIdbDocStore implements CloudDocStore {
   final String _key;
 
   final WebDocReplay _replay;
+
+  /// Completes to release this store's Web Lock (see [open]); null when locks
+  /// are unavailable. [dispose] fires it so a later same-doc store can acquire.
+  final Completer<void>? _releaseLock;
 
   static const _dbName = 'mica-localfirst';
   static const _storeNames = ['base', 'outbox', 'remote', 'cursor'];
@@ -142,6 +160,17 @@ class WebIdbDocStore implements CloudDocStore {
   /// Open (creating/upgrading if needed) the browser store and hydrate this
   /// doc's rows. Returns null when IndexedDB is unavailable (private mode on
   /// some browsers) — the session then runs online-only, exactly as before.
+  ///
+  /// SINGLE-WRITER: acquires a Web Lock on the (origin, doc) so only ONE tab
+  /// holds a writable mirror at a time. The desktop store is single-process by
+  /// construction; the browser is not — two tabs each with a hydrated in-memory
+  /// copy would blind-overwrite the whole `rows` record and silently drop the
+  /// other's un-pushed outbox (the "outbox never silently dropped" P2
+  /// invariant). A second tab fails to acquire → returns null → that tab runs
+  /// online-only (its edits still push live; nothing to lose), exactly the
+  /// private-mode fallback. [dispose] releases the lock. (Same single-writer
+  /// discipline AFFiNE enforces via SharedWorker.)
+  ///
   /// [replay]/[dbName] are test seams (fake fold fn, throwaway database).
   static Future<WebIdbDocStore?> open(
     String origin,
@@ -149,16 +178,49 @@ class WebIdbDocStore implements CloudDocStore {
     WebDocReplay? replay,
     String dbName = _dbName,
   }) async {
+    final key = '$origin|$docId';
+    Completer<void>? release;
     try {
+      release = await _acquireLock('$dbName|$key');
+      if (release == null) return null; // another tab owns the writable mirror
       final db = await _openDb(dbName, retryOnMissingStores: true);
-      if (db == null) return null;
+      if (db == null) {
+        release.complete();
+        return null;
+      }
       final store =
-          WebIdbDocStore._(db, '$origin|$docId', replay ?? _yjsReplay);
+          WebIdbDocStore._(db, key, replay ?? _yjsReplay, release);
       await store._hydrate();
       return store;
     } catch (_) {
+      release?.complete(); // never strand the lock on a failed open
       return null;
     }
+  }
+
+  /// Request the (origin, doc) Web Lock, held until the returned completer
+  /// fires. Returns null when the lock is already held elsewhere (`ifAvailable`
+  /// → the browser calls back with `null`). When the Web Locks API is absent,
+  /// returns a dummy completer (best-effort, pre-guard behavior) rather than
+  /// blocking local-first entirely.
+  static Future<Completer<void>?> _acquireLock(String name) {
+    final mgr = _jsLockManager;
+    if (mgr == null) return Future.value(Completer<void>());
+    final granted = Completer<Completer<void>?>();
+    final held = Completer<void>();
+    final callback = (JSAny? lock) {
+      if (lock == null) {
+        if (!granted.isCompleted) granted.complete(null); // not available
+        return null;
+      }
+      if (!granted.isCompleted) granted.complete(held);
+      return held.future.toJS; // hold the lock until `held` completes
+    }.toJS;
+    final options = {'ifAvailable': true}.jsify() as JSObject;
+    // Fire-and-forget: the promise resolves when the lock is released; we track
+    // grant via `granted`, release via the returned completer.
+    _LockManager(mgr).request(name, options, callback);
+    return granted.future;
   }
 
   static Future<_IdbDatabase?> _openDb(
@@ -269,16 +331,32 @@ class WebIdbDocStore implements CloudDocStore {
   // update: IndexedDB keys can't express the desktop's composite PK cheaply,
   // and the whole set is already in memory — writing the doc's current list is
   // simpler and atomic per store. Sizes stay bounded by compaction.
+  //
+  // Writes are FIFO-serialized on [_tail], so the on-disk state is always a
+  // prefix of the operation sequence. Each op that advances the cursor writes
+  // the cursor in the SAME transaction as the data that justifies it
+  // (appendRemote(Batch)/save co-write cursor + rows atomically; standalone
+  // `advance` only moves to rids whose data an earlier queued write already
+  // persisted) — so the cursor can never point past on-disk data (P4-1
+  // invariant), even mid-stream. The one hole would be a queued write that
+  // executes AFTER an earlier one failed: the earlier failure rolls its whole
+  // transaction back (IDB atomicity), but a later already-queued write would
+  // still run and could persist a cursor whose data just rolled back. So once
+  // any write fails we FREEZE — every already-queued write becomes a no-op and
+  // [_broken] blocks new ones. The mirror then sits at the last fully
+  // consistent snapshot (safe: the server is authoritative; reconnect re-pulls
+  // the delta), rather than risking a torn cursor-ahead-of-data state.
 
   void _mirror(void Function(_IdbTransaction txn) write) {
     if (_broken) return;
     _tail = _tail.then((_) async {
+      if (_broken) return; // an earlier queued write failed → freeze consistently
       final txn = _db.transaction(_jsStoreNames, 'readwrite');
       final done = _completed(txn);
       write(txn);
       await done;
     }).catchError((_) {
-      _broken = true; // further appends report failure → session self-heals
+      _broken = true; // freeze + further appends report failure → session self-heals
     });
   }
 
@@ -307,13 +385,20 @@ class WebIdbDocStore implements CloudDocStore {
 
   /// Replay base + remote log + local log into final state bytes — the web
   /// mirror of the desktop's `load_doc` (yjs updates commute + are idempotent).
+  /// A corrupt base makes the yjs replay THROW; swallow it into null so a bad
+  /// mirror reads as "never mirrored" (the desktop contract — its FFI load
+  /// returns null) instead of crashing the session's connect()/compact().
   Uint8List? _replayedState() {
     final base = _base;
     if (base == null) return null;
-    return _replay(base, [
-      for (final e in _remote) e.bytes,
-      for (final e in _outbox) e.bytes,
-    ]);
+    try {
+      return _replay(base, [
+        for (final e in _remote) e.bytes,
+        for (final e in _outbox) e.bytes,
+      ]);
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── CloudDocStore ────────────────────────────────────────────────────────
@@ -426,4 +511,30 @@ class WebIdbDocStore implements CloudDocStore {
 
   /// Await the write-behind mirror (tests / graceful teardown).
   Future<void> flush() => _tail;
+
+  bool _disposed = false;
+
+  /// Release the single-writer Web Lock and close the IDB connection.
+  /// Idempotent. Wired to the cloud session's dispose; the desktop store's
+  /// [dispose] is a no-op (its MicaStore is shared and outlives any session).
+  ///
+  /// The lock is freed PROMPTLY (not behind [_tail]) so the same tab rebuilding
+  /// a session for this doc — e.g. the B3 sync-retry — can immediately reacquire
+  /// the writable mirror instead of falling back to online-only. Any queued
+  /// write-behind transactions still complete against the open connection; the
+  /// connection is closed once they drain. A new owner that starts writing in
+  /// the gap is safe: IndexedDB serializes transactions across connections, and
+  /// a disposing store's last writes are best-effort (its replacement rehydrates
+  /// from whatever durably landed).
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _releaseLock?.complete();
+    _tail.whenComplete(() {
+      try {
+        _db.close();
+      } catch (_) {}
+    });
+  }
 }

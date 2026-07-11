@@ -511,6 +511,67 @@ void main() {
     await server.stop();
     _bestEffortDelete(dir);
   });
+
+  test('review: a warm re-bootstrap base is merged even when a broadcast raced the cursor past base_rid',
+      () async {
+    // Red-line #1 regression. A single sync.update can advance _cursor past a
+    // rid whose content isn't fully live (yrs stores missing-dep updates as
+    // pending, returns Ok). If that broadcast wins the server's select! race
+    // ahead of the pull reply on reconnect, the follow-up prune re-bootstrap
+    // sync.base(base_rid <= _cursor) must STILL be merged — gating it on
+    // baseRid > _cursor drops the pruned range permanently.
+    final base0 = _buildBase(); // {a: "hi"}, served as rid 1
+
+    // A racing peer update (rid 5) that only edits a's TEXT — standalone-
+    // applicable, advances the client cursor to 5 (> the base_rid=2 below).
+    final peerA =
+        MicaDocument.fromStateWithClientId(bytes: base0, clientId: BigInt.from(101))!;
+    final svA = peerA.stateVector();
+    peerA.textInsert(id: 'a', at: 2, text: '-peer5');
+    final raceUpdate = peerA.encodeDiffSince(stateVector: svA);
+
+    // The re-bootstrap base (base_rid 2) carries content the client LACKS: a
+    // props field on block a (field-level CRDT → survives the merge alongside
+    // the racing text edit). Built on base0's lineage so it MERGES.
+    final base1Doc =
+        MicaDocument.fromStateWithClientId(bytes: base0, clientId: BigInt.from(102))!;
+    base1Doc.updateBlock(id: 'a', dataJson: jsonEncode({'marker': 'from-base1'}));
+    final base1 = base1Doc.encodeState();
+
+    final server = await _FakeSyncServer.start(base0);
+    server.raceBaseAfterUpdateOnPull(
+      raceUpdate: raceUpdate,
+      raceRid: 5,
+      base1: base1,
+      baseRid: 2,
+    );
+
+    String? markerSeen;
+    var ready = false;
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: BigInt.from(103),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (blocks) {
+        final a = blocks.firstWhere((b) => b['id'] == 'a',
+            orElse: () => const <String, dynamic>{});
+        final data = a['data'];
+        if (data is Map && data['marker'] is String) {
+          markerSeen = data['marker'] as String;
+        }
+      },
+    );
+    session.connect();
+
+    await _until(() => ready, reason: 'cold bootstrap');
+    // The base carried block a's `marker` prop; it must appear despite the
+    // cursor having raced to rid 5 > base_rid 2 (the fix merges unconditionally).
+    await _until(() => markerSeen == 'from-base1',
+        reason: 'warm re-bootstrap base merged despite cursor > base_rid');
+
+    session.dispose();
+    await server.stop();
+  });
 }
 
 void _bestEffortDelete(Directory dir) {
@@ -594,6 +655,28 @@ class _FakeSyncServer {
     _deltaBaseRid = baseRid;
   }
 
+  /// Review regression (warm re-bootstrap race): on the next pull, first
+  /// broadcast [raceUpdate] at [raceRid] (advancing the client's cursor PAST
+  /// [baseRid]), THEN send a prune re-bootstrap `sync.base(base1, baseRid)`.
+  /// Models a peer's broadcast winning the tokio::select! race ahead of the
+  /// pull reply. The client must merge base1 unconditionally, not skip it on
+  /// `baseRid <= _cursor`.
+  Uint8List? _raceUpdate;
+  int _raceRid = 0;
+  Uint8List? _raceBase1;
+  int _raceBaseRid = 0;
+  void raceBaseAfterUpdateOnPull({
+    required Uint8List raceUpdate,
+    required int raceRid,
+    required Uint8List base1,
+    required int baseRid,
+  }) {
+    _raceUpdate = raceUpdate;
+    _raceRid = raceRid;
+    _raceBase1 = base1;
+    _raceBaseRid = baseRid;
+  }
+
   /// Reject the next push carrying [id] with an `error` frame (once), modelling a
   /// transient server-side push failure the client must retry, not drop.
   void rejectPushOnce(String id) => _rejectPushIds.add(id);
@@ -648,6 +731,23 @@ class _FakeSyncServer {
         pullCount++;
         final sv = m['payload']?['sv'];
         if (sv is String) lastPullSv = sv;
+        final raceBase1 = _raceBase1;
+        if (raceBase1 != null) {
+          // Broadcast races ahead of the pull reply: the update advances the
+          // cursor past baseRid, THEN the re-bootstrap base arrives.
+          _raceBase1 = null;
+          _send({
+            'type': 'sync.update',
+            'rid': _raceRid,
+            'update': base64.encode(_raceUpdate!),
+          });
+          _send({
+            'type': 'sync.base',
+            'base': base64.encode(raceBase1),
+            'base_rid': _raceBaseRid,
+          });
+          return;
+        }
         final deltaDoc = _deltaDoc;
         if (deltaDoc != null && sv is String) {
           // P4-3: prune-forced re-bootstrap, but the client told us what it

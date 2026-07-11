@@ -335,15 +335,25 @@ class CloudSyncSession {
           _ready = true;
           if (!_readyCompleter.isCompleted) _readyCompleter.complete();
           onReady(_rootBlockId, childBlocks());
-        } else if (baseRid > _cursor) {
+        } else {
           // Re-bootstrap: the stream was pruned past our cursor. Merge the base
-          // (CRDT — our unpushed local edits survive) and fast-forward.
+          // (CRDT — our unpushed local edits survive) UNCONDITIONALLY, then only
+          // fast-forward the cursor when the base is genuinely ahead. The merge
+          // must NOT be gated on `baseRid > _cursor`: a single `sync.update`
+          // frame can advance `_cursor` past a rid whose content we couldn't
+          // fully integrate (yrs stores an update with missing deps as *pending*
+          // and returns Ok, so the cursor jumps but the bytes aren't live). If a
+          // broadcast races ahead of the pull reply on reconnect, the cursor can
+          // sit at/above base_rid while the pruned range 11..base_rid is still
+          // missing; gating the merge would skip the very base that backfills it
+          // — permanent silent divergence (red line #1), persisted by P4-1 and
+          // surviving restart. Re-merging an equal/older base is a CRDT no-op.
           final ok = existing.applyUpdate(update: base64.decode(b64));
           if (!ok) {
             _onIntegrityFault('bad_base');
             return;
           }
-          _cursor = baseRid;
+          if (baseRid > _cursor) _cursor = baseRid;
           if (!_disposed) onRemoteBlocks(childBlocks());
         }
         // A good base means recovery worked — reset the consecutive-fault count
@@ -714,5 +724,6 @@ class CloudSyncSession {
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
+    persistence?.dispose(); // release per-session store resources (web: lock+IDB)
   }
 }

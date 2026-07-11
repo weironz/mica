@@ -103,4 +103,10 @@ class StoreCloudDocStore implements CloudDocStore {
 
   @override
   void compact() => _store.squash(docId: _docId);
+
+  /// No-op: the wrapped [MicaStore] is shared and outlives any one session
+  /// (opened once for the device, not per cloud doc). Only the web store holds
+  /// per-session resources (a Web Lock + IDB handle) worth releasing.
+  @override
+  void dispose() {}
 }

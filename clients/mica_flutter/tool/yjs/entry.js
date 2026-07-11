@@ -16,6 +16,12 @@ import * as Y from 'yjs';
 // by the Rust side (e.g. a heading's `level`) are small, so Number is exact —
 // without this, opening a server-folded doc with int props crashes the read
 // side (caught live in the P4-2 e2e).
+//
+// CONSTRAINT: every integer block prop must fit in a JS safe integer (< 2^53).
+// Number() would silently truncate a larger i64, and _setProps (mica_ydoc.dart)
+// rewrites all of a block's prop keys on any data edit, so a truncated value
+// would round-trip back into the CRDT and sync out. No prop is that large today
+// (this is the tripwire if one is ever added — carry it as a string instead).
 const bigIntSafe = (_k, v) => (typeof v === 'bigint' ? Number(v) : v);
 
 globalThis.micaYjs = {

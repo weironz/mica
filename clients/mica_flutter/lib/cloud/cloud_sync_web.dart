@@ -64,9 +64,11 @@ class CloudSyncSession {
   /// Integrity-fault hook — parity with the desktop session (red line #1).
   final void Function(String reason, int count)? onFault;
 
-  /// Fired once per session the first time a valid frame arrives — "we are
-  /// online". Web has no offline-nav fallback to leave (that recovery is
-  /// desktop-only), but firing it keeps the contract identical across platforms.
+  /// Fired once per session the first time a valid frame arrives — a definitive
+  /// "we are online" signal. Used to leave the offline-nav fallback: P4-2 gave
+  /// web one too (localStorage page tree + IndexedDB doc mirrors), so main.dart
+  /// wires this to `_recoverOnlineNav`, which refetches the authoritative
+  /// workspace list / real roles once the server is reachable again.
   final void Function()? onServerConnected;
 
   /// Crash-recovery parity (C1), legacy path only: unacked diffs restored at
@@ -271,7 +273,7 @@ class CloudSyncSession {
           final MicaYDoc doc;
           try {
             doc = MicaYDoc.fromState(base64.decode(b64));
-          } catch (e, st) {
+          } catch (_) {
             _onIntegrityFault('bad_base');
             return;
           }
@@ -281,14 +283,19 @@ class CloudSyncSession {
           _ready = true;
           if (!_readyCompleter.isCompleted) _readyCompleter.complete();
           onReady(_rootBlockId, childBlocks());
-        } else if (baseRid > _cursor) {
-          // Re-bootstrap after stream pruning: merge the base, keep local edits.
+        } else {
+          // Re-bootstrap after stream pruning: merge the base UNCONDITIONALLY,
+          // then fast-forward the cursor only when the base is genuinely ahead.
+          // Gating the merge on `baseRid > _cursor` would silently drop the
+          // pruned range when a broadcast races the cursor past base_rid on
+          // reconnect (a single sync.update stores missing-dep content as
+          // pending yet advances _cursor) — red-line #1, mirrors io.
           final ok = existing.applyUpdate(base64.decode(b64));
           if (!ok) {
             _onIntegrityFault('bad_base');
             return;
           }
-          _cursor = baseRid;
+          if (baseRid > _cursor) _cursor = baseRid;
           if (!_disposed) onRemoteBlocks(childBlocks());
         }
         // Recovery worked — reset the consecutive-fault count (B3 parity).
@@ -590,5 +597,6 @@ class CloudSyncSession {
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
+    persistence?.dispose(); // release the single-writer Web Lock + IDB handle
   }
 }
