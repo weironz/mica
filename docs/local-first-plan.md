@@ -83,13 +83,13 @@
 | P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ✅ 完成 |
 | P2 | 离线编辑(append-log outbox 统一,重连 CRDT)—— 设计与逐步进展见 [`local-first-p2-design.md`](local-first-p2-design.md)(P2a 使能 → P2b outbox 切 append-log → P2c 双副本收敛 → P2d 放开离线编辑门 → P2e trim 压实,每步配对抗复审) | ✅ 完成 |
 | P3 | 溶解双模式为"工作区:本地/已连云"(双向)+ UX —— 设计与逐步进展见 [`local-first-p3-design.md`](local-first-p3-design.md)(P3a 复合主键 → P3b 统一接线 → P3c-1 溶解核心 → P3d op 路由 → P3e 离线切工作区 → P3f 双向,每步配对抗复审) | ✅ 完成(含 P3c-2) |
-| P4 | web IndexedDB、props CRDT、state-vector 对账、纯 append-log 落盘 | ⏭️ 已评估未动工(见下) |
+| P4 | ①纯 append-log ✅ · ②web IndexedDB / ③state-vector / ④props CRDT(各有门槛,见下) | 🚧 ① 完成 |
 
 ### P4 评估(2026-07-11,P3 收尾时)
 
 四项均为 P2b 级以上的独立工程,各自需要完整的「实现→验证→复审→修复」周期,不宜在单夜尾声仓促落码。按成本/收益排序的建议顺序:
 
-1. **纯 append-log 落盘(桌面)**——收益:去掉每 400ms 整档 encode 的 I/O(大文档尤甚);成本:中(持久化节奏重写 + 崩溃安全重推演 + 复审)。**建议下一个做**,与 P2e 的 trim 已是半成品衔接。
+1. **纯 append-log 落盘(桌面)** ✅ **完成(b7f4add)**——doc_remote_update 表(SCHEMA v5,rid 幂等 + cursor 同事务);_applyRemote 应用瞬间同步落盘(400ms 崩溃窗口消失);快照仅 sync.base;压缩无定时器(每 32 append 查量,>256 squash,dispose 折叠)。integrity 11 + converge + offline-read 全绿。
 2. **web IndexedDB nbstore**——收益:web 也 local-first(目前 web 明确在线-only);成本:大(JS bundle 侧 y-indexedb 或自研 + web CloudDocStore + playwright e2e)。做之前先确认 web 用户面是否值得。
 3. **state-vector 快对账**——收益:超陈旧副本首连省流量;成本:中大(动服务端协议——P2/P3 全程守住的「服务端不动」边界要打开)。等真实遇到「重连拉全量太慢」再做。
 4. **props 字段级 CRDT**——收益:并发改属性不互斥;成本:最大(Rust+JS 双引擎 + 服务端折叠 + 编辑器)。维持「明确暂缓」。
