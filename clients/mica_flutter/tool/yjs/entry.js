@@ -11,6 +11,13 @@
 //   cd tool/yjs && npm install && npm run build
 import * as Y from 'yjs';
 
+// yrs encodes integer `Any` values as BigInt-typed ints; yjs surfaces them as
+// JS BigInt, which JSON.stringify rejects (TypeError). Props integers written
+// by the Rust side (e.g. a heading's `level`) are small, so Number is exact —
+// without this, opening a server-folded doc with int props crashes the read
+// side (caught live in the P4-2 e2e).
+const bigIntSafe = (_k, v) => (typeof v === 'bigint' ? Number(v) : v);
+
 globalThis.micaYjs = {
   // ── lifecycle / sync primitives (mirror MicaDocument's FFI surface) ──
   newDoc: () => new Y.Doc(),
@@ -43,7 +50,7 @@ globalThis.micaYjs = {
   // concurrent edits to different props keys converge. JSON.parse yields plain
   // JS values (yjs stores them like yrs `Any`).
   mapSetJson: (m, k, jsonStr) => m.set(k, JSON.parse(jsonStr)),
-  mapEntriesJson: (m) => JSON.stringify(Object.fromEntries(m.entries())),
+  mapEntriesJson: (m) => JSON.stringify(Object.fromEntries(m.entries()), bigIntSafe),
 
   // ── nested-type constructors (write side, for W2) ──
   newMap: () => new Y.Map(),
@@ -60,7 +67,7 @@ globalThis.micaYjs = {
   textDelta: (t) => t.toDelta(),
   // JSON-bridged variants so Dart passes/reads structured values as strings
   // instead of building/inspecting JS objects over js_interop.
-  textDeltaJson: (t) => JSON.stringify(t.toDelta()),
+  textDeltaJson: (t) => JSON.stringify(t.toDelta(), bigIntSafe),
   textFormatJson: (t, i, len, attrsJson) => t.format(i, len, JSON.parse(attrsJson)),
 
   // ── Y.Array ──

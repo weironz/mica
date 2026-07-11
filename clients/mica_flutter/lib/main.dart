@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'editor/clipboard_copy.dart';
 import 'cloud/cloud_sync.dart';
+import 'cloud/doc_store_platform.dart';
 import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
 import 'local/local_offline.dart';
@@ -483,6 +484,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
+      // The startup restore isn't a _run() action, so nothing else wires the
+      // doc it just auto-opened: without this, the WS sync session (presence +
+      // yrs CRDT + local-first mirror) only starts on the user's FIRST click —
+      // typing before that silently rode the REST fallback with no mirror.
+      _reconcileSync();
     } catch (error) {
       if (!mounted) return;
       // Revoked/invalid token → drop it; desktop falls back to the local world.
@@ -585,9 +591,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // recovers edits the server never acked. Restored here; re-pushed on connect.
     final unackedKey = 'cloudUnacked:$documentId';
     // Local-first (Phase 1): mirror this cloud doc to the on-device store so it
-    // reads offline across a restart. Null on web / if the store isn't open →
-    // online-only, as before. deviceClientId() above opened the store.
-    final persistence = _local.cloudDocStore(documentId);
+    // reads offline across a restart. deviceClientId() above opened the store.
+    // P4-2: on web the mirror is IndexedDB-backed instead (null only when
+    // IndexedDB is unavailable → online-only, as before).
+    var persistence = _local.cloudDocStore(documentId);
+    persistence ??= await openWebDocStore(_cloudOrigin, documentId);
+    // The selection may have moved while the browser store opened.
+    if (!mounted ||
+        _selectedBootstrap?.document.id != documentId ||
+        _sync?.documentId != documentId) {
+      return;
+    }
     if (persistence != null) {
       // P2b: the append-log is now the durable outbox. One-time migration — fold
       // any legacy prefs `cloudUnacked` queue into it (append THEN delete; the
@@ -936,9 +950,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // read the mirror directly, no per-switch network timeout. Otherwise try
       // the server; fall back to the mirror ONLY on connectivity failures —
       // an ApiException means the server answered (403/404/500) and must
-      // surface, not be masked by stale cache (P1c discipline).
-      if (_offlineNav && !kIsWeb) {
-        _openWorkspaceFromMirror(workspace);
+      // surface, not be masked by stale cache (P1c discipline). P4-2: web has
+      // a mirror too (localStorage page tree + IndexedDB docs).
+      if (_offlineNav) {
+        await _openWorkspaceFromMirror(workspace);
         return;
       }
       try {
@@ -947,8 +962,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       } on ApiException {
         rethrow;
       } catch (_) {
-        if (kIsWeb) rethrow; // web has no mirror — surface the failure
-        _openWorkspaceFromMirror(workspace);
+        await _openWorkspaceFromMirror(workspace);
       }
     });
   }
@@ -957,14 +971,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// (offline switch, P3e — the AFFiNE "signed-in offline opens from cache"
   /// behavior). Members are unknowable offline (empty); the first cached view
   /// opens via its mirrored doc, and the sync session reconciles on reconnect.
-  void _openWorkspaceFromMirror(Workspace workspace) {
+  Future<void> _openWorkspaceFromMirror(Workspace workspace) async {
     final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
     if (cache == null) return; // never mirrored — nothing to show
     final rebuilt = rebuildCloudNavFromCache(cache, _session?.user.id ?? '');
     final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
     final firstView = views.firstOrNull;
     final bootstrap =
-        firstView == null ? null : _offlineCloudBootstrap(firstView);
+        firstView == null ? null : await _offlineCloudBootstrap(firstView);
+    if (!mounted) return;
     setState(() {
       _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
       _membersByWorkspace = {..._membersByWorkspace, workspace.id: const []};
@@ -1467,7 +1482,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // renders (P1c). Null when it was never opened online → select the view
         // with an empty editor pane; the yrs session below seeds/connects when
         // the network returns.
-        bootstrap = _offlineCloudBootstrap(view);
+        bootstrap = await _offlineCloudBootstrap(view);
       }
       setState(() {
         _selectedView = view;
@@ -2858,11 +2873,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Mirror the cloud page tree (workspace list + per-workspace views) into the
   /// on-device store so a future offline start can still list and navigate cloud
   /// content (P2 option C — Phase 1b/1c). Origin-scoped by server URL, so
-  /// switching servers doesn't cross over. Desktop only (web has no store; it
-  /// stays online). The cloud is authoritative — this is a clean replace after
-  /// each successful online load.
+  /// switching servers doesn't cross over. P4-2: on web the mirror is
+  /// localStorage-backed (LocalOffline web variant). The cloud is authoritative
+  /// — this is a clean replace after each successful online load.
   void _cacheCloudPageTree() {
-    if (kIsWeb) return;
     final origin = _api.baseUri.toString();
     final workspaces = <WorkspaceData>[
       for (final (i, w) in _workspaces.indexed)
@@ -2895,13 +2909,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// list + views from the mirror, opens the first view's mirrored doc if it was
   /// previously synced, and kicks off [_reconcileSync] (the WS reconnects and the
   /// yrs session seeds from disk immediately; both catch up when the network
-  /// returns). Returns true if a cache existed and was applied. Desktop only.
+  /// returns). Returns true if a cache existed and was applied.
   Future<bool> _applyOfflineCloudNav(AuthSession session) async {
-    if (kIsWeb) return false;
     // The cloud cold-start path never opened the on-device store (only
     // localOffline mode and _setupCloudYrs do), so open it here — otherwise the
     // mirror reads as empty and this fallback silently no-ops. deviceClientId()
-    // opens the store if needed and is a no-op once open.
+    // opens the store if needed and is a no-op once open (null on web, where
+    // the mirror needs no FFI store).
     await _local.deviceClientId();
     if (!mounted) return false;
     final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
@@ -2911,7 +2925,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
     final firstView = views.firstOrNull;
     final bootstrap =
-        firstView == null ? null : _offlineCloudBootstrap(firstView);
+        firstView == null ? null : await _offlineCloudBootstrap(firstView);
+    if (!mounted) return false;
     setState(() {
       _session = session;
       _workspaces = rebuilt.workspaces;
@@ -2942,14 +2957,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Build a bootstrap for a cloud [view] from its on-device mirror (offline
-  /// doc-open, P1c). The mirrored replica already carries the root block, so a
-  /// complete bootstrap (correct `rootBlockId` + blocks) is built synchronously —
-  /// no wait on the async seed. Null if the doc was never opened online (nothing
-  /// mirrored): the tree still lists the page; opening it shows empty until back
-  /// online. Uses the cloud doc id as the record id so [_reconcileSync] wires the
-  /// same-keyed [CloudSyncSession] for it.
-  DocumentBootstrap? _offlineCloudBootstrap(DocumentView view) {
-    final data = _local.openCloudDocMirror(view.objectId);
+  /// doc-open, P1c). On desktop the mirrored replica loads synchronously via
+  /// FFI (correct `rootBlockId` + blocks before first paint); on web (P4-2) it
+  /// hydrates from IndexedDB — async, but awaited before the bootstrap is
+  /// applied, so the rootBlockId is equally correct from the start. Null if the
+  /// doc was never opened online (nothing mirrored): the tree still lists the
+  /// page; opening it shows empty until back online. Uses the cloud doc id as
+  /// the record id so [_reconcileSync] wires the same-keyed [CloudSyncSession].
+  Future<DocumentBootstrap?> _offlineCloudBootstrap(DocumentView view) async {
+    final data = _local.openCloudDocMirror(view.objectId) ??
+        await openWebDocMirror(_cloudOrigin, view.objectId);
     if (data == null) return null;
     return _localBootstrapFrom(view.objectId, data.rootBlockId, data.blocks, view);
   }
