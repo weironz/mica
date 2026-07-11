@@ -9,10 +9,13 @@
 //!
 //! The Doc uses `OffsetKind::Utf16` so mark offsets equal Dart string indices.
 //!
-//! NOTE (M1 simplification): `props` is stored as a JSON string, not a nested
-//! `MapRef`. That's last-write-wins per block, NOT field-level CRDT — fine for
-//! single-device M1/M2, but must become a `MapRef` before multi-writer sync
-//! (P2-M4). Marks + text already get proper character-level CRDT via `Text`.
+//! NOTE: since P2-M4.7 `props` is a nested `MapRef` — concurrent edits to
+//! DIFFERENT props keys converge (field-level CRDT; see [`set_props`]). The
+//! read side ([`read_props`]) still accepts the pre-M4.7 legacy form (a JSON
+//! string, last-write-wins per block) so old docs load; writes migrate them.
+//! Marks + text get character-level CRDT via `Text`. The web `MicaYDoc`
+//! mirrors both forms byte-compatibly (`web_interop.rs` is the cross-engine
+//! gate).
 
 use std::collections::HashMap;
 use std::sync::Arc;

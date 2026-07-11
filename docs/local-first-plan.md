@@ -83,16 +83,21 @@
 | P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ✅ 完成 |
 | P2 | 离线编辑(append-log outbox 统一,重连 CRDT)—— 设计与逐步进展见 [`local-first-p2-design.md`](local-first-p2-design.md)(P2a 使能 → P2b outbox 切 append-log → P2c 双副本收敛 → P2d 放开离线编辑门 → P2e trim 压实,每步配对抗复审) | ✅ 完成 |
 | P3 | 溶解双模式为"工作区:本地/已连云"(双向)+ UX —— 设计与逐步进展见 [`local-first-p3-design.md`](local-first-p3-design.md)(P3a 复合主键 → P3b 统一接线 → P3c-1 溶解核心 → P3d op 路由 → P3e 离线切工作区 → P3f 双向,每步配对抗复审) | ✅ 完成(含 P3c-2) |
-| P4 | ①纯 append-log ✅ · ②web IndexedDB · ③state-vector · ④props CRDT —— **用户 2026-07-11 拍板全做**(门槛作废),自主连续执行中 | 🚧 ①完成+复审修复中 → ②→③→④ |
+| P4 | ①纯 append-log ✅ · ②web IndexedDB ✅ · ③state-vector ✅ · ④props CRDT ✅(考古:M4.7 已做) —— **用户 2026-07-11 拍板全做**(门槛作废),自主连续执行 | ✅ 代码全落,待对抗复审收尾 |
 
-### P4 评估(2026-07-11,P3 收尾时)
+### P4 评估(2026-07-11,P3 收尾时;状态随做随记)
 
-四项均为 P2b 级以上的独立工程,各自需要完整的「实现→验证→复审→修复」周期,不宜在单夜尾声仓促落码。按成本/收益排序的建议顺序:
+四项均为 P2b 级以上的独立工程,各自需要完整的「实现→验证→复审→修复」周期。结果:
 
-1. **纯 append-log 落盘(桌面)** ✅ **完成(b7f4add)**——doc_remote_update 表(SCHEMA v5,rid 幂等 + cursor 同事务);_applyRemote 应用瞬间同步落盘(400ms 崩溃窗口消失);快照仅 sync.base;压缩无定时器(每 32 append 查量,>256 squash,dispose 折叠)。integrity 11 + converge + offline-read 全绿。
-2. **web IndexedDB nbstore**——收益:web 也 local-first(目前 web 明确在线-only);成本:大(JS bundle 侧 y-indexedb 或自研 + web CloudDocStore + playwright e2e)。做之前先确认 web 用户面是否值得。
-3. **state-vector 快对账**——收益:超陈旧副本首连省流量;成本:中大(动服务端协议——P2/P3 全程守住的「服务端不动」边界要打开)。等真实遇到「重连拉全量太慢」再做。
-4. **props 字段级 CRDT**——收益:并发改属性不互斥;成本:最大(Rust+JS 双引擎 + 服务端折叠 + 编辑器)。维持「明确暂缓」。
+1. **纯 append-log 落盘(桌面)** ✅ **完成(b7f4add + 复审修复 25697a5)**——doc_remote_update 表(SCHEMA v5,rid 幂等 + cursor 同事务);_applyRemote 应用瞬间同步落盘(400ms 崩溃窗口消失);快照仅 sync.base;压缩无定时器(每 32 append 查量,>256 squash,dispose 折叠);复审加固:FFI bool 化+写失败自愈(live doc→base)、sync.updates 批量单事务、synchronous=NORMAL、delete_doc 补 remote 表。integrity 全绿。
+2. **web IndexedDB nbstore** ✅ **完成(2026-07-11)**——web 也 local-first:
+   - `WebIdbDocStore`(`lib/cloud/web_idb_doc_store.dart`):CloudDocStore over IndexedDB,**手写 dart:js_interop 绑定**(`dart:indexed_db` 已被 SDK 移除、package:web 非依赖——in-house);open() 水合到内存 + 同步接口 + 序列化 write-behind 镜像;每 store 单记录(rows 列表),压缩兜底体积;失败翻 _broken → append 报错 → 会话自愈快照。可注入 replay 测试缝(chrome 测试不依赖 yjs bundle)。
+   - `cloud_sync_web.dart` 整体镜像 io 的 P2b/P4-1 机器:seed-from-store 离线渲染、durable outbox、连续前缀 ack(_ackedAhead)、error 帧重试+毒编辑熔断、appendRemoteBatch 批落盘、_maybeCompact/_compactNow、写失败自愈。onServerConnected 现在 web 也触发(平台合同一致)。
+   - 平台工厂 `doc_store_platform{,_io,_web}.dart`:main.dart `persistence ??= await openWebDocStore(origin, docId)`(IndexedDB 不可用→null→在线-only 如前);await 后重查选中防移位。
+   - **页树缓存 + web 离线导航**:LocalOffline web 变体的 mirrorCloudPageTree/cachedCloudPageTree 用 **localStorage**(小 JSON、同步——正好化解冷启动 chicken-and-egg);`_offlineCloudBootstrap` 转 async + `openWebDocMirror`(IndexedDB→MicaYDoc→blocks);main.dart 四道 kIsWeb 门全开(_cacheCloudPageTree/_applyOfflineCloudNav/P3e 切换/选视图兜底)。
+   - 已知边界:web 无 CAS,离线时图片不渲染(文本/结构完好);IndexedDB 私窗不可用→回到纯在线。
+3. **state-vector 快对账** ✅ **完成(2026-07-11)**——服务端边界第一次打开,改动纯增量:`sync.rs::diff_from_base`(坏 sv→None→回退全量);ws.rs sync.bootstrap/sync.pull 读可选 `sv`(base64),Rebootstrap 时 `sync.base` 载 **最小 diff**(同一字段、同一客户端 apply 路径,`delta` 仅观测);客户端 io+web `_pullPayload()` 所有 sync.pull 附 sv(**自愈 bootstrap 故意不带**=显式请求全量)。双向后向兼容(旧客户端不发 sv、旧服务器忽略 sv)。验证:Rust 单测(diff×10 < 全量 + 收敛 + 坏 sv 回退)、integrity 新增 P4-3 集成测试(重连 pull 带 sv→FFI 真 diff→收敛)。
+4. **props 字段级 CRDT** ✅ **考古发现:P2-M4.7(b0ae960)已实现**——Rust `set_props`/`read_props` 早已是嵌套 MapRef 字段级 CRDT + 读侧兼容 legacy JSON-string;web `mica_ydoc.dart` 镜像;`web_interop.rs:38` 跨引擎 wire-compat 测试把关。本轮仅修 `doc.rs` 模块头**过时注释**(还写着"LWW、必须在 P2-M4 前改")。P4 评估时误以为未做——教训:评估先查代码,别只信旧文档。
 
 ~~P3c-2 遗留打磨~~ ✅ 已完成(2e32f8d):Settings 改「云服务器」节、ServerMode/ServerConfig 退役、token per-origin(换服务器保凭证)。
 
