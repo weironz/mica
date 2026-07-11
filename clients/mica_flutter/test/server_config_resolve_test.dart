@@ -71,4 +71,40 @@ void main() {
       expect(r.activeOrigin, 'https://mica.example.com');
     });
   });
+
+  group('resolveLegacyCloudSetup — origin normalization (P3c-2 review)', () {
+    // Everything downstream keys off Dart-normalized URLs; a raw legacy string
+    // would file the auth token under a never-read-again key = silent sign-out.
+    test('mixed-case host normalizes to the canonical lowercase form', () {
+      final r = resolve(mode: 'self', url: 'https://Notes.MyCompany.com');
+      expect(r.cloudOrigin, 'https://notes.mycompany.com');
+      expect(
+        r.cloudOrigin,
+        Uri.parse(r.cloudOrigin).toString(),
+        reason: 'the emitted origin is a normalization fixed point',
+      );
+    });
+
+    test('explicit default port is stripped', () {
+      final r = resolve(mode: 'self', url: 'https://my.server:443');
+      expect(r.cloudOrigin, 'https://my.server');
+    });
+
+    test("'local' with a configured self-host keeps THAT origin (token files "
+        'under the right server, never sent to Mica Cloud)', () {
+      final r = resolve(
+        mode: 'local',
+        url: 'https://home.lan:8080',
+        token: 'jwt.stale.selfhost',
+      );
+      expect(r.activeOrigin, 'local');
+      expect(r.cloudOrigin, 'https://home.lan:8080');
+    });
+
+    test('token with no saved URL falls back to the build-default server '
+        '(legacy parity — dev setups keep working)', () {
+      final r = resolve(token: 'jwt.abc.def');
+      expect(r.cloudOrigin, ApiClient.defaultBaseUri().toString());
+    });
+  });
 }

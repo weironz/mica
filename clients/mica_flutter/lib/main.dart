@@ -82,11 +82,24 @@ DateTime? jwtExpiry(String token) {
   required String authToken,
   required bool isWeb,
 }) {
-  final onlineUrl =
-      savedUrl.isEmpty ? ApiClient.defaultBaseUri().toString() : savedUrl;
+  // Everything downstream keys off Dart-normalized URL strings
+  // (_api.baseUri.toString(): lowercased host, default ports stripped) — so the
+  // migration MUST emit the same normal form, or a legacy raw URL (mixed-case
+  // host, explicit :443) would file the auth token under a key nothing ever
+  // reads again (= silent sign-out on the first Settings save).
+  String normalize(String url) => Uri.tryParse(url)?.toString() ?? url;
+  final onlineUrl = normalize(
+    savedUrl.isEmpty ? ApiClient.defaultBaseUri().toString() : savedUrl,
+  );
   switch (savedMode) {
     case 'local':
-      return (cloudOrigin: kMicaCloudUrl, activeOrigin: 'local');
+      // Keep the user's configured server (they just weren't ACTIVE on it) so
+      // any stale token files under the RIGHT origin — hardcoding Mica Cloud
+      // here would send a self-hosted token to the wrong server on restore.
+      return (
+        cloudOrigin: savedUrl.isEmpty ? kMicaCloudUrl : onlineUrl,
+        activeOrigin: 'local',
+      );
     case 'cloud': // legacy: the fixed Mica Cloud preset is now just a URL
       return (cloudOrigin: kMicaCloudUrl, activeOrigin: kMicaCloudUrl);
     case 'online':
