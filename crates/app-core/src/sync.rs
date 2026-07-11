@@ -136,6 +136,21 @@ pub async fn bootstrap_base(db: &PgPool, document_id: Uuid) -> ApiResult<YrsBase
     Ok(base)
 }
 
+/// P4-3 (state-vector fast reconciliation): the minimal yrs update that brings a
+/// client at `client_sv` (its v1-encoded state vector) up to `base` — orders of
+/// magnitude smaller than the full base for a client that already holds most of
+/// the doc (seeded from its on-device store / reconnecting after stream pruning).
+///
+/// Returns `None` when the diff can't be computed (corrupt base, garbage sv) —
+/// the caller falls back to the full base, so a bad sv can never break
+/// bootstrap. Applying the diff is the same client operation as applying the
+/// full base (both are yrs updates), which keeps the protocol change purely
+/// additive: old clients never send an sv and old servers ignore it.
+pub fn diff_from_base(base: &YrsBase, client_sv: &[u8]) -> Option<Vec<u8>> {
+    let doc = MicaDoc::from_update(&base.state).ok()?;
+    doc.encode_diff(client_sv).ok()
+}
+
 /// Append a client's yrs `update` to the workspace stream and fold it into the
 /// document base, returning the assigned `rid`. The update is validated by
 /// applying it onto the current base first; a malformed/undecodable update is
@@ -385,5 +400,43 @@ mod tests {
             server.to_blocks().into_iter().find(|b| b.id == "a").unwrap().text,
             "Hi there"
         );
+    }
+
+    // P4-3: a warm client's sv yields a diff that (a) converges it to the base
+    // and (b) is much smaller than the full base; a garbage sv falls back (None).
+    #[test]
+    fn diff_from_base_converges_and_shrinks() {
+        // A doc with enough content that "full base ≫ one-edit diff" is obvious.
+        let mut server = MicaDoc::from_blocks(
+            "r",
+            &[
+                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+                CoreBlock::new("a", "paragraph")
+                    .with_text(&"lorem ipsum dolor sit amet ".repeat(50)),
+            ],
+        );
+        // Client seeded from this state (its on-device mirror).
+        let mut client = MicaDoc::from_update(&server.encode_state()).unwrap();
+        let client_sv = client.state_vector();
+        // The doc moves on server-side (a peer edit folded into the base).
+        server.text_insert("a", 0, "peer: ");
+        let base = YrsBase {
+            state: server.encode_state(),
+            state_vector: server.state_vector(),
+            base_rid: 7,
+        };
+
+        let diff = diff_from_base(&base, &client_sv).expect("valid sv → diff");
+        assert!(
+            diff.len() * 10 < base.state.len(),
+            "diff ({}) should be far smaller than the full base ({})",
+            diff.len(),
+            base.state.len()
+        );
+        client.apply_update(&diff).unwrap();
+        assert_eq!(client.to_blocks(), server.to_blocks());
+
+        // Garbage sv → None (caller falls back to the full base).
+        assert!(diff_from_base(&base, b"not a state vector").is_none());
     }
 }

@@ -425,6 +425,47 @@ void main() {
     _bestEffortDelete(dir);
   });
 
+  test('P4-3: reconnect pull advertises sv; a delta sync.base fast-forwards the replica',
+      () async {
+    final base = _buildBase();
+    final server = await _FakeSyncServer.start(base);
+
+    String textOfA = '';
+    var ready = false;
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: BigInt.from(31),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (blocks) {
+        textOfA = blocks.firstWhere((b) => b['id'] == 'a',
+            orElse: () => const {'text': ''})['text'] as String;
+      },
+    );
+    session.connect();
+    await _until(() => ready, reason: 'cold bootstrap (full base, no sv)');
+    await _until(() => server.lastPullSv != null,
+        reason: 'the post-base catch-up pull already advertises the sv');
+
+    // The doc moves on server-side while we are away; the stream gets pruned,
+    // so the reconnect can only be served from the base — as a delta (P4-3).
+    final peer =
+        MicaDocument.fromStateWithClientId(bytes: base, clientId: BigInt.two)!;
+    peer.textInsert(id: 'a', at: 2, text: ' peer-moved-on');
+    server.serveDeltaBaseOnPull(peer, baseRid: 9);
+    server.lastPullSv = null;
+    await server.dropCurrentSocket();
+
+    // Auto-reconnect → warm pull carries the sv → delta base applied.
+    await _until(() => server.lastPullSv != null,
+        reason: 'reconnect pull advertises the replica sv',
+        timeout: const Duration(seconds: 8));
+    await _until(() => textOfA == 'hi peer-moved-on',
+        reason: 'the delta sync.base fast-forwards the replica');
+
+    session.dispose();
+    await server.stop();
+  });
+
   test('P2b: a permanently-rejected push is bound-retried + surfaced, never spins or lost',
       () async {
     // Guards the retry budget: a permanent rejection of a low clock must NOT spin
@@ -540,6 +581,19 @@ class _FakeSyncServer {
   final Set<String> _rejectAlways = {};
   int _rid = 1;
 
+  /// P4-3: the `sv` the latest sync.pull advertised (null = none sent).
+  String? lastPullSv;
+  MicaDocument? _deltaDoc;
+  int _deltaBaseRid = 0;
+
+  /// P4-3: answer the next sv-carrying pull with a `sync.base` whose bytes are
+  /// the minimal diff for that sv (computed from [doc], the server's live
+  /// replica) — models the real server's prune-forced delta re-bootstrap.
+  void serveDeltaBaseOnPull(MicaDocument doc, {required int baseRid}) {
+    _deltaDoc = doc;
+    _deltaBaseRid = baseRid;
+  }
+
   /// Reject the next push carrying [id] with an `error` frame (once), modelling a
   /// transient server-side push failure the client must retry, not drop.
   void rejectPushOnce(String id) => _rejectPushIds.add(id);
@@ -592,6 +646,23 @@ class _FakeSyncServer {
         });
       case 'sync.pull':
         pullCount++;
+        final sv = m['payload']?['sv'];
+        if (sv is String) lastPullSv = sv;
+        final deltaDoc = _deltaDoc;
+        if (deltaDoc != null && sv is String) {
+          // P4-3: prune-forced re-bootstrap, but the client told us what it
+          // has — reply with the minimal diff instead of the full state.
+          _deltaDoc = null;
+          _send({
+            'type': 'sync.base',
+            'base': base64.encode(
+              deltaDoc.encodeDiffSince(stateVector: base64.decode(sv)),
+            ),
+            'base_rid': _deltaBaseRid,
+            'delta': true,
+          });
+          return;
+        }
         final ups = List<Map<String, dynamic>>.from(pullQueue);
         pullQueue.clear();
         _send({

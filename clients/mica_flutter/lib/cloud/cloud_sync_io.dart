@@ -237,12 +237,23 @@ class CloudSyncSession {
     } else {
       // Reconnect: keep our replica (it may hold unpushed edits), just catch up
       // from our cursor and resend everything still unacked.
-      _send({
-        'type': 'sync.pull',
-        'payload': {'since_rid': _cursor},
-      });
+      _send({'type': 'sync.pull', 'payload': _pullPayload()});
       _flushUnacked(resendAll: true);
     }
+  }
+
+  /// The sync.pull payload. P4-3: alongside the stream cursor we advertise the
+  /// replica's state vector, so a prune-forced re-bootstrap answers with the
+  /// minimal diff instead of the full doc (`sync.base` carries either — both
+  /// are yrs updates, applied identically). An old server ignores `sv`; the
+  /// deliberate exception is the integrity-fault heal, which requests a FULL
+  /// base (no sv) since a corrupt replica's sv is the wrong basis for a diff.
+  Map<String, dynamic> _pullPayload() {
+    final doc = _doc;
+    return {
+      'since_rid': _cursor,
+      if (doc != null) 'sv': base64.encode(doc.stateVector()),
+    };
   }
 
   /// Seed the unacked queue from persisted state exactly once (crash recovery).
@@ -341,10 +352,7 @@ class CloudSyncSession {
         _faultCount = 0;
         // Catch up anything after the base, then push queued local edits
         // (including any recovered from a prior crash).
-        _send({
-          'type': 'sync.pull',
-          'payload': {'since_rid': _cursor},
-        });
+        _send({'type': 'sync.pull', 'payload': _pullPayload()});
         _flushUnacked(resendAll: true);
         _saveBaseNow(); // a base IS a snapshot — persist it now (rare event)
       case 'sync.updates':
@@ -386,10 +394,7 @@ class CloudSyncSession {
             _cursor > before &&
             _channel != null &&
             !_disposed) {
-          _send({
-            'type': 'sync.pull',
-            'payload': {'since_rid': _cursor},
-          });
+          _send({'type': 'sync.pull', 'payload': _pullPayload()});
         }
       case 'sync.update':
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());

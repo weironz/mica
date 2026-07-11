@@ -336,18 +336,13 @@ async fn handle_client_message(
     "sync.bootstrap" => {
       // Fast-forward base for a client opening the doc: full yrs state + the rid
       // it is current to. The base is built lazily from the op snapshot on first
-      // access, so existing documents work without a migration pass.
+      // access, so existing documents work without a migration pass. P4-3: a
+      // client that already holds a replica may send its state vector (`sv`,
+      // base64) — it then gets the minimal diff instead of the full state (same
+      // `sync.base` shape; applying either is the same yrs operation).
+      let client_sv = client_sv(&envelope.payload);
       match sync::bootstrap_base(&state.db, document_id).await {
-        Ok(base) => vec![
-          json!({
-            "type": "sync.base",
-            "ack_id": ack_id,
-            "document_id": document_id,
-            "base": STANDARD.encode(&base.state),
-            "base_rid": base.base_rid,
-          })
-          .to_string(),
-        ],
+        Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, document_id)],
         Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
       }
     }
@@ -360,18 +355,14 @@ async fn handle_client_message(
         .get("since_rid")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+      // P4-3: the optional client state vector turns a prune-forced re-bootstrap
+      // into a minimal diff instead of a full-doc download.
+      let client_sv = client_sv(&envelope.payload);
       match sync::catch_up_document(&state.db, document_id, since_rid, 1000).await {
         // Cursor fell behind the pruned window → re-bootstrap from the base.
-        Ok(sync::CatchUp::Rebootstrap(base)) => vec![
-          json!({
-            "type": "sync.base",
-            "ack_id": ack_id,
-            "document_id": document_id,
-            "base": STANDARD.encode(&base.state),
-            "base_rid": base.base_rid,
-          })
-          .to_string(),
-        ],
+        Ok(sync::CatchUp::Rebootstrap(base)) => {
+          vec![base_message(&base, client_sv.as_deref(), ack_id, document_id)]
+        }
         Ok(sync::CatchUp::Updates(updates)) => {
           let head = updates.last().map(|u| u.rid).unwrap_or(since_rid);
           let encoded: Vec<Value> = updates
@@ -480,6 +471,37 @@ fn accepted_event(applied: &AppliedUpdate, ack_id: Option<&str>) -> Value {
     "kind": applied.update.update_kind,
     "payload": applied.update.payload,
   })
+}
+
+/// P4-3: the client's optional state vector (`sv`, base64) from a
+/// sync.bootstrap / sync.pull payload. Undecodable → None (full base fallback).
+fn client_sv(payload: &Value) -> Option<Vec<u8>> {
+  payload
+    .get("sv")
+    .and_then(Value::as_str)
+    .and_then(|s| STANDARD.decode(s.as_bytes()).ok())
+}
+
+/// A `sync.base` frame carrying either the minimal diff for `client_sv` (P4-3,
+/// when present and computable) or the full base state. Both are yrs updates —
+/// the client applies them identically; `delta` is observability only.
+fn base_message(
+  base: &sync::YrsBase,
+  client_sv: Option<&[u8]>,
+  ack_id: Option<&str>,
+  document_id: Uuid,
+) -> String {
+  let diff = client_sv.and_then(|sv| sync::diff_from_base(base, sv));
+  let delta = diff.is_some();
+  json!({
+    "type": "sync.base",
+    "ack_id": ack_id,
+    "document_id": document_id,
+    "base": STANDARD.encode(diff.as_deref().unwrap_or(&base.state)),
+    "base_rid": base.base_rid,
+    "delta": delta,
+  })
+  .to_string()
 }
 
 fn error_message(ack_id: Option<&str>, code: &str, message: &str) -> String {
