@@ -52,8 +52,14 @@ abstract class CloudDocStore {
   // fresh base and clears what's folded (un-pushed outbox tail kept).
 
   /// Durably append a REMOTE update keyed by its stream [rid]; advances
-  /// `lastSyncedRid` in the same transaction. Idempotent per rid.
-  void appendRemote(int rid, Uint8List update);
+  /// `lastSyncedRid` in the same transaction. Idempotent per rid. Returns
+  /// false when the write failed — the caller must self-heal (write a base
+  /// snapshot from the live doc) instead of letting a later disk-rebuilding
+  /// [compact] fold a hole into the base.
+  bool appendRemote(int rid, Uint8List update);
+
+  /// Batch variant: one transaction (one journal sync) for a catch-up array.
+  bool appendRemoteBatch(List<({int rid, Uint8List update})> items);
 
   /// Current (local outbox rows, remote log rows) — compaction bookkeeping.
   ({int local, int remote}) logSizes();

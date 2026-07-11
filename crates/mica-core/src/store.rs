@@ -92,6 +92,7 @@ impl LocalStore {
         let conn = Connection::open(path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
              CREATE TABLE IF NOT EXISTS doc_snapshot(
                  doc_id     TEXT PRIMARY KEY,
                  state      BLOB NOT NULL,
@@ -469,6 +470,50 @@ impl LocalStore {
         }
     }
 
+    /// Batch variant of [`Self::append_remote_update`]: all rows + the cursor
+    /// advance in ONE transaction (one commit), so a 1000-row catch-up pull
+    /// costs one journal sync instead of a thousand (the reconnect storm the
+    /// P4-1 review flagged).
+    pub fn append_remote_updates(
+        &self,
+        doc_id: &str,
+        items: &[(i64, Vec<u8>)],
+    ) -> Result<(), StoreError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute_batch("BEGIN;")?;
+        let result: Result<(), StoreError> = (|| {
+            let mut max_rid = i64::MIN;
+            for (rid, update) in items {
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload) VALUES(?1,?2,?3)",
+                    params![doc_id, rid, update],
+                )?;
+                if *rid > max_rid {
+                    max_rid = *rid;
+                }
+            }
+            self.conn.execute(
+                "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
+                 ON CONFLICT(doc_id) DO UPDATE SET
+                     last_synced_rid=MAX(last_synced_rid, excluded.last_synced_rid)",
+                params![doc_id, max_rid],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
+    }
+
     /// A document's persisted remote-stream tail, ordered by `rid`.
     pub fn doc_remote_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
         let mut stmt = self.conn.prepare(
@@ -558,23 +603,39 @@ impl LocalStore {
             None => return Ok(()),
         };
         let state = doc.encode_state();
-        self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
-             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-            params![doc_id, state, now_millis()],
-        )?;
         let pushed = self.sync_cursor(doc_id)?.pushed_clock;
-        self.conn.execute(
-            "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
-            params![doc_id, pushed],
-        )?;
-        // The remote log is fully folded into the new base (it has no un-pushed
-        // semantics — the server already owns these updates), so clear it all.
-        self.conn.execute(
-            "DELETE FROM doc_remote_update WHERE doc_id=?1",
-            params![doc_id],
-        )?;
-        Ok(())
+        // One transaction: fold + trim + clear commit together (crash mid-way
+        // was already safe via replay idempotency, but structural atomicity is
+        // cheaper to reason about than a CRDT argument).
+        self.conn.execute_batch("BEGIN;")?;
+        let result: Result<(), StoreError> = (|| {
+            self.conn.execute(
+                "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
+                 ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+                params![doc_id, state, now_millis()],
+            )?;
+            self.conn.execute(
+                "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
+                params![doc_id, pushed],
+            )?;
+            // The remote log is fully folded into the new base (it has no
+            // un-pushed semantics — the server already owns these updates).
+            self.conn.execute(
+                "DELETE FROM doc_remote_update WHERE doc_id=?1",
+                params![doc_id],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
     }
 
     /// A document's cloud sync high-water marks (zeroed if never synced).
@@ -623,6 +684,7 @@ impl LocalStore {
             "doc_snapshot",
             "doc_snapshot_backup",
             "doc_update",
+            "doc_remote_update",
             "sync_cursor",
         ] {
             self.conn
@@ -1223,6 +1285,34 @@ mod tests {
         );
         let (local, remote_rows) = store.log_sizes("d").unwrap();
         assert_eq!((local, remote_rows), (1, 0));
+    }
+
+    #[test]
+    fn batch_remote_append_and_delete_doc_cover_remote_log() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
+        store.save_doc("d", &doc).unwrap();
+        let mut remote =
+            MicaDoc::from_update_with_client_id(&doc.encode_state(), Some(42)).unwrap();
+        let mut items = Vec::new();
+        for i in 0..5 {
+            let sv = remote.state_vector();
+            remote.text_insert("a", 5, &format!(" r{i}"));
+            items.push((10 + i as i64, remote.encode_diff(&sv).unwrap()));
+        }
+        // One transaction: all rows land, cursor at the max rid.
+        store.append_remote_updates("d", &items).unwrap();
+        assert_eq!(store.doc_remote_updates("d").unwrap().len(), 5);
+        assert_eq!(store.sync_cursor("d").unwrap().last_synced_rid, 14);
+        // Batch is idempotent per rid too.
+        store.append_remote_updates("d", &items).unwrap();
+        assert_eq!(store.doc_remote_updates("d").unwrap().len(), 5);
+        // delete_doc removes the remote log with everything else.
+        store.delete_doc("d").unwrap();
+        assert!(store.doc_remote_updates("d").unwrap().is_empty());
+        assert!(store.load_doc("d", cid).unwrap().is_none());
     }
 
     #[test]

@@ -13,11 +13,23 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 abstract class MicaStore implements RustOpaqueInterface {
   /// Durably append a REMOTE update and advance `last_synced_rid` in the same
   /// transaction (P4-1) — the persisted cursor can never point past an update
-  /// that isn't on disk. Idempotent per `(doc_id, rid)`.
-  void appendRemoteUpdate({
+  /// that isn't on disk. Idempotent per `(doc_id, rid)`. Returns false when
+  /// the write FAILED (busy/full/io) so the caller can self-heal by writing a
+  /// base snapshot from the live in-memory doc — a swallowed failure here plus
+  /// a later disk-rebuilding compact would silently lose the update (P4-1
+  /// review CRITICAL).
+  bool appendRemoteUpdate({
     required String docId,
     required PlatformInt64 rid,
     required List<int> update,
+  });
+
+  /// Batch variant: one transaction (one journal sync) for a whole
+  /// `sync.updates` catch-up array. Parallel lists (rids[i] ↔ updates[i]).
+  bool appendRemoteUpdates({
+    required String docId,
+    required Int64List rids,
+    required List<Uint8List> updates,
   });
 
   /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic

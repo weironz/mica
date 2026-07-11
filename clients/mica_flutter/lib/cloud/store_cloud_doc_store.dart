@@ -1,4 +1,6 @@
-import 'dart:typed_data';
+import 'dart:typed_data' hide Int64List;
+
+import 'package:flutter_rust_bridge/flutter_rust_bridge.dart' show Int64List;
 
 import '../src/rust/api/document.dart';
 import '../src/rust/api/store.dart';
@@ -81,8 +83,17 @@ class StoreCloudDocStore implements CloudDocStore {
       _store.trimUpdatesThrough(docId: _docId, upToClock: pushedClock);
 
   @override
-  void appendRemote(int rid, Uint8List update) =>
+  bool appendRemote(int rid, Uint8List update) =>
       _store.appendRemoteUpdate(docId: _docId, rid: rid, update: update);
+
+  @override
+  bool appendRemoteBatch(List<({int rid, Uint8List update})> items) =>
+      items.isEmpty ||
+      _store.appendRemoteUpdates(
+        docId: _docId,
+        rids: Int64List.fromList([for (final i in items) i.rid]),
+        updates: [for (final i in items) i.update],
+      );
 
   @override
   ({int local, int remote}) logSizes() {

@@ -83,7 +83,7 @@
 | P1c | 离线读取回退 + doc-open chicken-and-egg(从 store 读)→ 闭环离线读 | ✅ 完成 |
 | P2 | 离线编辑(append-log outbox 统一,重连 CRDT)—— 设计与逐步进展见 [`local-first-p2-design.md`](local-first-p2-design.md)(P2a 使能 → P2b outbox 切 append-log → P2c 双副本收敛 → P2d 放开离线编辑门 → P2e trim 压实,每步配对抗复审) | ✅ 完成 |
 | P3 | 溶解双模式为"工作区:本地/已连云"(双向)+ UX —— 设计与逐步进展见 [`local-first-p3-design.md`](local-first-p3-design.md)(P3a 复合主键 → P3b 统一接线 → P3c-1 溶解核心 → P3d op 路由 → P3e 离线切工作区 → P3f 双向,每步配对抗复审) | ✅ 完成(含 P3c-2) |
-| P4 | ①纯 append-log ✅ · ②web IndexedDB / ③state-vector / ④props CRDT(各有门槛,见下) | 🚧 ① 完成 |
+| P4 | ①纯 append-log ✅ · ②web IndexedDB · ③state-vector · ④props CRDT —— **用户 2026-07-11 拍板全做**(门槛作废),自主连续执行中 | 🚧 ①完成+复审修复中 → ②→③→④ |
 
 ### P4 评估(2026-07-11,P3 收尾时)
 

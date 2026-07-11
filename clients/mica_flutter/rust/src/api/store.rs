@@ -305,14 +305,36 @@ impl MicaStore {
 
     /// Durably append a REMOTE update and advance `last_synced_rid` in the same
     /// transaction (P4-1) — the persisted cursor can never point past an update
-    /// that isn't on disk. Idempotent per `(doc_id, rid)`.
+    /// that isn't on disk. Idempotent per `(doc_id, rid)`. Returns false when
+    /// the write FAILED (busy/full/io) so the caller can self-heal by writing a
+    /// base snapshot from the live in-memory doc — a swallowed failure here plus
+    /// a later disk-rebuilding compact would silently lose the update (P4-1
+    /// review CRITICAL).
     #[frb(sync)]
-    pub fn append_remote_update(&self, doc_id: String, rid: i64, update: Vec<u8>) {
-        let _ = self
-            .inner
+    pub fn append_remote_update(&self, doc_id: String, rid: i64, update: Vec<u8>) -> bool {
+        self.inner
             .lock()
             .unwrap()
-            .append_remote_update(&doc_id, rid, &update);
+            .append_remote_update(&doc_id, rid, &update)
+            .is_ok()
+    }
+
+    /// Batch variant: one transaction (one journal sync) for a whole
+    /// `sync.updates` catch-up array. Parallel lists (rids[i] ↔ updates[i]).
+    #[frb(sync)]
+    pub fn append_remote_updates(
+        &self,
+        doc_id: String,
+        rids: Vec<i64>,
+        updates: Vec<Vec<u8>>,
+    ) -> bool {
+        let items: Vec<(i64, Vec<u8>)> =
+            rids.into_iter().zip(updates.into_iter()).collect();
+        self.inner
+            .lock()
+            .unwrap()
+            .append_remote_updates(&doc_id, &items)
+            .is_ok()
     }
 
     /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.

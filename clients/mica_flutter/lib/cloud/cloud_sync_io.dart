@@ -351,12 +351,29 @@ class CloudSyncSession {
         final ups = m['updates'];
         final before = _cursor;
         var changed = false;
+        final applied = <({int rid, Uint8List update})>[];
         if (ups is List) {
           for (final u in ups) {
-            if (u is Map && _applyRemote(u.cast<String, dynamic>())) {
+            if (u is! Map) continue;
+            final item = u.cast<String, dynamic>();
+            if (_applyRemote(item, persist: false)) {
               changed = true;
+              final rid = (item['rid'] as num?)?.toInt();
+              final b64 = item['update'];
+              if (rid != null && b64 is String) {
+                applied.add((rid: rid, update: base64.decode(b64)));
+              }
             }
           }
+        }
+        // One transaction for the whole batch — a 1000-row catch-up pull costs
+        // one journal sync, not a thousand (P4-1 review: reconnect storm).
+        if (applied.isNotEmpty) {
+          final store = persistence;
+          if (store != null && !store.appendRemoteBatch(applied)) {
+            _healPersistFailure();
+          }
+          _maybeCompact();
         }
         if (changed && !_disposed) onRemoteBlocks(childBlocks());
         // B2 (verified catch-up): the server caps each pull, so a non-empty batch
@@ -442,7 +459,7 @@ class CloudSyncSession {
     }
   }
 
-  bool _applyRemote(Map<String, dynamic> u) {
+  bool _applyRemote(Map<String, dynamic> u, {bool persist = true}) {
     final doc = _doc;
     if (doc == null) return false;
     final b64 = u['update'];
@@ -463,13 +480,33 @@ class CloudSyncSession {
     // P4-1: durably append the remote update the MOMENT it applies (its own
     // log + lastSyncedRid in one transaction) — replaces the debounced full-
     // snapshot write-through, so there is no 400ms crash window anymore. A
-    // rid-less update is skipped: the cursor didn't advance for it, so the
-    // next pull re-delivers it (idempotent).
-    if (rid != null) {
-      persistence?.appendRemote(rid, base64.decode(b64));
+    // rid-less update is deliberately NOT persisted: its cursor didn't
+    // advance, so the next pull re-delivers it (idempotent); today every
+    // server path carries a rid — if a future protocol change breaks that,
+    // this comment is the tripwire.
+    if (rid != null && persist) {
+      _persistRemote(rid, base64.decode(b64));
       _maybeCompact();
     }
     return true;
+  }
+
+  /// Persist one remote update; on a FAILED write, self-heal by snapshotting
+  /// the live in-memory doc as the base (it is authoritative and contains the
+  /// update) — otherwise a later compact would rebuild from disk and fold the
+  /// hole into the base permanently (P4-1 review CRITICAL). Surfaced via
+  /// [onFault] so a persistently failing store is observable.
+  void _persistRemote(int rid, Uint8List bytes) {
+    final store = persistence;
+    if (store == null) return;
+    if (!store.appendRemote(rid, bytes)) _healPersistFailure();
+  }
+
+  int _persistFails = 0;
+
+  void _healPersistFailure() {
+    _saveBaseNow(); // live doc → base: covers whatever the log write missed
+    onFault?.call('persist_failed', ++_persistFails);
   }
 
   /// Handle an integrity fault (red line #1): count it, notify [onFault], and —
