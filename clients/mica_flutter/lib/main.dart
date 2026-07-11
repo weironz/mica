@@ -67,85 +67,36 @@ DateTime? jwtExpiry(String token) {
   }
 }
 
-/// Which backend the client talks to.
-/// - [online]: a REST + WebSocket server reached by URL — Mica Cloud by default,
-///   or any self-hosted Mica server — authenticated with email/password login.
-/// - [localOffline]: on-device, no server (Phase 2 CRDT engine) — a fully local
-///   workspace + page tree persisted in SQLite, edited offline (P2-M3).
-enum ServerMode { online, localOffline }
-
-/// User's chosen backend, persisted in prefs. "Mica Cloud" is not a separate
-/// mode — it is just the default [url] (kMicaCloudUrl) for [ServerMode.online];
-/// self-hosting is the same mode pointed at a different URL.
-class ServerConfig {
-  const ServerConfig({required this.mode, required this.url});
-
-  final ServerMode mode;
-
-  /// Base URL for cloud/self-hosted; empty for local-offline.
-  final String url;
-
-  Uri? get baseUri {
-    final trimmed = url.trim();
-    return trimmed.isEmpty ? null : Uri.tryParse(trimmed);
-  }
-
-  ServerConfig copyWith({ServerMode? mode, String? url}) =>
-      ServerConfig(mode: mode ?? this.mode, url: url ?? this.url);
-
-  /// Load the saved config, migrating the legacy `cloud`/`self` modes into the
-  /// unified `online` mode (they only ever differed by URL). Falls back to the
-  /// build-time default so existing dev setups keep working.
-  static ServerConfig load() => resolve(
-        savedMode: loadPref('serverMode'),
-        savedUrl: loadPref('serverUrl') ?? '',
-        authToken: loadPref('authToken') ?? '',
-        isWeb: kIsWeb,
-      );
-
-  /// Pure resolution of the persisted prefs into a config (no I/O, so it is
-  /// unit-testable). Migrates the legacy `cloud`/`self` modes into `online`
-  /// (they only ever differed by URL), and picks the fresh-install default.
-  @visibleForTesting
-  static ServerConfig resolve({
-    required String? savedMode,
-    required String savedUrl,
-    required String authToken,
-    required bool isWeb,
-  }) {
-    ServerConfig online() => ServerConfig(
-          mode: ServerMode.online,
-          url: savedUrl.isEmpty ? ApiClient.defaultBaseUri().toString() : savedUrl,
-        );
-    switch (savedMode) {
-      case 'local':
-        return const ServerConfig(mode: ServerMode.localOffline, url: '');
-      case 'cloud': // legacy: the fixed Mica Cloud preset is now just a URL
-        return const ServerConfig(mode: ServerMode.online, url: kMicaCloudUrl);
-      case 'online':
-      case 'self': // legacy self-hosted → same online mode, keep its URL
-        return online();
-      default:
-        // No saved choice. Desktop is local-first — a fresh install starts
-        // writing immediately, no account or network. But NOT if the user already
-        // signed in (persisted auth token) or set a URL: they were using an online
-        // server, so keep them online rather than stranding their account behind
-        // the new local-first default on upgrade. Web has no on-device store
-        // (local offline is native-only) and is served from the cloud → always
-        // online.
-        final usedOnlineBefore = authToken.isNotEmpty || savedUrl.isNotEmpty;
-        return (isWeb || usedOnlineBefore)
-            ? online()
-            : const ServerConfig(mode: ServerMode.localOffline, url: '');
-    }
-  }
-
-  void save() {
-    savePref('serverMode', switch (mode) {
-      ServerMode.online => 'online',
-      ServerMode.localOffline => 'local',
-    });
-    savePref('serverUrl', url);
+/// One-time migration (P3c-2) of the legacy world-switch prefs
+/// (`serverMode`/`serverUrl`, the pre-P3 ServerMode model) into the dissolved
+/// model: which cloud server is configured ([cloudOrigin]) and which world
+/// starts active ([activeOrigin], `'local'` or the cloud origin). Pure — no
+/// I/O — so it is unit-testable. Semantics carried over from the old resolve():
+/// legacy `cloud`/`self` fold into a URL; a desktop fresh install is
+/// local-first UNLESS the user had signed in / set a URL before (they were
+/// online users — don't strand them); web is always cloud-active.
+@visibleForTesting
+({String cloudOrigin, String activeOrigin}) resolveLegacyCloudSetup({
+  required String? savedMode,
+  required String savedUrl,
+  required String authToken,
+  required bool isWeb,
+}) {
+  final onlineUrl =
+      savedUrl.isEmpty ? ApiClient.defaultBaseUri().toString() : savedUrl;
+  switch (savedMode) {
+    case 'local':
+      return (cloudOrigin: kMicaCloudUrl, activeOrigin: 'local');
+    case 'cloud': // legacy: the fixed Mica Cloud preset is now just a URL
+      return (cloudOrigin: kMicaCloudUrl, activeOrigin: kMicaCloudUrl);
+    case 'online':
+    case 'self': // legacy self-hosted → same thing, keep its URL
+      return (cloudOrigin: onlineUrl, activeOrigin: onlineUrl);
+    default:
+      final usedOnlineBefore = authToken.isNotEmpty || savedUrl.isNotEmpty;
+      return (isWeb || usedOnlineBefore)
+          ? (cloudOrigin: onlineUrl, activeOrigin: onlineUrl)
+          : (cloudOrigin: kMicaCloudUrl, activeOrigin: 'local');
   }
 }
 
@@ -229,7 +180,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Which backend we talk to (cloud / self-hosted / local-offline). Loaded
   /// from prefs in [_loadPrefs] and applied to [_api] before any request.
-  late ServerConfig _serverConfig;
+  /// The configured cloud server's origin URL (P3c-2). Always set (defaults to
+  /// Mica Cloud); whether the user is signed in to it is a separate question
+  /// (the per-origin auth prefs). There is no "mode" anymore — the local world
+  /// always exists alongside.
+  late String _cloudOrigin;
 
   AuthSession? _session;
   List<Workspace> _workspaces = const [];
@@ -308,14 +263,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // P3c: both worlds live side by side — the local store always opens (it
     // backs local workspaces AND the cloud mirrors), and a cloud session is
     // restored when one was persisted. The active world comes from the
-    // persisted `activeOrigin` (migrated once from the legacy ServerMode).
+    // persisted `activeOrigin` (written by the P3c-2 legacy migration in
+    // _loadPrefs on first run).
     _activeOrigin = loadPref('activeOrigin') ??
-        (_serverConfig.mode == ServerMode.localOffline
-            ? 'local'
-            : _api.baseUri.toString());
+        (_local.available ? 'local' : _cloudOrigin);
     if (!_local.available && _activeOrigin == 'local') {
       // Web has no local world — the cloud origin is the only one.
-      _activeOrigin = _api.baseUri.toString();
+      _activeOrigin = _cloudOrigin;
     }
     if (_local.available) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _initLocalOffline());
@@ -339,34 +293,56 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Persist a new server choice and switch the live client to it. Switching
   /// invalidates the current session (different backend), so we sign out — the
   /// login screen then targets the newly selected server.
-  Future<void> _saveServerConfig(ServerConfig config) async {
-    config.save();
-    setState(() => _serverConfig = config);
-    final base = config.baseUri;
-    if (base != null) {
-      _api.baseUri = base;
-    }
-    _signOut();
-    // P3c: keep the active world in step with the legacy Settings choice —
-    // "local" activates the local world, a server URL activates (and awaits
-    // sign-in to) that cloud origin.
-    setState(() {
-      _activeOrigin = config.mode == ServerMode.localOffline
-          ? 'local'
-          : _api.baseUri.toString();
-    });
-    savePref('activeOrigin', _activeOrigin);
-    // Switching into local offline opens the on-device store + page tree.
-    if (config.mode == ServerMode.localOffline) {
-      await _initLocalOffline();
+  /// Point the app at a different cloud server (P3c-2 — replaces the legacy
+  /// mode switch). The current cloud session is disconnected but its stored
+  /// credentials are KEPT under the old origin's keys, so switching back signs
+  /// in again without retyping; the new origin's stored session (if any) is
+  /// restored immediately.
+  Future<void> _connectCloudServer(String url) async {
+    final parsed = Uri.tryParse(url.trim());
+    if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) return;
+    final normalized = parsed.toString();
+    if (normalized == _cloudOrigin) return;
+    _disconnectCloudSession(); // keep the old origin's stored credentials
+    setState(() => _cloudOrigin = normalized);
+    savePref('cloudOrigin', normalized);
+    _api.baseUri = parsed;
+    await _restoreSession(); // the new origin may already have stored creds
+    if (mounted && _session != null && _activeOrigin != _cloudOrigin) {
+      setState(() => _activeOrigin = _cloudOrigin);
+      savePref('activeOrigin', _activeOrigin);
     }
   }
 
   /// Restore persisted client settings (Settings dialog writes them through
   /// [_savePrefs] on every change).
   void _loadPrefs() {
-    _serverConfig = ServerConfig.load();
-    final base = _serverConfig.baseUri;
+    var cloudOrigin = loadPref('cloudOrigin');
+    if (cloudOrigin == null || cloudOrigin.isEmpty) {
+      // One-time migration from the legacy serverMode/serverUrl prefs (P3c-2).
+      final legacy = resolveLegacyCloudSetup(
+        savedMode: loadPref('serverMode'),
+        savedUrl: loadPref('serverUrl') ?? '',
+        authToken: loadPref('authToken') ?? '',
+        isWeb: kIsWeb,
+      );
+      cloudOrigin = legacy.cloudOrigin;
+      savePref('cloudOrigin', cloudOrigin);
+      if ((loadPref('activeOrigin') ?? '').isEmpty) {
+        savePref('activeOrigin', legacy.activeOrigin);
+      }
+      // Move the single-key credentials to per-origin keys so switching
+      // servers stops destroying them (回切免重登). The legacy keys are left
+      // in place unread — harmless, and a rollback safety net.
+      final legacyToken = loadPref('authToken') ?? '';
+      if (legacyToken.isNotEmpty &&
+          (loadPref('authToken:$cloudOrigin') ?? '').isEmpty) {
+        savePref('authToken:$cloudOrigin', legacyToken);
+        savePref('authUser:$cloudOrigin', loadPref('authUser') ?? '');
+      }
+    }
+    _cloudOrigin = cloudOrigin;
+    final base = Uri.tryParse(_cloudOrigin);
     if (base != null) {
       _api.baseUri = base;
     }
@@ -426,12 +402,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// follow-up; the localStorage copy is likewise XSS-exposed). The token is
   /// server-specific — [_signOut] (which a server switch also calls) clears it,
   /// so a saved token always matches the configured backend.
+  // Credentials are keyed per cloud origin (P3c-2), so pointing the app at a
+  // different server doesn't destroy the previous server's session — switching
+  // back restores it without retyping.
   void _persistSession(AuthSession session) {
-    savePref('authToken', session.accessToken);
-    savePref('authUser', jsonEncode(session.user.toJson()));
+    savePref('authToken:$_cloudOrigin', session.accessToken);
+    savePref('authUser:$_cloudOrigin', jsonEncode(session.user.toJson()));
   }
 
   void _clearPersistedSession() {
+    savePref('authToken:$_cloudOrigin', '');
+    savePref('authUser:$_cloudOrigin', '');
+    // Also clear the legacy single-key copies so an explicit sign-out can't be
+    // resurrected by a future migration re-run.
     savePref('authToken', '');
     savePref('authUser', '');
   }
@@ -452,8 +435,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _restoreSession() async {
     if (_session != null) return;
-    final token = loadPref('authToken');
-    final userJson = loadPref('authUser');
+    final token = loadPref('authToken:$_cloudOrigin');
+    final userJson = loadPref('authUser:$_cloudOrigin');
     if (token == null ||
         token.isEmpty ||
         userJson == null ||
@@ -2798,9 +2781,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Explicit sign-out: forget the stored credentials, then disconnect.
   void _signOut() {
-    _closeDocumentSync();
     _clearPersistedSession();
+    _disconnectCloudSession();
+  }
+
+  /// Tear down the live cloud session/state WITHOUT touching stored
+  /// credentials — used by sign-out (after wiping creds) and by switching
+  /// cloud servers (which deliberately keeps the old origin's creds, P3c-2).
+  void _disconnectCloudSession() {
+    _closeDocumentSync();
     setState(() {
       _session = null;
       _workspaces = const [];
@@ -3175,8 +3166,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       userEmail: _session?.user.email ?? '',
       onUpdateProfile: local ? (_) async {} : _updateProfile,
       onChangePassword: local ? (_, _) async {} : _changePassword,
-      serverConfig: _serverConfig,
-      onSaveServerConfig: _saveServerConfig,
+      cloudOrigin: _cloudOrigin,
+      onConnectCloud: _connectCloudServer,
       appearance: _appearance,
       pageWidth: _pageWidth,
       reHostImages: _reHostImages,
@@ -3516,8 +3507,8 @@ class WorkspaceView extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
-    required this.serverConfig,
-    required this.onSaveServerConfig,
+    required this.cloudOrigin,
+    required this.onConnectCloud,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -3655,8 +3646,10 @@ class WorkspaceView extends StatefulWidget {
   final String userEmail;
   final Future<void> Function(String displayName) onUpdateProfile;
   final Future<void> Function(String current, String next) onChangePassword;
-  final ServerConfig serverConfig;
-  final Future<void> Function(ServerConfig config) onSaveServerConfig;
+  /// The configured cloud server's origin URL (P3c-2) — Settings shows it and
+  /// [onConnectCloud] switches it.
+  final String cloudOrigin;
+  final Future<void> Function(String url) onConnectCloud;
   final EditorAppearance appearance;
   final double pageWidth;
   final bool reHostImages;
@@ -5415,8 +5408,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         userEmail: widget.userEmail,
         onUpdateProfile: widget.onUpdateProfile,
         onChangePassword: widget.onChangePassword,
-        serverConfig: widget.serverConfig,
-        onSaveServerConfig: widget.onSaveServerConfig,
+        cloudOrigin: widget.cloudOrigin,
+        onConnectCloud: widget.onConnectCloud,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
         maxPageWidth: _editorAvailWidth,
@@ -6450,8 +6443,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
-    required this.serverConfig,
-    required this.onSaveServerConfig,
+    required this.cloudOrigin,
+    required this.onConnectCloud,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -6471,8 +6464,8 @@ class _SettingsDialog extends StatefulWidget {
   final String userEmail;
   final Future<void> Function(String displayName) onUpdateProfile;
   final Future<void> Function(String current, String next) onChangePassword;
-  final ServerConfig serverConfig;
-  final Future<void> Function(ServerConfig config) onSaveServerConfig;
+  final String cloudOrigin;
+  final Future<void> Function(String url) onConnectCloud;
   final Future<Map<String, dynamic>> Function() onLoadAiSettings;
   final Future<void> Function({
     required String provider,
@@ -6544,12 +6537,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late bool _showPageTitle = widget.showPageTitle;
   late bool _aiEnabled = widget.aiEnabled;
 
-  // Server connection (online remote server / local-offline).
-  late ServerMode _serverMode = widget.serverConfig.mode;
+  // Cloud server connection (P3c-2: no mode anymore — the local world always
+  // exists; this only configures WHICH cloud server the cloud section uses).
   late final _serverUrl = TextEditingController(
-    text: widget.serverConfig.url.isEmpty
-        ? kMicaCloudUrl
-        : widget.serverConfig.url,
+    text: widget.cloudOrigin.isEmpty ? kMicaCloudUrl : widget.cloudOrigin,
   );
   bool _serverSaving = false;
   String? _serverMsg;
@@ -7219,143 +7210,43 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
-  void _selectServerMode(ServerMode mode) {
-    setState(() {
-      _serverMode = mode;
-      _serverMsg = null;
-      // Pre-fill Mica Cloud when switching to the online server with a blank URL.
-      if (mode == ServerMode.online && _serverUrl.text.trim().isEmpty) {
-        _serverUrl.text = kMicaCloudUrl;
-      }
-    });
-  }
-
-  Widget _serverModeTile(
-    ServerMode mode,
-    IconData icon,
-    String title,
-    String subtitle, {
-    bool enabled = true,
-  }) {
-    final selected = _serverMode == mode;
-    const primary = Color(0xFF2563EB);
-    const muted = Color(0xFF94A3B8);
-    return Opacity(
-      opacity: enabled ? 1 : 0.55,
-      child: InkWell(
-        onTap: enabled ? () => _selectServerMode(mode) : null,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                selected
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-                size: 20,
-                color: selected ? primary : muted,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          icon,
-                          size: 18,
-                          color: enabled ? primary : muted,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          title,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        if (!enabled) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF1F5F9),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              'Coming soon',
-                              style: TextStyle(fontSize: 11, color: muted),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF64748B),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   List<Widget> _serverSection(BuildContext context) => [
-    _sectionTitle(context, Icons.dns_outlined, 'Server', const Color(0xFF2563EB)),
+    _sectionTitle(
+      context,
+      Icons.dns_outlined,
+      '云服务器',
+      const Color(0xFF2563EB),
+    ),
     const SizedBox(height: 8),
-    _serverModeTile(
-      ServerMode.online,
-      Icons.cloud_outlined,
-      'Remote server',
-      'Mica Cloud, or your own self-hosted Mica server — by URL.',
-    ),
-    _serverModeTile(
-      ServerMode.localOffline,
-      Icons.offline_bolt_outlined,
-      'Local (offline)',
-      'Work entirely on this device — no account, no network. Notes are stored '
-          'locally and edited offline.',
-    ),
-    if (_serverMode == ServerMode.online) ...[
-      const SizedBox(height: 12),
-      TextField(
-        controller: _serverUrl,
-        enabled: !_serverSaving,
-        keyboardType: TextInputType.url,
-        autocorrect: false,
-        decoration: const InputDecoration(
-          labelText: 'Server URL',
-          hintText: 'https://mica.cloudcele.com',
-          prefixIcon: Icon(Icons.link),
-          border: OutlineInputBorder(),
-        ),
+    // P3c-2: no mode radio anymore — the local world always exists alongside;
+    // this only picks WHICH cloud server the switcher's cloud section talks to.
+    TextField(
+      controller: _serverUrl,
+      enabled: !_serverSaving,
+      keyboardType: TextInputType.url,
+      autocorrect: false,
+      decoration: const InputDecoration(
+        labelText: 'Server URL',
+        hintText: 'https://mica.cloudcele.com',
+        prefixIcon: Icon(Icons.link),
+        border: OutlineInputBorder(),
       ),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          onPressed: _serverSaving
-              ? null
-              : () => setState(() => _serverUrl.text = kMicaCloudUrl),
-          icon: const Icon(Icons.cloud_outlined, size: 16),
-          label: const Text('Use Mica Cloud'),
-        ),
+    ),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: _serverSaving
+            ? null
+            : () => setState(() => _serverUrl.text = kMicaCloudUrl),
+        icon: const Icon(Icons.cloud_outlined, size: 16),
+        label: const Text('Use Mica Cloud'),
       ),
-    ],
+    ),
     const SizedBox(height: 10),
     Text(
-      'Switching servers signs you out — sign in again on the selected server. '
-      'Your account and data live on that server, not on this device.',
+      '本地工作区始终在这台设备上,与服务器无关。切换服务器会断开当前云端'
+      '连接(凭证保留,切回即恢复登录);登录/登出入口在工作区切换器与账号'
+      '菜单。',
       style: Theme.of(
         context,
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
@@ -7382,17 +7273,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   Future<void> _saveServer() async {
-    if (_serverMode == ServerMode.localOffline) {
-      setState(() {
-        _serverSaving = true;
-        _serverMsg = null;
-      });
-      await widget.onSaveServerConfig(
-        const ServerConfig(mode: ServerMode.localOffline, url: ''),
-      );
-      if (mounted) Navigator.of(context).pop();
-      return;
-    }
     final url = _serverUrl.text.trim();
     final parsed = Uri.tryParse(url);
     if (url.isEmpty ||
@@ -7408,11 +7288,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _serverSaving = true;
       _serverMsg = null;
     });
-    await widget.onSaveServerConfig(
-      ServerConfig(mode: _serverMode, url: url),
-    );
-    // The save signs out and rebuilds the shell to the login screen; close the
-    // dialog so the user lands on it.
+    await widget.onConnectCloud(url);
+    // The switch lands the user in the local world (or restores the new
+    // origin's session); close the dialog so they see it.
     if (mounted) Navigator.of(context).pop();
   }
 
