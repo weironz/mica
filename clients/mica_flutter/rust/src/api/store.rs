@@ -303,6 +303,28 @@ impl MicaStore {
             .collect()
     }
 
+    /// Durably append a REMOTE update and advance `last_synced_rid` in the same
+    /// transaction (P4-1) — the persisted cursor can never point past an update
+    /// that isn't on disk. Idempotent per `(doc_id, rid)`.
+    #[frb(sync)]
+    pub fn append_remote_update(&self, doc_id: String, rid: i64, update: Vec<u8>) {
+        let _ = self
+            .inner
+            .lock()
+            .unwrap()
+            .append_remote_update(&doc_id, rid, &update);
+    }
+
+    /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
+    #[frb(sync)]
+    pub fn log_sizes(&self, doc_id: String) -> (i64, i64) {
+        self.inner
+            .lock()
+            .unwrap()
+            .log_sizes(&doc_id)
+            .unwrap_or((0, 0))
+    }
+
     /// Fold the update log into the base snapshot and truncate it (compaction),
     /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
     #[frb(sync)]

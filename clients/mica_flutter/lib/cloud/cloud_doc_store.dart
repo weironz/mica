@@ -43,4 +43,22 @@ abstract class CloudDocStore {
   /// Drop acked outbox entries (`clock ≤ pushedClock`) to bound the log; the
   /// un-pushed tail is kept and the clock stays monotonic.
   void trimOutboxThrough(int pushedClock);
+
+  // ── remote log + compaction (P4-1: pure append-log persistence) ───────────
+  //
+  // Remote updates get their own durable log (never the outbox — that stays
+  // pure-local, P2c) appended the moment they apply, replacing the debounced
+  // full-snapshot write-through. `compact()` folds base + both logs into a
+  // fresh base and clears what's folded (un-pushed outbox tail kept).
+
+  /// Durably append a REMOTE update keyed by its stream [rid]; advances
+  /// `lastSyncedRid` in the same transaction. Idempotent per rid.
+  void appendRemote(int rid, Uint8List update);
+
+  /// Current (local outbox rows, remote log rows) — compaction bookkeeping.
+  ({int local, int remote}) logSizes();
+
+  /// Fold base + logs into a fresh base snapshot and clear the folded rows
+  /// (the un-pushed outbox tail survives). Safe no-op if nothing is stored.
+  void compact();
 }

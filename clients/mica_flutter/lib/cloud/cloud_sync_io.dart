@@ -141,11 +141,10 @@ class CloudSyncSession {
   bool _restored = false;
   Timer? _persistTimer;
 
-  /// Local-first mirror state (Phase 1): [_seeded] gates the one-time seed of the
-  /// replica from the on-device store; [_saveTimer] debounces write-through.
+  /// Local-first mirror state (Phase 1): [_seeded] gates the one-time seed of
+  /// the replica from the on-device store.
   bool _seeded = false;
   bool _sawServerFrame = false;
-  Timer? _saveTimer;
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
@@ -347,7 +346,7 @@ class CloudSyncSession {
           'payload': {'since_rid': _cursor},
         });
         _flushUnacked(resendAll: true);
-        _saveLocalSoon(); // persist the fresh/merged base + cursor
+        _saveBaseNow(); // a base IS a snapshot — persist it now (rare event)
       case 'sync.updates':
         final ups = m['updates'];
         final before = _cursor;
@@ -411,7 +410,12 @@ class CloudSyncSession {
         }
         if (rid != null && rid > _cursor) {
           _cursor = rid;
-          _saveLocalSoon(); // persist the cursor our own acked edit advanced
+          // Persist the advanced stream position (one tiny cursor write; the
+          // update bytes are ours — already in the base/outbox).
+          final store = persistence;
+          if (store != null && rid > store.cursor().lastSyncedRid) {
+            store.advance(lastSyncedRid: rid);
+          }
         }
       case 'error':
         // A push we sent was rejected (not acked) — e.g. transient server-side
@@ -456,7 +460,15 @@ class CloudSyncSession {
     }
     final rid = (u['rid'] as num?)?.toInt();
     if (rid != null && rid > _cursor) _cursor = rid;
-    _saveLocalSoon(); // persist the merged remote update + advanced cursor
+    // P4-1: durably append the remote update the MOMENT it applies (its own
+    // log + lastSyncedRid in one transaction) — replaces the debounced full-
+    // snapshot write-through, so there is no 400ms crash window anymore. A
+    // rid-less update is skipped: the cursor didn't advance for it, so the
+    // next pull re-delivers it (idempotent).
+    if (rid != null) {
+      persistence?.appendRemote(rid, base64.decode(b64));
+      _maybeCompact();
+    }
     return true;
   }
 
@@ -493,7 +505,7 @@ class CloudSyncSession {
       // Durable append (survives restart/crash); its monotonic `clock` is the
       // push id the server echoes in `sync.ack`.
       final clock = persistence!.appendOutbox(diff);
-      _saveLocalSoon(); // base snapshot write-through for offline read
+      _maybeCompact(); // durable already — only bound the log, no snapshot churn
       // Durable regardless; only actively push if not stalled on a poison edit
       // (a permanently-rejected earlier clock — it would just pile up unacked).
       if (_channel != null && _ready && !_pushStalled) {
@@ -504,8 +516,7 @@ class CloudSyncSession {
     }
     final p = _Pending('${_pushSeq++}', diff);
     _unacked.add(p);
-    _persistSoon();
-    _saveLocalSoon(); // persist the local edit for offline durability
+    _persistSoon(); // legacy (web) durability: the prefs unacked queue
     if (_channel != null && _ready) _sendPush(p);
   }
 
@@ -563,28 +574,42 @@ class CloudSyncSession {
   /// Debounced write-through of the replica + cursor to the on-device store
   /// (Phase 1). Coalesces edit/remote-update bursts so we re-encode the doc once
   /// per idle window, not per keystroke — offline durability without I/O churn.
-  void _saveLocalSoon() {
-    if (persistence == null || _doc == null) return;
-    _saveTimer?.cancel();
-    _saveTimer = Timer(const Duration(milliseconds: 400), _saveLocalNow);
-  }
-
-  void _saveLocalNow() {
-    _saveTimer?.cancel();
-    _saveTimer = null;
+  /// Persist the full replica as the base snapshot NOW. P4-1: this runs only
+  /// when a server base arrives (once per bootstrap/re-bootstrap) — steady-state
+  /// persistence is pure append-log (appendOutbox/appendRemote, durable at the
+  /// moment of the event), and [_maybeCompact] re-baselines periodically.
+  void _saveBaseNow() {
     final doc = _doc;
     final store = persistence;
     if (doc == null || store == null) return;
     store.save(doc.encodeState(), _cursor);
-    // Compaction (P2e): acked outbox entries (clock ≤ pushed_clock) are now held
-    // BOTH by the server (acked) and by the base snapshot just written — safe to
-    // drop, bounding the append-log. Deliberately here and not in the ack
-    // handler: trimming before the base write-through lands would open a crash
-    // window where an acked-but-trimmed edit is invisible to an offline restart
-    // (recoverable only by pulling from the server). The un-pushed tail
-    // (> pushed_clock) is never touched, and the clock stays monotonic across
-    // the trim (P2a), so the outbox semantics are unchanged.
-    store.trimOutboxThrough(store.cursor().pushedClock);
+  }
+
+  int _appendsSinceCompactCheck = 0;
+  static const int _compactCheckEvery = 32;
+  static const int _compactThreshold = 256;
+
+  /// Bound the logs without timers: every [_compactCheckEvery] appends, check
+  /// the combined log size; past [_compactThreshold], fold base + logs into a
+  /// fresh base (squash — clears the remote log and the acked outbox prefix;
+  /// P2a keeps the un-pushed tail and the clock monotonic). Amortizes the full
+  /// doc re-encode to ≤ once per [_compactCheckEvery] updates, instead of the
+  /// old once-per-400ms-idle.
+  void _maybeCompact() {
+    final store = persistence;
+    if (store == null) return;
+    if (++_appendsSinceCompactCheck < _compactCheckEvery) return;
+    _appendsSinceCompactCheck = 0;
+    final sizes = store.logSizes();
+    if (sizes.local + sizes.remote > _compactThreshold) _compactNow();
+  }
+
+  /// Fold + trim now (also the hard-close flush — a compacted store reopens
+  /// fastest, and the fold is exactly what the old full-snapshot flush wrote).
+  void _compactNow() {
+    final store = persistence;
+    if (store == null || _doc == null) return;
+    store.compact();
   }
 
   void _send(Map<String, dynamic> message) {
@@ -641,7 +666,7 @@ class CloudSyncSession {
       _flushUnacked();
     }
     _persistNow();
-    _saveLocalNow(); // hard-close guarantee: flush the replica to disk (C1)
+    _compactNow(); // hard-close: fold base+logs so the store reopens fastest
     _disposed = true;
     _reconnectTimer?.cancel();
     _sub?.cancel();

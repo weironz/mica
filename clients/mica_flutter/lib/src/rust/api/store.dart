@@ -11,6 +11,15 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
+  /// Durably append a REMOTE update and advance `last_synced_rid` in the same
+  /// transaction (P4-1) — the persisted cursor can never point past an update
+  /// that isn't on disk. Idempotent per `(doc_id, rid)`.
+  void appendRemoteUpdate({
+    required String docId,
+    required PlatformInt64 rid,
+    required List<int> update,
+  });
+
   /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic
   /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
   PlatformInt64 appendUpdate({
@@ -48,6 +57,9 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Load a document by id, decoded with this device's stable client id, or
   /// null if there's no such document.
   MicaDocument? loadDoc({required String docId});
+
+  /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
+  (PlatformInt64, PlatformInt64) logSizes({required String docId});
 
   /// Open (creating if needed) the local store at `path`. Returns null on
   /// failure (e.g. an unwritable path).

@@ -339,6 +339,92 @@ void main() {
     _bestEffortDelete(dir);
   });
 
+  test('P4-1: a remote update is durable the moment it applies (no debounce window)',
+      () async {
+    final dir = Directory.systemTemp.createTempSync('mica_p41');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+    final adapter = StoreCloudDocStore(store, 'doc-p41');
+    final base = _buildBase();
+    final server = await _FakeSyncServer.start(base);
+
+    var ready = false;
+    final session = CloudSyncSession(
+      uri: server.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready = true,
+      onRemoteBlocks: (_) {},
+      persistence: adapter,
+    );
+    session.connect();
+    await _until(() => ready, reason: 'cold bootstrap');
+
+    // Another actor's edit arrives as a broadcast update.
+    final other =
+        MicaDocument.fromStateWithClientId(bytes: base, clientId: BigInt.two)!;
+    final sv = other.stateVector();
+    other.textInsert(id: 'a', at: 2, text: ' from-peer');
+    server.pushUpdate(rid: 9, update: other.encodeDiffSince(stateVector: sv));
+
+    // Durable in the remote log + cursor advanced — WITHOUT any dispose/flush
+    // (the old model had a 400ms debounced full-snapshot window here).
+    await _until(
+      () => adapter.logSizes().remote == 1,
+      reason: 'remote update appended durably on apply',
+    );
+    expect(store.syncCursor(docId: 'doc-p41').lastSyncedRid, 9,
+        reason: 'cursor advanced in the same transaction');
+    // A fresh load (as an offline restart would) replays base + remote log.
+    final replayed = store.loadDoc(docId: 'doc-p41')!;
+    final blocks = (jsonDecode(replayed.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
+    expect(blocks.firstWhere((b) => b['id'] == 'a')['text'], 'hi from-peer');
+
+    session.dispose(); // hard-close compacts: logs fold into the base
+    expect(adapter.logSizes().remote, 0, reason: 'dispose compaction folded it');
+    _bestEffortDelete(dir);
+  });
+
+  test('P4-1: compaction keeps the logs bounded with content intact', () {
+    final dir = Directory.systemTemp.createTempSync('mica_p41c');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+    final adapter = StoreCloudDocStore(store, 'doc-c');
+    final doc = MicaDocument.fromBlocksJson(
+      rootId: 'r',
+      blocksJson: jsonEncode([
+        {'id': 'r', 'type': 'page', 'children': ['a']},
+        {'id': 'a', 'type': 'paragraph', 'text': 'x'},
+      ]),
+    );
+    adapter.save(doc.encodeState(), 1);
+
+    // Pile up remote entries (another actor typing), then compact.
+    final peer = MicaDocument.fromStateWithClientId(
+        bytes: doc.encodeState(), clientId: BigInt.from(5))!;
+    for (var i = 0; i < 40; i++) {
+      final sv = peer.stateVector();
+      peer.textInsert(id: 'a', at: 1, text: '$i,');
+      adapter.appendRemote(i + 2, peer.encodeDiffSince(stateVector: sv));
+    }
+    // Plus an un-pushed local edit that must SURVIVE compaction.
+    final mine = store.loadDoc(docId: 'doc-c')!;
+    final sv = mine.stateVector();
+    mine.textInsert(id: 'a', at: 0, text: 'mine:');
+    adapter.appendOutbox(mine.encodeDiffSince(stateVector: sv));
+
+    expect(adapter.logSizes().remote, 40);
+    adapter.compact();
+    expect(adapter.logSizes().remote, 0, reason: 'remote log folded + cleared');
+    expect(adapter.logSizes().local, 1,
+        reason: 'un-pushed outbox tail survives (P2a guard)');
+    final after = store.loadDoc(docId: 'doc-c')!;
+    final text = (jsonDecode(after.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((b) => b['id'] == 'a')['text'] as String;
+    expect(text, startsWith('mine:'), reason: 'local edit intact');
+    expect(text, contains('39,'), reason: 'all 40 peer edits intact');
+    _bestEffortDelete(dir);
+  });
+
   test('P2b: a permanently-rejected push is bound-retried + surfaced, never spins or lost',
       () async {
     // Guards the retry budget: a permanent rejection of a low clock must NOT spin
@@ -527,6 +613,16 @@ class _FakeSyncServer {
           }
         }
     }
+  }
+
+  /// Broadcast a VALID remote update to the connected client (another actor's
+  /// edit arriving over the stream).
+  void pushUpdate({required int rid, required Uint8List update}) {
+    _send({
+      'type': 'sync.update',
+      'rid': rid,
+      'update': base64.encode(update),
+    });
   }
 
   void pushGarbageUpdate({required int rid}) {

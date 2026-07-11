@@ -25,7 +25,7 @@ pub enum StoreError {
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
 /// the table layout changes and add the migration in [`LocalStore::open`].
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
@@ -125,6 +125,12 @@ impl LocalStore {
                  clock   INTEGER NOT NULL,
                  payload BLOB NOT NULL,
                  PRIMARY KEY(doc_id, clock)
+             );
+             CREATE TABLE IF NOT EXISTS doc_remote_update(
+                 doc_id  TEXT NOT NULL,
+                 rid     INTEGER NOT NULL,
+                 payload BLOB NOT NULL,
+                 PRIMARY KEY(doc_id, rid)
              );
              CREATE TABLE IF NOT EXISTS sync_cursor(
                  doc_id          TEXT PRIMARY KEY,
@@ -386,6 +392,12 @@ impl LocalStore {
             None => return Ok(None),
         };
         let mut doc = MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?;
+        // Replay both logs (P4-1): the remote stream tail first, then the local
+        // outbox. yrs updates commute and are idempotent, so relative order and
+        // overlap with the base are both safe.
+        for (_rid, update) in self.doc_remote_updates(doc_id)? {
+            doc.apply_update(&update)?;
+        }
         for (_clock, update) in self.doc_updates(doc_id)? {
             doc.apply_update(&update)?;
         }
@@ -417,6 +429,71 @@ impl LocalStore {
             params![doc_id, next, update],
         )?;
         Ok(next)
+    }
+
+    /// Durably append a REMOTE update (P4-1) and advance `last_synced_rid` in
+    /// the same transaction — so the persisted cursor can never claim a stream
+    /// position whose update isn't on disk. Idempotent per `(doc_id, rid)`
+    /// (re-pulls replay the same rids). Remote updates get their own log —
+    /// never `doc_update`, whose rows are the PURE-LOCAL outbox (P2c invariant:
+    /// a remote row there would corrupt `pushed_clock` semantics).
+    pub fn append_remote_update(
+        &self,
+        doc_id: &str,
+        rid: i64,
+        update: &[u8],
+    ) -> Result<(), StoreError> {
+        self.conn.execute_batch("BEGIN;")?;
+        let result: Result<(), StoreError> = (|| {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload) VALUES(?1,?2,?3)",
+                params![doc_id, rid, update],
+            )?;
+            self.conn.execute(
+                "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
+                 ON CONFLICT(doc_id) DO UPDATE SET
+                     last_synced_rid=MAX(last_synced_rid, excluded.last_synced_rid)",
+                params![doc_id, rid],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
+    }
+
+    /// A document's persisted remote-stream tail, ordered by `rid`.
+    pub fn doc_remote_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rid,payload FROM doc_remote_update WHERE doc_id=?1 ORDER BY rid",
+        )?;
+        let rows = stmt
+            .query_map(params![doc_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// (local outbox rows, remote log rows) — the compaction trigger reads this
+    /// to keep both logs bounded without timers.
+    pub fn log_sizes(&self, doc_id: &str) -> Result<(i64, i64), StoreError> {
+        let local: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM doc_update WHERE doc_id=?1",
+            params![doc_id],
+            |r| r.get(0),
+        )?;
+        let remote: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM doc_remote_update WHERE doc_id=?1",
+            params![doc_id],
+            |r| r.get(0),
+        )?;
+        Ok((local, remote))
     }
 
     /// All of a document's incremental updates, ordered by `clock`.
@@ -490,6 +567,12 @@ impl LocalStore {
         self.conn.execute(
             "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
             params![doc_id, pushed],
+        )?;
+        // The remote log is fully folded into the new base (it has no un-pushed
+        // semantics — the server already owns these updates), so clear it all.
+        self.conn.execute(
+            "DELETE FROM doc_remote_update WHERE doc_id=?1",
+            params![doc_id],
         )?;
         Ok(())
     }
@@ -767,7 +850,7 @@ mod tests {
         // whose PK shape differs would otherwise trip the v4 rebuild, which DROPs
         // and recreates from a hard-coded column list — silently stripping the
         // newer app's columns before the trailing gate could reject. Craft a fake
-        // v5 store (3-column PK + a v5-only column) and assert open() refuses it
+        // future-versioned store (3-column PK + a v5-only column) and assert open() refuses it
         // with the structure untouched.
         let path = temp_path();
         let p = path.to_str().unwrap();
@@ -775,7 +858,7 @@ mod tests {
             let conn = Connection::open(p).unwrap();
             conn.execute_batch(
                 "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO local_meta VALUES('schema_version','5');
+                 INSERT INTO local_meta VALUES('schema_version','6');
                  CREATE TABLE local_view(
                      origin TEXT NOT NULL, device TEXT NOT NULL, id TEXT NOT NULL,
                      workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
@@ -796,7 +879,7 @@ mod tests {
         }
         assert!(matches!(
             LocalStore::open(p),
-            Err(StoreError::SchemaTooNew { found: 5, .. })
+            Err(StoreError::SchemaTooNew { found: 6, .. })
         ));
         // Structure untouched: the v5-only column and 3-column PK are intact, and
         // no rebuild artifacts (backup / _v4 temp tables) were created.
@@ -1078,6 +1161,68 @@ mod tests {
             vec![2, 3],
             "outbox still holds the un-pushed edits",
         );
+    }
+
+    #[test]
+    fn remote_log_replays_advances_cursor_and_squashes() {
+        // P4-1: remote updates persist in their own log (never the outbox),
+        // advance last_synced_rid transactionally, replay on load, and squash
+        // folds BOTH logs while clearing the remote one entirely.
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
+        store.save_doc("d", &doc).unwrap();
+
+        // A "remote" edit: a diff minted by another actor.
+        let mut remote =
+            MicaDoc::from_update_with_client_id(&doc.encode_state(), Some(999)).unwrap();
+        let sv = remote.state_vector();
+        remote.text_insert("a", 5, " remote");
+        let r_diff = remote.encode_diff(&sv).unwrap();
+
+        store.append_remote_update("d", 7, &r_diff).unwrap();
+        // Idempotent per rid (a re-pull replays the same row).
+        store.append_remote_update("d", 7, &r_diff).unwrap();
+        assert_eq!(store.doc_remote_updates("d").unwrap().len(), 1);
+        assert_eq!(
+            store.sync_cursor("d").unwrap().last_synced_rid,
+            7,
+            "cursor moved with the append",
+        );
+        // A lower rid never regresses the cursor.
+        store.append_remote_update("d", 3, &r_diff).unwrap();
+        assert_eq!(store.sync_cursor("d").unwrap().last_synced_rid, 7);
+
+        // The outbox stays pure-local: remote rows never enter doc_update.
+        assert!(store.doc_updates("d").unwrap().is_empty());
+
+        // A local edit alongside; load replays base + remote + local.
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        assert!(
+            working.to_blocks().iter().any(|b| b.text.contains("remote")),
+            "remote log replayed",
+        );
+        let sv2 = working.state_vector();
+        working.text_insert("a", 0, "local ");
+        store.append_update("d", &working.encode_diff(&sv2).unwrap()).unwrap();
+        let loaded = store.load_doc("d", cid).unwrap().unwrap();
+        let a = loaded.to_blocks().into_iter().find(|b| b.id == "a").unwrap();
+        assert_eq!(a.text, "local Hello remote");
+
+        // Squash folds both logs into the base; remote log cleared, un-pushed
+        // local tail kept (pushed_clock=0 so nothing trims from the outbox).
+        store.squash("d", cid).unwrap();
+        assert!(store.doc_remote_updates("d").unwrap().is_empty(), "remote log cleared");
+        assert_eq!(store.doc_updates("d").unwrap().len(), 1, "un-pushed outbox kept");
+        assert_eq!(
+            store.load_doc("d", cid).unwrap().unwrap().to_blocks().iter()
+                .find(|b| b.id == "a").unwrap().text,
+            "local Hello remote",
+            "content intact after squash",
+        );
+        let (local, remote_rows) = store.log_sizes("d").unwrap();
+        assert_eq!((local, remote_rows), (1, 0));
     }
 
     #[test]

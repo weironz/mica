@@ -79,4 +79,17 @@ class StoreCloudDocStore implements CloudDocStore {
   @override
   void trimOutboxThrough(int pushedClock) =>
       _store.trimUpdatesThrough(docId: _docId, upToClock: pushedClock);
+
+  @override
+  void appendRemote(int rid, Uint8List update) =>
+      _store.appendRemoteUpdate(docId: _docId, rid: rid, update: update);
+
+  @override
+  ({int local, int remote}) logSizes() {
+    final s = _store.logSizes(docId: _docId);
+    return (local: s.$1, remote: s.$2);
+  }
+
+  @override
+  void compact() => _store.squash(docId: _docId);
 }
