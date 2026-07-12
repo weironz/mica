@@ -31,6 +31,12 @@ pub struct CreateDocumentRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CreateFolderRequest {
+  name: String,
+  parent_view_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateViewRequest {
   name: String,
 }
@@ -281,6 +287,71 @@ pub async fn create_document(
   tx.commit().await?;
 
   Ok(Json(DocumentCreateResponse { document, view }))
+}
+
+/// `POST /api/workspaces/{workspace_id}/folders`
+///
+/// Create a folder view — a pure container in the page tree (AFFiNE-style
+/// "entity used solely for organizing content"). Unlike [`create_document`] it
+/// inserts ONLY a `views` row with `object_type='folder'`: no `documents` row,
+/// no snapshot, no CRDT sync. `object_id` gets a fresh (unreferenced) uuid to
+/// satisfy the NOT NULL column. Export renders it as a directory, never a `.md`.
+pub async fn create_folder(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<CreateFolderRequest>,
+) -> ApiResult<Json<ViewResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+
+  let name = normalize_view_name(&payload.name)?;
+
+  if let Some(parent_view_id) = payload.parent_view_id {
+    ensure_view_in_workspace(&state.db, workspace_id, parent_view_id).await?;
+  }
+
+  // No document / snapshot — a folder has no content. `object_id` is a fresh
+  // uuid purely to satisfy the NOT NULL column; nothing references it.
+  let object_id = Uuid::new_v4();
+  let position = Uuid::now_v7().to_string();
+  let view = sqlx::query_as::<_, View>(
+    r#"
+      INSERT INTO views (
+        workspace_id,
+        parent_view_id,
+        object_id,
+        object_type,
+        name,
+        position,
+        created_by
+      )
+      VALUES ($1, $2, $3, 'folder', $4, $5, $6)
+      RETURNING
+        id,
+        workspace_id,
+        parent_view_id,
+        object_id,
+        object_type::text AS object_type,
+        name,
+        icon,
+        position,
+        is_deleted,
+        created_by,
+        created_at,
+        updated_at
+    "#,
+  )
+  .bind(workspace_id)
+  .bind(payload.parent_view_id)
+  .bind(object_id)
+  .bind(name)
+  .bind(position)
+  .bind(user_id)
+  .fetch_one(&state.db)
+  .await?;
+
+  Ok(Json(ViewResponse { view }))
 }
 
 /// `POST /api/workspaces/{workspace_id}/documents/import/markdown`
@@ -849,7 +920,25 @@ pub async fn export_workspace_zip(
     path_by_view.insert(view.id.to_string(), path);
   }
 
-  for (view, folder, _base) in pages {
+  for (view, folder, base) in pages {
+    if view.object_type == "folder" {
+      // A folder is a pure container: emit NO `.md` (that was the wart), just a
+      // manifest entry so the directory — even an empty one — round-trips. Its
+      // `path` is the directory its children nest under (folder segments + own
+      // deduped name), matching the segments collect_page_paths gave the kids.
+      let mut dir = String::new();
+      for seg in &folder {
+        dir.push_str(seg);
+        dir.push('/');
+      }
+      dir.push_str(&base);
+      manifest_pages.push(serde_json::json!({
+        "path": dir,
+        "title": view.name,
+        "type": "folder",
+      }));
+      continue;
+    }
     if view.object_type != "document" {
       continue;
     }
@@ -927,6 +1016,7 @@ pub async fn export_workspace_zip(
     manifest_pages.push(serde_json::json!({
       "path": path,
       "title": view.name,
+      "type": "document",
     }));
     let content = format!("# {}\n\n{}", view.name, body);
     entries.push(ZipEntry {
@@ -1461,4 +1551,74 @@ fn normalize_position(position: Option<String>) -> ApiResult<String> {
   }
 
   Ok(position)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn view(id: u128, parent: Option<u128>, name: &str, otype: &str) -> View {
+    let now = Utc::now();
+    View {
+      id: Uuid::from_u128(id),
+      workspace_id: Uuid::from_u128(1),
+      parent_view_id: parent.map(Uuid::from_u128),
+      object_id: Uuid::from_u128(1000 + id),
+      object_type: otype.to_string(),
+      name: name.to_string(),
+      icon: None,
+      position: format!("{id:020}"),
+      is_deleted: false,
+      created_by: Uuid::from_u128(2),
+      created_at: now,
+      updated_at: now,
+    }
+  }
+
+  /// The export path builder treats folders like any other tree node: a folder
+  /// contributes its (deduped) name as a directory segment to its children, and
+  /// every node — folder or document — appears in pre-order. This is what lets
+  /// the export loop render a folder as a directory path (no `.md`) whose
+  /// children nest under it (F1).
+  #[test]
+  fn collect_page_paths_nests_children_under_a_folder() {
+    let chapter = view(10, None, "Chapter", "folder");
+    let intro = view(11, Some(10), "Intro", "document");
+    let sub = view(12, Some(10), "Sub", "folder"); // empty child folder
+    let deep = view(13, Some(12), "Deep", "document");
+    let all = [&chapter, &intro, &sub, &deep];
+
+    let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
+      std::collections::HashMap::new();
+    for v in all {
+      by_parent.entry(v.parent_view_id).or_default().push(v);
+    }
+    for list in by_parent.values_mut() {
+      list.sort_by(|a, b| a.position.cmp(&b.position));
+    }
+
+    let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
+    collect_page_paths(&by_parent, None, &Vec::new(), &mut pages);
+
+    // Pre-order, every node present (folders included).
+    let names: Vec<&str> = pages.iter().map(|(v, _, _)| v.name.as_str()).collect();
+    assert_eq!(names, ["Chapter", "Intro", "Sub", "Deep"]);
+
+    // The folder "Chapter" contributes its segment to its children; the empty
+    // folder "Sub" nests under "Chapter" and passes both segments to "Deep".
+    let seg = |n: &str| {
+      let (_, folder, base) = pages.iter().find(|(v, _, _)| v.name == n).unwrap();
+      (folder.clone(), base.clone())
+    };
+    assert_eq!(seg("Chapter"), (vec![], "Chapter".to_string()));
+    assert_eq!(seg("Intro"), (vec!["Chapter".to_string()], "Intro".to_string()));
+    assert_eq!(seg("Sub"), (vec!["Chapter".to_string()], "Sub".to_string()));
+    assert_eq!(
+      seg("Deep"),
+      (vec!["Chapter".to_string(), "Sub".to_string()], "Deep".to_string())
+    );
+    // => the export loop writes the empty folder "Sub" as directory path
+    //    "Chapter/Sub" (manifest type:'folder', no `.md`), and "Deep" as
+    //    "Chapter/Sub/Deep.md" — no stray container `.md` anywhere.
+  }
 }

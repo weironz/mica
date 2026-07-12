@@ -110,6 +110,10 @@ pub fn api_router() -> Router<AppState> {
       post(documents::create_document),
     )
     .route(
+      "/workspaces/{workspace_id}/folders",
+      post(documents::create_folder),
+    )
+    .route(
       "/workspaces/{workspace_id}/documents/import/markdown",
       post(documents::import_document_markdown),
     )
