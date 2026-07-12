@@ -3942,7 +3942,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
   final FocusNode _pageTitleFocus = FocusNode(debugLabel: 'PageTitle');
   Timer? _pageTitleSaveTimer;
-  final Set<String> _collapsedViewIds = {};
+  // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
+  // default). The tree opens collapsed and remembers what the user expanded;
+  // navigating to / creating a nested page reveals its ancestors.
+  final Set<String> _expandedViewIds = {};
   // True only while a page is being dragged in the tree. The drop zones overlay
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
@@ -3983,6 +3986,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitle.text = isUntitledPageName(name) ? '' : name;
     final workspace = widget.selectedWorkspace;
     if (workspace != null) _rename.text = workspace.name;
+    // Restore this workspace's remembered expand state (tree opens collapsed by
+    // default; reveal the initially-selected page's ancestors so it shows).
+    _loadExpanded();
+    final sel = widget.selectedBootstrap?.view.id;
+    if (sel != null) _revealAncestors(sel);
     // Restore a manually-set sidebar width; otherwise fit to the first tree.
     _navWidthManual = loadPref('navWidthManual') == 'true';
     if (_navWidthManual) {
@@ -4029,7 +4037,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         selected != null && selected.id != oldWidget.selectedWorkspace?.id;
     if (wsChanged) {
       _rename.text = selected.name;
-      _collapsedViewIds.clear();
+      _loadExpanded(); // restore this workspace's remembered expand state
     }
     // Re-fit the sidebar to content when the tree could have changed shape:
     // switched workspace, added/removed a page, or renamed the open page.
@@ -4068,6 +4076,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _pageTitleFocus.requestFocus();
         _pageTitle.selection = const TextSelection.collapsed(offset: 0);
       });
+    }
+    // Reveal the opened page in the sidebar: expand its ancestor chain so a
+    // nested selection isn't hidden under collapsed parents (and the expansion
+    // is remembered). Also fire when the view set first populates — on a cold
+    // start the selection can be set before widget.views arrives, so the
+    // initState reveal would have walked an empty tree.
+    final viewsChanged = widget.views.length != oldWidget.views.length;
+    if ((idChanged || viewsChanged) &&
+        bootstrap != null &&
+        _revealAncestors(bootstrap.view.id)) {
+      _saveExpanded();
     }
   }
 
@@ -4511,17 +4530,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           depth: item.depth,
           hasChildren: item.hasChildren,
           revealToggle: _navHovered,
-          isCollapsed: _collapsedViewIds.contains(item.view.id),
+          isCollapsed: !_expandedViewIds.contains(item.view.id),
           isSelected: item.view.id == widget.selectedView?.id,
           canEdit: canEdit,
-          onToggle: () => _toggleViewCollapse(item.view),
+          onToggle: () => _toggleViewExpand(item.view),
           onPressed: () => _navigateToView(item.view),
           onCreateChild: () {
-            setState(() => _collapsedViewIds.remove(item.view.id));
-            widget.onCreateChildDocument(item.view, 'Untitled');
+            setState(() => _expandForChildOf(item.view.id)); // reveal the new child
+            widget.onCreateChildDocument(item.view, kUntitledPage);
           },
           onCreateChildFolder: () {
-            setState(() => _collapsedViewIds.remove(item.view.id));
+            setState(() => _expandForChildOf(item.view.id));
             widget.onCreateChildFolder(item.view, '新文件夹');
           },
           onRename: () => _promptRenameDocument(item.view),
@@ -4672,7 +4691,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               .toList()
             ..sort((a, b) => a.position.compareTo(b.position));
       children.add(dragged);
-      setState(() => _collapsedViewIds.remove(target.id)); // reveal new child
+      setState(() => _expandForChildOf(target.id)); // reveal the drop target
       widget.onReorderViews(target.id, children);
       return;
     }
@@ -4717,7 +4736,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
         final hasChildren = (childrenByParent[child.id] ?? const []).isNotEmpty;
         ordered.add((view: child, depth: depth, hasChildren: hasChildren));
-        if (!_collapsedViewIds.contains(child.id)) {
+        if (_expandedViewIds.contains(child.id)) {
           appendChildren(child.id, depth + 1);
         }
       }
@@ -4746,12 +4765,70 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return ordered;
   }
 
-  void _toggleViewCollapse(DocumentView view) {
+  void _toggleViewExpand(DocumentView view) {
     setState(() {
-      if (!_collapsedViewIds.add(view.id)) {
-        _collapsedViewIds.remove(view.id);
+      if (!_expandedViewIds.add(view.id)) {
+        _expandedViewIds.remove(view.id);
       }
+      _saveExpanded();
     });
+  }
+
+  /// Pref key for the active workspace's expanded set. Per-workspace so each
+  /// remembers its own shape (node ids are only unique within a workspace).
+  String? get _expandedPrefKey {
+    final wsId = widget.selectedWorkspace?.id;
+    return wsId == null ? null : 'sidebar.expandedIds.$wsId';
+  }
+
+  /// Load the persisted expanded set for the active workspace. Absent/garbage →
+  /// empty (all collapsed). No stale filter here — [widget.views] may not be
+  /// loaded yet on first build, and stale ids are harmless (a deleted node never
+  /// renders); pruning happens on save when the tree is populated.
+  void _loadExpanded() {
+    _expandedViewIds.clear();
+    final key = _expandedPrefKey;
+    if (key == null) return;
+    final raw = loadPref(key);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      _expandedViewIds.addAll((jsonDecode(raw) as List).cast<String>());
+    } catch (_) {
+      // corrupt value → treat as none expanded
+    }
+  }
+
+  void _saveExpanded() {
+    final key = _expandedPrefKey;
+    if (key == null) return;
+    // Prune ids of deleted nodes now that the tree is loaded, so the blob can't
+    // grow forever (mirrors AppFlowy's remove-on-collapse without a delete hook).
+    if (widget.views.isNotEmpty) {
+      final live = {for (final v in widget.views) v.id};
+      _expandedViewIds.removeWhere((id) => !live.contains(id));
+    }
+    savePref(key, jsonEncode(_expandedViewIds.toList()));
+  }
+
+  /// Expand every ANCESTOR of [id] so a (possibly nested) node is revealed in
+  /// the sidebar — used on navigate/create so the active/new page is never
+  /// hidden under a collapsed parent (AppFlowy/Notion "reveal current page").
+  /// The node itself is not expanded (that would show ITS children). Returns
+  /// whether anything changed.
+  bool _revealAncestors(String id) {
+    var changed = false;
+    for (final a in ancestorIds(widget.views, id)) {
+      if (_expandedViewIds.add(a)) changed = true;
+    }
+    return changed;
+  }
+
+  /// Expand [id] itself (so a freshly-created/dropped child under it is visible)
+  /// plus its ancestor chain, and persist. Call inside setState.
+  void _expandForChildOf(String id) {
+    _expandedViewIds.add(id);
+    _revealAncestors(id);
+    _saveExpanded();
   }
 
   void _schedulePageTitleSave() {
@@ -9727,6 +9804,19 @@ bool canNestUnder(Iterable<DocumentView> views, String? parentId) {
 /// part that must walk the WHOLE subtree (not just direct children) so trashing a
 /// folder carries its deep descendants, matching the server's recursive-CTE
 /// handlers. Returns empty if [rootId] isn't present; cycle-safe.
+/// The ids of every ANCESTOR of [id] (walking parentViewId up). Pure + testable
+/// core of the sidebar "reveal a nested node" logic — expanding these makes a
+/// deep node visible. Cycle-safe; returns empty if [id] is a root/unknown.
+Set<String> ancestorIds(Iterable<DocumentView> views, String id) {
+  final parents = {for (final v in views) v.id: v.parentViewId};
+  final out = <String>{};
+  var cursor = parents[id];
+  while (cursor != null && out.add(cursor)) {
+    cursor = parents[cursor];
+  }
+  return out;
+}
+
 Set<String> collectSubtreeIds(
   Iterable<({String id, String? parentId})> nodes,
   String rootId,
