@@ -33,6 +33,7 @@ void main() {
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
+      onCreateChildFolder: () {},
       onRename: () {},
       onDelete: () {},
     )));
@@ -68,6 +69,7 @@ void main() {
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
+      onCreateChildFolder: () {},
       onRename: () => renamed = true,
       onDelete: () => deleted = true,
     )));
@@ -103,6 +105,7 @@ void main() {
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
+      onCreateChildFolder: () {},
       onRename: () {},
       onDelete: () {},
     )));
@@ -130,6 +133,7 @@ void main() {
       onToggle: () => toggled = true,
       onPressed: () {},
       onCreateChild: () {},
+      onCreateChildFolder: () {},
       onRename: () {},
       onDelete: () {},
     )));
@@ -142,8 +146,8 @@ void main() {
     await tester.tap(find.byIcon(Icons.more_horiz));
     await tester.pumpAndSettle();
 
-    expect(find.text('收起子页面'), findsOneWidget);
-    await tester.tap(find.text('收起子页面'));
+    expect(find.text('收起子项'), findsOneWidget);
+    await tester.tap(find.text('收起子项'));
     await tester.pumpAndSettle();
     expect(toggled, isTrue);
   });
@@ -160,6 +164,7 @@ void main() {
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
+      onCreateChildFolder: () {},
       onRename: () {},
       onDelete: () {},
     )));
@@ -172,5 +177,81 @@ void main() {
     // canEdit == false → no ⋯ / + even on hover.
     expect(find.byIcon(Icons.more_horiz), findsNothing);
     expect(find.byIcon(Icons.add), findsNothing);
+  });
+
+  // ── F4: folder rows ─────────────────────────────────────────────────────────
+
+  DocumentView folderView() => const DocumentView(
+        id: 'f1',
+        parentViewId: null,
+        objectId: 'o-folder',
+        objectType: 'folder',
+        name: 'Chapter',
+        position: '0000000010',
+      );
+
+  testWidgets('a folder row shows a folder icon and clicking it expands (not open)',
+      (tester) async {
+    var toggled = false;
+    var opened = false;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: folderView(),
+      depth: 0,
+      hasChildren: true,
+      revealToggle: false,
+      isCollapsed: true,
+      isSelected: false,
+      canEdit: true,
+      onToggle: () => toggled = true,
+      onPressed: () => opened = true, // navigate/open — must NOT fire for a folder
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onDelete: () {},
+    )));
+
+    // Folder icon, not the document icon.
+    expect(find.byIcon(Icons.folder_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.description_outlined), findsNothing);
+
+    // Clicking the row expands it in place instead of opening an editor.
+    await tester.tap(find.byType(DocumentListItem));
+    await tester.pumpAndSettle();
+    expect(toggled, isTrue, reason: 'folder click toggles expand');
+    expect(opened, isFalse, reason: 'folder click never opens an editor');
+  });
+
+  testWidgets('the row menu offers "新建子文件夹" and fires onCreateChildFolder',
+      (tester) async {
+    var childFolder = false;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: folderView(),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () => childFolder = true,
+      onRename: () {},
+      onDelete: () {},
+    )));
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.byType(DocumentListItem)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
+
+    expect(find.text('新建子页面'), findsOneWidget);
+    expect(find.text('新建子文件夹'), findsOneWidget);
+    await tester.tap(find.text('新建子文件夹'));
+    await tester.pumpAndSettle();
+    expect(childFolder, isTrue);
   });
 }

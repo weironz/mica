@@ -1028,6 +1028,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _createDocument(name, parentViewId: parent.id);
   }
 
+  /// Create a cloud folder (pure container) and add it to the tree. Unlike a
+  /// document it is NOT opened in the editor (folders have no content); the
+  /// user creates pages under it. Mirrored offline via [_cacheCloudPageTree].
+  Future<void> _createFolder(String name, {String? parentViewId}) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final view = await _api.createFolder(
+        session.accessToken,
+        workspace.id,
+        name,
+        parentViewId: parentViewId,
+      );
+      if (!mounted) return;
+      setState(() {
+        final views = _viewsByWorkspace[workspace.id] ?? const [];
+        _viewsByWorkspace = {
+          ..._viewsByWorkspace,
+          workspace.id: [...views, view],
+        };
+      });
+      _cacheCloudPageTree();
+    });
+  }
+
+  Future<void> _createChildFolder(DocumentView parent, String name) {
+    return _createFolder(name, parentViewId: parent.id);
+  }
+
   /// Persist a new sibling order: assign evenly spaced, zero-padded positions to
   /// [orderedSiblings] (all sharing [parentViewId]) and push the ones that
   /// changed. Ordering is per-parent, so renumbering one group is self-contained.
@@ -1456,6 +1485,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _selectView(DocumentView view) {
+    // A folder has no document to open (the sidebar routes folder taps to
+    // expand/collapse; this guards other callers, e.g. internal page links).
+    if (view.objectType == 'folder') return Future.value();
     return _run(() async {
       // The editor's pending edits were just flushed (see _navigateToView) into
       // the current doc's cloud session. Drain it — wait for those pushes to be
@@ -1953,6 +1985,26 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Create a local folder (pure container) — a view with object_type='folder'
+  /// and no document. Not opened in the editor; pages are created under it.
+  Future<void> _localCreateFolder(String name, {String? parentViewId}) async {
+    final title = name.trim().isEmpty ? '新文件夹' : name.trim();
+    final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
+    _local.saveView((
+      id: viewId,
+      workspaceId: _localSelectedWorkspace?.id ?? 'local',
+      parentId: parentViewId,
+      // A folder has no document; object_id is an unused placeholder.
+      objectId: 'folder_$viewId',
+      name: title,
+      position: _nextLocalPosition(parentViewId),
+      trashed: false,
+      objectType: 'folder',
+    ));
+    if (!mounted) return;
+    setState(_reloadLocalViews);
+  }
+
   /// S-tier vault import: land a picked folder's `.md` files into the local
   /// store as documents, mirroring the directory tree (read-only — the source
   /// folder is untouched). Wired to the existing "import folder into workspace"
@@ -1983,6 +2035,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localSelectView(DocumentView view) async {
+    if (view.objectType == 'folder') return; // a folder has no document to open
     final data = _local.openDoc(view.objectId);
     if (data == null || !mounted) return;
     setState(() {
@@ -2869,8 +2922,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final selectedView = views
         .where((view) => view.id == _selectedView?.id)
         .firstOrNull;
-    final viewToOpen = selectedView ?? views.firstOrNull;
-    final bootstrap = viewToOpen == null
+    // Auto-open a DOCUMENT (folders have no content to bootstrap — opening one
+    // would 404 on its unbacked object_id).
+    final viewToOpen =
+        selectedView ?? views.where((v) => v.objectType == 'document').firstOrNull;
+    final bootstrap = viewToOpen == null || viewToOpen.objectType == 'folder'
         ? null
         : await _api.bootstrapDocument(
             session.accessToken,
@@ -2983,6 +3039,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// page; opening it shows empty until back online. Uses the cloud doc id as
   /// the record id so [_reconcileSync] wires the same-keyed [CloudSyncSession].
   Future<DocumentBootstrap?> _offlineCloudBootstrap(DocumentView view) async {
+    // A folder has no document to open.
+    if (view.objectType == 'folder') return null;
     final data = _local.openCloudDocMirror(view.objectId) ??
         await openWebDocMirror(_cloudOrigin, view.objectId);
     if (data == null) return null;
@@ -3169,6 +3227,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onCreateChildDocument: local
           ? (parent, name) => _localCreateDocument(name, parentViewId: parent.id)
           : _createChildDocument,
+      onCreateFolder: local ? _localCreateFolder : _createFolder,
+      onCreateChildFolder: local
+          ? (parent, name) => _localCreateFolder(name, parentViewId: parent.id)
+          : _createChildFolder,
       onReorderViews: local ? _localReorderViews : _reorderViews,
       onLoadTrash: local ? _localLoadTrash : _loadTrash,
       onRestoreView: local ? _localRestoreView : _restoreView,
@@ -3525,6 +3587,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteWorkspace,
     required this.onCreateDocument,
     required this.onCreateChildDocument,
+    required this.onCreateFolder,
+    required this.onCreateChildFolder,
     required this.onReorderViews,
     required this.onLoadTrash,
     required this.onRestoreView,
@@ -3639,6 +3703,9 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String name) onCreateDocument;
   final Future<void> Function(DocumentView parent, String name)
   onCreateChildDocument;
+  final Future<void> Function(String name) onCreateFolder;
+  final Future<void> Function(DocumentView parent, String name)
+  onCreateChildFolder;
   final Future<void> Function(String? parentViewId, List<DocumentView> ordered)
   onReorderViews;
   final Future<List<DocumentView>> Function() onLoadTrash;
@@ -4068,12 +4135,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onPressed: _openRecycleBin,
                       icon: const Icon(Icons.delete_outline, size: 20),
                     ),
-                    IconButton(
-                      tooltip: 'New page',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () {
-                        widget.onCreateDocument('Untitled');
+                    PopupMenuButton<String>(
+                      tooltip: '新建',
+                      position: PopupMenuPosition.under,
+                      onSelected: (v) {
+                        if (v == 'page') {
+                          widget.onCreateDocument('Untitled');
+                        } else {
+                          widget.onCreateFolder('新文件夹');
+                        }
                       },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: 'page',
+                          child: _MenuRow(icon: Icons.add, label: '新建页面'),
+                        ),
+                        PopupMenuItem(
+                          value: 'folder',
+                          child: _MenuRow(
+                            icon: Icons.create_new_folder_outlined,
+                            label: '新建文件夹',
+                          ),
+                        ),
+                      ],
                       icon: const Icon(Icons.note_add_outlined, size: 20),
                     ),
                   ],
@@ -4300,6 +4384,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onCreateChild: () {
             setState(() => _collapsedViewIds.remove(item.view.id));
             widget.onCreateChildDocument(item.view, 'Untitled');
+          },
+          onCreateChildFolder: () {
+            setState(() => _collapsedViewIds.remove(item.view.id));
+            widget.onCreateChildFolder(item.view, '新文件夹');
           },
           onRename: () => _promptRenameDocument(item.view),
           onDelete: () => widget.onDeleteView(item.view),
@@ -7986,6 +8074,7 @@ class DocumentListItem extends StatefulWidget {
     required this.onToggle,
     required this.onPressed,
     required this.onCreateChild,
+    required this.onCreateChildFolder,
     required this.onRename,
     required this.onDelete,
     super.key,
@@ -8003,8 +8092,11 @@ class DocumentListItem extends StatefulWidget {
   final VoidCallback onToggle;
   final VoidCallback onPressed;
   final VoidCallback onCreateChild;
+  final VoidCallback onCreateChildFolder;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+
+  bool get _isFolder => view.objectType == 'folder';
 
   @override
   State<DocumentListItem> createState() => _DocumentListItemState();
@@ -8059,6 +8151,10 @@ class _DocumentListItemState extends State<DocumentListItem> {
           child: _MenuRow(icon: Icons.add, label: '新建子页面'),
         ),
         const PopupMenuItem(
+          value: 'childFolder',
+          child: _MenuRow(icon: Icons.create_new_folder_outlined, label: '新建子文件夹'),
+        ),
+        const PopupMenuItem(
           value: 'rename',
           child: _MenuRow(icon: Icons.edit_outlined, label: '重命名'),
         ),
@@ -8067,7 +8163,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
             value: 'toggle',
             child: _MenuRow(
               icon: widget.isCollapsed ? Icons.unfold_more : Icons.unfold_less,
-              label: widget.isCollapsed ? '展开子页面' : '收起子页面',
+              label: widget.isCollapsed ? '展开子项' : '收起子项',
             ),
           ),
         const PopupMenuDivider(),
@@ -8085,6 +8181,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
     switch (selected) {
       case 'child':
         widget.onCreateChild();
+      case 'childFolder':
+        widget.onCreateChildFolder();
       case 'rename':
         widget.onRename();
       case 'toggle':
@@ -8107,7 +8205,9 @@ class _DocumentListItemState extends State<DocumentListItem> {
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
-          onTap: w.onPressed,
+          // A folder has no content to open — clicking it expands/collapses in
+          // place (file-manager style). Documents open in the editor.
+          onTap: w._isFolder ? w.onToggle : w.onPressed,
           onSecondaryTapDown:
               w.canEdit ? (d) => _openMenuAtGlobal(d.globalPosition) : null,
           child: ConstrainedBox(
@@ -8140,7 +8240,11 @@ class _DocumentListItemState extends State<DocumentListItem> {
                         : const SizedBox.shrink(),
                   ),
                   Icon(
-                    Icons.description_outlined,
+                    w._isFolder
+                        ? (w.isCollapsed
+                              ? Icons.folder_outlined
+                              : Icons.folder_open_outlined)
+                        : Icons.description_outlined,
                     size: 18,
                     color: w.isSelected
                         ? const Color(0xFF2563EB)
@@ -8531,6 +8635,27 @@ class ApiClient {
       token: token,
     );
     return DocumentCreateResult.fromJson(response);
+  }
+
+  /// Create a folder view — a pure container (no document). Returns the new
+  /// view (object_type='folder'). Mirrors [createDocument] against the folders
+  /// endpoint (F1).
+  Future<DocumentView> createFolder(
+    String token,
+    String workspaceId,
+    String name, {
+    String? parentViewId,
+  }) async {
+    final body = <String, dynamic>{'name': name};
+    if (parentViewId != null) {
+      body['parent_view_id'] = parentViewId;
+    }
+    final response = await _post(
+      '/api/workspaces/$workspaceId/folders',
+      body,
+      token: token,
+    );
+    return DocumentView.fromJson(response['view'] as Map<String, dynamic>);
   }
 
   Future<DocumentBootstrap> bootstrapDocument(
