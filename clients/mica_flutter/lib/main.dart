@@ -3146,6 +3146,41 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Switch the whole switcher to a world (the Level-1 world toggle). Lands on
+  /// that world's current/first workspace; switching to a signed-out cloud world
+  /// prompts sign-in first, then lands there. In-place — both worlds are
+  /// first-class and long-lived, so no restart (unlike AppFlowy's anon→cloud).
+  Future<void> _switchWorld(bool local) async {
+    if (local == _activeIsLocal) return; // already in that world
+    if (local) {
+      final target = _localSelectedWorkspace ?? _localWorkspaces.firstOrNull;
+      if (target == null) return; // local always seeds one, but be safe
+      await _selectEntry(
+        WorkspaceEntry(origin: 'local', workspace: target, role: 'owner'),
+      );
+      return;
+    }
+    // Cloud world needs a signed-in session.
+    if (_session == null) {
+      await _promptSignIn();
+      if (!mounted || _session == null) return; // cancelled / failed
+    }
+    final cloudOrigin = _api.baseUri.toString();
+    final target = _selectedWorkspace ?? _workspaces.firstOrNull;
+    if (target == null) {
+      // Signed in but no cloud workspaces yet — flip world so the empty-cloud
+      // state (create / import) shows instead of the local tree.
+      if (_activeOrigin != cloudOrigin) {
+        setState(() => _activeOrigin = cloudOrigin);
+        savePref('activeOrigin', cloudOrigin);
+      }
+      return;
+    }
+    await _selectEntry(
+      WorkspaceEntry(origin: cloudOrigin, workspace: target, role: target.role),
+    );
+  }
+
   // Per-entry workspace actions (P3c): the switcher lists BOTH worlds, so row
   // actions must dispatch on the ROW's origin, not the active one.
   Future<void> _renameEntry(WorkspaceEntry e, String name) => e.isLocal
@@ -3242,6 +3277,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return WorkspaceView(
       session: session,
       entries: _workspaceEntries,
+      activeIsLocal: local,
+      onSwitchWorld: _switchWorld,
       selectedRef: _selectedEntry?.ref,
       onSelectEntry: _selectEntry,
       onRenameEntry: _renameEntry,
@@ -3626,6 +3663,8 @@ class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.session,
     required this.entries,
+    required this.activeIsLocal,
+    required this.onSwitchWorld,
     required this.selectedRef,
     required this.onSelectEntry,
     required this.onRenameEntry,
@@ -3727,6 +3766,14 @@ class WorkspaceView extends StatefulWidget {
   /// The unified workspace list (P3c): local + cloud entries, grouped by
   /// origin in the switcher. Row actions dispatch on the ROW's entry.
   final List<WorkspaceEntry> entries;
+
+  /// Whether the ACTIVE world is local — the Level-1 world toggle reflects it,
+  /// and the switcher shows only this world's workspaces (one world at a time).
+  final bool activeIsLocal;
+
+  /// Switch the whole switcher to a world (true = local). Signed-out cloud
+  /// prompts sign-in first. In-place; no restart.
+  final Future<void> Function(bool local) onSwitchWorld;
   final WorkspaceRef? selectedRef;
   final Future<void> Function(WorkspaceEntry entry) onSelectEntry;
   final Future<void> Function(WorkspaceEntry entry, String name) onRenameEntry;
@@ -4167,6 +4214,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   Expanded(
                     child: _WorkspaceSelector(
                       entries: widget.entries,
+                      activeIsLocal: widget.activeIsLocal,
+                      onSwitchWorld: widget.onSwitchWorld,
                       selectedRef: widget.selectedRef,
                       cloudOriginLabel: widget.cloudOriginLabel,
                       cloudEmail: widget.session?.user.email,
@@ -5812,13 +5861,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 }
 
-/// Workspace switcher (P3c): ONE grouped list mixing both worlds. A cloud
-/// section (server label + account, or a sign-in row when signed out) above a
-/// local section, then a "New workspace" row whose dialog picks the kind.
-/// Row actions dispatch on the ROW's entry, not the active world.
+/// Workspace switcher (v0.3.2): ONE WORLD AT A TIME. A Level-1 world toggle
+/// (Cloud account / Local device) sits on top; below it, only the ACTIVE world's
+/// workspaces — cloud (server label + account, or a sign-in card when signed
+/// out) OR local, never both tiled. Create/import land in the active world; row
+/// actions still dispatch on the ROW's entry.
 class _WorkspaceSelector extends StatefulWidget {
   const _WorkspaceSelector({
     required this.entries,
+    required this.activeIsLocal,
+    required this.onSwitchWorld,
     required this.selectedRef,
     required this.cloudOriginLabel,
     required this.cloudEmail,
@@ -5837,6 +5889,11 @@ class _WorkspaceSelector extends StatefulWidget {
   });
 
   final List<WorkspaceEntry> entries;
+
+  /// The active world (true = local); the toggle highlights it and the list
+  /// below shows only its workspaces.
+  final bool activeIsLocal;
+  final Future<void> Function(bool local) onSwitchWorld;
   final WorkspaceRef? selectedRef;
   final String cloudOriginLabel;
 
@@ -5891,20 +5948,17 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
       ),
       menuChildren: [
-        _sectionHeader(
-          Icons.cloud_outlined,
-          widget.cloudOriginLabel,
-          trailing: widget.cloudEmail ?? '未登录',
-        ),
-        if (widget.cloudEmail == null && widget.onSignIn != null)
+        // ── Level 1: world toggle — one world at a time ──────────────────
+        _worldRow(local: false),
+        if (widget.localAvailable) _worldRow(local: true),
+        const Divider(height: 8),
+        // ── Level 2: only the ACTIVE world's workspaces ──────────────────
+        if (!widget.activeIsLocal &&
+            widget.cloudEmail == null &&
+            widget.onSignIn != null)
           _signInRow()
         else
-          for (final e in cloud) _row(e),
-        if (widget.localAvailable) ...[
-          const Divider(height: 8),
-          _sectionHeader(Icons.computer_outlined, '本地'),
-          for (final e in locals) _row(e),
-        ],
+          for (final e in (widget.activeIsLocal ? locals : cloud)) _row(e),
         const Divider(height: 8),
         _createRow(),
         SizedBox(
@@ -5954,10 +6008,14 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 controller.isOpen ? controller.close() : controller.open(),
             child: Row(
               children: [
-                const Icon(
-                  Icons.workspaces_outline,
+                // World-aware icon so the collapsed switcher shows which world
+                // you're in (cloud vs this device).
+                Icon(
+                  widget.activeIsLocal
+                      ? Icons.computer_outlined
+                      : Icons.cloud_outlined,
                   size: 20,
-                  color: Color(0xFF475569),
+                  color: const Color(0xFF475569),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -5976,35 +6034,48 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  /// A slim group header: provenance icon + label (+ account email on the
-  /// cloud section).
-  Widget _sectionHeader(IconData icon, String label, {String? trailing}) {
+  /// Level-1 world toggle row: the Cloud account or the Local device. The active
+  /// world is highlighted + checked; tapping the OTHER world switches to it
+  /// (in-place — signed-out cloud prompts sign-in via onSwitchWorld). Tapping the
+  /// already-active world is a no-op (the menu just closes).
+  Widget _worldRow({required bool local}) {
+    final active = local == widget.activeIsLocal;
+    final accent = const Color(0xFF2563EB);
+    final icon = local ? Icons.computer_outlined : Icons.cloud_outlined;
+    final label = local ? '本地' : widget.cloudOriginLabel;
+    // Local = "this device" (no account); cloud = the signed-in email / 未登录.
+    final sub = local ? '本机' : (widget.cloudEmail ?? '未登录');
     return SizedBox(
       width: 320,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: MenuItemButton(
+        onPressed: () {
+          if (!active) widget.onSwitchWorld(local);
+        },
+        leadingIcon: Icon(
+          icon,
+          size: 18,
+          color: active ? accent : const Color(0xFF64748B),
+        ),
+        trailingIcon: active
+            ? Icon(Icons.check, size: 16, color: accent)
+            : null,
         child: Row(
           children: [
-            Icon(icon, size: 15, color: const Color(0xFF94A3B8)),
-            const SizedBox(width: 8),
             Text(
               label,
-              style: const TextStyle(
-                fontSize: 12,
+              style: TextStyle(
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF64748B),
+                color: active ? const Color(0xFF0F172A) : const Color(0xFF334155),
               ),
             ),
-            const Spacer(),
-            if (trailing != null)
-              Text(
-                trailing,
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                sub,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: Color(0xFF94A3B8),
-                ),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
               ),
+            ),
           ],
         ),
       ),
