@@ -980,7 +980,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (cache == null) return; // never mirrored — nothing to show
     final rebuilt = rebuildCloudNavFromCache(cache, _session?.user.id ?? '');
     final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
-    final firstView = views.firstOrNull;
+    // Auto-open the first DOCUMENT, never a folder (a folder has no mirrored
+    // doc → blank editor + a folder wrongly highlighted as selected).
+    final firstView = firstOpenableView(views);
     final bootstrap =
         firstView == null ? null : await _offlineCloudBootstrap(firstView);
     if (!mounted) return;
@@ -1869,7 +1871,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (_localViews.isEmpty) {
       await _localCreateDocument('欢迎');
     } else {
-      await _localSelectView(_localViews.first);
+      // Open the first document, skipping folders (a folder has no doc to open;
+      // _localSelectView would early-return, leaving the editor blank).
+      final firstDoc = firstOpenableView(_localViews);
+      if (firstDoc != null) await _localSelectView(firstDoc);
     }
     if (mounted) setState(() => _localReady = true);
   }
@@ -1902,9 +1907,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _localSelectedView = null;
       _localBootstrap = null;
     });
-    if (_localViews.isNotEmpty) {
-      await _localSelectView(_localViews.first);
-    }
+    final firstDoc = firstOpenableView(_localViews);
+    if (firstDoc != null) await _localSelectView(firstDoc);
   }
 
   Future<void> _localRenameWorkspace(Workspace workspace, String name) async {
@@ -1950,8 +1954,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
       _reloadLocalViews();
     });
-    if (wasSelected && _localViews.isNotEmpty) {
-      await _localSelectView(_localViews.first);
+    if (wasSelected) {
+      final firstDoc = firstOpenableView(_localViews);
+      if (firstDoc != null) await _localSelectView(firstDoc);
     }
   }
 
@@ -2500,21 +2505,44 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// A view and all its descendants from the on-device set (incl. trashed rows),
+  /// so local delete/restore/purge cascade the whole subtree like the server's
+  /// recursive-CTE handlers. Without this, trashing a folder orphans its
+  /// children: deep descendants vanish from the sidebar (the orphan fallback in
+  /// _visibleDocumentTree only lifts direct children) until the parent returns.
+  List<ViewData> _localSubtree(String rootId) {
+    final all = _local.listViews();
+    final ids = collectSubtreeIds(
+      all.map((v) => (id: v.id, parentId: v.parentId)),
+      rootId,
+    );
+    return [
+      for (final v in all)
+        if (ids.contains(v.id)) v,
+    ];
+  }
+
   Future<void> _localDeleteView(DocumentView view) async {
-    _local.saveView((
-      id: view.id,
-      workspaceId: _workspaceIdOfView(view.id),
-      parentId: view.parentViewId,
-      objectId: view.objectId,
-      name: view.name,
-      position: view.position,
-      trashed: true,
-      objectType: view.objectType,
-    ));
+    // Soft-delete the page AND its whole subtree (folders carry children).
+    final subtree = _localSubtree(view.id);
+    final ids = {for (final v in subtree) v.id};
+    for (final v in subtree) {
+      _local.saveView((
+        id: v.id,
+        workspaceId: v.workspaceId,
+        parentId: v.parentId,
+        objectId: v.objectId,
+        name: v.name,
+        position: v.position,
+        trashed: true,
+        objectType: v.objectType,
+      ));
+    }
     if (!mounted) return;
     setState(() {
       _reloadLocalViews();
-      if (_localSelectedView?.id == view.id) {
+      // Close the editor if the open page was anywhere in the trashed subtree.
+      if (_localSelectedView != null && ids.contains(_localSelectedView!.id)) {
         _localSelectedView = null;
         _localBootstrap = null;
       }
@@ -2553,25 +2581,52 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localRestoreView(DocumentView view) async {
-    _local.saveView((
-      id: view.id,
-      workspaceId: _workspaceIdOfView(view.id),
-      parentId: view.parentViewId,
-      objectId: view.objectId,
-      name: view.name,
-      position: view.position,
-      trashed: false,
-      objectType: view.objectType,
-    ));
+    // Restore the page and the subtree that was trashed with it.
+    for (final v in _localSubtree(view.id)) {
+      _local.saveView((
+        id: v.id,
+        workspaceId: v.workspaceId,
+        parentId: v.parentId,
+        objectId: v.objectId,
+        name: v.name,
+        position: v.position,
+        trashed: false,
+        objectType: v.objectType,
+      ));
+    }
+    // Mirror the server's restore_view: if the restored root's parent is no
+    // longer an active view, lift it to the top level so it isn't an orphan.
+    final active = {
+      for (final v in _local.listViews())
+        if (!v.trashed) v.id,
+    };
+    final root = _local.listViews().where((v) => v.id == view.id).firstOrNull;
+    if (root != null && root.parentId != null && !active.contains(root.parentId)) {
+      _local.saveView((
+        id: root.id,
+        workspaceId: root.workspaceId,
+        parentId: null,
+        objectId: root.objectId,
+        name: root.name,
+        position: root.position,
+        trashed: false,
+        objectType: root.objectType,
+      ));
+    }
     if (mounted) setState(_reloadLocalViews);
   }
 
   Future<void> _localPurgeView(DocumentView view) async {
-    _local.purgeView(view.id, view.objectId);
+    // Permanently remove the page and its subtree from the recycle bin.
+    final subtree = _localSubtree(view.id);
+    final ids = {for (final v in subtree) v.id};
+    for (final v in subtree) {
+      _local.purgeView(v.id, v.objectId);
+    }
     if (!mounted) return;
     setState(() {
       _reloadLocalViews();
-      if (_localSelectedView?.id == view.id) {
+      if (_localSelectedView != null && ids.contains(_localSelectedView!.id)) {
         _localSelectedView = null;
         _localBootstrap = null;
       }
@@ -2924,15 +2979,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         .firstOrNull;
     // Auto-open a DOCUMENT (folders have no content to bootstrap — opening one
     // would 404 on its unbacked object_id).
-    final viewToOpen =
-        selectedView ?? views.where((v) => v.objectType == 'document').firstOrNull;
-    final bootstrap = viewToOpen == null || viewToOpen.objectType == 'folder'
-        ? null
-        : await _api.bootstrapDocument(
-            session.accessToken,
-            workspace.id,
-            viewToOpen.objectId,
-          );
+    final viewToOpen = selectedView ?? firstOpenableView(views);
+    DocumentBootstrap? bootstrap;
+    if (viewToOpen != null && viewToOpen.objectType != 'folder') {
+      try {
+        bootstrap = await _api.bootstrapDocument(
+          session.accessToken,
+          workspace.id,
+          viewToOpen.objectId,
+        );
+      } on ApiException {
+        // The auto-open target answered with an error (404/403 — deleted
+        // server-side, access revoked, or an unbacked folder object_id from an
+        // older client that didn't guard). listViews already succeeded, so we
+        // are demonstrably ONLINE: show the tree with nothing opened rather than
+        // letting one bad view cascade into a full offline downgrade at startup.
+        bootstrap = null;
+      }
+    }
 
     setState(() {
       _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
@@ -2997,7 +3061,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final rebuilt = rebuildCloudNavFromCache(cache, session.user.id);
     final workspace = rebuilt.workspaces.first;
     final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
-    final firstView = views.firstOrNull;
+    // Auto-open the first DOCUMENT, never a folder (a folder has no mirrored
+    // doc → the editor would sit blank with a folder marked selected, and the
+    // online path already skips folders — keep offline consistent).
+    final firstView = firstOpenableView(views);
     final bootstrap =
         firstView == null ? null : await _offlineCloudBootstrap(firstView);
     if (!mounted) return false;
@@ -9485,10 +9552,11 @@ class DocumentView {
 /// the P1c offline-read reconstruction. `role` is the real mirrored membership
 /// role (P2d), so an editor can edit a cached cloud doc offline (its edits queue
 /// in the append-log outbox and push on reconnect); a viewer stays read-only via
-/// the existing `matchesEditRole` gate. `objectType` is defaulted to `'document'`
-/// and `ownerId` to [ownerId] (the current user) — still not mirrored; the real
-/// values return on the next successful online load. Views are grouped by their
-/// `workspaceId` and keep the mirror's position order. Pure + testable.
+/// the existing `matchesEditRole` gate. `objectType` is carried through from the
+/// mirror (F3 — so a mirrored folder stays a folder offline); only `ownerId` is
+/// defaulted to [ownerId] (the current user), the real value returning on the
+/// next successful online load. Views are grouped by their `workspaceId` and keep
+/// the mirror's position order. Pure + testable.
 ({List<Workspace> workspaces, Map<String, List<DocumentView>> views})
 rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
   final workspaces = [
@@ -9509,6 +9577,41 @@ rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
     );
   }
   return (workspaces: workspaces, views: views);
+}
+
+/// The first view worth auto-opening: a folder is a pure container with no
+/// content to bootstrap (opening one would 404 on its unbacked object_id), so
+/// every auto-open path — online, offline mirror, and local — skips folders and
+/// lands on the first document. Shared + testable so the three worlds can't
+/// drift back to `.firstOrNull` (which would land on a folder → blank editor).
+DocumentView? firstOpenableView(Iterable<DocumentView> views) =>
+    views.where((v) => v.objectType == 'document').firstOrNull;
+
+/// The ids of [rootId] plus all its descendants, given parent-linked [nodes].
+/// Pure + testable core of the local delete/restore/purge subtree cascade — the
+/// part that must walk the WHOLE subtree (not just direct children) so trashing a
+/// folder carries its deep descendants, matching the server's recursive-CTE
+/// handlers. Returns empty if [rootId] isn't present; cycle-safe.
+Set<String> collectSubtreeIds(
+  Iterable<({String id, String? parentId})> nodes,
+  String rootId,
+) {
+  final byParent = <String?, List<String>>{};
+  var hasRoot = false;
+  for (final n in nodes) {
+    (byParent[n.parentId] ??= <String>[]).add(n.id);
+    if (n.id == rootId) hasRoot = true;
+  }
+  if (!hasRoot) return <String>{};
+  final out = <String>{};
+  final stack = <String>[rootId];
+  while (stack.isNotEmpty) {
+    final id = stack.removeLast();
+    if (!out.add(id)) continue; // already visited → cycle guard
+    final kids = byParent[id];
+    if (kids != null) stack.addAll(kids);
+  }
+  return out;
 }
 
 class DocumentRecord {

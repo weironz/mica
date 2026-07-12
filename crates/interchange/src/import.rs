@@ -71,9 +71,20 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
   // A folder entry's `path` is a directory (no `.md`); a document entry's is the
   // `.md` file.
   let manifest_docs: Vec<String> = mds.keys().cloned().collect();
+  let entries = manifest_entries(manifest.as_deref());
+  // A folder has no `.md`/H1 to recover its display name from — its real name
+  // lives only in the manifest `title`. Key by the folder's dir path so the
+  // chain walk restores the true name instead of the sanitized path segment
+  // (spaces/punctuation collapse to `_` in the path). Documents are unaffected:
+  // their name round-trips through the `# {name}` H1 the export prepends.
+  let folder_titles: HashMap<String, String> = entries
+    .iter()
+    .filter(|(_, is_folder, _)| *is_folder)
+    .filter_map(|(path, _, title)| title.clone().map(|t| (path.clone(), t)))
+    .collect();
   let mut ordered: Vec<(String, bool)> = Vec::new();
   let mut queued: HashSet<String> = HashSet::new();
-  for (path, is_folder) in manifest_entries(manifest.as_deref()) {
+  for (path, is_folder, _) in entries {
     if is_folder {
       if queued.insert(path.clone()) {
         ordered.push((path, true));
@@ -124,9 +135,15 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
       let idx = match existing {
         Some(idx) => idx,
         None => {
+          // Prefer the manifest's real name; fall back to the (cleaned) path
+          // segment for manifest-less / foreign archives.
+          let title = folder_titles
+            .get(&folder_path)
+            .cloned()
+            .unwrap_or_else(|| seg.clone());
           pages.push(PagePlan {
             archive_path: None,
-            title: seg,
+            title,
             parent,
             markdown: String::new(),
             is_folder: true,
@@ -170,10 +187,12 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
   }
 }
 
-/// Parse the export `manifest.json` into `(path, is_folder)` in listed
-/// (pre-order) order. Entries without a `type` field default to document
-/// (v1 manifests, pre-folder). Empty/absent manifest → no entries.
-fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool)> {
+/// Parse the export `manifest.json` into `(path, is_folder, title)` in listed
+/// (pre-order) order. `title` is the entry's original display name (used to
+/// restore folder names, which have no `.md`/H1 to recover from). Entries
+/// without a `type` field default to document (v1 manifests, pre-folder).
+/// Empty/absent manifest → no entries.
+fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool, Option<String>)> {
   let Some(json) = manifest_json else {
     return Vec::new();
   };
@@ -188,7 +207,11 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool)> {
     .filter_map(|p| {
       let path = p.get("path")?.as_str()?.to_string();
       let is_folder = p.get("type").and_then(|t| t.as_str()) == Some("folder");
-      Some((path, is_folder))
+      let title = p
+        .get("title")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string());
+      Some((path, is_folder, title))
     })
     .collect()
 }
@@ -369,6 +392,29 @@ mod tests {
     assert!(!doc.is_folder, "Doc keeps document identity");
     assert_eq!(doc.markdown.trim(), "parent body");
     assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
+  }
+
+  // Folder names round-trip through the manifest `title`, NOT the sanitized dir
+  // path. Export collapses spaces/punctuation to `_` in the path; import must
+  // restore the real name from `title` (a folder has no `.md`/H1 to recover it).
+  #[test]
+  fn folder_name_with_spaces_round_trips_via_manifest_title() {
+    let raw = vec![
+      e("manifest.json", &manifest(&[
+        ("My_Folder", "My Folder", "folder"),
+        ("My_Folder/Note.md", "Note", "document"),
+      ])),
+      e("My_Folder/Note.md", "# Note\n\nbody"),
+    ];
+    let plan = plan_import(raw, false);
+    let folder = find(&plan, "My Folder");
+    assert!(folder.is_folder, "folder keeps its real name from the manifest");
+    assert_eq!(parent_title(&plan, "Note"), Some("My Folder"));
+    // The sanitized path segment must NEVER leak in as a display name.
+    assert!(
+      plan.pages.iter().all(|p| p.title != "My_Folder"),
+      "sanitized path segment must not survive as a title",
+    );
   }
 
   // A foreign archive with no manifest (Obsidian/plain markdown tree): a

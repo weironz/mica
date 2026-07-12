@@ -1095,12 +1095,53 @@ fn collect_page_paths<'a>(
   };
   let mut used = std::collections::HashSet::new();
   for child in children {
-    let base = unique_zip_path(safe_segment(&child.name), &mut used);
+    let base = unique_sibling_base(child, &mut used);
     out.push((child, folder.to_vec(), base.clone()));
     let mut sub = folder.to_vec();
     sub.push(base);
     collect_page_paths(by_parent, Some(child.id), &sub, out);
   }
+}
+
+/// Pick a per-sibling base name whose emitted archive paths cannot collide. A
+/// document occupies `<base>.md` (its file) and, if it has children, `<base>/`
+/// (their directory); a folder occupies `<base>/` (its manifest dir). Reserving
+/// BOTH forms in one `used` set is what stops a document `notes` and a sibling
+/// folder `notes.md` from both emitting the byte-identical path `notes.md` — the
+/// folder's dir vs the document's file — which the importer would then dedup by
+/// path string, silently dropping one node. On collision the later sibling is
+/// bumped (`-2`, `-3`…), and that bumped base also becomes its children's nesting
+/// prefix, so export/manifest/children stay consistent.
+fn unique_sibling_base(view: &View, used: &mut std::collections::HashSet<String>) -> String {
+  let seg = safe_segment(&view.name);
+  let is_doc = view.object_type == "document";
+  // Names a given base would occupy in the sibling directory namespace.
+  let occupied = |base: &str| -> Vec<String> {
+    if is_doc {
+      vec![base.to_string(), format!("{base}.md")]
+    } else {
+      vec![base.to_string()]
+    }
+  };
+  let free = |base: &str, used: &std::collections::HashSet<String>| {
+    occupied(base).iter().all(|n| !used.contains(n))
+  };
+  let base = if free(&seg, used) {
+    seg
+  } else {
+    let mut n = 2;
+    loop {
+      let candidate = format!("{seg}-{n}");
+      if free(&candidate, used) {
+        break candidate;
+      }
+      n += 1;
+    }
+  };
+  for name in occupied(&base) {
+    used.insert(name);
+  }
+  base
 }
 
 /// A path segment safe for a filename: keep letters/digits of any script plus
@@ -1620,5 +1661,51 @@ mod tests {
     // => the export loop writes the empty folder "Sub" as directory path
     //    "Chapter/Sub" (manifest type:'folder', no `.md`), and "Deep" as
     //    "Chapter/Sub/Deep.md" — no stray container `.md` anywhere.
+  }
+
+  /// Regression (F5): a folder whose sanitized name ends in `.md` must not
+  /// collide with a sibling document's `.md` file. The document occupies
+  /// `<name>.md` (its file) and the folder's dir is byte-identical — without
+  /// unifying the sibling namespace both emit the same manifest path and the
+  /// importer silently drops one node (data loss on the round-trip red line).
+  #[test]
+  fn folder_named_like_a_md_file_does_not_collide_with_sibling_document() {
+    // Sibling document "notes" (→ file "notes.md") and folder "notes.md".
+    let doc = view(20, None, "notes", "document");
+    let folder = view(21, None, "notes.md", "folder");
+
+    let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
+      std::collections::HashMap::new();
+    for v in [&doc, &folder] {
+      by_parent.entry(v.parent_view_id).or_default().push(v);
+    }
+    for list in by_parent.values_mut() {
+      list.sort_by(|a, b| a.position.cmp(&b.position));
+    }
+
+    let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
+    collect_page_paths(&by_parent, None, &Vec::new(), &mut pages);
+
+    // Reconstruct the paths the export loop emits: a document → `<base>.md`
+    // (a file), a folder → `<base>` (a directory / its manifest path).
+    let emit = |name: &str| -> String {
+      let (v, folder, base) = pages.iter().find(|(v, _, _)| v.name == name).unwrap();
+      let mut p = folder.join("/");
+      if !p.is_empty() {
+        p.push('/');
+      }
+      p.push_str(base);
+      if v.object_type == "document" {
+        p.push_str(".md");
+      }
+      p
+    };
+    let doc_path = emit("notes");
+    let folder_path = emit("notes.md");
+    assert_eq!(doc_path, "notes.md", "the document keeps its natural file path");
+    assert_ne!(
+      doc_path, folder_path,
+      "folder dir and document file must not share a manifest path",
+    );
   }
 }

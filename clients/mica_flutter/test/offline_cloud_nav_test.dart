@@ -66,6 +66,28 @@ void main() {
     expect(rebuilt.views['w2']!.single.objectId, 'd3');
   });
 
+  // F5 Fix C: every auto-open path funnels through firstOpenableView so a folder
+  // is never opened as a document (which would 404 / show a blank editor).
+  test('firstOpenableView skips folders and returns the first document', () {
+    DocumentView v(String id, String type) => DocumentView(
+          id: id,
+          parentViewId: null,
+          objectId: 'o$id',
+          objectType: type,
+          name: id,
+          position: '0000000010',
+        );
+    // A folder sorted first is skipped; the first document wins.
+    expect(
+      firstOpenableView([v('f', 'folder'), v('d1', 'document'), v('d2', 'document')])?.id,
+      'd1',
+    );
+    // Only folders → nothing openable.
+    expect(firstOpenableView([v('f1', 'folder'), v('f2', 'folder')]), isNull);
+    // Empty → null.
+    expect(firstOpenableView(const <DocumentView>[]), isNull);
+  });
+
   test('rebuildCloudNavFromCache handles a workspace with no views', () {
     final CloudPageTreeCache cache = (
       workspaces: <WorkspaceData>[
