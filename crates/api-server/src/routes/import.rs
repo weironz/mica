@@ -162,6 +162,24 @@ async fn run_import(
   let client = reqwest::Client::new();
 
   for (idx, page) in plan.pages.iter().enumerate() {
+    // A folder is a pure container: just a view, no document/snapshot, no
+    // markdown/asset processing (F2 round-trip — folders survive export→import).
+    if page.is_folder {
+      insert_folder(
+        state,
+        workspace_id,
+        user_id,
+        view_ids[idx],
+        page.parent.map(|p| view_ids[p]),
+        &page.title,
+      )
+      .await?;
+      let mut jobs = state.import_jobs.write().await;
+      if let Some(job) = jobs.get_mut(&job_id) {
+        job.done = idx + 1;
+      }
+      continue;
+    }
     let root_block_id = format!("block_{}", Uuid::new_v4().simple());
     let mut payload = import_markdown(&page.markdown, &root_block_id);
     let from = page.archive_path.as_deref().unwrap_or("");
@@ -249,6 +267,41 @@ async fn create_workspace(state: &AppState, user_id: Uuid, name: &str) -> ApiRes
   .await?;
   tx.commit().await?;
   Ok(workspace_id)
+}
+
+/// Insert a folder view (pure container) — no document, no snapshot. `object_id`
+/// is a fresh unreferenced uuid to satisfy the NOT NULL column. Mirrors
+/// [`documents::create_folder`], used by the import executor for folder pages.
+async fn insert_folder(
+  state: &AppState,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  view_id: Uuid,
+  parent_view_id: Option<Uuid>,
+  title: &str,
+) -> ApiResult<()> {
+  let title = title.trim();
+  let title = if title.is_empty() { "Untitled" } else { title };
+  let object_id = Uuid::new_v4();
+  let position = Uuid::now_v7().to_string();
+  sqlx::query(
+    r#"
+      INSERT INTO views (
+        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by
+      )
+      VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .bind(parent_view_id)
+  .bind(object_id)
+  .bind(title)
+  .bind(position)
+  .bind(user_id)
+  .execute(&state.db)
+  .await?;
+  Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -20,8 +20,12 @@ pub struct PagePlan {
   /// Index of the parent page in [ImportPlan::pages]; None = workspace root.
   pub parent: Option<usize>,
   /// Markdown body (leading H1 duplicating the title already stripped);
-  /// empty for directory pages.
+  /// empty for directory/folder pages.
   pub markdown: String,
+  /// A pure container (folder) — no document content. A directory that has no
+  /// `.md` of its own, or a manifest `type:"folder"` entry. The executor
+  /// creates a `object_type='folder'` view (no document/snapshot) for these.
+  pub is_folder: bool,
 }
 
 #[derive(Debug)]
@@ -60,21 +64,44 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
     if notion { strip_notion_id(s).to_string() } else { s.to_string() }
   };
   let md_for_folder = folder_page_index(mds.keys().map(String::as_str), notion);
-  let ordered = order_page_paths(mds.keys().cloned().collect(), manifest.as_deref());
+
+  // Planning order: manifest entries first (they carry pre-order + explicit
+  // `type`, so folders — even empty ones with no `.md` — round-trip), then any
+  // `.md` the manifest didn't mention (partial/foreign archives), as documents.
+  // A folder entry's `path` is a directory (no `.md`); a document entry's is the
+  // `.md` file.
+  let manifest_docs: Vec<String> = mds.keys().cloned().collect();
+  let mut ordered: Vec<(String, bool)> = Vec::new();
+  let mut queued: HashSet<String> = HashSet::new();
+  for (path, is_folder) in manifest_entries(manifest.as_deref()) {
+    if is_folder {
+      if queued.insert(path.clone()) {
+        ordered.push((path, true));
+      }
+    } else if mds.contains_key(&path) && queued.insert(path.clone()) {
+      ordered.push((path, false));
+    }
+  }
+  for path in order_page_paths(manifest_docs, manifest.as_deref()) {
+    if queued.insert(path.clone()) {
+      ordered.push((path, false));
+    }
+  }
 
   let mut pages: Vec<PagePlan> = Vec::new();
   let mut page_by_path: HashMap<String, usize> = HashMap::new();
   let mut folder_page: HashMap<String, usize> = HashMap::new();
 
-  for path in &ordered {
+  for (path, is_folder) in &ordered {
     let parts: Vec<&str> = path.split('/').collect();
-    // Walk the folder chain. A folder maps to the page exported as
-    // `<folder>.md` (modulo Notion IDs) when present; otherwise a synthetic
-    // directory page is planned.
+    // For a folder entry the whole path is the folder chain; for a document the
+    // ancestors are folders and the last segment is the file.
+    let chain = if *is_folder { parts.len() } else { parts.len().saturating_sub(1) };
+
     let mut parent: Option<usize> = None;
     let mut folder_path = String::new();
     let mut norm_folder = String::new();
-    for seg_raw in parts.iter().take(parts.len().saturating_sub(1)) {
+    for seg_raw in parts.iter().take(chain) {
       if !folder_path.is_empty() {
         folder_path.push('/');
       }
@@ -85,6 +112,10 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
       }
       norm_folder.push_str(&seg);
 
+      // Prefer a `.md`-backed container (old convention / an existing
+      // document-with-children: `Doc.md` + `Doc/…`) — that folder maps to the
+      // DOCUMENT page, keeping its body. Else reuse a synthetic folder, else
+      // create one (a pure container → object_type='folder').
       let existing = md_for_folder
         .get(&norm_folder)
         .and_then(|mdp| page_by_path.get(mdp))
@@ -98,6 +129,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
             title: seg,
             parent,
             markdown: String::new(),
+            is_folder: true,
           });
           let idx = pages.len() - 1;
           folder_page.insert(folder_path.clone(), idx);
@@ -107,6 +139,11 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
       parent = Some(idx);
     }
 
+    // A folder entry is fully realized by the chain walk above (its leaf folder
+    // page). A document entry adds its own page under the walked ancestors.
+    if *is_folder {
+      continue;
+    }
     let markdown = &mds[path];
     let base = parts.last().unwrap_or(&"");
     let fallback = clean(
@@ -119,6 +156,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
       title,
       parent,
       markdown: body,
+      is_folder: false,
     });
     page_by_path.insert(path.clone(), pages.len() - 1);
   }
@@ -130,6 +168,29 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
     page_by_path,
     notion,
   }
+}
+
+/// Parse the export `manifest.json` into `(path, is_folder)` in listed
+/// (pre-order) order. Entries without a `type` field default to document
+/// (v1 manifests, pre-folder). Empty/absent manifest → no entries.
+fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool)> {
+  let Some(json) = manifest_json else {
+    return Vec::new();
+  };
+  let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+    return Vec::new();
+  };
+  let Some(pages) = value.get("pages").and_then(|p| p.as_array()) else {
+    return Vec::new();
+  };
+  pages
+    .iter()
+    .filter_map(|p| {
+      let path = p.get("path")?.as_str()?.to_string();
+      let is_folder = p.get("type").and_then(|t| t.as_str()) == Some("folder");
+      Some((path, is_folder))
+    })
+    .collect()
 }
 
 /// First `# ` heading, else the fallback (cleaned filename).
@@ -231,4 +292,100 @@ fn percent_decode(s: &str) -> String {
     i += 1;
   }
   String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn e(name: &str, bytes: &str) -> ZipFileEntry {
+    ZipFileEntry { name: name.to_string(), bytes: bytes.as_bytes().to_vec() }
+  }
+
+  /// Build the `manifest.json` a Mica export emits for the given entries.
+  fn manifest(entries: &[(&str, &str, &str)]) -> String {
+    let pages: Vec<serde_json::Value> = entries
+      .iter()
+      .map(|(path, title, ty)| serde_json::json!({"path": path, "title": title, "type": ty}))
+      .collect();
+    serde_json::json!({"version": 1, "generator": "mica", "pages": pages}).to_string()
+  }
+
+  fn find<'a>(plan: &'a ImportPlan, title: &str) -> &'a PagePlan {
+    plan.pages.iter().find(|p| p.title == title).expect("page present")
+  }
+  fn parent_title<'a>(plan: &'a ImportPlan, title: &str) -> Option<&'a str> {
+    find(plan, title).parent.map(|i| plan.pages[i].title.as_str())
+  }
+
+  // A pure folder with a child document (the new Mica export shape): the folder
+  // imports as a folder page (no content), the child nests under it.
+  #[test]
+  fn folder_with_child_imports_as_folder() {
+    let raw = vec![
+      e("manifest.json", &manifest(&[
+        ("Chapter", "Chapter", "folder"),
+        ("Chapter/Intro.md", "Intro", "document"),
+      ])),
+      e("Chapter/Intro.md", "# Intro\n\nhello"),
+    ];
+    let plan = plan_import(raw, false);
+    let chapter = find(&plan, "Chapter");
+    assert!(chapter.is_folder, "Chapter is a folder");
+    assert!(chapter.archive_path.is_none() && chapter.markdown.is_empty());
+    let intro = find(&plan, "Intro");
+    assert!(!intro.is_folder);
+    assert_eq!(intro.markdown.trim(), "hello");
+    assert_eq!(parent_title(&plan, "Intro"), Some("Chapter"));
+  }
+
+  // An EMPTY folder (only in the manifest, no `.md`, no children) survives the
+  // round-trip — this is what the manifest folder entry buys us.
+  #[test]
+  fn empty_folder_survives_via_manifest() {
+    let raw = vec![
+      e("manifest.json", &manifest(&[("Empty", "Empty", "folder")])),
+    ];
+    let plan = plan_import(raw, false);
+    assert_eq!(plan.pages.len(), 1);
+    let empty = find(&plan, "Empty");
+    assert!(empty.is_folder && empty.parent.is_none());
+  }
+
+  // A document that HAS children (Doc.md + Doc/Child.md, both type=document) stays
+  // a DOCUMENT (keeps its body) — it must NOT be turned into a folder.
+  #[test]
+  fn document_with_children_stays_a_document() {
+    let raw = vec![
+      e("manifest.json", &manifest(&[
+        ("Doc.md", "Doc", "document"),
+        ("Doc/Child.md", "Child", "document"),
+      ])),
+      e("Doc.md", "# Doc\n\nparent body"),
+      e("Doc/Child.md", "# Child\n\nchild body"),
+    ];
+    let plan = plan_import(raw, false);
+    let doc = find(&plan, "Doc");
+    assert!(!doc.is_folder, "Doc keeps document identity");
+    assert_eq!(doc.markdown.trim(), "parent body");
+    assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
+  }
+
+  // A foreign archive with no manifest (Obsidian/plain markdown tree): a
+  // directory that contains files becomes a folder (not an empty document).
+  // Two top-level dirs so neither is peeled as a lone wrapper by normalize.
+  #[test]
+  fn foreign_directory_without_manifest_becomes_folder() {
+    let raw = vec![
+      e("Section/Note.md", "# Note\n\nbody"),
+      e("Appendix/Refs.md", "# Refs\n\nlinks"),
+    ];
+    let plan = plan_import(raw, false);
+    let section = find(&plan, "Section");
+    assert!(section.is_folder, "a bare directory imports as a folder");
+    assert!(section.archive_path.is_none() && section.markdown.is_empty());
+    assert_eq!(parent_title(&plan, "Note"), Some("Section"));
+    assert!(find(&plan, "Appendix").is_folder);
+    assert_eq!(parent_title(&plan, "Refs"), Some("Appendix"));
+  }
 }
