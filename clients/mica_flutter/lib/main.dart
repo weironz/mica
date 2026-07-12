@@ -4234,12 +4234,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     child: _WorkspaceSelector(
                       entries: widget.entries,
                       activeIsLocal: widget.activeIsLocal,
-                      onSwitchWorld: widget.onSwitchWorld,
                       selectedRef: widget.selectedRef,
-                      cloudOriginLabel: widget.cloudOriginLabel,
                       cloudEmail: widget.session?.user.email,
                       onSignIn: widget.onSignIn,
-                      localAvailable: widget.localAvailable,
                       onSelect: widget.onSelectEntry,
                       onRename: _promptRenameWorkspace,
                       onDelete: _confirmDeleteWorkspace,
@@ -5835,6 +5832,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onChangePassword: widget.onChangePassword,
         cloudOrigin: widget.cloudOrigin,
         onConnectCloud: widget.onConnectCloud,
+        activeIsLocal: widget.activeIsLocal,
+        onSwitchWorld: widget.onSwitchWorld,
+        localAvailable: widget.localAvailable,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
         maxPageWidth: _editorAvailWidth,
@@ -5947,12 +5947,9 @@ class _WorkspaceSelector extends StatefulWidget {
   const _WorkspaceSelector({
     required this.entries,
     required this.activeIsLocal,
-    required this.onSwitchWorld,
     required this.selectedRef,
-    required this.cloudOriginLabel,
     required this.cloudEmail,
     required this.onSignIn,
-    required this.localAvailable,
     required this.onSelect,
     required this.onRename,
     required this.onDelete,
@@ -5967,17 +5964,14 @@ class _WorkspaceSelector extends StatefulWidget {
 
   final List<WorkspaceEntry> entries;
 
-  /// The active world (true = local); the toggle highlights it and the list
-  /// below shows only its workspaces.
+  /// The active world (true = local); the list shows only its workspaces.
+  /// Switching worlds lives in Settings → 服务器, not this menu.
   final bool activeIsLocal;
-  final Future<void> Function(bool local) onSwitchWorld;
   final WorkspaceRef? selectedRef;
-  final String cloudOriginLabel;
 
   /// Signed-in account email, or null when signed out (shows the sign-in row).
   final String? cloudEmail;
   final VoidCallback? onSignIn;
-  final bool localAvailable;
   final Future<void> Function(WorkspaceEntry entry) onSelect;
   final void Function(WorkspaceEntry entry) onRename;
   final void Function(WorkspaceEntry entry) onDelete;
@@ -6025,11 +6019,8 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
       ),
       menuChildren: [
-        // ── Level 1: world toggle — one world at a time ──────────────────
-        _worldRow(local: false),
-        if (widget.localAvailable) _worldRow(local: true),
-        const Divider(height: 8),
-        // ── Level 2: only the ACTIVE world's workspaces ──────────────────
+        // Only the ACTIVE world's workspaces — one world at a time. Switching
+        // world (本地 / 云服务器) lives in Settings → 服务器, not here.
         if (!widget.activeIsLocal &&
             widget.cloudEmail == null &&
             widget.onSignIn != null)
@@ -6108,54 +6099,6 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           ),
         );
       },
-    );
-  }
-
-  /// Level-1 world toggle row: the Cloud account or the Local device. The active
-  /// world is highlighted + checked; tapping the OTHER world switches to it
-  /// (in-place — signed-out cloud prompts sign-in via onSwitchWorld). Tapping the
-  /// already-active world is a no-op (the menu just closes).
-  Widget _worldRow({required bool local}) {
-    final active = local == widget.activeIsLocal;
-    final accent = const Color(0xFF2563EB);
-    final icon = local ? Icons.computer_outlined : Icons.cloud_outlined;
-    final label = local ? '本地' : widget.cloudOriginLabel;
-    // Local = "this device" (no account); cloud = the signed-in email / 未登录.
-    final sub = local ? '本机' : (widget.cloudEmail ?? '未登录');
-    return SizedBox(
-      width: 320,
-      child: MenuItemButton(
-        onPressed: () {
-          if (!active) widget.onSwitchWorld(local);
-        },
-        leadingIcon: Icon(
-          icon,
-          size: 18,
-          color: active ? accent : const Color(0xFF64748B),
-        ),
-        trailingIcon: active
-            ? Icon(Icons.check, size: 16, color: accent)
-            : null,
-        child: Row(
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: active ? const Color(0xFF0F172A) : const Color(0xFF334155),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                sub,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -6904,6 +6847,9 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
+    required this.activeIsLocal,
+    required this.onSwitchWorld,
+    required this.localAvailable,
     required this.maxPageWidth,
   });
 
@@ -6942,6 +6888,12 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
+
+  /// Active world + its switch, surfaced in Settings → 服务器 (moved out of the
+  /// workspace menu). [localAvailable] hides the switch on web (no local world).
+  final bool activeIsLocal;
+  final Future<void> Function(bool local) onSwitchWorld;
+  final bool localAvailable;
 
   /// The realizable full-bleed column width, measured at the editor — the page-
   /// width slider's max, so its travel maps to widths the window can actually show.
@@ -7661,12 +7613,39 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _sectionTitle(
       context,
       Icons.dns_outlined,
-      '云服务器',
+      '服务器',
       const Color(0xFF2563EB),
     ),
     const SizedBox(height: 8),
-    // P3c-2: no mode radio anymore — the local world always exists alongside;
-    // this only picks WHICH cloud server the switcher's cloud section talks to.
+    // 本地 / 云服务器 world switch — moved here from the workspace menu (the
+    // switcher just lists the active world's workspaces now). Picks which world
+    // the sidebar shows. Hidden on web (no local world).
+    if (widget.localAvailable) ...[
+      SegmentedButton<bool>(
+        segments: const [
+          ButtonSegment(
+            value: true,
+            icon: Icon(Icons.computer_outlined, size: 18),
+            label: Text('本地'),
+          ),
+          ButtonSegment(
+            value: false,
+            icon: Icon(Icons.cloud_outlined, size: 18),
+            label: Text('云服务器'),
+          ),
+        ],
+        selected: {widget.activeIsLocal},
+        showSelectedIcon: false,
+        onSelectionChanged: (s) {
+          final local = s.first;
+          if (local == widget.activeIsLocal) return;
+          Navigator.of(context).pop(); // close Settings; land in the chosen world
+          widget.onSwitchWorld(local);
+        },
+      ),
+      const SizedBox(height: 16),
+    ],
+    // Which cloud server the "云服务器" world talks to.
     TextField(
       controller: _serverUrl,
       enabled: !_serverSaving,
