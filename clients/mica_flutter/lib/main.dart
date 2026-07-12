@@ -3770,6 +3770,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // Pane widths, drag-resizable via the splitters (long page names need room).
   double _navWidth = 280;
   double _toolsWidth = 300;
+  // Once the user drags the nav splitter we stop auto-fitting and honor their
+  // width (persisted). Until then, the sidebar fits itself to the longest page
+  // name on each workspace switch (min/max clamped) — the "auto width" ask.
+  bool _navWidthManual = false;
+  static const double _navWidthMin = 220;
+  static const double _navWidthMax = 480;
   final EditorScrollHook _scrollHook = EditorScrollHook();
   // The realizable page-column width (editor pane minus the scroll padding),
   // measured live so the Settings "Page width" slider maxes at full-bleed
@@ -3789,15 +3795,62 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (name.isNotEmpty) _pageTitle.text = name;
     final workspace = widget.selectedWorkspace;
     if (workspace != null) _rename.text = workspace.name;
+    // Restore a manually-set sidebar width; otherwise fit to the first tree.
+    _navWidthManual = loadPref('navWidthManual') == 'true';
+    if (_navWidthManual) {
+      final saved = double.tryParse(loadPref('navWidth') ?? '');
+      if (saved != null) {
+        _navWidth = saved.clamp(_navWidthMin, _navWidthMax);
+      }
+    } else {
+      _fitNavWidthToContent();
+    }
+  }
+
+  /// Auto-size the sidebar to the widest visible page name (+ the row's fixed
+  /// chrome), clamped to [_navWidthMin, _navWidthMax]. Runs on a workspace
+  /// switch, not continuously, so the width doesn't jump as you scroll/expand.
+  /// A no-op once the user has taken manual control of the width.
+  void _fitNavWidthToContent() {
+    if (_navWidthManual) return;
+    final items = _visibleDocumentTree();
+    if (items.isEmpty) return;
+    var widest = 0.0;
+    for (final it in items) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: it.view.name,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      // left pad 2 + indent + toggle 18 + icon 18 + gap 6 + text + right pad 4
+      // + a little slack so the glyphs never kiss the edge.
+      final rowWidth = 2 + it.depth * 16 + 18 + 18 + 6 + tp.width + 4 + 14;
+      if (rowWidth > widest) widest = rowWidth;
+    }
+    _navWidth = widest.clamp(_navWidthMin, _navWidthMax);
   }
 
   @override
   void didUpdateWidget(covariant WorkspaceView oldWidget) {
     super.didUpdateWidget(oldWidget);
     final selected = widget.selectedWorkspace;
-    if (selected != null && selected.id != oldWidget.selectedWorkspace?.id) {
+    final wsChanged =
+        selected != null && selected.id != oldWidget.selectedWorkspace?.id;
+    if (wsChanged) {
       _rename.text = selected.name;
       _collapsedViewIds.clear();
+    }
+    // Re-fit the sidebar to content when the tree could have changed shape:
+    // switched workspace, added/removed a page, or renamed the open page.
+    // (No-op once the width is user-controlled.)
+    if (wsChanged ||
+        widget.views.length != oldWidget.views.length ||
+        widget.selectedBootstrap?.view.name !=
+            oldWidget.selectedBootstrap?.view.name) {
+      _fitNavWidthToContent();
     }
 
     final bootstrap = widget.selectedBootstrap;
@@ -3838,9 +3891,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         else ...[
           SizedBox(width: _navWidth, child: _navigationPane(context)),
           _resizeHandle(
-            onDrag: (dx) => setState(
-              () => _navWidth = (_navWidth + dx).clamp(220.0, 480.0),
-            ),
+            onDrag: (dx) => setState(() {
+              // Dragging takes manual control — stop auto-fitting from here on.
+              _navWidthManual = true;
+              _navWidth =
+                  (_navWidth + dx).clamp(_navWidthMin, _navWidthMax);
+            }),
+            onDragEnd: () {
+              savePref('navWidth', _navWidth.toStringAsFixed(1));
+              savePref('navWidthManual', 'true');
+            },
           ),
         ],
         Expanded(child: _editorPane(context)),
@@ -3880,12 +3940,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// A slim draggable splitter between panes (the divider line stays 1px;
   /// the grab area is wider for easy targeting).
-  Widget _resizeHandle({required void Function(double dx) onDrag}) {
+  Widget _resizeHandle({
+    required void Function(double dx) onDrag,
+    VoidCallback? onDragEnd,
+  }) {
     return MouseRegion(
       cursor: SystemMouseCursors.resizeLeftRight,
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
+        onHorizontalDragEnd: onDragEnd == null ? null : (_) => onDragEnd(),
         child: const SizedBox(
           width: 7,
           child: Center(child: VerticalDivider(width: 1)),
@@ -7904,7 +7968,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
   }
 }
 
-class DocumentListItem extends StatelessWidget {
+class DocumentListItem extends StatefulWidget {
   const DocumentListItem({
     required this.view,
     required this.depth,
@@ -7937,101 +8001,212 @@ class DocumentListItem extends StatelessWidget {
   final VoidCallback onDelete;
 
   @override
+  State<DocumentListItem> createState() => _DocumentListItemState();
+}
+
+class _DocumentListItemState extends State<DocumentListItem> {
+  // Per-row hover (Notion / Feishu style): the action affordances live off the
+  // row until the pointer is on THIS row, so page names get the full width by
+  // default and only the row you point at compresses to show its controls.
+  bool _hovered = false;
+
+  /// The row's context menu — one place for rename/delete/new-child/collapse,
+  /// opened from the `⋯` button AND from a right-click anywhere on the row
+  /// (parity with Feishu/Notion). Only the capabilities Mica actually has; no
+  /// invented copy/move/favorite items.
+  Future<void> _openMenu(BuildContext anchorContext) async {
+    final box = anchorContext.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(anchorContext).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final position = RelativeRect.fromLTRB(
+      topLeft.dx,
+      topLeft.dy + box.size.height,
+      overlay.size.width - topLeft.dx,
+      0,
+    );
+    await _showMenuAt(position);
+  }
+
+  Future<void> _openMenuAtGlobal(Offset globalPosition) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final local = overlay.globalToLocal(globalPosition);
+    await _showMenuAt(
+      RelativeRect.fromLTRB(
+        local.dx,
+        local.dy,
+        overlay.size.width - local.dx,
+        0,
+      ),
+    );
+  }
+
+  Future<void> _showMenuAt(RelativeRect position) async {
+    final selected = await showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        const PopupMenuItem(
+          value: 'child',
+          child: _MenuRow(icon: Icons.add, label: '新建子页面'),
+        ),
+        const PopupMenuItem(
+          value: 'rename',
+          child: _MenuRow(icon: Icons.edit_outlined, label: '重命名'),
+        ),
+        if (widget.hasChildren)
+          PopupMenuItem(
+            value: 'toggle',
+            child: _MenuRow(
+              icon: widget.isCollapsed ? Icons.unfold_more : Icons.unfold_less,
+              label: widget.isCollapsed ? '展开子页面' : '收起子页面',
+            ),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'delete',
+          child: _MenuRow(
+            icon: Icons.delete_outline,
+            label: '删除',
+            danger: true,
+          ),
+        ),
+      ],
+    );
+    if (!mounted) return;
+    switch (selected) {
+      case 'child':
+        widget.onCreateChild();
+      case 'rename':
+        widget.onRename();
+      case 'toggle':
+        widget.onToggle();
+      case 'delete':
+        widget.onDelete();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
+    final w = widget;
+    // Show the controls when the row is hovered; a right-click works regardless.
+    final showActions = w.canEdit && _hovered;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Material(
+        color: w.isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
         borderRadius: BorderRadius.circular(6),
-        onTap: onPressed,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 38),
-          child: Padding(
-            padding: EdgeInsets.only(left: 2 + (depth * 16), right: 4),
-            child: Row(
-              children: [
-                // AppFlowy-style expand column: always present so every page
-                // icon shares one column; the toggle is invisible until the
-                // pointer enters the sidebar (and only parents have one).
-                SizedBox(
-                  width: 18,
-                  height: 30,
-                  child: hasChildren
-                      ? Opacity(
-                          opacity: revealToggle ? 1.0 : 0.0,
-                          child: IconButton(
-                            tooltip: isCollapsed ? 'Expand' : 'Collapse',
-                            onPressed: onToggle,
-                            padding: EdgeInsets.zero,
-                            iconSize: 18,
-                            icon: Icon(
-                              isCollapsed
-                                  ? Icons.chevron_right
-                                  : Icons.expand_more,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: w.onPressed,
+          onSecondaryTapDown:
+              w.canEdit ? (d) => _openMenuAtGlobal(d.globalPosition) : null,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 38),
+            child: Padding(
+              padding: EdgeInsets.only(left: 2 + (w.depth * 16), right: 4),
+              child: Row(
+                children: [
+                  // AppFlowy-style expand column: always present so every page
+                  // icon shares one column; the toggle is invisible until the
+                  // pointer enters the sidebar (and only parents have one).
+                  SizedBox(
+                    width: 18,
+                    height: 30,
+                    child: w.hasChildren
+                        ? Opacity(
+                            opacity: (w.revealToggle || _hovered) ? 1.0 : 0.0,
+                            child: IconButton(
+                              tooltip: w.isCollapsed ? 'Expand' : 'Collapse',
+                              onPressed: w.onToggle,
+                              padding: EdgeInsets.zero,
+                              iconSize: 18,
+                              icon: Icon(
+                                w.isCollapsed
+                                    ? Icons.chevron_right
+                                    : Icons.expand_more,
+                              ),
                             ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                Icon(
-                  Icons.description_outlined,
-                  size: 18,
-                  color: isSelected
-                      ? const Color(0xFF2563EB)
-                      : const Color(0xFF64748B),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    view.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: isSelected
-                          ? FontWeight.w600
-                          : FontWeight.w400,
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  Icon(
+                    Icons.description_outlined,
+                    size: 18,
+                    color: w.isSelected
+                        ? const Color(0xFF2563EB)
+                        : const Color(0xFF64748B),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      w.view.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: w.isSelected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                      ),
                     ),
                   ),
-                ),
-                if (canEdit) ...[
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: IconButton(
-                      tooltip: 'Create child page',
-                      onPressed: onCreateChild,
-                      padding: EdgeInsets.zero,
-                      iconSize: 17,
-                      icon: const Icon(Icons.add),
+                  // Two compact affordances, hover-only (Feishu pattern): `⋯`
+                  // opens the full menu, `+` quick-adds a child. Everything else
+                  // lives in the menu, so names keep the width at rest.
+                  if (showActions) ...[
+                    SizedBox(
+                      width: 28,
+                      height: 30,
+                      child: Builder(
+                        builder: (btnCtx) => IconButton(
+                          tooltip: '删除、重命名等',
+                          onPressed: () => _openMenu(btnCtx),
+                          padding: EdgeInsets.zero,
+                          iconSize: 17,
+                          icon: const Icon(Icons.more_horiz),
+                        ),
+                      ),
                     ),
-                  ),
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: IconButton(
-                      tooltip: 'Rename',
-                      onPressed: onRename,
-                      padding: EdgeInsets.zero,
-                      iconSize: 17,
-                      icon: const Icon(Icons.edit_outlined),
+                    SizedBox(
+                      width: 28,
+                      height: 30,
+                      child: IconButton(
+                        tooltip: '新建子页面',
+                        onPressed: w.onCreateChild,
+                        padding: EdgeInsets.zero,
+                        iconSize: 17,
+                        icon: const Icon(Icons.add),
+                      ),
                     ),
-                  ),
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: IconButton(
-                      tooltip: 'Delete',
-                      onPressed: onDelete,
-                      padding: EdgeInsets.zero,
-                      iconSize: 17,
-                      icon: const Icon(Icons.delete_outline),
-                    ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A leading-icon + label row for the page context menu.
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label, this.danger = false});
+  final IconData icon;
+  final String label;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? const Color(0xFFDC2626) : null;
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 12),
+        Text(label, style: TextStyle(color: color)),
+      ],
     );
   }
 }
