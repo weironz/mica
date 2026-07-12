@@ -20,6 +20,7 @@ void main() {
           name: 'Page',
           position: 'a',
           trashed: false,
+          objectType: 'document',
         ),
         (
           id: 'v2',
@@ -29,6 +30,7 @@ void main() {
           name: '子页',
           position: 'b',
           trashed: false,
+          objectType: 'document',
         ),
         (
           id: 'v3',
@@ -38,6 +40,7 @@ void main() {
           name: 'Other',
           position: 'a',
           trashed: false,
+          objectType: 'document',
         ),
       ],
     );

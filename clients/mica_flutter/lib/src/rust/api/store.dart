@@ -158,6 +158,9 @@ class LocalView {
   /// page mirrored for offline nav. `list_views` filters by this.
   final String origin;
 
+  /// "document" (default) or "folder" (a pure container, no content).
+  final String objectType;
+
   const LocalView({
     required this.id,
     required this.workspaceId,
@@ -167,6 +170,7 @@ class LocalView {
     required this.position,
     required this.trashed,
     required this.origin,
+    required this.objectType,
   });
 
   @override
@@ -178,7 +182,8 @@ class LocalView {
       name.hashCode ^
       position.hashCode ^
       trashed.hashCode ^
-      origin.hashCode;
+      origin.hashCode ^
+      objectType.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -192,7 +197,8 @@ class LocalView {
           name == other.name &&
           position == other.position &&
           trashed == other.trashed &&
-          origin == other.origin;
+          origin == other.origin &&
+          objectType == other.objectType;
 }
 
 /// A local workspace mirrored to Dart (P2-M3).

@@ -57,6 +57,8 @@ pub struct LocalView {
     /// Provenance: "local" for on-device pages, or a server URL for a cloud
     /// page mirrored for offline nav. `list_views` filters by this.
     pub origin: String,
+    /// "document" (default) or "folder" (a pure container, no content).
+    pub object_type: String,
 }
 
 impl From<CoreView> for LocalView {
@@ -70,6 +72,7 @@ impl From<CoreView> for LocalView {
             position: v.position,
             trashed: v.trashed,
             origin: v.origin,
+            object_type: v.object_type,
         }
     }
 }
@@ -85,6 +88,7 @@ impl From<LocalView> for CoreView {
             position: v.position,
             trashed: v.trashed,
             origin: v.origin,
+            object_type: v.object_type,
         }
     }
 }

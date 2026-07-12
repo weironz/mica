@@ -25,7 +25,7 @@ pub enum StoreError {
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
 /// the table layout changes and add the migration in [`LocalStore::open`].
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
@@ -79,6 +79,9 @@ pub struct LocalView {
     pub trashed: bool,
     /// Provenance: `"local"` or a server URL — same scoping as [`LocalWorkspace`].
     pub origin: String,
+    /// `"document"` (default) or `"folder"` (a pure container, no content).
+    /// Mirrored so the offline nav can render/behave correctly without a server.
+    pub object_type: String,
 }
 
 /// A local document store backed by one SQLite file.
@@ -111,6 +114,7 @@ impl LocalStore {
                  name         TEXT NOT NULL,
                  position     TEXT NOT NULL,
                  trashed      INTEGER NOT NULL DEFAULT 0,
+                 object_type  TEXT NOT NULL DEFAULT 'document',
                  PRIMARY KEY(origin, id)
              );
              CREATE TABLE IF NOT EXISTS local_workspace(
@@ -297,6 +301,26 @@ impl LocalStore {
                  DROP TABLE local_workspace;
                  ALTER TABLE local_workspace_v4 RENAME TO local_workspace;
                  COMMIT;",
+            )?;
+        }
+
+        // v6 (folder type): mirror a view's `object_type` so a folder (pure
+        // container) survives offline — otherwise the offline nav can't tell a
+        // folder from a document. Additive ALTER (default preserves old rows);
+        // runs after the v4 rebuild so the rebuilt table (whose hard-coded
+        // column list predates this) gets the column too.
+        let has_object_type: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_view') WHERE name='object_type'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_object_type {
+            conn.execute(
+                "ALTER TABLE local_view ADD COLUMN object_type TEXT NOT NULL DEFAULT 'document'",
+                [],
             )?;
         }
 
@@ -745,7 +769,7 @@ impl LocalStore {
     /// from `parent_id`.
     pub fn list_views(&self, origin: &str) -> Result<Vec<LocalView>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,workspace_id,parent_id,object_id,name,position,trashed,origin \
+            "SELECT id,workspace_id,parent_id,object_id,name,position,trashed,origin,object_type \
              FROM local_view WHERE origin=?1 ORDER BY position",
         )?;
         let rows = stmt
@@ -759,6 +783,7 @@ impl LocalStore {
                     position: r.get(5)?,
                     trashed: r.get::<_, i64>(6)? != 0,
                     origin: r.get(7)?,
+                    object_type: r.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -769,12 +794,13 @@ impl LocalStore {
     /// toggling, all by writing the desired row.
     pub fn save_view(&self, v: &LocalView) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed,origin)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+            "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed,origin,object_type)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
              ON CONFLICT(origin,id) DO UPDATE SET
                  workspace_id=excluded.workspace_id, parent_id=excluded.parent_id,
                  object_id=excluded.object_id, name=excluded.name,
-                 position=excluded.position, trashed=excluded.trashed",
+                 position=excluded.position, trashed=excluded.trashed,
+                 object_type=excluded.object_type",
             params![
                 v.id,
                 v.workspace_id,
@@ -783,7 +809,8 @@ impl LocalStore {
                 v.name,
                 v.position,
                 v.trashed as i64,
-                v.origin
+                v.origin,
+                v.object_type
             ],
         )?;
         Ok(())
@@ -920,37 +947,37 @@ mod tests {
             let conn = Connection::open(p).unwrap();
             conn.execute_batch(
                 "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO local_meta VALUES('schema_version','6');
+                 INSERT INTO local_meta VALUES('schema_version','7');
                  CREATE TABLE local_view(
                      origin TEXT NOT NULL, device TEXT NOT NULL, id TEXT NOT NULL,
                      workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
                      object_id TEXT NOT NULL, name TEXT NOT NULL, position TEXT NOT NULL,
                      trashed INTEGER NOT NULL DEFAULT 0,
-                     v5_only TEXT,
+                     v6_only TEXT,
                      PRIMARY KEY(origin, device, id));
                  CREATE TABLE local_workspace(
                      origin TEXT NOT NULL, device TEXT NOT NULL, id TEXT NOT NULL,
                      name TEXT NOT NULL, position TEXT NOT NULL,
                      role TEXT NOT NULL DEFAULT 'viewer',
-                     v5_only TEXT,
+                     v6_only TEXT,
                      PRIMARY KEY(origin, device, id));
-                 INSERT INTO local_view(origin,device,id,object_id,name,position,v5_only)
+                 INSERT INTO local_view(origin,device,id,object_id,name,position,v6_only)
                      VALUES('local','dev1','v1','d1','Future Page','0000000010','keep-me');",
             )
             .unwrap();
         }
         assert!(matches!(
             LocalStore::open(p),
-            Err(StoreError::SchemaTooNew { found: 6, .. })
+            Err(StoreError::SchemaTooNew { found: 7, .. })
         ));
-        // Structure untouched: the v5-only column and 3-column PK are intact, and
+        // Structure untouched: the v6-only column and 3-column PK are intact, and
         // no rebuild artifacts (backup / _v4 temp tables) were created.
         {
             let conn = Connection::open(p).unwrap();
-            let v5_kept: String = conn
-                .query_row("SELECT v5_only FROM local_view WHERE id='v1'", [], |r| r.get(0))
+            let v6_kept: String = conn
+                .query_row("SELECT v6_only FROM local_view WHERE id='v1'", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(v5_kept, "keep-me");
+            assert_eq!(v6_kept, "keep-me");
             let pk: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM pragma_table_info('local_view') WHERE pk>0",
@@ -993,6 +1020,7 @@ mod tests {
         assert_eq!(v.name, "Old Page", "legacy data preserved");
         assert_eq!(v.workspace_id, "local", "back-filled to default workspace");
         assert_eq!(v.origin, "local", "legacy rows back-filled to local origin");
+        assert_eq!(v.object_type, "document", "object_type (v6) back-filled");
         let local_ws = store.list_workspaces("local").unwrap();
         let default_ws = local_ws.iter().find(|w| w.id == "local");
         assert!(default_ws.is_some(), "default workspace created");
@@ -1102,6 +1130,7 @@ mod tests {
             position: pos.into(),
             trashed: false,
             origin: "local".into(),
+            object_type: "document".into(),
         }
     }
 
@@ -1131,6 +1160,37 @@ mod tests {
         assert!(store.list_views("local").unwrap().iter().find(|v| v.id == "v1").unwrap().trashed);
         store.purge_view("local", "v1").unwrap();
         assert!(store.list_views("local").unwrap().iter().all(|v| v.id != "v1"));
+    }
+
+    #[test]
+    fn view_object_type_round_trips_folder_and_document() {
+        let store = LocalStore::open_in_memory().unwrap();
+        // A folder (pure container) and a document, mirrored offline.
+        store
+            .save_view(&LocalView {
+                object_type: "folder".into(),
+                ..view("f1", None, "Chapter", "0000000010")
+            })
+            .unwrap();
+        store.save_view(&view("d1", Some("f1"), "Intro", "0000000010")).unwrap();
+
+        let all = store.list_views("local").unwrap();
+        let f = all.iter().find(|v| v.id == "f1").unwrap();
+        let d = all.iter().find(|v| v.id == "d1").unwrap();
+        assert_eq!(f.object_type, "folder", "folder type persists");
+        assert_eq!(d.object_type, "document", "document is the default");
+
+        // Upsert preserves the type across a rename (edited via save_view).
+        store
+            .save_view(&LocalView {
+                object_type: "folder".into(),
+                name: "Renamed Chapter".into(),
+                ..view("f1", None, "x", "0000000010")
+            })
+            .unwrap();
+        let f = store.list_views("local").unwrap().into_iter().find(|v| v.id == "f1").unwrap();
+        assert_eq!(f.object_type, "folder");
+        assert_eq!(f.name, "Renamed Chapter");
     }
 
     #[test]

@@ -2148,8 +2148,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalView dco_decode_local_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return LocalView(
       id: dco_decode_String(arr[0]),
       workspaceId: dco_decode_String(arr[1]),
@@ -2159,6 +2159,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       position: dco_decode_String(arr[5]),
       trashed: dco_decode_bool(arr[6]),
       origin: dco_decode_String(arr[7]),
+      objectType: dco_decode_String(arr[8]),
     );
   }
 
@@ -2498,6 +2499,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_position = sse_decode_String(deserializer);
     var var_trashed = sse_decode_bool(deserializer);
     var var_origin = sse_decode_String(deserializer);
+    var var_objectType = sse_decode_String(deserializer);
     return LocalView(
       id: var_id,
       workspaceId: var_workspaceId,
@@ -2507,6 +2509,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       position: var_position,
       trashed: var_trashed,
       origin: var_origin,
+      objectType: var_objectType,
     );
   }
 
@@ -2882,6 +2885,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.position, serializer);
     sse_encode_bool(self.trashed, serializer);
     sse_encode_String(self.origin, serializer);
+    sse_encode_String(self.objectType, serializer);
   }
 
   @protected

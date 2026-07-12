@@ -40,6 +40,7 @@ void main() {
       name: 'Cloud Page',
       position: '0000000010',
       trashed: false,
+      objectType: 'document',
     );
     online.mirrorCloudPageTree(server, const [ws], const [view]);
 
@@ -98,6 +99,7 @@ void main() {
       name: 'Parent',
       position: '0000000010',
       trashed: false,
+      objectType: 'document',
     );
     const child = (
       id: 'v2',
@@ -107,6 +109,7 @@ void main() {
       name: 'Child',
       position: '0000000010',
       trashed: false,
+      objectType: 'document',
     );
     local.mirrorCloudPageTree(server, const [ws], const [parent, child]);
     final doc = MicaDocument.fromBlocksJson(

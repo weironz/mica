@@ -1727,7 +1727,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     id: v.id,
     parentViewId: v.parentId,
     objectId: v.objectId,
-    objectType: 'document',
+    objectType: v.objectType,
     name: v.name,
     position: v.position,
   );
@@ -1936,6 +1936,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       name: title,
       position: position,
       trashed: false,
+      objectType: 'document',
     );
     _local.saveView(data);
     final view = _viewFromData(data);
@@ -2419,6 +2420,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       name: title,
       position: view.position,
       trashed: false,
+      objectType: view.objectType,
     ));
     if (!mounted) return;
     setState(() {
@@ -2428,7 +2430,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           id: view.id,
           parentViewId: view.parentViewId,
           objectId: view.objectId,
-          objectType: 'document',
+          objectType: view.objectType,
           name: title,
           position: view.position,
         );
@@ -2454,6 +2456,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       name: view.name,
       position: view.position,
       trashed: true,
+      objectType: view.objectType,
     ));
     if (!mounted) return;
     setState(() {
@@ -2481,6 +2484,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           name: v.name,
           position: position,
           trashed: false,
+          objectType: v.objectType,
         ));
       }
     }
@@ -2504,6 +2508,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       name: view.name,
       position: view.position,
       trashed: false,
+      objectType: view.objectType,
     ));
     if (mounted) setState(_reloadLocalViews);
   }
@@ -2910,6 +2915,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             name: v.name,
             position: v.position,
             trashed: false,
+            objectType: v.objectType,
           ),
     ];
     _local.mirrorCloudPageTree(origin, workspaces, views);
@@ -9371,7 +9377,7 @@ rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
         id: v.id,
         parentViewId: v.parentId,
         objectId: v.objectId,
-        objectType: 'document',
+        objectType: v.objectType,
         name: v.name,
         position: v.position,
       ),

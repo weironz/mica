@@ -22,6 +22,7 @@ typedef ViewData = ({
   String name,
   String position,
   bool trashed,
+  String objectType,
 });
 
 typedef WorkspaceData = ({String id, String name, String position, String role});
@@ -95,6 +96,7 @@ class LocalOffline {
               'name': v.name,
               'position': v.position,
               'trashed': v.trashed,
+              'objectType': v.objectType,
             },
         ],
       }),
@@ -128,6 +130,7 @@ class LocalOffline {
               name: v['name'] as String,
               position: v['position'] as String,
               trashed: (v['trashed'] as bool?) ?? false,
+              objectType: (v['objectType'] as String?) ?? 'document',
             ),
         ],
       );

@@ -27,6 +27,7 @@ typedef ViewData = ({
   String name,
   String position,
   bool trashed,
+  String objectType,
 });
 
 /// One local workspace, as plain data. [role] is the user's membership role,
@@ -169,6 +170,7 @@ class LocalOffline {
           name: v.name,
           position: v.position,
           trashed: v.trashed,
+          objectType: v.objectType,
         ),
     ];
   }
@@ -184,6 +186,7 @@ class LocalOffline {
         position: v.position,
         trashed: v.trashed,
         origin: origin,
+        objectType: v.objectType,
       ),
     );
   }
@@ -308,6 +311,7 @@ class LocalOffline {
           position: v.position,
           trashed: v.trashed,
           origin: 'local',
+          objectType: v.objectType,
         ),
       );
     }
@@ -413,6 +417,9 @@ class LocalOffline {
         name: name,
         position: nextPos(parentView),
         trashed: false,
+        // A vault directory is a pure container — a folder (F2 makes the server
+        // import do the same). The empty doc above is an unused placeholder.
+        objectType: 'folder',
       ));
       folders++;
       folderView[relDir] = viewId;
@@ -445,6 +452,7 @@ class LocalOffline {
           name: fileName.isEmpty ? 'Untitled' : fileName,
           position: nextPos(parentView),
           trashed: false,
+          objectType: 'document',
         ));
         docs++;
         // Yield periodically so a large vault doesn't freeze the UI isolate.

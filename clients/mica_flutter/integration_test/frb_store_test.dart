@@ -165,10 +165,11 @@ void main() {
         workspaceId: 'cw',
         parentId: null,
         objectId: 'cd',
-        name: 'Cloud Page',
+        name: 'Cloud Folder',
         position: '0000000010',
         trashed: false,
         origin: cloud,
+        objectType: 'folder', // a mirrored folder (F3)
       ),
     );
     s.saveView(
@@ -181,6 +182,7 @@ void main() {
         position: '0000000010',
         trashed: false,
         origin: 'local',
+        objectType: 'document',
       ),
     );
 
@@ -196,9 +198,14 @@ void main() {
     expect(cloudWs.map((w) => w.id), ['cw']);
     expect(cloudWs.single.role, 'editor', reason: 'role mirrored for offline edit (P2d)');
 
-    // Durable: the origin column survives reopening the same db file.
+    // The mirrored folder's object_type persists (F3 offline folder support).
+    expect(cloudViews.single.objectType, 'folder');
+    expect(localViews.firstWhere((v) => v.id == 'lv').objectType, 'document');
+
+    // Durable: the origin column + object_type survive reopening the db file.
     final s2 = MicaStore.open(path: path)!;
     expect(s2.listViews(origin: cloud).map((v) => v.id), ['cv']);
+    expect(s2.listViews(origin: cloud).single.objectType, 'folder');
     expect(s2.listViews(origin: 'local').map((v) => v.id), contains('lv'));
     expect(s2.listWorkspaces(origin: cloud).map((w) => w.id), ['cw']);
 
@@ -223,6 +230,7 @@ void main() {
           position: '0000000010',
           trashed: false,
           origin: origin,
+          objectType: 'document',
         );
     s.saveView(view: v('local', 'Local X'));
     s.saveView(view: v(cloud, 'Cloud X'));

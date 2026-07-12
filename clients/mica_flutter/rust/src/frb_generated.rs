@@ -2444,6 +2444,7 @@ impl SseDecode for crate::api::store::LocalView {
     let mut var_position = <String>::sse_decode(deserializer);
     let mut var_trashed = <bool>::sse_decode(deserializer);
     let mut var_origin = <String>::sse_decode(deserializer);
+    let mut var_objectType = <String>::sse_decode(deserializer);
     return crate::api::store::LocalView {
       id: var_id,
       workspace_id: var_workspaceId,
@@ -2453,6 +2454,7 @@ impl SseDecode for crate::api::store::LocalView {
       position: var_position,
       trashed: var_trashed,
       origin: var_origin,
+      object_type: var_objectType,
     };
   }
 }
@@ -2719,6 +2721,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::store::LocalView {
       self.position.into_into_dart().into_dart(),
       self.trashed.into_into_dart().into_dart(),
       self.origin.into_into_dart().into_dart(),
+      self.object_type.into_into_dart().into_dart(),
     ]
     .into_dart()
   }
@@ -2923,6 +2926,7 @@ impl SseEncode for crate::api::store::LocalView {
     <String>::sse_encode(self.position, serializer);
     <bool>::sse_encode(self.trashed, serializer);
     <String>::sse_encode(self.origin, serializer);
+    <String>::sse_encode(self.object_type, serializer);
   }
 }
 
