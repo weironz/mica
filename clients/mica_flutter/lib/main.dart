@@ -4537,7 +4537,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // only exist during a drag, so opaque is safe (no taps to intercept).
       hitTestBehavior: HitTestBehavior.opaque,
       onWillAcceptWithDetails: (details) =>
-          !_isSelfOrDescendant(target.id, details.data.id),
+          !_isSelfOrDescendant(target.id, details.data.id) &&
+          _parentAllowsChildren(_dropParentId(target, mode)),
       onAcceptWithDetails: (details) => _handleDrop(details.data, target, mode),
       builder: (context, candidate, rejected) {
         final active = candidate.isNotEmpty;
@@ -4585,6 +4586,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
     return false;
   }
+
+  /// The view a drop would reparent the dragged item under (null = workspace
+  /// root): `into` nests under the target; before/after makes it the target's
+  /// sibling, i.e. under the target's own parent.
+  String? _dropParentId(DocumentView target, _DropMode mode) =>
+      mode == _DropMode.into ? target.id : target.parentViewId;
+
+  bool _parentAllowsChildren(String? parentId) =>
+      canNestUnder(widget.views, parentId);
 
   void _handleDrop(DocumentView dragged, DocumentView target, _DropMode mode) {
     if (mode == _DropMode.into) {
@@ -8213,14 +8223,21 @@ class _DocumentListItemState extends State<DocumentListItem> {
       context: context,
       position: position,
       items: [
-        const PopupMenuItem(
-          value: 'child',
-          child: _MenuRow(icon: Icons.add, label: '新建子页面'),
-        ),
-        const PopupMenuItem(
-          value: 'childFolder',
-          child: _MenuRow(icon: Icons.create_new_folder_outlined, label: '新建子文件夹'),
-        ),
+        // A page is a leaf: only folders can hold children, so the two
+        // "new child" entries appear on folder rows only.
+        if (widget._isFolder) ...[
+          const PopupMenuItem(
+            value: 'child',
+            child: _MenuRow(icon: Icons.add, label: '新建子页面'),
+          ),
+          const PopupMenuItem(
+            value: 'childFolder',
+            child: _MenuRow(
+              icon: Icons.create_new_folder_outlined,
+              label: '新建子文件夹',
+            ),
+          ),
+        ],
         const PopupMenuItem(
           value: 'rename',
           child: _MenuRow(icon: Icons.edit_outlined, label: '重命名'),
@@ -8330,8 +8347,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
                     ),
                   ),
                   // Two compact affordances, hover-only (Feishu pattern): `⋯`
-                  // opens the full menu, `+` quick-adds a child. Everything else
-                  // lives in the menu, so names keep the width at rest.
+                  // opens the full menu, `+` quick-adds a child. The `+` shows
+                  // only on folders — a page is a leaf (containers = folders).
                   if (showActions) ...[
                     SizedBox(
                       width: 28,
@@ -8346,17 +8363,18 @@ class _DocumentListItemState extends State<DocumentListItem> {
                         ),
                       ),
                     ),
-                    SizedBox(
-                      width: 28,
-                      height: 30,
-                      child: IconButton(
-                        tooltip: '新建子页面',
-                        onPressed: w.onCreateChild,
-                        padding: EdgeInsets.zero,
-                        iconSize: 17,
-                        icon: const Icon(Icons.add),
+                    if (w._isFolder)
+                      SizedBox(
+                        width: 28,
+                        height: 30,
+                        child: IconButton(
+                          tooltip: '新建子页面',
+                          onPressed: w.onCreateChild,
+                          padding: EdgeInsets.zero,
+                          iconSize: 17,
+                          icon: const Icon(Icons.add),
+                        ),
                       ),
-                    ),
                   ],
                 ],
               ),
@@ -9586,6 +9604,17 @@ rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
 /// drift back to `.firstOrNull` (which would land on a folder → blank editor).
 DocumentView? firstOpenableView(Iterable<DocumentView> views) =>
     views.where((v) => v.objectType == 'document').firstOrNull;
+
+/// Whether a view may be nested under [parentId] (null = workspace root). A page
+/// is a leaf: nothing may live under a document — only a folder (or the root)
+/// accepts children. Pure + testable; shared by the drag-drop gate so it stays
+/// consistent with the menu (which offers "new child" on folders only). Existing
+/// or imported document-with-children still renders; this only blocks NEW nesting.
+bool canNestUnder(Iterable<DocumentView> views, String? parentId) {
+  if (parentId == null) return true; // workspace root always accepts children
+  final parent = views.where((v) => v.id == parentId).firstOrNull;
+  return parent != null && parent.objectType == 'folder';
+}
 
 /// The ids of [rootId] plus all its descendants, given parent-linked [nodes].
 /// Pure + testable core of the local delete/restore/purge subtree cascade — the

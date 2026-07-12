@@ -43,7 +43,8 @@ void main() {
     expect(find.byIcon(Icons.add), findsNothing);
     expect(find.text('A long page name that would truncate'), findsOneWidget);
 
-    // Hover the row → the two compact affordances fade in.
+    // Hover the row → the menu affordance fades in. The `+` quick-add is
+    // folder-only (a page is a leaf), so it stays absent on a document row.
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     addTearDown(mouse.removePointer);
@@ -51,7 +52,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byIcon(Icons.more_horiz), findsOneWidget);
-    expect(find.byIcon(Icons.add), findsOneWidget);
+    expect(find.byIcon(Icons.add), findsNothing);
   });
 
   testWidgets('⋯ opens a menu with rename/delete; delete fires onDelete',
@@ -84,7 +85,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('重命名'), findsOneWidget);
     expect(find.text('删除'), findsOneWidget);
-    expect(find.text('新建子页面'), findsOneWidget);
+    // A page is a leaf — no child-create entries on a document row.
+    expect(find.text('新建子页面'), findsNothing);
+    expect(find.text('新建子文件夹'), findsNothing);
 
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
