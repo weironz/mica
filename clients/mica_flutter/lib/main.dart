@@ -2028,7 +2028,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final localWs = entry.workspace;
     var session = _session;
     if (session == null) {
-      final creds = await _promptCloudAuth(localWs.name);
+      final creds = await _promptCloudAuth(migrateWorkspace: localWs.name);
       if (creds == null || !mounted) return;
       await _run(() async {
         final s = creds.$1 == AuthMode.register
@@ -2267,7 +2267,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Minimal modal collecting cloud credentials for migration. Returns the auth
   /// mode + form, or null if cancelled.
-  Future<(AuthMode, AuthFormValue)?> _promptCloudAuth(String wsName) {
+  /// The cloud sign-in dialog. Two intents share one form:
+  ///  - plain sign-in ([migrateWorkspace] == null): just log in / register.
+  ///  - sign-in-and-migrate ([migrateWorkspace] set to a local workspace name):
+  ///    the caller copies that local workspace to the cloud afterwards.
+  /// Only the copy differs — the returned creds and the behavior are identical.
+  Future<(AuthMode, AuthFormValue)?> _promptCloudAuth({String? migrateWorkspace}) {
+    final migrate = migrateWorkspace != null;
     final email = TextEditingController();
     final name = TextEditingController();
     final pass = TextEditingController();
@@ -2276,14 +2282,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('连接云端账号并迁移'),
+          title: Text(migrate ? '连接云端账号并迁移' : '登录云端账号'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  '把本地工作区 “$wsName” 复制到云端(本地数据保留)。',
+                  migrate
+                      ? '把本地工作区 “$migrateWorkspace” 复制到云端(本地数据保留)。'
+                      : '登录后即可访问你的云端工作区(本地数据不受影响)。',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -2328,7 +2336,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   password: pass.text,
                 ),
               )),
-              child: const Text('迁移'),
+              child: Text(migrate ? '迁移' : '登录'),
             ),
           ],
         ),
@@ -3043,7 +3051,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Sign in to the configured cloud server from the switcher / account UI
   /// (desktop: the login gate is gone — auth is a dialog, P3c §1.3).
   Future<void> _promptSignIn() async {
-    final creds = await _promptCloudAuth('云端工作区');
+    final creds = await _promptCloudAuth();
     if (creds == null || !mounted) return;
     await _run(() async {
       final session = creds.$1 == AuthMode.register
