@@ -1961,7 +1961,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localCreateDocument(String name, {String? parentViewId}) async {
-    final title = name.trim().isEmpty ? 'Untitled' : name.trim();
+    final title = name.trim().isEmpty ? kUntitledPage : name.trim();
     final created = _local.newDoc();
     final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
     final position = _nextLocalPosition(parentViewId);
@@ -3932,7 +3932,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // didUpdateWidget only fires on later changes, so without this the title
     // looks blank until the next page switch.
     final name = widget.selectedBootstrap?.view.name ?? '';
-    if (name.isNotEmpty) _pageTitle.text = name;
+    // Show the placeholder (not solid text) for an untitled page.
+    _pageTitle.text = isUntitledPageName(name) ? '' : name;
     final workspace = widget.selectedWorkspace;
     if (workspace != null) _rename.text = workspace.name;
     // Restore a manually-set sidebar width; otherwise fit to the first tree.
@@ -3994,14 +3995,32 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
 
     final bootstrap = widget.selectedBootstrap;
-    if (bootstrap?.view.id != oldWidget.selectedBootstrap?.view.id ||
+    final idChanged =
+        bootstrap?.view.id != oldWidget.selectedBootstrap?.view.id;
+    if (idChanged ||
         bootstrap?.view.name != oldWidget.selectedBootstrap?.view.name) {
       // Skip the no-op echo of our own rename: assigning .text resets the
       // selection, which the web engine renders as select-all — one
       // backspace in the title would select the whole name after the
-      // debounced save round-tripped.
+      // debounced save round-tripped. An untitled page renders empty so its
+      // placeholder shows instead of solid text.
       final name = bootstrap?.view.name ?? '';
-      if (_pageTitle.text != name) _pageTitle.text = name;
+      final display = isUntitledPageName(name) ? '' : name;
+      if (_pageTitle.text != display) _pageTitle.text = display;
+    }
+    // Opening a fresh/untitled page with the title shown: land the caret in the
+    // title so you can name it right away (instead of on the body), matching the
+    // "Untitled is a placeholder" model.
+    if (idChanged &&
+        widget.showPageTitle &&
+        bootstrap != null &&
+        bootstrap.view.objectType == 'document' &&
+        isUntitledPageName(bootstrap.view.name)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _pageTitleFocus.requestFocus();
+        _pageTitle.selection = const TextSelection.collapsed(offset: 0);
+      });
     }
   }
 
@@ -4062,7 +4081,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// rest unhandled, so these fire when a key bubbles past it. Both Control
   /// (Win/Linux) and Meta (macOS) variants are bound.
   Map<ShortcutActivator, VoidCallback> _appShortcuts() {
-    void newPage() => widget.onCreateDocument('Untitled');
+    void newPage() => widget.onCreateDocument(kUntitledPage);
     return <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
       const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
@@ -4207,7 +4226,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       position: PopupMenuPosition.under,
                       onSelected: (v) {
                         if (v == 'page') {
-                          widget.onCreateDocument('Untitled');
+                          widget.onCreateDocument(kUntitledPage);
                         } else {
                           widget.onCreateFolder('新文件夹');
                         }
@@ -4931,7 +4950,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               // otherwise nextFocus() away from the editor.
                               onEditingComplete: _titleEnter,
                               decoration: const InputDecoration(
-                                hintText: 'Untitled',
+                                hintText: kUntitledPage,
                                 border: InputBorder.none,
                               ),
                             ),
@@ -9604,6 +9623,19 @@ rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
 /// drift back to `.firstOrNull` (which would land on a folder → blank editor).
 DocumentView? firstOpenableView(Iterable<DocumentView> views) =>
     views.where((v) => v.objectType == 'document').firstOrNull;
+
+/// The default name a freshly-created page carries (the server rejects empty
+/// view names, so a new page must be named). The title field renders this — and
+/// the legacy English 'Untitled' — as an empty placeholder so a new page shows a
+/// grey hint + caret rather than solid, pre-selected text.
+const String kUntitledPage = '未命名页面';
+
+/// True when [name] is an untouched default page name (new page never renamed),
+/// so the title field should show its placeholder instead of the literal text.
+bool isUntitledPageName(String name) {
+  final t = name.trim();
+  return t == kUntitledPage || t == 'Untitled';
+}
 
 /// Whether a view may be nested under [parentId] (null = workspace root). A page
 /// is a leaf: nothing may live under a document — only a folder (or the root)
