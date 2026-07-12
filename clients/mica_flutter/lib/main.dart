@@ -5019,20 +5019,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                // Collaborator presence, right-aligned under the title row.
-                // (The seq/snapshot sync counters that used to sit here were
-                // dev-only noise.)
-                Padding(
-                  padding: const EdgeInsets.only(left: EditorTheme.gutter),
-                  child: Row(
-                    children: [
-                      const Spacer(),
-                      _PresenceBar(presence: widget.presence),
-                    ],
+                const SizedBox(height: 4),
+                // Collaborator presence, right-aligned under the title row —
+                // shown ONLY when someone else is here. Solo, this was an
+                // "Only you" line that just widened the title↔body gap for no
+                // reason (the space the user flagged).
+                if (widget.presence.isNotEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                    child: Row(
+                      children: [
+                        const Spacer(),
+                        _PresenceBar(presence: widget.presence),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
+                  const SizedBox(height: 4),
+                ],
                 Padding(
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
@@ -9733,20 +9736,10 @@ class _PresenceBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Solo → nothing (the caller also skips rendering the row); an "Only you"
+    // line here just padded the title↔body gap.
     if (presence.isEmpty) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.circle, size: 8, color: Color(0xFF94A3B8)),
-          const SizedBox(width: 6),
-          Text(
-            'Only you',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
-          ),
-        ],
-      );
+      return const SizedBox.shrink();
     }
 
     return Row(
