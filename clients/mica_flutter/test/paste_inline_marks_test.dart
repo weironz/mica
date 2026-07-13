@@ -69,6 +69,31 @@ void main() {
     });
   });
 
+  group('htmlToMarkdown — bare inline (one Typora paragraph, no <p> wrapper)', () {
+    test('coalesces top-level inline runs into ONE paragraph with marks', () {
+      const html =
+          '<strong>判断标准(BF3):</strong> <code>ip -br link</code> 显示 UP;'
+          '<code>no-carrier</code> = 没插光纤';
+      final md = htmlToMarkdown(html);
+      expect(
+        md.contains('\n'),
+        isFalse,
+        reason: 'one paragraph, not one block per inline element',
+      );
+      expect(md, contains('**判断标准(BF3):**'));
+      expect(md, contains('`ip -br link`'));
+      expect(md, contains('`no-carrier`'));
+    });
+
+    test('text + bold + text at top level stays one line', () {
+      expect(htmlToMarkdown('a <b>b</b> c'), 'a **b** c');
+    });
+
+    test('still splits when a real block element separates inline runs', () {
+      expect(htmlToMarkdown('<b>x</b><p>para</p><i>y</i>'), '**x**\n\npara\n\n*y*');
+    });
+  });
+
   group('htmlToMarkdown — no regression on links / blocks', () {
     test('links still become [text](href)', () {
       expect(

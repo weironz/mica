@@ -12,13 +12,56 @@ String htmlToMarkdown(String source) {
   final body = doc.body ?? doc.documentElement;
   if (body == null) return '';
   final out = StringBuffer();
-  for (final node in body.nodes) {
-    _node(node, out);
-  }
+  _emitChildren(body.nodes, out);
   return out
       .toString()
       .replaceAll(RegExp(r'\n{3,}'), '\n\n')
       .trim();
+}
+
+/// Inline elements (whitelist). Anything else — `p`, `div`, headings, lists,
+/// `table`, `img`, unknown custom elements — is treated as block-level.
+const _inlineTags = {
+  'a', 'strong', 'b', 'em', 'i', 'code', 's', 'del', 'strike', 'u', 'mark',
+  'sub', 'sup', 'small', 'span', 'font', 'br', 'wbr', 'abbr', 'cite', 'q',
+  'kbd', 'samp', 'var', 'time', 'label', 'ins', 'big', 'tt',
+};
+
+bool _isInlineNode(dom.Node n) =>
+    n is dom.Text ||
+    (n is dom.Element && _inlineTags.contains(_tag(n)));
+
+/// Emit a node list, coalescing runs of consecutive inline siblings (text +
+/// `<strong>`/`<code>`/… ) into ONE Markdown paragraph. Without this, a
+/// clipboard fragment that is bare inline content (a single paragraph copied
+/// from Typora arrives with no `<p>` wrapper) would put every `<strong>`/`<code>`
+/// on its own line and drop its emphasis — the inline markers are only added
+/// when the element is *gathered*, not when `_node` treats it as a block.
+void _emitChildren(List<dom.Node> nodes, StringBuffer out) {
+  final run = <dom.Node>[];
+  void flush() {
+    if (run.isEmpty) return;
+    final sb = StringBuffer();
+    for (final n in run) {
+      _gatherOne(n, sb);
+    }
+    run.clear();
+    final text = sb.toString().replaceAll(RegExp(r'[ \t]+'), ' ').trim();
+    if (text.isNotEmpty) {
+      out.writeln(text);
+      out.writeln();
+    }
+  }
+
+  for (final n in nodes) {
+    if (_isInlineNode(n)) {
+      run.add(n);
+    } else {
+      flush();
+      _node(n, out);
+    }
+  }
+  flush();
 }
 
 String _tag(dom.Element e) => (e.localName ?? '').toLowerCase();
@@ -97,17 +140,13 @@ void _node(dom.Node node, StringBuffer out) {
     case 'figure':
     case 'picture':
     case 'span':
-      for (final child in node.nodes) {
-        _node(child, out);
-      }
+      _emitChildren(node.nodes, out);
     default:
       if (node.querySelector(
             'table, ul, ol, pre, blockquote, h1, h2, h3, h4, h5, h6, p, img',
           ) !=
           null) {
-        for (final child in node.nodes) {
-          _node(child, out);
-        }
+        _emitChildren(node.nodes, out);
         return;
       }
       final text = _inline(node);
@@ -206,39 +245,45 @@ void _appendNewline(StringBuffer sb) {
 
 void _gather(dom.Node node, StringBuffer sb) {
   for (final child in node.nodes) {
-    if (child is dom.Text) {
-      sb.write(child.text);
-    } else if (child is dom.Element) {
-      final tag = _tag(child);
-      if (tag == 'br') {
-        sb.write(' ');
-      } else if (tag == 'a') {
-        final href = _cleanHref(child.attributes['href']);
-        final inner = StringBuffer();
-        _gather(child, inner);
-        final text = inner.toString().trim();
-        if (href != null && text.isNotEmpty) {
-          sb.write('[$text]($href)');
-        } else {
-          sb.write(text);
-        }
-      } else if (tag == 'img') {
-        final src = _cleanSrc(child.attributes['src']);
-        if (src != null) {
-          sb.write('![${child.attributes['alt'] ?? ''}]($src)');
-        }
-      } else if (tag == 'code') {
-        sb.write(_inlineCode(child.text));
-      } else {
-        final marks = _inlineMarks(child);
-        if (marks.isEmpty) {
-          _gather(child, sb);
-        } else {
-          final inner = StringBuffer();
-          _gather(child, inner);
-          sb.write(_wrapMarks(inner.toString(), marks));
-        }
-      }
+    _gatherOne(child, sb);
+  }
+}
+
+/// Append one inline node's Markdown (text or an inline element) to [sb].
+void _gatherOne(dom.Node child, StringBuffer sb) {
+  if (child is dom.Text) {
+    sb.write(child.text);
+    return;
+  }
+  if (child is! dom.Element) return;
+  final tag = _tag(child);
+  if (tag == 'br') {
+    sb.write(' ');
+  } else if (tag == 'a') {
+    final href = _cleanHref(child.attributes['href']);
+    final inner = StringBuffer();
+    _gather(child, inner);
+    final text = inner.toString().trim();
+    if (href != null && text.isNotEmpty) {
+      sb.write('[$text]($href)');
+    } else {
+      sb.write(text);
+    }
+  } else if (tag == 'img') {
+    final src = _cleanSrc(child.attributes['src']);
+    if (src != null) {
+      sb.write('![${child.attributes['alt'] ?? ''}]($src)');
+    }
+  } else if (tag == 'code') {
+    sb.write(_inlineCode(child.text));
+  } else {
+    final marks = _inlineMarks(child);
+    if (marks.isEmpty) {
+      _gather(child, sb);
+    } else {
+      final inner = StringBuffer();
+      _gather(child, inner);
+      sb.write(_wrapMarks(inner.toString(), marks));
     }
   }
 }
