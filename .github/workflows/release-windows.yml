@@ -1,8 +1,11 @@
-name: Release (Windows)
+name: Release
 
-# Push a tag like `v0.1.0` (or run manually) to build the Flutter Windows
-# desktop app, package it with Inno Setup, and attach the installer to the
-# GitHub release. Unsigned for now — see installer/mica.iss.
+# Push a tag like `v0.1.0` (or run manually) to build the release artifacts and
+# attach them to the GitHub release for that tag:
+#   * the Flutter Windows desktop app, packaged with Inno Setup (unsigned for
+#     now — see installer/mica.iss); this drives the in-app auto-updater.
+#   * the `mica-cli` binary for Windows / Linux / macOS (a pure, thin HTTP client
+#     over the REST API — no backup engine baked in; see docs/backup.md).
 
 on:
   push:
@@ -85,3 +88,80 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: clients/mica_flutter/installer/Output/Mica-Setup-${{ steps.ver.outputs.version }}.exe
+
+  cli:
+    # Build + publish the mica-cli binary for each desktop OS. `needs: windows`
+    # so the installer (and make_latest) lands on the release FIRST — the in-app
+    # updater reads /releases/latest, and we never want it to see a release whose
+    # installer asset isn't attached yet. These legs only attach binaries.
+    needs: windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bin: mica-cli.exe
+            suffix: windows-x64.exe
+          - os: ubuntu-latest
+            bin: mica-cli
+            suffix: linux-x64
+          - os: macos-latest
+            bin: mica-cli
+            suffix: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One shared cache across the matrix would collide (different OSes);
+          # rust-cache already namespaces by runner OS. Key by the crate so the
+          # desktop job's (nonexistent) Rust cache never mixes in.
+          key: mica-cli
+
+      # Pure-Rust build: reqwest uses rustls-tls (no OpenSSL), so Linux/macOS
+      # need no system TLS libs. --locked pins to the committed Cargo.lock.
+      - name: Build mica-cli
+        shell: bash
+        run: cargo build --locked -p mica-cli --release
+
+      - name: Stage binary
+        id: stage
+        shell: bash
+        run: |
+          asset="mica-cli-${{ steps.ver.outputs.version }}-${{ matrix.suffix }}"
+          cp "target/release/${{ matrix.bin }}" "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload cli artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mica-cli-${{ matrix.suffix }}
+          path: ${{ steps.stage.outputs.asset }}
+          if-no-files-found: error
+
+      - name: Publish cli binary to release
+        # Same gate as the installer: tag pushes always publish; manual runs only
+        # when publish=true (else dry-run = build + artifact only). The release
+        # already exists (needs: windows created it) — this just attaches a file.
+        if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: ${{ steps.stage.outputs.asset }}
