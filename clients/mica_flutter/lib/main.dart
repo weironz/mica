@@ -3998,6 +3998,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   double _editorAvailWidth = 1160;
   final GlobalKey _editorSurfaceKey = GlobalKey();
   final EditorCommandHook _commandHook = EditorCommandHook();
+  // Live document outline (TOC). The editor republishes headings on every edit;
+  // the outline panel listens, so it tracks typing instead of only navigation.
+  final EditorOutlineHook _outlineHook = EditorOutlineHook();
 
   @override
   void initState() {
@@ -4026,6 +4029,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     } else {
       _fitNavWidthToContent();
     }
+    _seedOutline();
+  }
+
+  /// Seed the live outline from the current page's bootstrap snapshot so the
+  /// headings show the instant a page opens — before the editor mounts and
+  /// starts republishing them live. [EditorOutlineHook] change-dedupes, so the
+  /// editor's first live publish (identical data) is a no-op.
+  void _seedOutline() {
+    final blocks = widget.selectedBootstrap?.childBlocks ?? const [];
+    _outlineHook.publish([
+      for (final b in blocks)
+        if (b.kind == 'heading')
+          OutlineEntry(id: b.id, text: b.text, level: _headingLevel(b)),
+    ]);
   }
 
   /// Auto-size the sidebar to the widest visible page name (+ the row's fixed
@@ -4077,6 +4094,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final bootstrap = widget.selectedBootstrap;
     final idChanged =
         bootstrap?.view.id != oldWidget.selectedBootstrap?.view.id;
+    // New page open → reseed the outline from its snapshot immediately (the new
+    // editor's live publish is one frame away; this avoids a stale-headings flash).
+    if (idChanged) _seedOutline();
     if (idChanged ||
         bootstrap?.view.name != oldWidget.selectedBootstrap?.view.name) {
       // Skip the no-op echo of our own rename: assigning .text resets the
@@ -4123,6 +4143,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _editorFocus.dispose();
     _pageTitleFocus.dispose();
     _pageTitleSaveTimer?.cancel();
+    _outlineHook.dispose();
     super.dispose();
   }
 
@@ -5235,6 +5256,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     reHostImages: widget.reHostImages,
                     scrollHook: _scrollHook,
                     commandHook: _commandHook,
+                    outlineHook: _outlineHook,
                     onExitTop: () {
                       if (!widget.showPageTitle) return;
                       _pageTitleFocus.requestFocus();
@@ -5288,31 +5310,33 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   /// Tappable outline entries for the current page's headings (no section
-  /// header). Tapping scrolls the editor to that heading.
-  List<Widget> _pageOutlineItems(BuildContext context) {
-    final blocks = widget.selectedBootstrap?.childBlocks ?? const [];
+  /// header). Tapping scrolls the editor to that heading. Fed the LIVE heading
+  /// list from [_outlineHook] (republished by the editor on every edit), so it
+  /// tracks typing — not just navigation.
+  List<Widget> _pageOutlineItems(
+    BuildContext context,
+    List<OutlineEntry> headings,
+  ) {
     return [
-      for (final b in blocks)
-        if (b.kind == 'heading' && b.text.trim().isNotEmpty)
+      for (final h in headings)
+        if (h.text.trim().isNotEmpty)
           InkWell(
-            onTap: () => _scrollHook.scrollToBlock(b.id),
+            onTap: () => _scrollHook.scrollToBlock(h.id),
             borderRadius: BorderRadius.circular(6),
             child: Padding(
               padding: EdgeInsets.only(
-                left: 4.0 + 14 * ((_headingLevel(b) - 1).clamp(0, 5)),
+                left: 4.0 + 14 * ((h.level.clamp(1, 6) - 1).clamp(0, 5)),
                 top: 5,
                 bottom: 5,
                 right: 4,
               ),
               child: Text(
-                b.text.trim(),
+                h.text.trim(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: _headingLevel(b) <= 1 ? 14 : 13,
-                  fontWeight: _headingLevel(b) <= 1
-                      ? FontWeight.w600
-                      : FontWeight.w400,
+                  fontSize: h.level <= 1 ? 14 : 13,
+                  fontWeight: h.level <= 1 ? FontWeight.w600 : FontWeight.w400,
                   color: const Color(0xFF334155),
                 ),
               ),
@@ -5328,37 +5352,43 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return 1;
   }
 
-  /// Right panel — the current page's outline (table of contents).
+  /// Right panel — the current page's outline (table of contents). Rebuilds
+  /// off [_outlineHook] so headings track live edits, not just navigation.
   Widget _workspaceTools(BuildContext context) {
-    final outline = _pageOutlineItems(context);
-    return ColoredBox(
-      color: Colors.white,
-      child: outline.isEmpty
-          ? const EmptyState(
-              icon: Icons.toc,
-              title: 'Outline',
-              detail: 'Headings in this page appear here.',
-            )
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+    return ListenableBuilder(
+      listenable: _outlineHook,
+      builder: (context, _) {
+        final outline = _pageOutlineItems(context, _outlineHook.headings);
+        return ColoredBox(
+          color: Colors.white,
+          child: outline.isEmpty
+              ? const EmptyState(
+                  icon: Icons.toc,
+                  title: 'Outline',
+                  detail: 'Headings in this page appear here.',
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.toc, size: 18),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Outline',
-                        style: Theme.of(context).textTheme.titleLarge,
+                      Row(
+                        children: [
+                          const Icon(Icons.toc, size: 18),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Outline',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 8),
+                      ...outline,
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  ...outline,
-                ],
-              ),
-            ),
+                ),
+        );
+      },
     );
   }
 

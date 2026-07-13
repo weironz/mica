@@ -42,6 +42,51 @@ class EditorScrollHook {
   void scrollToBlock(String blockId) => _scroll?.call(blockId);
 }
 
+/// A single heading in the live document outline (table of contents).
+class OutlineEntry {
+  const OutlineEntry({
+    required this.id,
+    required this.text,
+    required this.level,
+  });
+  final String id;
+  final String text;
+  final int level;
+
+  @override
+  bool operator ==(Object other) =>
+      other is OutlineEntry &&
+      other.id == id &&
+      other.text == text &&
+      other.level == level;
+
+  @override
+  int get hashCode => Object.hash(id, text, level);
+}
+
+/// Live table-of-contents feed. The editor republishes the current headings (in
+/// document order) on every model change; the host's outline panel listens and
+/// rebuilds. Decouples the outline from the frozen bootstrap snapshot so it
+/// tracks the user's own edits in real time (not just navigation / remote sync).
+class EditorOutlineHook extends ChangeNotifier {
+  List<OutlineEntry> _headings = const [];
+  List<OutlineEntry> get headings => _headings;
+
+  void publish(List<OutlineEntry> next) {
+    if (_same(next)) return;
+    _headings = List.unmodifiable(next);
+    notifyListeners();
+  }
+
+  bool _same(List<OutlineEntry> next) {
+    if (next.length != _headings.length) return false;
+    for (var i = 0; i < next.length; i++) {
+      if (next[i] != _headings[i]) return false;
+    }
+    return true;
+  }
+}
+
 /// Lets the host's formatting toolbar drive editor commands (block converts,
 /// inline marks, inserts, undo/redo) without owning the controller. The
 /// editor registers itself while mounted; calls are no-ops otherwise.
@@ -102,6 +147,7 @@ class MicaEditor extends StatefulWidget {
     this.focusNode,
     this.scrollHook,
     this.commandHook,
+    this.outlineHook,
     this.onExitTop,
     this.appearance = const EditorAppearance(),
     this.onOpenPage,
@@ -168,6 +214,10 @@ class MicaEditor extends StatefulWidget {
 
   /// Optional hook the host's formatting toolbar uses to run editor commands.
   final EditorCommandHook? commandHook;
+
+  /// Optional hook that receives the live heading list (document outline / TOC)
+  /// on every edit, so the host's outline panel updates without navigation.
+  final EditorOutlineHook? outlineHook;
 
   /// Called when the caret tries to leave the document upward (ArrowUp on the
   /// first line, Backspace at the very start) — the host focuses the page
@@ -327,6 +377,32 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     widget.scrollHook?._scroll = _scrollToBlock;
     _registerCommandHook();
     _ensureNotEmptyDeferred();
+    // Seed the outline once the first frame is up (publishing during init could
+    // notify the host's outline panel mid-build).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _publishOutline();
+    });
+  }
+
+  /// Push the current headings (id + text + level, document order) to the host
+  /// outline hook. Change-detected, so it only rebuilds the outline when a
+  /// heading is actually added / removed / retitled / re-leveled.
+  void _publishOutline() {
+    final hook = widget.outlineHook;
+    if (hook == null) return;
+    final items = <OutlineEntry>[];
+    for (final n in _controller.nodes) {
+      if (n.kind == 'heading') {
+        items.add(
+          OutlineEntry(
+            id: n.id,
+            text: n.text,
+            level: (n.data['level'] as num?)?.toInt() ?? 1,
+          ),
+        );
+      }
+    }
+    hook.publish(items);
   }
 
   /// Wire the host formatting toolbar's commands to the controller. Every
@@ -533,6 +609,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _refreshMarkBar();
       _cacheImageUrls();
       _reportCursor();
+      _publishOutline();
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).
