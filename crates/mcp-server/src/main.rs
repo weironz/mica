@@ -6,7 +6,7 @@
 //!
 //! Config (env): `MICA_API_BASE_URL` (e.g. https://mica.cloudcele.com) and
 //! `MICA_PAT` (a Mica personal access token). Optional `MICA_MCP_READ_ONLY=1`
-//! registers only the read tools.
+//! makes every write tool refuse at call time (the read tools stay listed).
 use anyhow::Context as _;
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -68,8 +68,11 @@ impl MicaMcp {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
+            // Cap the forwarded body — never dump a large or server-internal
+            // error payload back to the model.
+            let body: String = text.chars().take(400).collect();
             return Err(McpError::internal_error(
-                format!("Mica API {status}: {text}"),
+                format!("Mica API {status}: {body}"),
                 None,
             ));
         }
@@ -133,6 +136,8 @@ struct CreateDocArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct UpdateDocArgs {
     workspace_id: String,
+    /// The document's object id (a page's `object_id` from mica_list_pages) —
+    /// NOT its view id (that's for move/trash).
     document_id: String,
     /// One of: "append" (add after current content — safe default),
     /// "replace_all" (rewrite the page), "insert_at" (insert after `anchor`),
@@ -246,7 +251,10 @@ impl MicaMcp {
         ))
     }
 
-    #[tool(description = "Create a new page (optionally with Markdown body) in a workspace.")]
+    #[tool(
+        description = "Create a new page (optionally with Markdown body) in a workspace.",
+        annotations(read_only_hint = false)
+    )]
     async fn mica_create_document(
         &self,
         Parameters(CreateDocArgs {
@@ -317,7 +325,10 @@ impl MicaMcp {
         ))
     }
 
-    #[tool(description = "Move a page under a new parent folder (or to the top level).")]
+    #[tool(
+        description = "Move a page under a new parent folder (or to the top level).",
+        annotations(read_only_hint = false)
+    )]
     async fn mica_move_document(
         &self,
         Parameters(MoveDocArgs {

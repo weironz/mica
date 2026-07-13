@@ -99,6 +99,28 @@ pub async fn apply_document_operations(
   actor_id: Uuid,
   operations: &[DocumentOperation],
 ) -> ApiResult<AppliedUpdate> {
+  apply_derived_operations(db, workspace_id, document_id, actor_id, |_| {
+    Ok(operations.to_vec())
+  })
+  .await
+}
+
+/// Like [`apply_document_operations`], but the ops are DERIVED from the document
+/// snapshot inside the same `FOR UPDATE` lock that applies them — so callers that
+/// compute ops from current state (e.g. the markdown write path: append after the
+/// end, insert after an anchor, delete existing) can't race a concurrent edit
+/// between reading and applying. `derive` gets the locked snapshot; its `Err`
+/// becomes a `BadRequest`.
+pub async fn apply_derived_operations<F>(
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  actor_id: Uuid,
+  derive: F,
+) -> ApiResult<AppliedUpdate>
+where
+  F: FnOnce(&DocumentSnapshotPayload) -> Result<Vec<DocumentOperation>, String>,
+{
   let mut tx = db.begin().await?;
 
   let locked = lock_document_tx(&mut tx, workspace_id, document_id)
@@ -110,12 +132,16 @@ pub async fn apply_document_operations(
 
   let current_payload = payload_from_value(current_snapshot.payload)
     .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
-  let next_payload = apply_operations(current_payload, operations)
+  let operations = derive(&current_payload).map_err(ApiError::BadRequest)?;
+  if operations.is_empty() {
+    return Err(ApiError::BadRequest("no operations to apply".to_string()));
+  }
+  let next_payload = apply_operations(current_payload, &operations)
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
   let next_payload_value =
     serde_json::to_value(next_payload).map_err(|error| ApiError::Internal(error.to_string()))?;
   let operations_value =
-    serde_json::to_value(operations).map_err(|error| ApiError::Internal(error.to_string()))?;
+    serde_json::to_value(&operations).map_err(|error| ApiError::Internal(error.to_string()))?;
   let next_seq = locked.current_seq + 1;
 
   let update = sqlx::query_as::<_, UpdateRecord>(

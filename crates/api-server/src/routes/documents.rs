@@ -805,6 +805,10 @@ fn outline_walk(
   let Some(block) = by_id.get(id) else {
     return;
   };
+  // Only the root's DIRECT children — these are exactly the anchors `insert_at`
+  // accepts (it resolves against root.children). Mica stores a flat block list
+  // under the root, so this is also the whole body; don't recurse and advertise
+  // deeper ids that insert_at would reject.
   for child_id in &block.children {
     if let Some(child) = by_id.get(child_id.as_str()) {
       block_ids.push(child.id.clone());
@@ -816,7 +820,6 @@ fn outline_walk(
         });
       }
     }
-    outline_walk(child_id, by_id, headings, block_ids);
   }
 }
 
@@ -867,18 +870,16 @@ pub async fn update_document_markdown(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
-  let snapshot = store::latest_snapshot(&state.db, document_id)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-  let payload = payload_from_value(snapshot.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
-
-  let ops = markdown_update_ops(&payload, &request).map_err(ApiError::BadRequest)?;
-  if ops.is_empty() {
-    return Err(ApiError::BadRequest("no content to write".to_string()));
-  }
-  let applied =
-    store::apply_document_operations(&state.db, workspace_id, document_id, user_id, &ops).await?;
+  // Derive the ops from the snapshot INSIDE the write lock (no read-then-apply
+  // TOCTOU: an anchor index / delete target can't drift under a concurrent edit).
+  let applied = store::apply_derived_operations(
+    &state.db,
+    workspace_id,
+    document_id,
+    user_id,
+    |payload| markdown_update_ops(payload, &request),
+  )
+  .await?;
   ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
 
   Ok(Json(DocumentUpdateResponse {
@@ -908,27 +909,59 @@ fn markdown_update_ops(
       .ok_or("find_replace requires a non-empty `find`")?;
     let replace = request.replace.as_deref().unwrap_or("");
     let mut ops = Vec::new();
+    let mut skipped_formatted = false;
     for block in &current.blocks {
-      if block.id != root_id && block.text.contains(find) {
-        ops.push(DocumentOperation::UpdateBlock {
-          block_id: block.id.clone(),
-          kind: None,
-          text: Some(block.text.replace(find, replace)),
-          data: None,
-        });
+      if block.id == root_id || !block.text.contains(find) {
+        continue;
       }
+      // A block's inline marks are UTF-16 offset ranges into its text. A blind
+      // text replace would leave those offsets pointing at the wrong characters
+      // — silently mangling bold/italic/link/math. Never touch a marked block;
+      // steer the caller to replace_all/insert_at for formatted content.
+      let has_marks = block
+        .data
+        .get("marks")
+        .and_then(|m| m.as_array())
+        .is_some_and(|a| !a.is_empty());
+      if has_marks {
+        skipped_formatted = true;
+        continue;
+      }
+      ops.push(DocumentOperation::UpdateBlock {
+        block_id: block.id.clone(),
+        kind: None,
+        text: Some(block.text.replace(find, replace)),
+        data: None,
+      });
     }
     if ops.is_empty() {
-      return Err(format!("no block text contains {find:?}"));
+      return Err(if skipped_formatted {
+        format!("{find:?} appears only in formatted text; use replace_all or insert_at instead")
+      } else {
+        format!("no block text contains {find:?}")
+      });
     }
     return Ok(ops);
   }
+
+  // Parse the incoming markdown up front so an empty body is rejected BEFORE any
+  // destructive delete (a replace_all with empty markdown must not wipe the doc).
+  let tmp_root = format!("block_{}", Uuid::new_v4().simple());
+  let parsed = import_markdown(&request.markdown, &tmp_root);
+  let has_content = parsed
+    .blocks
+    .iter()
+    .find(|b| b.id == tmp_root)
+    .is_some_and(|r| !r.children.is_empty());
 
   let mut ops = Vec::new();
   // Where the new content grafts under the root: append (None), replace_all
   // (None, after wiping), or insert_at (right after the anchor).
   let start_index = match request.mode {
     MarkdownUpdateMode::ReplaceAll => {
+      if !has_content {
+        return Err("replace_all needs markdown content — refusing to wipe the document".to_string());
+      }
       if let Some(root) = current.blocks.iter().find(|b| b.id == root_id) {
         for child in &root.children {
           ops.push(DocumentOperation::DeleteBlock { block_id: child.clone() });
@@ -957,8 +990,6 @@ fn markdown_update_ops(
     MarkdownUpdateMode::FindReplace => unreachable!("handled above"),
   };
 
-  let tmp_root = format!("block_{}", Uuid::new_v4().simple());
-  let parsed = import_markdown(&request.markdown, &tmp_root);
   let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
     parsed.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
   graft_ops(&tmp_root, root_id, start_index, &by_id, &mut ops);
@@ -2119,5 +2150,51 @@ mod tests {
     let mut miss = request;
     miss.find = Some("nope".into());
     assert!(markdown_update_ops(&current, &miss).is_err());
+  }
+
+  #[test]
+  fn markdown_update_find_replace_skips_formatted_blocks() {
+    use mica_app_core::documents::{Block, DocumentSnapshotPayload};
+    // The only matching block carries an inline mark → a text-only replace would
+    // desync its UTF-16 offsets, so find_replace must refuse rather than corrupt.
+    let payload = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".into(),
+      blocks: vec![
+        Block {
+          id: "root".into(),
+          kind: "page".into(),
+          text: "".into(),
+          data: serde_json::Value::Null,
+          children: vec!["p".into()],
+        },
+        Block {
+          id: "p".into(),
+          kind: "paragraph".into(),
+          text: "see docs now".into(),
+          data: serde_json::json!({"marks": [{"type": "link", "start": 4, "end": 8}]}),
+          children: vec![],
+        },
+      ],
+    };
+    let request = UpdateMarkdownRequest {
+      mode: MarkdownUpdateMode::FindReplace,
+      markdown: String::new(),
+      anchor: None,
+      find: Some("see ".into()),
+      replace: Some(String::new()),
+    };
+    let err = markdown_update_ops(&payload, &request).unwrap_err();
+    assert!(err.contains("formatted"), "should refuse formatted blocks, got: {err}");
+  }
+
+  #[test]
+  fn markdown_update_replace_all_empty_refuses_to_wipe() {
+    let current = doc_with_children(&["a", "b"]);
+    let err = markdown_update_ops(&current, &upd(MarkdownUpdateMode::ReplaceAll, "  \n ")).unwrap_err();
+    assert!(
+      err.contains("wipe") || err.contains("content"),
+      "empty replace_all must not wipe the doc, got: {err}",
+    );
   }
 }
