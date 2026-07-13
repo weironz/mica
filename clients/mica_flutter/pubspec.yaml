@@ -24,6 +24,12 @@ dependencies:
   # variants for image paste + "copy image". Web keeps its DOM clipboard path.
   # In-house exemption #4 (platform glue). No Rust build (unlike super_clipboard).
   pasteboard: ^0.5.0
+  # dart:ffi helper (Utf16 alloc) for reading the Windows clipboard's registered
+  # "PNG" format directly (user32/kernel32 via dart:ffi): pasteboard reads only
+  # the flattened CF_DIB, which bakes a transparent PNG's alpha to black; the
+  # "PNG" format (browsers register it) keeps transparency. Pure-Dart, already in
+  # the tree; Windows-only + guarded + fallback. See rich_paste_stub.dart.
+  ffi: ^2.1.0
   # Pure-Dart HTML parser — converts pasted clipboard HTML to Markdown on desktop
   # (web uses dart:html for the same). Not platform glue; a parsing lib.
   html: ^0.15.0
