@@ -3855,9 +3855,13 @@ class _LanguagePickerState extends State<_LanguagePicker> {
 
   List<String> get _filtered {
     final q = _query.text.trim().toLowerCase();
-    if (q.isEmpty) return kCodeLanguages;
+    // Alphabetical so the list is scannable; `auto` (content detection) stays
+    // pinned on top as the smart default.
+    final rest = kCodeLanguages.where((l) => l != 'auto').toList()..sort();
+    final all = <String>['auto', ...rest];
+    if (q.isEmpty) return all;
     return [
-      for (final l in kCodeLanguages)
+      for (final l in all)
         if (l.toLowerCase().contains(q)) l,
     ];
   }

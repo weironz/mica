@@ -4286,7 +4286,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     visualDensity: VisualDensity.compact,
                     onPressed: () => setState(() => _navCollapsed = true),
                     icon: const Icon(
-                      Icons.keyboard_double_arrow_left,
+                      Icons.view_sidebar_outlined,
                       size: 20,
                     ),
                   ),
@@ -4460,7 +4460,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               tooltip: 'Expand sidebar',
               visualDensity: VisualDensity.compact,
               onPressed: () => setState(() => _navCollapsed = false),
-              icon: const Icon(Icons.keyboard_double_arrow_right, size: 20),
+              icon: const Icon(Icons.view_sidebar_outlined, size: 20),
             ),
           ],
         ),
@@ -5039,11 +5039,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         color: Colors.white,
         border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      // Align the buttons with the page's centered text column (not the pane
+      // edge): same horizontal padding + max width + left gutter as the body.
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: widget.pageWidth),
+            child: Padding(
+              padding: const EdgeInsets.only(left: EditorTheme.gutter),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
             btn(Icons.undo, 'Undo (Ctrl+Z)', h.undo),
             btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
             divider(),
@@ -5120,7 +5129,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             btn(Icons.horizontal_rule, 'Divider', () => h.insert('divider')),
             btn(Icons.grid_on, 'Table', () => h.insert('table')),
             btn(Icons.image_outlined, 'Image', () => h.insert('image')),
-          ],
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -5256,10 +5269,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             : 'Show side panel',
                         onPressed: () =>
                             setState(() => _toolsExpanded = !_toolsExpanded),
-                        icon: Icon(
-                          _toolsExpanded
-                              ? Icons.chevron_right
-                              : Icons.chevron_left,
+                        // Mirror of the left sidebar's icon → a symmetric pair
+                        // (panel bar on the right), matching AFFiNE.
+                        icon: Transform.flip(
+                          flipX: true,
+                          child: const Icon(Icons.view_sidebar_outlined),
                         ),
                       ),
                     ],

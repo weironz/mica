@@ -57,7 +57,7 @@ class EditorTheme {
   static const Color faint = Color(0xFF9AA4AF);
   static const Color caret = Color(0xFF2563EB);
   static const Color selection = Color(0x332563EB);
-  static const Color codeBg = Color(0xFFF1F5F9);
+  static const Color codeBg = Color(0xFFF4F4F6);
   /// Inline `code` span pill — a soft neutral chip behind the mono text (drawn
   /// in _paintInlineCode). Translucent so a text selection tints through it.
   static const Color inlineCodeBg = Color(0x1A64748B);
