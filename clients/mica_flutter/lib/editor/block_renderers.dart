@@ -254,6 +254,9 @@ class ImageRenderer extends AtomicBlockRenderer {
     if (decoded != null) {
       canvas.save();
       canvas.clipRRect(rr);
+      // Matte the image onto white first, so a transparent (alpha) PNG's
+      // see-through areas read as the page background — not black.
+      canvas.drawRect(r, Paint()..color = const Color(0xFFFFFFFF));
       paintImage(
         canvas: canvas,
         rect: r,
