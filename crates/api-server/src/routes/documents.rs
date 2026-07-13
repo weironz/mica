@@ -820,6 +820,113 @@ fn outline_walk(
   }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownUpdateMode {
+  /// Wipe the document body and write the markdown fresh.
+  ReplaceAll,
+  /// Add the markdown after the existing content (least conflict-prone).
+  Append,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMarkdownRequest {
+  pub mode: MarkdownUpdateMode,
+  pub markdown: String,
+}
+
+/// `PATCH /api/workspaces/{workspace_id}/documents/{document_id}/markdown`
+///
+/// Write markdown into an EXISTING document (the AI-facing write path). Content
+/// is markdown-in — the block/CRDT ops are derived server-side (reusing
+/// `import_markdown` + the authoritative `apply_document_operations`), so callers
+/// never construct raw ops. `append` is the safe default; `replace_all` wipes
+/// first. (Anchored `insert_at`/`find_replace` land in M2.)
+pub async fn update_document_markdown(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+  Json(request): Json<UpdateMarkdownRequest>,
+) -> ApiResult<Json<DocumentUpdateResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+
+  let snapshot = store::latest_snapshot(&state.db, document_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  let payload = payload_from_value(snapshot.payload)
+    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
+
+  let ops = markdown_update_ops(&payload, &request.markdown, &request.mode);
+  if ops.is_empty() {
+    return Err(ApiError::BadRequest("no content to write".to_string()));
+  }
+  let applied =
+    store::apply_document_operations(&state.db, workspace_id, document_id, user_id, &ops).await?;
+  ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
+
+  Ok(Json(DocumentUpdateResponse {
+    document: applied.document,
+    snapshot: applied.snapshot,
+    update: applied.update,
+  }))
+}
+
+/// Pure: derive the block ops that write [markdown] into a doc whose current
+/// state is [current]. `replace_all` first deletes the root's top-level children
+/// (delete cascades their subtrees); then the parsed markdown tree is grafted
+/// under the root — each block inserted with its `children` stripped and re-linked
+/// via `parent_id`, in pre-order so parents exist first. Testable without a DB.
+fn markdown_update_ops(
+  current: &mica_app_core::documents::DocumentSnapshotPayload,
+  markdown: &str,
+  mode: &MarkdownUpdateMode,
+) -> Vec<DocumentOperation> {
+  let root_id = current.root_block_id.as_str();
+  let mut ops = Vec::new();
+  if matches!(mode, MarkdownUpdateMode::ReplaceAll) {
+    if let Some(root) = current.blocks.iter().find(|b| b.id == root_id) {
+      for child in &root.children {
+        ops.push(DocumentOperation::DeleteBlock { block_id: child.clone() });
+      }
+    }
+  }
+  let tmp_root = format!("block_{}", Uuid::new_v4().simple());
+  let parsed = import_markdown(markdown, &tmp_root);
+  let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
+    parsed.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
+  graft_ops(&tmp_root, root_id, &by_id, &mut ops);
+  ops
+}
+
+/// Emit InsertBlock ops for every child of [parsed_parent], re-parenting them
+/// under [op_parent] (children stripped; re-linked by insertion order), then
+/// recurse so their descendants nest under the real block id.
+fn graft_ops(
+  parsed_parent: &str,
+  op_parent: &str,
+  by_id: &std::collections::HashMap<&str, &mica_app_core::documents::Block>,
+  ops: &mut Vec<DocumentOperation>,
+) {
+  let Some(parent) = by_id.get(parsed_parent) else {
+    return;
+  };
+  for child_id in &parent.children {
+    let Some(child) = by_id.get(child_id.as_str()) else {
+      continue;
+    };
+    let mut block = (*child).clone();
+    block.children = Vec::new();
+    ops.push(DocumentOperation::InsertBlock {
+      block,
+      parent_id: op_parent.to_string(),
+      index: None,
+    });
+    graft_ops(&child.id, &child.id, by_id, ops);
+  }
+}
+
 /// `GET /api/workspaces/{workspace_id}/documents/{document_id}/export.zip`
 ///
 /// A portable ZIP: `document.md` with Mica images rewritten to `assets/<name>`
@@ -1813,6 +1920,69 @@ mod tests {
         .map(|h| (h.level, h.text.as_str()))
         .collect::<Vec<_>>(),
       [(1, "Intro"), (2, "Details")],
+    );
+  }
+
+  fn doc_with_children(kids: &[&str]) -> mica_app_core::documents::DocumentSnapshotPayload {
+    use mica_app_core::documents::{Block, DocumentSnapshotPayload};
+    let mut blocks = vec![Block {
+      id: "root".into(),
+      kind: "page".into(),
+      text: "".into(),
+      data: serde_json::Value::Null,
+      children: kids.iter().map(|s| s.to_string()).collect(),
+    }];
+    for k in kids {
+      blocks.push(Block {
+        id: (*k).into(),
+        kind: "paragraph".into(),
+        text: "existing".into(),
+        data: serde_json::Value::Null,
+        children: vec![],
+      });
+    }
+    DocumentSnapshotPayload { schema_version: 1, root_block_id: "root".into(), blocks }
+  }
+
+  #[test]
+  fn markdown_update_append_grafts_under_root_without_deletes() {
+    use mica_app_core::documents::DocumentOperation;
+    let current = doc_with_children(&["old"]);
+    let ops = markdown_update_ops(&current, "# Title\n\nhello", &MarkdownUpdateMode::Append);
+    assert!(
+      ops.iter().all(|o| !matches!(o, DocumentOperation::DeleteBlock { .. })),
+      "append never deletes",
+    );
+    let top_inserts = ops
+      .iter()
+      .filter(|o| matches!(o, DocumentOperation::InsertBlock { parent_id, .. } if parent_id == "root"))
+      .count();
+    assert!(top_inserts >= 2, "heading + paragraph grafted under the existing root");
+    assert!(
+      ops.iter().all(|o| match o {
+        DocumentOperation::InsertBlock { block, .. } => block.children.is_empty(),
+        _ => true,
+      }),
+      "inserted blocks have children stripped (re-linked via parent_id)",
+    );
+  }
+
+  #[test]
+  fn markdown_update_replace_all_deletes_existing_top_level_first() {
+    use mica_app_core::documents::DocumentOperation;
+    let current = doc_with_children(&["a", "b"]);
+    let ops = markdown_update_ops(&current, "fresh body", &MarkdownUpdateMode::ReplaceAll);
+    let deletes: Vec<&str> = ops
+      .iter()
+      .filter_map(|o| match o {
+        DocumentOperation::DeleteBlock { block_id } => Some(block_id.as_str()),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(deletes, ["a", "b"], "existing top-level children deleted first");
+    assert!(
+      ops.iter().any(|o| matches!(o, DocumentOperation::InsertBlock { .. })),
+      "then the new markdown is grafted in",
     );
   }
 }
