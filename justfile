@@ -25,6 +25,13 @@ dev-web:
     cd clients/mica_flutter && {{flutter}} build web --no-tree-shake-icons
     chmod -R a+rX clients/mica_flutter/build/web
 
+# Launch the app to eyeball a change (hot reload: press r; quit: q). Desktop
+# opens the offline local world — create folders/pages with no backend.
+#   just app          # desktop (windows)
+#   just app chrome   # web
+app target="windows":
+    cd clients/mica_flutter && {{flutter}} run -d {{target}}
+
 # Container-parity check: run the REAL images locally before a release —
 # catches container-only bugs (e.g. loopback binds) that host dev can't.
 # Stops dev infra first (port clash); needs a root .env.prod.
