@@ -23,8 +23,8 @@ if [[ "${1:-}" == "--web-only" ]]; then
 fi
 
 echo "==> building API image + starting the stack"
-docker compose --env-file .env.prod -f deploy/docker-compose.prod.yml build api
-docker compose --env-file .env.prod -f deploy/docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f deploy/docker-compose.single.yml build api
+docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
 
 echo "==> waiting for health"
 for _ in $(seq 1 30); do
@@ -34,5 +34,5 @@ for _ in $(seq 1 30); do
   fi
   sleep 2
 done
-echo "health check failed — inspect: docker compose -f deploy/docker-compose.prod.yml logs api" >&2
+echo "health check failed — inspect: docker compose -f deploy/docker-compose.single.yml logs api" >&2
 exit 1

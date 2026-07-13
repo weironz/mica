@@ -1,8 +1,18 @@
-# Deployment (single server, IP + port 80)
+# Deployment
 
-Production form: nginx serves the Flutter bundle and reverse-proxies
-`/api` + `/ws` to the Rust backend; PostgreSQL and RustFS run alongside.
-Everything ships via `deploy/docker-compose.prod.yml`.
+Two compose files ship in `deploy/`:
+
+- **`docker-compose.yml`** — the canonical production stack, behind an existing
+  **Traefik** (label routing + Let's Encrypt, HTTPS, no host ports). This is what
+  runs at mica.cloudcele.com; see [Behind Traefik](#behind-traefik-the-canonical-production-stack).
+- **`docker-compose.single.yml`** — a simpler **single-server** variant (nginx on
+  port 80, no Traefik), documented in the next section.
+
+## Single server (IP + port 80)
+
+nginx serves the Flutter bundle and reverse-proxies `/api` + `/ws` to the Rust
+backend; PostgreSQL and RustFS run alongside. Ships via
+`deploy/docker-compose.single.yml`.
 
 ```
 browser ── :80 nginx ──┬── /            static Flutter bundle (deploy/web)
@@ -25,9 +35,9 @@ vi .env.prod          # SERVER_IP + strong JWT_SECRET / passwords (openssl rand 
 Then open `http://<SERVER_IP>/`. Database migrations are embedded in the
 binary and run automatically at startup.
 
-> The dev services (`docker-compose.yml`, host-run api on :8080, python
-> http.server on :8090) collide with the prod stack on :9000 — stop them
-> first on a shared machine: `pkill -x mica-api-server; docker compose down`.
+> Local dev (host-run api on :8080, python http.server on :8090) collides with
+> the prod stack on :9000 — stop it first on a shared machine:
+> `pkill -x mica-api-server; docker compose down`.
 
 ## Upgrades
 
@@ -60,12 +70,12 @@ reload picks up new releases (asset files are content-hashed).
 
 | Data | Where | Backup |
 |---|---|---|
-| Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f deploy/docker-compose.prod.yml exec postgres pg_dump -U mica mica > backup.sql` |
+| Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f deploy/docker-compose.single.yml exec postgres pg_dump -U mica mica > backup.sql` |
 | Image bytes | volume `mica-prod-rustfs` | snapshot the volume directory |
 
-## Variant: multi-app server behind an existing Traefik
+## Behind Traefik (the canonical production stack)
 
-`deploy/docker-compose.traefik.yml` — used for mica.cloudcele.com. No host
+`deploy/docker-compose.yml` — used for mica.cloudcele.com. No host
 ports; Traefik (label routing, `letsencrypt` certresolver) terminates TLS
 for both the app (`DOMAIN`) and RustFS (`S3_DOMAIN`, e.g.
 `s3.mica.cloudcele.com` — needs its own DNS A record; presigned URLs embed
