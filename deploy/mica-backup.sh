@@ -31,11 +31,12 @@ log() { echo "[$(date -Is)] mica-backup: $*"; }
 
 # 1) Guard: the repo must have been initialized once. We deliberately do NOT
 #    auto-init in the loop — a misconfigured backend must fail loudly, not
-#    silently create a second empty repo. One-off:
-#      docker compose --profile backup run --rm --entrypoint rustic-mica backup init
+#    silently create a second empty repo. One-off (--no-deps: init only talks to
+#    OSS, don't recreate the api dependency):
+#      docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init
 if ! "$RUSTIC" cat config >/dev/null 2>&1; then
   log "repo not initialized (or backend unreachable). Initialize once with:"
-  log "  docker compose --profile backup run --rm --entrypoint rustic-mica backup init"
+  log "  docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init"
   exit 1
 fi
 

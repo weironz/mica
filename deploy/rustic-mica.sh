@@ -3,9 +3,9 @@
 # /etc/rustic/rustic.toml, then exec `rustic` with the given args. EVERY rustic
 # invocation goes through this — the scheduled backup and one-off commands alike
 # (`init`, `snapshots`, `restore`, `check`) — so the config always exists even in
-# a fresh one-off container:
-#   docker compose --profile backup run --rm --entrypoint rustic-mica backup init
-#   docker compose --profile backup run --rm --entrypoint rustic-mica backup snapshots --group-by label
+# a fresh one-off container (init), or via `docker exec` on the running one:
+#   docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init
+#   docker exec mica-backup-1 rustic-mica snapshots --group-by label
 # The password stays in RUSTIC_PASSWORD (env) and is never written to the file.
 # enable_virtual_host_style is required for Aliyun OSS (path style 404s).
 set -euo pipefail

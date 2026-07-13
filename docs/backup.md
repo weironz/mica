@@ -82,9 +82,10 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    command goes through the `rustic-mica` wrapper (it renders the repo config
    from the `OSS_*` env first, then execs rustic):
    ```bash
-   docker compose --profile backup run --rm --entrypoint rustic-mica backup init
-   docker compose --profile backup up -d backup
-   docker compose logs -f backup      # BACKUP_ON_START=1 → the first run happens now
+   # --no-deps: init only talks to OSS, so don't recreate the api dependency.
+   docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init
+   docker compose --profile backup up -d --no-deps backup
+   docker logs -f mica-backup-1        # BACKUP_ON_START=1 → the first run happens now
    ```
    > Sharing a bucket with an existing repo? Give this one its own prefix via
    > `OSS_ROOT=<prefix>` in `.env` (else init fails, "config file already exists").
@@ -95,18 +96,21 @@ lives in the `mica-prod-backup` volume.
 
 ## Inspect / restore (per workspace)
 
-All via the same wrapper (`--entrypoint rustic-mica`, service `backup`):
+Run these against the **already-running** backup container with `docker exec`
+(the wrapper renders the repo config from the container's env each time). Using
+`docker compose run` instead would recreate the `api` dependency — avoid it here.
 
 ```bash
 # List snapshots grouped by workspace (label = workspace id, tag ws=<name>):
-docker compose --profile backup run --rm --entrypoint rustic-mica backup snapshots --group-by label
+docker exec mica-backup-1 rustic-mica snapshots --group-by label
 
 # Verify repository integrity:
-docker compose --profile backup run --rm --entrypoint rustic-mica backup check
+docker exec mica-backup-1 rustic-mica check
 
-# Restore one workspace's latest snapshot into the backup volume, then copy out:
-docker compose --profile backup run --rm --entrypoint rustic-mica backup \
-  restore latest --filter-label <workspace-id> --target /var/lib/mica/restore
+# Restore one workspace's latest snapshot. SNAPSHOT + DESTINATION are POSITIONAL
+# (not --target); --filter-label narrows "latest" to that workspace's lineage:
+docker exec mica-backup-1 rustic-mica restore latest /tmp/restore --filter-label <workspace-id>
+docker cp mica-backup-1:/tmp/restore ./restore     # then: docker exec mica-backup-1 rm -rf /tmp/restore
 ```
 
 To put content back into a Mica instance, re-import each workspace's tree (the
