@@ -744,6 +744,82 @@ pub async fn export_document_markdown(
   Ok(Json(MarkdownExportResponse { markdown }))
 }
 
+#[derive(Debug, Serialize)]
+pub struct OutlineHeading {
+  block_id: String,
+  level: i64,
+  text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DocumentOutlineResponse {
+  /// Headings in document order — the anchors an AI names to write in place
+  /// (`insert_at`/`find_replace`) instead of rewriting the whole doc.
+  headings: Vec<OutlineHeading>,
+  /// Every top-level block id in document order (finer anchors than headings).
+  block_ids: Vec<String>,
+}
+
+/// `GET /api/workspaces/{workspace_id}/documents/{document_id}/outline`
+///
+/// The document's structure map (headings + block ids) so an AI can anchor a
+/// local write rather than replace the whole page — the "get outline first,
+/// then patch" loop the note-app MCP servers (Obsidian, Notion) converge on.
+pub async fn document_outline(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<DocumentOutlineResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+
+  let snapshot = store::latest_snapshot(&state.db, document_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  let payload = payload_from_value(snapshot.payload)
+    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
+  Ok(Json(outline_from_payload(&payload)))
+}
+
+/// Pure: walk the block tree from the root in document order, collecting every
+/// top-level block id and (for `heading` blocks) a heading entry. Testable
+/// without a DB.
+fn outline_from_payload(
+  payload: &mica_app_core::documents::DocumentSnapshotPayload,
+) -> DocumentOutlineResponse {
+  let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
+    payload.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
+  let mut headings = Vec::new();
+  let mut block_ids = Vec::new();
+  outline_walk(&payload.root_block_id, &by_id, &mut headings, &mut block_ids);
+  DocumentOutlineResponse { headings, block_ids }
+}
+
+fn outline_walk(
+  id: &str,
+  by_id: &std::collections::HashMap<&str, &mica_app_core::documents::Block>,
+  headings: &mut Vec<OutlineHeading>,
+  block_ids: &mut Vec<String>,
+) {
+  let Some(block) = by_id.get(id) else {
+    return;
+  };
+  for child_id in &block.children {
+    if let Some(child) = by_id.get(child_id.as_str()) {
+      block_ids.push(child.id.clone());
+      if child.kind == "heading" {
+        headings.push(OutlineHeading {
+          block_id: child.id.clone(),
+          level: child.data.get("level").and_then(|v| v.as_i64()).unwrap_or(1),
+          text: child.text.clone(),
+        });
+      }
+    }
+    outline_walk(child_id, by_id, headings, block_ids);
+  }
+}
+
 /// `GET /api/workspaces/{workspace_id}/documents/{document_id}/export.zip`
 ///
 /// A portable ZIP: `document.md` with Mica images rewritten to `assets/<name>`
@@ -1706,6 +1782,37 @@ mod tests {
     assert_ne!(
       doc_path, folder_path,
       "folder dir and document file must not share a manifest path",
+    );
+  }
+
+  #[test]
+  fn outline_lists_headings_and_block_ids_in_document_order() {
+    use mica_app_core::documents::{Block, DocumentSnapshotPayload};
+    let blk = |id: &str, kind: &str, text: &str, data: serde_json::Value, kids: Vec<&str>| Block {
+      id: id.into(),
+      kind: kind.into(),
+      text: text.into(),
+      data,
+      children: kids.into_iter().map(String::from).collect(),
+    };
+    let payload = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".into(),
+      blocks: vec![
+        blk("root", "page", "", serde_json::Value::Null, vec!["h1", "p", "h2"]),
+        blk("h1", "heading", "Intro", serde_json::json!({"level": 1}), vec![]),
+        blk("p", "paragraph", "body", serde_json::Value::Null, vec![]),
+        blk("h2", "heading", "Details", serde_json::json!({"level": 2}), vec![]),
+      ],
+    };
+    let out = outline_from_payload(&payload);
+    assert_eq!(out.block_ids, ["h1", "p", "h2"]);
+    assert_eq!(
+      out.headings
+        .iter()
+        .map(|h| (h.level, h.text.as_str()))
+        .collect::<Vec<_>>(),
+      [(1, "Intro"), (2, "Details")],
     );
   }
 }
