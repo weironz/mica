@@ -87,6 +87,36 @@ class EditorOutlineHook extends ChangeNotifier {
   }
 }
 
+/// Lets the host open the editor's in-page find bar (Ctrl+F) even when focus is
+/// outside the editor. The editor wires [_open] on init; a no-op otherwise.
+class EditorFindHook {
+  void Function()? _open;
+  void open() => _open?.call();
+}
+
+/// Case-insensitive, non-overlapping occurrences of [query] across [texts] (one
+/// entry per document node), in document order — the enumerator behind the
+/// in-page find bar. Empty query → no matches. Pure; exposed for testing.
+List<({int node, int start, int end})> findTextMatches(
+  List<String> texts,
+  String query,
+) {
+  final matches = <({int node, int start, int end})>[];
+  if (query.isEmpty) return matches;
+  final needle = query.toLowerCase();
+  for (var i = 0; i < texts.length; i++) {
+    final hay = texts[i].toLowerCase();
+    var from = 0;
+    while (from <= hay.length - needle.length) {
+      final at = hay.indexOf(needle, from);
+      if (at < 0) break;
+      matches.add((node: i, start: at, end: at + query.length));
+      from = at + query.length;
+    }
+  }
+  return matches;
+}
+
 /// Lets the host's formatting toolbar drive editor commands (block converts,
 /// inline marks, inserts, undo/redo) without owning the controller. The
 /// editor registers itself while mounted; calls are no-ops otherwise.
@@ -148,6 +178,7 @@ class MicaEditor extends StatefulWidget {
     this.scrollHook,
     this.commandHook,
     this.outlineHook,
+    this.findHook,
     this.onExitTop,
     this.appearance = const EditorAppearance(),
     this.onOpenPage,
@@ -218,6 +249,9 @@ class MicaEditor extends StatefulWidget {
   /// Optional hook that receives the live heading list (document outline / TOC)
   /// on every edit, so the host's outline panel updates without navigation.
   final EditorOutlineHook? outlineHook;
+
+  /// Optional hook the host uses to open the in-page find bar (Ctrl+F).
+  final EditorFindHook? findHook;
 
   /// Called when the caret tries to leave the document upward (ArrowUp on the
   /// first line, Backspace at the very start) — the host focuses the page
@@ -375,6 +409,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.addListener(_onControllerChanged);
     _focus.addListener(_onFocusChange);
     widget.scrollHook?._scroll = _scrollToBlock;
+    widget.findHook?._open = _openFind;
     _registerCommandHook();
     _ensureNotEmptyDeferred();
     // Seed the outline once the first frame is up (publishing during init could
@@ -403,6 +438,154 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
     }
     hook.publish(items);
+  }
+
+  // ---- In-page find (Ctrl+F) -----------------------------------------------
+  bool _findOpen = false;
+  final TextEditingController _findCtrl = TextEditingController();
+  final FocusNode _findFocus = FocusNode(debugLabel: 'editorFind');
+  List<({int node, int start, int end})> _findMatches = const [];
+  int _findIndex = 0;
+
+  /// Open (or re-focus) the in-page find bar. Seeds the query from a simple
+  /// single-node selection, like a browser's Ctrl+F.
+  void _openFind() {
+    if (!mounted) return;
+    final sel = _controller.selection;
+    if (sel != null && !sel.isCollapsed && !sel.isMultiNode) {
+      final n = _controller.nodes[sel.start.node];
+      final s = sel.start.offset.clamp(0, n.text.length);
+      final e = sel.end.offset.clamp(0, n.text.length);
+      if (e > s) _findCtrl.text = n.text.substring(s, e);
+    }
+    setState(() => _findOpen = true);
+    _recomputeFind(reveal: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _findFocus.requestFocus();
+      _findCtrl.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _findCtrl.text.length,
+      );
+    });
+  }
+
+  void _closeFind() {
+    if (!_findOpen) return;
+    setState(() => _findOpen = false);
+    _focus.requestFocus();
+  }
+
+  /// Case-insensitive, non-overlapping scan of every node's text for the query.
+  void _recomputeFind({bool reveal = false}) {
+    final matches = findTextMatches(
+      [for (final n in _controller.nodes) n.text],
+      _findCtrl.text,
+    );
+    setState(() {
+      _findMatches = matches;
+      _findIndex = 0;
+    });
+    if (reveal && matches.isNotEmpty) _revealFind(0);
+  }
+
+  /// Move to the next/previous match (wrapping) and reveal it.
+  void _findStep(int delta) {
+    if (_findMatches.isEmpty) return;
+    setState(() {
+      _findIndex = (_findIndex + delta) % _findMatches.length;
+      if (_findIndex < 0) _findIndex += _findMatches.length;
+    });
+    _revealFind(_findIndex);
+  }
+
+  /// Select + scroll the i-th match into view. The existing selection paint
+  /// highlights it (visible even though the find field holds focus).
+  void _revealFind(int i) {
+    if (i < 0 || i >= _findMatches.length) return;
+    final m = _findMatches[i];
+    if (m.node >= _controller.nodes.length) return;
+    _controller.setSelection(
+      DocSelection(
+        anchor: DocPosition(m.node, m.start),
+        focus: DocPosition(m.node, m.end),
+      ),
+    );
+    _scrollToBlock(_controller.nodes[m.node].id);
+  }
+
+  Widget _buildFindBar() {
+    final total = _findMatches.length;
+    final label = _findCtrl.text.isEmpty
+        ? ''
+        : (total == 0 ? '无结果' : '${_findIndex + 1}/$total');
+    Widget iconBtn(IconData icon, String tip, VoidCallback? onTap) => IconButton(
+      icon: Icon(icon, size: 18),
+      tooltip: tip,
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+      color: const Color(0xFF475569),
+    );
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(8),
+      color: Colors.white,
+      child: CallbackShortcuts(
+        bindings: <ShortcutActivator, VoidCallback>{
+          const SingleActivator(LogicalKeyboardKey.escape): _closeFind,
+          const SingleActivator(LogicalKeyboardKey.enter, shift: true): () =>
+              _findStep(-1),
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.search, size: 16, color: Color(0xFF64748B)),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 170,
+                child: TextField(
+                  controller: _findCtrl,
+                  focusNode: _findFocus,
+                  onChanged: (_) => _recomputeFind(reveal: true),
+                  onSubmitted: (_) => _findStep(1),
+                  textInputAction: TextInputAction.search,
+                  style: const TextStyle(fontSize: 14),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: '页内查找',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 44,
+                child: Text(
+                  label,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                ),
+              ),
+              iconBtn(
+                Icons.keyboard_arrow_up,
+                '上一个 (Shift+Enter)',
+                total == 0 ? null : () => _findStep(-1),
+              ),
+              iconBtn(
+                Icons.keyboard_arrow_down,
+                '下一个 (Enter)',
+                total == 0 ? null : () => _findStep(1),
+              ),
+              iconBtn(Icons.close, '关闭 (Esc)', _closeFind),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// Wire the host formatting toolbar's commands to the controller. Every
@@ -555,6 +738,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Only dispose a focus node we created; an external one is owned by the host.
     if (widget.focusNode == null) _focus.dispose();
     _controller.removeListener(_onControllerChanged);
+    // Unwire the find hook if it still points at us, so a later Ctrl+F on a
+    // view with no editor (e.g. a folder) doesn't call into a dead State.
+    if (widget.findHook?._open == _openFind) widget.findHook?._open = null;
+    _findCtrl.dispose();
+    _findFocus.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -3395,6 +3583,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 ),
                 // Far off-screen: painted (capturable) but never visible.
                 Positioned(left: -100000, top: 0, child: _previews.offstageHost()),
+                if (_findOpen)
+                  Positioned(top: 6, right: 6, child: _buildFindBar()),
               ],
             ),
           ),

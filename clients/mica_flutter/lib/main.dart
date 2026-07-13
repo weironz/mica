@@ -4001,6 +4001,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // Live document outline (TOC). The editor republishes headings on every edit;
   // the outline panel listens, so it tracks typing instead of only navigation.
   final EditorOutlineHook _outlineHook = EditorOutlineHook();
+  // In-page find (Ctrl+F). The editor owns the find bar; the app-level shortcut
+  // opens it through this hook even when focus isn't in the editor.
+  final EditorFindHook _findHook = EditorFindHook();
 
   @override
   void initState() {
@@ -4198,8 +4201,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
       const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
-      const SingleActivator(LogicalKeyboardKey.keyF, control: true): _openSearch,
-      const SingleActivator(LogicalKeyboardKey.keyF, meta: true): _openSearch,
+      // Ctrl/Cmd+F → in-page find within the open document; Ctrl/Cmd+Shift+F →
+      // the workspace-wide search (what plain Ctrl+F used to do).
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+          _openInPageFind,
+      const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+          _openInPageFind,
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true, shift: true):
+          _openSearch,
+      const SingleActivator(LogicalKeyboardKey.keyF, meta: true, shift: true):
+          _openSearch,
       // Ctrl+, is the convention (works on English layouts / macOS Cmd+,), but a
       // Chinese IME grabs Ctrl+,/Ctrl+. at the OS level (punctuation toggle), so
       // it won't reach the app while such an IME is active. Settings is also
@@ -4209,6 +4220,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       const SingleActivator(LogicalKeyboardKey.comma, meta: true): _openSettings,
     };
   }
+
+  /// Ctrl/Cmd+F: open the editor's in-page find bar (no-op when no document is
+  /// open — e.g. a folder view). Workspace-wide search moved to Ctrl+Shift+F.
+  void _openInPageFind() => _findHook.open();
 
   /// A slim draggable splitter between panes (the divider line stays 1px;
   /// the grab area is wider for easy targeting).
@@ -5257,6 +5272,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     scrollHook: _scrollHook,
                     commandHook: _commandHook,
                     outlineHook: _outlineHook,
+                    findHook: _findHook,
                     onExitTop: () {
                       if (!widget.showPageTitle) return;
                       _pageTitleFocus.requestFocus();
