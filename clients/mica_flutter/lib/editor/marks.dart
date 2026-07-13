@@ -50,8 +50,7 @@ List<Mark> marksFromData(Map<String, dynamic> data) {
 List<Map<String, dynamic>> marksToJson(List<Mark> marks) =>
     [for (final m in marks) m.toJson()];
 
-const Color _codeColor = Color(0xFFB91C1C);
-const Color _codeBg = Color(0x14B91C1C);
+const Color _codeColor = Color(0xFF334155);
 const Color _linkColor = Color(0xFF2563EB);
 const Color _mathColor = Color(0xFF7C3AED);
 const Color _mathBg = Color(0x147C3AED);
@@ -85,11 +84,9 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
         case 'italic':
           style = style.copyWith(fontStyle: FontStyle.italic);
         case 'code':
-          style = style.copyWith(
-            fontFamily: kMonoFont,
-            color: _codeColor,
-            backgroundColor: _codeBg,
-          );
+          // The pill background is drawn in the render layer (_paintInlineCode)
+          // for rounded corners + padding; here just the mono font + calm ink.
+          style = style.copyWith(fontFamily: kMonoFont, color: _codeColor);
         case 'strike':
           decorations.add(TextDecoration.lineThrough);
         case 'link':

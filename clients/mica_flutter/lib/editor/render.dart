@@ -58,6 +58,9 @@ class EditorTheme {
   static const Color caret = Color(0xFF2563EB);
   static const Color selection = Color(0x332563EB);
   static const Color codeBg = Color(0xFFF1F5F9);
+  /// Inline `code` span pill — a soft neutral chip behind the mono text (drawn
+  /// in _paintInlineCode). Translucent so a text selection tints through it.
+  static const Color inlineCodeBg = Color(0x1A64748B);
   static const Color quoteBar = Color(0xFFCBD5E1);
   static const Color dropLine = Color(0xFF2563EB);
 
@@ -822,6 +825,7 @@ class RenderDocument extends RenderBox {
     // Block backgrounds first, so the selection highlight (next) is not hidden
     // behind a code block's fill.
     _paintBlockBackgrounds(canvas, offset);
+    _paintInlineCode(canvas, offset);
     _paintSelection(canvas, offset);
     for (var i = 0; i < _layouts.length; i++) {
       _paintNode(canvas, offset, i);
@@ -1323,6 +1327,47 @@ class RenderDocument extends RenderBox {
       canvas.restore();
     } else {
       l.painter.paint(canvas, origin);
+    }
+  }
+
+  /// Rounded pills behind inline `code` spans. Painted under the selection +
+  /// text layers, so a selection still tints them and the glyphs stay on top.
+  void _paintInlineCode(Canvas canvas, Offset offset) {
+    final paint = Paint()..color = EditorTheme.inlineCodeBg;
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      if (EditorNode.isAtomicKind(l.kind) ||
+          l.kind == 'code_block' ||
+          l.renderedBy != null) {
+        continue;
+      }
+      final marks = marksFromData(_nodes[i].data);
+      if (marks.isEmpty) continue;
+      final origin = offset + Offset(l.contentLeft, l.textTop);
+      final len = _nodes[i].text.length;
+      for (final m in marks) {
+        if (m.type != 'code') continue;
+        final s = m.start.clamp(0, len);
+        final e = m.end.clamp(0, len);
+        if (e <= s) continue;
+        final boxes = l.painter.getBoxesForSelection(
+          TextSelection(baseOffset: s, extentOffset: e),
+          boxHeightStyle: ui.BoxHeightStyle.tight,
+        );
+        for (final b in boxes) {
+          final r = b.toRect().shift(origin);
+          final chip = Rect.fromLTRB(
+            r.left - 3,
+            r.top - 1.5,
+            r.right + 3,
+            r.bottom + 1.5,
+          );
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(chip, const Radius.circular(4)),
+            paint,
+          );
+        }
+      }
     }
   }
 
