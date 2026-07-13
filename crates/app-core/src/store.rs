@@ -229,6 +229,53 @@ pub async fn latest_snapshot(db: &PgPool, document_id: Uuid) -> ApiResult<Option
   .map_err(ApiError::from)
 }
 
+/// Convert a yrs-core block into the op-model/markdown block shape. The two
+/// structs are field-identical; this is the inverse of `sync::to_core_block`.
+fn md_block_from_core(b: mica_core::Block) -> crate::documents::Block {
+  crate::documents::Block {
+    id: b.id,
+    kind: b.kind,
+    text: b.text,
+    data: b.data,
+    children: b.children,
+  }
+}
+
+/// The document's CURRENT block payload for *reads* — bootstrap, export, outline,
+/// search. Once a document is edited through the yrs sync path its live content
+/// lives in `document_yrs_base`, while the op-model `document_snapshots` stays
+/// frozen at the pre-yrs seed (P4①b dropped the periodic snapshot fold). Reading
+/// the raw snapshot therefore returns near-empty content for any doc that's been
+/// opened in the collaborative editor — the root cause of "cloud page exports
+/// blank / re-opens blank". Prefer the folded yrs base (materialize blocks from
+/// it) when present; fall back to the op-model snapshot for docs never touched
+/// via yrs. `None` only when the document has neither.
+///
+/// Read-only: this never mutates state, so it can't corrupt data — it only
+/// changes which representation a read returns. The op-model write path
+/// ([`apply_derived_operations`]) deliberately still reads the raw snapshot; it
+/// operates in the op-model world and is a separate concern.
+pub async fn current_payload(
+  db: &PgPool,
+  document_id: Uuid,
+) -> ApiResult<Option<DocumentSnapshotPayload>> {
+  let Some(snapshot) = latest_snapshot(db, document_id).await? else {
+    return Ok(None);
+  };
+  // op-model snapshot carries schema_version + the fallback content for docs
+  // never touched via yrs.
+  let mut payload = payload_from_value(snapshot.payload)
+    .map_err(|error| ApiError::Internal(format!("invalid document snapshot: {error}")))?;
+  if let Some(base) = crate::sync::document_base(db, document_id).await? {
+    let doc = mica_core::MicaDoc::from_update(&base.state).map_err(|error| {
+      ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}"))
+    })?;
+    payload.root_block_id = doc.root_block_id();
+    payload.blocks = doc.to_blocks().into_iter().map(md_block_from_core).collect();
+  }
+  Ok(Some(payload))
+}
+
 /// Insert the empty starting snapshot (`version_seq = 0`) for a new document.
 pub async fn insert_initial_snapshot(
   tx: &mut Transaction<'_, Postgres>,

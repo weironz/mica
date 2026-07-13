@@ -11,7 +11,7 @@ use mica_app_core::{
   AppState,
   documents::{
     DocumentOperation, DocumentSnapshotPayload, export_html, export_markdown,
-    export_markdown_with_assets, import_markdown, payload_from_value,
+    export_markdown_with_assets, import_markdown,
   },
   store::{self, DocumentRecord, SnapshotRecord, UpdateRecord},
 };
@@ -172,13 +172,11 @@ pub async fn search_workspace(
     let title_match = view.name.to_lowercase().contains(&needle);
 
     let mut snippet = String::new();
-    if let Some(snapshot) = store::latest_snapshot(&state.db, view.object_id).await? {
-      if let Ok(payload) = payload_from_value(snapshot.payload) {
-        for block in &payload.blocks {
-          if let Some(found) = snippet_for(&block.text, &needle) {
-            snippet = found;
-            break;
-          }
+    if let Some(payload) = store::current_payload(&state.db, view.object_id).await? {
+      for block in &payload.blocks {
+        if let Some(found) = snippet_for(&block.text, &needle) {
+          snippet = found;
+          break;
         }
       }
     }
@@ -678,9 +676,16 @@ pub async fn bootstrap_document(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-  let snapshot = store::latest_snapshot(&state.db, document_id)
+  let mut snapshot = store::latest_snapshot(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
+  // Serve LIVE content: for a doc edited via yrs sync the op-model snapshot is
+  // frozen at the pre-yrs seed, so materialize the current blocks from the yrs
+  // base — otherwise re-opening the page renders a near-blank stub.
+  if let Some(payload) = store::current_payload(&state.db, document_id).await? {
+    snapshot.payload = serde_json::to_value(&payload)
+      .map_err(|error| ApiError::Internal(error.to_string()))?;
+  }
 
   Ok(Json(DocumentBootstrapResponse {
     document,
@@ -733,11 +738,9 @@ pub async fn export_document_markdown(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
-  let snapshot = store::latest_snapshot(&state.db, document_id)
+  let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  let payload = payload_from_value(snapshot.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
   let markdown =
     export_markdown(&payload).map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
@@ -774,11 +777,9 @@ pub async fn document_outline(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
-  let snapshot = store::latest_snapshot(&state.db, document_id)
+  let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  let payload = payload_from_value(snapshot.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
   Ok(Json(outline_from_payload(&payload)))
 }
 
@@ -1040,11 +1041,9 @@ pub async fn export_document_zip(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
-  let snapshot = store::latest_snapshot(&state.db, document_id)
+  let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  let payload = payload_from_value(snapshot.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
 
   let mut entries = Vec::new();
   let assets = collect_assets(&state, workspace_id, &payload.blocks, &mut entries).await?;
@@ -1225,10 +1224,7 @@ pub async fn export_workspace_zip(
     if view.object_type != "document" {
       continue;
     }
-    let Some(snapshot) = store::latest_snapshot(&state.db, view.object_id).await? else {
-      continue;
-    };
-    let Ok(mut payload) = payload_from_value(snapshot.payload) else {
+    let Some(mut payload) = store::current_payload(&state.db, view.object_id).await? else {
       continue;
     };
     // Internal page links (`mica://page/<viewId>`) become standard relative
@@ -1558,8 +1554,8 @@ async fn workspace_markdown(
     out.push_str(&view.name);
     out.push_str("\n\n");
 
-    if let Some(snapshot) = store::latest_snapshot(db, view.object_id).await? {
-      if let Ok(payload) = payload_from_value(snapshot.payload) {
+    if let Some(payload) = store::current_payload(db, view.object_id).await? {
+      {
         if let Ok(markdown) = export_markdown(&payload) {
           let body = markdown.trim();
           if !body.is_empty() {
@@ -1597,11 +1593,9 @@ pub async fn export_document_html(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
-  let snapshot = store::latest_snapshot(&state.db, document_id)
+  let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  let payload = payload_from_value(snapshot.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
   let html = export_html(&payload).map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
   Ok(Json(HtmlExportResponse { html }))
