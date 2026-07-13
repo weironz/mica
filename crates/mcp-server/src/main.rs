@@ -26,6 +26,7 @@ struct MicaMcp {
     http: reqwest::Client,
     base: String,
     pat: String,
+    read_only: bool,
     tool_router: ToolRouter<Self>,
 }
 
@@ -34,12 +35,28 @@ impl MicaMcp {
         let base = std::env::var("MICA_API_BASE_URL")
             .context("MICA_API_BASE_URL is required (e.g. https://mica.cloudcele.com)")?;
         let pat = std::env::var("MICA_PAT").context("MICA_PAT is required (a Mica access token)")?;
+        let read_only = matches!(
+            std::env::var("MICA_MCP_READ_ONLY").as_deref(),
+            Ok("1") | Ok("true")
+        );
         Ok(Self {
             http: reqwest::Client::new(),
             base: base.trim_end_matches('/').to_string(),
             pat,
+            read_only,
             tool_router: Self::tool_router(),
         })
+    }
+
+    /// Guard every mutating tool: refuse when the server is started read-only.
+    fn ensure_writable(&self) -> Result<(), McpError> {
+        if self.read_only {
+            return Err(McpError::invalid_request(
+                "this Mica MCP server is running read-only (MICA_MCP_READ_ONLY)".to_string(),
+                None,
+            ));
+        }
+        Ok(())
     }
 
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<Value, McpError> {
@@ -72,6 +89,9 @@ impl MicaMcp {
     }
     async fn patch(&self, path: &str, body: Value) -> Result<Value, McpError> {
         self.send(self.http.patch(self.url(path)).json(&body)).await
+    }
+    async fn delete(&self, path: &str) -> Result<Value, McpError> {
+        self.send(self.http.delete(self.url(path))).await
     }
 }
 
@@ -141,18 +161,31 @@ struct MoveDocArgs {
     parent_view_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TrashArgs {
+    workspace_id: String,
+    /// The VIEW id to trash (its whole subtree goes to the recycle bin).
+    view_id: String,
+    /// Must be true to proceed — a guard against accidental deletion.
+    confirm: bool,
+}
+
 // ── Tools ───────────────────────────────────────────────────────────────────
 
 #[tool_router]
 impl MicaMcp {
-    #[tool(description = "List all Mica workspaces (id, name, role) the token can access.")]
+    #[tool(
+        description = "List all Mica workspaces (id, name, role) the token can access.",
+        annotations(read_only_hint = true)
+    )]
     async fn mica_list_workspaces(&self) -> Result<Json<Value>, McpError> {
         Ok(Json(self.get("/api/workspaces").await?))
     }
 
     #[tool(
         description = "List a workspace's page tree (documents + folders, with ids, names, \
-                       parents). Use a page's object_id with the read/write tools."
+                       parents). Use a page's object_id with the read/write tools.",
+        annotations(read_only_hint = true)
     )]
     async fn mica_list_pages(
         &self,
@@ -164,7 +197,10 @@ impl MicaMcp {
         ))
     }
 
-    #[tool(description = "Search a workspace's pages by title.")]
+    #[tool(
+        description = "Search a workspace's pages by title.",
+        annotations(read_only_hint = true)
+    )]
     async fn mica_search(
         &self,
         Parameters(SearchArgs { workspace_id, query }): Parameters<SearchArgs>,
@@ -176,7 +212,10 @@ impl MicaMcp {
         ))
     }
 
-    #[tool(description = "Read a document's content as Markdown.")]
+    #[tool(
+        description = "Read a document's content as Markdown.",
+        annotations(read_only_hint = true)
+    )]
     async fn mica_read_document(
         &self,
         Parameters(DocArg { workspace_id, document_id }): Parameters<DocArg>,
@@ -192,7 +231,8 @@ impl MicaMcp {
     #[tool(
         description = "Get a document's outline (headings + block ids in order). Call this \
                        before an anchored write so you can target a spot instead of rewriting \
-                       the whole page."
+                       the whole page.",
+        annotations(read_only_hint = true)
     )]
     async fn mica_get_outline(
         &self,
@@ -216,6 +256,7 @@ impl MicaMcp {
             parent_view_id,
         }): Parameters<CreateDocArgs>,
     ) -> Result<Json<Value>, McpError> {
+        self.ensure_writable()?;
         // Markdown → the import endpoint (parses content server-side); empty →
         // the plain create endpoint.
         if let Some(markdown) = markdown {
@@ -244,7 +285,8 @@ impl MicaMcp {
         description = "Write into an EXISTING document. mode: append (after current content, \
                        the safe default), replace_all (rewrite), insert_at (place after \
                        `anchor` from mica_get_outline — a local edit), find_replace (swap \
-                       `find`→`replace`). Content is Markdown; the server derives the ops."
+                       `find`→`replace`). Content is Markdown; the server derives the ops.",
+        annotations(title = "Write document", read_only_hint = false, destructive_hint = true)
     )]
     async fn mica_update_document(
         &self,
@@ -258,6 +300,7 @@ impl MicaMcp {
             replace,
         }): Parameters<UpdateDocArgs>,
     ) -> Result<Json<Value>, McpError> {
+        self.ensure_writable()?;
         let body = json!({
             "mode": mode,
             "markdown": markdown.unwrap_or_default(),
@@ -283,6 +326,7 @@ impl MicaMcp {
             parent_view_id,
         }): Parameters<MoveDocArgs>,
     ) -> Result<Json<Value>, McpError> {
+        self.ensure_writable()?;
         let body = json!({ "parent_view_id": parent_view_id });
         Ok(Json(
             self.post(
@@ -290,6 +334,48 @@ impl MicaMcp {
                 body,
             )
             .await?,
+        ))
+    }
+
+    #[tool(
+        description = "Move a page (and its subtree) to the recycle bin — a SOFT delete, \
+                       recoverable in the app. Requires confirm=true. Permanent deletion is \
+                       not exposed here.",
+        annotations(title = "Trash page", read_only_hint = false, destructive_hint = true)
+    )]
+    async fn mica_trash_view(
+        &self,
+        Parameters(TrashArgs {
+            workspace_id,
+            view_id,
+            confirm,
+        }): Parameters<TrashArgs>,
+    ) -> Result<Json<Value>, McpError> {
+        self.ensure_writable()?;
+        if !confirm {
+            return Err(McpError::invalid_params(
+                "refusing to trash without confirm=true".to_string(),
+                None,
+            ));
+        }
+        Ok(Json(
+            self.delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
+                .await?,
+        ))
+    }
+
+    #[tool(
+        description = "Export a whole workspace as Markdown (all pages, in tree order). Read-only \
+                       — use it to snapshot content for review or to hand to an external backup.",
+        annotations(read_only_hint = true)
+    )]
+    async fn mica_export_workspace(
+        &self,
+        Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
+    ) -> Result<Json<Value>, McpError> {
+        Ok(Json(
+            self.get(&format!("/api/workspaces/{workspace_id}/export/markdown"))
+                .await?,
         ))
     }
 }
