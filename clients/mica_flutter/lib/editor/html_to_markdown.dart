@@ -227,11 +227,99 @@ void _gather(dom.Node node, StringBuffer sb) {
         if (src != null) {
           sb.write('![${child.attributes['alt'] ?? ''}]($src)');
         }
+      } else if (tag == 'code') {
+        sb.write(_inlineCode(child.text));
       } else {
-        _gather(child, sb);
+        final marks = _inlineMarks(child);
+        if (marks.isEmpty) {
+          _gather(child, sb);
+        } else {
+          final inner = StringBuffer();
+          _gather(child, inner);
+          sb.write(_wrapMarks(inner.toString(), marks));
+        }
       }
     }
   }
+}
+
+/// Inline formatting marks implied by an element's tag AND its inline `style`
+/// — Google Docs / Word emit styled `<span>`s (`font-weight:700`), not
+/// `<b>`/`<em>`. Returns any of 'bold' | 'italic' | 'strike'; inline `<code>`
+/// is handled separately (literal content).
+Set<String> _inlineMarks(dom.Element e) {
+  final marks = <String>{};
+  switch (_tag(e)) {
+    case 'b':
+    case 'strong':
+      marks.add('bold');
+    case 'i':
+    case 'em':
+      marks.add('italic');
+    case 's':
+    case 'del':
+    case 'strike':
+      marks.add('strike');
+  }
+  final style = (e.attributes['style'] ?? '').toLowerCase();
+  if (style.contains('font-weight')) {
+    final w = RegExp(r'font-weight\s*:\s*([a-z0-9]+)').firstMatch(style)?.group(1);
+    if (w == 'bold' || w == 'bolder' || (int.tryParse(w ?? '') ?? 0) >= 600) {
+      marks.add('bold');
+    }
+  }
+  if (RegExp(r'font-style\s*:\s*italic').hasMatch(style)) marks.add('italic');
+  if (RegExp(r'text-decoration[^;]*line-through').hasMatch(style)) {
+    marks.add('strike');
+  }
+  return marks;
+}
+
+/// Wrap inline content in Markdown emphasis markers, keeping any leading/
+/// trailing whitespace OUTSIDE the markers — CommonMark rejects `** x **` as
+/// emphasis (a delimiter run can't touch whitespace on its inner side).
+String _wrapMarks(String inner, Set<String> marks) {
+  final core = inner.trim();
+  if (core.isEmpty) return inner;
+  final lead = inner.substring(0, inner.length - inner.trimLeft().length);
+  final trail = inner.substring(inner.trimRight().length);
+  var open = '';
+  var close = '';
+  if (marks.contains('bold')) {
+    open = '$open**';
+    close = '**$close';
+  }
+  if (marks.contains('italic')) {
+    open = '$open*';
+    close = '*$close';
+  }
+  if (marks.contains('strike')) {
+    open = '$open~~';
+    close = '~~$close';
+  }
+  return '$lead$open$core$close$trail';
+}
+
+/// Inline `<code>` → a backtick span. Content is literal; fence with one more
+/// backtick than the longest run inside, padding a space when it touches a
+/// backtick (CommonMark code-span rules).
+String _inlineCode(String raw) {
+  final core = raw.trim();
+  if (core.isEmpty) return raw;
+  final lead = raw.substring(0, raw.length - raw.trimLeft().length);
+  final trail = raw.substring(raw.trimRight().length);
+  var maxRun = 0, cur = 0;
+  for (final u in core.codeUnits) {
+    if (u == 0x60) {
+      cur++;
+      if (cur > maxRun) maxRun = cur;
+    } else {
+      cur = 0;
+    }
+  }
+  final fence = '`' * (maxRun + 1);
+  final pad = (core.startsWith('`') || core.endsWith('`')) ? ' ' : '';
+  return '$lead$fence$pad$core$pad$fence$trail';
 }
 
 String? _cleanHref(String? href) {
