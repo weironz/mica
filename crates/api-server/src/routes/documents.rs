@@ -827,12 +827,27 @@ pub enum MarkdownUpdateMode {
   ReplaceAll,
   /// Add the markdown after the existing content (least conflict-prone).
   Append,
+  /// Insert the markdown right after `anchor` (a top-level block id from the
+  /// outline) — a local write that leaves the rest of the page untouched.
+  InsertAt,
+  /// Replace every occurrence of `find` with `replace` across the doc's block
+  /// text (no `markdown`). Errors if nothing matches.
+  FindReplace,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateMarkdownRequest {
   pub mode: MarkdownUpdateMode,
+  #[serde(default)]
   pub markdown: String,
+  /// `insert_at`: the top-level block id to insert after.
+  #[serde(default)]
+  pub anchor: Option<String>,
+  /// `find_replace`: the text to find / its replacement.
+  #[serde(default)]
+  pub find: Option<String>,
+  #[serde(default)]
+  pub replace: Option<String>,
 }
 
 /// `PATCH /api/workspaces/{workspace_id}/documents/{document_id}/markdown`
@@ -858,7 +873,7 @@ pub async fn update_document_markdown(
   let payload = payload_from_value(snapshot.payload)
     .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
 
-  let ops = markdown_update_ops(&payload, &request.markdown, &request.mode);
+  let ops = markdown_update_ops(&payload, &request).map_err(ApiError::BadRequest)?;
   if ops.is_empty() {
     return Err(ApiError::BadRequest("no content to write".to_string()));
   }
@@ -880,38 +895,91 @@ pub async fn update_document_markdown(
 /// via `parent_id`, in pre-order so parents exist first. Testable without a DB.
 fn markdown_update_ops(
   current: &mica_app_core::documents::DocumentSnapshotPayload,
-  markdown: &str,
-  mode: &MarkdownUpdateMode,
-) -> Vec<DocumentOperation> {
+  request: &UpdateMarkdownRequest,
+) -> Result<Vec<DocumentOperation>, String> {
   let root_id = current.root_block_id.as_str();
-  let mut ops = Vec::new();
-  if matches!(mode, MarkdownUpdateMode::ReplaceAll) {
-    if let Some(root) = current.blocks.iter().find(|b| b.id == root_id) {
-      for child in &root.children {
-        ops.push(DocumentOperation::DeleteBlock { block_id: child.clone() });
+
+  // find_replace edits existing block text in place — no markdown parse/graft.
+  if matches!(request.mode, MarkdownUpdateMode::FindReplace) {
+    let find = request
+      .find
+      .as_deref()
+      .filter(|s| !s.is_empty())
+      .ok_or("find_replace requires a non-empty `find`")?;
+    let replace = request.replace.as_deref().unwrap_or("");
+    let mut ops = Vec::new();
+    for block in &current.blocks {
+      if block.id != root_id && block.text.contains(find) {
+        ops.push(DocumentOperation::UpdateBlock {
+          block_id: block.id.clone(),
+          kind: None,
+          text: Some(block.text.replace(find, replace)),
+          data: None,
+        });
       }
     }
+    if ops.is_empty() {
+      return Err(format!("no block text contains {find:?}"));
+    }
+    return Ok(ops);
   }
+
+  let mut ops = Vec::new();
+  // Where the new content grafts under the root: append (None), replace_all
+  // (None, after wiping), or insert_at (right after the anchor).
+  let start_index = match request.mode {
+    MarkdownUpdateMode::ReplaceAll => {
+      if let Some(root) = current.blocks.iter().find(|b| b.id == root_id) {
+        for child in &root.children {
+          ops.push(DocumentOperation::DeleteBlock { block_id: child.clone() });
+        }
+      }
+      None
+    }
+    MarkdownUpdateMode::Append => None,
+    MarkdownUpdateMode::InsertAt => {
+      let anchor = request
+        .anchor
+        .as_deref()
+        .ok_or("insert_at requires an `anchor` block id")?;
+      let root = current
+        .blocks
+        .iter()
+        .find(|b| b.id == root_id)
+        .ok_or("document has no root block")?;
+      let pos = root
+        .children
+        .iter()
+        .position(|c| c == anchor)
+        .ok_or_else(|| format!("anchor {anchor:?} is not a top-level block"))?;
+      Some(pos + 1)
+    }
+    MarkdownUpdateMode::FindReplace => unreachable!("handled above"),
+  };
+
   let tmp_root = format!("block_{}", Uuid::new_v4().simple());
-  let parsed = import_markdown(markdown, &tmp_root);
+  let parsed = import_markdown(&request.markdown, &tmp_root);
   let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
     parsed.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
-  graft_ops(&tmp_root, root_id, &by_id, &mut ops);
-  ops
+  graft_ops(&tmp_root, root_id, start_index, &by_id, &mut ops);
+  Ok(ops)
 }
 
 /// Emit InsertBlock ops for every child of [parsed_parent], re-parenting them
-/// under [op_parent] (children stripped; re-linked by insertion order), then
-/// recurse so their descendants nest under the real block id.
+/// under [op_parent] (children stripped; re-linked by insertion order). Top-level
+/// blocks land at [start_index] (incrementing) so `insert_at` positions after an
+/// anchor; `None` appends. Descendants recurse appended under the real block id.
 fn graft_ops(
   parsed_parent: &str,
   op_parent: &str,
+  start_index: Option<usize>,
   by_id: &std::collections::HashMap<&str, &mica_app_core::documents::Block>,
   ops: &mut Vec<DocumentOperation>,
 ) {
   let Some(parent) = by_id.get(parsed_parent) else {
     return;
   };
+  let mut index = start_index;
   for child_id in &parent.children {
     let Some(child) = by_id.get(child_id.as_str()) else {
       continue;
@@ -921,9 +989,10 @@ fn graft_ops(
     ops.push(DocumentOperation::InsertBlock {
       block,
       parent_id: op_parent.to_string(),
-      index: None,
+      index,
     });
-    graft_ops(&child.id, &child.id, by_id, ops);
+    graft_ops(&child.id, &child.id, None, by_id, ops);
+    index = index.map(|i| i + 1);
   }
 }
 
@@ -1944,11 +2013,22 @@ mod tests {
     DocumentSnapshotPayload { schema_version: 1, root_block_id: "root".into(), blocks }
   }
 
+  fn upd(mode: MarkdownUpdateMode, markdown: &str) -> UpdateMarkdownRequest {
+    UpdateMarkdownRequest {
+      mode,
+      markdown: markdown.into(),
+      anchor: None,
+      find: None,
+      replace: None,
+    }
+  }
+
   #[test]
   fn markdown_update_append_grafts_under_root_without_deletes() {
     use mica_app_core::documents::DocumentOperation;
     let current = doc_with_children(&["old"]);
-    let ops = markdown_update_ops(&current, "# Title\n\nhello", &MarkdownUpdateMode::Append);
+    let ops = markdown_update_ops(&current, &upd(MarkdownUpdateMode::Append, "# Title\n\nhello"))
+      .unwrap();
     assert!(
       ops.iter().all(|o| !matches!(o, DocumentOperation::DeleteBlock { .. })),
       "append never deletes",
@@ -1971,7 +2051,8 @@ mod tests {
   fn markdown_update_replace_all_deletes_existing_top_level_first() {
     use mica_app_core::documents::DocumentOperation;
     let current = doc_with_children(&["a", "b"]);
-    let ops = markdown_update_ops(&current, "fresh body", &MarkdownUpdateMode::ReplaceAll);
+    let ops =
+      markdown_update_ops(&current, &upd(MarkdownUpdateMode::ReplaceAll, "fresh body")).unwrap();
     let deletes: Vec<&str> = ops
       .iter()
       .filter_map(|o| match o {
@@ -1984,5 +2065,59 @@ mod tests {
       ops.iter().any(|o| matches!(o, DocumentOperation::InsertBlock { .. })),
       "then the new markdown is grafted in",
     );
+  }
+
+  #[test]
+  fn markdown_update_insert_at_positions_after_the_anchor() {
+    use mica_app_core::documents::DocumentOperation;
+    let current = doc_with_children(&["a", "b", "c"]);
+    let mut request = upd(MarkdownUpdateMode::InsertAt, "inserted");
+    request.anchor = Some("a".into());
+    let ops = markdown_update_ops(&current, &request).unwrap();
+    // The (single) new top-level paragraph lands at index 1 — right after "a".
+    let top = ops
+      .iter()
+      .find(|o| matches!(o, DocumentOperation::InsertBlock { parent_id, .. } if parent_id == "root"))
+      .expect("a top-level insert");
+    match top {
+      DocumentOperation::InsertBlock { index, .. } => assert_eq!(*index, Some(1)),
+      _ => unreachable!(),
+    }
+  }
+
+  #[test]
+  fn markdown_update_insert_at_unknown_anchor_errors() {
+    let current = doc_with_children(&["a"]);
+    let mut request = upd(MarkdownUpdateMode::InsertAt, "x");
+    request.anchor = Some("ghost".into());
+    assert!(markdown_update_ops(&current, &request).is_err());
+  }
+
+  #[test]
+  fn markdown_update_find_replace_updates_matching_blocks() {
+    use mica_app_core::documents::DocumentOperation;
+    let current = doc_with_children(&["a", "b"]); // both blocks' text == "existing"
+    let request = UpdateMarkdownRequest {
+      mode: MarkdownUpdateMode::FindReplace,
+      markdown: String::new(),
+      anchor: None,
+      find: Some("existing".into()),
+      replace: Some("updated".into()),
+    };
+    let ops = markdown_update_ops(&current, &request).unwrap();
+    let updated: Vec<(&str, &str)> = ops
+      .iter()
+      .filter_map(|o| match o {
+        DocumentOperation::UpdateBlock { block_id, text: Some(t), .. } => {
+          Some((block_id.as_str(), t.as_str()))
+        }
+        _ => None,
+      })
+      .collect();
+    assert_eq!(updated, [("a", "updated"), ("b", "updated")]);
+    // No matches → an error, not a silent no-op.
+    let mut miss = request;
+    miss.find = Some("nope".into());
+    assert!(markdown_update_ops(&current, &miss).is_err());
   }
 }

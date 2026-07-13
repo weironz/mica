@@ -110,6 +110,37 @@ struct CreateDocArgs {
     parent_view_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct UpdateDocArgs {
+    workspace_id: String,
+    document_id: String,
+    /// One of: "append" (add after current content — safe default),
+    /// "replace_all" (rewrite the page), "insert_at" (insert after `anchor`),
+    /// "find_replace" (swap text; uses `find`/`replace`, not `markdown`).
+    mode: String,
+    /// Markdown to write (append/replace_all/insert_at). Omit for find_replace.
+    #[serde(default)]
+    markdown: Option<String>,
+    /// insert_at: the block id to insert after (from `mica_get_outline`).
+    #[serde(default)]
+    anchor: Option<String>,
+    /// find_replace: the text to find and its replacement.
+    #[serde(default)]
+    find: Option<String>,
+    #[serde(default)]
+    replace: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct MoveDocArgs {
+    workspace_id: String,
+    /// The page's VIEW id (from `mica_list_pages`), not its object_id.
+    view_id: String,
+    /// New parent view id (a folder), or omit/null to move to the top level.
+    #[serde(default)]
+    parent_view_id: Option<String>,
+}
+
 // ── Tools ───────────────────────────────────────────────────────────────────
 
 #[tool_router]
@@ -207,6 +238,59 @@ impl MicaMcp {
                     .await?,
             ))
         }
+    }
+
+    #[tool(
+        description = "Write into an EXISTING document. mode: append (after current content, \
+                       the safe default), replace_all (rewrite), insert_at (place after \
+                       `anchor` from mica_get_outline — a local edit), find_replace (swap \
+                       `find`→`replace`). Content is Markdown; the server derives the ops."
+    )]
+    async fn mica_update_document(
+        &self,
+        Parameters(UpdateDocArgs {
+            workspace_id,
+            document_id,
+            mode,
+            markdown,
+            anchor,
+            find,
+            replace,
+        }): Parameters<UpdateDocArgs>,
+    ) -> Result<Json<Value>, McpError> {
+        let body = json!({
+            "mode": mode,
+            "markdown": markdown.unwrap_or_default(),
+            "anchor": anchor,
+            "find": find,
+            "replace": replace,
+        });
+        Ok(Json(
+            self.patch(
+                &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
+                body,
+            )
+            .await?,
+        ))
+    }
+
+    #[tool(description = "Move a page under a new parent folder (or to the top level).")]
+    async fn mica_move_document(
+        &self,
+        Parameters(MoveDocArgs {
+            workspace_id,
+            view_id,
+            parent_view_id,
+        }): Parameters<MoveDocArgs>,
+    ) -> Result<Json<Value>, McpError> {
+        let body = json!({ "parent_view_id": parent_view_id });
+        Ok(Json(
+            self.post(
+                &format!("/api/workspaces/{workspace_id}/views/{view_id}/move"),
+                body,
+            )
+            .await?,
+        ))
     }
 }
 
