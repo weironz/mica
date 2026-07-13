@@ -997,8 +997,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap != null) _reconcileSync();
   }
 
-  Future<void> _createDocument(String name, {String? parentViewId}) {
-    return _run(() async {
+  /// Returns the new view's id (null on failure) so the caller can drop it into
+  /// inline-rename — the sidebar name becomes editable immediately, no dialog.
+  Future<String?> _createDocument(String name, {String? parentViewId}) async {
+    String? newId;
+    await _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
       final created = await _api.createDocument(
@@ -1023,18 +1026,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedBootstrap = bootstrap;
         _selectedMarkdown = null;
       });
+      newId = created.view.id;
     });
+    return newId;
   }
 
-  Future<void> _createChildDocument(DocumentView parent, String name) {
+  Future<String?> _createChildDocument(DocumentView parent, String name) {
     return _createDocument(name, parentViewId: parent.id);
   }
 
   /// Create a cloud folder (pure container) and add it to the tree. Unlike a
   /// document it is NOT opened in the editor (folders have no content); the
   /// user creates pages under it. Mirrored offline via [_cacheCloudPageTree].
-  Future<void> _createFolder(String name, {String? parentViewId}) {
-    return _run(() async {
+  Future<String?> _createFolder(String name, {String? parentViewId}) async {
+    String? newId;
+    await _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
       final view = await _api.createFolder(
@@ -1051,11 +1057,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           workspace.id: [...views, view],
         };
       });
+      newId = view.id;
       _cacheCloudPageTree();
     });
+    return newId;
   }
 
-  Future<void> _createChildFolder(DocumentView parent, String name) {
+  Future<String?> _createChildFolder(DocumentView parent, String name) {
     return _createFolder(name, parentViewId: parent.id);
   }
 
@@ -1960,7 +1968,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  Future<void> _localCreateDocument(String name, {String? parentViewId}) async {
+  Future<String?> _localCreateDocument(String name, {String? parentViewId}) async {
     final title = name.trim().isEmpty ? kUntitledPage : name.trim();
     final created = _local.newDoc();
     final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
@@ -1977,7 +1985,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
     _local.saveView(data);
     final view = _viewFromData(data);
-    if (!mounted) return;
+    if (!mounted) return null;
     setState(() {
       _reloadLocalViews();
       _localSelectedView = view;
@@ -1988,11 +1996,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         view,
       );
     });
+    return viewId;
   }
 
   /// Create a local folder (pure container) — a view with object_type='folder'
   /// and no document. Not opened in the editor; pages are created under it.
-  Future<void> _localCreateFolder(String name, {String? parentViewId}) async {
+  Future<String?> _localCreateFolder(String name, {String? parentViewId}) async {
     final title = name.trim().isEmpty ? '新文件夹' : name.trim();
     final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
     _local.saveView((
@@ -2006,8 +2015,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       trashed: false,
       objectType: 'folder',
     ));
-    if (!mounted) return;
+    if (!mounted) return null;
     setState(_reloadLocalViews);
+    return viewId;
   }
 
   /// S-tier vault import: land a picked folder's `.md` files into the local
@@ -3814,11 +3824,11 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(Workspace workspace, String name)
   onRenameWorkspace;
   final Future<void> Function(Workspace workspace) onDeleteWorkspace;
-  final Future<void> Function(String name) onCreateDocument;
-  final Future<void> Function(DocumentView parent, String name)
+  final Future<String?> Function(String name) onCreateDocument;
+  final Future<String?> Function(DocumentView parent, String name)
   onCreateChildDocument;
-  final Future<void> Function(String name) onCreateFolder;
-  final Future<void> Function(DocumentView parent, String name)
+  final Future<String?> Function(String name) onCreateFolder;
+  final Future<String?> Function(DocumentView parent, String name)
   onCreateChildFolder;
   final Future<void> Function(String? parentViewId, List<DocumentView> ordered)
   onReorderViews;
@@ -3946,6 +3956,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // default). The tree opens collapsed and remembers what the user expanded;
   // navigating to / creating a nested page reveals its ancestors.
   final Set<String> _expandedViewIds = {};
+  // The view whose sidebar name is in inline-rename (edit) mode — null = none.
+  // Set right after creating a page/folder (so the user types its name
+  // immediately, no dialog) or from the row's "重命名" action; the matching row
+  // renders a focused TextField instead of the name Text.
+  String? _renamingViewId;
   // True only while a page is being dragged in the tree. The drop zones overlay
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
@@ -4147,7 +4162,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// rest unhandled, so these fire when a key bubbles past it. Both Control
   /// (Win/Linux) and Meta (macOS) variants are bound.
   Map<ShortcutActivator, VoidCallback> _appShortcuts() {
-    void newPage() => widget.onCreateDocument(kUntitledPage);
+    void newPage() =>
+        _createThenRename(() => widget.onCreateDocument(kUntitledPage));
     return <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
       const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
@@ -4291,9 +4307,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       position: PopupMenuPosition.under,
                       onSelected: (v) {
                         if (v == 'page') {
-                          widget.onCreateDocument(kUntitledPage);
+                          _createThenRename(
+                            () => widget.onCreateDocument(kUntitledPage),
+                          );
                         } else {
-                          widget.onCreateFolder('新文件夹');
+                          _createThenRename(
+                            () => widget.onCreateFolder('新文件夹'),
+                          );
                         }
                       },
                       itemBuilder: (_) => const [
@@ -4523,6 +4543,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return ListView(
       children: _visibleDocumentTree().map((item) {
         final row = DocumentListItem(
+          key: ValueKey(item.view.id),
           view: item.view,
           depth: item.depth,
           hasChildren: item.hasChildren,
@@ -4530,17 +4551,24 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           isCollapsed: !_expandedViewIds.contains(item.view.id),
           isSelected: item.view.id == widget.selectedView?.id,
           canEdit: canEdit,
+          isRenaming: item.view.id == _renamingViewId,
           onToggle: () => _toggleViewExpand(item.view),
           onPressed: () => _navigateToView(item.view),
           onCreateChild: () {
             setState(() => _expandForChildOf(item.view.id)); // reveal the new child
-            widget.onCreateChildDocument(item.view, kUntitledPage);
+            _createThenRename(
+              () => widget.onCreateChildDocument(item.view, kUntitledPage),
+            );
           },
           onCreateChildFolder: () {
             setState(() => _expandForChildOf(item.view.id));
-            widget.onCreateChildFolder(item.view, '新文件夹');
+            _createThenRename(
+              () => widget.onCreateChildFolder(item.view, '新文件夹'),
+            );
           },
-          onRename: () => _promptRenameDocument(item.view),
+          onRename: () => _beginRename(item.view),
+          onRenameSubmit: (name) => _commitRename(item.view, name),
+          onRenameCancel: _cancelRename,
           onDelete: () => widget.onDeleteView(item.view),
         );
         if (!canEdit) {
@@ -5602,43 +5630,33 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  Future<void> _promptRenameDocument(DocumentView view) async {
-    final controller = TextEditingController(text: view.name);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Rename page'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Page name',
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (value) => Navigator.of(context).pop(value),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              icon: const Icon(Icons.save),
-              label: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-    controller.dispose();
+  // ── Inline rename (no dialog) ──────────────────────────────────────────────
+  // The sidebar row renders a focused TextField for `_renamingViewId`; these
+  // drive it. Renaming starts from the row's "重命名" action or automatically
+  // right after creating a page/folder (see `_createThenRename`).
 
-    if (name == null) {
-      return;
-    }
+  void _beginRename(DocumentView view) {
+    setState(() => _renamingViewId = view.id);
+  }
 
-    await widget.onRenameView(view, name);
+  void _cancelRename() {
+    if (_renamingViewId == null) return;
+    setState(() => _renamingViewId = null);
+  }
+
+  Future<void> _commitRename(DocumentView view, String name) async {
+    final trimmed = name.trim();
+    if (_renamingViewId != null) setState(() => _renamingViewId = null);
+    // Empty or unchanged → keep the current name (server rejects empty names).
+    if (trimmed.isEmpty || trimmed == view.name) return;
+    await widget.onRenameView(view, trimmed);
+  }
+
+  /// Create a page/folder via [create], then drop its new sidebar row straight
+  /// into inline-rename so the user just types the name — no naming dialog.
+  Future<void> _createThenRename(Future<String?> Function() create) async {
+    final id = await create();
+    if (id != null && mounted) setState(() => _renamingViewId = id);
   }
 
   Future<void> _confirmDeleteWorkspace(WorkspaceEntry entry) async {
@@ -8297,11 +8315,14 @@ class DocumentListItem extends StatefulWidget {
     required this.isCollapsed,
     required this.isSelected,
     required this.canEdit,
+    required this.isRenaming,
     required this.onToggle,
     required this.onPressed,
     required this.onCreateChild,
     required this.onCreateChildFolder,
     required this.onRename,
+    required this.onRenameSubmit,
+    required this.onRenameCancel,
     required this.onDelete,
     super.key,
   });
@@ -8315,11 +8336,19 @@ class DocumentListItem extends StatefulWidget {
   final bool isCollapsed;
   final bool isSelected;
   final bool canEdit;
+
+  /// This row's name is in inline-edit mode: render a focused TextField instead
+  /// of the name Text, and hide the hover actions.
+  final bool isRenaming;
   final VoidCallback onToggle;
   final VoidCallback onPressed;
   final VoidCallback onCreateChild;
   final VoidCallback onCreateChildFolder;
   final VoidCallback onRename;
+
+  /// Commit the inline-edited name (Enter or blur); cancel on Esc.
+  final ValueChanged<String> onRenameSubmit;
+  final VoidCallback onRenameCancel;
   final VoidCallback onDelete;
 
   bool get _isFolder => view.objectType == 'folder';
@@ -8333,6 +8362,71 @@ class _DocumentListItemState extends State<DocumentListItem> {
   // row until the pointer is on THIS row, so page names get the full width by
   // default and only the row you point at compresses to show its controls.
   bool _hovered = false;
+
+  // ── Inline name editing ─────────────────────────────────────────────────────
+  // Live only while `widget.isRenaming`. Enter or blur (click-away) commits; Esc
+  // cancels. `_renameHandled` makes commit/cancel fire exactly once per edit
+  // (the disposal below also drops focus, which must not re-commit).
+  TextEditingController? _renameCtrl;
+  FocusNode? _renameFocus;
+  bool _renameHandled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isRenaming) _enterRename();
+  }
+
+  @override
+  void didUpdateWidget(DocumentListItem old) {
+    super.didUpdateWidget(old);
+    if (widget.isRenaming && !old.isRenaming) {
+      _enterRename();
+    } else if (!widget.isRenaming && old.isRenaming) {
+      _exitRename();
+    }
+  }
+
+  @override
+  void dispose() {
+    _exitRename();
+    super.dispose();
+  }
+
+  void _enterRename() {
+    _renameHandled = false;
+    final name = widget.view.name;
+    _renameCtrl = TextEditingController(text: name)
+      ..selection = TextSelection(baseOffset: 0, extentOffset: name.length);
+    _renameFocus = FocusNode()..addListener(_onRenameFocusChange);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _renameFocus?.requestFocus(),
+    );
+  }
+
+  void _exitRename() {
+    _renameFocus?.removeListener(_onRenameFocusChange);
+    _renameFocus?.dispose();
+    _renameCtrl?.dispose();
+    _renameFocus = null;
+    _renameCtrl = null;
+  }
+
+  void _onRenameFocusChange() {
+    if (_renameFocus?.hasFocus == false) _commitRename(); // blur = commit
+  }
+
+  void _commitRename() {
+    if (_renameHandled) return;
+    _renameHandled = true;
+    widget.onRenameSubmit(_renameCtrl?.text ?? widget.view.name);
+  }
+
+  void _cancelRename() {
+    if (_renameHandled) return;
+    _renameHandled = true;
+    widget.onRenameCancel();
+  }
 
   /// The row's context menu — one place for rename/delete/new-child/collapse,
   /// opened from the `⋯` button AND from a right-click anywhere on the row
@@ -8439,8 +8533,11 @@ class _DocumentListItemState extends State<DocumentListItem> {
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           // A folder has no content to open — clicking it expands/collapses in
-          // place (file-manager style). Documents open in the editor.
-          onTap: w._isFolder ? w.onToggle : w.onPressed,
+          // place (file-manager style). Documents open in the editor. While
+          // renaming, taps stay inside the inline field (click-away commits).
+          onTap: w.isRenaming
+              ? null
+              : (w._isFolder ? w.onToggle : w.onPressed),
           onSecondaryTapDown:
               w.canEdit ? (d) => _openMenuAtGlobal(d.globalPosition) : null,
           child: ConstrainedBox(
@@ -8485,20 +8582,43 @@ class _DocumentListItemState extends State<DocumentListItem> {
                   ),
                   const SizedBox(width: 6),
                   Expanded(
-                    child: Text(
-                      w.view.name,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: w.isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      ),
-                    ),
+                    child: (w.isRenaming && _renameCtrl != null)
+                        ? CallbackShortcuts(
+                            bindings: {
+                              const SingleActivator(LogicalKeyboardKey.escape):
+                                  _cancelRename,
+                            },
+                            child: TextField(
+                              controller: _renameCtrl,
+                              focusNode: _renameFocus,
+                              maxLines: 1,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 5,
+                                ),
+                                border: OutlineInputBorder(),
+                              ),
+                              onSubmitted: (_) => _commitRename(),
+                            ),
+                          )
+                        : Text(
+                            w.view.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  fontWeight: w.isSelected
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                ),
+                          ),
                   ),
                   // Two compact affordances, hover-only (Feishu pattern): `⋯`
                   // opens the full menu, `+` quick-adds a child. The `+` shows
                   // only on folders — a page is a leaf (containers = folders).
-                  if (showActions) ...[
+                  if (showActions && !w.isRenaming) ...[
                     SizedBox(
                       width: 28,
                       height: 30,
@@ -8512,7 +8632,10 @@ class _DocumentListItemState extends State<DocumentListItem> {
                         ),
                       ),
                     ),
-                    if (w._isFolder)
+                    // Folders hold children: quick-add a child page (`+`) and a
+                    // child folder (📁). New items drop straight into inline
+                    // rename, so this is: click → type name → Enter.
+                    if (w._isFolder) ...[
                       SizedBox(
                         width: 28,
                         height: 30,
@@ -8524,6 +8647,18 @@ class _DocumentListItemState extends State<DocumentListItem> {
                           icon: const Icon(Icons.add),
                         ),
                       ),
+                      SizedBox(
+                        width: 28,
+                        height: 30,
+                        child: IconButton(
+                          tooltip: '新建子文件夹',
+                          onPressed: w.onCreateChildFolder,
+                          padding: EdgeInsets.zero,
+                          iconSize: 17,
+                          icon: const Icon(Icons.create_new_folder_outlined),
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),

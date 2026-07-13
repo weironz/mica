@@ -30,6 +30,9 @@ void main() {
       isCollapsed: false,
       isSelected: false,
       canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
@@ -67,6 +70,9 @@ void main() {
       isCollapsed: false,
       isSelected: false,
       canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
@@ -105,6 +111,9 @@ void main() {
       isCollapsed: false,
       isSelected: false,
       canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
@@ -133,6 +142,9 @@ void main() {
       isCollapsed: false,
       isSelected: false,
       canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () => toggled = true,
       onPressed: () {},
       onCreateChild: () {},
@@ -164,6 +176,9 @@ void main() {
       isCollapsed: false,
       isSelected: false,
       canEdit: false,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
@@ -205,6 +220,9 @@ void main() {
       isCollapsed: true,
       isSelected: false,
       canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () => toggled = true,
       onPressed: () => opened = true, // navigate/open — must NOT fire for a folder
       onCreateChild: () {},
@@ -235,6 +253,9 @@ void main() {
       isCollapsed: false,
       isSelected: false,
       canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
       onToggle: () {},
       onPressed: () {},
       onCreateChild: () {},
@@ -256,5 +277,98 @@ void main() {
     await tester.tap(find.text('新建子文件夹'));
     await tester.pumpAndSettle();
     expect(childFolder, isTrue);
+  });
+
+  testWidgets('isRenaming shows an editable field seeded with the name; '
+      'Enter commits', (tester) async {
+    String? submitted;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(name: 'Old name'),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: true,
+      onRenameSubmit: (v) => submitted = v,
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onDelete: () {},
+    )));
+    await tester.pumpAndSettle();
+
+    // The name is an editable field (not a static Text), seeded with the current
+    // name so typing replaces it.
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      'Old name',
+    );
+
+    await tester.enterText(find.byType(TextField), 'New name');
+    await tester.testTextInput.receiveAction(TextInputAction.done); // Enter
+    await tester.pumpAndSettle();
+    expect(submitted, 'New name');
+  });
+
+  testWidgets('commit fires exactly once on blur (click-away)', (tester) async {
+    var submits = 0;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(name: 'X'),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: true,
+      onRenameSubmit: (_) => submits++,
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onDelete: () {},
+    )));
+    await tester.pumpAndSettle();
+    FocusManager.instance.primaryFocus?.unfocus(); // click-away
+    await tester.pumpAndSettle();
+    expect(submits, 1);
+  });
+
+  testWidgets('a folder row shows the quick create-folder icon on hover',
+      (tester) async {
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: folderView(),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onDelete: () {},
+    )));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.byType(DocumentListItem)));
+    await tester.pumpAndSettle();
+    // A folder row has both quick-add affordances: child page + child folder.
+    expect(find.byIcon(Icons.add), findsOneWidget);
+    expect(find.byIcon(Icons.create_new_folder_outlined), findsOneWidget);
   });
 }
