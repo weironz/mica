@@ -1,5 +1,16 @@
 # Backup & Restore
 
+> **Direction (2026-07): backup is moving external.** Baking a restic engine
+> (`rustic_core`) into `mica-cli` was a mistake — it couples us to one backup
+> tool, pulls a heavy dep tree, and re-invents what mature tools do better. The
+> new model separates mechanism from policy: **Mica's job is a great, consistent
+> `export`/`import` (API + CLI); backup is the job of dedicated tools** (restic,
+> borg, rclone, cron) pointed at the export. Markdown exports are text, so they
+> dedup and diff beautifully. See `crates/mcp-server/README.md#backup`. The
+> embedded `mica-cli backup` (rustic) below is **deprecated**; retirement is
+> **staged** — keep the running prod backup until the external replacement is
+> verified. New setups should use `mica-cli export` + an external backup tool.
+
 Mica ships its own backup as part of the `mica-cli` tool: `mica-cli export`
 projects every workspace to a Markdown + images tree, and `mica-cli backup`
 (an embedded, restic-format, encrypted/deduplicated engine — `rustic_core`)
