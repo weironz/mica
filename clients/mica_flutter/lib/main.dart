@@ -4004,6 +4004,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // In-page find (Ctrl+F). The editor owns the find bar; the app-level shortcut
   // opens it through this hook even when focus isn't in the editor.
   final EditorFindHook _findHook = EditorFindHook();
+  // Focused block's kind/level → highlights the current block type in the
+  // (optional) format toolbar.
+  final EditorActiveBlockHook _activeBlockHook = EditorActiveBlockHook();
 
   @override
   void initState() {
@@ -4147,6 +4150,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitleFocus.dispose();
     _pageTitleSaveTimer?.cancel();
     _outlineHook.dispose();
+    _activeBlockHook.dispose();
     super.dispose();
   }
 
@@ -4941,7 +4945,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (widget.showFormatBar && canEdit) _formatBar(context),
+          if (widget.showFormatBar && canEdit)
+            ListenableBuilder(
+              listenable: _activeBlockHook,
+              builder: (context, _) => _formatBar(context),
+            ),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -4983,16 +4991,33 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// driven through [_commandHook] so focus/selection semantics stay in the
   /// editor.
   Widget _formatBar(BuildContext context) {
-    Widget btn(IconData icon, String tip, VoidCallback onTap) {
+    Widget btn(
+      IconData icon,
+      String tip,
+      VoidCallback onTap, {
+      bool active = false,
+    }) {
       return Tooltip(
         message: tip,
         waitDuration: const Duration(milliseconds: 500),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
-          child: Padding(
+          child: Container(
+            decoration: active
+                ? BoxDecoration(
+                    color: const Color(0x142563EB),
+                    borderRadius: BorderRadius.circular(6),
+                  )
+                : null,
             padding: const EdgeInsets.all(6),
-            child: Icon(icon, size: 18, color: const Color(0xFF475569)),
+            child: Icon(
+              icon,
+              size: 18,
+              color: active
+                  ? const Color(0xFF2563EB)
+                  : const Color(0xFF475569),
+            ),
           ),
         ),
       );
@@ -5006,6 +5031,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
 
     final h = _commandHook;
+    final k = _activeBlockHook.kind;
+    final lvl = _activeBlockHook.level;
+    bool onHeading(int n) => k == 'heading' && lvl == n;
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -5019,21 +5047,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             btn(Icons.undo, 'Undo (Ctrl+Z)', h.undo),
             btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
             divider(),
-            btn(Icons.notes, 'Text', () => h.setBlock('paragraph')),
+            btn(
+              Icons.notes,
+              'Text',
+              () => h.setBlock('paragraph'),
+              active: k == 'paragraph',
+            ),
             btn(
               Icons.looks_one_outlined,
               'Heading 1',
               () => h.setBlock('heading', {'level': 1}),
+              active: onHeading(1),
             ),
             btn(
               Icons.looks_two_outlined,
               'Heading 2',
               () => h.setBlock('heading', {'level': 2}),
+              active: onHeading(2),
             ),
             btn(
               Icons.looks_3_outlined,
               'Heading 3',
               () => h.setBlock('heading', {'level': 3}),
+              active: onHeading(3),
             ),
             divider(),
             btn(Icons.format_bold, 'Bold (Ctrl+B)', () => h.toggleMark('bold')),
@@ -5054,19 +5090,32 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               Icons.format_list_bulleted,
               'Bulleted list',
               () => h.setBlock('bulleted_list'),
+              active: k == 'bulleted_list',
             ),
             btn(
               Icons.format_list_numbered,
               'Numbered list',
               () => h.setBlock('numbered_list'),
+              active: k == 'numbered_list',
             ),
             btn(
               Icons.check_box_outlined,
               'To-do list',
               () => h.setBlock('todo', {'checked': false}),
+              active: k == 'todo',
             ),
-            btn(Icons.format_quote, 'Quote', () => h.setBlock('quote')),
-            btn(Icons.terminal, 'Code block', () => h.setBlock('code_block')),
+            btn(
+              Icons.format_quote,
+              'Quote',
+              () => h.setBlock('quote'),
+              active: k == 'quote',
+            ),
+            btn(
+              Icons.terminal,
+              'Code block',
+              () => h.setBlock('code_block'),
+              active: k == 'code_block',
+            ),
             divider(),
             btn(Icons.horizontal_rule, 'Divider', () => h.insert('divider')),
             btn(Icons.grid_on, 'Table', () => h.insert('table')),
@@ -5273,6 +5322,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     commandHook: _commandHook,
                     outlineHook: _outlineHook,
                     findHook: _findHook,
+                    activeBlockHook: _activeBlockHook,
                     onExitTop: () {
                       if (!widget.showPageTitle) return;
                       _pageTitleFocus.requestFocus();

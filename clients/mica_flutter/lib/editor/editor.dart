@@ -94,6 +94,23 @@ class EditorFindHook {
   void open() => _open?.call();
 }
 
+/// Publishes the focused block's kind (+ heading level) to the host, so the
+/// optional format toolbar can highlight the button for the current block type
+/// — e.g. which heading level the caret sits in. Change-detected.
+class EditorActiveBlockHook extends ChangeNotifier {
+  String? _kind;
+  int? _level;
+  String? get kind => _kind;
+  int? get level => _level;
+
+  void publish(String? kind, int? level) {
+    if (kind == _kind && level == _level) return;
+    _kind = kind;
+    _level = level;
+    notifyListeners();
+  }
+}
+
 /// Case-insensitive, non-overlapping occurrences of [query] across [texts] (one
 /// entry per document node), in document order — the enumerator behind the
 /// in-page find bar. Empty query → no matches. Pure; exposed for testing.
@@ -179,6 +196,7 @@ class MicaEditor extends StatefulWidget {
     this.commandHook,
     this.outlineHook,
     this.findHook,
+    this.activeBlockHook,
     this.onExitTop,
     this.appearance = const EditorAppearance(),
     this.onOpenPage,
@@ -252,6 +270,10 @@ class MicaEditor extends StatefulWidget {
 
   /// Optional hook the host uses to open the in-page find bar (Ctrl+F).
   final EditorFindHook? findHook;
+
+  /// Optional hook that receives the focused block's kind + heading level, so
+  /// the host toolbar can highlight the current block type.
+  final EditorActiveBlockHook? activeBlockHook;
 
   /// Called when the caret tries to leave the document upward (ArrowUp on the
   /// first line, Backspace at the very start) — the host focuses the page
@@ -415,7 +437,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Seed the outline once the first frame is up (publishing during init could
     // notify the host's outline panel mid-build).
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _publishOutline();
+      if (!mounted) return;
+      _publishOutline();
+      _publishActiveBlock();
     });
   }
 
@@ -438,6 +462,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
     }
     hook.publish(items);
+  }
+
+  /// Publish the focused block's kind + heading level for the host toolbar.
+  void _publishActiveBlock() {
+    final hook = widget.activeBlockHook;
+    if (hook == null) return;
+    final n = _controller.focusedNode;
+    final kind = n?.kind;
+    hook.publish(kind, kind == 'heading' ? n!.headingLevel : null);
   }
 
   // ---- In-page find (Ctrl+F) -----------------------------------------------
@@ -798,6 +831,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _cacheImageUrls();
       _reportCursor();
       _publishOutline();
+      _publishActiveBlock();
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).

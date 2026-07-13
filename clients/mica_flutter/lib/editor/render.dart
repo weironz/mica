@@ -1235,31 +1235,6 @@ class RenderDocument extends RenderBox {
     final origin = offset + Offset(l.contentLeft, l.textTop);
 
     switch (l.kind) {
-      case 'heading':
-        // Level tag ("H1".."H6") in the gutter rail — so you can tell a
-        // heading's level at a glance (sizes alone can't separate H4/H5/H6).
-        // Shares the drag handle's spot: it hides on hover, when the handle
-        // takes over ([_handleRectFor] / the ⠿ painted for [_hoverBlock]).
-        if (_hoverBlock != i) {
-          final badge = TextPainter(
-            text: TextSpan(
-              text: 'H${_nodes[i].headingLevel}',
-              style: TextStyle(
-                color: EditorTheme.faint,
-                fontSize: 11 * _appearance.fontScale,
-                height: 1.0,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            textDirection: TextDirection.ltr,
-          )..layout();
-          final r = _handleRectFor(i).shift(offset);
-          badge.paint(
-            canvas,
-            Offset(r.center.dx - badge.width / 2, r.center.dy - badge.height / 2),
-          );
-          badge.dispose();
-        }
       case 'bulleted_list':
         final c = origin + Offset(-14, l.painter.preferredLineHeight * 0.5);
         switch (l.indentLevel % 3) {
