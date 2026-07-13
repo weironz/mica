@@ -6,6 +6,7 @@ members = [
   "crates/infra",
   "crates/interchange",
   "crates/markdown",
+  "crates/mcp-server",
   "crates/mica-core",
 ]
 resolver = "2"
