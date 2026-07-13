@@ -93,8 +93,12 @@ class EditorTheme {
             return const TextStyle(color: text, fontSize: 24, height: 1.35, fontWeight: FontWeight.w700, letterSpacing: -0.3);
           case 3:
             return const TextStyle(color: text, fontSize: 20, height: 1.4, fontWeight: FontWeight.w600, letterSpacing: -0.2);
-          default:
-            return const TextStyle(color: text, fontSize: 17, height: 1.45, fontWeight: FontWeight.w600, letterSpacing: -0.1);
+          case 4:
+            return const TextStyle(color: text, fontSize: 18, height: 1.45, fontWeight: FontWeight.w600, letterSpacing: -0.1);
+          case 5:
+            return const TextStyle(color: text, fontSize: 16, height: 1.5, fontWeight: FontWeight.w600);
+          default: // H6 — smallest; a muted ink keeps it distinct from body.
+            return const TextStyle(color: muted, fontSize: 15, height: 1.5, fontWeight: FontWeight.w600);
         }
       case 'quote':
         return const TextStyle(color: muted, fontSize: 16, height: 1.6, fontStyle: FontStyle.italic);
@@ -1231,6 +1235,31 @@ class RenderDocument extends RenderBox {
     final origin = offset + Offset(l.contentLeft, l.textTop);
 
     switch (l.kind) {
+      case 'heading':
+        // Level tag ("H1".."H6") in the gutter rail — so you can tell a
+        // heading's level at a glance (sizes alone can't separate H4/H5/H6).
+        // Shares the drag handle's spot: it hides on hover, when the handle
+        // takes over ([_handleRectFor] / the ⠿ painted for [_hoverBlock]).
+        if (_hoverBlock != i) {
+          final badge = TextPainter(
+            text: TextSpan(
+              text: 'H${_nodes[i].headingLevel}',
+              style: TextStyle(
+                color: EditorTheme.faint,
+                fontSize: 11 * _appearance.fontScale,
+                height: 1.0,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          final r = _handleRectFor(i).shift(offset);
+          badge.paint(
+            canvas,
+            Offset(r.center.dx - badge.width / 2, r.center.dy - badge.height / 2),
+          );
+          badge.dispose();
+        }
       case 'bulleted_list':
         final c = origin + Offset(-14, l.painter.preferredLineHeight * 0.5);
         switch (l.indentLevel % 3) {
