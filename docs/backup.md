@@ -63,10 +63,14 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:v0.3 . --provenance=false --sbom=false
    docker save willdockerhub/mica-cli:v0.3 | gzip | ssh root@<node> 'gunzip | docker load'
    ```
-2. **Mint a read-scoped token** — app *Settings → API Tokens*, or
-   `mica-cli auth token create --name backup --scope read` — and add it plus the
-   repo/OSS config to the node's `.env` (next to `MICA_VERSION`). Each value
-   stands alone so the AccessKey rotates without touching the rest:
+2. **Mint a read-scoped Mica token** (PAT) — in the app (*Settings → API
+   Tokens*), or with the CLI:
+   ```bash
+   mica-cli auth login --email you@example.com          # once, to authenticate
+   mica-cli auth token create --name backup --scope read   # secret printed ONCE
+   ```
+   Add it plus the repo/OSS config to the node's `.env` (next to `MICA_VERSION`).
+   Each value stands alone so the AccessKey rotates without touching the rest:
    ```
    MICA_BACKUP_TOKEN=mica_pat_…
    MICA_BACKUP_PASSWORD=…                 # SAVE THIS OFF-HOST — lose it, lose the repo
@@ -78,14 +82,15 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    OSS_ROOT=mica                          # object-key prefix; use a fresh one to share a bucket
    # optional: BACKUP_HOUR=3  KEEP_DAILY=7  KEEP_WEEKLY=4  KEEP_MONTHLY=6
    ```
-3. **Initialise the repo once, then start the service.** Every one-off rustic
-   command goes through the `rustic-mica` wrapper (it renders the repo config
-   from the `OSS_*` env first, then execs rustic):
+3. **Start the service, initialise the repo once, then trigger the first run.**
+   On start the container renders `/etc/rustic/rustic.toml` from the `OSS_*` env,
+   so plain `rustic` works via `docker exec` (no wrapper). `--no-deps` avoids
+   recreating the `api` container.
    ```bash
-   # --no-deps: init only talks to OSS, so don't recreate the api dependency.
-   docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init
-   docker compose --profile backup up -d --no-deps backup
-   docker logs -f mica-backup-1        # BACKUP_ON_START=1 → the first run happens now
+   docker compose --profile backup up -d --no-deps backup   # starts + renders the rustic config
+   docker exec mica-backup-1 rustic init                     # create the repo (once)
+   docker exec mica-backup-1 mica-backup.sh                  # first backup now (else it waits for BACKUP_HOUR)
+   docker logs -f mica-backup-1
    ```
    > Sharing a bucket with an existing repo? Give this one its own prefix via
    > `OSS_ROOT=<prefix>` in `.env` (else init fails, "config file already exists").
@@ -94,24 +99,34 @@ The container runs `mica-backup.sh` (export → per-workspace snapshot → forge
 --prune) at `${BACKUP_HOUR}:00` daily and once on (re)start; the staging tree
 lives in the `mica-prod-backup` volume.
 
-## Inspect / restore (per workspace)
+## Daily operations (init / backup / inspect / restore)
 
-Run these against the **already-running** backup container with `docker exec`
-(the wrapper renders the repo config from the container's env each time). Using
-`docker compose run` instead would recreate the `api` dependency — avoid it here.
+Run against the **running** backup container with `docker exec` — it already has
+the repo config (rendered from env on start), so plain `rustic` works. (Don't use
+`docker compose run`; its `depends_on` would recreate the `api` container.)
 
 ```bash
+# Initialize the repo (ONE time, right after first `up -d`):
+docker exec mica-backup-1 rustic init
+
+# Run a backup right now (what the daily loop calls; export → snapshot → forget):
+docker exec mica-backup-1 mica-backup.sh
+
 # List snapshots grouped by workspace (label = workspace id, tag ws=<name>):
-docker exec mica-backup-1 rustic-mica snapshots --group-by label
+docker exec mica-backup-1 rustic snapshots --group-by label
 
 # Verify repository integrity:
-docker exec mica-backup-1 rustic-mica check
+docker exec mica-backup-1 rustic check
 
 # Restore one workspace's latest snapshot. SNAPSHOT + DESTINATION are POSITIONAL
 # (not --target); --filter-label narrows "latest" to that workspace's lineage:
-docker exec mica-backup-1 rustic-mica restore latest /tmp/restore --filter-label <workspace-id>
+docker exec mica-backup-1 rustic restore latest /tmp/restore --filter-label <workspace-id>
 docker cp mica-backup-1:/tmp/restore ./restore     # then: docker exec mica-backup-1 rm -rf /tmp/restore
 ```
+
+Find a workspace's id (the `--label`/`--filter-label` value) in `rustic snapshots
+--group-by label` (the `Label` column, tagged `ws=<name>`), or in the export's
+`manifest.json`.
 
 To put content back into a Mica instance, re-import each workspace's tree (the
 app's Import / the `/api/workspaces/import` endpoint). Recreate user accounts

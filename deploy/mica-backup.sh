@@ -22,30 +22,50 @@
 set -euo pipefail
 
 MICA_CLI="${MICA_CLI:-mica-cli}"
-# All rustic calls go through the wrapper, which renders /etc/rustic/rustic.toml
-# from the OSS_* env before exec'ing rustic (see rustic-mica.sh).
-RUSTIC="${RUSTIC:-rustic-mica}"
+RUSTIC="${RUSTIC:-rustic}"
 EXPORT_DIR="${MICA_EXPORT_DIR:-/var/lib/mica/export}"
+CONF=/etc/rustic/rustic.toml
 
 log() { echo "[$(date -Is)] mica-backup: $*"; }
 
-# 1) Guard: the repo must have been initialized once. We deliberately do NOT
+# 1) Render the rustic repo config from env (opendal S3 → Aliyun OSS). rustic
+#    auto-discovers /etc/rustic/rustic.toml, so plain `rustic …` works here AND
+#    for any `docker exec mica-backup-1 rustic …` afterwards. The password stays
+#    in RUSTIC_PASSWORD (env) and is NEVER written to the file.
+#    enable_virtual_host_style is required for Aliyun OSS (path style 404s).
+mkdir -p "$(dirname "$CONF")"
+( umask 077; cat > "$CONF" <<EOF
+[repository]
+repository = "opendal:s3"
+
+[repository.options]
+bucket = "${OSS_BUCKET:?set OSS_BUCKET}"
+endpoint = "${OSS_ENDPOINT:?set OSS_ENDPOINT}"
+region = "${OSS_REGION:?set OSS_REGION}"
+access_key_id = "${OSS_ACCESS_KEY_ID:?set OSS_ACCESS_KEY_ID}"
+secret_access_key = "${OSS_SECRET_ACCESS_KEY:?set OSS_SECRET_ACCESS_KEY}"
+root = "${OSS_ROOT:?set OSS_ROOT}"
+enable_virtual_host_style = "true"
+EOF
+)
+
+# 2) Guard: the repo must have been initialized once. We deliberately do NOT
 #    auto-init in the loop — a misconfigured backend must fail loudly, not
-#    silently create a second empty repo. One-off (--no-deps: init only talks to
-#    OSS, don't recreate the api dependency):
-#      docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init
+#    silently create a second empty repo. Initialize once (config is already
+#    rendered above on container start), then it backs up on the next run:
+#      docker exec mica-backup-1 rustic init
 if ! "$RUSTIC" cat config >/dev/null 2>&1; then
   log "repo not initialized (or backend unreachable). Initialize once with:"
-  log "  docker compose --profile backup run --rm --no-deps --entrypoint rustic-mica backup init"
+  log "  docker exec mica-backup-1 rustic init"
   exit 1
 fi
 
-# 2) Export every workspace → mirrored Markdown+images tree (+ manifest.json).
+# 3) Export every workspace → mirrored Markdown+images tree (+ manifest.json).
 #    `export` prunes files removed upstream, so the tree tracks current state.
 log "export all workspaces → ${EXPORT_DIR}"
 "$MICA_CLI" export --out "$EXPORT_DIR"
 
-# 3) Snapshot each workspace as its own lineage: label = stable id, tag = name.
+# 4) Snapshot each workspace as its own lineage: label = stable id, tag = name.
 manifest="${EXPORT_DIR}/manifest.json"
 count=0
 while IFS=$'\t' read -r wsid wsname wsdir; do
@@ -61,7 +81,7 @@ while IFS=$'\t' read -r wsid wsname wsdir; do
 done < <(jq -r '.workspaces[] | [.id, .name, .dir] | @tsv' "$manifest")
 log "snapshotted ${count} workspace(s)"
 
-# 4) Retention PER workspace (group by the stable label = id), then prune once.
+# 5) Retention PER workspace (group by the stable label = id), then prune once.
 log "retention: keep ${KEEP_DAILY:-7}d / ${KEEP_WEEKLY:-4}w / ${KEEP_MONTHLY:-6}m per workspace + prune"
 "$RUSTIC" forget \
   --group-by label \
