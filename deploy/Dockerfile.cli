@@ -1,33 +1,50 @@
-# mica-cli with the built-in backup engine (rustic_core + OpenDAL S3), packaged
-# as a small always-on container that backs up every workspace on a daily
-# schedule. Same binary users run by hand — `backup` is a default feature.
+# The Mica backup container: the mica-cli thin API client + the external `rustic`
+# CLI, packaged as a small always-on service that exports every workspace and
+# snapshots it into one rustic repo daily. mica-cli itself has NO backup engine
+# (that was retired — see docs/backup.md); rustic owns encryption/dedup/retention.
 #   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:vX.Y .
 
-# Pin the builder to bookworm (glibc 2.36) to MATCH the debian:bookworm-slim
-# runtime below. Bare `rust:1.96-slim` tracks Debian stable (now trixie, glibc
-# 2.40); jiff/rustic then reference GLIBC_2.38/2.39 symbols the bookworm runtime
-# lacks, so the binary won't start ("GLIBC_2.38 not found"). Same-release build
-# and runtime keeps the binary's glibc floor ≤ what the runtime provides.
+# ── mica-cli (thin API client) ───────────────────────────────────────────────
+# bookworm builder to match the bookworm-slim runtime's glibc; mica-cli is pure
+# Rust + rustls (no OpenSSL), so this is only about a consistent libc floor.
 FROM rust:1.96-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# Only mica-cli is compiled (its deps pull rustic); the rest of the workspace is
-# just needed to resolve. `backup` is on by default → binary has `backup …`.
 RUN cargo build --release -p mica-cli
 
-FROM debian:bookworm-slim
-# rustls-tls (see workspace reqwest) needs only the CA roots, not libssl.
+# ── rustic CLI (external backup engine), checksum-pinned ──────────────────────
+# The musl build is fully static → runs on the bookworm-slim runtime with no
+# glibc dependency (sidesteps the GLIBC_2.38 gotcha entirely).
+FROM debian:bookworm-slim AS rustic
+ARG RUSTIC_VERSION=v0.11.3
+ARG RUSTIC_SHA256=3298555dc3da30d1cdf6775783e7c777ac4d148708721b3aecbe630ac827b3a9
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL -o /tmp/rustic.tar.gz \
+      "https://github.com/rustic-rs/rustic/releases/download/${RUSTIC_VERSION}/rustic-${RUSTIC_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+ && echo "${RUSTIC_SHA256}  /tmp/rustic.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/rustic.tar.gz -C /tmp \
+ && install -m755 "$(find /tmp -maxdepth 2 -type f -name rustic | head -1)" /usr/local/bin/rustic \
+ && /usr/local/bin/rustic --version
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+# ca-certificates: TLS to the API + OSS. jq: parse export manifest.json.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates jq \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
+COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic
 COPY deploy/mica-backup.sh /usr/local/bin/mica-backup.sh
 COPY deploy/mica-backup-loop.sh /usr/local/bin/mica-backup-loop.sh
+COPY deploy/rustic-mica.sh /usr/local/bin/rustic-mica
 # Strip any CR (Windows checkout) before chmod — a `\r` in the shebang makes the
 # container fail with `/usr/bin/env: 'bash\r': No such file or directory`.
-RUN sed -i 's/\r$//' /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh \
- && chmod +x /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh
+RUN sed -i 's/\r$//' \
+      /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh /usr/local/bin/rustic-mica \
+ && chmod +x \
+      /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh /usr/local/bin/rustic-mica
 ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
-# The loop runs mica-backup.sh (export → snapshot → forget) once a day.
+# The loop runs mica-backup.sh (export → per-workspace snapshot → forget) daily.
 ENTRYPOINT ["/usr/local/bin/mica-backup-loop.sh"]

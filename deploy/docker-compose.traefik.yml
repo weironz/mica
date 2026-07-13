@@ -100,22 +100,21 @@ services:
     environment:
       MICA_SERVER: http://api:8080
       MICA_TOKEN: ${MICA_BACKUP_TOKEN:-}            # a read-scoped Mica token
-      MICA_BACKUP_REPO: ${MICA_BACKUP_REPO:-opendal:s3:/mica}
-      MICA_BACKUP_PASSWORD: ${MICA_BACKUP_PASSWORD:-}
-      # OpenDAL S3/OSS backend options — one option per line (MICA_OPT_<KEY> maps
-      # to the opendal option <key>), sourced from the readable OSS_* vars in
-      # .env so every value stands alone and the AccessKey rotates without
-      # touching the rest. enable_virtual_host_style is required for Aliyun OSS.
-      MICA_OPT_BUCKET: ${OSS_BUCKET:-}
-      MICA_OPT_ENDPOINT: ${OSS_ENDPOINT:-}
-      MICA_OPT_REGION: ${OSS_REGION:-}
-      MICA_OPT_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
-      MICA_OPT_SECRET_ACCESS_KEY: ${OSS_SECRET_ACCESS_KEY:-}
-      MICA_OPT_ENABLE_VIRTUAL_HOST_STYLE: "true"
-      MICA_OPT_ROOT: ${OSS_ROOT:-mica}
+      # rustic repo encryption password — SAVE OFF-HOST (lose it, lose the repo).
+      RUSTIC_PASSWORD: ${MICA_BACKUP_PASSWORD:-}
+      # opendal S3 backend → Aliyun OSS. mica-backup.sh renders these into
+      # /etc/rustic/rustic.toml (virtual-host style is forced on, required for
+      # OSS). Each value stands alone so the AccessKey rotates without touching
+      # the rest; use a fresh OSS_ROOT prefix to share a bucket with another repo.
+      OSS_BUCKET: ${OSS_BUCKET:-}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:-}
+      OSS_REGION: ${OSS_REGION:-}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
+      OSS_SECRET_ACCESS_KEY: ${OSS_SECRET_ACCESS_KEY:-}
+      OSS_ROOT: ${OSS_ROOT:-mica}
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
-      KEEP_DAILY: ${KEEP_DAILY:-14}
-      KEEP_WEEKLY: ${KEEP_WEEKLY:-8}
+      KEEP_DAILY: ${KEEP_DAILY:-7}
+      KEEP_WEEKLY: ${KEEP_WEEKLY:-4}
       KEEP_MONTHLY: ${KEEP_MONTHLY:-6}
     volumes:
       - mica-prod-backup:/var/lib/mica/export
