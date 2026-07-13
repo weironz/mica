@@ -4,8 +4,8 @@
 great, consistent **`export`**; backup — encryption, dedup, retention, remote
 targets — is the job of a dedicated tool. The production stack ships a small
 container that wires the two together: `mica-cli export` (a thin API client, no
-backup engine) + **`rustic`** (external, restic-format) snapshotting to Aliyun
-OSS. `mica-cli` itself has no `backup` command anymore.
+backup engine — see [`cli.md`](cli.md)) + **`rustic`** (external, restic-format)
+snapshotting to Aliyun OSS. `mica-cli` itself has no `backup` command anymore.
 
 ## Topology: one repo, one bucket, one lineage per workspace
 

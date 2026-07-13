@@ -5,7 +5,7 @@ client over the REST API** — the symmetric counterpart to the MCP server
 (`crates/mcp-server`): same capabilities, one for shells/CI, one for AI agents.
 It talks to the public API only and **never touches the database**. It carries
 **no backup engine** — `export` produces a portable tree and you point a
-dedicated tool (restic/rustic/rclone/borg) at it (see [`docs/backup.md`](../../docs/backup.md)).
+dedicated tool (restic/rustic/rclone/borg) at it (see [`backup.md`](backup.md)).
 
 ## Install
 
@@ -133,7 +133,7 @@ Only GETs — a **read-scoped** token suffices.
 pattern is **`mica-cli export` + an external backup tool**: e.g. `rustic backup
 <out>`, `rclone sync <out> remote:`, or `restic`/`borg`/`cron + tar`. The
 production stack wires `export` + `rustic` into one container — see
-[`docs/backup.md`](../../docs/backup.md).
+[`backup.md`](backup.md).
 
 ## Scripting / agents
 
