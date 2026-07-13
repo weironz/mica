@@ -3,23 +3,17 @@ name = "mica-cli"
 version = "0.1.5"
 edition.workspace = true
 license.workspace = true
-# The `backup` feature pulls rustic_core, which needs rustc 1.88. Only this crate
-# opts up; the workspace (api-server etc.) stays at 1.85, and the default
-# `mica-cli` build does not pull rustic at all.
-rust-version = "1.88"
+rust-version.workspace = true
 
 [[bin]]
 name = "mica-cli"
 path = "src/main.rs"
 
-[features]
-# `backup` is ON by default, so a plain `cargo build` yields a mica-cli that
-# already has `mica-cli backup …` (no separate binary to remember). Build with
-# `--no-default-features` for a light client with no backup — and no rustic tree.
-# The api-server is a separate crate and never pulls this either way.
-default = ["backup"]
-backup = ["dep:rustic_core", "dep:rustic_backend", "dep:jiff"]
-
+# A thin, pure HTTP client over the Mica REST API — the symmetric CLI to the MCP
+# server. Backup is deliberately NOT built in (that was a mistake: it coupled us
+# to `rustic_core` and re-invented what mature tools do better). Instead,
+# `mica-cli export` mirrors every workspace to Markdown + images and you point an
+# external backup tool (restic / rclone / borg / cron) at the output.
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
@@ -29,8 +23,3 @@ reqwest = { workspace = true, features = ["blocking", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
-
-# backup-only (optional) — restic-compatible engine + S3/OpenDAL backend.
-rustic_core = { version = "0.12", optional = true }
-rustic_backend = { version = "0.6", default-features = false, features = ["opendal"], optional = true }
-jiff = { version = "0.2", optional = true }

@@ -11,8 +11,6 @@
 //! into a mirrored directory that an external tool (e.g. restic → Aliyun OSS) can
 //! then snapshot incrementally.
 
-#[cfg(feature = "backup")]
-mod backup;
 mod client;
 mod config;
 
@@ -46,11 +44,9 @@ enum Command {
   /// Workspaces.
   #[command(subcommand)]
   Ws(WsCmd),
-  /// Export workspaces to a directory of Markdown + images (mirrored).
+  /// Export workspaces to a directory of Markdown + images (mirrored) — point an
+  /// external backup tool (restic / rclone / borg) at the output.
   Export(ExportArgs),
-  /// Encrypted, deduplicated backups: init / snapshot / restore / forget / check.
-  #[cfg(feature = "backup")]
-  Backup(backup::BackupArgs),
 }
 
 #[derive(Subcommand)]
@@ -142,8 +138,6 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
-    #[cfg(feature = "backup")]
-    Command::Backup(args) => backup::run(cli.json, args),
   }
 }
 

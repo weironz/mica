@@ -1,21 +1,35 @@
 # Backup & Restore
 
-> **Direction (2026-07): backup is moving external.** Baking a restic engine
-> (`rustic_core`) into `mica-cli` was a mistake — it couples us to one backup
-> tool, pulls a heavy dep tree, and re-invents what mature tools do better. The
-> new model separates mechanism from policy: **Mica's job is a great, consistent
-> `export`/`import` (API + CLI); backup is the job of dedicated tools** (restic,
-> borg, rclone, cron) pointed at the export. Markdown exports are text, so they
-> dedup and diff beautifully. See `crates/mcp-server/README.md#backup`. The
-> embedded `mica-cli backup` (rustic) below is **deprecated**; retirement is
-> **staged** — keep the running prod backup until the external replacement is
-> verified. New setups should use `mica-cli export` + an external backup tool.
+**Mica does not do backups — on purpose (mechanism vs policy).** Mica's job is a
+great, consistent **`export`** (and `import`); backup — encryption, dedup,
+retention, remote targets — is the job of dedicated tools (`restic`, `borg`,
+`rclone`, `cron`) pointed at the export. Markdown exports are text, so they dedup
+and diff beautifully.
 
-Mica ships its own backup as part of the `mica-cli` tool: `mica-cli export`
-projects every workspace to a Markdown + images tree, and `mica-cli backup`
-(an embedded, restic-format, encrypted/deduplicated engine — `rustic_core`)
-snapshots that tree to a local repo and/or Aliyun OSS. No external
-`restic`/`backrest`/`cron` binary.
+```
+[timer] mica-cli export --out <dir>          # all workspaces → Markdown + images (mirrored, API-only)
+        restic -r s3:… backup <dir>          # encrypt + dedup + incremental → your target
+        # or: rclone sync <dir> remote:mica ; or borg ; or just cron + tar
+```
+
+`mica-cli` is a **thin HTTP client** — `export` hits the same `/export.zip`
+endpoint the web export button uses; it never touches the DB. Restore is
+`mica-cli import <dir>/<ws>.zip` (or, per page, the MCP `mica_update_document`).
+
+> **History:** an embedded restic engine (`rustic_core`) used to ship as
+> `mica-cli backup` (`default = ["backup"]`). That coupled us to one tool and
+> pulled a heavy dep tree, so it was **removed** (2026-07); the CLI is now a pure
+> API client. The legacy rustic deploy notes below are kept for the prod
+> `mica-backup-1` service, which still runs the old image — **migrate it to
+> `mica-cli export` + an external tool, then retire that service.** Do not
+> `docker compose build cli` against it (the new image has no `backup` command).
+
+---
+
+## Legacy (embedded rustic — removed from code; prod service pending migration)
+
+The following describes the retired `mica-cli backup` (rustic) flow, kept only
+to operate the still-running prod backup container until it is migrated:
 
 ```
 [timer] mica-cli export --out <dir>              # content: all workspaces → md + images
