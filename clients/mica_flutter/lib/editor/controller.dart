@@ -1690,6 +1690,29 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(lastIndex, nodes[lastIndex].text.length));
   }
 
+  /// Paste [specs] as blocks, replacing any ranged selection first — so Ctrl+A →
+  /// paste swaps the whole document instead of appending to it. With a collapsed
+  /// caret this is exactly [insertBlocksAfterFocus]. Over a selection it deletes
+  /// the selection, then: if that leaves an empty block (a whole-block or
+  /// select-all paste) it overwrites that block via [replaceFocusedWithBlocks] —
+  /// which also repairs its kind (e.g. a leftover empty heading); a partial
+  /// selection keeps its surrounding text, so the paste is appended after it.
+  void insertBlocksReplacingSelection(
+    List<({String kind, String text, Map<String, dynamic> data})> specs,
+  ) {
+    if (specs.isEmpty) return;
+    final sel = selection;
+    if (sel != null && !sel.isCollapsed) {
+      deleteSelection();
+      final leftover = focusedNode;
+      if (leftover != null && leftover.text.isEmpty) {
+        replaceFocusedWithBlocks(specs);
+        return;
+      }
+    }
+    insertBlocksAfterFocus(specs);
+  }
+
   /// Insert raw text at the caret within the focused node (replacing any
   /// in-node selection), preserving newlines. Used to paste into a code block so
   /// the content stays inside it.

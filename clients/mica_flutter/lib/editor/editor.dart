@@ -922,7 +922,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
     if (markdown.trim().isEmpty) return false;
     if (rich || markdown.contains('\n')) {
-      _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
+      // Paste replaces the current selection (Ctrl+A → paste swaps the doc).
+      _controller.insertBlocksReplacingSelection(markdownToBlocks(markdown));
       _rehostExternalImages();
       _syncImeFromSelection(force: true);
       return true;
