@@ -82,4 +82,90 @@ void main() {
     );
     expect(c.selectionText(), 'Tit');
   });
+
+  // The clipboard's text/plain flavor: what a PLAIN editor (Notepad) reads —
+  // Markdown syntax stripped, only rendered affordances (bullet/number/box) kept.
+  group('selectionPlainText — no Markdown syntax', () {
+    test('inline marks + block markers are gone; text/bullets rendered', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'heading', text: 'Title', data: {'level': 2}),
+        EditorNode(id: 'b', kind: 'paragraph', text: 'hi there', data: {
+          'marks': marksToJson([Mark(0, 2, 'bold'), Mark(3, 8, 'code')]),
+        }),
+        EditorNode(id: 'c', kind: 'bulleted_list', text: 'one'),
+        EditorNode(id: 'd', kind: 'quote', text: 'wise words'),
+      ]);
+      final plain = c.selectionPlainText();
+      expect(plain, isNot(contains('**')));
+      expect(plain, isNot(contains('`')));
+      expect(plain, isNot(contains('#')));
+      expect(plain, isNot(contains('> ')));
+      expect(plain, contains('Title'));
+      expect(plain, contains('hi there')); // marks live off the text → already clean
+      expect(plain, contains('• one')); // rendered bullet, not Markdown "- "
+      expect(plain, contains('wise words'));
+    });
+
+    test('a link keeps its text and drops the URL', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: 'see docs', data: {
+          'marks': marksToJson([Mark(4, 8, 'link', href: 'https://x.dev')]),
+        }),
+      ]);
+      expect(c.selectionPlainText(), 'see docs');
+    });
+
+    test('a numbered list renders running numbers', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'numbered_list', text: 'first'),
+        EditorNode(id: 'b', kind: 'numbered_list', text: 'second'),
+      ]);
+      expect(c.selectionPlainText(), '1. first\n\n2. second');
+    });
+  });
+
+  // The clipboard's text/html flavor: Typora/Obsidian read this and convert it
+  // back to formatted content, so copy→paste there keeps the formatting.
+  group('selectionHtml — rich flavor', () {
+    test('inline marks become HTML tags', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: 'hi there', data: {
+          'marks': marksToJson([Mark(0, 2, 'bold'), Mark(3, 8, 'code')]),
+        }),
+      ]);
+      final html = c.selectionHtml();
+      expect(html, contains('<strong>hi</strong>'));
+      expect(html, contains('<code>there</code>'));
+    });
+
+    test('a link becomes an anchor with href', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: 'see docs', data: {
+          'marks': marksToJson([Mark(4, 8, 'link', href: 'https://x.dev')]),
+        }),
+      ]);
+      expect(c.selectionHtml(), contains('<a href="https://x.dev">docs</a>'));
+    });
+
+    test('heading + a grouped bullet list + a grouped quote', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'heading', text: 'Title', data: {'level': 2}),
+        EditorNode(id: 'b', kind: 'bulleted_list', text: 'one'),
+        EditorNode(id: 'c', kind: 'bulleted_list', text: 'two'),
+        EditorNode(id: 'd', kind: 'quote', text: 'q1'),
+        EditorNode(id: 'e', kind: 'quote', text: 'q2'),
+      ]);
+      final html = c.selectionHtml();
+      expect(html, contains('<h2>Title</h2>'));
+      expect(html, contains('<ul><li>one</li><li>two</li></ul>'));
+      expect(html, contains('<blockquote><p>q1</p><p>q2</p></blockquote>'));
+    });
+
+    test('entity-escapes reserved characters', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: 'a < b & c'),
+      ]);
+      expect(c.selectionHtml(), '<p>a &lt; b &amp; c</p>');
+    });
+  });
 }

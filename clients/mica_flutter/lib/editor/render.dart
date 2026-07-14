@@ -101,7 +101,11 @@ class EditorTheme {
             return const TextStyle(color: muted, fontSize: 15, height: 1.5, fontWeight: FontWeight.w600);
         }
       case 'quote':
-        return const TextStyle(color: muted, fontSize: 16, height: 1.6, fontStyle: FontStyle.italic);
+        // Upright, not italic: the left bar + muted ink already mark a quote
+        // (Notion/GitHub style). Baking italic into the base style meant an
+        // italic *mark* had nothing to toggle — you could never un-italic quoted
+        // text — so emphasis is left entirely to marks (marks-over-plain-text).
+        return const TextStyle(color: muted, fontSize: 16, height: 1.6);
       case 'footnote_def':
         // Small muted body, mirroring quote — the `[label]` marker is painted
         // in the gutter (see _paintNode), so the text itself stays plain.

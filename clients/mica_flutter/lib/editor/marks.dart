@@ -1455,3 +1455,79 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
   }
   return out.toString();
 }
+
+/// Entity-escape text for HTML body content.
+String escapeHtml(String s) => s
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+
+/// Entity-escape text for a double-quoted HTML attribute value.
+String escapeHtmlAttr(String s) => escapeHtml(s).replaceAll('"', '&quot;');
+
+/// The inline text + [marks] rendered as HTML — the rich flavor written to the
+/// clipboard so plain editors read stripped `text/plain` while Markdown editors
+/// (Typora, Obsidian) read `text/html` and keep the formatting. Mirrors
+/// [inlineToMarkdown]'s outermost-first recursion so nested emphasis nests; HTML
+/// needs only entity-escaping (no delimiter fencing).
+String inlineToHtml(String text, List<Mark> marks) =>
+    _renderSpanHtml(text, 0, text.length, marks);
+
+String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
+  final out = StringBuffer();
+  var pos = lo;
+  while (pos < hi) {
+    Mark? pick;
+    var ps = 0, pe = 0;
+    for (final m in marks) {
+      final s = m.start < pos ? pos : m.start;
+      final e = m.end > hi ? hi : m.end;
+      if (e <= s) continue;
+      if (pick == null || s < ps || (s == ps && e > pe)) {
+        pick = m;
+        ps = s;
+        pe = e;
+      }
+    }
+    if (pick == null) {
+      out.write(escapeHtml(text.substring(pos, hi)));
+      break;
+    }
+    out.write(escapeHtml(text.substring(pos, ps)));
+    // Literal-content leaves (no nested marks).
+    if (pick.type == 'code') {
+      out.write('<code>${escapeHtml(text.substring(ps, pe))}</code>');
+      pos = pe;
+      continue;
+    }
+    if (pick.type == 'footnote' || pick.type == 'math' || pick.type == 'html') {
+      out.write(escapeHtml(text.substring(ps, pe)));
+      pos = pe;
+      continue;
+    }
+    final inner = [
+      for (final m in marks)
+        if (!identical(m, pick) && m.end > ps && m.start < pe) m,
+    ];
+    final body = _renderSpanHtml(text, ps, pe, inner);
+    switch (pick.type) {
+      case 'bold':
+        out.write('<strong>$body</strong>');
+      case 'italic':
+        out.write('<em>$body</em>');
+      case 'strike':
+        out.write('<s>$body</s>');
+      case 'link':
+        out.write('<a href="${escapeHtmlAttr(pick.href ?? '')}">$body</a>');
+      case 'image':
+        out.write(
+          '<img src="${escapeHtmlAttr(pick.href ?? '')}" '
+          'alt="${escapeHtmlAttr(text.substring(ps, pe))}">',
+        );
+      default:
+        out.write(body);
+    }
+    pos = pe;
+  }
+  return out.toString();
+}

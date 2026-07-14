@@ -783,6 +783,220 @@ class EditorController extends ChangeNotifier {
     }
   }
 
+  /// The (node, from, to) slices the current ranged selection covers, in order.
+  /// Empty when there is no ranged selection. Shared by the plain/HTML copy
+  /// flavors ([selectionText] keeps its own walk for the quote-group newline).
+  List<({int node, int from, int to})> _selectionSlices() {
+    final sel = selection;
+    if (sel == null || sel.isCollapsed) return const [];
+    final s = sel.start, e = sel.end;
+    if (s.node == e.node) {
+      return [(node: s.node, from: s.offset, to: e.offset)];
+    }
+    final out = <({int node, int from, int to})>[
+      (node: s.node, from: s.offset, to: nodes[s.node].text.length),
+    ];
+    for (var i = s.node + 1; i <= e.node; i++) {
+      out.add((
+        node: i,
+        from: 0,
+        to: i == e.node ? e.offset : nodes[i].text.length,
+      ));
+    }
+    return out;
+  }
+
+  /// The selection as human-readable PLAIN text — what you see, with no Markdown
+  /// syntax (so pasting into Notepad/etc. doesn't leak `**`/`#`/`` ` ``). Inline
+  /// marks live outside `text`, so a raw slice is already unmarked; only the
+  /// rendered block affordance (bullet / number / checkbox) is added back. The
+  /// clipboard's `text/plain` flavor — the `text/html` one keeps formatting.
+  String selectionPlainText({Map<String, String>? imageUrls}) {
+    final slices = _selectionSlices();
+    if (slices.isEmpty) return '';
+    final buf = StringBuffer();
+    final counters = <int, int>{}; // numbered-list running count per indent
+    for (var i = 0; i < slices.length; i++) {
+      final sl = slices[i];
+      final node = nodes[sl.node];
+      if (i > 0) {
+        final prev = nodes[slices[i - 1].node];
+        final sameQuoteGroup = node.kind == 'quote' &&
+            prev.kind == 'quote' &&
+            node.data['qbreak'] != true;
+        buf.write(sameQuoteGroup ? '\n' : '\n\n');
+      }
+      buf.write(_nodePlain(node, sl.from, sl.to, imageUrls, counters));
+    }
+    return buf.toString();
+  }
+
+  String _nodePlain(EditorNode node, int from, int to,
+      Map<String, String>? imageUrls, Map<int, int> counters) {
+    // Numbering only runs across an unbroken column of numbered items.
+    if (node.kind != 'numbered_list') counters.clear();
+    switch (node.kind) {
+      case 'table':
+        return TableData.fromBlock(node.data)
+            .rows
+            .map((r) => r.join('\t'))
+            .join('\n');
+      case 'image':
+        final fileId = node.data['file_id'] as String?;
+        return (imageUrls?[fileId] ?? node.data['url'] ?? node.text) as String;
+      case 'divider':
+        return '';
+    }
+    final len = node.text.length;
+    final a = from.clamp(0, len);
+    final b = to.clamp(0, len);
+    final sub = node.text.substring(a, b);
+    if (!(a == 0 && b == len)) return sub; // partial line → bare text
+    final indent = node.isListKind ? '  ' * node.indent : '';
+    switch (node.kind) {
+      case 'bulleted_list':
+        return '$indent• $sub';
+      case 'numbered_list':
+        final n = (counters[node.indent] ?? 0) + 1;
+        counters[node.indent] = n;
+        return '$indent$n. $sub';
+      case 'todo':
+        return '$indent${node.todoChecked ? '☑' : '☐'} $sub';
+      default:
+        return sub; // heading / quote / paragraph → just the text
+    }
+  }
+
+  /// The selection as HTML — the clipboard's rich flavor, built straight from the
+  /// block model (headings, lists, quotes, code, tables + inline marks) so
+  /// Markdown editors that read `text/html` keep the formatting. Consecutive list
+  /// items / quotes group into one `<ul>`/`<ol>`/`<blockquote>`.
+  String selectionHtml({Map<String, String>? imageUrls}) {
+    final slices = _selectionSlices();
+    if (slices.isEmpty) return '';
+    final buf = StringBuffer();
+    String? openList; // 'ul' | 'ol' while inside a list run
+    var inQuote = false;
+    void closeList() {
+      if (openList != null) {
+        buf.write('</$openList>');
+        openList = null;
+      }
+    }
+
+    void closeQuote() {
+      if (inQuote) {
+        buf.write('</blockquote>');
+        inQuote = false;
+      }
+    }
+
+    for (final sl in slices) {
+      final node = nodes[sl.node];
+      final len = node.text.length;
+      final a = sl.from.clamp(0, len);
+      final b = sl.to.clamp(0, len);
+      final full = a == 0 && b == len;
+      String inlineHtml() {
+        final clipped = <Mark>[];
+        for (final m in marksFromData(node.data)) {
+          final s = m.start.clamp(a, b);
+          final e = m.end.clamp(a, b);
+          if (e > s) {
+            clipped.add(
+                Mark(s - a, e - a, m.type, href: m.href, title: m.title));
+          }
+        }
+        return inlineToHtml(node.text.substring(a, b), clipped);
+      }
+
+      if (node.kind == 'image') {
+        closeList();
+        closeQuote();
+        final fileId = node.data['file_id'] as String?;
+        final src = (imageUrls?[fileId] ??
+            node.data['url'] ??
+            node.data['name'] ??
+            '') as String;
+        buf.write('<p><img src="${escapeHtmlAttr(src)}" '
+            'alt="${escapeHtmlAttr(node.text)}"></p>');
+        continue;
+      }
+      if (node.kind == 'divider') {
+        closeList();
+        closeQuote();
+        buf.write('<hr>');
+        continue;
+      }
+      if (node.kind == 'table') {
+        closeList();
+        closeQuote();
+        buf.write(_tableHtml(TableData.fromBlock(node.data)));
+        continue;
+      }
+      if (node.kind == 'code_block') {
+        closeList();
+        closeQuote();
+        buf.write('<pre><code>${escapeHtml(node.text.substring(a, b))}'
+            '</code></pre>');
+        continue;
+      }
+
+      final isListItem = full &&
+          (node.kind == 'bulleted_list' ||
+              node.kind == 'numbered_list' ||
+              node.kind == 'todo');
+      if (isListItem) {
+        closeQuote();
+        final want = node.kind == 'numbered_list' ? 'ol' : 'ul';
+        if (openList != want) {
+          closeList();
+          buf.write('<$want>');
+          openList = want;
+        }
+        final box =
+            node.kind == 'todo' ? (node.todoChecked ? '☑ ' : '☐ ') : '';
+        buf.write('<li>$box${inlineHtml()}</li>');
+        continue;
+      }
+      closeList();
+
+      if (full && node.kind == 'quote') {
+        if (!inQuote) {
+          buf.write('<blockquote>');
+          inQuote = true;
+        }
+        buf.write('<p>${inlineHtml()}</p>');
+        continue;
+      }
+      closeQuote();
+
+      if (full && node.kind == 'heading') {
+        final lvl = node.headingLevel.clamp(1, 6);
+        buf.write('<h$lvl>${inlineHtml()}</h$lvl>');
+        continue;
+      }
+      buf.write('<p>${inlineHtml()}</p>');
+    }
+    closeList();
+    closeQuote();
+    return buf.toString();
+  }
+
+  String _tableHtml(TableData table) {
+    final buf = StringBuffer('<table>');
+    for (var r = 0; r < table.rows.length; r++) {
+      buf.write('<tr>');
+      final tag = r == 0 ? 'th' : 'td';
+      for (final cell in table.rows[r]) {
+        buf.write('<$tag>${escapeHtml(cell)}</$tag>');
+      }
+      buf.write('</tr>');
+    }
+    buf.write('</table>');
+    return buf.toString();
+  }
+
   /// Delete the current ranged selection, which may span multiple nodes. The
   /// surrounding text of the first and last nodes is merged into the first node
   /// and the nodes in between are removed. The document never becomes empty.

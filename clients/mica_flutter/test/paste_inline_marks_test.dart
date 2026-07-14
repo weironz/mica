@@ -113,4 +113,46 @@ void main() {
       expect(htmlToMarkdown('<h2>Title with <code>x</code></h2>'), '## Title with `x`');
     });
   });
+
+  // Regression: a <li> whose content was an inline element (a link, bold, code)
+  // dropped that wrapper — _directInline descended past it with _gather. A
+  // bulleted list of links pasted as bare text.
+  group('htmlToMarkdown — inline formatting inside list items', () {
+    test('a link inside a bullet keeps [text](href)', () {
+      expect(
+        htmlToMarkdown('<ul><li><a href="https://x.dev">docs</a></li></ul>'),
+        '- [docs](https://x.dev)',
+      );
+    });
+
+    test('a bullet mixing text + link keeps both', () {
+      expect(
+        htmlToMarkdown('<ul><li>see <a href="https://x.dev">here</a> now</li></ul>'),
+        '- see [here](https://x.dev) now',
+      );
+    });
+
+    test('bold / inline-code inside a bullet survive', () {
+      expect(
+        htmlToMarkdown('<ul><li><strong>bold</strong> and <code>x</code></li></ul>'),
+        '- **bold** and `x`',
+      );
+    });
+
+    test('a numbered item keeps its link too', () {
+      expect(
+        htmlToMarkdown('<ol><li><a href="https://x.dev">one</a></li></ol>'),
+        '1. [one](https://x.dev)',
+      );
+    });
+
+    test('nested list under an item is still emitted (not swallowed)', () {
+      final md = htmlToMarkdown(
+        '<ul><li><a href="https://x.dev">parent</a>'
+        '<ul><li>child</li></ul></li></ul>',
+      );
+      expect(md, contains('- [parent](https://x.dev)'));
+      expect(md, contains('  - child'));
+    });
+  });
 }

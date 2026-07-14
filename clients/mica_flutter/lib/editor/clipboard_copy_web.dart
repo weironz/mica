@@ -33,3 +33,42 @@ Future<bool> copyTextToClipboard(String text) async {
     return false;
   }
 }
+
+/// Copy the selection in TWO flavors via a multi-format `ClipboardItem`: [plain]
+/// (Markdown-free `text/plain`, what Notepad reads) and [richHtml] (`text/html`,
+/// what Typora/Obsidian read and convert back to formatted content). Needs a
+/// secure context + ClipboardItem; falls back to writing just [plain] otherwise.
+Future<bool> copyRichToClipboard({
+  required String plain,
+  required String richHtml,
+}) async {
+  try {
+    final clipboard = js_util.getProperty(html.window.navigator, 'clipboard');
+    final ctor = js_util.getProperty(html.window, 'ClipboardItem');
+    if (clipboard != null &&
+        ctor != null &&
+        js_util.hasProperty(clipboard, 'write')) {
+      final flavors = js_util.newObject<Object>();
+      js_util.setProperty(
+        flavors,
+        'text/plain',
+        html.Blob(<dynamic>[plain], 'text/plain'),
+      );
+      js_util.setProperty(
+        flavors,
+        'text/html',
+        html.Blob(<dynamic>[richHtml], 'text/html'),
+      );
+      final item = js_util.callConstructor(ctor, <dynamic>[flavors]);
+      await js_util.promiseToFuture<void>(
+        js_util.callMethod(clipboard, 'write', <dynamic>[
+          js_util.jsify(<dynamic>[item]),
+        ]),
+      );
+      return true;
+    }
+  } catch (_) {
+    // Fall through: at least land the plain flavor.
+  }
+  return copyTextToClipboard(plain);
+}

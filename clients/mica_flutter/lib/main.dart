@@ -3971,6 +3971,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // immediately, no dialog) or from the row's "重命名" action; the matching row
   // renders a focused TextField instead of the name Text.
   String? _renamingViewId;
+  // The sidebar node the user last "located" — a page OR a folder (folders never
+  // reach `selectedView`, so this is the only handle on a focused folder). Drives
+  // where the top New-page/New-folder buttons create: inside a focused folder, or
+  // beside a focused page. Kept in sync with the open doc in didUpdateWidget so a
+  // single highlight follows the last interaction. Null = create at the root.
+  String? _focusedNavId;
   // True only while a page is being dragged in the tree. The drop zones overlay
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
@@ -4080,6 +4086,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   @override
   void didUpdateWidget(covariant WorkspaceView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Keep the sidebar's "located" node in step with the open doc: opening a
+    // page (link / auto-open / navigate) refocuses it, so the single row
+    // highlight follows and a stale folder focus doesn't linger.
+    if (widget.selectedView?.id != oldWidget.selectedView?.id) {
+      _focusedNavId = widget.selectedView?.id;
+    }
     final selected = widget.selectedWorkspace;
     final wsChanged =
         selected != null && selected.id != oldWidget.selectedWorkspace?.id;
@@ -4200,8 +4212,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// rest unhandled, so these fire when a key bubbles past it. Both Control
   /// (Win/Linux) and Meta (macOS) variants are bound.
   Map<ShortcutActivator, VoidCallback> _appShortcuts() {
-    void newPage() =>
-        _createThenRename(() => widget.onCreateDocument(kUntitledPage));
+    void newPage() => _createLocated(folder: false);
     return <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
       const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
@@ -4352,34 +4363,24 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onPressed: _openRecycleBin,
                       icon: const Icon(Icons.delete_outline, size: 20),
                     ),
-                    PopupMenuButton<String>(
-                      tooltip: '新建',
-                      position: PopupMenuPosition.under,
-                      onSelected: (v) {
-                        if (v == 'page') {
-                          _createThenRename(
-                            () => widget.onCreateDocument(kUntitledPage),
-                          );
-                        } else {
-                          _createThenRename(
-                            () => widget.onCreateFolder('新文件夹'),
-                          );
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(
-                          value: 'page',
-                          child: _MenuRow(icon: Icons.add, label: '新建页面'),
-                        ),
-                        PopupMenuItem(
-                          value: 'folder',
-                          child: _MenuRow(
-                            icon: Icons.create_new_folder_outlined,
-                            label: '新建文件夹',
-                          ),
-                        ),
-                      ],
+                    // Two separate quick actions (not a menu): a new page and a
+                    // new folder. Both create relative to the located sidebar
+                    // node (see _createLocated) — inside a focused folder, or
+                    // beside a focused page.
+                    IconButton(
+                      tooltip: '新建页面',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _createLocated(folder: false),
                       icon: const Icon(Icons.note_add_outlined, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: '新建文件夹',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _createLocated(folder: true),
+                      icon: const Icon(
+                        Icons.create_new_folder_outlined,
+                        size: 20,
+                      ),
                     ),
                   ],
                 ],
@@ -4590,6 +4591,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
     }
 
+    // The single highlighted row = the located node (last-tapped folder/page),
+    // falling back to the open doc. So a focused folder highlights just like the
+    // open page, and the two never light up at once.
+    final activeId = _focusedNavId ?? widget.selectedView?.id;
     return ListView(
       children: _visibleDocumentTree().map((item) {
         final row = DocumentListItem(
@@ -4599,7 +4604,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           hasChildren: item.hasChildren,
           revealToggle: _navHovered,
           isCollapsed: !_expandedViewIds.contains(item.view.id),
-          isSelected: item.view.id == widget.selectedView?.id,
+          isSelected: item.view.id == activeId,
           canEdit: canEdit,
           isRenaming: item.view.id == _renamingViewId,
           onToggle: () => _toggleViewExpand(item.view),
@@ -4842,6 +4847,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   void _toggleViewExpand(DocumentView view) {
     setState(() {
+      // Tapping a folder both toggles its subtree AND "locates" it — folders
+      // never become `selectedView`, so this is how a folder becomes the target
+      // for the top New-page/New-folder buttons (and gets the row highlight).
+      _focusedNavId = view.id;
       if (!_expandedViewIds.add(view.id)) {
         _expandedViewIds.remove(view.id);
       }
@@ -5777,6 +5786,42 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _createThenRename(Future<String?> Function() create) async {
     final id = await create();
     if (id != null && mounted) setState(() => _renamingViewId = id);
+  }
+
+  DocumentView? _viewById(String? id) {
+    if (id == null) return null;
+    for (final v in widget.views) {
+      if (v.id == id) return v;
+    }
+    return null;
+  }
+
+  /// The node the top New-page/New-folder buttons create relative to: the last
+  /// folder/page the user tapped, else the open doc, else null (root).
+  DocumentView? _locatedView() =>
+      _viewById(_focusedNavId ?? widget.selectedView?.id);
+
+  /// Create a page ([folder] false) or folder ([folder] true) relative to the
+  /// currently located sidebar node, then drop it into inline-rename:
+  ///  - located a folder → create INSIDE it (a child),
+  ///  - located a page (a leaf can't hold children) → create BESIDE it (under its
+  ///    parent, so it lands in the same group, in order),
+  ///  - nothing located → create at the workspace root (the old behaviour).
+  void _createLocated({required bool folder}) {
+    final parent = createParentForLocated(widget.views, _locatedView());
+    if (parent != null) {
+      setState(() => _expandForChildOf(parent.id)); // reveal the new child
+    }
+    _createThenRename(() {
+      if (parent == null) {
+        return folder
+            ? widget.onCreateFolder('新文件夹')
+            : widget.onCreateDocument(kUntitledPage);
+      }
+      return folder
+          ? widget.onCreateChildFolder(parent, '新文件夹')
+          : widget.onCreateChildDocument(parent, kUntitledPage);
+    });
   }
 
   Future<void> _confirmDeleteWorkspace(WorkspaceEntry entry) async {

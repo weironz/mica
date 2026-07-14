@@ -468,6 +468,22 @@ bool canNestUnder(Iterable<DocumentView> views, String? parentId) {
   return parent != null && parent.objectType == 'folder';
 }
 
+/// The view a new page/folder should be created UNDER, given the sidebar node
+/// the user has "located". A folder holds children → create INSIDE it; a page is
+/// a leaf → create BESIDE it (under its own parent, so it lands in the same
+/// group in order); nothing located → the workspace root (null). Pure + testable
+/// core of the top-of-sidebar New page/folder buttons.
+DocumentView? createParentForLocated(
+  Iterable<DocumentView> views,
+  DocumentView? located,
+) {
+  if (located == null) return null;
+  if (located.objectType == 'folder') return located;
+  final parentId = located.parentViewId;
+  if (parentId == null) return null;
+  return views.where((v) => v.id == parentId).firstOrNull;
+}
+
 /// The ids of [rootId] plus all its descendants, given parent-linked [nodes].
 /// Pure + testable core of the local delete/restore/purge subtree cascade — the
 /// part that must walk the WHOLE subtree (not just direct children) so trashing a

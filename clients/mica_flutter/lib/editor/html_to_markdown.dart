@@ -204,12 +204,15 @@ String _inline(dom.Node node) {
 String _directInline(dom.Element item) {
   final sb = StringBuffer();
   for (final child in item.nodes) {
-    if (child is dom.Text) {
-      sb.write(child.text);
-    } else if (child is dom.Element) {
+    if (child is dom.Element) {
       final t = _tag(child);
-      if (t != 'ul' && t != 'ol') _gather(child, sb);
+      if (t == 'ul' || t == 'ol') continue; // nested list → _list handles it
     }
+    // _gatherOne, NOT _gather: _gather descends into the element's children and
+    // so drops the wrapper — a `<li>` whose content is `<a href>text</a>` would
+    // lose the link (and `<strong>`/`<code>` their emphasis). _gatherOne treats
+    // the element itself, emitting `[text](href)` / `**text**` / `` `text` ``.
+    _gatherOne(child, sb);
   }
   return sb.toString().replaceAll(RegExp(r'[ \t]+'), ' ').trim();
 }

@@ -1402,18 +1402,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     if (accel && key == LogicalKeyboardKey.keyC) {
-      final text = _controller.selectionText(imageUrls: _imageUrlCache);
-      if (text.isEmpty) return KeyEventResult.ignored;
-      copyTextToClipboard(text).then((_) {
+      final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
+      if (plain.isEmpty) return KeyEventResult.ignored;
+      final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
+      copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
         if (mounted) _focus.requestFocus();
       });
       return KeyEventResult.handled;
     }
 
     if (accel && key == LogicalKeyboardKey.keyX) {
-      final text = _controller.selectionText(imageUrls: _imageUrlCache);
-      if (text.isEmpty) return KeyEventResult.ignored;
-      copyTextToClipboard(text).then((_) {
+      final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
+      if (plain.isEmpty) return KeyEventResult.ignored;
+      final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
+      copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
         if (!mounted) return;
         _focus.requestFocus();
         _controller.deleteSelection();
