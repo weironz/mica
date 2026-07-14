@@ -895,8 +895,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// Native paste interceptor (web): rich HTML or multi-line text is converted to
   /// Markdown and inserted as structured blocks; a single line of plain text
   /// falls through to the normal inline paste. Returns true when consumed.
-  bool _handleRichPaste(String markdown, String plain, bool rich) {
-    if (!mounted || !_focus.hasFocus || !widget.canEdit) return false;
+  bool _handleRichPaste(String markdown, String plain, bool rich,
+      {bool requireFocus = true}) {
+    if (!mounted || (requireFocus && !_focus.hasFocus) || !widget.canEdit) {
+      return false;
+    }
 
     // Inside a code block, paste raw text verbatim (keep newlines, stay inside).
     final node = _controller.focusedNode;
@@ -994,21 +997,84 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// URL/image links, formulas, multi-line markdown); a plain single line falls
   /// through (returns false) and is inserted inline, replacing any selection —
   /// the same outcome the web textarea produced.
-  Future<void> _pasteFromClipboard() async {
-    if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
+  /// Copy the current ranged selection in both flavors (stripped text/plain +
+  /// rich text/html). False when there is nothing to copy. Shared by Ctrl+C
+  /// and the context menu.
+  bool _copySelection() {
+    final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
+    if (plain.isEmpty) return false;
+    final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
+    copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
+      if (mounted) _focus.requestFocus();
+    });
+    return true;
+  }
+
+  /// Cut = copy both flavors, then delete the selection.
+  bool _cutSelection() {
+    final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
+    if (plain.isEmpty) return false;
+    final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
+    copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
+      if (!mounted) return;
+      _focus.requestFocus();
+      _controller.deleteSelection();
+      _syncImeFromSelection();
+    });
+    return true;
+  }
+
+  /// Paste the clipboard's PLAIN text literally: no HTML conversion and no
+  /// Markdown parsing — `**x**` stays `**x**`, a pipe row stays a pipe row.
+  /// Multi-line content becomes plain paragraphs (or keeps its real newlines
+  /// when pasting into a code block).
+  Future<void> _pastePlainText() async {
+    if (!mounted || !widget.canEdit) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text =
+        (data?.text ?? '').replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    if (text.isEmpty || !mounted) return;
+    final node = _controller.focusedNode;
+    if (node != null && node.isCode) {
+      _controller.insertTextAtCaret(text); // keeps newlines inside the block
+      _syncImeFromSelection(force: true);
+      return;
+    }
+    final lines = text.split('\n');
+    if (lines.length == 1) {
+      final sel = _controller.selection;
+      if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
+      _controller.insertTextAtCaret(text);
+    } else {
+      _controller.insertBlocksReplacingSelection([
+        for (final l in lines)
+          (kind: 'paragraph', text: l, data: <String, dynamic>{}),
+      ]);
+    }
+    _syncImeFromSelection(force: true);
+  }
+
+  /// [requireFocus] false = called from the context menu, where the canvas may
+  /// not have regained focus yet by the time the async clipboard reads land.
+  Future<void> _pasteFromClipboard({bool requireFocus = true}) async {
+    bool live() => mounted && (!requireFocus || _focus.hasFocus);
+    if (!live() || !widget.canEdit) return;
     // 0) Clipboard HTML that carries a real <table> (Excel / Google Sheets /
     //    a web table) → a Markdown table. Checked BEFORE the bitmap: Excel
     //    also puts a picture of the copied cells on the clipboard, and the
     //    image-first order pasted spreadsheets as screenshots.
     final tableMd = await readClipboardTableAsMarkdown();
-    if (tableMd != null && mounted && _focus.hasFocus) {
+    if (tableMd != null && live()) {
       final tData = await Clipboard.getData(Clipboard.kTextPlain);
-      if (_handleRichPaste(tableMd, tData?.text ?? '', true)) return;
+      if (_handleRichPaste(tableMd, tData?.text ?? '', true,
+          requireFocus: requireFocus)) {
+        return;
+      }
     }
     // 1) A bitmap (screenshot / copied image) → upload as an image block.
     final img = await readClipboardImage();
     if (img != null && img.isNotEmpty) {
-      if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
+      if (!live() || !widget.canEdit) return;
       _handlePasteImage(img, 'image/png', 'pasted-image.png');
       return;
     }
@@ -1016,12 +1082,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final plain = data?.text ?? '';
     // 2) Rich HTML (browser/Word) → Markdown so structure survives, like web.
     final md = await readClipboardHtmlAsMarkdown();
-    if (md != null && mounted && _focus.hasFocus) {
-      if (_handleRichPaste(md, plain, true)) return;
+    if (md != null && live()) {
+      if (_handleRichPaste(md, plain, true, requireFocus: requireFocus)) {
+        return;
+      }
     }
     // 3) Plain text: multi-line markdown-parses, single line inserts inline.
-    if (plain.isEmpty || !mounted || !_focus.hasFocus) return;
-    if (!_handleRichPaste(plain, plain, false)) {
+    if (plain.isEmpty || !live()) return;
+    if (!_handleRichPaste(plain, plain, false, requireFocus: requireFocus)) {
       final sel = _controller.selection;
       if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
       _controller.insertTextAtCaret(plain);
@@ -1456,33 +1524,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     if (accel && key == LogicalKeyboardKey.keyC) {
-      final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
-      if (plain.isEmpty) return KeyEventResult.ignored;
-      final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
-      copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
-        if (mounted) _focus.requestFocus();
-      });
-      return KeyEventResult.handled;
+      return _copySelection() ? KeyEventResult.handled : KeyEventResult.ignored;
     }
 
     if (accel && key == LogicalKeyboardKey.keyX) {
-      final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
-      if (plain.isEmpty) return KeyEventResult.ignored;
-      final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
-      copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
-        if (!mounted) return;
-        _focus.requestFocus();
-        _controller.deleteSelection();
-        _syncImeFromSelection();
-      });
-      return KeyEventResult.handled;
+      return _cutSelection() ? KeyEventResult.handled : KeyEventResult.ignored;
     }
 
     // Web's DOM paste interceptor (setRichPasteHandler) handles Ctrl+V; on
     // desktop there is no such hook, so read the clipboard and route it through
-    // the same paste logic ourselves.
+    // the same paste logic ourselves. Ctrl+Shift+V pastes as PLAIN text.
     if (accel && key == LogicalKeyboardKey.keyV && !kIsWeb) {
-      _pasteFromClipboard();
+      if (shift) {
+        _pastePlainText();
+      } else {
+        _pasteFromClipboard();
+      }
       return KeyEventResult.handled;
     }
 
@@ -3733,14 +3790,67 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   /// Right-click on an image → context menu (copy / download / delete).
   void _onSecondaryTapDown(TapDownDetails d) {
-    if (!widget.canEdit) return;
     final r = _render;
     if (r == null) return;
-    final node = r.imageAt(r.globalToLocal(d.globalPosition));
-    if (node == null) return;
+    final local = r.globalToLocal(d.globalPosition);
+    final node = r.imageAt(local);
+    if (node != null) {
+      if (!widget.canEdit) return;
+      _focus.requestFocus();
+      _controller.collapseTo(DocPosition(node, 0)); // select the block
+      _showImageMenu(node, d.globalPosition);
+      return;
+    }
+    // Table cells have their own editing surface (and the cell field shows the
+    // native text menu) — no body text menu over them.
+    if (r.tableCellAt(local) != null) return;
+    _showTextContextMenu(local, d.globalPosition);
+  }
+
+  /// The body text context menu: copy/cut on the current selection, paste, and
+  /// paste-as-plain-text. Right-clicking INSIDE a ranged selection keeps it
+  /// (copy targets it); right-clicking elsewhere moves the caret there first,
+  /// so a paste lands where clicked (standard editor behavior).
+  Future<void> _showTextContextMenu(Offset local, Offset globalPosition) async {
+    final r = _render;
+    if (r == null) return;
+    final sel = _controller.selection;
+    final p = r.positionAt(local);
+    var insideSelection = false;
+    if (sel != null && !sel.isCollapsed) {
+      final s = sel.start, e = sel.end;
+      final afterStart =
+          p.node > s.node || (p.node == s.node && p.offset >= s.offset);
+      final beforeEnd =
+          p.node < e.node || (p.node == e.node && p.offset <= e.offset);
+      insideSelection = afterStart && beforeEnd;
+    }
     _focus.requestFocus();
-    _controller.collapseTo(DocPosition(node, 0)); // select the block
-    _showImageMenu(node, d.globalPosition);
+    if (!insideSelection && widget.canEdit) {
+      _controller.setSelection(DocSelection.collapsed(p));
+      _syncImeFromSelection(force: true);
+    }
+    final canEdit = widget.canEdit;
+    if (!insideSelection && !canEdit) return; // read-only + nothing to copy
+    final choice = await _showSmallMenu(globalPosition, [
+      if (insideSelection) ('copy', '复制'),
+      if (insideSelection && canEdit) ('cut', '剪切'),
+      if (canEdit) ('paste', '粘贴'),
+      if (canEdit) ('pastePlain', '粘贴为纯文本'),
+    ]);
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'copy':
+        _copySelection();
+      case 'cut':
+        _cutSelection();
+      case 'paste':
+        _focus.requestFocus();
+        await _pasteFromClipboard(requireFocus: false);
+      case 'pastePlain':
+        _focus.requestFocus();
+        await _pastePlainText();
+    }
   }
 
   Future<void> _showImageMenu(int node, Offset globalPosition) async {
