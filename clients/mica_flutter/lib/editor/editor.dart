@@ -1754,6 +1754,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!widget.canEdit) return;
     _closeSlash();
     _closePageLink();
+    // Any click clears a table row/column block-selection; the row/column
+    // handle branches below re-set it when that's what was clicked.
+    r.tableBlockSelection = null;
     final mathIdx = r.blockAt(local);
     if (mathIdx != null &&
         mathIdx < _controller.nodes.length &&
@@ -1808,11 +1811,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final rowHandle = r.tableRowHandleAt(local);
     if (rowHandle != null) {
+      // Clicking a row handle block-selects the whole row (highlight) and opens
+      // its menu — "select by row" without a cross-cell text selection.
+      r.tableBlockSelection = (node: rowHandle.node, row: rowHandle.row, col: null);
       _openRowMenu(rowHandle.node, rowHandle.row, d.globalPosition);
       return;
     }
     final colHandle = r.tableColHandleAt(local);
     if (colHandle != null) {
+      r.tableBlockSelection = (node: colHandle.node, row: null, col: colHandle.col);
       _openColumnMenu(colHandle.node, colHandle.col, d.globalPosition);
       return;
     }
@@ -1893,6 +1900,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _closeCellEditor();
     final r = _render;
     if (r == null || node >= _controller.nodes.length) return;
+    r.tableBlockSelection = null; // editing a cell clears a row/column selection
     final localRect = r.tableCellRect(node, row, col);
     if (localRect == null) return;
     final table = TableData.fromBlock(_controller.nodes[node].data);

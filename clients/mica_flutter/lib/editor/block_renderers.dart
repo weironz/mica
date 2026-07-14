@@ -517,6 +517,30 @@ class TableRenderer extends AtomicBlockRenderer {
       cell.painter.paint(canvas, cell.textAt + offset);
     }
 
+    // Row/column block selection: a translucent band + a 2px outline over the
+    // selected row's / column's cells (set by clicking that row/column handle).
+    final bs = host._tableBlockSel;
+    if (bs != null && bs.node == index) {
+      Rect? band;
+      for (final cell in l.tableCells) {
+        if ((bs.row != null && cell.row == bs.row) ||
+            (bs.col != null && cell.col == bs.col)) {
+          band = band == null ? cell.rect : band.expandToInclude(cell.rect);
+        }
+      }
+      if (band != null) {
+        final box = band.shift(offset);
+        canvas.drawRect(box, Paint()..color = EditorTheme.selection);
+        canvas.drawRect(
+          box,
+          Paint()
+            ..color = EditorTheme.caret
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2,
+        );
+      }
+    }
+
     if (host._hoverCode != index) return;
 
     // Affordances reveal per the cell/row/column the pointer is actually over,

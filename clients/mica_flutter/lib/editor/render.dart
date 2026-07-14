@@ -447,6 +447,16 @@ class RenderDocument extends RenderBox {
   /// to be displayed [targetWidth] logical px wide.
   void Function(String id, String source, double targetWidth)? onRequestPreview;
 
+  /// Which table row / column is block-selected (a highlight band). Set by
+  /// clicking a row/column handle; null = none. Kept separate from the document
+  /// text selection so "select a row" is a block highlight, not a text range.
+  ({int node, int? row, int? col})? _tableBlockSel;
+  set tableBlockSelection(({int node, int? row, int? col})? value) {
+    if (_tableBlockSel == value) return;
+    _tableBlockSel = value;
+    markNeedsPaint();
+  }
+
   /// `file_id`s that failed to load — painted as a broken-image placeholder.
   Set<String> _imageErrors = {};
   set imageErrors(Set<String> value) {
