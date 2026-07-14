@@ -1504,6 +1504,32 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return KeyEventResult.handled;
     }
 
+    // Heading level shortcuts (Notion/Word convention): Ctrl/Cmd+Alt+1…6 sets
+    // H1–H6 on the selected block(s), Ctrl/Cmd+Alt+0 back to plain text. Not
+    // Typora's bare Ctrl+digit — the browser owns Ctrl+1…9 for tab switching
+    // on the web build, so the app would never see it there.
+    if (accel && HardwareKeyboard.instance.isAltPressed) {
+      final int? digit = switch (key) {
+        LogicalKeyboardKey.digit0 || LogicalKeyboardKey.numpad0 => 0,
+        LogicalKeyboardKey.digit1 || LogicalKeyboardKey.numpad1 => 1,
+        LogicalKeyboardKey.digit2 || LogicalKeyboardKey.numpad2 => 2,
+        LogicalKeyboardKey.digit3 || LogicalKeyboardKey.numpad3 => 3,
+        LogicalKeyboardKey.digit4 || LogicalKeyboardKey.numpad4 => 4,
+        LogicalKeyboardKey.digit5 || LogicalKeyboardKey.numpad5 => 5,
+        LogicalKeyboardKey.digit6 || LogicalKeyboardKey.numpad6 => 6,
+        _ => null,
+      };
+      if (digit != null) {
+        if (digit == 0) {
+          _controller.setSelectedBlocksKind('paragraph');
+        } else {
+          _controller.setSelectedBlocksKind('heading', data: {'level': digit});
+        }
+        _syncImeFromSelection(force: true);
+        return KeyEventResult.handled;
+      }
+    }
+
     // When a whole atomic block (image/divider/table) is the caret stop: delete
     // removes it; arrows step off it to the adjacent node.
     final atomic = sel.isCollapsed && sel.focus.node < _controller.nodes.length
@@ -2447,7 +2473,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return IconButton(
         iconSize: 18,
         visualDensity: VisualDensity.compact,
-        tooltip: 'Heading $level',
+        tooltip: 'Heading $level (Ctrl+Alt+$level)',
         style: active
             ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
             : null,
