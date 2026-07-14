@@ -1,6 +1,6 @@
 # Mica 开发环境与辅助工具
 
-> 换机/新机重配环境的清单。核心工具链(Flutter、Rust、Docker、平台 SDK)见 `docs/desktop-plan.md` 的「环境备忘」；本文专记 **AI 辅助开发工具**(MCP、code-review-graph、skills)。
+> 换机/新机重配环境的清单。核心工具链(Flutter、Rust、Docker、平台 SDK)见 `docs/desktop-plan.md` 的「环境备忘」；本文专记 **AI 辅助开发工具**(MCP、codebase-memory-mcp、skills)。
 
 ## MCP 服务器
 
@@ -10,13 +10,13 @@
 
 | 服务 | 命令 | 备注 |
 |---|---|---|
-| code-review-graph | `uvx code-review-graph serve` | 知识图谱(见下节);`.mcp.json` 里 `cwd` 写的是 Linux 路径 `/data/codes/mica`,**换机需改成本机仓库路径**(如 Windows `D:\codes\mica`) |
 | playwright | `npx -y @playwright/mcp@latest --headless` | web 端实测截图 |
 
 ### 用户级(全局配置,换机单独重配)
 
 这些**不在仓库**里,配在 Claude Code 用户级(`claude mcp add ...` 或用户 settings):
 
+- **codebase-memory-mcp** — 代码知识图谱(见下节;CLAUDE.md 要求探索代码优先用它)
 - **GitHub MCP** — 仓库/PR/issue 操作
 - **Playwright MCP** — 浏览器自动化(与项目级重复,按需)
 - **Chrome DevTools MCP** — 调试/性能/网络
@@ -24,17 +24,17 @@
 
 > 迁移时用 `claude mcp list` 导出现有配置作为权威来源,本表仅作清单提醒。
 
-## code-review-graph(知识图谱)
+## codebase-memory-mcp(知识图谱)
 
-CLAUDE.md 要求探索代码**优先用图谱**而非 Grep/Read。安装与建图:
+CLAUDE.md 要求探索代码**优先用图谱**而非 Grep/Read(省 token + 给结构上下文:callers/callees/数据流/测试)。**用户级 MCP**,全局装的 exe(`AppData\Local\Programs\codebase-memory-mcp\`;`claude mcp get codebase-memory-mcp` 看权威配置),不在 `.mcp.json` 里。
 
-```bash
-pipx install code-review-graph
-code-review-graph install          # 装 hooks(图谱随文件改动自动增量更新)
-code-review-graph build            # 首次全量建图(在仓库根目录跑)
-```
+工具面:`search_graph`(找符号)/ `search_code`(图增强搜)/ `get_code_snippet`(取源码)/ `trace_path`(调用链/数据流)/ `query_graph`(Cypher)/ `get_architecture` / `detect_changes`(审改动)。
 
-MCP 服务端本身由 `.mcp.json` 的 `uvx code-review-graph serve` 拉起。
+**不自动更新** —— 大改后手动重建:`index_repository(repo_path="D:/codes/mica", mode="full")`(模式 `full` / `moderate` / `fast`);`index_status` 查新鲜度,`list_projects` 列项目(本项目名 `D-codes-mica`)。
+
+配套用户级 hook(`~/.claude/hooks/`):`cbm-code-discovery-gate`(PreToolUse Grep|Glob 门,督促走图)+ `cbm-session-reminder`(SessionStart 注入探索协议 + 近期上下文)。
+
+> code-review-graph 已于 2026-07-15 全局卸载(省 token),由本 MCP 取代;`.mcp.json` / `.claude` hooks / pipx 本体 / `.code-review-graph` 数据均已移除。
 
 ## Skills
 
@@ -75,5 +75,5 @@ claude mcp add --transport http --scope user github https://api.githubcopilot.co
 ## 重配顺序(换机)
 
 1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK + **开发者模式**(见上「Windows 桌面构建前置」)。
-2. 本文的 MCP(改 `.mcp.json` 的 cwd)、code-review-graph 建图、skills。
+2. 本文的 MCP(项目级 `.mcp.json` = playwright;用户级 codebase-memory-mcp 等)、首次 `index_repository` 建图、skills。
 3. 起后端:`docker compose up -d --build postgres api`(详见 `docs/desktop-plan.md` M1 状态)。

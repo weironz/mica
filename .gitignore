@@ -30,8 +30,6 @@
 
 # OS files
 .DS_Store
-# Added by code-review-graph
-.code-review-graph/
 
 # Claude Code personal overrides + Playwright MCP screenshots
 .claude/settings.local.json
@@ -56,7 +54,6 @@ dist/
 .claude/settings.local.json
 .claude/worktrees/
 .claude/
-.code-review-graphignore
 skills-lock.json
 
 # Agent tooling configs — machine-local; repo keeps only CLAUDE.md (see 9a058de).

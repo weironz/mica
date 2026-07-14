@@ -1,19 +1,23 @@
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+<!-- codebase-memory-mcp knowledge graph -->
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
+## MCP Tools: codebase-memory-mcp
+
+**IMPORTANT: This project has a knowledge graph (project `D-codes-mica`).
+ALWAYS use the codebase-memory-mcp tools BEFORE Grep/Glob/Read to explore
+the codebase.** The graph is faster, cheaper (fewer tokens), and gives you
+structural context (callers, callees, data flow, tests) that file scanning
+cannot. (code-review-graph was uninstalled 2026-07-15 — this is now the ONLY
+code graph; ignore any lingering references to it.)
 
 ### When to use graph tools FIRST
 
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
+- **Find a symbol** (function/class/route): `search_graph` (name_pattern / label / qn_pattern) instead of Grep
+- **Text search across code**: `search_code` (graph-augmented grep) instead of raw Grep
+- **Read one symbol's source**: `get_code_snippet` (qualified_name) — precise range, cheaper than Read
+- **Call chains / impact**: `trace_path` (mode=calls|data_flow|cross_service) instead of hand-tracing imports
+- **Complex relationships**: `query_graph` (Cypher — callers/callees/imports/tests)
+- **Architecture questions**: `get_architecture` (aspects) instead of reading many files
+- **Code review**: `detect_changes` for a risk-scored diff analysis
 
 Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
@@ -21,21 +25,25 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 | Tool | Use when |
 | ------ | ---------- |
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
+| `search_graph` | Find functions/classes/routes by name / label / qualified-name |
+| `search_code` | Graph-augmented text search (grep replacement) |
+| `get_code_snippet` | Exact source of a symbol by qualified name |
+| `trace_path` | Call chains / data flow / cross-service paths |
+| `query_graph` | Cypher patterns — callers, callees, imports, tests |
+| `get_architecture` | High-level structure (e.g. aspects=['all']) |
+| `detect_changes` | Risk-scored review of what changed |
+| `index_repository` | (Re)index — MANUAL, see Workflow #1 |
+| `index_status` / `list_projects` | Check freshness / list indexed projects |
 
 ### Workflow
 
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
+1. **The graph is NOT auto-updated** (no file-change hook — that was code-review-graph's).
+   After a substantial change, or if `search_graph` misses a just-added symbol, re-run
+   `index_repository(repo_path="D:/codes/mica", mode="full")`. Modes: `full` (incl.
+   similarity/semantic edges, slow) / `moderate` / `fast`. Check freshness with `index_status`.
+2. Use `search_graph` / `search_code` / `get_code_snippet` for exploration.
+3. Use `trace_path` / `query_graph` for callers/callees/impact and test coverage.
+4. Use `detect_changes` for code review.
 
 <!-- Project principles & state — distilled from the Linux dev machine's agent
      memory (2026-06-06) so any session on any machine starts with them. -->

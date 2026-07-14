@@ -69,7 +69,7 @@
 - 修了 `_resolveBaseUri()` 非 web 下的坏 `file://` base(改默认 `http://127.0.0.1:8080`,`--dart-define=MICA_API_BASE_URL` 可覆盖)。
 - **连 API 端到端验证通过**:本机后端 = `docker compose up -d --build postgres api`(**Docker Desktop**,端口原生发布到 Windows `127.0.0.1`)。桌面端默认构建(base `127.0.0.1:8080`)即可连:autologin→自动注册 demo(migrations 无 seed,`_devAutoLogin` 登录失败自动 register)→列 workspace(api 日志 login 401→register 200→workspaces 200)。
 - **网络方案(已定)**:用 **Docker Desktop** 跑栈,容器端口直达 Windows localhost,无需 dart-define、无需 WSL IP。备选:WSL 内原生 docker 时本机 localhost 转发不生效,需连 WSL eth0 IP(随重启变)或 `--dart-define=MICA_API_BASE_URL=http://<wsl-ip>:8080`。
-- 辅助工具(MCP / code-review-graph / skills)重配清单见 `docs/dev-environment.md`。
+- 辅助工具(MCP / codebase-memory-mcp / skills)重配清单见 `docs/dev-environment.md`。
 
 ### ~~待用户拍板(M2/M3 前)~~ 已拍板(2026-06-07)
 
