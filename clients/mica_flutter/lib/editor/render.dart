@@ -224,6 +224,7 @@ class _NodeLayout {
   Rect? addRowBar;
   Rect? tableHandle; // top-left block handle
   Rect? tableDelete; // top-right delete icon
+  Rect? tableGridRect; // the grid alone (no top gutter / bottom bar) — selection hugs this
 
   // Image layout (kind == 'image'): the destination rect (local) the decoded
   // image (or its placeholder) is painted into, plus hover affordances.
@@ -251,6 +252,37 @@ class _TableCell {
   final int row;
   final int col;
   final Offset textAt; // where to paint the cell text (local)
+}
+
+/// What part of a table the pointer is over. Drives the hover-reveal of the
+/// row/column handles and the add-row/add-column bars so each shows only for the
+/// row/column you're actually pointing at (AppFlowy/AFFiNE-style), not the whole
+/// table at once.
+class _TableHover {
+  const _TableHover({
+    required this.node,
+    this.row,
+    this.col,
+    this.onAddCol = false,
+    this.onAddRow = false,
+  });
+  final int node;
+  final int? row; // hovered cell's row (or the row whose left handle is under it)
+  final int? col; // hovered cell's col (or the column whose top handle is under it)
+  final bool onAddCol; // pointer sits on the add-column strip itself
+  final bool onAddRow; // pointer sits on the add-row strip itself
+
+  @override
+  bool operator ==(Object other) =>
+      other is _TableHover &&
+      other.node == node &&
+      other.row == row &&
+      other.col == col &&
+      other.onAddCol == onAddCol &&
+      other.onAddRow == onAddRow;
+
+  @override
+  int get hashCode => Object.hash(node, row, col, onAddCol, onAddRow);
 }
 
 /// Which code-block toolbar icon the pointer is hovering.
@@ -490,22 +522,45 @@ class RenderDocument extends RenderBox {
         }
       }
     }
+    // Which table cell / row-column handle / add-strip the pointer is over —
+    // so each affordance reveals only for the row/column being pointed at.
+    _TableHover? tableHover;
+    if (local != null) {
+      final cell = tableCellAt(local);
+      final rowH = tableRowHandleAt(local);
+      final colH = tableColHandleAt(local);
+      final add = tableAddAt(local);
+      final tnode = cell?.node ?? rowH?.node ?? colH?.node ?? add?.node;
+      if (tnode != null) {
+        tableHover = _TableHover(
+          node: tnode,
+          row: cell?.row ?? rowH?.row,
+          col: cell?.col ?? colH?.col,
+          onAddCol: add?.column == true,
+          onAddRow: add != null && !add.column,
+        );
+      }
+    }
+
     if (node != _hoverCode ||
         icon != _hoverIcon ||
         image != _hoverImage ||
         block != _hoverBlock ||
+        tableHover != _hoverTable ||
         border?.node != _hoverColBorder?.node ||
         border?.col != _hoverColBorder?.col) {
       _hoverCode = node;
       _hoverIcon = icon;
       _hoverImage = image;
       _hoverBlock = block;
+      _hoverTable = tableHover;
       _hoverColBorder = border;
       markNeedsPaint();
     }
   }
 
   ({int node, int col})? _hoverColBorder;
+  _TableHover? _hoverTable; // which cell/row/col/edge of a table is hovered
   int? _hoverBlock; // block under the pointer (shows the drag handle)
   int? _dropIndex; // insertion index while a block drag is live
 
@@ -868,6 +923,23 @@ class RenderDocument extends RenderBox {
 
   void _drawAtomicHighlight(Canvas canvas, Offset offset, int i, {required bool border}) {
     final l = _layouts[i];
+    // A selected table hugs the grid exactly — no tint in the top gutter (column
+    // handles) or the bottom add-row bar, and no rounded spill past the outer
+    // lines. The highlight lands between the grid's top and bottom lines.
+    if (l.kind == 'table' && l.tableGridRect != null) {
+      final box = l.tableGridRect!.shift(offset);
+      canvas.drawRect(box, Paint()..color = EditorTheme.selection);
+      if (border) {
+        canvas.drawRect(
+          box,
+          Paint()
+            ..color = EditorTheme.caret
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2,
+        );
+      }
+      return;
+    }
     // Start at the block's own left edge — drawing from x=0 spilled the
     // tint into the drag-handle gutter, left of the page's text column.
     final box = (l.kind == 'image' && l.imageDst != null)

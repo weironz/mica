@@ -482,7 +482,10 @@ class TableRenderer extends AtomicBlockRenderer {
       )
       ..addRowBar = Rect.fromLTWH(x0, gridBottom, availW, RenderDocument._tBottomBar)
       ..tableHandle = Rect.fromLTWH(x0, top, 16, RenderDocument._tTopGutter)
-      ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, RenderDocument._tTopGutter);
+      ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, RenderDocument._tTopGutter)
+      // The grid alone (no top gutter / bottom bar) — the selection highlight
+      // hugs this so it lands exactly between the top and bottom grid lines.
+      ..tableGridRect = Rect.fromLTWH(x0, gridTop, colEdges.last - x0, gridHeight);
     return layout;
   }
 
@@ -516,6 +519,9 @@ class TableRenderer extends AtomicBlockRenderer {
 
     if (host._hoverCode != index) return;
 
+    // Affordances reveal per the cell/row/column the pointer is actually over,
+    // not for the whole table at once (AppFlowy/AFFiNE-style).
+    final th = host._hoverTable?.node == index ? host._hoverTable : null;
     final plusColor = EditorTheme.muted;
 
     // Hovered column border: an accent line so the resize target is obvious.
@@ -532,10 +538,10 @@ class TableRenderer extends AtomicBlockRenderer {
     }
 
     // Row / column drag grips: a single soft rounded pill centered on the edge
-    // line — a clean handle affordance rather than three scattered dots.
+    // line — shown only for the row/column the pointer is over.
     final gripPaint = Paint()..color = const Color(0xFFC2CAD6);
-    for (final h in l.rowHandles) {
-      final r = h.shift(offset);
+    if (th?.row != null && th!.row! < l.rowHandles.length) {
+      final r = l.rowHandles[th.row!].shift(offset);
       final len = (r.height * 0.5).clamp(12.0, 18.0);
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -549,8 +555,8 @@ class TableRenderer extends AtomicBlockRenderer {
         gripPaint,
       );
     }
-    for (final h in l.colHandles) {
-      final r = h.shift(offset);
+    if (th?.col != null && th!.col! < l.colHandles.length) {
+      final r = l.colHandles[th.col!].shift(offset);
       final len = (r.width * 0.4).clamp(14.0, 24.0);
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -588,8 +594,12 @@ class TableRenderer extends AtomicBlockRenderer {
       tp.dispose();
     }
 
-    plusBar(l.addColBar, true);
-    plusBar(l.addRowBar, false);
+    // Add-column / add-row bars reveal only when the pointer is over the last
+    // column / last row (or already on the strip itself).
+    final cols = l.colHandles.length;
+    final rows = l.rowHandles.length;
+    if (th != null && (th.onAddCol || th.col == cols - 1)) plusBar(l.addColBar, true);
+    if (th != null && (th.onAddRow || th.row == rows - 1)) plusBar(l.addRowBar, false);
 
     void cornerIcon(Rect? rect, IconData icon, Color color) {
       if (rect == null) return;
