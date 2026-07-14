@@ -362,6 +362,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // Commit-and-close hook for the active cell editor; called when a drag
   // begins so the floating field never detaches from its (re-laid-out) cell.
   VoidCallback? _commitCellEditor;
+  // The table cell currently being edited (controller + address), so the
+  // floating format bar can act on the cell's selection like it does on the body.
+  ({CellEditController ctl, int node, int row, int col})? _activeCell;
+  // A live drag selecting text inside a cell: the cell's controller + the anchor
+  // text offset. Drives the cell's selection from the canvas pointer (the field
+  // can't receive the canvas-owned drag itself).
+  ({CellEditController ctl, int node, int row, int col, int anchor})? _cellDrag;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
 
@@ -1900,10 +1907,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     var committed = false;
     late OverlayEntry entry;
 
+    // Grow/shrink the cell's row live as its text changes — a preview relayout
+    // (no op) so pressing Enter expands the table immediately, not only after
+    // clicking away. Also keeps the floating format bar in step with the cell's
+    // selection. The final value is persisted by [commit].
+    void onCellChanged() {
+      _controller.previewTableCell(node, row, col, controller.serialize());
+      _refreshMarkBar(); // show/route the floating format bar over the cell
+    }
+    controller.addListener(onCellChanged);
+
     void commit() {
       if (committed) return;
       committed = true;
+      controller.removeListener(onCellChanged);
       _render?.editingCell = null;
+      _activeCell = null;
+      _hideMarkBar();
       _controller.setTableCell(node, row, col, controller.serialize());
       focus.removeListener(_cellFocusListener!);
       // Tear the field down FIRST, then dispose its controller/focus after this
@@ -2033,6 +2053,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
     _cellEntry = entry;
     _render?.editingCell = (node: node, row: row, col: col);
+    _activeCell = (ctl: controller, node: node, row: row, col: col);
     Overlay.of(context).insert(entry);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!committed) focus.requestFocus();
@@ -2202,13 +2223,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _refreshMarkBar() {
     final sel = _controller.selection;
+    // A ranged selection inside a table cell shows the bar too (inline marks
+    // only), so selecting cell text — not just Ctrl+B — can format it.
+    final ac = _activeCell;
+    final cellSel = ac?.ctl.selection;
+    final inCell =
+        ac != null && cellSel != null && cellSel.isValid && !cellSel.isCollapsed;
     // Show on any ranged selection: inline marks for a single text block, plus
     // block-type conversion (list/quote/heading/code) for any selection.
-    final show = _focus.hasFocus &&
-        widget.canEdit &&
-        sel != null &&
-        !sel.isCollapsed &&
-        _render?.caretRectFor(sel.start) != null;
+    final show = widget.canEdit &&
+        (inCell ||
+            (_focus.hasFocus &&
+                sel != null &&
+                !sel.isCollapsed &&
+                _render?.caretRectFor(sel.start) != null));
     if (!show) {
       _hideMarkBar();
       return;
@@ -2226,21 +2254,54 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _markBar = null;
   }
 
+  /// Toggle an inline mark on whatever is focused: the active table cell (its
+  /// own selection) if one is being edited, otherwise the document selection.
+  /// This is what makes the format bar + shortcuts act on cell content.
+  void _toggleMarkCtx(String type, {String? href}) {
+    final ac = _activeCell;
+    if (ac != null && ac.ctl.selection.isValid && !ac.ctl.selection.isCollapsed) {
+      ac.ctl.toggleMark(type, href: href);
+    } else {
+      _controller.toggleMark(type, href: href);
+    }
+  }
+
   Widget _buildMarkBar(BuildContext context) {
     final r = _render;
-    final sel = _controller.selection;
-    if (r == null || sel == null) return const SizedBox.shrink();
-    final rect = r.caretRectFor(sel.start);
-    if (rect == null) return const SizedBox.shrink();
-    final origin = r.localToGlobal(rect.topLeft);
+    if (r == null) return const SizedBox.shrink();
+    // Cell mode: a table cell is being edited with a ranged selection — anchor
+    // the bar over the cell and route marks to the cell (block-type conversions
+    // are hidden: a cell holds inline text only).
+    final ac = _activeCell;
+    final cellSel = ac?.ctl.selection;
+    final inCell =
+        ac != null && cellSel != null && cellSel.isValid && !cellSel.isCollapsed;
+    final Offset origin;
+    if (inCell) {
+      final cellRect = r.tableCellRect(ac.node, ac.row, ac.col);
+      if (cellRect == null) return const SizedBox.shrink();
+      origin = r.localToGlobal(cellRect.topLeft);
+    } else {
+      final sel = _controller.selection;
+      if (sel == null) return const SizedBox.shrink();
+      final rect = r.caretRectFor(sel.start);
+      if (rect == null) return const SizedBox.shrink();
+      origin = r.localToGlobal(rect.topLeft);
+    }
     final screen = MediaQuery.of(context).size;
     final left = origin.dx.clamp(8.0, screen.width - 420);
     final top = (origin.dy - 44).clamp(8.0, screen.height - 8);
 
-    final singleText = !sel.isMultiNode &&
-        _controller.focusedNode != null &&
-        _controller.focusedNode!.kind != 'code_block' &&
-        _controller.focusedNode!.kind != 'table';
+    final docSel = _controller.selection;
+    final singleText = inCell ||
+        (docSel != null &&
+            !docSel.isMultiNode &&
+            _controller.focusedNode != null &&
+            _controller.focusedNode!.kind != 'code_block' &&
+            _controller.focusedNode!.kind != 'table');
+    // Block-type conversions (headings/lists/quote/code block) only apply to
+    // document blocks, never to inline cell content.
+    final showBlocks = !inCell;
 
     Widget markBtn(IconData icon, String type, String tip, {VoidCallback? custom}) {
       return IconButton(
@@ -2248,7 +2309,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         visualDensity: VisualDensity.compact,
         tooltip: tip,
         icon: Icon(icon, color: EditorTheme.text),
-        onPressed: custom ?? () => _controller.toggleMark(type),
+        onPressed: custom ?? () => _toggleMarkCtx(type),
       );
     }
 
@@ -2342,24 +2403,27 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   markBtn(Icons.format_italic, 'italic', 'Italic'),
                 ],
                 // Code block sits just before inline code — the two code
-                // affordances read as one group.
-                blockBtn(Icons.terminal, 'code_block', 'Code block'),
+                // affordances read as one group (document blocks only).
+                if (showBlocks) blockBtn(Icons.terminal, 'code_block', 'Code block'),
                 if (singleText) ...[
                   markBtn(Icons.code, 'code', 'Inline code'),
                   markBtn(Icons.strikethrough_s, 'strike', 'Strikethrough'),
                   markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
-                  const VerticalDivider(width: 9, indent: 8, endIndent: 8),
                 ],
-                // The three everyday heading levels are one click; the rare
-                // H4–H6 hide behind the chevron.
-                for (var level = 1; level <= 3; level++)
-                  headingBtn(level),
-                moreHeadingsBtn(),
-                blockBtn(Icons.notes, 'paragraph', 'Text'),
-                blockBtn(Icons.format_list_bulleted, 'bulleted_list', 'Bulleted list'),
-                blockBtn(Icons.format_list_numbered, 'numbered_list', 'Numbered list'),
-                blockBtn(Icons.check_box_outlined, 'todo', 'To-do', data: {'checked': false}),
-                blockBtn(Icons.format_quote, 'quote', 'Quote'),
+                if (showBlocks) ...[
+                  const VerticalDivider(width: 9, indent: 8, endIndent: 8),
+                  // The three everyday heading levels are one click; the rare
+                  // H4–H6 hide behind the chevron.
+                  for (var level = 1; level <= 3; level++)
+                    headingBtn(level),
+                  moreHeadingsBtn(),
+                  blockBtn(Icons.notes, 'paragraph', 'Text'),
+                  blockBtn(Icons.format_list_bulleted, 'bulleted_list', 'Bulleted list'),
+                  blockBtn(Icons.format_list_numbered, 'numbered_list', 'Numbered list'),
+                  blockBtn(Icons.check_box_outlined, 'todo', 'To-do',
+                      data: {'checked': false}),
+                  blockBtn(Icons.format_quote, 'quote', 'Quote'),
+                ],
               ],
             ),
           ),
@@ -2763,6 +2827,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
+  /// Map a render-local pointer to a text offset inside the active cell, using a
+  /// throwaway painter of the cell's clean text + marks (the same style the field
+  /// renders with) so a drag-selection lands on the right character.
+  int _cellOffsetAt(
+    RenderDocument r,
+    ({CellEditController ctl, int node, int row, int col}) ac,
+    Offset local,
+  ) {
+    final rect = r.tableCellRect(ac.node, ac.row, ac.col);
+    if (rect == null) return ac.ctl.text.length;
+    const padH = 10.0, padV = 9.0;
+    final origin = rect.topLeft + const Offset(padH, padV);
+    final tp = TextPainter(
+      text: buildMarkedSpan(
+        ac.ctl.text,
+        ac.ctl.marks,
+        const TextStyle(fontSize: 15, height: 1.4),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: (rect.width - padH * 2).clamp(1.0, double.infinity));
+    final pos = tp.getPositionForOffset(local - origin);
+    tp.dispose();
+    return pos.offset.clamp(0, ac.ctl.text.length);
+  }
+
   void _onPanDown(DragDownDetails d) {
     // Captured at the REAL pointer-down spot: by the time onPanStart fires
     // the pointer has already travelled past the touch slop, and a drag that
@@ -2832,6 +2921,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (tcell != null) {
       _dragAnchor = null;
       _openCellEditor(tcell.node, tcell.row, tcell.col);
+      // Begin a text drag-selection inside the cell — the field can't receive
+      // the canvas-owned drag, so we drive its selection from the pointer.
+      final ac = _activeCell;
+      if (ac != null) {
+        final off = _cellOffsetAt(r, ac, local);
+        ac.ctl.selection = TextSelection.collapsed(offset: off);
+        _cellDrag =
+            (ctl: ac.ctl, node: ac.node, row: ac.row, col: ac.col, anchor: off);
+      }
       return;
     }
     _focus.requestFocus();
@@ -2848,6 +2946,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final r = _render;
     if (r == null) return;
     final local = r.globalToLocal(d.globalPosition);
+    // Extend a text drag-selection inside the active cell.
+    final cd = _cellDrag;
+    if (cd != null) {
+      final off = _cellOffsetAt(
+        r,
+        (ctl: cd.ctl, node: cd.node, row: cd.row, col: cd.col),
+        local,
+      );
+      cd.ctl.selection =
+          TextSelection(baseOffset: cd.anchor, extentOffset: off);
+      return;
+    }
     if (_blockDrag != null) {
       r.setDropIndicator(r.dropIndexAt(local.dy));
       return;
@@ -2919,6 +3029,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _onPanEnd(DragEndDetails d) {
     _diagramPan = null;
     _panDownDiagram = null;
+    _cellDrag = null; // end any in-cell text drag-selection
     if (_blockDrag != null) {
       final r = _render;
       final from = _blockDrag!;

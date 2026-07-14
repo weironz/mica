@@ -1221,6 +1221,24 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Update a cell's text LOCALLY — relayout only, NO op sent. Used while a cell
+  /// is being edited so its row grows/shrinks live as you type (each newline
+  /// re-measures the cell and re-lays out the table). The value is persisted by
+  /// [setTableCell] on commit. A no-op when the text is unchanged, so a mere
+  /// selection change doesn't trigger a relayout.
+  void previewTableCell(int index, int row, int col, String text) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'table') return;
+    final table = TableData.fromBlock(node.data);
+    if (row < 0 || row >= table.rows.length) return;
+    if (col < 0 || col >= table.rows[row].length) return;
+    if (table.rows[row][col] == text) return;
+    table.rows[row][col] = text;
+    node.data = table.toBlockData();
+    notifyListeners(); // relayout only; not persisted until commit
+  }
+
   void _writeTable(int index, TableData table) {
     final node = nodes[index];
     node.data = table.toBlockData();
