@@ -100,6 +100,34 @@ Future<String?> readClipboardHtmlAsMarkdown() async {
   return md.trim().isEmpty ? null : md;
 }
 
+/// Clipboard HTML converted to Markdown, but only when it holds a real DATA
+/// `<table>` — the Excel/Sheets/web-table paste path. Excel ALSO puts a bitmap
+/// of the copied cells on the clipboard, so the caller checks this BEFORE the
+/// image flavor (image-first pasted spreadsheets as pictures).
+Future<String?> readClipboardTableAsMarkdown() async {
+  final h = await Pasteboard.html;
+  if (h == null || h.trim().isEmpty) return null;
+  final raw = stripCfHtmlHeader(h);
+  if (!clipboardHtmlIsDataTable(raw)) return null;
+  final md = htmlToMarkdown(raw);
+  // Must actually convert to a pipe table (not just contain a tag) — otherwise
+  // fall through to the image/HTML flavors.
+  if (!md.contains('| --- ')) return null;
+  return md.trim().isEmpty ? null : md;
+}
+
+/// Whether clipboard [html] carries a real DATA table worth converting:
+/// a genuine `<table` tag (not `<tablet…>` etc.) and NO `<img>` inside — an
+/// image wrapped in a layout table (Word/Outlook copy of a picture, email
+/// signatures) must lose to the bitmap flavor or the pasted image is silently
+/// replaced by a broken/empty one-cell table. Excel/Sheets tables carry no img.
+bool clipboardHtmlIsDataTable(String html) {
+  final lower = html.toLowerCase();
+  if (!RegExp(r'<table[\s>]').hasMatch(lower)) return false;
+  if (RegExp(r'<img[\s>/]').hasMatch(lower)) return false;
+  return true;
+}
+
 /// Windows wraps clipboard HTML in the CF_HTML ("HTML Format") clipboard format,
 /// whose plaintext descriptor header (`Version:`, `StartHTML:`, `EndHTML:`,
 /// `StartFragment:`, `EndFragment:`, optional `SourceURL:`) precedes the real

@@ -24,6 +24,7 @@ bool _installed = false;
 // not by explicit pull, so these facade pulls are unused on web.
 Future<Uint8List?> readClipboardImage() async => null;
 Future<String?> readClipboardHtmlAsMarkdown() async => null;
+Future<String?> readClipboardTableAsMarkdown() async => null;
 
 void setRichImagePasteHandler(ImagePasteHandler? handler) {
   _imageHandler = handler;
@@ -68,10 +69,20 @@ void setRichPasteHandler(RichPasteHandler? handler) {
     final data = (event as html.ClipboardEvent).clipboardData;
     if (data == null) return;
 
+    // HTML that carries a real DATA <table> (Excel / Sheets / a web table)
+    // wins over the bitmap: Excel also puts a picture of the copied cells on
+    // the clipboard, and image-first pasted spreadsheets as screenshots. An
+    // <img> inside the table means it's a LAYOUT table wrapping a picture
+    // (Word/Outlook) — the bitmap must win or the image is silently lost.
+    final htmlFlavor = data.getData('text/html');
+    final lowerHtml = htmlFlavor.toLowerCase();
+    final hasTable = RegExp(r'<table[\s>]').hasMatch(lowerHtml) &&
+        !RegExp(r'<img[\s>/]').hasMatch(lowerHtml);
+
     // A pasted bitmap (screenshot, copied image) arrives as a file — in the
     // clipboard's `files` and/or `items`. Upload it rather than dropping as text.
     final imageHandler = _imageHandler;
-    if (imageHandler != null) {
+    if (imageHandler != null && !hasTable) {
       final image = _clipboardImage(data);
       if (image != null) {
         event.preventDefault();
@@ -93,10 +104,9 @@ void setRichPasteHandler(RichPasteHandler? handler) {
 
     final handler = _handler;
     if (handler == null) return;
-    final htmlData = data.getData('text/html');
     final plain = data.getData('text/plain');
-    final hasHtml = htmlData.trim().isNotEmpty;
-    final content = hasHtml ? htmlToMarkdown(htmlData) : plain;
+    final hasHtml = htmlFlavor.trim().isNotEmpty;
+    final content = hasHtml ? htmlToMarkdown(htmlFlavor) : plain;
 
     if (handler(content, plain, hasHtml)) {
       event.preventDefault();

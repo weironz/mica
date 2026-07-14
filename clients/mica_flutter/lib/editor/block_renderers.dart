@@ -379,56 +379,109 @@ class TableRenderer extends AtomicBlockRenderer {
     final availW = (fullW * table.tableWidth.clamp(0.15, 1.0))
         .clamp(60.0, fullW);
 
-    // Column widths from normalized weights.
+    const padH = 10.0;
+    const padV = 9.0;
+    const minRowH = 42.0;
+
+    // Build every cell's painter first (unlaid-out) so widths can be derived
+    // from content before the final fixed-width layout pass.
+    final grid = <List<TextPainter>>[];
+    for (var r = 0; r < table.rows.length; r++) {
+      final isHeader = table.header && r == 0;
+      grid.add([
+        for (var c = 0; c < cols; c++)
+          TextPainter(
+            text: RenderDocument.cellDisplaySpan(
+              c < table.rows[r].length ? table.rows[r][c] : '',
+              host._appearance.applyTo(
+                TextStyle(
+                  color: EditorTheme.text,
+                  fontSize: 15,
+                  height: 1.4,
+                  fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
+                ),
+                isCode: false,
+              ),
+            ),
+            textAlign: alignAt(c),
+            textDirection: TextDirection.ltr,
+          ),
+      ]);
+    }
+
+    // Column widths. All weights equal = the user never resized a column →
+    // AUTO-FIT (Typora-style): each column sized to its longest cell (clamped
+    // so an empty column stays usable and one huge cell can't eat the table),
+    // then the table's span is distributed proportionally. Any manual resize
+    // writes unequal weights, which turns auto-fit off; the table menu's
+    // "Auto-fit columns" resets them.
     final weights = [
       for (var c = 0; c < cols; c++)
         c < table.widths.length ? table.widths[c] : 1.0,
     ];
+    final autoFit =
+        weights.every((w) => (w - weights.first).abs() < 1e-6);
+    if (autoFit) {
+      for (var c = 0; c < cols; c++) {
+        var natural = 0.0;
+        for (var r = 0; r < grid.length; r++) {
+          final tp = grid[r][c]..layout();
+          natural = natural > tp.width ? natural : tp.width;
+        }
+        weights[c] = (natural + padH * 2 + 2).clamp(60.0, 420.0);
+      }
+    }
     final weightSum = weights.fold<double>(0, (a, b) => a + b);
     final colW = [for (final w in weights) availW * w / weightSum];
+    // Auto-fit distributes proportionally, so a verbose column can squeeze the
+    // short ones below the 40px minimum the manual resize enforces (letter-
+    // by-letter wrapping). Enforce the floor in PIXEL space, stealing the
+    // deficit from the columns with room — possible only while the table is
+    // wide enough for 40px each.
+    if (autoFit && availW >= 40.0 * cols) {
+      const floor = 40.0;
+      var deficit = 0.0;
+      for (var c = 0; c < colW.length; c++) {
+        if (colW[c] < floor) {
+          deficit += floor - colW[c];
+          colW[c] = floor;
+        }
+      }
+      if (deficit > 0) {
+        final flexSum = colW.fold<double>(
+            0, (a, w) => a + (w > floor ? w - floor : 0));
+        if (flexSum > 0) {
+          for (var c = 0; c < colW.length; c++) {
+            if (colW[c] > floor) {
+              colW[c] -= deficit * (colW[c] - floor) / flexSum;
+            }
+          }
+        }
+      }
+    }
     final colEdges = <double>[x0];
     for (final w in colW) {
       colEdges.add(colEdges.last + w);
     }
 
-    const padH = 10.0;
-    const padV = 9.0;
-    const minRowH = 42.0;
     final cells = <_TableCell>[];
     final rowHandles = <Rect>[];
     var yy = gridTop;
     for (var r = 0; r < table.rows.length; r++) {
       final isHeader = table.header && r == 0;
-      final painters = <TextPainter>[];
       var rowH = minRowH;
       for (var c = 0; c < cols; c++) {
-        final raw = c < table.rows[r].length ? table.rows[r][c] : '';
-        final tp = TextPainter(
-          text: RenderDocument.cellDisplaySpan(
-            raw,
-            host._appearance.applyTo(
-              TextStyle(
-                color: EditorTheme.text,
-                fontSize: 15,
-                height: 1.4,
-                fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
-              ),
-              isCode: false,
-            ),
-          ),
-          textAlign: alignAt(c),
-          textDirection: TextDirection.ltr,
-        )..layout(
+        final tp = grid[r][c]
+          ..layout(
             minWidth: (colW[c] - padH * 2).clamp(0.0, double.infinity),
             maxWidth: (colW[c] - padH * 2).clamp(0.0, double.infinity),
           );
-        painters.add(tp);
         rowH = rowH > tp.height + padV * 2 ? rowH : tp.height + padV * 2;
       }
       for (var c = 0; c < cols; c++) {
         cells.add(_TableCell(
           Rect.fromLTWH(colEdges[c], yy, colW[c], rowH),
-          painters[c],
+          grid[r][c],
           isHeader,
           r,
           c,
@@ -517,14 +570,16 @@ class TableRenderer extends AtomicBlockRenderer {
       cell.painter.paint(canvas, cell.textAt + offset);
     }
 
-    // Row/column block selection: a translucent band + a 2px outline over the
-    // selected row's / column's cells (set by clicking that row/column handle).
+    // Cell-area block selection (row / column / dragged rectangle): a
+    // translucent band + a 2px outline over the selected cells.
     final bs = host._tableBlockSel;
     if (bs != null && bs.node == index) {
       Rect? band;
       for (final cell in l.tableCells) {
-        if ((bs.row != null && cell.row == bs.row) ||
-            (bs.col != null && cell.col == bs.col)) {
+        if (cell.row >= bs.r0 &&
+            cell.row <= bs.r1 &&
+            cell.col >= bs.c0 &&
+            cell.col <= bs.c1) {
           band = band == null ? cell.rect : band.expandToInclude(cell.rect);
         }
       }

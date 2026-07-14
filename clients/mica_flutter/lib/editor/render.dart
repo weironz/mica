@@ -447,14 +447,48 @@ class RenderDocument extends RenderBox {
   /// to be displayed [targetWidth] logical px wide.
   void Function(String id, String source, double targetWidth)? onRequestPreview;
 
-  /// Which table row / column is block-selected (a highlight band). Set by
-  /// clicking a row/column handle; null = none. Kept separate from the document
-  /// text selection so "select a row" is a block highlight, not a text range.
-  ({int node, int? row, int? col})? _tableBlockSel;
-  set tableBlockSelection(({int node, int? row, int? col})? value) {
+  /// Which rectangular cell AREA of a table is block-selected (rows r0–r1 ×
+  /// columns c0–c1, inclusive). Row select = one row × all columns; column
+  /// select = all rows × one column; a cross-cell drag selects any rectangle
+  /// (AFFiNE-style area selection). Kept separate from the document text
+  /// selection so it highlights whole cells, never a cross-cell text range.
+  ({int node, int r0, int c0, int r1, int c1})? _tableBlockSel;
+  ({int node, int r0, int c0, int r1, int c1})? get tableBlockSelection =>
+      _tableBlockSel;
+  set tableBlockSelection(({int node, int r0, int c0, int r1, int c1})? value) {
     if (_tableBlockSel == value) return;
     _tableBlockSel = value;
     markNeedsPaint();
+  }
+
+  /// The cell of table [node] nearest [local] — the point is clamped into the
+  /// grid first, so a drag that wanders past the table's edge still resolves to
+  /// an edge cell (keeps a cross-cell area drag live outside the borders).
+  ({int row, int col})? tableCellNear(int node, Offset local) {
+    if (node < 0 || node >= _layouts.length) return null;
+    final l = _layouts[node];
+    if (l.kind != 'table' || l.tableCells.isEmpty) return null;
+    final grid = l.tableGridRect;
+    final p = grid == null
+        ? local
+        : Offset(
+            local.dx.clamp(grid.left + 0.5, grid.right - 0.5),
+            local.dy.clamp(grid.top + 0.5, grid.bottom - 0.5),
+          );
+    for (final cell in l.tableCells) {
+      if (cell.rect.contains(p)) return (row: cell.row, col: cell.col);
+    }
+    // On a border line: fall back to the nearest cell center.
+    _TableCell? best;
+    var bestD = double.infinity;
+    for (final cell in l.tableCells) {
+      final d = (cell.rect.center - p).distanceSquared;
+      if (d < bestD) {
+        bestD = d;
+        best = cell;
+      }
+    }
+    return best == null ? null : (row: best.row, col: best.col);
   }
 
   /// `file_id`s that failed to load — painted as a broken-image placeholder.
@@ -1607,6 +1641,24 @@ class RenderDocument extends RenderBox {
   List<double> tableWeights(int index) {
     if (index < 0 || index >= _nodes.length) return const [];
     return TableData.fromBlock(_nodes[index].data).widths;
+  }
+
+  /// EFFECTIVE per-column widths of table [index] as currently laid out, in
+  /// pixels. In auto-fit mode (all stored weights equal) the rendered widths
+  /// are content-derived and DIFFER from the stored weights — a column resize
+  /// must seed from what's on screen, or its first tick snaps every column
+  /// back to the stored (equal) split. Empty when the layout isn't a table.
+  List<double> tableEffectiveWeights(int index) {
+    if (index < 0 || index >= _layouts.length) return const [];
+    final l = _layouts[index];
+    if (l.kind != 'table' || l.tableCells.isEmpty) return const [];
+    // Cells are built row-major: the first row's rects span every column.
+    final widths = <double>[];
+    for (final cell in l.tableCells) {
+      if (cell.row != 0) break;
+      widths.add(cell.rect.width);
+    }
+    return widths;
   }
 
   /// Pixel width available to columns (full content width).

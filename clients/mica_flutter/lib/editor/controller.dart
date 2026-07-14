@@ -1254,6 +1254,37 @@ class EditorController extends ChangeNotifier {
     return TableData.fromBlock(nodes[index].data);
   }
 
+  /// Blank every cell in the inclusive [r0],[c0]–[r1],[c1] rectangle (one op) —
+  /// Delete/Backspace/cut on a cell-area selection.
+  void clearTableCells(int index, int r0, int c0, int r1, int c1) {
+    final table = _tableAt(index);
+    if (table == null) return;
+    var changed = false;
+    for (var r = r0.clamp(0, table.rows.length); r <= r1 && r < table.rows.length; r++) {
+      for (var c = c0.clamp(0, table.rows[r].length);
+          c <= c1 && c < table.rows[r].length;
+          c++) {
+        if (table.rows[r][c].isNotEmpty) {
+          table.rows[r][c] = '';
+          changed = true;
+        }
+      }
+    }
+    if (changed) _writeTable(index, table);
+  }
+
+  /// Reset every column to the same weight — the renderer reads "all equal" as
+  /// auto-fit-to-content mode, so this re-enables automatic column widths after
+  /// manual resizes.
+  void resetTableColumnWidths(int index) {
+    final table = _tableAt(index);
+    if (table == null) return;
+    for (var c = 0; c < table.widths.length; c++) {
+      table.widths[c] = 1.0;
+    }
+    _writeTable(index, table);
+  }
+
   void insertTableRow(int index, int at) {
     final table = _tableAt(index);
     if (table == null) return;
@@ -1851,6 +1882,16 @@ class EditorController extends ChangeNotifier {
 
   /// Insert a paragraph as the new first block (Enter in the page title
   /// pushes the body down). Caret lands at its start.
+  /// Insert an empty paragraph right after [index] and put the caret in it —
+  /// how ↓ exits a table that is the document's last block.
+  void insertParagraphAfter(int index) {
+    if (index < 0 || index >= nodes.length) return;
+    final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+    nodes.insert(index + 1, created);
+    _sendNow([_insertOp(created, index + 1)]);
+    collapseTo(DocPosition(index + 1, 0));
+  }
+
   void insertParagraphAtTop(String text) {
     final created = EditorNode(id: _genId(), kind: 'paragraph', text: text);
     nodes.insert(0, created);

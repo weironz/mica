@@ -369,6 +369,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // text offset. Drives the cell's selection from the canvas pointer (the field
   // can't receive the canvas-owned drag itself).
   ({CellEditController ctl, int node, int row, int col, int anchor})? _cellDrag;
+  // A live cross-cell drag selecting a rectangular AREA of cells (starts when a
+  // cell drag crosses into another cell — AFFiNE-style): the anchor cell.
+  ({int node, int row, int col})? _areaDrag;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
 
@@ -642,6 +645,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     hook
       .._toggleMark = (type) {
         if (!mounted || !widget.canEdit) return;
+        // A table cell is being edited: act on the cell's own selection and do
+        // NOT refocus the canvas — that would blur the cell field, committing
+        // and closing it before the mark could apply.
+        if (_activeCell != null) {
+          _toggleMarkCtx(type);
+          return;
+        }
         _focus.requestFocus();
         _controller.toggleMark(type);
         _syncImeFromSelection(force: true);
@@ -833,6 +843,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // an `updateEditingValue` back and, e.g., dismiss the slash menu.
     void apply() {
       if (!mounted) return;
+      // Any document change invalidates a table cell-area selection: it stores
+      // a node INDEX, and edits/undo/menu ops/remote ops shift indices — a
+      // stale area made Delete blank the WRONG table and stole Backspace/
+      // Ctrl+C from ordinary body editing. (Cell-edit previews don't get here
+      // with an area set: opening a cell editor already clears it.)
+      _render?.tableBlockSelection = null;
       setState(() {});
       _restartBlink();
       _refreshMarkBar();
@@ -980,6 +996,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// the same outcome the web textarea produced.
   Future<void> _pasteFromClipboard() async {
     if (!mounted || !_focus.hasFocus || !widget.canEdit) return;
+    // 0) Clipboard HTML that carries a real <table> (Excel / Google Sheets /
+    //    a web table) → a Markdown table. Checked BEFORE the bitmap: Excel
+    //    also puts a picture of the copied cells on the clipboard, and the
+    //    image-first order pasted spreadsheets as screenshots.
+    final tableMd = await readClipboardTableAsMarkdown();
+    if (tableMd != null && mounted && _focus.hasFocus) {
+      final tData = await Clipboard.getData(Clipboard.kTextPlain);
+      if (_handleRichPaste(tableMd, tData?.text ?? '', true)) return;
+    }
     // 1) A bitmap (screenshot / copied image) → upload as an image block.
     final img = await readClipboardImage();
     if (img != null && img.isNotEmpty) {
@@ -1409,6 +1434,27 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return KeyEventResult.handled;
     }
 
+    // A table cell-area selection (row / column / dragged rectangle) captures
+    // the clipboard + delete keys: copy as TSV+HTML, cut/delete blanks cells.
+    final area = _render?.tableBlockSelection;
+    if (area != null) {
+      if (key == LogicalKeyboardKey.escape) {
+        _render?.tableBlockSelection = null;
+        return KeyEventResult.handled;
+      }
+      if (accel &&
+          (key == LogicalKeyboardKey.keyC || key == LogicalKeyboardKey.keyX)) {
+        _copyTableArea(area, cut: key == LogicalKeyboardKey.keyX);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.delete ||
+          key == LogicalKeyboardKey.backspace) {
+        _controller.clearTableCells(
+            area.node, area.r0, area.c0, area.r1, area.c1);
+        return KeyEventResult.handled;
+      }
+    }
+
     if (accel && key == LogicalKeyboardKey.keyC) {
       final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
       if (plain.isEmpty) return KeyEventResult.ignored;
@@ -1813,13 +1859,27 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (rowHandle != null) {
       // Clicking a row handle block-selects the whole row (highlight) and opens
       // its menu — "select by row" without a cross-cell text selection.
-      r.tableBlockSelection = (node: rowHandle.node, row: rowHandle.row, col: null);
+      final t = TableData.fromBlock(_controller.nodes[rowHandle.node].data);
+      r.tableBlockSelection = (
+        node: rowHandle.node,
+        r0: rowHandle.row,
+        c0: 0,
+        r1: rowHandle.row,
+        c1: (t.columns - 1).clamp(0, 1 << 30),
+      );
       _openRowMenu(rowHandle.node, rowHandle.row, d.globalPosition);
       return;
     }
     final colHandle = r.tableColHandleAt(local);
     if (colHandle != null) {
-      r.tableBlockSelection = (node: colHandle.node, row: null, col: colHandle.col);
+      final t = TableData.fromBlock(_controller.nodes[colHandle.node].data);
+      r.tableBlockSelection = (
+        node: colHandle.node,
+        r0: 0,
+        c0: colHandle.col,
+        r1: (t.rowCount - 1).clamp(0, 1 << 30),
+        c1: colHandle.col,
+      );
       _openColumnMenu(colHandle.node, colHandle.col, d.globalPosition);
       return;
     }
@@ -1922,6 +1982,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     void onCellChanged() {
       _controller.previewTableCell(node, row, col, controller.serialize());
       _refreshMarkBar(); // show/route the floating format bar over the cell
+      // The preview relayout can MOVE/RESIZE this cell (auto-fit column widths,
+      // row growth) — re-anchor the overlay after that layout lands.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!committed && entry.mounted) entry.markNeedsBuild();
+      });
     }
     controller.addListener(onCellChanged);
 
@@ -1931,6 +1996,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       controller.removeListener(onCellChanged);
       _render?.editingCell = null;
       _activeCell = null;
+      // A commit can land MID-DRAG (Esc / Tab / arrow-exit / focus loss while
+      // the button is still down); the live drag must not keep driving this
+      // controller — it is disposed a frame from now.
+      if (_cellDrag != null && identical(_cellDrag!.ctl, controller)) {
+        _cellDrag = null;
+      }
       _hideMarkBar();
       _controller.setTableCell(node, row, col, controller.serialize());
       focus.removeListener(_cellFocusListener!);
@@ -2002,12 +2073,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         commit();
         return KeyEventResult.handled;
       }
-      if (key == LogicalKeyboardKey.arrowDown && row + 1 < rows) {
-        moveTo(row + 1, col);
-        return KeyEventResult.handled;
-      }
-      if (key == LogicalKeyboardKey.arrowUp && row > 0) {
-        moveTo(row - 1, col);
+      // Up/Down are line-aware in a multi-line cell: they move within the
+      // cell's own VISUAL lines first (soft-wrapped lines count, not just hard
+      // \n); only at the first/last visual line do they jump to the cell
+      // above/below — and past the table's edge they EXIT the table back into
+      // the document. Shift+arrows always stay with the field (selection
+      // extension), and a ranged selection collapses natively first.
+      if (key == LogicalKeyboardKey.arrowDown ||
+          key == LogicalKeyboardKey.arrowUp) {
+        final up = key == LogicalKeyboardKey.arrowUp;
+        if (HardwareKeyboard.instance.isShiftPressed || !sel.isCollapsed) {
+          return KeyEventResult.ignored;
+        }
+        if (!_cellCaretOnEdgeLine(node, row, col, controller,
+            sel.baseOffset, last: !up)) {
+          return KeyEventResult.ignored; // move within the cell's lines
+        }
+        if (up ? row > 0 : row + 1 < rows) {
+          moveTo(up ? row - 1 : row + 1, col);
+        } else {
+          commit();
+          _exitTableCaret(node, up: up);
+        }
         return KeyEventResult.handled;
       }
       if (key == LogicalKeyboardKey.arrowLeft && atStart && col > 0) {
@@ -2022,10 +2109,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     entry = OverlayEntry(
-      builder: (context) => Positioned(
-        left: topLeft.dx,
-        top: topLeft.dy,
-        width: localRect.width,
+      builder: (context) {
+        // Anchor to the cell's CURRENT rect each build — the table relayouts
+        // under the field while typing (live row growth + auto-fit column
+        // widths), and a stale position would visibly detach the editor.
+        final rr = _render;
+        final liveRect = rr?.tableCellRect(node, row, col) ?? localRect;
+        final liveTopLeft =
+            rr != null ? rr.localToGlobal(liveRect.topLeft) : topLeft;
+        return Positioned(
+        left: liveTopLeft.dx,
+        top: liveTopLeft.dy,
+        width: liveRect.width,
         child: Focus(
           onKeyEvent: onKey,
           // The overlay mounts above the app's Material, but TextField needs a
@@ -2033,7 +2128,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: Material(
             type: MaterialType.transparency,
             child: Container(
-              constraints: BoxConstraints(minHeight: localRect.height),
+              constraints: BoxConstraints(minHeight: liveRect.height),
               color: Colors.transparent,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
               child: TextField(
@@ -2057,7 +2152,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             ),
           ),
         ),
-      ),
+      );
+      },
     );
     _cellEntry = entry;
     _render?.editingCell = (node: node, row: row, col: col);
@@ -2267,11 +2363,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// This is what makes the format bar + shortcuts act on cell content.
   void _toggleMarkCtx(String type, {String? href}) {
     final ac = _activeCell;
-    if (ac != null && ac.ctl.selection.isValid && !ac.ctl.selection.isCollapsed) {
-      ac.ctl.toggleMark(type, href: href);
-    } else {
-      _controller.toggleMark(type, href: href);
+    if (ac != null) {
+      // With a cell open the command belongs to the CELL — a collapsed cell
+      // selection is a no-op, never a fall-through: the (hidden) document
+      // selection may still hold an old range, and mutating it here would
+      // silently bold off-screen text while the user is looking at the cell.
+      if (ac.ctl.selection.isValid && !ac.ctl.selection.isCollapsed) {
+        ac.ctl.toggleMark(type, href: href);
+      }
+      return;
     }
+    _controller.toggleMark(type, href: href);
   }
 
   Widget _buildMarkBar(BuildContext context) {
@@ -2397,7 +2499,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return Positioned(
       left: left,
       top: top,
-      child: ExcludeFocus(
+      // TextFieldTapRegion: clicking the bar must not count as a tap OUTSIDE
+      // the cell editor's TextField — Flutter's onTapOutside would unfocus it
+      // on pointer-DOWN, committing and closing the cell before the button's
+      // onPressed (pointer-up) could apply the mark.
+      child: TextFieldTapRegion(
+        child: ExcludeFocus(
         child: Material(
           elevation: 6,
           borderRadius: BorderRadius.circular(8),
@@ -2436,6 +2543,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             ),
           ),
         ),
+        ),
       ),
     );
   }
@@ -2445,6 +2553,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ('left', 'Align left'),
       ('center', 'Align center'),
       ('right', 'Align right'),
+      ('autofit', 'Auto-fit columns'),
       ('copy', 'Copy table'),
       ('delete', 'Delete table'),
     ]);
@@ -2453,6 +2562,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       case 'center':
       case 'right':
         _controller.setTableAlign(node, selected!);
+      case 'autofit':
+        // Equal weights = the renderer's content-driven auto width mode.
+        _controller.resetTableColumnWidths(node);
       case 'copy':
         final table = TableData.fromBlock(_controller.nodes[node].data);
         await copyTextToClipboard(tableToMarkdown(table));
@@ -2835,6 +2947,119 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
+  /// Copy the selected cell area to the clipboard in two flavors: plain TSV
+  /// (tab-separated — pastes back into Excel/Sheets as cells) and an HTML
+  /// `<table>` with the cells' inline marks (pastes into Mica/Typora as a
+  /// table, via the HTML-table paste path). [cut] also blanks the cells.
+  void _copyTableArea(
+    ({int node, int r0, int c0, int r1, int c1}) area, {
+    required bool cut,
+  }) {
+    if (area.node < 0 || area.node >= _controller.nodes.length) return;
+    // A stale index could land on a non-table node — TableData.fromBlock would
+    // fabricate the empty-table placeholder and overwrite the clipboard with it.
+    if (_controller.nodes[area.node].kind != 'table') return;
+    final table = TableData.fromBlock(_controller.nodes[area.node].data);
+    final plainRows = <String>[];
+    final htmlRows = StringBuffer();
+    for (var r = area.r0; r <= area.r1 && r < table.rows.length; r++) {
+      if (r < 0) continue;
+      final plainCells = <String>[];
+      htmlRows.write('<tr>');
+      for (var c = area.c0; c <= area.c1 && c < table.rows[r].length; c++) {
+        if (c < 0) continue;
+        final parsed = parseInline(table.rows[r][c]);
+        plainCells.add(
+          parsed.text.replaceAll('\t', ' ').replaceAll('\n', ' '),
+        );
+        htmlRows.write('<td>${inlineToHtml(parsed.text, parsed.marks)}</td>');
+      }
+      htmlRows.write('</tr>');
+      plainRows.add(plainCells.join('\t'));
+    }
+    copyRichToClipboard(
+      plain: plainRows.join('\n'),
+      richHtml: '<table>$htmlRows</table>',
+    );
+    if (cut) {
+      _controller.clearTableCells(area.node, area.r0, area.c0, area.r1, area.c1);
+    }
+  }
+
+  /// Whether the caret at [offset] sits on the first ([last] false) or last
+  /// ([last] true) VISUAL line of the cell — soft-wrapped lines included, which
+  /// a plain `\n` scan misses (a wrapped cell would eject the caret from the
+  /// table instead of moving down a visual line). Measured with the same span
+  /// + width the cell's field renders with.
+  bool _cellCaretOnEdgeLine(
+    int node,
+    int row,
+    int col,
+    CellEditController controller,
+    int offset, {
+    required bool last,
+  }) {
+    final rect = _render?.tableCellRect(node, row, col);
+    final caret = offset.clamp(0, controller.text.length);
+    final tp = TextPainter(
+      text: buildMarkedSpan(
+        controller.text,
+        controller.marks,
+        const TextStyle(fontSize: 15, height: 1.4),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(
+        maxWidth:
+            ((rect?.width ?? double.infinity) - 20).clamp(1.0, double.infinity),
+      );
+    final lines = tp.computeLineMetrics();
+    final caretY =
+        tp.getOffsetForCaret(TextPosition(offset: caret), Rect.zero).dy;
+    tp.dispose();
+    if (lines.length <= 1) return true;
+    // Find the caret's line index by walking cumulative line heights.
+    var top = 0.0;
+    var line = 0;
+    for (var i = 0; i < lines.length; i++) {
+      if (caretY < top + lines[i].height - 0.1) {
+        line = i;
+        break;
+      }
+      top += lines[i].height;
+      line = i;
+    }
+    return last ? line == lines.length - 1 : line == 0;
+  }
+
+  /// Move the document caret out of table [node]: [up] lands at the end of the
+  /// block above, else at the start of the block below (appending an empty
+  /// paragraph when the table is the last block, so ↓ always has somewhere to
+  /// go). Restores canvas focus + IME — the caret just left an overlay field.
+  void _exitTableCaret(int node, {required bool up}) {
+    _focus.requestFocus();
+    _attachIme();
+    final nodes = _controller.nodes;
+    if (up) {
+      if (node > 0) {
+        final target = nodes[node - 1];
+        final offset = target.isAtomic ? 0 : target.text.length;
+        _controller.setSelection(
+          DocSelection.collapsed(DocPosition(node - 1, offset)),
+        );
+      } else {
+        // Table is the first block: select it (there is nothing above).
+        _controller.setSelection(DocSelection.collapsed(DocPosition(node, 0)));
+      }
+    } else if (node + 1 < nodes.length) {
+      _controller.setSelection(
+        DocSelection.collapsed(DocPosition(node + 1, 0)),
+      );
+    } else {
+      _controller.insertParagraphAfter(node); // also places the caret in it
+    }
+    _syncImeFromSelection(force: true);
+  }
+
   /// Map a render-local pointer to a text offset inside the active cell, using a
   /// throwaway painter of the cell's clean text + marks (the same style the field
   /// renders with) so a drag-selection lands on the right character.
@@ -2890,11 +3115,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Dragging a table column border resizes columns.
     final colBorder = r.tableColBorderAt(local);
     if (colBorder != null) {
+      // Seed from the EFFECTIVE (rendered) widths, not the stored weights: in
+      // auto-fit mode the two differ, and starting from the stored equal
+      // weights made the first drag tick snap every column to the equal split.
+      final effective = r.tableEffectiveWeights(colBorder.node);
       _colResize = (
         node: colBorder.node,
         col: colBorder.col,
         startX: local.dx,
-        weights: [...r.tableWeights(colBorder.node)],
+        weights: effective.isNotEmpty
+            ? effective
+            : [...r.tableWeights(colBorder.node)],
         avail: r.tableAvailWidth(),
         frac: r.tableWidthFraction(colBorder.node),
       );
@@ -2954,9 +3185,43 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final r = _render;
     if (r == null) return;
     final local = r.globalToLocal(d.globalPosition);
-    // Extend a text drag-selection inside the active cell.
+    // Extend a cross-cell AREA selection (rectangle of whole cells).
+    final ad = _areaDrag;
+    if (ad != null) {
+      final cur = r.tableCellNear(ad.node, local);
+      if (cur != null) {
+        r.tableBlockSelection = (
+          node: ad.node,
+          r0: ad.row < cur.row ? ad.row : cur.row,
+          c0: ad.col < cur.col ? ad.col : cur.col,
+          r1: ad.row > cur.row ? ad.row : cur.row,
+          c1: ad.col > cur.col ? ad.col : cur.col,
+        );
+      }
+      return;
+    }
+    // Extend a text drag-selection inside the active cell — until the pointer
+    // crosses into ANOTHER cell, which escalates to an area selection (in-cell
+    // text OR whole-cell area, never a cross-cell text range).
     final cd = _cellDrag;
     if (cd != null) {
+      final hit = r.tableCellAt(local);
+      if (hit != null &&
+          hit.node == cd.node &&
+          (hit.row != cd.row || hit.col != cd.col)) {
+        _commitCellEditor?.call(); // close the cell field (commits its text)
+        _focus.requestFocus(); // area actions (Ctrl+C / Delete) need key focus
+        _areaDrag = (node: cd.node, row: cd.row, col: cd.col);
+        r.tableBlockSelection = (
+          node: cd.node,
+          r0: cd.row < hit.row ? cd.row : hit.row,
+          c0: cd.col < hit.col ? cd.col : hit.col,
+          r1: cd.row > hit.row ? cd.row : hit.row,
+          c1: cd.col > hit.col ? cd.col : hit.col,
+        );
+        _cellDrag = null;
+        return;
+      }
       final off = _cellOffsetAt(
         r,
         (ctl: cd.ctl, node: cd.node, row: cd.row, col: cd.col),
@@ -3038,6 +3303,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _diagramPan = null;
     _panDownDiagram = null;
     _cellDrag = null; // end any in-cell text drag-selection
+    _areaDrag = null; // the area SELECTION stays; only the drag ends
     if (_blockDrag != null) {
       final r = _render;
       final from = _blockDrag!;

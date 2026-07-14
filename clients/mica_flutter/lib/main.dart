@@ -5043,7 +5043,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final k = _activeBlockHook.kind;
     final lvl = _activeBlockHook.level;
     bool onHeading(int n) => k == 'heading' && lvl == n;
-    return Container(
+    // TextFieldTapRegion: clicking the toolbar must not read as a tap OUTSIDE
+    // the table-cell editor's TextField — onTapOutside would unfocus/commit the
+    // cell on pointer-down, so the command would land after the cell closed.
+    return TextFieldTapRegion(
+        child: Container(
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
@@ -5145,7 +5149,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           ),
         ),
       ),
-    );
+    ));
   }
 
   Widget _editorScroll(
