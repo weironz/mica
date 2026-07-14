@@ -21,6 +21,7 @@ import 'open_url.dart';
 import 'pick_image.dart';
 import 'render.dart';
 import 'rich_paste.dart';
+import 'cell_edit_controller.dart';
 import 'table.dart';
 
 export 'controller.dart' show DocOp, ApplyOps;
@@ -1892,7 +1893,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         ? table.rows[row][col]
         : '';
     final topLeft = r.localToGlobal(localRect.topLeft);
-    final controller = TextEditingController(text: text);
+    // WYSIWYG cell editor: renders inline marks (bold/italic/code) live instead
+    // of the raw Markdown source, and serializes back to Markdown on commit.
+    final controller = CellEditController(text);
     final focus = FocusNode();
     var committed = false;
     late OverlayEntry entry;
@@ -1901,7 +1904,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (committed) return;
       committed = true;
       _render?.editingCell = null;
-      _controller.setTableCell(node, row, col, controller.text);
+      _controller.setTableCell(node, row, col, controller.serialize());
       focus.removeListener(_cellFocusListener!);
       // Tear the field down FIRST, then dispose its controller/focus after this
       // frame. Disposing them synchronously here races the removed TextField's
@@ -1935,6 +1938,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final atStart = sel.baseOffset == 0 && sel.isCollapsed;
       final atEnd = sel.baseOffset == controller.text.length && sel.isCollapsed;
       final key = e.logicalKey;
+
+      // Inline formatting inside the cell (WYSIWYG marks), same accelerators as
+      // the body: Ctrl/Cmd+B/I/E over a ranged selection.
+      final accel = HardwareKeyboard.instance.isControlPressed ||
+          HardwareKeyboard.instance.isMetaPressed;
+      if (accel) {
+        final mark = switch (key) {
+          LogicalKeyboardKey.keyB => 'bold',
+          LogicalKeyboardKey.keyI => 'italic',
+          LogicalKeyboardKey.keyE => 'code',
+          _ => null,
+        };
+        if (mark != null) {
+          controller.toggleMark(mark);
+          return KeyEventResult.handled;
+        }
+      }
 
       if (key == LogicalKeyboardKey.tab) {
         final shift = HardwareKeyboard.instance.isShiftPressed;
@@ -1993,6 +2013,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 focusNode: focus,
                 autofocus: true,
                 maxLines: null,
+                // Enter inserts a newline inside the cell (the cell grows); it
+                // does NOT commit. Commit is click-away / Esc / Tab / arrows.
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
                 cursorColor: const Color(0xFF2563EB),
                 style: const TextStyle(fontSize: 15, height: 1.4),
                 decoration: const InputDecoration(
@@ -2001,7 +2025,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   border: InputBorder.none,
                   isCollapsed: true,
                 ),
-                onSubmitted: (_) => commit(),
               ),
             ),
           ),
@@ -2799,6 +2822,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (bar != null) {
       _scrollbarDrag = bar;
       r.setCodeScrollByTrackX(bar, local.dx);
+      return;
+    }
+    // A drag that begins inside a table cell enters that cell's editor rather
+    // than starting a whole-table block selection (dragging over the atomic
+    // table used to select the entire table). Text is then drag-selected inside
+    // the cell's own field. _dragAnchor stays null so _onPanUpdate no-ops.
+    final tcell = r.tableCellAt(local);
+    if (tcell != null) {
+      _dragAnchor = null;
+      _openCellEditor(tcell.node, tcell.row, tcell.col);
       return;
     }
     _focus.requestFocus();
