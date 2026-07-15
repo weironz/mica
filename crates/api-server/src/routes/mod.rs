@@ -32,6 +32,7 @@ pub fn api_router() -> Router<AppState> {
     .route("/ready", get(health::ready))
     .route("/auth/register", post(auth::register))
     .route("/auth/login", post(auth::login))
+    .route("/auth/refresh", post(auth::refresh))
     .route("/auth/me", get(auth::me).patch(auth::update_me))
     .route("/auth/password", post(auth::change_password))
     .route(
@@ -105,8 +106,7 @@ pub fn api_router() -> Router<AppState> {
     )
     .route(
       "/workspaces/import",
-      post(import::start_import)
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
+      post(import::start_import).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
     )
     .route("/import/jobs/{job_id}", get(import::import_job))
     .route(

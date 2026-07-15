@@ -32,3 +32,7 @@ uuid.workspace = true
 [dev-dependencies]
 # Test-only: build real yrs bases for the P4-3 sv-reconciliation frame tests.
 mica-core = { path = "../mica-core" }
+# The refresh-token rotation IS its SQL (a conditional UPDATE is the concurrency
+# guard), so its tests run against a real Postgres — see the DATABASE_URL-gated
+# module in routes/auth.rs.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

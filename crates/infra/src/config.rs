@@ -25,6 +25,10 @@ pub struct AppConfig {
   pub database_max_connections: u32,
   pub jwt_secret: String,
   pub access_token_ttl_seconds: i64,
+  /// How long a sign-in survives without touching the password again. The
+  /// access token above stays short — it is an unrevocable JWT — and the
+  /// refresh token carries the session across its expiry.
+  pub refresh_token_ttl_seconds: i64,
   /// Test-environment convenience: `MICA_SEED_TEST_USER=email:password`
   /// upserts this account at startup (creating it or resetting its password)
   /// so E2E runs always have known credentials. Hard-ignored in production.
@@ -64,6 +68,11 @@ impl AppConfig {
       .and_then(|value| value.parse::<i64>().ok())
       .unwrap_or(60 * 60 * 24);
 
+    let refresh_token_ttl_seconds = env::var("REFRESH_TOKEN_TTL_SECONDS")
+      .ok()
+      .and_then(|value| value.parse::<i64>().ok())
+      .unwrap_or(60 * 60 * 24 * 30);
+
     // `email:password` — the password may itself contain `:`, so split once.
     // Never honored in production, no matter what the variable says.
     let seed_test_user = if environment == Environment::Production {
@@ -89,6 +98,7 @@ impl AppConfig {
       database_max_connections,
       jwt_secret,
       access_token_ttl_seconds,
+      refresh_token_ttl_seconds,
       seed_test_user,
     })
   }

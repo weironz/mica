@@ -36,7 +36,28 @@ pub struct AuthResponse {
   access_token: String,
   token_type: &'static str,
   expires_at: DateTime<Utc>,
+  /// Spend this on `/auth/refresh` for a fresh access token. Single-use: the
+  /// refresh hands back a new one. Returned in plaintext exactly once — only
+  /// its hash is kept.
+  refresh_token: String,
   user: UserResponse,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefreshRequest {
+  refresh_token: String,
+}
+
+/// No `used_at` here on purpose: whether the token is already spent is decided
+/// by the conditional UPDATE in [refresh], not by reading the value first —
+/// reading it would be a check-then-act that two concurrent refreshes could
+/// both pass.
+#[derive(Debug, FromRow)]
+struct RefreshTokenRow {
+  user_id: Uuid,
+  family_id: Uuid,
+  expires_at: DateTime<Utc>,
+  revoked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,7 +112,7 @@ pub async fn register(
   .await
   .map_err(map_insert_user_error)?;
 
-  Ok(Json(auth_response(&state, user)?))
+  Ok(Json(auth_response(&state, user).await?))
 }
 
 pub async fn login(
@@ -114,7 +135,7 @@ pub async fn login(
 
   verify_password(&payload.password, &user.password_hash)?;
 
-  Ok(Json(auth_response(&state, user)?))
+  Ok(Json(auth_response(&state, user).await?))
 }
 
 pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<MeResponse>> {
@@ -220,7 +241,18 @@ pub async fn change_password(
   Ok(StatusCode::NO_CONTENT)
 }
 
-fn auth_response(state: &AppState, user: UserRow) -> ApiResult<AuthResponse> {
+/// A fresh sign-in: its own token family.
+async fn auth_response(state: &AppState, user: UserRow) -> ApiResult<AuthResponse> {
+  auth_response_in_family(state, user, Uuid::new_v4()).await
+}
+
+/// [family_id] threads a rotation back to the sign-in it came from, so reuse
+/// detection can burn the whole chain at once.
+async fn auth_response_in_family(
+  state: &AppState,
+  user: UserRow,
+  family_id: Uuid,
+) -> ApiResult<AuthResponse> {
   let expires_at = Utc::now() + Duration::seconds(state.config.access_token_ttl_seconds);
   let claims = Claims {
     sub: user.id.to_string(),
@@ -233,12 +265,156 @@ fn auth_response(state: &AppState, user: UserRow) -> ApiResult<AuthResponse> {
   )
   .map_err(|error| ApiError::Internal(error.to_string()))?;
 
+  let refresh_token = issue_refresh_token(state, user.id, family_id).await?;
+
   Ok(AuthResponse {
     access_token,
     token_type: "Bearer",
     expires_at,
+    refresh_token,
     user: UserResponse::from(user),
   })
+}
+
+pub const REFRESH_PREFIX: &str = "mica_rt_";
+
+async fn issue_refresh_token(
+  state: &AppState,
+  user_id: Uuid,
+  family_id: Uuid,
+) -> ApiResult<String> {
+  mint_refresh_token(
+    &state.db,
+    state.config.refresh_token_ttl_seconds,
+    user_id,
+    family_id,
+  )
+  .await
+}
+
+/// Mint + store one refresh token, returning the plaintext (the only time it
+/// exists outside the client). Takes the pool rather than [AppState] so the
+/// rotation can be tested against a real database without an HTTP stack — the
+/// interesting logic here IS the SQL, so a test that mocks it tests nothing.
+pub async fn mint_refresh_token(
+  db: &sqlx::PgPool,
+  ttl_seconds: i64,
+  user_id: Uuid,
+  family_id: Uuid,
+) -> ApiResult<String> {
+  // 244 bits of randomness from two v4 UUIDs — same recipe as a PAT
+  // (tokens.rs), no extra crate.
+  let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+  let token = format!("{REFRESH_PREFIX}{secret}");
+  let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
+
+  sqlx::query(
+    r#"
+      INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+      VALUES ($1, $2, $3, $4)
+    "#,
+  )
+  .bind(user_id)
+  .bind(sha256_hex(&token))
+  .bind(family_id)
+  .bind(expires_at)
+  .execute(db)
+  .await?;
+
+  Ok(token)
+}
+
+/// Spend a refresh token, returning the `(user_id, family_id)` the next pair
+/// should be minted under. Every rejection is [ApiError::Unauthorized] — the
+/// caller has no business learning *why* a token it presented is unacceptable.
+pub async fn rotate_refresh_token(
+  db: &sqlx::PgPool,
+  refresh_token: &str,
+) -> ApiResult<(Uuid, Uuid)> {
+  let token_hash = sha256_hex(refresh_token);
+
+  let row = sqlx::query_as::<_, RefreshTokenRow>(
+    r#"
+      SELECT user_id, family_id, expires_at, revoked_at
+      FROM refresh_tokens
+      WHERE token_hash = $1
+    "#,
+  )
+  .bind(&token_hash)
+  .fetch_optional(db)
+  .await?
+  .ok_or(ApiError::Unauthorized)?;
+
+  if row.revoked_at.is_some() || row.expires_at <= Utc::now() {
+    return Err(ApiError::Unauthorized);
+  }
+
+  // Spend it. Conditional on still being unspent, so this doubles as the
+  // concurrency guard: of two simultaneous refreshes of the same token exactly
+  // one updates a row, and the loser falls into the replay branch below —
+  // Postgres decides, not a check-then-act we could lose.
+  let spent = sqlx::query(
+    r#"
+      UPDATE refresh_tokens
+      SET used_at = now()
+      WHERE token_hash = $1 AND used_at IS NULL
+    "#,
+  )
+  .bind(&token_hash)
+  .execute(db)
+  .await?;
+
+  if spent.rows_affected() == 0 {
+    // Already spent. Either a client raced itself or the token leaked and
+    // someone else is spending it — indistinguishable from here, so assume the
+    // worse one and burn the family. The user signs in again; an attacker
+    // holding a stolen token gets nothing.
+    revoke_family(db, row.family_id).await?;
+    return Err(ApiError::Unauthorized);
+  }
+
+  Ok((row.user_id, row.family_id))
+}
+
+/// `POST /api/auth/refresh` — trade a refresh token for a fresh access token,
+/// rotating the refresh token itself.
+pub async fn refresh(
+  State(state): State<AppState>,
+  Json(payload): Json<RefreshRequest>,
+) -> ApiResult<Json<AuthResponse>> {
+  let (user_id, family_id) = rotate_refresh_token(&state.db, &payload.refresh_token).await?;
+
+  let user = sqlx::query_as::<_, UserRow>(
+    r#"
+      SELECT id, email, display_name, password_hash, created_at
+      FROM users
+      WHERE id = $1
+    "#,
+  )
+  .bind(user_id)
+  .fetch_optional(&state.db)
+  .await?
+  .ok_or(ApiError::Unauthorized)?;
+
+  Ok(Json(
+    auth_response_in_family(&state, user, family_id).await?,
+  ))
+}
+
+/// Burn every token of one sign-in. Used on reuse detection: the chain is
+/// compromised, so nothing in it is trusted again.
+pub async fn revoke_family(db: &sqlx::PgPool, family_id: Uuid) -> ApiResult<()> {
+  sqlx::query(
+    r#"
+      UPDATE refresh_tokens
+      SET revoked_at = now()
+      WHERE family_id = $1 AND revoked_at IS NULL
+    "#,
+  )
+  .bind(family_id)
+  .execute(db)
+  .await?;
+  Ok(())
 }
 
 pub(crate) const PAT_PREFIX: &str = "mica_pat_";
@@ -397,6 +573,12 @@ fn is_public(path: &str) -> bool {
     || path.ends_with("/ready")
     || path.ends_with("/auth/login")
     || path.ends_with("/auth/register")
+    // You refresh precisely BECAUSE the access token is dead — demanding a live
+    // one here would be a deadlock, and the endpoint's own credential is the
+    // refresh token in its body. The same router-wide `scope_guard` already
+    // silently 401'd the blob endpoint for a month (see below), so this is
+    // pinned by a test rather than left to be rediscovered.
+    || path.ends_with("/auth/refresh")
     || is_blob_path(path)
 }
 
@@ -456,11 +638,7 @@ fn hash_password(password: &str) -> ApiResult<String> {
 /// runs always have known credentials — created if missing, password reset if
 /// it already exists. Production never reaches here (AppConfig strips the
 /// variable there).
-pub async fn seed_test_user(
-  db: &sqlx::PgPool,
-  email: &str,
-  password: &str,
-) -> anyhow::Result<()> {
+pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> anyhow::Result<()> {
   let password_hash =
     hash_password(password).map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
   sqlx::query(
@@ -591,7 +769,10 @@ mod tests {
   fn sha256_hex_is_64_lowercase_hex_and_deterministic() {
     let h = sha256_hex("mica_pat_example");
     assert_eq!(h.len(), 64);
-    assert!(h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    assert!(
+      h.chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+    );
     assert_eq!(h, sha256_hex("mica_pat_example"));
     assert_ne!(h, sha256_hex("mica_pat_other"));
   }
@@ -603,5 +784,186 @@ mod tests {
     assert!(is_public("/api/auth/register"));
     assert!(!is_public("/api/workspaces"));
     assert!(!is_public("/api/auth/tokens"));
+  }
+
+  #[test]
+  fn refresh_is_public_or_it_could_never_be_called() {
+    // Refreshing needs no access token by definition — the whole point is that
+    // yours has expired. If the router-wide guard ever claims this path, every
+    // client is locked out at the 24h mark with no way back except a re-login,
+    // which is the exact bug refresh exists to kill.
+    assert!(is_public("/api/auth/refresh"));
+  }
+}
+
+/// The rotation's correctness IS its SQL — the conditional UPDATE is what makes
+/// spending a token atomic, and a mocked database would test nothing at all. So
+/// these run against a real Postgres, gated on `DATABASE_URL` and skipped (green)
+/// without one, matching app-core/tests/sync_pg.rs.
+///
+///   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
+///   cargo test -p mica-api-server refresh_pg
+#[cfg(test)]
+mod refresh_pg {
+  use super::*;
+  use sqlx::PgPool;
+
+  async fn pool() -> Option<PgPool> {
+    let url = std::env::var("DATABASE_URL").ok()?;
+    PgPool::connect(&url).await.ok()
+  }
+
+  async fn seed_user(db: &PgPool) -> Uuid {
+    let user = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+      .bind(user)
+      .bind(format!("{user}@refresh.test"))
+      .execute(db)
+      .await
+      .unwrap();
+    user
+  }
+
+  const DAY: i64 = 60 * 60 * 24;
+
+  #[tokio::test]
+  async fn rotation_hands_back_the_same_family_and_burns_the_old_token() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    let first = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    let (got_user, got_family) = rotate_refresh_token(&db, &first).await.unwrap();
+    assert_eq!(got_user, user);
+    assert_eq!(
+      got_family, family,
+      "a rotation stays in its sign-in's family"
+    );
+
+    // The token just spent is dead — and spending it again is a replay.
+    assert!(rotate_refresh_token(&db, &first).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn a_replay_burns_the_whole_family_including_the_live_token() {
+    // The theft case: an attacker copies a refresh token, the real client
+    // spends it first, then the attacker spends it too. We cannot tell the two
+    // apart, so the entire chain dies and the human signs in again.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+
+    let stolen = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+    rotate_refresh_token(&db, &stolen).await.unwrap();
+    let live = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    // Attacker replays the old one.
+    assert!(rotate_refresh_token(&db, &stolen).await.is_err());
+
+    // The token the honest client is holding must ALSO be dead now — a reuse
+    // detection that leaves the chain usable protects nobody.
+    assert!(
+      rotate_refresh_token(&db, &live).await.is_err(),
+      "reuse detection must revoke the family, not just the replayed token"
+    );
+  }
+
+  #[tokio::test]
+  async fn one_family_dying_does_not_touch_another_sign_in() {
+    // Signing out one device must not sign out the rest.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+
+    let laptop = Uuid::new_v4();
+    let phone = Uuid::new_v4();
+    let laptop_token = mint_refresh_token(&db, DAY, user, laptop).await.unwrap();
+    let phone_token = mint_refresh_token(&db, DAY, user, phone).await.unwrap();
+
+    rotate_refresh_token(&db, &laptop_token).await.unwrap();
+    assert!(rotate_refresh_token(&db, &laptop_token).await.is_err()); // burns `laptop`
+
+    assert!(
+      rotate_refresh_token(&db, &phone_token).await.is_ok(),
+      "the other device's session is a separate family and must survive"
+    );
+  }
+
+  #[tokio::test]
+  async fn an_expired_token_is_refused_without_burning_anything() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    let expired = mint_refresh_token(&db, -1, user, family).await.unwrap();
+    assert!(rotate_refresh_token(&db, &expired).await.is_err());
+
+    // Expiry is not evidence of theft: a token minted later in the same family
+    // still works. (In practice the client is long gone, but conflating "old"
+    // with "stolen" would sign people out for merely being idle.)
+    let fresh = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+    assert!(rotate_refresh_token(&db, &fresh).await.is_ok());
+  }
+
+  #[tokio::test]
+  async fn a_revoked_token_is_refused() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    let token = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    revoke_family(&db, family).await.unwrap();
+    assert!(rotate_refresh_token(&db, &token).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn an_unknown_token_is_refused() {
+    let Some(db) = pool().await else { return };
+    assert!(
+      rotate_refresh_token(&db, "mica_rt_not_a_real_token")
+        .await
+        .is_err()
+    );
+  }
+
+  #[tokio::test]
+  async fn only_the_hash_is_stored_never_the_token() {
+    // The plaintext exists exactly once, in the response. A database dump must
+    // not be a pile of live credentials.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let token = mint_refresh_token(&db, DAY, user, Uuid::new_v4())
+      .await
+      .unwrap();
+    assert!(token.starts_with(REFRESH_PREFIX));
+
+    let stored: Option<String> =
+      sqlx::query_scalar("SELECT token_hash FROM refresh_tokens WHERE user_id = $1")
+        .bind(user)
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+    let stored = stored.unwrap();
+    assert_eq!(stored, sha256_hex(&token));
+    assert!(!stored.contains(&token));
+  }
+
+  #[tokio::test]
+  async fn concurrent_rotations_of_one_token_produce_exactly_one_winner() {
+    // The reason spending is a conditional UPDATE and not read-then-write: two
+    // in-flight refreshes (an app that fired twice) must not both mint a
+    // session. Postgres picks the winner; the loser is treated as a replay.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    let token = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    let (a, b) = tokio::join!(
+      rotate_refresh_token(&db, &token),
+      rotate_refresh_token(&db, &token)
+    );
+    assert_eq!(
+      [a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(),
+      1,
+      "exactly one of two concurrent rotations may win"
+    );
   }
 }
