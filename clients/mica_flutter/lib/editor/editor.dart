@@ -2408,20 +2408,44 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     });
   }
 
+  /// The image name to hang off a blob url, url-encoded. Cosmetic only (the
+  /// server ignores it), so a shared link reads as an image instead of ending
+  /// in a bare `/blob`. Null when the block has no usable name.
+  static String? _blobNameSuffix(EditorNode node) {
+    final name = (node.data['name'] as String?)?.trim();
+    if (name == null || name.isEmpty || !name.contains('.')) return null;
+    // Only the last path segment, and never a traversal — this lands in a url.
+    final leaf = name.split(RegExp(r'[/\\]')).last;
+    if (leaf.isEmpty || leaf == '.' || leaf == '..') return null;
+    return Uri.encodeComponent(leaf);
+  }
+
   /// Resolve fresh download URLs for any image file_ids not yet cached, so copy
   /// can emit working Markdown links synchronously (no gesture-breaking await).
   void _cacheImageUrls() {
     final resolve = widget.onResolveImageUrls;
     if (resolve == null) return;
     final ids = <String>[];
+    final names = <String, String>{}; // file_id -> encoded filename
     for (final n in _controller.nodes) {
       if (n.kind != 'image') continue;
       final id = n.data['file_id'] as String?;
-      if (id != null && !_imageUrlCache.containsKey(id)) ids.add(id);
+      if (id == null) continue;
+      final suffix = _blobNameSuffix(n);
+      if (suffix != null) names[id] = suffix;
+      if (!_imageUrlCache.containsKey(id)) ids.add(id);
     }
     if (ids.isEmpty) return;
     resolve(ids).then((map) {
-      if (mounted) _imageUrlCache.addAll(map);
+      if (!mounted) return;
+      // Hang the (cosmetic) filename off the blob url so a copied/exported
+      // link reads as an image: `…/blob/diagram.png`, not a bare `…/blob`.
+      _imageUrlCache.addAll({
+        for (final e in map.entries)
+          e.key: names[e.key] == null || !e.value.endsWith('/blob')
+              ? e.value
+              : '${e.value}/${names[e.key]}',
+      });
     });
   }
 

@@ -181,6 +181,12 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/files/{file_id}/blob",
       get(files::blob),
     )
+    // Same link with a cosmetic filename so it reads (and saves) as an image;
+    // the name is ignored — see files::blob.
+    .route(
+      "/workspaces/{workspace_id}/files/{file_id}/blob/{filename}",
+      get(files::blob_named),
+    )
     .route(
       "/workspaces/{workspace_id}/files/{file_id}",
       get(files::get_file).delete(files::delete_file),

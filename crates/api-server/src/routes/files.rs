@@ -275,15 +275,35 @@ pub async fn import_url(
 }
 
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}/blob`
+/// `GET /api/workspaces/{workspace_id}/files/{file_id}/blob/{filename}`
 ///
 /// A stable, never-expiring public link to an image's bytes — it 302-redirects
 /// to a freshly-signed storage URL on every request, so the link itself never
 /// goes stale. Unauthenticated (the `file_id` UUID is the capability), so copied
 /// Markdown images keep displaying in other apps. Used for copy/export.
+/// Kept public by `auth::is_blob_path`; `tests/blob_public.rs` guards it.
+///
+/// The optional trailing filename is COSMETIC — it is ignored entirely (the
+/// file_id alone resolves the bytes). It exists because a url ending in `/blob`
+/// tells a human, a browser's "save as", or a renderer keying off the extension
+/// nothing about being a PNG; `…/blob/diagram.png` does. Same shape as a GitHub
+/// raw url. The bare `/blob` form stays valid so links already copied out keep
+/// working.
 pub async fn blob(
   State(state): State<AppState>,
   Path((workspace_id, file_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
+  blob_inner(state, workspace_id, file_id).await
+}
+
+pub async fn blob_named(
+  State(state): State<AppState>,
+  Path((workspace_id, file_id, _filename)): Path<(Uuid, Uuid, String)>,
+) -> Response {
+  blob_inner(state, workspace_id, file_id).await
+}
+
+async fn blob_inner(state: AppState, workspace_id: Uuid, file_id: Uuid) -> Response {
   let Ok(storage) = storage(&state) else {
     return StatusCode::NOT_FOUND.into_response();
   };

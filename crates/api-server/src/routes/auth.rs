@@ -397,6 +397,23 @@ fn is_public(path: &str) -> bool {
     || path.ends_with("/ready")
     || path.ends_with("/auth/login")
     || path.ends_with("/auth/register")
+    || is_blob_path(path)
+}
+
+/// `…/files/{file_id}/blob` (+ an optional cosmetic filename segment) — the
+/// image capability link. Public BY DESIGN: the unguessable file_id is the
+/// capability, which is the only reason a copied Markdown image still renders
+/// in Typora / a browser (files::blob). This router-wide `scope_guard` shipped
+/// with PATs (a46db0a) and silently 401'd it for a month, quietly breaking the
+/// copy-portability the endpoint exists for — hence the explicit test in
+/// tests/blob_public.rs.
+fn is_blob_path(path: &str) -> bool {
+  let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+  let Some(i) = segs.iter().position(|s| *s == "files") else {
+    return false;
+  };
+  // files / {file_id} / blob   [ / {filename} ]
+  segs.get(i + 2) == Some(&"blob") && (segs.len() == i + 3 || segs.len() == i + 4)
 }
 
 fn normalize_email(email: &str) -> ApiResult<String> {
@@ -507,6 +524,44 @@ mod tests {
     let a = auth(vec![Scope::Write]);
     assert!(a.grants(Scope::Read), "write must grant read");
     assert!(a.grants(Scope::Write));
+  }
+
+  // The image blob link is a capability url (the file_id IS the credential) —
+  // public on purpose so a copied Markdown image still renders in Typora / a
+  // browser. This router-wide guard once swallowed it for a month without a
+  // peep; nothing else notices, because in-app rendering uses a different
+  // (authenticated) path. Hence pinning it here.
+  #[test]
+  fn image_blob_link_is_public() {
+    const WS: &str = "/api/workspaces/5a398481-bcf5-4a5e-83f0-a891bf0bad7e";
+    const FID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
+    assert!(is_public(&format!("{WS}/files/{FID}/blob")));
+    // …and with the cosmetic filename segment.
+    assert!(is_public(&format!("{WS}/files/{FID}/blob/diagram.png")));
+    assert!(is_public(&format!("{WS}/files/{FID}/blob/%E5%9B%BE.png")));
+  }
+
+  #[test]
+  fn only_the_blob_link_is_public_under_files() {
+    const WS: &str = "/api/workspaces/5a398481-bcf5-4a5e-83f0-a891bf0bad7e";
+    const FID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
+    // Metadata, upload plumbing and deletion all stay authenticated.
+    assert!(!is_public(&format!("{WS}/files/{FID}")));
+    assert!(!is_public(&format!("{WS}/files/presign")));
+    assert!(!is_public(&format!("{WS}/files/complete")));
+    assert!(!is_public(&format!("{WS}/files/resolve")));
+    assert!(!is_public(&format!("{WS}/files/import-url")));
+    // Nothing deeper than one filename segment is a blob link.
+    assert!(!is_public(&format!("{WS}/files/{FID}/blob/a/b")));
+    // And the word "blob" elsewhere doesn't open a door.
+    assert!(!is_public(&format!("{WS}/documents/{FID}/blob")));
+  }
+
+  #[test]
+  fn ordinary_endpoints_stay_guarded() {
+    assert!(!is_public("/api/workspaces"));
+    assert!(!is_public("/api/documents/abc"));
+    assert!(is_public("/api/health"));
   }
 
   #[test]
