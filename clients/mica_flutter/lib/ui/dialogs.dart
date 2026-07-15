@@ -715,7 +715,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ];
   }
 
-  Future<void> _save() async {
+  /// The AI page's Save. Was called `_save` and wired to the dialog's only
+  /// button, so it ran on every page — pressing Save while looking at Server
+  /// re-saved the AI settings and closed, doing nothing you had asked for.
+  Future<void> _saveAi() async {
     setState(() {
       _saving = true;
       _error = null;
@@ -1004,10 +1007,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// fixed-height control that scrolls its own popup, so N servers cost no
   /// layout at all. (AppFlowy uses a dropdown here for the same reason.)
   ///
-  /// Selecting is a DRAFT; the button below commits. The switch that lived here
-  /// before applied on tap and closed the dialog out from under you, so there
-  /// was no way to look before leaping — AppFlowy's `CloudSettingBloc` likewise
-  /// writes nothing on select and commits from an explicit button.
+  /// Selecting is a DRAFT; the dialog's Save commits it. The switch that lived
+  /// here before applied on tap and closed the dialog out from under you, so
+  /// there was no way to look before leaping — AppFlowy's `CloudSettingBloc`
+  /// likewise writes nothing on select and commits from an explicit button.
   List<Widget> _serverSection(BuildContext context) => [
     _sectionTitle(context, Icons.dns_outlined, '服务器', const Color(0xFF2563EB)),
     const SizedBox(height: 8),
@@ -1067,23 +1070,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 12),
       ErrorBanner(_serverMsg!),
     ],
-    const SizedBox(height: 14),
-    Align(
-      alignment: Alignment.centerLeft,
-      child: FilledButton.icon(
-        onPressed: (_serverSaving || _draftOrigin == widget.activeOrigin)
-            ? null
-            : _saveServer,
-        icon: _serverSaving
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.sync, size: 18),
-        label: const Text('切换并保存'),
-      ),
-    ),
+    // No switch button here: the dialog's own Save is it. Two Save buttons on
+    // one screen is two sources of truth about what "save" means.
   ];
 
   /// The draft selection. Null until touched, so the dropdown reads from
@@ -1202,11 +1190,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     });
   }
 
+  /// The Server page's Save: commit the drafted connection.
+  ///
+  /// Sets `_saving`, not `_serverSaving`: the button that shows the progress is
+  /// the dialog's, so it has to be the dialog's flag or the switch would run
+  /// with no sign of it. `_serverSaving` stays for the section's own async work
+  /// (add / delete), which spins nothing down there.
   Future<void> _saveServer() async {
     final target = _draftOrigin;
     if (target == widget.activeOrigin) return;
     setState(() {
-      _serverSaving = true;
+      _saving = true;
       _serverMsg = null;
     });
     await widget.onSetActiveConnection(target);
@@ -1320,45 +1314,66 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // Server selection is desktop-only: the web client is served by (and talks
     // same-origin to) its own backend, and Local-offline needs the native core
     // that isn't compiled for web. Hide the whole tab on web.
-    final tabs = <({String title, IconData icon, List<Widget> section})>[
-      (
-        title: 'Appearance',
-        icon: Icons.tune,
-        section: _appearanceSection(context),
-      ),
-      (
-        title: 'AI provider',
-        icon: Icons.auto_awesome,
-        section: _aiSection(context),
-      ),
-      (
-        title: 'Account',
-        icon: Icons.person_outline,
-        section: _accountSection(context),
-      ),
-      if (widget.onLoadTokens != null)
-        (
-          title: 'API Tokens',
-          icon: Icons.key_outlined,
-          section: _tokensSection(context),
-        ),
-      if (!kIsWeb)
-        (
-          title: 'Server',
-          icon: Icons.dns_outlined,
-          section: _serverSection(context),
-        ),
-      (
-        title: 'Data',
-        icon: Icons.import_export,
-        section: _dataSection(context),
-      ),
-      (
-        title: 'Shortcuts',
-        icon: Icons.keyboard_outlined,
-        section: _shortcutsSection(context),
-      ),
-    ];
+    // `onSave` is what the bottom Save button does ON THIS PAGE, or null
+    // when the page has nothing to commit (Appearance applies live;
+    // Shortcuts is a reference list). The button asks the page rather than
+    // an if-chain asking which page — and it means Save can no longer be
+    // pressed on a page it does nothing for, which is what it used to be:
+    // it saved the AI settings no matter where you were standing.
+    final tabs =
+        <({
+          String title,
+          IconData icon,
+          List<Widget> section,
+          Future<void> Function()? onSave,
+        })>[
+          (
+            title: 'Appearance',
+            icon: Icons.tune,
+            section: _appearanceSection(context),
+            onSave: null,
+          ),
+          (
+            title: 'AI provider',
+            icon: Icons.auto_awesome,
+            section: _aiSection(context),
+            onSave: _saveAi,
+          ),
+          (
+            title: 'Account',
+            icon: Icons.person_outline,
+            section: _accountSection(context),
+            onSave: null,
+          ),
+          if (widget.onLoadTokens != null)
+            (
+              title: 'API Tokens',
+              icon: Icons.key_outlined,
+              section: _tokensSection(context),
+              onSave: null,
+            ),
+          if (!kIsWeb)
+            (
+              title: 'Server',
+              icon: Icons.dns_outlined,
+              section: _serverSection(context),
+              // Only when the pick differs from what is live; picking is a
+              // draft until this button commits it.
+              onSave: _draftOrigin == widget.activeOrigin ? null : _saveServer,
+            ),
+          (
+            title: 'Data',
+            icon: Icons.import_export,
+            section: _dataSection(context),
+            onSave: null,
+          ),
+          (
+            title: 'Shortcuts',
+            icon: Icons.keyboard_outlined,
+            section: _shortcutsSection(context),
+            onSave: null,
+          ),
+        ];
     final titles = [for (final t in tabs) t.title];
     final icons = [for (final t in tabs) t.icon];
     final sections = [for (final t in tabs) t.section];
@@ -1424,7 +1439,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           child: const Text('Close'),
         ),
         FilledButton.icon(
-          onPressed: _saving || _loading ? null : _save,
+          onPressed: (_saving || _loading || tabs[_tab].onSave == null)
+              ? null
+              : tabs[_tab].onSave,
           icon: _saving
               ? const SizedBox(
                   width: 16,
