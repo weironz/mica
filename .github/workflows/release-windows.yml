@@ -1,11 +1,18 @@
 name: Release
 
-# Push a tag like `v0.1.0` (or run manually) to build the release artifacts and
-# attach them to the GitHub release for that tag:
+# Push a tag like `v0.1.0` (or run manually) to build EVERY release artifact.
+# Attached to the GitHub release for that tag:
 #   * the Flutter Windows desktop app, packaged with Inno Setup (unsigned for
 #     now — see installer/mica.iss); this drives the in-app auto-updater.
 #   * the `mica-cli` binary for Windows / Linux / macOS (a pure, thin HTTP client
 #     over the REST API — no backup engine baked in; see docs/backup.md).
+# Pushed to the container registries (`images` job):
+#   * mica-api / mica-web / mica-cli, tagged with the IMMUTABLE version.
+#
+# Deploying is deliberately NOT here: rolling prod is a human step
+# (`just deploy-prod X.Y.Z`). Letting CI deploy would mean putting a prod root
+# SSH key in GitHub secrets — a repo/Actions compromise would become a prod
+# compromise. CI only ever holds registry-push credentials. See docs/release.md.
 
 on:
   push:
@@ -165,3 +172,91 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: ${{ steps.stage.outputs.asset }}
+
+  images:
+    # The three images compose runs in prod (api, web, and cli — the `backup`
+    # service). All three are keyed to ${MICA_VERSION}, so they must be pushed
+    # TOGETHER at the same tag or a release leaves `backup` unable to pull.
+    #
+    # Pushed to BOTH registries: Aliyun ACR is what prod pulls (first-party,
+    # fast in CN); Docker Hub is the off-site copy. Prod used to depend on a
+    # third-party pull-through mirror (docker.1ms.run), which caches tag->digest
+    # and could hand back a stale image for a rolling tag — hence ACR + the
+    # IMMUTABLE version tag (never `latest`): a tag that never existed before
+    # cannot be served stale.
+    #
+    # Runs independently of the release jobs (attaches nothing to the release).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - img: api
+            file: deploy/Dockerfile.api
+          - img: web
+            file: deploy/Dockerfile.web
+            flutter: true
+          - img: cli
+            file: deploy/Dockerfile.cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Only the web image needs a Flutter bundle baked in.
+      - uses: subosito/flutter-action@v2
+        if: ${{ matrix.flutter }}
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build + stage the web bundle
+        if: ${{ matrix.flutter }}
+        run: |
+          cd clients/mica_flutter
+          flutter pub get
+          flutter build web --release
+          cd ../..
+          rm -rf deploy/web && mkdir -p deploy/web
+          cp -r clients/mica_flutter/build/web/. deploy/web/
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-shenzhen.aliyuncs.com
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build + push mica-${{ matrix.img }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: true
+          # Buildx defaults attach an OCI attestation manifest, turning the
+          # image into a multi-manifest index that some registries / a plain
+          # `docker save | docker load` cannot resolve.
+          provenance: false
+          sbom: false
+          tags: |
+            registry.cn-shenzhen.aliyuncs.com/willspace/mica-${{ matrix.img }}:v${{ steps.ver.outputs.version }}
+            willdockerhub/mica-${{ matrix.img }}:v${{ steps.ver.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.img }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.img }}

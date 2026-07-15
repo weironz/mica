@@ -11,17 +11,16 @@ set windows-shell := ["C:/Program Files/Git/bin/bash.exe", "-uc"]
 flutter := env_var_or_default("FLUTTER", "flutter")
 hub     := "willdockerhub"
 
-# Production node. It CANNOT reach Docker Hub, so images travel by
-# save|gzip -> scp -> docker load (see `ship`); the Hub push is a separate
-# off-site copy, not the delivery path.
+# Production node. Prod pulls its images from Aliyun ACR (first-party, fast in
+# CN); CI pushes there on every `v*` tag. `deploy-prod` is the ONLY recipe that
+# touches prod — CI never does (docs/release.md explains why).
 node     := "root@mica.cloudcele.com"
 node_dir := "/data/mica"
 site     := "https://mica.cloudcele.com"
 
-# The rolling DEPLOY tag compose reads from {{node_dir}}/.env (MICA_VERSION).
-# It is a pointer, NOT the app version — v0.3 has rolled through every 0.3–0.5
-# release. Changing it means editing .env on the node AND retagging mica-cli.
-deploy_tag := "v0.3"
+# Registry for LOCAL image builds (parity-check / a CI outage fallback).
+# Prod's own registry lives in {{node_dir}}/.env as MICA_REGISTRY.
+hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 
 # ---------------------------------------------------------------- dev loop
 
@@ -111,54 +110,51 @@ build-all: build-cli build-web build-api
 
 # ---------------------------------------------------------------- docker
 
-# --provenance/--sbom off: buildx defaults attach an OCI attestation
-# manifest, turning the image into a multi-manifest index that
-# `docker save | docker load` on the node cannot resolve.
-[doc("Build the two prod images (api + web) locally")]
-docker-build tag=deploy_tag: build-web
-    docker build --provenance=false --sbom=false -f deploy/Dockerfile.api -t {{hub}}/mica-api:{{tag}} .
-    docker build --provenance=false --sbom=false -f deploy/Dockerfile.web -t {{hub}}/mica-web:{{tag}} .
+# Release images come from CI; this is for `parity-check` and as a fallback
+# if CI is down. --provenance/--sbom off: buildx defaults attach an OCI
+# attestation manifest, turning the image into a multi-manifest index that
+# some registries / `docker save | docker load` cannot resolve.
+[doc("Build the prod images locally (parity-check / CI-outage fallback)")]
+docker-build tag: build-web
+    docker build --provenance=false --sbom=false -f deploy/Dockerfile.api -t {{hub_acr}}/mica-api:{{tag}} .
+    docker build --provenance=false --sbom=false -f deploy/Dockerfile.web -t {{hub_acr}}/mica-web:{{tag}} .
+    docker build --provenance=false --sbom=false -f deploy/Dockerfile.cli -t {{hub_acr}}/mica-cli:{{tag}} .
 
-# Needs `docker login` once. This is the off-site copy — the node is fed by
-# `ship`, which does not pull from Hub.
-[doc("Push the api + web images to Docker Hub")]
-docker-push tag=deploy_tag:
-    docker push {{hub}}/mica-api:{{tag}}
-    docker push {{hub}}/mica-web:{{tag}}
+# Normally CI does this. Needs `docker login registry.cn-shenzhen.aliyuncs.com`.
+[doc("Push locally built images to ACR (CI-outage fallback)")]
+docker-push tag:
+    docker push {{hub_acr}}/mica-api:{{tag}}
+    docker push {{hub_acr}}/mica-web:{{tag}}
+    docker push {{hub_acr}}/mica-cli:{{tag}}
 
 # ---------------------------------------------------------------- deploy
 
-# save|gzip|ssh docker load, because the node has no Docker Hub access.
-# --no-deps so postgres / rustfs / backup keep running untouched.
-[doc("Copy the built images to the prod node and recreate api + web")]
-ship tag=deploy_tag:
+# Prod pulls the CI-built images from ACR and restarts. --no-deps keeps
+# postgres / rustfs untouched. MICA_VERSION is rewritten in the node's .env so
+# a restart (or a reboot) comes back on the SAME version, not the old one.
+[doc("Roll prod to an already-published version, e.g. `just deploy-prod 0.5.1`")]
+deploy-prod version:
     #!/usr/bin/env bash
     set -euo pipefail
-    for img in api web; do
-      echo "==> shipping mica-$img:{{tag}}"
-      docker save {{hub}}/mica-$img:{{tag}} | gzip -1 | \
-        ssh {{node}} "gunzip -c | docker load"
-    done
-    ssh {{node}} 'cd {{node_dir}} && docker compose up -d --force-recreate --no-deps api web'
-    echo "==> recreated; waiting for api health"
+    tag="v{{version}}"
+    echo "==> pinning MICA_VERSION=$tag in {{node_dir}}/.env"
+    ssh {{node}} "cd {{node_dir}} && sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=$tag|' .env && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
+    echo "==> pulling + recreating api + web"
+    ssh {{node}} "cd {{node_dir}} && docker compose pull api web && docker compose up -d --no-deps api web"
+    echo "==> waiting for api health"
     ssh {{node}} 'for i in $(seq 1 30); do [ "$(docker inspect --format "{{{{.State.Health.Status}}}}" mica-api-1 2>/dev/null)" = healthy ] && { echo "api healthy"; exit 0; }; sleep 4; done; echo "api NOT healthy"; exit 1'
+    just verify-prod {{version}}
 
-# The live bundle hash must equal the local one (catches a stale image /
-# cached layer), plus the api version and the MCP endpoint.
-[doc("Prove prod serves exactly what was just built")]
-verify-prod:
+# The api must report the version we just rolled to, and the live bundle must
+# not be a cached/stale artifact. Checking only for HTTP 200 would miss both.
+[doc("Prove prod really serves <version>, e.g. `just verify-prod 0.5.1`")]
+verify-prod version:
     #!/usr/bin/env bash
     set -euo pipefail
-    want=$(md5sum deploy/web/main.dart.js | cut -d' ' -f1)
-    live=$(curl -fsS {{site}}/main.dart.js | md5sum | cut -d' ' -f1)
-    [ "$want" = "$live" ] && echo "bundle OK  $live" || { echo "STALE BUNDLE: want $want, live $live"; exit 1; }
-    curl -fsS {{site}}/api/health; echo
-    echo "mcp: $(curl -s -o /dev/null -w '%{http_code}' {{site}}/mcp)"
+    got=$(curl -fsS {{site}}/api/health)
+    echo "$got"
+    echo "$got" | grep -q '"version":"{{version}}"' \
+      || { echo "VERSION MISMATCH: prod is not {{version}}"; exit 1; }
+    echo "mcp:   $(curl -s -o /dev/null -w '%{http_code}' {{site}}/mcp)"
     echo "index: $(curl -s -o /dev/null -w '%{http_code}' {{site}}/)"
-
-# build images -> ship to the node -> push to Hub -> verify. The desktop
-# installer and mica-cli binaries are NOT here — GitHub Actions builds those
-# when you push the `v*` tag (docs/release.md).
-[doc("The whole web+api release: build -> ship -> push -> verify")]
-deploy-prod tag=deploy_tag: (docker-build tag) (ship tag) (docker-push tag) verify-prod
-    @echo "==> web + api live at {{site}}"
+    echo "bundle: $(curl -fsS {{site}}/main.dart.js | md5sum | cut -c1-12)…"

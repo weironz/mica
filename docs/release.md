@@ -1,55 +1,36 @@
 # 发版与构建(Release & build)
 
-一次发版产出 **5 样东西**,分两条流水线。**记住这条边界**:
+**一句话**:**CI 构建一切,`just` 决定何时上线。**
 
-| 产物 | 谁构建 | 怎么触发 |
+推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后你跑 `just deploy-prod X.Y.Z`
+把生产滚到那个版本。两步,没有第三步。
+
+| 产物 | 谁构建 | 去哪 |
 |---|---|---|
-| `Mica-Setup-X.Y.Z.exe`(Windows 桌面安装包) | **GitHub Actions** | 推 `v*` tag |
-| `mica-cli-X.Y.Z-{windows-x64.exe,linux-x64,macos-arm64}` | **GitHub Actions** | 推 `v*` tag(同上) |
-| `mica-web` 镜像 → 线上 web | **本地手动** | `just deploy-prod` |
-| `mica-api` 镜像 → 线上 API | **本地手动** | `just deploy-prod`(同上) |
-| Docker Hub 副本(api + web) | **本地手动** | `just docker-push`(含在 `deploy-prod` 里) |
+| `Mica-Setup-X.Y.Z.exe` | **CI** job `windows` | GitHub Release(驱动应用内自动更新) |
+| `mica-cli` ×3(win/linux/macos) | **CI** job `cli` | GitHub Release |
+| `mica-api` / `mica-web` / `mica-cli` 镜像 | **CI** job `images` | **阿里云 ACR**(生产拉这里)+ Docker Hub(异地副本) |
+| 生产上线 | **你**:`just deploy-prod X.Y.Z` | node72 从 ACR pull |
 
-> **Actions 管"发给用户的东西"(安装包 + CLI);"线上服务"(web + api)全靠本地手动。**
-> web/api 没有任何 CI —— 别指望推了 tag 线上就更新了。
+## 为什么 CI 不做部署
 
-## GitHub Actions
+让 CI 能部署,就得把**生产 root SSH key 放进 GitHub secrets** —— 仓库或 Actions 一旦
+被攻破,等于生产被攻破。现在 CI 只持有**推镜像的凭据**(权限小、可单独吊销),上线是
+你主动按的一下。这个边界是安全上的实质区别,不是流程洁癖。
 
-两个 workflow,都在 `.github/workflows/`:
+## 镜像与 tag:两条硬规矩
 
-- **`release-windows.yml`(Release)** —— 触发:推 `v*` tag(或手动 `workflow_dispatch`,`publish=false` 时为 dry-run)。
-  - job `windows`:`flutter build windows --release` → Inno Setup 打包 → 安装包 attach 到 GitHub Release。
-  - job `cli`:3 平台矩阵,`cargo build --locked -p mica-cli --release` → attach 到同一个 Release。
-  - **`cli` 特意 `needs: windows`**:应用内自动更新读 GitHub 的 `/releases/latest`,不能让它看到一个还没挂上安装包的 release。同理 `prerelease: false` + `make_latest: true` —— 标成 prerelease 会让自动更新完全看不见新版本。
-- **`ci.yml`(CI)** —— 触发:推 main / PR。只跑测试(cargo build + `mica-markdown`/`mica-core`/`mica-interchange` 测试 + flutter analyze/test)。**不产出任何产物。**
+1. **三个镜像必须同版本一起推**。compose 里 api / web / **cli**(`backup` 服务)全部
+   吃同一个 `${MICA_VERSION}`。少推一个,那个服务就拉不到镜像。CI 的矩阵保证了这点。
+2. **tag 永远不可变(`v0.5.1`),绝不用滚动 tag / `latest`**。
+   历史教训:生产曾靠第三方拉取加速器 `docker.1ms.run` 访问 Docker Hub,而这类 mirror
+   **会缓存 tag→digest** —— 滚动 tag(过去是 `v0.3` 一路滚到 v0.5)存在"推了新镜像、
+   拉下来还是旧的"的真实风险。换成 ACR 一方仓库 + 不可变 tag 之后,这类问题从根上没了:
+   一个从未存在过的 tag,无从被缓存成旧值。
 
-## 前置条件(本地)
-
-```bash
-winget install Casey.Just          # just 1.56+,所有 recipe 的入口
-choco install innosetup -y         # 仅 build-installer 需要
-docker login                       # 仅 docker-push 需要
-```
-Flutter / Rust / Docker Desktop / OpenSSH(连 node)见 `docs/dev-environment.md`。
-
-## 本地手动构建四个产物
-
-`just --list` 看全部。四个产物各一条:
-
-```bash
-just build-cli              # 1/4  → target/release/mica-cli.exe
-just build-installer 0.5.0  # 2/4  → clients/mica_flutter/installer/Output/Mica-Setup-0.5.0.exe
-just build-web              # 3/4  → deploy/web(顺带打印 bundle md5)
-just build-api              # 4/4  → target/release/mica-api-server(本地跑/剖析用)
-just build-all              # 1+3+4(installer 要 Windows 专属工具链,不含在内)
-```
-
-镜像与推送:
-
-```bash
-just docker-build           # 构建 mica-api + mica-web 两个镜像(会先跑 build-web)
-just docker-push            # 推 Docker Hub
-```
+> 顺带更正一个流传过的错误说法:**节点并非连不上 Docker Hub**(实测 `docker pull` 通,
+> 走的是 daemon 里配的 `docker.1ms.run` 加速器)。以前那套 `docker save | scp | load`
+> 经笔记本中转 90MB 的搬运,是建立在这个过时假设上的,现已删除。
 
 ## 完整发版流程
 
@@ -57,32 +38,89 @@ just docker-push            # 推 Docker Hub
    - `clients/mica_flutter/pubspec.yaml` 的 `version:`
    - `clients/mica_flutter/lib/main.dart` 的 `kAppVersion`
    - `crates/api-server/Cargo.toml` 的 `version`(顺带 `cargo check` 更新 `Cargo.lock`)
-2. **判断要不要重建 api**:改动是否触及 `crates/markdown` 等服务端依赖?
-   链路是 `api-server → mica-app-core → mica-markdown`。用 `cargo tree -p <crate> | grep <dep>` 实证,别猜。
-   (例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建;`mica-cli` 不依赖 markdown → 其镜像不用动。)
-3. `just test` 全绿。
+2. **判断服务端要不要跟着发**:改动是否触及 `crates/markdown` 等服务端依赖?
+   链路 `api-server → mica-app-core → mica-markdown`。用 `cargo tree -p <crate> | grep <dep>`
+   实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)
+3. `just test` 全绿;想更稳就 `just parity-check` 跑一遍真镜像。
 4. 提交 → `git push origin main` → `git tag vX.Y.Z && git push origin vX.Y.Z`
-   → **Actions 自动出安装包 + 3 个 CLI 二进制**。
-5. `just deploy-prod` → 构建镜像 → 送上 node → 重建服务 → 推 Hub → 验证。
-6. `gh run watch` 看 Actions;`gh release view vX.Y.Z` 确认 4 个 asset 都在。
+   → **CI 自动产出全部 7 个产物**(约 10–15 分钟)。
+5. `gh run watch` 等 CI 绿;`gh release view vX.Y.Z` 确认 4 个 asset 都在。
+6. `just deploy-prod X.Y.Z` → 节点改 `.env` 的 `MICA_VERSION` → 从 ACR pull → 重建
+   api+web → 等健康 → **验证 `/api/health` 真的报这个版本**。
 
-纯客户端发版(没碰服务端)可以只 `just deploy-prod` 发 web、跳过 api——但 `deploy-prod` 是两个一起来,想只发 web 就手动 `just docker-build && just ship`,或直接接受 api 重建一次(无害)。
+> `deploy-prod` 会把 `MICA_VERSION` **写进节点 `.env`**,所以之后重启/重启机器都会回到
+> 同一个版本,不会悄悄退回旧版。
 
-## 线上部署的关键事实
+## 本地还需要什么
 
-- **节点**:`root@mica.cloudcele.com`,`/data/mica`,容器名 `mica-api-1` / `mica-web-1`。
-- **节点连不上 Docker Hub** —— 所以镜像走 `docker save | gzip | ssh docker load`(`just ship`),**不是** `docker pull`。推 Hub 只是异地副本,不是投递路径。
-- **滚动标签 `v0.3` ≠ 应用版本**。compose 读 `/data/mica/.env` 的 `MICA_VERSION`,这个指针从 v0.3 一路滚到了 v0.5.x。要改名得同时改节点 `.env` **并**重打 `mica-cli` 镜像(backup 服务用它),否则那个服务会去 Hub 拉取然后失败。
+**Docker Desktop 仍然必需**(它不是只为发版而装):
+
+- `just dev-up` —— 本地开发的 postgres + rustfs
+- `just parity-check` —— 发版前跑**真镜像**,抓容器专属 bug(如 loopback 绑定)
+- `just docker-build` / `docker-push` —— **CI 挂掉时的兜底**,正常发版用不到
+
+前置:
+```bash
+winget install Casey.Just          # just 1.56+,所有 recipe 的入口
+choco install innosetup -y         # 仅本地 build-installer 需要(CI 自己装)
+```
+
+## 本地手动构建(不走 CI 时)
+
+```bash
+just build-cli              # → target/release/mica-cli.exe
+just build-installer 0.5.0  # → clients/mica_flutter/installer/Output/Mica-Setup-0.5.0.exe
+just build-web              # → deploy/web
+just build-api              # → target/release/mica-api-server
+just build-all              # 上面除 installer 外全部
+
+just docker-build 0.5.1     # 三个镜像(CI 兜底)
+just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.com
+```
+
+## 生产环境事实
+
+- **节点**:`root@mica.cloudcele.com`,`/data/mica`,容器 `mica-api-1` / `mica-web-1`。
+- **`.env` 两个关键变量**:
+  - `MICA_REGISTRY=registry.cn-shenzhen.aliyuncs.com/willspace`(compose 默认值也是它)
+  - `MICA_VERSION=vX.Y.Z`(由 `just deploy-prod` 改写)
+- **节点必须能 pull ACR**:仓库设为公开,或在节点上 `docker login registry.cn-shenzhen.aliyuncs.com`
+  一次(凭据只存在节点本地)。
 - **`--no-deps`**:只重建 api + web,postgres / rustfs / backup 不动。
-- **验证不能只看 200**:`just verify-prod` 会比对**线上 `main.dart.js` 的 md5 与本地 `deploy/web/` 的是否一致** —— 这是唯一能抓到"镜像陈旧 / 层缓存没更新"的手段。再加 `/api/health` 的 version 与 `/mcp` 状态码。
+- **验证不能只看 200**:`just verify-prod X.Y.Z` 会断言 `/api/health` 报的 version 就是
+  你要的那个 —— 这是唯一能抓到"镜像没真正更新 / 拉到旧层"的手段。
+
+## CI 需要的 secret
+
+仓库级(值不入库、不进任何文档):
+
+| Secret | 用途 |
+|---|---|
+| `ACR_USERNAME` / `ACR_PASSWORD` | 推阿里云 ACR(用 ACR 的**镜像仓库登录密码**或只授 ACR 权限的 RAM 子账号,**别用账号级 AK/SK**) |
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 推 Docker Hub(Personal access token,Read & Write) |
+
+设置方式(值不会留在 shell history):
+```bash
+gh secret set ACR_USERNAME
+gh secret set ACR_PASSWORD
+gh secret set DOCKERHUB_USERNAME
+gh secret set DOCKERHUB_TOKEN
+```
+
+> 凭据文件(`password.txt` / `aliyun-ak.txt` 等)已在 `.gitignore` 里。这是个**公开仓库**,
+> 镜像仓库的写权限一旦外泄,别人能往生产镜像里推任意内容,节点会照单全收地拉下来跑。
 
 ## 坑(踩过的)
 
-- **Windows 上的 `bash` 是 WSL 的**(`C:\WINDOWS\system32\bash.exe`)。justfile 用 `set windows-shell` 钉死 Git Bash;若走 WSL,那边没有 Windows 的 docker/flutter/cargo,路径还变成 `/mnt/d/...` → 全挂。
-- **Windows 没有 `rsync`**。旧 recipe 用 rsync 暂存 bundle,在 Windows 上直接失败;现用 `rm -rf` + `cp -r`。
-- **`docker build` 必须带 `--provenance=false --sbom=false`**。buildx 默认挂 OCI attestation,镜像变成多 manifest 索引,节点上 `docker load` 解不开。
-- **Inno Setup 不在默认环境里**,`build-installer` 前先 `choco install innosetup -y`。
-- Docker Desktop 没启动时 `docker build` 报 `npipe:////./pipe/dockerDesktopLinuxEngine` 找不到 —— 启动它再来。
+- **Windows 上 PATH 里的 `bash` 是 WSL 的**(`C:\WINDOWS\system32\bash.exe`)。justfile 用
+  `set windows-shell` 钉死 Git Bash;走 WSL 的话那边没有 Windows 的 docker/flutter/cargo,
+  路径还变 `/mnt/d/...` → 全挂。
+- **Windows 没有 `rsync`**,暂存 bundle 用 `rm -rf` + `cp -r`。
+- **`docker build` 必须带 `--provenance=false --sbom=false`**(CI 里是 build-push-action 的
+  `provenance: false` / `sbom: false`)。buildx 默认挂 OCI attestation,镜像变成多 manifest
+  索引,部分仓库和 `docker load` 解不开。
+- **Inno Setup 不在默认环境里**,本地 `build-installer` 前先 `choco install innosetup -y`。
+- Docker Desktop 没启动时 `docker build` 报 `npipe:////./pipe/dockerDesktopLinuxEngine` 找不到。
 
 ## 相关文档
 

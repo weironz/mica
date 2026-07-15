@@ -72,5 +72,13 @@ skills-lock.json
 /.github/*.instruction.md
 /.github/copilot-instructions.md
 
-# Local cloud credentials — never commit
+# Local cloud credentials — never commit.
+# `*token*.txt` above does NOT cover these; password.txt sat unignored while
+# holding live Docker Hub + Aliyun ACR credentials — one `git add -A` from
+# committing them to a public repo.
 aliyun-ak.txt
+password.txt
+*password*.txt
+*credential*
+*.pem
+*.key

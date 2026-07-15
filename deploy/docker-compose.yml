@@ -51,8 +51,17 @@ services:
       traefik.http.routers.mica-s3.tls.certresolver: letsencrypt
       traefik.http.services.mica-s3.loadbalancer.server.port: "9000"
 
+  # The three mica images are built + pushed together by CI on a `v*` tag
+  # (.github/workflows/release-windows.yml) and MUST move as a set —
+  # MICA_VERSION keys all of them.
+  #
+  # MICA_REGISTRY defaults to Aliyun ACR: prod is in CN, and pulling from
+  # Docker Hub there only worked through a third-party pull-through mirror
+  # (docker.1ms.run) that caches tag->digest — a stale-image trap. ACR is
+  # first-party; Docker Hub stays an off-site copy you can switch to with
+  # MICA_REGISTRY=willdockerhub. Tags are immutable versions, never `latest`.
   api:
-    image: willdockerhub/mica-api:${MICA_VERSION:-v0.1.5}
+    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-api:${MICA_VERSION:-v0.5.0}
     restart: unless-stopped
     environment:
       HTTP_ADDR: 0.0.0.0:8080
@@ -71,7 +80,7 @@ services:
         condition: service_started
 
   web:
-    image: willdockerhub/mica-web:${MICA_VERSION:-v0.1.5}
+    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-web:${MICA_VERSION:-v0.5.0}
     restart: unless-stopped
     networks: [default, traefik]
     depends_on:
@@ -92,7 +101,7 @@ services:
   #   docker compose --profile backup up -d backup
   # Talks to the API over the internal network (no token ever leaves the host).
   backup:
-    image: willdockerhub/mica-cli:${MICA_VERSION:-v0.1.5}
+    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-cli:${MICA_VERSION:-v0.5.0}
     profiles: ["backup"]
     restart: unless-stopped
     depends_on:
