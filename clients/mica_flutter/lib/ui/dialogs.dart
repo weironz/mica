@@ -215,9 +215,6 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
-    required this.activeIsLocal,
-    required this.onSwitchWorld,
-    required this.localAvailable,
     required this.maxPageWidth,
   });
 
@@ -256,12 +253,6 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
-
-  /// Active world + its switch, surfaced in Settings → 服务器 (moved out of the
-  /// workspace menu). [localAvailable] hides the switch on web (no local world).
-  final bool activeIsLocal;
-  final Future<void> Function(bool local) onSwitchWorld;
-  final bool localAvailable;
 
   /// The realizable full-bleed column width, measured at the editor — the page-
   /// width slider's max, so its travel maps to widths the window can actually show.
@@ -987,37 +978,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   List<Widget> _serverSection(BuildContext context) => [
     _sectionTitle(context, Icons.dns_outlined, '服务器', const Color(0xFF2563EB)),
     const SizedBox(height: 8),
-    // 本地 / 云服务器 world switch — moved here from the workspace menu (the
-    // switcher just lists the active world's workspaces now). Picks which world
-    // the sidebar shows. Hidden on web (no local world).
-    if (widget.localAvailable) ...[
-      SegmentedButton<bool>(
-        segments: const [
-          ButtonSegment(
-            value: true,
-            icon: Icon(Icons.computer_outlined, size: 18),
-            label: Text('本地'),
-          ),
-          ButtonSegment(
-            value: false,
-            icon: Icon(Icons.cloud_outlined, size: 18),
-            label: Text('云服务器'),
-          ),
-        ],
-        selected: {widget.activeIsLocal},
-        showSelectedIcon: false,
-        onSelectionChanged: (s) {
-          final local = s.first;
-          if (local == widget.activeIsLocal) return;
-          Navigator.of(
-            context,
-          ).pop(); // close Settings; land in the chosen world
-          widget.onSwitchWorld(local);
-        },
-      ),
-      const SizedBox(height: 16),
-    ],
-    // Which cloud server the "云服务器" world talks to.
+    // No 本地/云服务器 switch here any more. It used to sit at the top of this
+    // section and, on tap, persist the world AND close Settings out from under
+    // you. It is gone rather than fixed: it was a *navigation* action wearing a
+    // setting's clothes, and the workspace switcher already navigates — picking
+    // a workspace is what decides which world you are in, because each one
+    // carries its own origin. What remains here is the actual setting: which
+    // server the cloud workspaces live on.
     TextField(
       controller: _serverUrl,
       enabled: !_serverSaving,
@@ -1030,21 +997,15 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         border: OutlineInputBorder(),
       ),
     ),
-    Align(
-      alignment: Alignment.centerLeft,
-      child: TextButton.icon(
-        onPressed: _serverSaving
-            ? null
-            : () => setState(() => _serverUrl.text = kMicaCloudUrl),
-        icon: const Icon(Icons.cloud_outlined, size: 16),
-        label: const Text('Use Mica Cloud'),
-      ),
-    ),
+    // "Use Mica Cloud" lived here as a button that only typed the default URL
+    // into the field above — which the field's own hint already shows. AppFlowy
+    // doesn't even give its hosted cloud a URL box (it's a constant); a button
+    // whose whole job is to fill in a default is noise.
     const SizedBox(height: 10),
     Text(
-      '本地工作区始终在这台设备上,与服务器无关。切换服务器会断开当前云端'
-      '连接(凭证保留,切回即恢复登录);登录/登出入口在工作区切换器与账号'
-      '菜单。',
+      '云端工作区住在这台服务器上;本地工作区始终在这台设备上,与服务器'
+      '无关。两者都列在左上角的工作区切换器里 —— 点哪个就打开哪个。换服务器'
+      '会断开当前云端连接(凭证按服务器保留,换回即恢复登录)。',
       style: Theme.of(
         context,
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),

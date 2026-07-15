@@ -3237,41 +3237,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Switch the whole switcher to a world (the Level-1 world toggle). Lands on
-  /// that world's current/first workspace; switching to a signed-out cloud world
-  /// prompts sign-in first, then lands there. In-place — both worlds are
-  /// first-class and long-lived, so no restart (unlike AppFlowy's anon→cloud).
-  Future<void> _switchWorld(bool local) async {
-    if (local == _activeIsLocal) return; // already in that world
-    if (local) {
-      final target = _localSelectedWorkspace ?? _localWorkspaces.firstOrNull;
-      if (target == null) return; // local always seeds one, but be safe
-      await _selectEntry(
-        WorkspaceEntry(origin: 'local', workspace: target, role: 'owner'),
-      );
-      return;
-    }
-    // Cloud world needs a signed-in session.
-    if (_session == null) {
-      await _promptSignIn();
-      if (!mounted || _session == null) return; // cancelled / failed
-    }
-    final cloudOrigin = _api.baseUri.toString();
-    final target = _selectedWorkspace ?? _workspaces.firstOrNull;
-    if (target == null) {
-      // Signed in but no cloud workspaces yet — flip world so the empty-cloud
-      // state (create / import) shows instead of the local tree.
-      if (_activeOrigin != cloudOrigin) {
-        setState(() => _activeOrigin = cloudOrigin);
-        savePref('activeOrigin', cloudOrigin);
-      }
-      return;
-    }
-    await _selectEntry(
-      WorkspaceEntry(origin: cloudOrigin, workspace: target, role: target.role),
-    );
-  }
-
   // Per-entry workspace actions (P3c): the switcher lists BOTH worlds, so row
   // actions must dispatch on the ROW's origin, not the active one.
   Future<void> _renameEntry(WorkspaceEntry e, String name) => e.isLocal
@@ -3369,7 +3334,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       session: session,
       entries: _workspaceEntries,
       activeIsLocal: local,
-      onSwitchWorld: _switchWorld,
       selectedRef: _selectedEntry?.ref,
       onSelectEntry: _selectEntry,
       onRenameEntry: _renameEntry,
@@ -3470,8 +3434,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onLoadTokens: local ? null : _loadTokens,
       onCreateToken: local ? null : _createToken,
       onRevokeToken: local ? null : _revokeToken,
-      userName: _session?.user.displayName ?? (local ? '本地' : ''),
-      userEmail: _session?.user.email ?? '',
+      // The identity of the world you are LOOKING AT, not "do you happen to
+      // have a session". `_session?.x ?? (local ? … : …)` asked the latter, so
+      // a local workspace showed the cloud account and claimed you were editing
+      // these files as that person — which isn't true. The local world has no
+      // account: it is files on this device, owned by nobody.
+      userName: local ? '本地工作区' : (_session?.user.displayName ?? ''),
+      userEmail: local ? '这台设备' : (_session?.user.email ?? ''),
       onUpdateProfile: local ? (_) async {} : _updateProfile,
       onChangePassword: local ? (_, _) async {} : _changePassword,
       cloudOrigin: _cloudOrigin,
@@ -3758,7 +3727,6 @@ class WorkspaceView extends StatefulWidget {
     required this.session,
     required this.entries,
     required this.activeIsLocal,
-    required this.onSwitchWorld,
     required this.selectedRef,
     required this.onSelectEntry,
     required this.onRenameEntry,
@@ -3865,7 +3833,6 @@ class WorkspaceView extends StatefulWidget {
 
   /// Switch the whole switcher to a world (true = local). Signed-out cloud
   /// prompts sign-in first. In-place; no restart.
-  final Future<void> Function(bool local) onSwitchWorld;
   final WorkspaceRef? selectedRef;
   final Future<void> Function(WorkspaceEntry entry) onSelectEntry;
   final Future<void> Function(WorkspaceEntry entry, String name) onRenameEntry;
@@ -4383,6 +4350,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     child: _WorkspaceSelector(
                       entries: widget.entries,
                       activeIsLocal: widget.activeIsLocal,
+                      cloudLabel: widget.cloudOriginLabel,
                       selectedRef: widget.selectedRef,
                       cloudEmail: widget.session?.user.email,
                       onSignIn: widget.onSignIn,
@@ -6071,9 +6039,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onChangePassword: widget.onChangePassword,
         cloudOrigin: widget.cloudOrigin,
         onConnectCloud: widget.onConnectCloud,
-        activeIsLocal: widget.activeIsLocal,
-        onSwitchWorld: widget.onSwitchWorld,
-        localAvailable: widget.localAvailable,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
         maxPageWidth: _editorAvailWidth,

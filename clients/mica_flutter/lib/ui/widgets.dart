@@ -3,15 +3,27 @@
 // `part of main.dart`. Extracted 2026-07 for navigability.
 part of '../main.dart';
 
-/// Workspace switcher (v0.3.2): ONE WORLD AT A TIME. A Level-1 world toggle
-/// (Cloud account / Local device) sits on top; below it, only the ACTIVE world's
-/// workspaces — cloud (server label + account, or a sign-in card when signed
-/// out) OR local, never both tiled. Create/import land in the active world; row
-/// actions still dispatch on the ROW's entry.
+/// Workspace switcher: **every** workspace, grouped by where it lives — the
+/// cloud server (with its account, or a sign-in row when signed out) and this
+/// device. Switching is picking a row; there is no mode to leave first.
+///
+/// This replaced a "one world at a time" model where the menu showed only the
+/// active world and a separate toggle (Settings → 服务器) chose which. That
+/// toggle was the only thing making "which world am I in" a question the user
+/// had to answer — [WorkspaceEntry.origin] already says where each workspace
+/// lives (`'local'` or the server URL), so the active origin is simply *derived*
+/// from the row you pick (see `_selectEntry`). AFFiNE reaches the same place by
+/// treating `local` as a reserved server id in one flat list; AppFlowy keeps a
+/// global mode and pays for it with a restart. We already had AFFiNE's model —
+/// the toggle was a filter bolted on top of it.
+///
+/// Create/import land in the selected workspace's world; row actions dispatch on
+/// the ROW's entry.
 class _WorkspaceSelector extends StatefulWidget {
   const _WorkspaceSelector({
     required this.entries,
     required this.activeIsLocal,
+    required this.cloudLabel,
     required this.selectedRef,
     required this.cloudEmail,
     required this.onSignIn,
@@ -27,11 +39,16 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onDetach,
   });
 
+  /// Every workspace, both worlds. Grouped for display, never filtered.
   final List<WorkspaceEntry> entries;
 
-  /// The active world (true = local); the list shows only its workspaces.
-  /// Switching worlds lives in Settings → 服务器, not this menu.
+  /// Where the *selected* workspace lives. Descriptive only — it labels the
+  /// collapsed button; it does not decide what the menu lists.
   final bool activeIsLocal;
+
+  /// Label for the cloud group (the configured server's host).
+  final String cloudLabel;
+
   final WorkspaceRef? selectedRef;
 
   /// Signed-in account email, or null when signed out (shows the sign-in row).
@@ -84,14 +101,20 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
       ),
       menuChildren: [
-        // Only the ACTIVE world's workspaces — one world at a time. Switching
-        // world (本地 / 云服务器) lives in Settings → 服务器, not here.
-        if (!widget.activeIsLocal &&
-            widget.cloudEmail == null &&
-            widget.onSignIn != null)
+        // Both groups, always. The single `activeIsLocal ? locals : cloud`
+        // that used to stand here WAS the mode: two lists were already built
+        // and one was thrown away, so "which world am I in" became a question
+        // only because the menu refused to answer it.
+        _groupHeader(Icons.cloud_outlined, widget.cloudLabel),
+        if (widget.cloudEmail == null && widget.onSignIn != null)
           _signInRow()
         else
-          for (final e in (widget.activeIsLocal ? locals : cloud)) _row(e),
+          for (final e in cloud) _row(e),
+        if (locals.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          _groupHeader(Icons.computer_outlined, '这台设备'),
+          for (final e in locals) _row(e),
+        ],
         const Divider(height: 8),
         _createRow(),
         SizedBox(
@@ -164,6 +187,35 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           ),
         );
       },
+    );
+  }
+
+  /// Names which server a group of rows lives on. Without it a flat list of
+  /// every workspace would be exactly the ambiguity the old mode was hiding
+  /// from — the grouping is what lets the mode go.
+  Widget _groupHeader(IconData icon, String label) {
+    return SizedBox(
+      width: 320,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Row(
+          children: [
+            Icon(icon, size: 13, color: const Color(0xFF94A3B8)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF94A3B8),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
