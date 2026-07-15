@@ -14,6 +14,7 @@ import 'markdown.dart';
 import 'marks.dart';
 import 'clipboard_copy.dart';
 import 'image_actions.dart';
+import 'image_animator.dart';
 import 'mermaid_preview.dart';
 import 'model.dart';
 import 'preview_raster.dart';
@@ -376,9 +377,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   MouseCursor _cursor = SystemMouseCursors.text;
 
   // Decoded images keyed by file_id, painted on the canvas by RenderDocument.
+  // For an animated one (GIF / animated WebP) this holds the frame currently
+  // on screen and _imageAnims holds the loop feeding it.
   final Map<String, ui.Image> _imageCache = {};
   final Set<String> _imageErrors = {};
   final Set<String> _imageLoading = {};
+  final Map<String, ImageAnimator> _imageAnims = {};
+  // Keys the canvas drew since each one's last frame — see [_onImageFrame].
+  final Set<String> _imagePainted = {};
+  // Bumped per animated frame, so an open fullscreen viewer moves too.
+  final ValueNotifier<int> _imageFrameTick = ValueNotifier(0);
   // file_id -> fresh download URL, for copy/export of images.
   final Map<String, String> _imageUrlCache = {};
   // Active table column resize: node, right-column index, start x, start
@@ -776,10 +784,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _cellEntry = null;
     _markBar?.remove();
     _markBar = null;
+    for (final anim in _imageAnims.values) {
+      anim.dispose();
+    }
+    _imageAnims.clear();
     for (final img in _imageCache.values) {
       img.dispose();
     }
     _imageCache.clear();
+    _imageFrameTick.dispose();
     setRichPasteHandler(null);
     setRichImagePasteHandler(null);
     _stopAutoScroll();
@@ -2406,20 +2419,79 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         return;
       }
       try {
-        final codec = await ui.instantiateImageCodec(bytes);
-        final frame = await codec.getNextFrame();
-        if (!mounted) {
-          frame.image.dispose();
-          return;
-        }
-        _imageLoading.remove(fileId);
-        setState(() => _imageCache[fileId] = frame.image);
+        await _decodeInto(fileId, bytes);
       } catch (_) {
         if (!mounted) return;
         _imageLoading.remove(fileId);
         setState(() => _imageErrors.add(fileId));
       }
     });
+  }
+
+  /// Decode [bytes] under [key] and put them on the canvas: a still image once,
+  /// an animated one (GIF / animated WebP) frame by frame via [ImageAnimator].
+  Future<void> _decodeInto(String key, Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    if (!mounted) {
+      codec.dispose();
+      return;
+    }
+    if (codec.frameCount > 1) {
+      _imageAnims.remove(key)?.dispose();
+      // Seed the paint mark: nothing has drawn this yet, and the very first
+      // frame is what gives the canvas something to draw.
+      _imagePainted.add(key);
+      final anim = ImageAnimator(
+        CodecFrameSource(codec),
+        onFrame: (frame) => _onImageFrame(key, frame),
+      );
+      _imageAnims[key] = anim;
+      anim.start();
+      return;
+    }
+    final frame = await codec.getNextFrame();
+    codec.dispose();
+    if (!mounted) {
+      frame.image.dispose();
+      return;
+    }
+    _imageLoading.remove(key);
+    _imageErrors.remove(key);
+    setState(() => _imageCache[key] = frame.image);
+  }
+
+  /// One frame of an animated image, owned by us from here on.
+  void _onImageFrame(String key, ui.Image frame) {
+    if (!mounted) {
+      frame.dispose();
+      return;
+    }
+    final first = !_imageCache.containsKey(key);
+    if (first) {
+      _imageLoading.remove(key);
+      _imageErrors.remove(key);
+      // The first frame settles the block's natural size, so it has to go
+      // through layout. Every frame after is the same size — paint only.
+      setState(() => _imageCache[key] = frame);
+      return;
+    }
+    final previous = _imageCache[key];
+    _imageCache[key] = frame;
+    _render?.replaceImage(key, frame);
+    _imageFrameTick.value++;
+    previous?.dispose();
+
+    // Nothing drew the last frame: the block was deleted or its source
+    // replaced, and decoding on would burn CPU on a picture no one sees. The
+    // canvas re-arms the mark whenever it paints, so a block that comes back
+    // (undo) revives the loop in [_onImagePainted].
+    if (!_imagePainted.remove(key)) _imageAnims[key]?.pause();
+  }
+
+  void _onImagePainted(String key) {
+    _imagePainted.add(key);
+    final anim = _imageAnims[key];
+    if (anim != null && !anim.isPlaying) anim.start();
   }
 
   /// The image name to hang off a blob url, url-encoded. Cosmetic only (the
@@ -4317,8 +4389,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (node < 0 || node >= _controller.nodes.length) return;
     final data = _controller.nodes[node].data;
     final key = (data['file_id'] ?? data['url']) as String?;
-    final image = key == null ? null : _imageCache[key];
-    if (image == null) return;
+    if (key == null || _imageCache[key] == null) return;
     showDialog<void>(
       context: context,
       barrierColor: const Color(0xCC000000),
@@ -4329,7 +4400,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           children: [
             InteractiveViewer(
               maxScale: 6,
-              child: Center(child: RawImage(image: image)),
+              // An animated image keeps playing in here: the tick fires once
+              // per frame, and RawImage clones whatever it is handed — so the
+              // editor stays free to dispose the frame it has moved on from.
+              child: Center(
+                child: ValueListenableBuilder<int>(
+                  valueListenable: _imageFrameTick,
+                  builder: (context, _, child) {
+                    final frame = _imageCache[key];
+                    return frame == null
+                        ? const SizedBox.shrink()
+                        : RawImage(image: frame);
+                  },
+                ),
+              ),
             ),
             Positioned(
               top: 0,
@@ -4373,16 +4457,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// Seed the canvas image cache with freshly-uploaded bytes (skip the fetch).
   void _primeImage(String fileId, Uint8List bytes) {
     if (_imageCache.containsKey(fileId)) return;
-    ui.instantiateImageCodec(bytes).then((codec) => codec.getNextFrame()).then((
-      frame,
-    ) {
-      if (!mounted) {
-        frame.image.dispose();
-        return;
-      }
-      _imageErrors.remove(fileId);
-      setState(() => _imageCache[fileId] = frame.image);
-    }).catchError((_) {});
+    _decodeInto(fileId, bytes).catchError((_) {});
   }
 
   Future<void> _runInlineAi() async {
@@ -4494,6 +4569,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   previewImages: _previews.images,
                   onRequestPreview: _previews.request,
                   onRequestImage: _requestImage,
+                  onImagePainted: _onImagePainted,
                   remoteCursors: widget.remoteCursors,
                 ),
                 // Far off-screen: painted (capturable) but never visible.

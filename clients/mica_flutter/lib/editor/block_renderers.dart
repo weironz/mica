@@ -262,6 +262,9 @@ class ImageRenderer extends AtomicBlockRenderer {
     final external = node.data['file_id'] == null &&
         (node.data['url'] as String?)?.startsWith('http') == true;
     if (decoded != null) {
+      // Tell the host this picture is still on the canvas — that is what keeps
+      // an animated one running (and stops it once the block is gone).
+      host.onImagePainted?.call(key!);
       canvas.save();
       canvas.clipRRect(rr);
       // Matte the image onto white first, so a transparent (alpha) PNG's

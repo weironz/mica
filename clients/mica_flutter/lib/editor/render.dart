@@ -435,6 +435,28 @@ class RenderDocument extends RenderBox {
     markNeedsLayout();
   }
 
+  /// Swap in a new frame of an animated image (GIF / animated WebP).
+  ///
+  /// Separate from [images] because every frame of an animation is the same
+  /// size as the last, so the block's box never moves — going through the
+  /// setter would relayout the whole document ten-plus times a second for a
+  /// picture that hasn't changed shape. A frame that somehow *does* differ in
+  /// size falls back to a relayout rather than painting into a stale box.
+  void replaceImage(String key, ui.Image frame) {
+    final old = _images[key];
+    _images[key] = frame;
+    if (old != null && (old.width != frame.width || old.height != frame.height)) {
+      markNeedsLayout();
+    } else {
+      markNeedsPaint();
+    }
+  }
+
+  /// Called during paint for each image actually drawn. The host uses it to
+  /// stop animating pictures no longer on the canvas (block deleted, source
+  /// replaced) — see `_MicaEditorState._onImageFrame`.
+  void Function(String key)? onImagePainted;
+
   /// Rasterized previews per previewer id ('math', 'mermaid', …), keyed by
   /// source. Fed by the host's RasterPreviewPipeline.
   Map<String, Map<String, ui.Image>> _previewImages = const {};
@@ -1949,6 +1971,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.images = const {},
     this.imageErrors = const {},
     this.onRequestImage,
+    this.onImagePainted,
     this.previewImages = const {},
     this.onRequestPreview,
     this.remoteCursors = const [],
@@ -1963,6 +1986,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final Map<String, ui.Image> images;
   final Set<String> imageErrors;
   final void Function(String fileId)? onRequestImage;
+  final void Function(String key)? onImagePainted;
   final List<RemoteCursor> remoteCursors;
 
   /// Rasterized formulas keyed by LaTeX source (captured by the editor via
@@ -1980,6 +2004,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     appearance: appearance,
   )
     ..onRequestImage = onRequestImage
+    ..onImagePainted = onImagePainted
     ..onRequestPreview = onRequestPreview
     ..imageErrors = imageErrors
     ..previewImages = previewImages
@@ -1995,6 +2020,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..caretOn = caretOn
       ..appearance = appearance
       ..onRequestImage = onRequestImage
+      ..onImagePainted = onImagePainted
       ..onRequestPreview = onRequestPreview
       ..imageErrors = imageErrors
       ..previewImages = previewImages

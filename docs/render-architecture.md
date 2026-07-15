@@ -79,6 +79,39 @@ the second: on web, JS interop → mermaid.js → SVG → image; elsewhere,
 code. No new block kind: ` ```mermaid ` stays a `code_block` in the document
 model (round-trips through Markdown untouched); only rendering changes.
 
+## Decision 3: animated images are played by hand, off the canvas's own cache
+
+GIFs (and animated WebP) can't ride Flutter's `Image` widget — the canvas paints
+raw `ui.Image`s. `ui.instantiateImageCodec` + a single `getNextFrame()` gives you
+frame 0 and nothing else, which is exactly what a GIF used to look like here:
+still.
+
+`image_animator.dart` plays the loop instead, modelled on Flutter's own
+`MultiFrameImageStreamCompleter`. Two things it copies, both load-bearing:
+
+- **Frames are emitted from a scheduler frame callback**, not straight off a
+  `Timer`. The engine stops producing frames when the window is hidden, so the
+  animation stalls by itself rather than decoding for nobody.
+- **A 0ms delay means "unspecified"**, not "flat out" — substitute 100ms, as
+  browsers do, or the loop pegs a core.
+
+Two things it does NOT copy, because the canvas is not a widget tree:
+
+- **Frame swaps go through `RenderDocument.replaceImage`, not the `images`
+  setter** — every frame is the same size, so the box never moves and a relayout
+  of the whole document per frame would be pure waste. A frame that somehow does
+  differ in size falls back to a relayout.
+- **Loops are stopped by the paint, not by the model.** `ImageRenderer.paint`
+  reports each image it draws (`onImagePainted`); a loop whose last frame nobody
+  drew is paused (block deleted, source replaced) and revives when the canvas
+  paints it again. There is no separate liveness bookkeeping to drift out of
+  sync with the document.
+
+Ownership is the sharp edge: each emitted frame belongs to the host from the
+moment it lands, the host disposes the frame it has moved past, and `RawImage`
+clones what it is handed — which is why the fullscreen viewer can hold a frame
+the editor is busy replacing.
+
 ## Non-goals
 
 - No renderer interface for text blocks (see Decision 1).
