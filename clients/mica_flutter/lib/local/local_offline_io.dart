@@ -154,6 +154,25 @@ class LocalOffline {
     store.deleteWorkspace(origin: 'local', id: id);
   }
 
+  /// Erase everything mirrored from [origin] — every doc, view and workspace.
+  /// Used when a server is removed: its data lives on that server, and what we
+  /// keep here is only a mirror of it.
+  ///
+  /// Scoped by origin throughout (the store has always taken it; the methods
+  /// above merely pin it to `'local'`), so one server's removal cannot reach
+  /// another's rows, nor the on-device workspaces — which are nobody's mirror
+  /// and would be gone for good.
+  void forgetOrigin(String origin) {
+    final store = _store;
+    if (store == null || origin == 'local') return;
+    for (final v in store.listViews(origin: origin)) {
+      store.deleteDoc(docId: v.objectId);
+    }
+    for (final w in store.listWorkspaces(origin: origin)) {
+      store.deleteWorkspace(origin: origin, id: w.id);
+    }
+  }
+
   // ── page tree ──────────────────────────────────────────────────────────────
 
   /// Views for [origin] ("local" or a server URL). Defaults to local.

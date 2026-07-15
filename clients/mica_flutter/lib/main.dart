@@ -190,7 +190,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Mica Cloud); whether the user is signed in to it is a separate question
   /// (the per-origin auth prefs). There is no "mode" anymore — the local world
   /// always exists alongside.
+  /// The server the cloud side currently talks to. Always one of [_servers].
   late String _cloudOrigin;
+
+  /// Every configured server, in the order the user added them. Credentials are
+  /// already filed per origin (`authToken:$origin`, …), so N servers cost
+  /// nothing to keep — switching back to one restores its sign-in.
+  ///
+  /// `'local'` is deliberately NOT in here: it is a peer of these in the
+  /// Settings list, but it is not a server and has no URL, credentials or
+  /// session. See [_connections].
+  List<String> _servers = const [];
+
+  /// What the Settings list offers, in order: this device, then every server.
+  /// One list, one choice — [_activeOrigin] is whichever is picked.
+  List<String> get _connections => ['local', ..._servers];
 
   AuthSession? _session;
   List<Workspace> _workspaces = const [];
@@ -304,6 +318,101 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// credentials are KEPT under the old origin's keys, so switching back signs
   /// in again without retyping; the new origin's stored session (if any) is
   /// restored immediately.
+  /// The configured servers, seeded from the single-server world that came
+  /// before: whatever `cloudOrigin` the legacy migration settled on becomes
+  /// server #1, so nobody's sign-in moves. [seed] is always present, even if a
+  /// stale `servers` list somehow lost it — the app must never end up pointing
+  /// at a server that isn't in its own list.
+  List<String> _loadServers(String seed) {
+    final raw = loadPref('servers') ?? '';
+    var list = <String>[];
+    if (raw.isNotEmpty) {
+      try {
+        list = (jsonDecode(raw) as List).cast<String>();
+      } catch (_) {
+        list = const [];
+      }
+    }
+    if (!list.contains(seed)) list = [seed, ...list];
+    return list;
+  }
+
+  void _saveServers() => savePref('servers', jsonEncode(_servers));
+
+  /// Make [origin] the one world on screen — `'local'` or one of [_servers].
+  /// The single entry point: local and a server are the same kind of choice, so
+  /// they go through the same door rather than a bool toggle.
+  Future<void> _setActiveConnection(String origin) async {
+    if (origin == _activeOrigin) return;
+    if (origin == 'local') {
+      // Keep the server's credentials — switching back must not cost a re-login.
+      _disconnectCloudSession();
+      setState(() => _activeOrigin = 'local');
+      savePref('activeOrigin', 'local');
+      return;
+    }
+    await _connectCloudServer(origin);
+    if (!mounted) return;
+    // Land on the server even when it has no session yet: its sign-in row is
+    // how you get one, and it lives in the world you just chose.
+    if (_activeOrigin != origin) {
+      setState(() => _activeOrigin = origin);
+      savePref('activeOrigin', origin);
+    }
+  }
+
+  /// Add a server and make it active. Returns an error message, or null on
+  /// success — a URL we can't parse must not silently become a dead entry.
+  Future<String?> _addServer(String url) async {
+    final parsed = Uri.tryParse(url.trim());
+    if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
+      return '请输入完整的服务器地址(含 https://)';
+    }
+    final normalized = parsed.toString();
+    if (!_servers.contains(normalized)) {
+      setState(() => _servers = [..._servers, normalized]);
+      _saveServers();
+    }
+    await _setActiveConnection(normalized);
+    return null;
+  }
+
+  /// Forget a server completely: its credentials AND its on-device mirror.
+  ///
+  /// "删除就删除干净,反正 server 云端还有数据在" — true for anything that
+  /// reached the server, which is why we push first: [drainOutbox] gives the
+  /// pending edits their last chance while we still have a session. What can't
+  /// be pushed (offline, server gone) only ever existed here, so the caller
+  /// must have said so out loud before we get here.
+  Future<void> _removeServer(String origin) async {
+    if (!_servers.contains(origin)) return;
+    if (_activeOrigin == origin) {
+      await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
+      await _setActiveConnection('local');
+      if (!mounted) return;
+    }
+    setState(() => _servers = _servers.where((s) => s != origin).toList());
+    _saveServers();
+    // Credentials, then the mirror. Both are keyed by origin, so this is exact
+    // — no other server's data can be caught by it.
+    savePref('authToken:$origin', '');
+    savePref('authUser:$origin', '');
+    savePref('refreshToken:$origin', '');
+    _local.forgetOrigin(origin);
+    // The app must always point at a server that exists.
+    if (_cloudOrigin == origin) {
+      final next = _servers.firstOrNull ?? kMicaCloudUrl;
+      if (!_servers.contains(next)) {
+        setState(() => _servers = [next]);
+        _saveServers();
+      }
+      setState(() => _cloudOrigin = next);
+      savePref('cloudOrigin', next);
+      final base = Uri.tryParse(next);
+      if (base != null) _api.baseUri = base;
+    }
+  }
+
   Future<void> _connectCloudServer(String url) async {
     final parsed = Uri.tryParse(url.trim());
     if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) return;
@@ -348,6 +457,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     }
     _cloudOrigin = cloudOrigin;
+    _servers = _loadServers(cloudOrigin);
     final base = Uri.tryParse(_cloudOrigin);
     if (base != null) {
       _api.baseUri = base;

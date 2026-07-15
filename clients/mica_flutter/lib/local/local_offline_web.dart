@@ -63,6 +63,11 @@ class LocalOffline {
 
   void deleteWorkspace(String id) {}
 
+  /// No-op: web has no local store (the mirror lives in IndexedDB, cleared with
+  /// the doc mirrors, not here). Present so the caller needn't branch on
+  /// platform. See the io variant for what this actually does.
+  void forgetOrigin(String origin) {}
+
   List<ViewData> listViews({String origin = 'local'}) => const [];
 
   void saveView(ViewData v, {String origin = 'local'}) {}
