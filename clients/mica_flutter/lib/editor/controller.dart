@@ -548,6 +548,30 @@ class EditorController extends ChangeNotifier {
     if (i < 0 || i >= nodes.length) return false;
     final cur = nodes[i];
 
+    // The caret is parked ON an atomic block (a divider, or an image the user
+    // clicked): Backspace removes it. This has to come first — an atomic block
+    // holds no text by nature, so the "empty styled line falls back to a
+    // paragraph" rule below would otherwise claim it and quietly turn the
+    // picture into a blank line, wiping its file_id instead of deleting it.
+    if (cur.isAtomic) {
+      nodes.removeAt(i);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': cur.id},
+      ]);
+      if (nodes.isEmpty) {
+        ensureNotEmpty();
+        return true;
+      }
+      // Land where the block was: end of the block above, else start of the
+      // one that slid up into its place.
+      final target = (i - 1).clamp(0, nodes.length - 1);
+      collapseTo(DocPosition(
+        target,
+        i > 0 ? nodes[target].text.length : 0,
+      ));
+      return true;
+    }
+
     // A styled-but-empty caret line first turns back into a plain paragraph.
     // This also lets Backspace clear an empty styled FIRST block (e.g. an empty
     // code block at the top), which has no previous block to merge into.
@@ -644,7 +668,27 @@ class EditorController extends ChangeNotifier {
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
     final i = sel.focus.node;
-    if (i < 0 || i + 1 >= nodes.length) return false;
+    if (i < 0 || i >= nodes.length) return false;
+
+    // The caret is parked ON an atomic block: Delete removes it, same as
+    // Backspace. Without this the merge below would pull the FOLLOWING block's
+    // text into the divider/image node — the block survives as a mongrel and
+    // its neighbour disappears.
+    final atCaret = nodes[i];
+    if (atCaret.isAtomic) {
+      nodes.removeAt(i);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': atCaret.id},
+      ]);
+      if (nodes.isEmpty) {
+        ensureNotEmpty();
+        return true;
+      }
+      collapseTo(DocPosition(i.clamp(0, nodes.length - 1), 0));
+      return true;
+    }
+
+    if (i + 1 >= nodes.length) return false;
     final cur = nodes[i];
     final next = nodes[i + 1];
 

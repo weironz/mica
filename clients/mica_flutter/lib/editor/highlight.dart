@@ -33,6 +33,84 @@ const Color _strColor = Color(0xFF0A7D34); // string — green
 const Color _comColor = Color(0xFF6B7280); // comment — grey
 const Color _numColor = Color(0xFFB45309); // number — amber
 const Color _fnColor = Color(0xFF2563EB); // function call — blue
+const Color _keyColor = Color(0xFF0F766E); // key / property / tag — teal
+
+/// Fence labels people actually write, mapped to the name the tokenizer knows.
+///
+/// Not cosmetic: an unknown language makes [buildCodeSpan] bail out and render
+/// the block as flat grey text, and pasted fences say ```py / ```sh / ```yml far
+/// more often than the canonical spelling. Every alias here scored **zero**
+/// coloured characters before the map existed.
+const Map<String, String> _languageAliases = {
+  'py': 'python',
+  'python3': 'python',
+  'sh': 'bash',
+  'shell': 'bash',
+  'zsh': 'bash',
+  'ksh': 'bash',
+  'console': 'bash',
+  'shell-session': 'bash',
+  'yml': 'yaml',
+  'rs': 'rust',
+  'js': 'javascript',
+  'jsx': 'javascript',
+  'mjs': 'javascript',
+  'cjs': 'javascript',
+  'node': 'javascript',
+  'ts': 'typescript',
+  'tsx': 'typescript',
+  'golang': 'go',
+  'c++': 'cpp',
+  'cxx': 'cpp',
+  'cc': 'cpp',
+  'hpp': 'cpp',
+  'h': 'c',
+  'htm': 'html',
+  'xml': 'html',
+  'svg': 'html',
+  'xhtml': 'html',
+  'jsonc': 'json',
+  'json5': 'json',
+  'sqlite': 'sql',
+  'psql': 'sql',
+  'postgres': 'sql',
+  'postgresql': 'sql',
+  'mysql': 'sql',
+  'text': 'plaintext',
+  'txt': 'plaintext',
+  'none': 'plaintext',
+  'plain': 'plaintext',
+};
+
+/// The canonical name for a fence label / dropdown choice: `py` → `python`.
+/// Unknown names pass through unchanged (and simply won't highlight).
+String canonicalCodeLanguage(String name) {
+  final n = name.trim().toLowerCase();
+  return _languageAliases[n] ?? n;
+}
+
+/// A structural pattern — syntax that carries a language's meaning without
+/// being a *word*, so the keyword set is powerless to express it.
+///
+/// This is the whole reason YAML looked dead: its salience is `key:`, and a
+/// keyword list can only match `true`/`false`/`null`, which barely occur. Same
+/// for a CSS property, an HTML tag, a JSON key.
+///
+/// [source] is anchored at the scan position. Group 1 is coloured when present,
+/// otherwise the whole match; either way it must start at the match's start, so
+/// the scanner can simply skip past what it coloured.
+class _Rule {
+  _Rule(String source, this.color, {this.leadOnly = false})
+      : pattern = RegExp(source);
+
+  final RegExp pattern;
+  final Color color;
+
+  /// Only try at a line's first real token — after indentation and after
+  /// YAML's `- ` item marker. This is what separates a `key:` from a colon
+  /// that merely appears inside a value (`url: http://x`).
+  final bool leadOnly;
+}
 
 class _Lang {
   const _Lang({
@@ -41,6 +119,7 @@ class _Lang {
     this.blockComments = true,
     this.strings = const ['"', "'", '`'],
     this.caseInsensitive = false,
+    this.rules = const [],
   });
 
   final Set<String> keywords;
@@ -48,6 +127,9 @@ class _Lang {
   final bool blockComments;
   final List<String> strings;
   final bool caseInsensitive;
+
+  /// Tried before comments/strings/keywords, in order. See [_Rule].
+  final List<_Rule> rules;
 }
 
 const _hashLike = ['#'];
@@ -139,16 +221,35 @@ final Map<String, _Lang> _langs = {
       'sizeof', 'enum', 'try', 'catch', 'throw',
     },
   ),
-  'json': const _Lang(
-    keywords: {'true', 'false', 'null'},
-    lineComments: [],
+  'json': _Lang(
+    keywords: const {'true', 'false', 'null'},
+    lineComments: const [],
     blockComments: false,
-    strings: ['"'],
+    strings: const ['"'],
+    rules: [
+      // A key is a string too, so without this every key and every value came
+      // out the same green and the structure read as one undifferentiated blob.
+      _Rule(r'"(?:[^"\\]|\\.)*"(?=\s*:)', _keyColor),
+    ],
   ),
-  'yaml': const _Lang(
-    keywords: {'true', 'false', 'null', 'yes', 'no'},
+  // YAML is nearly all keys and values: `true/false/null` are the only words a
+  // keyword set can catch, which is why this used to render as a grey slab.
+  'yaml': _Lang(
+    keywords: const {'true', 'false', 'null', 'yes', 'no', 'on', 'off'},
     lineComments: _hashLike,
     blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      // `key:` at the head of a line (indentation and `- ` don't count).
+      _Rule(r'''[A-Za-z_][A-Za-z0-9_.\-/]*(?=\s*:(?:\s|$))''', _keyColor,
+          leadOnly: true),
+      // "quoted key":
+      _Rule(r'''"(?:[^"\\]|\\.)*"(?=\s*:(?:\s|$))''', _keyColor, leadOnly: true),
+      // Anchors, aliases and merge keys: &base  *base  <<:
+      _Rule(r'[&*][A-Za-z0-9_\-]+', _fnColor),
+      // Document markers.
+      _Rule(r'^(?:---|\.\.\.)$', _comColor, leadOnly: true),
+    ],
   ),
   'sql': const _Lang(
     keywords: {
@@ -172,12 +273,36 @@ final Map<String, _Lang> _langs = {
     lineComments: _hashLike,
     blockComments: false,
   ),
-  'css': const _Lang(
-    keywords: {},
-    lineComments: [],
-    strings: ['"', "'"],
+  // CSS has no keywords worth the name — it is selectors, properties and
+  // values. It scored 1 coloured character out of 36 before these rules.
+  'css': _Lang(
+    keywords: const {},
+    lineComments: const [],
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'@[a-zA-Z-]+', _kwColor), // @media, @import, @keyframes
+      _Rule(r'[a-zA-Z-]+(?=\s*:)', _keyColor, leadOnly: true), // property:
+      _Rule(r'''[.#]?[A-Za-z_][A-Za-z0-9_\-]*(?=[^;{}]*\{)''', _fnColor,
+          leadOnly: true), // a selector, i.e. what precedes the next {
+      _Rule(r'[.#&:][A-Za-z_][A-Za-z0-9_\-]*', _fnColor), // .cls #id :hover
+    ],
   ),
-  'html': const _Lang(keywords: {}, lineComments: [], blockComments: false),
+  // HTML/XML: tags and attribute names carry the structure. Its `<!-- -->`
+  // comments are neither the `//` nor the `/* */` the tokenizer knows, so they
+  // come in as a rule too.
+  'html': _Lang(
+    keywords: const {},
+    lineComments: const [],
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'<!--[\s\S]*?(?:-->|$)', _comColor),
+      _Rule(r'<[!/?]?[A-Za-z][A-Za-z0-9:.\-]*', _kwColor), // <div  </div  <?xml
+      _Rule(r'/?>', _kwColor),
+      _Rule(r'[A-Za-z_:][A-Za-z0-9_:.\-]*(?=\s*=)', _keyColor), // attr=
+      _Rule(r'&[a-zA-Z]+;|&#\d+;', _numColor), // &nbsp; &#8212;
+    ],
+  ),
   'plaintext': const _Lang(keywords: {}, lineComments: [], blockComments: false),
   // Mermaid source (shown while the block is focused; unfocused blocks render
   // as a diagram). Diagram-type and structure words; `%%` line comments.
@@ -197,9 +322,46 @@ final Map<String, _Lang> _langs = {
 /// Resolve the effective language: explicit choice, or auto-detected when the
 /// choice is null/empty/`auto`.
 String resolveCodeLanguage(String code, String? selected) {
-  final choice = selected?.trim().toLowerCase() ?? '';
+  final choice = canonicalCodeLanguage(selected ?? '');
   if (choice.isNotEmpty && choice != 'auto') return choice;
   return detectLanguage(code);
+}
+
+/// The language whose *structural syntax* the code plainly uses, or null when
+/// nothing is conclusive.
+///
+/// Deliberately much stricter than [detectLanguage]: every signature here is
+/// syntax that would be an error in most other languages, not a word that
+/// merely leans one way (`echo`, `print(`, `:=` are all far too weak to appear
+/// here). Only used to overrule a language a *pasted* block claims about
+/// itself — see `retagMislabeledFences` — so a false positive silently
+/// mislabels someone's code, and the bar is set accordingly. Returning null is
+/// always the safe answer.
+String? strongLanguageSignature(String code) {
+  bool has(String p) => RegExp(p, multiLine: true).hasMatch(code);
+
+  // A shebang says what the file IS — nothing outranks it.
+  if (has(r'^#!.*\b(bash|sh|zsh|ksh)\b')) return 'bash';
+  if (has(r'^#!.*\bpython[\d.]*\b')) return 'python';
+  if (has(r'^#!.*\bnode\b')) return 'javascript';
+
+  // `def f(...):` / `class C(...):` / `elif`: a colon-terminated block header.
+  if (has(r'^\s*(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->[^:]+)?:') ||
+      has(r'^\s*elif\s+.+:\s*$') ||
+      has(r'^\s*class\s+\w+\s*(?:\([\w., ]*\))?\s*:\s*$')) {
+    return 'python';
+  }
+  if (has(r'\bfn\s+\w+\s*(?:<[^>]*>)?\s*\([^)]*\)') &&
+      (has(r'\blet\s+mut\b') || has(r'\w+!\s*\(') || has(r'->\s*\w'))) {
+    return 'rust';
+  }
+  if (has(r'^\s*package\s+\w+\s*$') && has(r'^\s*func\s+\w+\s*\(')) {
+    return 'go';
+  }
+  // Deliberately absent: `#include` (C and C++ share it, so it cannot tell them
+  // apart and would retag cpp→c), and `public class` (C#, Java and Kotlin all
+  // have it). A signature that can't name ONE language doesn't belong here.
+  return null;
 }
 
 /// Heuristic language detection from content signatures.
@@ -240,8 +402,9 @@ String detectLanguage(String code) {
 
 /// Build a colored [TextSpan] for [code] under [language], over [base] style.
 TextSpan buildCodeSpan(String code, String language, TextStyle base) {
-  final lang = _langs[language];
-  if (lang == null || language == 'plaintext') {
+  final name = canonicalCodeLanguage(language);
+  final lang = _langs[name];
+  if (lang == null || name == 'plaintext') {
     return TextSpan(text: code, style: base);
   }
 
@@ -266,9 +429,37 @@ TextSpan buildCodeSpan(String code, String language, TextStyle base) {
   bool isIdent(String ch) => RegExp(r'[A-Za-z0-9_]').hasMatch(ch);
   bool isDigit(String ch) => RegExp(r'[0-9]').hasMatch(ch);
 
+  // Whether only indentation (and YAML's `- ` marker) has been seen on this
+  // line so far — what makes a `key:` a key. See [_Rule.leadOnly].
+  var lineLead = true;
+
   while (i < n) {
     final ch = code[i];
     final rest = code.substring(i);
+    final atLead = lineLead;
+    if (ch == '\n') {
+      lineLead = true;
+    } else if (ch != ' ' && ch != '\t' && ch != '-') {
+      lineLead = false;
+    }
+
+    // Structural rules run first: an HTML `<!-- -->` must beat the string
+    // scanner on the quotes inside it, and a JSON key must be claimed before
+    // it is tokenized as just another string.
+    var matchedRule = false;
+    for (final rule in lang.rules) {
+      if (rule.leadOnly && !atLead) continue;
+      final m = rule.pattern.matchAsPrefix(code, i);
+      if (m == null) continue;
+      final text = (m.groupCount >= 1 ? m.group(1) : m.group(0)) ?? '';
+      if (text.isEmpty) continue;
+      emit(text, rule.color);
+      i += text.length;
+      lineLead = false;
+      matchedRule = true;
+      break;
+    }
+    if (matchedRule) continue;
 
     // Block comments
     if (lang.blockComments && rest.startsWith('/*')) {

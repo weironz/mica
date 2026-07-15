@@ -5,6 +5,7 @@
 /// `data.marks` via [parseInline]; code blocks and tables keep raw text.
 library;
 
+import 'highlight.dart';
 import 'marks.dart';
 import 'table.dart';
 
@@ -267,6 +268,63 @@ String deindentColumns(String line, int columns) {
 /// fence. A legit `````\n```mermaid` (4-outer/3-inner) has different lengths and
 /// is left alone; two adjacent independent code blocks are distinguished by
 /// tracking open/close state.
+/// Correct a fence whose language label the code itself contradicts.
+///
+/// ChatGPT (and anything else built on highlight.js auto-detect) labels an
+/// unlabelled code block by guessing, and `bash` is that guess's favourite
+/// fallback — so Python arrives as ```` ```bash ```` and renders in the wrong
+/// colours. We honour an explicit label over our own detection, which is right
+/// in general and exactly wrong here: the label isn't the author's, it's
+/// another tool's bad guess.
+///
+/// So: trust the label, unless the code *plainly* says otherwise. Only a
+/// [strongLanguageSignature] — structural syntax, never a suggestive word —
+/// overrules it, and an unrecognised label is always left alone.
+///
+/// PASTE-ONLY, for two reasons. It must not touch stored documents or file
+/// import, where the fence is the author's own and round-tripping it is an
+/// invariant (see [unwrapNestedFences]). And it must not reach
+/// [resolveCodeLanguage], where a label picked from the dropdown is a
+/// deliberate human choice — overruling *that* would be worse than the bug.
+String retagMislabeledFences(String md) {
+  final lines = md.split('\n');
+  final fenceRe = RegExp(r'^( {0,3})(`{3,}|~{3,})\s*([\w+#.-]*)\s*$');
+  var i = 0;
+  while (i < lines.length) {
+    final m = fenceRe.firstMatch(lines[i]);
+    if (m == null) {
+      i++;
+      continue;
+    }
+    final indent = m.group(1)!;
+    final fence = m.group(2)!;
+    final label = m.group(3)!;
+    // Find this block's closer, and collect the code between.
+    var j = i + 1;
+    final body = <String>[];
+    while (j < lines.length) {
+      final c = fenceRe.firstMatch(lines[j]);
+      if (c != null &&
+          c.group(3)!.isEmpty &&
+          c.group(2)![0] == fence[0] &&
+          c.group(2)!.length >= fence.length) {
+        break;
+      }
+      body.add(lines[j]);
+      j++;
+    }
+    if (label.isNotEmpty) {
+      final claimed = canonicalCodeLanguage(label);
+      final strong = strongLanguageSignature(body.join('\n'));
+      if (strong != null && strong != claimed) {
+        lines[i] = '$indent$fence$strong';
+      }
+    }
+    i = j + 1; // resume after the closer — never rescan a block's contents
+  }
+  return lines.join('\n');
+}
+
 String unwrapNestedFences(String md) {
   final lines = md.split('\n');
   final fenceRe = RegExp(r'^( {0,3})(`{3,}|~{3,})([^`]*)$');

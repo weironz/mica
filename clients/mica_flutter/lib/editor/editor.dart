@@ -922,6 +922,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // mermaid block in a SECOND equal-length fence). Paste-only — the core
     // CommonMark parser and file import stay strict.
     markdown = unwrapNestedFences(markdown);
+    // ChatGPT ships Python as ```bash (highlight.js auto-detect's favourite
+    // wrong guess). Paste-only, and only when the code structurally contradicts
+    // the label — see [retagMislabeledFences].
+    markdown = retagMislabeledFences(markdown);
 
     // Inside a code block, paste raw text verbatim (keep newlines, stay
     // inside) — but only when the selection is confined to that block: a
@@ -2056,6 +2060,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _syncImeFromSelection(force: true);
       return;
     }
+    // A block with nothing to click into (a divider) takes the click as
+    // "select me", so it can be seen and deleted at all.
+    final blockNode = r.blockSelectAt(local);
+    if (blockNode != null) {
+      _focus.requestFocus();
+      _controller.collapseTo(DocPosition(blockNode, 0));
+      _syncImeFromSelection(force: true);
+      return;
+    }
     // A click anywhere outside the diagram blocks restores their natural
     // zoom/pan (the explicit reset gesture — hover-leave was too eager).
     r.resetPreviewViewsOutside(local);
@@ -2431,6 +2444,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// Decode [bytes] under [key] and put them on the canvas: a still image once,
   /// an animated one (GIF / animated WebP) frame by frame via [ImageAnimator].
   Future<void> _decodeInto(String key, Uint8List bytes) async {
+    // Claim the key before the first await, so it is claimed synchronously with
+    // the call. _primeImage decodes bytes we already hold, but inserting the
+    // block relayouts immediately — and the renderer, seeing nothing decoded
+    // yet, would ask the host to FETCH the very image we just uploaded. That
+    // second decode then overwrote this one's ui.Image without disposing it.
+    _imageLoading.add(key);
     final codec = await ui.instantiateImageCodec(bytes);
     if (!mounted) {
       codec.dispose();
@@ -2455,9 +2474,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       frame.image.dispose();
       return;
     }
+    final previous = _imageCache[key];
     _imageLoading.remove(key);
     _imageErrors.remove(key);
     setState(() => _imageCache[key] = frame.image);
+    previous?.dispose(); // never orphan the handle we just replaced
   }
 
   /// One frame of an animated image, owned by us from here on.
@@ -4456,8 +4477,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   /// Seed the canvas image cache with freshly-uploaded bytes (skip the fetch).
   void _primeImage(String fileId, Uint8List bytes) {
-    if (_imageCache.containsKey(fileId)) return;
-    _decodeInto(fileId, bytes).catchError((_) {});
+    if (_imageCache.containsKey(fileId) || _imageLoading.contains(fileId)) {
+      return;
+    }
+    _decodeInto(fileId, bytes).catchError((_) {
+      if (mounted) setState(() => _imageLoading.remove(fileId));
+    });
   }
 
   Future<void> _runInlineAi() async {

@@ -49,6 +49,18 @@ abstract class AtomicBlockRenderer {
     int index,
   ) {}
 
+  /// Whether a plain click inside the block's box parks the caret ON the block
+  /// (a whole-block stop the host then tints) instead of snapping to the
+  /// nearest text node, which is what [RenderDocument.positionAt] does with
+  /// every atomic node by default.
+  ///
+  /// Off by default, because most atomic blocks have something better to do
+  /// with a click: a table routes it into a cell, an image has its own richer
+  /// path (hover toolbar, double-click to zoom). A divider has nothing to click
+  /// *into* — without this there is no way to select the line in order to
+  /// delete it.
+  bool get selectsWholeBlockOnClick => false;
+
   /// Paint above everything but the caret (last pass) — e.g. the image
   /// hover toolbar + resize handle. Most renderers need nothing here.
   void paintOverlay(
@@ -919,6 +931,12 @@ class DividerRenderer extends AtomicBlockRenderer {
 
   @override
   String get kind => 'divider';
+
+  // A divider is a line and nothing else: there is no text to put a caret in
+  // and no sub-part to click, so without this a click just snaps the caret to
+  // the paragraph above and the line can never be selected — or deleted.
+  @override
+  bool get selectsWholeBlockOnClick => true;
 
   @override
   _NodeLayout? layout(

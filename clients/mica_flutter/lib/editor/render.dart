@@ -453,8 +453,13 @@ class RenderDocument extends RenderBox {
   }
 
   /// Called during paint for each image actually drawn. The host uses it to
-  /// stop animating pictures no longer on the canvas (block deleted, source
-  /// replaced) — see `_MicaEditorState._onImageFrame`.
+  /// stop animating pictures nothing draws any more — the block was deleted, or
+  /// its source replaced. See `_MicaEditorState._onImageFrame`.
+  ///
+  /// NOT an on-screen test: this render object paints the whole document, with
+  /// no viewport culling, so a picture scrolled out of view still reports here
+  /// and its animation keeps running. Hiding the window does stall it, but by a
+  /// different route — the engine simply stops asking for frames.
   void Function(String key)? onImagePainted;
 
   /// Rasterized previews per previewer id ('math', 'mermaid', …), keyed by
@@ -1892,6 +1897,31 @@ class RenderDocument extends RenderBox {
   double? nodeBoxTop(String nodeId) {
     for (final l in _layouts) {
       if (l.nodeId == nodeId) return l.boxTop;
+    }
+    return null;
+  }
+
+  /// Node index of an atomic block whose renderer takes a click as "select me"
+  /// and whose box contains [local], or null.
+  ///
+  /// [positionAt] refuses to put the caret on an atomic node — it snaps to the
+  /// neighbouring text — which leaves a block like a divider with no way to be
+  /// selected at all. Renderers opt in via
+  /// [AtomicBlockRenderer.selectsWholeBlockOnClick]; the host turns a hit here
+  /// into a whole-block caret stop, which [_paintAtomicSelection] then tints.
+  int? blockSelectAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      if (!(_renderersByKind[l.kind]?.selectsWholeBlockOnClick ?? false)) {
+        continue;
+      }
+      final box = Rect.fromLTWH(
+        l.boxLeft,
+        l.boxTop,
+        size.width - l.boxLeft,
+        l.boxHeight,
+      );
+      if (box.contains(local)) return i;
     }
     return null;
   }
