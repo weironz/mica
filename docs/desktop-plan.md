@@ -128,5 +128,11 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 
 - `just dev-web`:构建 web bundle(末尾自动 chmod);dev nginx 已配 `Cache-Control: no-store`(防 stale bundle,这个坑栽过三次)
 - 验证流:改完 → `flutter test`(目前 176 个)→ `just dev-web` → playwright-cli 实测截图;**开测前确认没有旧标签页连着同一文档**(幽灵会话曾污染过协同数据,杀法:`playwright-cli kill-all` + 查 `ps aux | grep chrome`)
+- **本地 Docker 栈不跟着代码走**:`docker compose up -d` 只保证容器在跑,不重建镜像 —— 改了 `crates/` 必须 `docker compose build api && docker compose up -d api`。
+  **怎么发现自己中招**:`curl -s localhost:8080/api/health` 报的 version 是 `env!("CARGO_PKG_VERSION")`,编译期烤进去的,和 `crates/api-server/Cargo.toml` 比一下就知道镜像多老(2026-07-15 撞过:镜像停在 7/11 的 0.1.5,落后 4 个发版,登录压根不返回 refresh_token,差点把"功能没做"当成"功能坏了"查)。
+  **迁移同理**:`sqlx::migrate!("../../migrations")` 是编译进二进制的,compose 没挂 `./migrations` —— 旧镜像 = 旧迁移。
+  **但 DATABASE_URL-gated 的 Rust 测试会绕过容器直接对这个库跑迁移**,所以库的 schema 可能比容器里的代码还新(同一天:测试把 0005/0006 落进了只认到 0004 的库)。schema 和 api 对不上时先查这个,别怀疑迁移本身。
+- **Windows 上跑这套需要一个未跟踪的 `docker-compose.override.yml`**(`.gitignore:40`):committed compose 把 `S3_ENDPOINT` 指向 Linux 开发机 IP,Windows 上要改 `host.docker.internal` —— 它既是烤进 presigned URL 给客户端用的 host,又是 api 容器自己做服务端上传(ZIP 导入)时打的地址,`host.docker.internal` 两头都成立。换机器 clone 一份跑不起来,得自己补这个文件(内容见现有那份的头注释)。
+- 本地开发账号:`demo@mica.dev` / `password123`(仓库里写死的种子,见 `clients/mica_flutter/tool/fake_collab.dart`、三个 integration test、`main.dart` 的 `--dart-define` 默认值)。注意 API 路径带 `/api` 前缀:`POST /api/auth/login`。
 - DB 取证:`docker exec mica-postgres psql -U mica -d mica`;操作流在 `document_updates`(payload->operations),快照在 `document_snapshots`(payload->blocks,字段名 `type`)
 - 代码字体:Roboto Mono 已打包(`fonts/`);web 上 `'monospace'` 族名不解析,新代码一律用 `kMonoFont`(model.dart)
