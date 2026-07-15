@@ -2029,6 +2029,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _onImageAction(imageAction.node, imageAction.action);
       return;
     }
+    // Double-click the picture itself → fullscreen viewer. The toolbar's
+    // expand button is easy to miss, and double-click-to-zoom is what every
+    // other image surface does. Single click still just selects the block.
+    final imageNode = r.imageAt(local);
+    if (imageNode != null) {
+      _focus.requestFocus();
+      _controller.collapseTo(DocPosition(imageNode, 0));
+      if (_bumpTapCount(local) >= 2) {
+        _tapCount = 0; // consumed: a third click shouldn't re-open it
+        _openImageViewer(imageNode);
+      }
+      _syncImeFromSelection(force: true);
+      return;
+    }
     // A click anywhere outside the diagram blocks restores their natural
     // zoom/pan (the explicit reset gesture — hover-leave was too eager).
     r.resetPreviewViewsOutside(local);
@@ -4032,6 +4046,34 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           ),
         ),
         const PopupMenuDivider(height: 1),
+        const PopupMenuItem(value: 'expand', child: Text('全屏查看')),
+        const PopupMenuItem(value: 'edit', child: Text('编辑图片…')),
+        // Alignment also lives on the hover toolbar; mirrored here so the
+        // right-click menu is a complete surface on its own (the toolbar only
+        // appears on hover, which touch and keyboard users never get). Three
+        // plain items, NOT a row of IconButtons inside one item: the menu
+        // item's own InkWell swallows taps aimed at a nested button, and a
+        // flat item is keyboard-navigable.
+        for (final a in const [
+          ('left', '左对齐', Icons.format_align_left),
+          ('center', '居中', Icons.format_align_center),
+          ('right', '右对齐', Icons.format_align_right),
+        ])
+          PopupMenuItem(
+            value: 'align:${a.$1}',
+            child: Row(
+              children: [
+                Icon(a.$3, size: 18, color: EditorTheme.muted),
+                const SizedBox(width: 10),
+                Text(a.$2),
+                if ((data['align'] as String? ?? 'center') == a.$1) ...[
+                  const Spacer(),
+                  Icon(Icons.check, size: 16, color: EditorTheme.muted),
+                ],
+              ],
+            ),
+          ),
+        const PopupMenuDivider(height: 1),
         if (isExternal)
           const PopupMenuItem(value: 'rehost', child: Text('转存到 Mica 存储')),
         // Both forms have a link worth copying. A stored image's is its Mica
@@ -4049,7 +4091,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ],
     );
     if (choice == null || !mounted) return;
+    if (choice.startsWith('align:')) {
+      _controller.setImageAlign(node, choice.substring(6));
+      return;
+    }
     switch (choice) {
+      case 'expand':
+        _openImageViewer(node);
+      case 'edit':
+        await _showImageEditDialog(node);
       case 'rehost':
         await _rehostImage(node);
       case 'copyLink':
@@ -4071,6 +4121,60 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.deleteNode(node);
         _syncImeFromSelection(force: true);
     }
+  }
+
+  /// Image properties + replace. Shows where the image actually lives — its
+  /// full link, whichever kind — because that is the thing you cannot tell by
+  /// looking at the canvas, and it decides whether the doc can rot.
+  Future<void> _showImageEditDialog(int node) async {
+    if (node < 0 || node >= _controller.nodes.length) return;
+    final id = _controller.nodes[node].id;
+    final data = _controller.nodes[node].data;
+    final external = data['file_id'] == null &&
+        (data['url'] as String?)?.startsWith('http') == true;
+    final link = _imageLinkOf(data) ?? '(链接尚未解析)';
+    // Returns the url to replace with; '' = handled already (a file upload) or
+    // nothing typed; null = cancelled.
+    final url = await showDialog<String>(
+      context: context,
+      builder: (_) => _ImageEditDialog(
+        link: link,
+        external: external,
+        reHost: widget.reHostImages,
+        onUploadReplace:
+            widget.onUploadImage == null ? null : () => _replaceImageFromFile(id),
+      ),
+    );
+    if (url == null || url.isEmpty || !mounted) return;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      _toast('请填写 http(s) 开头的图片链接');
+      return;
+    }
+    // Show it immediately on its url, then run the same server-then-client
+    // re-host ladder the paste path uses — so "replace by link" obeys the
+    // re-host setting instead of quietly inventing its own rule.
+    _controller.setImageUrl(id, url);
+    if (!widget.reHostImages) return;
+    if (!_rehostPending.add(url)) return;
+    await _rehostOne(id, url);
+    if (mounted) setState(() => _rehostPending.remove(url));
+  }
+
+  /// Pick a local file and point the image block at the uploaded copy.
+  Future<bool> _replaceImageFromFile(String nodeId) async {
+    final upload = widget.onUploadImage;
+    if (upload == null) return false;
+    final picked = await pickImage();
+    if (picked == null) return false;
+    final result = await upload(picked.bytes, picked.name, picked.mime);
+    if (result == null || !mounted) {
+      if (mounted) _toast('上传失败');
+      return false;
+    }
+    _primeImage(result.fileId, picked.bytes);
+    _controller
+        .setImageSource(nodeId, fileId: result.fileId, name: result.name);
+    return true;
   }
 
   /// The host of a url, for showing which site an image depends on.
@@ -4751,6 +4855,145 @@ class _LanguagePickerState extends State<_LanguagePicker> {
               ),
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Image properties + replace. Owns its own [TextEditingController]: creating it
+/// outside and disposing after `showDialog` returns is a trap — the route's exit
+/// animation is still building the TextField, and it throws "used after being
+/// disposed".
+///
+/// Pops the url to replace with; `''` when a file upload already handled the
+/// replacement (or nothing was typed), null on cancel.
+class _ImageEditDialog extends StatefulWidget {
+  const _ImageEditDialog({
+    required this.link,
+    required this.external,
+    required this.reHost,
+    this.onUploadReplace,
+  });
+
+  final String link;
+  final bool external;
+
+  /// Mirrors the app's "re-host pasted images" setting, so the dialog can say
+  /// what a pasted link will actually do instead of leaving you to guess.
+  final bool reHost;
+  final Future<bool> Function()? onUploadReplace;
+
+  @override
+  State<_ImageEditDialog> createState() => _ImageEditDialogState();
+}
+
+class _ImageEditDialogState extends State<_ImageEditDialog> {
+  final _url = TextEditingController();
+  var _busy = false;
+
+  @override
+  void dispose() {
+    _url.dispose();
+    super.dispose();
+  }
+
+  Future<void> _upload() async {
+    final pick = widget.onUploadReplace;
+    if (pick == null || _busy) return;
+    setState(() => _busy = true);
+    final ok = await pick();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (ok) Navigator.pop(context, '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('编辑图片'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.external
+                    ? '外部链接 · 原站失效后图片会丢失'
+                    : '已存储到 Mica · 链接公开可访问',
+                style: TextStyle(fontSize: 12, color: EditorTheme.muted),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: EditorTheme.codeBg,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: SelectableText(
+                  widget.link,
+                  maxLines: 3,
+                  style: const TextStyle(fontFamily: kMonoFont, fontSize: 12),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('复制链接'),
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: widget.link)),
+                ),
+              ),
+              const Divider(),
+              const Text('替换图片', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                icon: _busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.upload_file, size: 18),
+                label: const Text('上传本地图片'),
+                onPressed: widget.onUploadReplace == null || _busy
+                    ? null
+                    : _upload,
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _url,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '或粘贴图片链接',
+                  hintText: 'https://…',
+                  isDense: true,
+                ),
+                onSubmitted: (v) => Navigator.pop(context, v.trim()),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                widget.reHost
+                    ? '已启用自动转存:链接会被转存到 Mica 存储(取不到则保留原链接)'
+                    : '自动转存已关闭:将直接保留原链接',
+                style: TextStyle(fontSize: 11, color: EditorTheme.faint),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _url.text.trim()),
+          child: const Text('替换'),
         ),
       ],
     );

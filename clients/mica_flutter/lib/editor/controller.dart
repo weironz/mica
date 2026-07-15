@@ -2297,6 +2297,22 @@ class EditorController extends ChangeNotifier {
   }
 
   /// Set an image block's alignment (`left`/`center`/`right`).
+  /// Point an image block at an external [url] (dropping any stored file_id) —
+  /// the "replace with a link" path. When re-hosting is on the caller then runs
+  /// the usual ladder, which swaps it back to a file_id if it can.
+  void setImageUrl(String nodeId, String url) {
+    final node = nodes.where((n) => n.id == nodeId).firstOrNull;
+    if (node == null || node.kind != 'image') return;
+    final name = Uri.tryParse(url)?.pathSegments.lastOrNull ?? '';
+    final data = {...node.data, 'url': url, 'name': name}..remove('file_id');
+    node.data = data;
+    _dirty.remove(node.id);
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   void setImageAlign(int index, String align) {
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
