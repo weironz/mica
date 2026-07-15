@@ -3548,15 +3548,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onLoadTokens: local ? null : _loadTokens,
       onCreateToken: local ? null : _createToken,
       onRevokeToken: local ? null : _revokeToken,
-      // The identity of the world you are LOOKING AT, not "do you happen to
-      // have a session". `_session?.x ?? (local ? … : …)` asked the latter, so
-      // a local workspace showed the cloud account and claimed you were editing
-      // these files as that person — which isn't true. The local world has no
-      // account: it is files on this device, owned by nobody.
-      userName: local ? '本地工作区' : (_session?.user.displayName ?? ''),
-      userEmail: local ? '这台设备' : (_session?.user.email ?? ''),
-      onUpdateProfile: local ? (_) async {} : _updateProfile,
-      onChangePassword: local ? (_, _) async {} : _changePassword,
+      // Only ever the cloud account: 本地模式 has none, and the Account tab is
+      // absent there rather than filled with a fiction. (An earlier attempt put
+      // '本地工作区' here — which surfaced as an editable Display name for an
+      // account that does not exist, above a Save button that did nothing.)
+      userName: _session?.user.displayName ?? '',
+      userEmail: _session?.user.email ?? '',
+      // Null, not a no-op: absence is what hides the tab. See onLoadTokens.
+      onUpdateProfile: local ? null : _updateProfile,
+      onChangePassword: local ? null : _changePassword,
       cloudOrigin: _cloudOrigin,
       connections: _connections,
       onSetActiveConnection: _setActiveConnection,
@@ -4057,8 +4057,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String id)? onRevokeToken;
   final String userName;
   final String userEmail;
-  final Future<void> Function(String displayName) onUpdateProfile;
-  final Future<void> Function(String current, String next) onChangePassword;
+  /// Null in 本地模式 — no account there, so Settings drops the Account tab
+  /// entirely rather than showing controls that do nothing.
+  final Future<void> Function(String displayName)? onUpdateProfile;
+  final Future<void> Function(String current, String next)? onChangePassword;
   /// The configured cloud server's origin URL (P3c-2) — Settings shows it and
   /// [onConnectCloud] switches it.
   final String cloudOrigin;

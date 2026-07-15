@@ -225,8 +225,13 @@ class _SettingsDialog extends StatefulWidget {
 
   final String userName;
   final String userEmail;
-  final Future<void> Function(String displayName) onUpdateProfile;
-  final Future<void> Function(String current, String next) onChangePassword;
+  /// Null in 本地模式 — there is no account to edit, so the Account tab is not
+  /// offered at all. Null, not a do-nothing function: the same distinction
+  /// [onLoadTokens] already draws. A no-op here rendered a whole page of live
+  /// controls — a Display name you could type into, a Save button, a password
+  /// change — that silently did nothing.
+  final Future<void> Function(String displayName)? onUpdateProfile;
+  final Future<void> Function(String current, String next)? onChangePassword;
   final String cloudOrigin;
   final Future<void> Function(String url) onConnectCloud;
 
@@ -413,9 +418,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _accountMsg = null;
     });
     try {
-      await widget.onUpdateProfile(_name.text.trim());
-      if (mounted)
-        Navigator.of(context).pop(); // saved → close, like server config
+      await widget.onUpdateProfile!(_name.text.trim());
+      // Stay open: saving is not leaving. ("like server config" — the thing it
+      // copied — no longer closes either; nothing in Settings does.)
+      if (mounted) setState(() => _accountMsg = '已保存');
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -435,9 +441,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _accountMsg = null;
     });
     try {
-      await widget.onChangePassword(_curPass.text, _newPass.text);
-      if (mounted)
-        Navigator.of(context).pop(); // changed → close, like server config
+      await widget.onChangePassword!(_curPass.text, _newPass.text);
+      if (!mounted) return;
+      // Stay open, and clear the fields — leaving a password sitting in a live
+      // text box is the reason closing felt like the tidy option.
+      _curPass.clear();
+      _newPass.clear();
+      // Accurate, not reassuring: change_password revokes EVERY family of this
+      // user (auth.rs `revoke_user_sessions`) — this device included. Saying
+      // "other devices" would be a lie, and the surprise would land later, when
+      // this session quietly fails to renew.
+      setState(
+        () => _accountMsg = '密码已修改。所有设备(含这台)都需要重新登录。',
+      );
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -1379,11 +1395,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         icon: Icons.auto_awesome,
         section: _aiSection(context),
       ),
-      (
-        title: 'Account',
-        icon: Icons.person_outline,
-        section: _accountSection(context),
-      ),
+      // 本地模式 has no account — same reason API Tokens below is absent there.
+      if (widget.onUpdateProfile != null)
+        (
+          title: 'Account',
+          icon: Icons.person_outline,
+          section: _accountSection(context),
+        ),
       if (widget.onLoadTokens != null)
         (
           title: 'API Tokens',
