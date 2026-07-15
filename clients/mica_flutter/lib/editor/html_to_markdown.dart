@@ -13,6 +13,8 @@ library;
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
+import 'marks.dart' show mathRunSpans;
+
 String htmlToMarkdown(String source) {
   final doc = html_parser.parse(source);
   final body = doc.body ?? doc.documentElement;
@@ -22,10 +24,7 @@ String htmlToMarkdown(String source) {
   _inQuote = false;
   _msoIndents = null;
   _emitChildren(body.nodes, out);
-  return out
-      .toString()
-      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-      .trim();
+  return out.toString().replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
 }
 
 /// While true, `_inlineMarks` drops 'italic' — set inside `<blockquote>`
@@ -45,7 +44,29 @@ bool _inQuote = false;
 /// code spans, strikethrough, link brackets, raw HTML `<`, inline math `$`).
 /// The parser unescapes any backslash-escaped ASCII punctuation, so the page's
 /// literal text survives the round trip unchanged.
-String _escapeMdInline(String s) =>
+///
+/// EXCEPT valid math runs, which pass through verbatim. LLM answers copied
+/// from a browser arrive as HTML with literal `$\eta = 2$` in the text;
+/// escaping their `$` (and doubling the `\` of every LaTeX command) meant a
+/// pasted formula could never become a math mark — while the same text pasted
+/// as PLAIN text parsed fine. [mathRunSpans] applies the same Pandoc rules the
+/// downstream parser does, so exactly what would parse is what survives; a
+/// lone `$` with no valid closer (prices, "$5 and $10") still escapes.
+String _escapeMdInline(String s) {
+  final spans = mathRunSpans(s);
+  if (spans.isEmpty) return _escapeAllMdInline(s);
+  final out = StringBuffer();
+  var cursor = 0;
+  for (final r in spans) {
+    out.write(_escapeAllMdInline(s.substring(cursor, r.start)));
+    out.write(s.substring(r.start, r.end));
+    cursor = r.end;
+  }
+  out.write(_escapeAllMdInline(s.substring(cursor)));
+  return out.toString();
+}
+
+String _escapeAllMdInline(String s) =>
     s.replaceAllMapped(RegExp(r'[\\`*_~\[\]<$]'), (m) => '\\${m[0]}');
 
 /// Escape a paragraph-level LINE that would re-parse as a block construct.
@@ -68,14 +89,39 @@ String _escapeBlockStart(String line) {
 /// Inline elements (whitelist). Anything else — `p`, `div`, headings, lists,
 /// `table`, `img`, unknown custom elements — is treated as block-level.
 const _inlineTags = {
-  'a', 'strong', 'b', 'em', 'i', 'code', 's', 'del', 'strike', 'u', 'mark',
-  'sub', 'sup', 'small', 'span', 'font', 'br', 'wbr', 'abbr', 'cite', 'q',
-  'kbd', 'samp', 'var', 'time', 'label', 'ins', 'big', 'tt',
+  'a',
+  'strong',
+  'b',
+  'em',
+  'i',
+  'code',
+  's',
+  'del',
+  'strike',
+  'u',
+  'mark',
+  'sub',
+  'sup',
+  'small',
+  'span',
+  'font',
+  'br',
+  'wbr',
+  'abbr',
+  'cite',
+  'q',
+  'kbd',
+  'samp',
+  'var',
+  'time',
+  'label',
+  'ins',
+  'big',
+  'tt',
 };
 
 bool _isInlineNode(dom.Node n) =>
-    n is dom.Text ||
-    (n is dom.Element && _inlineTags.contains(_tag(n)));
+    n is dom.Text || (n is dom.Element && _inlineTags.contains(_tag(n)));
 
 /// Emit a node list, coalescing runs of consecutive inline siblings (text +
 /// `<strong>`/`<code>`/… ) into ONE Markdown paragraph. Without this, a
@@ -114,8 +160,9 @@ String _tag(dom.Element e) => (e.localName ?? '').toLowerCase();
 
 void _node(dom.Node node, StringBuffer out) {
   if (node is dom.Text) {
-    final text =
-        _escapeMdInline(node.text).replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = _escapeMdInline(
+      node.text,
+    ).replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text.isNotEmpty) {
       out.writeln(_escapeBlockStart(text));
       out.writeln();
@@ -176,8 +223,10 @@ void _node(dom.Node node, StringBuffer out) {
     case 'img':
       final src = _cleanSrc(node.attributes['src']);
       if (src != null) {
-        out.writeln('![${_escapeMdInline(node.attributes['alt'] ?? '')}]'
-            '(${_wrapDest(src)})');
+        out.writeln(
+          '![${_escapeMdInline(node.attributes['alt'] ?? '')}]'
+          '(${_wrapDest(src)})',
+        );
         out.writeln();
       }
     case 'dl':
@@ -248,7 +297,8 @@ void _emitQuote(dom.Element node, StringBuffer out, String indent) {
 /// column so the parser attaches the fence as an item child). The language
 /// comes from the `language-*`/`lang-*` class on `<pre>` or its `<code>`.
 void _fencedCode(dom.Element pre, StringBuffer out, String indent) {
-  final cls = '${pre.attributes['class'] ?? ''} '
+  final cls =
+      '${pre.attributes['class'] ?? ''} '
       '${pre.querySelector('code')?.attributes['class'] ?? ''}';
   final lang =
       RegExp(r'(?:language-|lang-)([\w+#-]+)').firstMatch(cls)?.group(1) ?? '';
@@ -274,8 +324,12 @@ dom.Element? _taskCheckbox(dom.Element item) {
   return null;
 }
 
-void _list(dom.Element list, StringBuffer out,
-    {required bool ordered, String indent = ''}) {
+void _list(
+  dom.Element list,
+  StringBuffer out, {
+  required bool ordered,
+  String indent = '',
+}) {
   // `<ol start="5">` — seed the numbering so the list round-trips its start.
   var index = int.tryParse(list.attributes['start'] ?? '') ?? 1;
   // Indent for a list nested as a DIRECT child of this list ("sibling"
@@ -346,13 +400,17 @@ int _msoBase = 1;
 bool _msoIsListP(dom.Element? e) =>
     e != null &&
     _tag(e) == 'p' &&
-    RegExp(r'mso-list:[^;"]*\blevel\d+', caseSensitive: false)
-        .hasMatch(e.attributes['style'] ?? '');
+    RegExp(
+      r'mso-list:[^;"]*\blevel\d+',
+      caseSensitive: false,
+    ).hasMatch(e.attributes['style'] ?? '');
 
 bool _msoListItem(dom.Element p, StringBuffer out) {
   final style = p.attributes['style'] ?? '';
-  final m = RegExp(r'mso-list:[^;"]*\blevel(\d+)', caseSensitive: false)
-      .firstMatch(style);
+  final m = RegExp(
+    r'mso-list:[^;"]*\blevel(\d+)',
+    caseSensitive: false,
+  ).firstMatch(style);
   if (m == null) return false;
   final level = (int.tryParse(m.group(1)!) ?? 1).clamp(1, 9);
   var markerText = '';
@@ -365,8 +423,9 @@ bool _msoListItem(dom.Element p, StringBuffer out) {
     }
   }
   // `1.` `(1)` `a)` `一、` → ordered; Wingdings glyphs (`·` `l` `§` `Ø`) → bullet.
-  final ordered = RegExp(r'^\(?([0-9a-zA-Z]{1,3}|[一二三四五六七八九十]{1,3})[.)、]')
-      .hasMatch(markerText);
+  final ordered = RegExp(
+    r'^\(?([0-9a-zA-Z]{1,3}|[一二三四五六七八九十]{1,3})[.)、]',
+  ).hasMatch(markerText);
 
   if (_msoIndents == null || !_msoIsListP(p.previousElementSibling)) {
     _msoIndents = null; // new run
@@ -543,8 +602,10 @@ void _gatherOne(dom.Node child, StringBuffer sb) {
   } else if (tag == 'img') {
     final src = _cleanSrc(child.attributes['src']);
     if (src != null) {
-      sb.write('![${_escapeMdInline(child.attributes['alt'] ?? '')}]'
-          '(${_wrapDest(src)})');
+      sb.write(
+        '![${_escapeMdInline(child.attributes['alt'] ?? '')}]'
+        '(${_wrapDest(src)})',
+      );
     }
   } else if (tag == 'code') {
     sb.write(_inlineCode(child.text));
@@ -585,7 +646,9 @@ Set<String> _inlineMarks(dom.Element e) {
   }
   final style = (e.attributes['style'] ?? '').toLowerCase();
   if (style.contains('font-weight')) {
-    final w = RegExp(r'font-weight\s*:\s*([a-z0-9]+)').firstMatch(style)?.group(1);
+    final w = RegExp(
+      r'font-weight\s*:\s*([a-z0-9]+)',
+    ).firstMatch(style)?.group(1);
     if (w == 'bold' || w == 'bolder' || (int.tryParse(w ?? '') ?? 0) >= 600) {
       marks.add('bold');
     }
@@ -647,7 +710,8 @@ String _inlineCode(String raw) {
 
 String? _cleanHref(String? href) {
   final h = href?.trim() ?? '';
-  if (h.isEmpty || h.startsWith('#') || h.startsWith('javascript:')) return null;
+  if (h.isEmpty || h.startsWith('#') || h.startsWith('javascript:'))
+    return null;
   return h;
 }
 

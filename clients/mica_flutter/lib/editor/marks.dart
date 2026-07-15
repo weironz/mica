@@ -450,6 +450,44 @@ int _findMathCloser(String src, int contentStart) {
   return (text: out.toString(), marks: marks);
 }
 
+/// Delimiter-INCLUSIVE spans of every valid inline math run in [src] — `$…$`
+/// per the Pandoc rules and `\(…\)` — recognizing exactly what
+/// [parseInlineMath] would parse, without touching the string.
+///
+/// The HTML paste path uses this to let real formulas through its Markdown
+/// escaping: `htmlToMarkdown` backslash-escapes `$` (and `\`) in page text so
+/// literal punctuation cannot re-parse as syntax, which silently killed every
+/// pasted `$\eta = 2$` — LLM answers copied from a browser are HTML, so the
+/// user's primary math workflow never produced a single math mark. Runs found
+/// here pass through verbatim; a `$` with no valid closer (currency, a stray
+/// dollar) still gets escaped, which is STRICTER than the plain-text paste.
+List<({int start, int end})> mathRunSpans(String src) {
+  final spans = <({int start, int end})>[];
+  var i = 0;
+  while (i < src.length) {
+    if (src[i] == r'\' && i + 1 < src.length && src[i + 1] == '(') {
+      final close = src.indexOf(r'\)', i + 2);
+      if (close > i && src.substring(i + 2, close).trim().isNotEmpty) {
+        spans.add((start: i, end: close + 2));
+        i = close + 2;
+        continue;
+      }
+    }
+    if (src[i] == kDollar &&
+        (i == 0 || src[i - 1] != kDollar) &&
+        (i + 1 >= src.length || src[i + 1] != kDollar)) {
+      final close = _findMathCloser(src, i + 1);
+      if (close > 0) {
+        spans.add((start: i, end: close + 1));
+        i = close + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+  return spans;
+}
+
 /// GFM extended autolink starting at src[i] (caller checks the word
 /// boundary): bare http(s)/ftp URLs, `www.` (href gains http://), bare
 /// emails. Returns (consumed chars, href), or null.
