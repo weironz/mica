@@ -137,13 +137,31 @@ deploy-prod version:
     #!/usr/bin/env bash
     set -euo pipefail
     tag="v{{version}}"
-    echo "==> pinning MICA_VERSION=$tag in {{node_dir}}/.env"
-    ssh {{node}} "cd {{node_dir}} && sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=$tag|' .env && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
+    # The node's compose is NOT a git checkout — it was hand-placed and drifted:
+    # prod sat on a hardcoded willdockerhub/... image while the repo had already
+    # moved to ACR, so a "deploy" silently kept pulling from the old registry.
+    # Ship the repo's copy every time (backing up first) — repo is the truth.
+    # NB the node's file is docker-compose.yaml; keep that name, or compose
+    # would find two files and pick the other one.
+    # (No backticks anywhere in a recipe body: just runs them as commands,
+    # even inside a # comment.)
+    echo "==> syncing compose + pinning MICA_VERSION=$tag"
+    scp -q deploy/docker-compose.yml {{node}}:{{node_dir}}/docker-compose.yaml.new
+    ssh {{node}} "cd {{node_dir}} \
+      && cp docker-compose.yaml docker-compose.yaml.bak-\$(date +%Y%m%d-%H%M%S) \
+      && mv docker-compose.yaml.new docker-compose.yaml \
+      && sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=$tag|' .env \
+      && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
     echo "==> pulling + recreating api + web"
     ssh {{node}} "cd {{node_dir}} && docker compose pull api web && docker compose up -d --no-deps api web"
+    # Go-template braces vs just: four open-braces escape a literal two, but a
+    # closing pair is ALREADY literal outside an interpolation — writing four
+    # closers emitted two extra, so the format returned "healthy}}" and the
+    # compare never matched. It cried "NOT healthy" over a healthy deploy.
     echo "==> waiting for api health"
-    ssh {{node}} 'for i in $(seq 1 30); do [ "$(docker inspect --format "{{{{.State.Health.Status}}}}" mica-api-1 2>/dev/null)" = healthy ] && { echo "api healthy"; exit 0; }; sleep 4; done; echo "api NOT healthy"; exit 1'
+    ssh {{node}} 'for i in $(seq 1 60); do s=$(docker inspect --format "{{{{.State.Health.Status}}" mica-api-1 2>/dev/null || true); [ "$s" = healthy ] && { echo "api healthy"; exit 0; }; sleep 4; done; echo "api NOT healthy (last state: ${s:-unknown})"; exit 1'
     just verify-prod {{version}}
+    echo "==> prod now on $tag from the registry in {{node_dir}}/.env"
 
 # The api must report the version we just rolled to, and the live bundle must
 # not be a cached/stale artifact. Checking only for HTTP 200 would miss both.
