@@ -1196,33 +1196,69 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         continue;
       }
       if (!_rehostPending.add(url)) continue; // already in flight
-      final id = node.id;
-      Future<({String fileId, String name})?> job;
-      try {
-        job = import(url);
-      } catch (_) {
-        _rehostPending.remove(url);
-        continue;
-      }
-      job.then(
-        (result) {
-          if (!mounted) return;
-          if (result != null) {
-            _controller
-                .setImageSource(id, fileId: result.fileId, name: result.name);
-            _rehostPending.remove(url);
-            return;
-          }
-          // Fall back to rendering the original url: re-hosting is a
-          // durability nicety, not a precondition for showing the image.
-          setState(() => _rehostPending.remove(url));
-        },
-        onError: (_) {
-          if (!mounted) return;
-          setState(() => _rehostPending.remove(url));
-        },
-      );
+      _rehostOne(node.id, url).whenComplete(() {
+        if (!mounted) {
+          _rehostPending.remove(url);
+          return;
+        }
+        // Repaint either way: on success the block now has a file_id; on
+        // failure clearing `pending` lets [_requestImage] load the url.
+        setState(() => _rehostPending.remove(url));
+      });
     }
+  }
+
+  /// Move one external image into our storage. Tries the SERVER first (it can
+  /// stream straight into storage), then falls back to doing it from HERE:
+  /// fetch the bytes and upload them like any picked/pasted image.
+  ///
+  /// The fallback is the whole point. Server-side import fails routinely for
+  /// reasons that have nothing to do with the link being bad — a CN-hosted
+  /// server has no route to medium/imgur/… while this client reaches them
+  /// fine. Without it the doc silently keeps depending on a link that can rot.
+  /// Returns true when the block ended up on a file_id.
+  Future<bool> _rehostOne(String nodeId, String url) async {
+    final import = widget.onImportImageUrl;
+    if (import != null) {
+      try {
+        final result = await import(url);
+        if (result != null) {
+          if (!mounted) return false;
+          _controller
+              .setImageSource(nodeId, fileId: result.fileId, name: result.name);
+          return true;
+        }
+      } catch (_) {
+        // fall through to the client-side attempt
+      }
+    }
+    final load = widget.onLoadImageBytes;
+    final upload = widget.onUploadImage;
+    if (load == null || upload == null) return false;
+    try {
+      // On web this can be blocked by the source's CORS policy — then the
+      // bytes are unreadable here too and the block stays on its url.
+      final bytes = await load(url);
+      if (bytes == null || bytes.isEmpty || !mounted) return false;
+      final name = _imageNameFromUrl(url);
+      final result = await upload(bytes, name, _mimeFromName(name));
+      if (result == null || !mounted) return false;
+      _primeImage(result.fileId, bytes);
+      _controller
+          .setImageSource(nodeId, fileId: result.fileId, name: result.name);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// A filename for an image url: its last path segment (query stripped), or a
+  /// generic fallback when the url carries no usable name.
+  static String _imageNameFromUrl(String url) {
+    final path = Uri.tryParse(url)?.path ?? '';
+    final seg = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+    final name = Uri.decodeComponent(seg);
+    return name.contains('.') ? name : 'image.png';
   }
 
   // ---------------------------------------------------------------------------
@@ -3954,17 +3990,42 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         overlay.size.height - globalPosition.dy,
       ),
       items: [
-        if (isExternal)
-          const PopupMenuItem(value: 'rehost', child: Text('Save to Mica storage')),
-        const PopupMenuItem(value: 'copy', child: Text('Copy image')),
-        const PopupMenuItem(value: 'download', child: Text('Download')),
-        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+        // Say where the image LIVES. This used to be implied by the mere
+        // presence of the re-host entry — you had to already know that to read
+        // it. Storage is the norm; an external link is the one that can rot,
+        // so it names the host you're depending on.
+        PopupMenuItem(
+          enabled: false,
+          height: 32,
+          child: Text(
+            isExternal
+                ? '外部链接 · ${_urlHost(data['url'] as String? ?? '')}'
+                : '已存储到 Mica',
+            style: TextStyle(fontSize: 12, color: EditorTheme.muted),
+          ),
+        ),
+        const PopupMenuDivider(height: 1),
+        if (isExternal) ...[
+          const PopupMenuItem(value: 'rehost', child: Text('转存到 Mica 存储')),
+          const PopupMenuItem(value: 'copyLink', child: Text('复制图片链接')),
+          const PopupMenuItem(value: 'openLink', child: Text('在浏览器中打开')),
+        ],
+        const PopupMenuItem(value: 'copy', child: Text('复制图片')),
+        const PopupMenuItem(value: 'download', child: Text('下载')),
+        const PopupMenuItem(value: 'delete', child: Text('删除')),
       ],
     );
     if (choice == null || !mounted) return;
     switch (choice) {
       case 'rehost':
         await _rehostImage(node);
+      case 'copyLink':
+        await Clipboard.setData(
+          ClipboardData(text: (data['url'] as String?) ?? ''),
+        );
+      case 'openLink':
+        final url = data['url'] as String?;
+        if (url != null) openUrl(url);
       case 'copy':
         await _copyImage(node);
       case 'download':
@@ -3975,19 +4036,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
-  /// Re-host one external image into Mica storage (right-click action).
+  /// The host of a url, for showing which site an image depends on.
+  static String _urlHost(String url) {
+    final h = Uri.tryParse(url)?.host ?? '';
+    return h.isEmpty ? url : h;
+  }
+
+  /// Re-host one external image into Mica storage (right-click action). Uses
+  /// the same server-then-client ladder as the automatic pass, so it works
+  /// even when this server can't reach the host.
   Future<void> _rehostImage(int node) async {
-    final import = widget.onImportImageUrl;
-    if (import == null || node < 0 || node >= _controller.nodes.length) return;
+    if (node < 0 || node >= _controller.nodes.length) return;
     final url = _controller.nodes[node].data['url'] as String?;
     if (url == null) return;
     final id = _controller.nodes[node].id;
-    final result = await import(url);
-    if (result == null || !mounted) {
-      _toast('Could not save the image');
-      return;
-    }
-    _controller.setImageSource(id, fileId: result.fileId, name: result.name);
+    if (!_rehostPending.add(url)) return;
+    final ok = await _rehostOne(id, url);
+    if (!mounted) return;
+    setState(() => _rehostPending.remove(url));
+    if (!ok) _toast('转存失败:这台服务器和本机都取不到该图片');
   }
 
   /// Bytes + filename for an image node (re-fetched via the host loader).

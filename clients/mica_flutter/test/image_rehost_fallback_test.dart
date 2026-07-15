@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
@@ -17,6 +20,13 @@ void main() {
     required List<EditorNode> nodes,
     required Future<({String fileId, String name})?> Function(String) import,
     required List<String> fetched,
+    Future<Uint8List?> Function(String)? loadBytes,
+    Future<({String fileId, String name})?> Function(
+      Uint8List,
+      String,
+      String,
+    )? upload,
+    List<Map<String, dynamic>>? ops,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -26,10 +36,12 @@ void main() {
             nodes: nodes,
             version: 0,
             canEdit: true,
-            onApplyOperations: (_) async {},
+            onApplyOperations: (batch) async => ops?.addAll(batch),
             onImportImageUrl: import,
+            onUploadImage: upload,
             onLoadImageBytes: (key) async {
               fetched.add(key);
+              if (loadBytes != null) return loadBytes(key);
               return null; // decode failure is fine; we only assert the ATTEMPT
             },
           ),
@@ -71,6 +83,111 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 50));
     expect(fetched, contains('f1'));
+  });
+
+  // The re-host ladder. Server first; when it can't reach the host (routine
+  // for a CN-hosted server vs medium/imgur/…) the CLIENT does it, since it
+  // demonstrably can read the bytes. Only when BOTH fail does the block stay
+  // on its url — never silently, and never losing the link.
+  group('client-side re-host fallback (via the image menu)', () {
+    final png = Uint8List.fromList([1, 2, 3, 4]);
+
+    // Right-click the image and pick the re-host entry — the user's recovery
+    // path, and the same ladder the automatic post-paste pass runs.
+    Future<void> rehostViaMenu(WidgetTester tester) async {
+      final origin = tester.getTopLeft(find.byType(MicaEditor));
+      final g = await tester.startGesture(
+        origin + const Offset(60, 60),
+        kind: PointerDeviceKind.mouse,
+        buttons: kSecondaryButton,
+      );
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(find.text('转存到 Mica 存储'), findsOneWidget,
+          reason: 'an external image must offer the recovery action');
+      await tester.tap(find.text('转存到 Mica 存储'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('server fails, client fetches + uploads -> block gets a file_id',
+        (tester) async {
+      final uploads = <({String name, String mime})>[];
+      final ops = <Map<String, dynamic>>[];
+      await pump(
+        tester,
+        nodes: [
+          EditorNode(id: 'i', kind: 'image', text: '', data: {'url': url}),
+        ],
+        ops: ops,
+        import: (_) async => null, // server has no route to the host
+        loadBytes: (_) async => png, // but WE can read it
+        upload: (bytes, name, mime) async {
+          uploads.add((name: name, mime: mime));
+          return (fileId: 'f-new', name: name);
+        },
+        fetched: <String>[],
+      );
+      await rehostViaMenu(tester);
+
+      expect(uploads, hasLength(1));
+      expect(uploads.single.name, 'pic.png',
+          reason: 'the name comes from the url path');
+      expect(uploads.single.mime, 'image/png');
+      final updated = ops.lastWhere((o) => o['type'] == 'update_block');
+      expect((updated['data'] as Map)['file_id'], 'f-new');
+      expect((updated['data'] as Map).containsKey('url'), isFalse,
+          reason: 'once stored, the block no longer depends on the link');
+    });
+
+    testWidgets('server AND client both fail -> the url survives, no data loss',
+        (tester) async {
+      var uploaded = false;
+      final ops = <Map<String, dynamic>>[];
+      final nodes = [
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'url': url}),
+      ];
+      await pump(
+        tester,
+        nodes: nodes,
+        ops: ops,
+        import: (_) async => null,
+        loadBytes: (_) async => null, // we can't read it either (dead link)
+        upload: (_, __, ___) async {
+          uploaded = true;
+          return null;
+        },
+        fetched: <String>[],
+      );
+      await rehostViaMenu(tester);
+
+      expect(uploaded, isFalse, reason: 'nothing to upload without bytes');
+      expect(nodes.first.data['url'], url,
+          reason: 'the link must survive: export still emits ![](url)');
+      expect(ops.where((o) => o['type'] == 'update_block'), isEmpty,
+          reason: 'a failed re-host must not rewrite the block');
+    });
+
+    testWidgets('a stored image offers no re-host entry and names its home',
+        (tester) async {
+      await pump(
+        tester,
+        nodes: [
+          EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
+        ],
+        import: (_) async => null,
+        fetched: <String>[],
+      );
+      final origin = tester.getTopLeft(find.byType(MicaEditor));
+      final g = await tester.startGesture(
+        origin + const Offset(60, 60),
+        kind: PointerDeviceKind.mouse,
+        buttons: kSecondaryButton,
+      );
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(find.text('已存储到 Mica'), findsOneWidget);
+      expect(find.text('转存到 Mica 存储'), findsNothing);
+    });
   });
 
   group('insertImage — url fallback keeps the paste', () {

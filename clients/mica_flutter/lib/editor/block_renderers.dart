@@ -251,6 +251,16 @@ class ImageRenderer extends AtomicBlockRenderer {
     final rr = RRect.fromRectAndRadius(r, const Radius.circular(6));
     final key = _key(host, l);
     final decoded = key == null ? null : host._images[key];
+    final node = host._nodes.firstWhere(
+      (n) => n.id == l.nodeId,
+      orElse: () => EditorNode(id: '', kind: 'paragraph', text: ''),
+    );
+    // An image still living on someone else's server: it renders fine, but the
+    // doc depends on a link that can rot. Only this case is marked — storage
+    // is the norm (re-hosting is automatic), and badging every image would be
+    // noise that trains you to ignore the badge.
+    final external = node.data['file_id'] == null &&
+        (node.data['url'] as String?)?.startsWith('http') == true;
     if (decoded != null) {
       canvas.save();
       canvas.clipRRect(rr);
@@ -265,6 +275,7 @@ class ImageRenderer extends AtomicBlockRenderer {
         filterQuality: FilterQuality.medium,
       );
       canvas.restore();
+      if (external) _paintExternalBadge(canvas, r);
       return;
     }
     // Placeholder: rounded fill + centered icon (broken on error, else image).
@@ -283,11 +294,69 @@ class ImageRenderer extends AtomicBlockRenderer {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    glyph.paint(
+    // A broken image used to be a mute grey box: no source, no reason, no way
+    // out — indistinguishable from a bug. Name the host we failed to reach, so
+    // the state explains itself (the url is still in the block, so the content
+    // and its Markdown export are intact either way).
+    final caption = isError && external
+        ? _hostOf(node.data['url'] as String? ?? '')
+        : null;
+    final capPainter = caption == null
+        ? null
+        : (TextPainter(
+            text: TextSpan(
+              text: '无法加载 · $caption',
+              style: TextStyle(fontSize: 11, color: EditorTheme.faint),
+            ),
+            textDirection: TextDirection.ltr,
+            maxLines: 1,
+            ellipsis: '…',
+          )..layout(maxWidth: r.width - 16));
+    final blockH = glyph.height + (capPainter == null ? 0 : capPainter.height + 4);
+    final top = r.center.dy - blockH / 2;
+    glyph.paint(canvas, Offset(r.center.dx - glyph.width / 2, top));
+    capPainter?.paint(
       canvas,
-      r.center - Offset(glyph.width / 2, glyph.height / 2),
+      Offset(r.center.dx - capPainter.width / 2, top + glyph.height + 4),
     );
     glyph.dispose();
+    capPainter?.dispose();
+    if (external) _paintExternalBadge(canvas, r);
+  }
+
+  static String _hostOf(String url) {
+    final h = Uri.tryParse(url)?.host ?? '';
+    return h.isEmpty ? url : h;
+  }
+
+  /// A small "外链" chip in the image's top-left corner.
+  static void _paintExternalBadge(Canvas canvas, Rect r) {
+    final label = TextPainter(
+      text: const TextSpan(
+        text: '外链',
+        style: TextStyle(fontSize: 10, color: Color(0xFFFFFFFF)),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    const padH = 5.0, padV = 2.0;
+    final chip = Rect.fromLTWH(
+      r.left + 6,
+      r.top + 6,
+      label.width + padH * 2,
+      label.height + padV * 2,
+    );
+    // Skip it on a thumbnail too small to carry the chip without covering the
+    // picture.
+    if (chip.width > r.width - 12 || chip.height > r.height - 12) {
+      label.dispose();
+      return;
+    }
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(chip, const Radius.circular(4)),
+      Paint()..color = const Color(0xB3475569),
+    );
+    label.paint(canvas, Offset(chip.left + padH, chip.top + padV));
+    label.dispose();
   }
 
   @override
