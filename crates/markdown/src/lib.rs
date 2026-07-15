@@ -1981,8 +1981,40 @@ fn find_pair(chars: &[char], from: usize, a: char, b: char) -> Option<usize> {
   None
 }
 
+/// One past the closing backtick run of the code span opening at `start` (the
+/// index of its first backtick), or None when the run never closes — CommonMark
+/// leaves an unclosed run as literal text.
+///
+/// Deliberately a second copy of the run-matching in the inline-code branch
+/// rather than a shared helper: that branch also strips padding and folds
+/// newlines, and it carries the conformance score. This only needs the extent.
+/// Keep the two in step.
+fn code_span_close(chars: &[char], start: usize) -> Option<usize> {
+  let mut n = 0;
+  while start + n < chars.len() && chars[start + n] == '`' {
+    n += 1;
+  }
+  let mut j = start + n;
+  while j < chars.len() {
+    if chars[j] == '`' {
+      let mut m = 0;
+      while j + m < chars.len() && chars[j + m] == '`' {
+        m += 1;
+      }
+      if m == n {
+        return Some(j + m);
+      }
+      j += m;
+    } else {
+      j += 1;
+    }
+  }
+  None
+}
+
 /// A valid `$` math closer per the Pandoc rules: content non-empty with
-/// non-space edges, closer not followed by a digit, no newline inside.
+/// non-space edges, closer not followed by a digit, no newline inside, and no
+/// crossing into a code span.
 fn find_math_closer(chars: &[char], content_start: usize) -> Option<usize> {
   if chars.get(content_start).is_none_or(|c| c.is_whitespace()) {
     return None;
@@ -1992,6 +2024,21 @@ fn find_math_closer(chars: &[char], content_start: usize) -> Option<usize> {
     let c = chars[j];
     if c == '\n' {
       return None; // inline math stays on one line
+    }
+    if c == '`' {
+      // Code spans bind tighter than math — CommonMark 0.31.2 §6.1 gives them
+      // higher precedence than every inline construct but HTML tags and
+      // autolinks — so a `$` inside one is literal and cannot close us. Step
+      // over the span whole; scanning through it is what let `` `$HOME` `` be
+      // eaten by an earlier `$`. An unclosed run is literal text: fall through
+      // and keep scanning, exactly as CommonMark reads it.
+      if let Some(after) = code_span_close(chars, j) {
+        if chars[j..after].contains(&'\n') {
+          return None; // the span folds a line break; inline math may not
+        }
+        j = after;
+        continue;
+      }
     }
     if c == '$' && j > content_start {
       if chars[j - 1].is_whitespace() || chars[j - 1] == '\\' {

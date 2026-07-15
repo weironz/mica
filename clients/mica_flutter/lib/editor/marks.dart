@@ -39,16 +39,24 @@ List<Mark> marksFromData(Map<String, dynamic> data) {
       final end = (m['end'] as num?)?.toInt();
       final type = m['type'] as String?;
       if (start != null && end != null && type != null && end > start) {
-        marks.add(Mark(start, end, type,
-            href: m['href'] as String?, title: m['title'] as String?));
+        marks.add(
+          Mark(
+            start,
+            end,
+            type,
+            href: m['href'] as String?,
+            title: m['title'] as String?,
+          ),
+        );
       }
     }
   }
   return marks;
 }
 
-List<Map<String, dynamic>> marksToJson(List<Mark> marks) =>
-    [for (final m in marks) m.toJson()];
+List<Map<String, dynamic>> marksToJson(List<Mark> marks) => [
+  for (final m in marks) m.toJson(),
+];
 
 const Color _codeColor = Color(0xFF334155);
 const Color _linkColor = Color(0xFF2563EB);
@@ -199,10 +207,11 @@ List<Mark> concatMarks(List<Mark> a, List<Mark> b, int junction) =>
 
 List<Mark> _normalize(List<Mark> marks) {
   if (marks.isEmpty) return marks;
-  final sorted = [...marks]..sort((a, b) {
-    if (a.type != b.type) return a.type.compareTo(b.type);
-    return a.start.compareTo(b.start);
-  });
+  final sorted = [...marks]
+    ..sort((a, b) {
+      if (a.type != b.type) return a.type.compareTo(b.type);
+      return a.start.compareTo(b.start);
+    });
   final out = <Mark>[];
   for (final m in sorted) {
     if (m.end <= m.start) continue;
@@ -211,8 +220,14 @@ List<Mark> _normalize(List<Mark> marks) {
         out.last.href == m.href &&
         out.last.end >= m.start) {
       final prev = out.removeLast();
-      out.add(Mark(prev.start, m.end > prev.end ? m.end : prev.end, m.type,
-          href: m.href));
+      out.add(
+        Mark(
+          prev.start,
+          m.end > prev.end ? m.end : prev.end,
+          m.type,
+          href: m.href,
+        ),
+      );
     } else {
       out.add(m);
     }
@@ -221,7 +236,6 @@ List<Mark> _normalize(List<Mark> marks) {
 }
 
 const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
-
 
 /// Single-line link reference definition ` [label]: dest "title"`.
 ({String label, String dest, String? title})? parseRefDefinition(String raw) {
@@ -273,6 +287,35 @@ int matchingBracket(String src, int open) {
 
 const kDollar = r'$';
 
+/// One past the closing backtick run of the code span opening at [start] (the
+/// index of its first backtick), or -1 when the run never closes — CommonMark
+/// leaves an unclosed run as literal text.
+///
+/// Mirrors `code_span_close` in `crates/markdown/src/lib.rs` (Rust is
+/// authoritative — CLAUDE.md #2). Deliberately separate from the inline-code
+/// scanner, which also strips padding and folds newlines; this only needs the
+/// extent.
+int _codeSpanClose(String src, int start) {
+  var n = 0;
+  while (start + n < src.length && src[start + n] == '`') {
+    n++;
+  }
+  var j = start + n;
+  while (j < src.length) {
+    if (src[j] == '`') {
+      var m = 0;
+      while (j + m < src.length && src[j + m] == '`') {
+        m++;
+      }
+      if (m == n) return j + m;
+      j += m;
+    } else {
+      j++;
+    }
+  }
+  return -1;
+}
+
 /// A valid `\$` math closer per the Pandoc rules, or -1.
 int _findMathCloser(String src, int contentStart) {
   if (contentStart >= src.length) return -1;
@@ -282,6 +325,18 @@ int _findMathCloser(String src, int contentStart) {
   while (j < src.length) {
     final c = src[j];
     if (c == '\n') return -1; // inline math stays on one line
+    if (c == '`') {
+      // Code spans bind tighter than math — CommonMark 0.31.2 §6.1 gives them
+      // higher precedence than every inline construct but HTML tags and
+      // autolinks — so a `$` inside one is literal and cannot close us. Step
+      // over the span whole. An unclosed run is literal text: fall through.
+      final after = _codeSpanClose(src, j);
+      if (after >= 0) {
+        if (src.substring(j, after).contains('\n')) return -1;
+        j = after;
+        continue;
+      }
+    }
     if (c == kDollar && j > contentStart) {
       final prev = src[j - 1];
       if (prev == ' ' || prev == '\t' || prev == r'\') {
@@ -370,8 +425,9 @@ int _findMathCloser(String src, int contentStart) {
       }
       end = _trimAutolinkEnd(rest.substring(0, end));
       final candidate = rest.substring(0, end);
-      final afterScheme =
-          implied.isEmpty ? candidate.substring(prefix.length) : candidate;
+      final afterScheme = implied.isEmpty
+          ? candidate.substring(prefix.length)
+          : candidate;
       final domain = afterScheme.split(RegExp(r'[/?#]')).first;
       if (!_validAutolinkDomain(domain)) return null;
       if (candidate.isEmpty) return null;
@@ -420,8 +476,7 @@ int _trimAutolinkEnd(String s) {
       final amp = kept.lastIndexOf('&');
       if (amp >= 0) {
         final body = kept.substring(amp + 1, end - 1);
-        if (body.isNotEmpty &&
-            RegExp(r'^[A-Za-z0-9]+$').hasMatch(body)) {
+        if (body.isNotEmpty && RegExp(r'^[A-Za-z0-9]+$').hasMatch(body)) {
           end = amp;
           continue;
         }
@@ -434,8 +489,7 @@ int _trimAutolinkEnd(String s) {
 }
 
 bool _validAutolinkDomain(String domain) {
-  if (domain.isEmpty ||
-      !RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(domain)) {
+  if (domain.isEmpty || !RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(domain)) {
     return false;
   }
   final segments = domain.split('.');
@@ -469,7 +523,8 @@ int inlineHtmlEnd(String src, int i) {
   }
   bool isAlpha(String c) =>
       (c.codeUnitAt(0) | 0x20) >= 0x61 && (c.codeUnitAt(0) | 0x20) <= 0x7A;
-  bool isAlnum(String c) => isAlpha(c) || (c.codeUnitAt(0) >= 0x30 && c.codeUnitAt(0) <= 0x39);
+  bool isAlnum(String c) =>
+      isAlpha(c) || (c.codeUnitAt(0) >= 0x30 && c.codeUnitAt(0) <= 0x39);
   if (i + 1 < src.length && src[i + 1] == '!') {
     if (i + 2 >= src.length || !isAlpha(src[i + 2])) return -1;
     final p = findPat(i + 2, '>');
@@ -486,11 +541,13 @@ int inlineHtmlEnd(String src, int i) {
     p++;
   }
   int skipWs(int q) {
-    while (q < src.length && (src[q] == ' ' || src[q] == '\t' || src[q] == '\n')) {
+    while (q < src.length &&
+        (src[q] == ' ' || src[q] == '\t' || src[q] == '\n')) {
       q++;
     }
     return q;
   }
+
   if (closing) {
     final q = skipWs(p);
     return (q < src.length && src[q] == '>') ? q + 1 : -1;
@@ -505,7 +562,11 @@ int inlineHtmlEnd(String src, int i) {
     if (!(isAlpha(c0) || c0 == '_' || c0 == ':')) return -1;
     var r = q + 1;
     while (r < src.length &&
-        (isAlnum(src[r]) || src[r] == '_' || src[r] == '.' || src[r] == ':' || src[r] == '-')) {
+        (isAlnum(src[r]) ||
+            src[r] == '_' ||
+            src[r] == '.' ||
+            src[r] == ':' ||
+            src[r] == '-')) {
       r++;
     }
     final eq = skipWs(r);
@@ -522,8 +583,7 @@ int inlineHtmlEnd(String src, int i) {
         p = w + 1;
       } else {
         var w = v;
-        while (w < src.length &&
-            !' \t\n"\'=<>`'.contains(src[w])) {
+        while (w < src.length && !' \t\n"\'=<>`'.contains(src[w])) {
           w++;
         }
         if (w == v) return -1;
@@ -727,7 +787,9 @@ const Map<String, String> _namedEntities = {
     if (digits.isEmpty || digits.length > 7) return null;
     final n = int.tryParse(digits, radix: radix);
     if (n == null) return null;
-    final code = (n == 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF)) ? 0xFFFD : n;
+    final code = (n == 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF))
+        ? 0xFFFD
+        : n;
     return (String.fromCharCode(code), semi - i + 1);
   }
   final v = _namedEntities[body];
@@ -1041,8 +1103,11 @@ String? autolinkTarget(String inner) {
         j++;
       }
       final count = j - i;
-      final f = _flanking(c, i == 0 ? null : src[i - 1],
-          j < src.length ? src[j] : null);
+      final f = _flanking(
+        c,
+        i == 0 ? null : src[i - 1],
+        j < src.length ? src[j] : null,
+      );
       delims.add(_Delim(c, out.length, count, f.open, f.close));
       out.write(c * count);
       i = j;
@@ -1158,8 +1223,8 @@ String? autolinkTarget(String inner) {
 /// One run of `*`/`_` delimiters, tracked in output coordinates.
 class _Delim {
   _Delim(this.c, this.start, this.count, this.canOpen, this.canClose)
-      : curStart = start,
-        orig = count;
+    : curStart = start,
+      orig = count;
   final String c;
   final int start;
   int curStart;
@@ -1330,8 +1395,7 @@ String _processEmphasis(String text, List<Mark> marks, List<_Delim> delims) {
 /// `1. x`, `---`) must escape its leader or it changes kind on re-parse.
 /// Mirrors the Rust engine.
 String escapeBlockLeader(String line) {
-  final dividerLike =
-      line.length >= 3 && line.split('').every((c) => c == '-');
+  final dividerLike = line.length >= 3 && line.split('').every((c) => c == '-');
   if (line.startsWith('- ') ||
       line.startsWith('+ ') ||
       line.startsWith('> ') ||
@@ -1435,7 +1499,8 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
         }
       }
       final fence = '`' * (longest + 1);
-      final pad = raw.startsWith('`') ||
+      final pad =
+          raw.startsWith('`') ||
           raw.endsWith('`') ||
           (raw.startsWith(' ') && raw.endsWith(' ') && raw.trim().isNotEmpty);
       out.write(pad ? '$fence $raw $fence' : '$fence$raw$fence');
@@ -1492,10 +1557,8 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
 }
 
 /// Entity-escape text for HTML body content.
-String escapeHtml(String s) => s
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+String escapeHtml(String s) =>
+    s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 /// Entity-escape text for a double-quoted HTML attribute value.
 String escapeHtmlAttr(String s) => escapeHtml(s).replaceAll('"', '&quot;');
@@ -1540,8 +1603,10 @@ String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
       // text/html see the formula; the data-mica-math wrapper lets our own
       // HTML→Markdown converter pass it through verbatim (no escaping) so a
       // mica→mica round trip re-parses the math mark instead of dropping it.
-      out.write('<span data-mica-math="1">\$'
-          '${escapeHtml(text.substring(ps, pe))}\$</span>');
+      out.write(
+        '<span data-mica-math="1">\$'
+        '${escapeHtml(text.substring(ps, pe))}\$</span>',
+      );
       pos = pe;
       continue;
     }
@@ -1550,8 +1615,10 @@ String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
       // text may have been edited). External readers see a superscript label;
       // our converter restores `[^label]` from the attribute.
       final label = pick.href ?? text.substring(ps, pe);
-      out.write('<sup data-mica-footnote="${escapeHtmlAttr(label)}">'
-          '${escapeHtml(text.substring(ps, pe))}</sup>');
+      out.write(
+        '<sup data-mica-footnote="${escapeHtmlAttr(label)}">'
+        '${escapeHtml(text.substring(ps, pe))}</sup>',
+      );
       pos = pe;
       continue;
     }
