@@ -1850,6 +1850,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         }
         return KeyEventResult.skipRemainingHandlers;
       }
+      // A caret at a typeset formula's trailing edge deletes the whole formula
+      // — its source is an atom, not backspaceable one character at a time.
+      // Before both the web and desktop grapheme paths, since it replaces them.
+      if (sel.isCollapsed && _controller.deleteMathAtomBackward()) {
+        _syncImeFromSelection(force: true);
+        return KeyEventResult.handled;
+      }
       // Within-node backspace. The desktop embedder does NOT route Backspace to
       // a raw text-input client (only typed characters reach updateEditingValue),
       // so delete the grapheme before the caret ourselves. Web's hidden textarea
@@ -1879,6 +1886,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           return KeyEventResult.handled;
         }
         return KeyEventResult.skipRemainingHandlers;
+      }
+      // Delete at a formula's leading edge removes it whole (mirror of the
+      // Backspace case above).
+      if (sel.isCollapsed && _controller.deleteMathAtomForward()) {
+        _syncImeFromSelection(force: true);
+        return KeyEventResult.handled;
       }
       // Within-node forward delete: same desktop caveat as backspace.
       if (!kIsWeb && !_imeComposing && sel.isCollapsed) {
@@ -2081,6 +2094,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         mathIdx < _controller.nodes.length &&
         _controller.nodes[mathIdx].kind == 'math_block') {
       _editMathBlock(_controller.nodes[mathIdx]);
+      return;
+    }
+    // A typeset inline formula is an atom: clicking it opens the source editor
+    // rather than placing a caret inside (AppFlowy/AFFiNE/Notion all do this).
+    final inlineMath = r.inlineMathAt(local);
+    if (inlineMath != null) {
+      _focus.requestFocus();
+      _editInlineMath(
+        inlineMath.node,
+        inlineMath.start,
+        inlineMath.end,
+        inlineMath.source,
+      );
       return;
     }
     final langNode = r.codeLanguageAt(local);
@@ -4162,6 +4188,54 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (source != null) {
       _controller.setBlockText(node.id, _stripMathDelimiters(source));
     }
+  }
+
+  /// Edit a typeset inline formula's source — same dialog as the block form,
+  /// but writes back to the `[start, end)` run of node [i]. Empty source
+  /// deletes the formula.
+  Future<void> _editInlineMath(int i, int start, int end, String source) async {
+    final controller = TextEditingController(text: source);
+    final edited = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Math formula', style: TextStyle(fontSize: 16)),
+        content: SizedBox(
+          width: 420,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 4,
+            minLines: 1,
+            style: const TextStyle(fontFamily: kMonoFont, fontSize: 14),
+            decoration: const InputDecoration(
+              hintText: r'\eta = 2 \times \frac{N-1}{N}',
+              isDense: true,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (edited == null) return;
+    // Re-read the run: the dialog was modal, but stay defensive.
+    if (i < 0 || i >= _controller.nodes.length) return;
+    _controller.setInlineMathSource(
+      i,
+      start,
+      end,
+      _stripMathDelimiters(edited).trim(),
+    );
+    _syncImeFromSelection(force: true);
   }
 
   /// LaTeX sources are stored bare; users habitually paste `$$…$$`-wrapped

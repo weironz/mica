@@ -106,12 +106,19 @@ class InlineAtom {
     required this.size,
     required this.baseline,
     required this.renderer,
+    this.underline = false,
     this.painterIndex = -1,
   });
 
   final int docStart;
   final int docEnd;
   final String source;
+
+  /// A link mark spans this run — Flutter won't draw a TextDecoration across a
+  /// placeholder, so the atom paints its own underline segment to keep a link
+  /// that wraps a formula visually continuous. A generic mark-property pass-
+  /// through, not a renderer-type branch.
+  final bool underline;
 
   /// Offset of this atom's U+FFFC in the display text — assigned by
   /// [FoldPlan]'s constructor from the accumulated shifts.

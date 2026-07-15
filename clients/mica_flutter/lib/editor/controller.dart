@@ -74,7 +74,8 @@ class EditorController extends ChangeNotifier {
   /// same node when possible and never overwrites the text of a node with
   /// unsent local edits.
   void reconcile(List<EditorNode> server) {
-    final focusedId = (selection != null && selection!.focus.node < nodes.length)
+    final focusedId =
+        (selection != null && selection!.focus.node < nodes.length)
         ? nodes[selection!.focus.node].id
         : null;
     final byId = {for (final n in nodes) n.id: n};
@@ -131,7 +132,10 @@ class EditorController extends ChangeNotifier {
       return DocPosition(node, off);
     }
 
-    selection = DocSelection(anchor: clamp(sel.anchor), focus: clamp(sel.focus));
+    selection = DocSelection(
+      anchor: clamp(sel.anchor),
+      focus: clamp(sel.focus),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -140,8 +144,45 @@ class EditorController extends ChangeNotifier {
 
   void setSelection(DocSelection? sel, {bool keepGoalX = false}) {
     if (!keepGoalX) goalX = null;
-    selection = sel;
+    selection = _snapSelectionOutOfAtoms(sel);
     notifyListeners();
+  }
+
+  /// Keep the caret (and selection endpoints) out of the interior of a typeset
+  /// inline formula: a run renders as one atom, so a caret cannot land inside
+  /// its source — it would let you edit hidden characters blind. The single
+  /// choke point every caret move, click and drag flows through, so no motion
+  /// command needs its own atom-awareness.
+  DocSelection? _snapSelectionOutOfAtoms(DocSelection? sel) {
+    if (sel == null) return null;
+    final marksAt = (int node) => node >= 0 && node < nodes.length
+        ? marksFromData(nodes[node].data)
+        : const <Mark>[];
+    if (sel.isCollapsed) {
+      final m = marksAt(sel.focus.node);
+      final snapped = snapOutOfMathRun(m, sel.focus.offset);
+      return snapped == sel.focus.offset
+          ? sel
+          : DocSelection.collapsed(sel.focus.withOffset(snapped));
+    }
+    // A range: push each endpoint OUT, away from the other, so selecting into a
+    // formula grabs the whole thing rather than half its source.
+    final forward = sel.anchor.compareTo(sel.focus) <= 0;
+    final anchor = sel.anchor.withOffset(
+      snapOutOfMathRun(
+        marksAt(sel.anchor.node),
+        sel.anchor.offset,
+        prefEnd: !forward,
+      ),
+    );
+    final focus = sel.focus.withOffset(
+      snapOutOfMathRun(
+        marksAt(sel.focus.node),
+        sel.focus.offset,
+        prefEnd: forward,
+      ),
+    );
+    return DocSelection(anchor: anchor, focus: focus);
   }
 
   void collapseTo(DocPosition pos, {bool keepGoalX = false}) {
@@ -168,10 +209,12 @@ class EditorController extends ChangeNotifier {
     if (text.isEmpty) return false;
     final (start, end) = wordBoundsAt(text, pos.offset.clamp(0, text.length));
     if (start == end) return false;
-    setSelection(DocSelection(
-      anchor: DocPosition(pos.node, start),
-      focus: DocPosition(pos.node, end),
-    ));
+    setSelection(
+      DocSelection(
+        anchor: DocPosition(pos.node, start),
+        focus: DocPosition(pos.node, end),
+      ),
+    );
     return true;
   }
 
@@ -181,10 +224,12 @@ class EditorController extends ChangeNotifier {
     if (index < 0 || index >= nodes.length) return false;
     final node = nodes[index];
     if (node.isAtomic || node.text.isEmpty) return false;
-    setSelection(DocSelection(
-      anchor: DocPosition(index, 0),
-      focus: DocPosition(index, node.text.length),
-    ));
+    setSelection(
+      DocSelection(
+        anchor: DocPosition(index, 0),
+        focus: DocPosition(index, node.text.length),
+      ),
+    );
     return true;
   }
 
@@ -214,9 +259,7 @@ class EditorController extends ChangeNotifier {
         // (deleting a linked "AA" before another "A" aligns on the wrong "A").
         // The edit must cover the previous ranged selection — widen to it so
         // marks die with their text instead of bleeding onto the neighbors.
-        if (!sel.isCollapsed &&
-            sel.start.node == i &&
-            sel.end.node == i) {
+        if (!sel.isCollapsed && sel.start.node == i && sel.end.node == i) {
           final selS = sel.start.offset.clamp(0, old.length);
           final selE = sel.end.offset.clamp(0, old.length);
           if (prefix > selS) prefix = selS;
@@ -241,6 +284,67 @@ class EditorController extends ChangeNotifier {
     goalX = null;
     _markDirty(node.id);
     notifyListeners();
+  }
+
+  /// Replace the inline math run `[start, end)` in node [i] with [newSource]
+  /// (delimiter-stripped LaTeX). Empty [newSource] deletes the formula outright
+  /// — the atom is indivisible. The `math` mark rides the length change through
+  /// [shiftMarks]: its start is pinned, its end tracks the delta, so it ends up
+  /// covering exactly the new source (or collapses away when that is empty).
+  /// The caret lands just past the atom, or at [start] on deletion.
+  bool setInlineMathSource(int i, int start, int end, String newSource) {
+    if (i < 0 || i >= nodes.length) return false;
+    final node = nodes[i];
+    final old = node.text;
+    if (start < 0 || end > old.length || start >= end) return false;
+    final newText = old.substring(0, start) + newSource + old.substring(end);
+    final shifted = shiftMarks(
+      marksFromData(node.data),
+      start,
+      end,
+      newSource.length - (end - start),
+      newText.length,
+    );
+    node.text = newText;
+    node.data = {...node.data, 'marks': marksToJson(shifted)};
+    final caret = newSource.isEmpty ? start : start + newSource.length;
+    selection = DocSelection.collapsed(DocPosition(i, caret));
+    goalX = null;
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': newText,
+        'data': node.data,
+      },
+    ]);
+    notifyListeners();
+    return true;
+  }
+
+  /// Backspace with the caret at a formula's trailing edge deletes the whole
+  /// formula. Returns false when no run ends there (caller falls through to the
+  /// ordinary grapheme delete).
+  bool deleteMathAtomBackward() {
+    final sel = selection;
+    if (sel == null || !sel.isCollapsed) return false;
+    final i = sel.focus.node;
+    if (i < 0 || i >= nodes.length) return false;
+    final run = mathRunEndingAt(marksFromData(nodes[i].data), sel.focus.offset);
+    return run != null && setInlineMathSource(i, run.start, run.end, '');
+  }
+
+  /// Delete with the caret at a formula's leading edge deletes it whole.
+  bool deleteMathAtomForward() {
+    final sel = selection;
+    if (sel == null || !sel.isCollapsed) return false;
+    final i = sel.focus.node;
+    if (i < 0 || i >= nodes.length) return false;
+    final run = mathRunStartingAt(
+      marksFromData(nodes[i].data),
+      sel.focus.offset,
+    );
+    return run != null && setInlineMathSource(i, run.start, run.end, '');
   }
 
   /// Soft newline inside a code block with auto-indent: insert `\n` at [caret]
@@ -398,7 +502,12 @@ class EditorController extends ChangeNotifier {
       node.kind = 'paragraph';
       node.data = {};
       _sendNow([
-        {'type': 'update_block', 'block_id': node.id, 'kind': 'paragraph', 'data': {}},
+        {
+          'type': 'update_block',
+          'block_id': node.id,
+          'kind': 'paragraph',
+          'data': {},
+        },
       ]);
       collapseTo(DocPosition(i, 0));
       return;
@@ -422,10 +531,14 @@ class EditorController extends ChangeNotifier {
         ? _continuationData(node)
         : <String, dynamic>{};
     // Marks split with the text: each half keeps (a rebased copy of) its own.
-    final (beforeMarks, afterMarks) =
-        splitMarks(marksFromData(node.data), at);
+    final (beforeMarks, afterMarks) = splitMarks(marksFromData(node.data), at);
     if (afterMarks.isNotEmpty) newData['marks'] = marksToJson(afterMarks);
-    final created = EditorNode(id: _genId(), kind: newKind, text: after, data: newData);
+    final created = EditorNode(
+      id: _genId(),
+      kind: newKind,
+      text: after,
+      data: newData,
+    );
 
     node.text = before;
     node.data = {...node.data, 'marks': marksToJson(beforeMarks)};
@@ -457,7 +570,13 @@ class EditorController extends ChangeNotifier {
       node.data = {};
       node.text = '';
       _sendNow([
-        {'type': 'update_block', 'block_id': node.id, 'kind': 'paragraph', 'data': {}, 'text': ''},
+        {
+          'type': 'update_block',
+          'block_id': node.id,
+          'kind': 'paragraph',
+          'data': {},
+          'text': '',
+        },
       ]);
       collapseTo(DocPosition(i, 0));
       return;
@@ -565,10 +684,7 @@ class EditorController extends ChangeNotifier {
       // Land where the block was: end of the block above, else start of the
       // one that slid up into its place.
       final target = (i - 1).clamp(0, nodes.length - 1);
-      collapseTo(DocPosition(
-        target,
-        i > 0 ? nodes[target].text.length : 0,
-      ));
+      collapseTo(DocPosition(target, i > 0 ? nodes[target].text.length : 0));
       return true;
     }
 
@@ -579,7 +695,12 @@ class EditorController extends ChangeNotifier {
       cur.kind = 'paragraph';
       cur.data = {};
       _sendNow([
-        {'type': 'update_block', 'block_id': cur.id, 'kind': 'paragraph', 'data': {}},
+        {
+          'type': 'update_block',
+          'block_id': cur.id,
+          'kind': 'paragraph',
+          'data': {},
+        },
       ]);
       notifyListeners();
       return true;
@@ -640,11 +761,13 @@ class EditorController extends ChangeNotifier {
     prev.text = merged;
     prev.data = {
       ...prev.data,
-      'marks': marksToJson(concatMarks(
-        marksFromData(prev.data),
-        marksFromData(cur.data),
-        junction,
-      )),
+      'marks': marksToJson(
+        concatMarks(
+          marksFromData(prev.data),
+          marksFromData(cur.data),
+          junction,
+        ),
+      ),
     };
     nodes.removeAt(i);
     _dirty
@@ -708,11 +831,13 @@ class EditorController extends ChangeNotifier {
     cur.text = merged;
     cur.data = {
       ...cur.data,
-      'marks': marksToJson(concatMarks(
-        marksFromData(cur.data),
-        marksFromData(next.data),
-        junction,
-      )),
+      'marks': marksToJson(
+        concatMarks(
+          marksFromData(cur.data),
+          marksFromData(next.data),
+          junction,
+        ),
+      ),
     };
     nodes.removeAt(i + 1);
     _dirty
@@ -748,10 +873,9 @@ class EditorController extends ChangeNotifier {
       }
       if (node.kind == 'image') {
         final fileId = node.data['file_id'] as String?;
-        final target = (imageUrls?[fileId] ??
-            node.data['url'] ??
-            node.data['name'] ??
-            '') as String;
+        final target =
+            (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
+                as String;
         return '![${node.text}]($target)';
       }
       if (node.kind == 'divider') return '---';
@@ -789,15 +913,19 @@ class EditorController extends ChangeNotifier {
     // blank line is the Markdown boundary between blockquotes, so the
     // round-trip would mark every line `qbreak` and the quote bar shatters.
     final buf = StringBuffer(
-        nodeText(s.node, s.offset, nodes[s.node].text.length));
+      nodeText(s.node, s.offset, nodes[s.node].text.length),
+    );
     for (var i = s.node + 1; i <= e.node; i++) {
-      final sameQuoteGroup = nodes[i].kind == 'quote' &&
+      final sameQuoteGroup =
+          nodes[i].kind == 'quote' &&
           nodes[i - 1].kind == 'quote' &&
           nodes[i].data['qbreak'] != true;
       buf.write(sameQuoteGroup ? '\n' : '\n\n');
-      buf.write(i == e.node
-          ? nodeText(e.node, 0, e.offset)
-          : nodeText(i, 0, nodes[i].text.length));
+      buf.write(
+        i == e.node
+            ? nodeText(e.node, 0, e.offset)
+            : nodeText(i, 0, nodes[i].text.length),
+      );
     }
     return buf.toString();
   }
@@ -808,7 +936,9 @@ class EditorController extends ChangeNotifier {
   /// quote from every such block on copy.
   String _blockPrefix(EditorNode node) {
     final pad = node.isListKind ? '    ' * node.indent : '';
-    final quote = node.kind == 'quote' ? '' : '> ' * node.quoteDepth.clamp(0, 16);
+    final quote = node.kind == 'quote'
+        ? ''
+        : '> ' * node.quoteDepth.clamp(0, 16);
     switch (node.kind) {
       case 'heading':
         return '$quote${'#' * node.headingLevel} ';
@@ -871,7 +1001,8 @@ class EditorController extends ChangeNotifier {
       final node = nodes[sl.node];
       if (i > 0) {
         final prev = nodes[slices[i - 1].node];
-        final sameQuoteGroup = node.kind == 'quote' &&
+        final sameQuoteGroup =
+            node.kind == 'quote' &&
             prev.kind == 'quote' &&
             node.data['qbreak'] != true;
         buf.write(sameQuoteGroup ? '\n' : '\n\n');
@@ -881,8 +1012,13 @@ class EditorController extends ChangeNotifier {
     return buf.toString();
   }
 
-  String _nodePlain(EditorNode node, int from, int to,
-      Map<String, String>? imageUrls, Map<int, int> counters) {
+  String _nodePlain(
+    EditorNode node,
+    int from,
+    int to,
+    Map<String, String>? imageUrls,
+    Map<int, int> counters,
+  ) {
     // Numbering mirrors the renderer (render.dart): a non-numbered LIST item
     // interrupts only its own level and deeper (parents keep counting); any
     // other block ends every run. Wholesale clear() on a nested bullet made
@@ -896,10 +1032,9 @@ class EditorController extends ChangeNotifier {
     }
     switch (node.kind) {
       case 'table':
-        return TableData.fromBlock(node.data)
-            .rows
-            .map((r) => r.join('\t'))
-            .join('\n');
+        return TableData.fromBlock(
+          node.data,
+        ).rows.map((r) => r.join('\t')).join('\n');
       case 'image':
         final fileId = node.data['file_id'] as String?;
         return (imageUrls?[fileId] ?? node.data['url'] ?? node.text) as String;
@@ -919,8 +1054,8 @@ class EditorController extends ChangeNotifier {
         // Returning to a shallower level restarts the deeper runs, and the
         // first item of a run seeds from its stored start (`5.` stays `5.`).
         counters.removeWhere((k, _) => k > node.indent);
-        final n = (counters[node.indent] ??
-                ((node.data['start'] as int?) ?? 1) - 1) +
+        final n =
+            (counters[node.indent] ?? ((node.data['start'] as int?) ?? 1) - 1) +
             1;
         counters[node.indent] = n;
         return '$indent$n. $sub';
@@ -966,7 +1101,9 @@ class EditorController extends ChangeNotifier {
           // `<ol start="5">`: the run's real first number must survive the
           // trip — pasting `5. five` back as `1.` changes visible content.
           final start = want == 'ol' ? it.data['start'] : null;
-          sb.write(start is int && start != 1 ? '<ol start="$start">' : '<$want>');
+          sb.write(
+            start is int && start != 1 ? '<ol start="$start">' : '<$want>',
+          );
           tag = want;
         }
         if (liOpen) sb.write('</li>');
@@ -1042,12 +1179,13 @@ class EditorController extends ChangeNotifier {
       if (node.kind == 'image') {
         setQuote(0);
         final fileId = node.data['file_id'] as String?;
-        final src = (imageUrls?[fileId] ??
-            node.data['url'] ??
-            node.data['name'] ??
-            '') as String;
-        buf.write('<p><img src="${escapeHtmlAttr(src)}" '
-            'alt="${escapeHtmlAttr(node.text)}"></p>');
+        final src =
+            (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
+                as String;
+        buf.write(
+          '<p><img src="${escapeHtmlAttr(src)}" '
+          'alt="${escapeHtmlAttr(node.text)}"></p>',
+        );
         si++;
         continue;
       }
@@ -1069,8 +1207,10 @@ class EditorController extends ChangeNotifier {
         final cls = lang.isEmpty
             ? ''
             : ' class="language-${escapeHtmlAttr(lang)}"';
-        buf.write('<pre><code$cls>${escapeHtml(node.text.substring(a, b))}'
-            '</code></pre>');
+        buf.write(
+          '<pre><code$cls>${escapeHtml(node.text.substring(a, b))}'
+          '</code></pre>',
+        );
         si++;
         continue;
       }
@@ -1079,8 +1219,10 @@ class EditorController extends ChangeNotifier {
         // TeX; our converter passes it through verbatim so it re-parses as a
         // math block instead of a paragraph of raw LaTeX.
         setQuote(0);
-        buf.write('<p><span data-mica-math="1">\$\$'
-            '${escapeHtml(node.text)}\$\$</span></p>');
+        buf.write(
+          '<p><span data-mica-math="1">\$\$'
+          '${escapeHtml(node.text)}\$\$</span></p>',
+        );
         si++;
         continue;
       }
@@ -1089,8 +1231,10 @@ class EditorController extends ChangeNotifier {
         // reconstructs `[^label]: …` (escaping would kill a literal leader).
         setQuote(0);
         final label = (node.data['label'] ?? '') as String;
-        buf.write('<p data-mica-fndef="${escapeHtmlAttr(label)}">'
-            '${inlineHtmlOf(node, a, b)}</p>');
+        buf.write(
+          '<p data-mica-fndef="${escapeHtmlAttr(label)}">'
+          '${inlineHtmlOf(node, a, b)}</p>',
+        );
         si++;
         continue;
       }
@@ -1109,13 +1253,15 @@ class EditorController extends ChangeNotifier {
           run.add(nodes[slices[si].node]);
           si++;
         }
-        buf.write(_listRunHtml(run, (n) {
-          final box = n.kind == 'todo'
-              ? '<input type="checkbox"${n.todoChecked ? ' checked' : ''}'
-                  ' disabled> '
-              : '';
-          return '$box${inlineHtmlOf(n, 0, n.text.length)}';
-        }));
+        buf.write(
+          _listRunHtml(run, (n) {
+            final box = n.kind == 'todo'
+                ? '<input type="checkbox"${n.todoChecked ? ' checked' : ''}'
+                      ' disabled> '
+                : '';
+            return '$box${inlineHtmlOf(n, 0, n.text.length)}';
+          }),
+        );
         continue;
       }
 
@@ -1211,7 +1357,9 @@ class EditorController extends ChangeNotifier {
     final prefix = startIsUnit ? '' : startNode.text.substring(0, s);
     final suffix = endIsUnit ? '' : endNode.text.substring(e);
     final merged = prefix + suffix;
-    final removed = [for (var i = start.node + 1; i <= end.node; i++) nodes[i].id];
+    final removed = [
+      for (var i = start.node + 1; i <= end.node; i++) nodes[i].id,
+    ];
 
     // Start node keeps marks strictly before the cut (clip, don't stretch —
     // the joined tail must not inherit them); the end node's surviving tail
@@ -1265,7 +1413,12 @@ class EditorController extends ChangeNotifier {
     node.kind = kind;
     node.data = data ?? {};
     _sendNow([
-      {'type': 'update_block', 'block_id': node.id, 'kind': kind, 'data': node.data},
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'kind': kind,
+        'data': node.data,
+      },
     ]);
     notifyListeners();
   }
@@ -1325,10 +1478,7 @@ class EditorController extends ChangeNotifier {
       final node = nodes[i];
       if (node.isAtomic || node.kind == 'code_block') continue;
       final marks = node.data['marks'];
-      final nd = <String, dynamic>{
-        if (marks != null) 'marks': marks,
-        ...?data,
-      };
+      final nd = <String, dynamic>{if (marks != null) 'marks': marks, ...?data};
       node
         ..kind = kind
         ..data = nd;
@@ -1449,10 +1599,16 @@ class EditorController extends ChangeNotifier {
     final table = _tableAt(index);
     if (table == null) return;
     var changed = false;
-    for (var r = r0.clamp(0, table.rows.length); r <= r1 && r < table.rows.length; r++) {
-      for (var c = c0.clamp(0, table.rows[r].length);
-          c <= c1 && c < table.rows[r].length;
-          c++) {
+    for (
+      var r = r0.clamp(0, table.rows.length);
+      r <= r1 && r < table.rows.length;
+      r++
+    ) {
+      for (
+        var c = c0.clamp(0, table.rows[r].length);
+        c <= c1 && c < table.rows[r].length;
+        c++
+      ) {
         if (table.rows[r][c].isNotEmpty) {
           table.rows[r][c] = '';
           changed = true;
@@ -1529,7 +1685,10 @@ class EditorController extends ChangeNotifier {
     if (table == null) return;
     final first = table.header ? 1 : 0;
     final to = row + delta;
-    if (row < first || to < first || row >= table.rows.length || to >= table.rows.length) {
+    if (row < first ||
+        to < first ||
+        row >= table.rows.length ||
+        to >= table.rows.length) {
       return;
     }
     final r = table.rows.removeAt(row);
@@ -1714,7 +1873,9 @@ class EditorController extends ChangeNotifier {
 
     if (node.kind == 'paragraph') {
       if (caret == 2 &&
-          (text.startsWith('- ') || text.startsWith('* ') || text.startsWith('+ '))) {
+          (text.startsWith('- ') ||
+              text.startsWith('* ') ||
+              text.startsWith('+ '))) {
         return convert('bulleted_list', {}, 2);
       }
       if (caret == 2 && text.startsWith('> ')) {
@@ -1798,8 +1959,9 @@ class EditorController extends ChangeNotifier {
 
     // Link: [label](url) — closing `)` just typed.
     if (text.endsWith(')')) {
-      final m = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)$')
-          .firstMatch(text.substring(0, caret));
+      final m = RegExp(
+        r'\[([^\]]+)\]\(([^)\s]+)\)$',
+      ).firstMatch(text.substring(0, caret));
       if (m != null) {
         matchStart = m.start;
         innerStart = m.start + 1; // after '['
@@ -1855,7 +2017,8 @@ class EditorController extends ChangeNotifier {
     if (type == null) return false;
 
     final inner = text.substring(innerStart, innerEnd);
-    final newText = text.substring(0, matchStart) + inner + text.substring(caret);
+    final newText =
+        text.substring(0, matchStart) + inner + text.substring(caret);
 
     // Shift existing marks for the two marker deletions (right side first so the
     // left offsets stay valid), then add the new mark over the converted run.
@@ -1897,7 +2060,12 @@ class EditorController extends ChangeNotifier {
 
   /// Apply a slash-menu choice: remove the `/query` text in [start, end) and
   /// convert the focused block to [kind].
-  void applySlashCommand(int start, int end, String kind, Map<String, dynamic> data) {
+  void applySlashCommand(
+    int start,
+    int end,
+    String kind,
+    Map<String, dynamic> data,
+  ) {
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
@@ -1999,8 +2167,14 @@ class EditorController extends ChangeNotifier {
       }
       if (me > ms) shifted.add(Mark(ms, me, m.type, href: m.href));
     }
-    final next =
-        applyMark(shifted, s, s + text.length, 'link', href: href, add: true);
+    final next = applyMark(
+      shifted,
+      s,
+      s + text.length,
+      'link',
+      href: href,
+      add: true,
+    );
     node
       ..text = newText
       ..data = {...node.data, 'marks': marksToJson(next)};
@@ -2021,7 +2195,13 @@ class EditorController extends ChangeNotifier {
   /// across the replacement; the caret lands after the inserted run. Used to
   /// paste inline content (e.g. inline math `$…$`) into the text flow without
   /// breaking the line.
-  void insertInlineSpan(int i, int start, int end, String text, List<Mark> spans) {
+  void insertInlineSpan(
+    int i,
+    int start,
+    int end,
+    String text,
+    List<Mark> spans,
+  ) {
     if (i < 0 || i >= nodes.length) return;
     final node = nodes[i];
     if (node.isAtomic || node.kind == 'code_block' || node.kind == 'table') {
@@ -2052,7 +2232,9 @@ class EditorController extends ChangeNotifier {
     }
     // Add the inserted spans, offset to the insertion point.
     for (final m in spans) {
-      next.add(Mark(s + m.start, s + m.end, m.type, href: m.href, title: m.title));
+      next.add(
+        Mark(s + m.start, s + m.end, m.type, href: m.href, title: m.title),
+      );
     }
     node
       ..text = newText
@@ -2188,7 +2370,9 @@ class EditorController extends ChangeNotifier {
       // Atomic blocks have no caret-editable text — splicing into node.text
       // silently corrupted an image's alt / a math block's LaTeX / a table's
       // dead text. Route the paste to a fresh paragraph below instead.
-      insertBlocksAfterFocus([(kind: 'paragraph', text: text, data: <String, dynamic>{})]);
+      insertBlocksAfterFocus([
+        (kind: 'paragraph', text: text, data: <String, dynamic>{}),
+      ]);
       return;
     }
     final len = node.text.length;
@@ -2335,7 +2519,12 @@ class EditorController extends ChangeNotifier {
       });
       imageIndex = i;
     } else {
-      final created = EditorNode(id: _genId(), kind: 'image', text: alt, data: data);
+      final created = EditorNode(
+        id: _genId(),
+        kind: 'image',
+        text: alt,
+        data: data,
+      );
       nodes.insert(i + 1, created);
       ops.add(_insertOp(created, i + 1));
       imageIndex = i + 1;
@@ -2354,7 +2543,11 @@ class EditorController extends ChangeNotifier {
   /// Replace an image's external `url` with our own `file_id` + `name` (after
   /// re-hosting). Looked up by node id since indices may have shifted. No-op if
   /// the node is gone or already has this file_id.
-  void setImageSource(String nodeId, {required String fileId, required String name}) {
+  void setImageSource(
+    String nodeId, {
+    required String fileId,
+    required String name,
+  }) {
     final node = nodes.where((n) => n.id == nodeId).firstOrNull;
     if (node == null || node.kind != 'image') return;
     if (node.data['file_id'] == fileId) return;
@@ -2462,7 +2655,12 @@ class EditorController extends ChangeNotifier {
     if (node == null || node.text == text) return;
     node.text = text;
     _sendNow([
-      {'type': 'update_block', 'block_id': node.id, 'text': text, 'data': node.data},
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': text,
+        'data': node.data,
+      },
     ]);
     notifyListeners();
   }
@@ -2632,7 +2830,11 @@ class EditorController extends ChangeNotifier {
         // Skip ids already represented in this batch to avoid double-writes.
         final inBatch = ops.any((o) => o['block_id'] == id);
         if (node != null && !inBatch) {
-          pending.add({'type': 'update_block', 'block_id': id, 'text': node.text});
+          pending.add({
+            'type': 'update_block',
+            'block_id': id,
+            'text': node.text,
+          });
         }
       }
       _dirty.clear();

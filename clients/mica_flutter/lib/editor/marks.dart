@@ -146,6 +146,39 @@ Mark? mathRunAt(List<Mark> marks, int caret) {
   return null;
 }
 
+/// A typeset inline formula is an atom: the caret rests on either side of it
+/// but never inside its source. This maps an offset that landed inside a math
+/// run to the run edge it should snap to.
+///
+/// [prefEnd] biases a caret exactly ambiguous between edges toward the end
+/// (a range endpoint extending forward wants the far edge); a plain caret
+/// snaps to the nearer edge. Offsets outside every run pass through unchanged,
+/// so this is safe to call on every selection.
+int snapOutOfMathRun(List<Mark> marks, int offset, {bool? prefEnd}) {
+  final run = mathRunAt(marks, offset);
+  if (run == null) return offset;
+  if (prefEnd != null) return prefEnd ? run.end : run.start;
+  return (offset - run.start) <= (run.end - offset) ? run.start : run.end;
+}
+
+/// The math run whose source ends exactly at [caret] (caret == run.end), or
+/// null. Backspace at such a caret deletes the whole formula rather than a
+/// single source character — the atom is indivisible. The mirror for Delete is
+/// a run with `run.start == caret`.
+Mark? mathRunEndingAt(List<Mark> marks, int caret) {
+  for (final m in marks) {
+    if (m.type == 'math' && m.end == caret && m.end > m.start) return m;
+  }
+  return null;
+}
+
+Mark? mathRunStartingAt(List<Mark> marks, int caret) {
+  for (final m in marks) {
+    if (m.type == 'math' && m.start == caret && m.end > m.start) return m;
+  }
+  return null;
+}
+
 /// Add or remove [type] over `[from, to)` (toggle decided by the caller).
 List<Mark> applyMark(
   List<Mark> marks,

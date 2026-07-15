@@ -42,7 +42,7 @@
 - **callout/toggle/embed/columns 块未建** —— Notion 类常见结构块。(L)
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;10+ 处硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。(各 L)
 - **文档内查找/替换缺失** —— 有全局搜索却无 Ctrl+F;基于现有文本模型很便宜。(S)
-- **行内数学未排版** —— `$…$` 仍显示紫色源码,仅 block 数学真排版(`marks.dart`)。(M)
+- ~~**行内数学未排版**~~ ✅ 2026-07-16:`$…$` 真排进行里(基线对齐、随字号缩放),公式为不可进入的原子 —— 点击弹源码编辑框、光标两侧跳过、退格删整体(AppFlowy/Notion 交互)。机制 = `InlineAtomRenderer` 注册表 + `FoldPlan` doc↔painter 映射 + `setSelection` snap(`inline_atoms.dart`,render-architecture.md Decision 4)。
 - **Web IME/光标滚动实况调优** —— Milestone 1 遗留(合成态/游离换行、caret scroll-into-view)。(M)
 - **AI 离线为空 stub / 无拼写检查 / 无字数统计**。(M / M / S)
 

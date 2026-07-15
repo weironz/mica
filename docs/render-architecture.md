@@ -112,8 +112,68 @@ moment it lands, the host disposes the frame it has moved past, and `RawImage`
 clones what it is handed — which is why the fullscreen viewer can hold a frame
 the editor is busy replacing.
 
+## Decision 4: inline atoms fold at paint time; formulas are atoms you click to edit
+
+Inline math (`$…$`, a `math` mark over N source characters) typesets in-line
+without touching Decision 1's load-bearing wall, via a fold: every atom-marked
+run becomes **one U+FFFC placeholder** in its node's TextPainter
+(`TextPainter.setPlaceholderDimensions` — probed on desktop Skia and verified on
+CanvasKit with real rendering), and the typeset raster is drawn into the
+placeholder's box. This holds unconditionally — a formula is never entered.
+
+A typeset formula is an **atom** (AppFlowy / AFFiNE / Notion all landed here):
+
+- The caret rests on either edge but never inside the source. The controller's
+  single `setSelection` choke point snaps any selection endpoint out of a run's
+  interior, so every caret move, click and drag inherits it for free.
+- Clicking a formula opens the same **source editor dialog** the block form
+  uses (`_editInlineMath`), writing back through `setInlineMathSource`, which
+  rides the `math` mark's length change through `shiftMarks` (empty source
+  deletes the run).
+- Backspace/Delete at an edge removes the whole formula
+  (`deleteMathAtom{Backward,Forward}`) — the source is indivisible.
+
+The document model, storage, and markdown round-trip see none of it: folding is
+strictly a render-layer affair. (The earlier Zed model — the caret's node shows
+editable source in place — is preserved in `_paintMathPreview`'s hover card,
+which typesets the formula you are editing; it is now a preview aid, not the
+edit surface.)
+
+The machinery (`lib/editor/inline_atoms.dart`, a part-file like the block
+registry):
+
+- **`InlineAtomRenderer` registry, keyed by mark type** — the inline sibling of
+  `AtomicBlockRenderer`, same contract shape: `measure() → null` DECLINES and
+  the run stays styled source (raster pending, capture failed, empty source).
+  Adding an inline-rendered mark type means adding a renderer here, never an
+  `if (type == …)` in render.dart.
+- **`FoldPlan`** — the doc↔painter offset mapping for one folded node. Doc
+  offsets strictly inside a run collapse to the placeholder's edges
+  (floor/ceil pair, so ranges always cover the whole placeholder); painter
+  offsets map back to run edges, never inside. The invariant that keeps this
+  sane: **painter offsets never leave render.dart unmapped**. Crossings today:
+  `positionAt`, `caretRectFor` (remote cursors reach folded nodes),
+  `_paintSelection`, `_paintInlineCode`, `lineStart`/`lineEnd`.
+- **The selection setter is paint-only** — fold state no longer depends on the
+  selection (folding is unconditional). Note this is not a layout fast-path in
+  practice: the `nodes` setter relayouts the whole document on every controller
+  notification (nodes is mutated in place, so it can't cheaply detect change);
+  measured ~6ms for 200 nodes, folding included, and folding makes layout
+  *cheaper* (one placeholder per run instead of the glyphs). Don't build on an
+  assumption that caret moves skip layout.
+- **Math reuses the block previewer whole** — same `'math'` id, same
+  source-keyed raster cache; the 18pt raster scales by (text font size / 18).
+  The pipeline additionally captures each preview's **baseline** (a transparent
+  `RenderProxyBox` inside the RepaintBoundary reads `getDistanceToBaseline`
+  during its own performLayout — within 0.004px of a bare layout) so atoms sit
+  on the text baseline via `PlaceholderAlignment.baseline`; a missing baseline
+  degrades to `middle`, never crashes.
+
 ## Non-goals
 
 - No renderer interface for text blocks (see Decision 1).
 - No plugin discovery/dynamic loading — the registry is a hardcoded list.
 - No server-side diagram rendering for now (revisit if desktop needs previews).
+- No in-place editing of a typeset inline formula (clicking it unfolds the
+  node to source instead — AppFlowy/AFFiNE reached the same conclusion via
+  popovers).

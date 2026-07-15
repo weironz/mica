@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show listEquals, setEquals;
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -388,31 +388,17 @@ class RenderDocument extends RenderBox {
   DocSelection? _selection;
   set selection(DocSelection? value) {
     if (_selection == value) return;
-    final before = _selectionNodes(_selection);
-    final after = _selectionNodes(value);
     _selection = value;
-    // Fold state is a function of which nodes the selection touches: entering
-    // a node with inline atoms unfolds it into editable source, leaving folds
-    // it back — that is layout, not paint. Gated on the affected nodes really
-    // carrying atom marks, so ordinary caret movement stays paint-only.
-    if (!setEquals(before, after) && before.union(after).any(_hasInlineAtoms)) {
-      markNeedsLayout();
-    } else {
-      markNeedsPaint();
-    }
-  }
-
-  Set<int> _selectionNodes(DocSelection? s) =>
-      s == null ? const <int>{} : {s.anchor.node, s.focus.node};
-
-  bool _hasInlineAtoms(int index) {
-    if (index < 0 || index >= _nodes.length) return false;
-    final raw = _nodes[index].data['marks'];
-    if (raw is! List) return false;
-    for (final m in raw) {
-      if (m is Map && _inlineAtomRenderers.containsKey(m['type'])) return true;
-    }
-    return false;
+    // Inline atoms fold unconditionally (a typeset formula is never entered —
+    // click opens an editor, the caret snaps to its edges), so fold state does
+    // not depend on the selection: a selection change genuinely only needs a
+    // repaint. This is NOT a layout fast-path in practice, though — the `nodes`
+    // setter runs first on every controller notification and relayouts the
+    // whole document unconditionally (nodes is one mutated-in-place instance,
+    // so it can't cheaply tell whether it changed). Measured cost is ~6ms for
+    // 200 nodes, folding included; don't build on an assumption that caret
+    // moves skip layout.
+    markNeedsPaint();
   }
 
   List<RemoteCursor> _remoteCursors = const [];
@@ -766,6 +752,25 @@ class RenderDocument extends RenderBox {
     return null;
   }
 
+  /// The typeset inline formula under [local] — its node, source range and
+  /// LaTeX — or null. A click on one opens the editor (formulas are atoms; you
+  /// don't edit them in place).
+  ({int node, int start, int end, String source})? inlineMathAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      final l = _layouts[i];
+      final fold = l.fold;
+      if (fold == null) continue;
+      final origin = Offset(l.contentLeft, l.textTop);
+      for (final a in fold.atoms) {
+        if (a.renderer is! MathInlineAtomRenderer) continue;
+        if (a.rect.shift(origin).contains(local)) {
+          return (node: i, start: a.docStart, end: a.docEnd, source: a.source);
+        }
+      }
+    }
+    return null;
+  }
+
   /// The block whose drag handle sits under [local], if any.
   int? dragHandleAt(Offset local) {
     final h = _hoverBlock;
@@ -890,18 +895,13 @@ class RenderDocument extends RenderBox {
           : null;
       final marks = isCode ? const <Mark>[] : marksFromData(node.data);
 
-      // Inline atoms (math): marked runs render as one typeset object — but
-      // NOT in the node the selection touches. That node shows plain source,
-      // the caret walks real characters, and every offset is identity; folding
-      // applies only where nobody is editing. This is what keeps IME, caret
-      // motion and backspace out of the mapping business (the Zed fold model;
-      // block math's "caret inside shows source" is the same convention).
-      final selNow = _selection;
-      final active =
-          selNow != null &&
-          (selNow.anchor.node == nodeIndex || selNow.focus.node == nodeIndex);
+      // Inline atoms (math): marked runs render as one typeset object,
+      // unconditionally. A formula is an atom — the caret never lands inside its
+      // source (the controller snaps selections out of the run and click opens
+      // an editor), so folding does not depend on where the selection is, and
+      // the doc↔painter map only ever sees offsets on the run's edges.
       FoldPlan? fold;
-      if (!isCode && !active && marks.isNotEmpty) {
+      if (!isCode && marks.isNotEmpty) {
         final atoms = <InlineAtom>[];
         for (final m in marks) {
           final r = _inlineAtomRenderers[m.type];
@@ -917,6 +917,10 @@ class RenderDocument extends RenderBox {
             textWidth,
           );
           if (measured == null) continue; // declined: run stays styled source
+          // A link wrapping the formula keeps its underline across the atom.
+          final underline = marks.any(
+            (l) => l.type == 'link' && l.start <= s && l.end >= e,
+          );
           atoms.add(
             InlineAtom(
               docStart: s,
@@ -925,6 +929,7 @@ class RenderDocument extends RenderBox {
               size: measured.size,
               baseline: measured.baseline,
               renderer: r,
+              underline: underline,
             ),
           );
         }
@@ -1871,7 +1876,15 @@ class RenderDocument extends RenderBox {
       if (fold != null) {
         for (final a in fold.atoms) {
           if (a.rect.isEmpty) continue;
-          a.renderer.paint(this, canvas, a.rect.shift(origin), a.source);
+          final box = a.rect.shift(origin);
+          if (a.underline) {
+            // Same blue marks.dart underlines link text with (_linkColor).
+            canvas.drawRect(
+              Rect.fromLTWH(box.left, box.bottom - 1, box.width, 1),
+              Paint()..color = const Color(0xFF2563EB),
+            );
+          }
+          a.renderer.paint(this, canvas, box, a.source);
         }
       }
     }
