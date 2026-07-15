@@ -1500,7 +1500,27 @@ String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
       pos = pe;
       continue;
     }
-    if (pick.type == 'footnote' || pick.type == 'math' || pick.type == 'html') {
+    if (pick.type == 'math') {
+      // The LaTeX source keeps its `$` delimiters so Markdown editors reading
+      // text/html see the formula; the data-mica-math wrapper lets our own
+      // HTML→Markdown converter pass it through verbatim (no escaping) so a
+      // mica→mica round trip re-parses the math mark instead of dropping it.
+      out.write('<span data-mica-math="1">\$'
+          '${escapeHtml(text.substring(ps, pe))}\$</span>');
+      pos = pe;
+      continue;
+    }
+    if (pick.type == 'footnote') {
+      // Mirror inlineToMarkdown: the label lives on the mark's href (the span
+      // text may have been edited). External readers see a superscript label;
+      // our converter restores `[^label]` from the attribute.
+      final label = pick.href ?? text.substring(ps, pe);
+      out.write('<sup data-mica-footnote="${escapeHtmlAttr(label)}">'
+          '${escapeHtml(text.substring(ps, pe))}</sup>');
+      pos = pe;
+      continue;
+    }
+    if (pick.type == 'html') {
       out.write(escapeHtml(text.substring(ps, pe)));
       pos = pe;
       continue;

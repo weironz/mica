@@ -900,10 +900,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!mounted || (requireFocus && !_focus.hasFocus) || !widget.canEdit) {
       return false;
     }
+    // The document model is \n-only; Windows clipboards deliver \r\n and this
+    // was the one paste path that stored the \r (code blocks kept literal
+    // carriage returns, breaking the round-trip and caret math).
+    markdown = markdown.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    plain = plain.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 
-    // Inside a code block, paste raw text verbatim (keep newlines, stay inside).
+    // Inside a code block, paste raw text verbatim (keep newlines, stay
+    // inside) — but only when the selection is confined to that block: a
+    // cross-block selection ending in a code block must fall through to the
+    // block path, or only the code half got replaced (keyed, absurdly, to
+    // the drag direction).
     final node = _controller.focusedNode;
-    if (node != null && node.isCode) {
+    final sel0 = _controller.selection;
+    if (node != null && node.isCode && !(sel0 != null && sel0.isMultiNode)) {
       final raw = plain.isNotEmpty ? plain : markdown;
       if (raw.isEmpty) return false;
       _controller.insertTextAtCaret(raw);
@@ -982,6 +992,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     if (markdown.trim().isEmpty) return false;
+    // A single-line RICH fragment (a few words copied from a page or from
+    // mica itself) weaves INLINE at the caret — landing it as a fresh
+    // paragraph below broke the most common paste gesture. Real block
+    // constructs (a heading, a list item, a table row) still take the block
+    // path: only a lone paragraph spec qualifies.
+    if (rich &&
+        !markdown.contains('\n') &&
+        node != null &&
+        !node.isAtomic &&
+        !node.isCode &&
+        node.kind != 'table') {
+      final specs = markdownToBlocks(markdown);
+      if (specs.length == 1 && specs.single.kind == 'paragraph') {
+        final sel = _controller.selection;
+        if (sel != null && !sel.isMultiNode) {
+          final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
+          final to = sel.end.node == sel.focus.node ? sel.end.offset : from;
+          final spec = specs.single;
+          _controller.insertInlineSpan(
+              sel.focus.node, from, to, spec.text, marksFromData(spec.data));
+          _syncImeFromSelection(force: true);
+          return true;
+        }
+      }
+    }
     if (rich || markdown.contains('\n')) {
       // Paste replaces the current selection (Ctrl+A → paste swaps the doc).
       _controller.insertBlocksReplacingSelection(markdownToBlocks(markdown));
@@ -1035,7 +1070,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         (data?.text ?? '').replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     if (text.isEmpty || !mounted) return;
     final node = _controller.focusedNode;
-    if (node != null && node.isCode) {
+    final sel0 = _controller.selection;
+    // Same guard as _handleRichPaste: a cross-block selection ending in a
+    // code block must not take the in-block arm.
+    if (node != null && node.isCode && !(sel0 != null && sel0.isMultiNode)) {
       _controller.insertTextAtCaret(text); // keeps newlines inside the block
       _syncImeFromSelection(force: true);
       return;

@@ -760,26 +760,33 @@ class EditorController extends ChangeNotifier {
   }
 
   /// The leading Markdown marker for a block kind (heading/list/quote/todo).
+  /// A non-quote block that lives INSIDE a blockquote (`data.quote` > 0 on a
+  /// heading/list/code) keeps its `> ` markers — dropping them stripped the
+  /// quote from every such block on copy.
   String _blockPrefix(EditorNode node) {
     final pad = node.isListKind ? '    ' * node.indent : '';
+    final quote = node.kind == 'quote' ? '' : '> ' * node.quoteDepth.clamp(0, 16);
     switch (node.kind) {
       case 'heading':
-        return '${'#' * node.headingLevel} ';
+        return '$quote${'#' * node.headingLevel} ';
       case 'bulleted_list':
-        return '$pad- ';
+        // `data.marker` records a marker change that separates two adjacent
+        // lists — serialize it or the lists merge back into one on paste.
+        return '$quote$pad${(node.data['marker'] as String?) ?? '-'} ';
       case 'numbered_list':
-        return '${pad}1. ';
+        // The real start number: `5. five` must not paste back as `1.`.
+        return '$quote$pad${node.data['start'] ?? 1}. ';
       case 'quote':
         // Nested quotes repeat the marker, matching the Rust exporter.
         return '> ' * node.quoteDepth.clamp(1, 16);
       case 'todo':
-        return node.todoChecked ? '$pad- [x] ' : '$pad- [ ] ';
+        return node.todoChecked ? '$quote$pad- [x] ' : '$quote$pad- [ ] ';
       case 'footnote_def':
         // GFM definition leader; continuation lines indent 4 columns, but the
         // copy path is line-oriented so the prefix covers the first line.
-        return '[^${node.data['label'] ?? ''}]: ';
+        return '$quote[^${node.data['label'] ?? ''}]: ';
       default:
-        return '';
+        return quote;
     }
   }
 
@@ -833,8 +840,17 @@ class EditorController extends ChangeNotifier {
 
   String _nodePlain(EditorNode node, int from, int to,
       Map<String, String>? imageUrls, Map<int, int> counters) {
-    // Numbering only runs across an unbroken column of numbered items.
-    if (node.kind != 'numbered_list') counters.clear();
+    // Numbering mirrors the renderer (render.dart): a non-numbered LIST item
+    // interrupts only its own level and deeper (parents keep counting); any
+    // other block ends every run. Wholesale clear() on a nested bullet made
+    // the copied numbers contradict the numbers on screen.
+    if (node.kind != 'numbered_list') {
+      if (node.isListKind) {
+        counters.removeWhere((k, _) => k >= node.indent);
+      } else {
+        counters.clear();
+      }
+    }
     switch (node.kind) {
       case 'table':
         return TableData.fromBlock(node.data)
@@ -857,7 +873,12 @@ class EditorController extends ChangeNotifier {
       case 'bulleted_list':
         return '$indent• $sub';
       case 'numbered_list':
-        final n = (counters[node.indent] ?? 0) + 1;
+        // Returning to a shallower level restarts the deeper runs, and the
+        // first item of a run seeds from its stored start (`5.` stays `5.`).
+        counters.removeWhere((k, _) => k > node.indent);
+        final n = (counters[node.indent] ??
+                ((node.data['start'] as int?) ?? 1) - 1) +
+            1;
         counters[node.indent] = n;
         return '$indent$n. $sub';
       case 'todo':
@@ -867,52 +888,116 @@ class EditorController extends ChangeNotifier {
     }
   }
 
+  /// A run of consecutive list items → nested `<ul>`/`<ol>` HTML. An item
+  /// whose `data.indent` is deeper than the current level opens a sublist
+  /// INSIDE the previous `<li>` (`</li>` is written lazily so the nested list
+  /// sits within it — valid HTML, what Typora/Word expect); a shallower item
+  /// pops back out. A kind change at the same level (`ul` ↔ `ol`) closes the
+  /// current list and opens the other.
+  static String _listRunHtml(
+    List<EditorNode> items,
+    String Function(EditorNode) content,
+  ) {
+    var i = 0;
+    String emit(int level) {
+      final sb = StringBuffer();
+      String? tag;
+      var liOpen = false;
+      while (i < items.length) {
+        final it = items[i];
+        final lv = it.indent < 0 ? 0 : it.indent;
+        if (lv < level) break;
+        if (lv > level) {
+          // Deeper item: nest inside the open <li>; a run that STARTS deep
+          // (selection began on a nested item) just emits the sublist bare.
+          sb.write(emit(level + 1));
+          continue;
+        }
+        final want = it.kind == 'numbered_list' ? 'ol' : 'ul';
+        if (tag != want) {
+          if (liOpen) {
+            sb.write('</li>');
+            liOpen = false;
+          }
+          if (tag != null) sb.write('</$tag>');
+          // `<ol start="5">`: the run's real first number must survive the
+          // trip — pasting `5. five` back as `1.` changes visible content.
+          final start = want == 'ol' ? it.data['start'] : null;
+          sb.write(start is int && start != 1 ? '<ol start="$start">' : '<$want>');
+          tag = want;
+        }
+        if (liOpen) sb.write('</li>');
+        sb.write('<li>${content(it)}');
+        liOpen = true;
+        i++;
+      }
+      if (liOpen) sb.write('</li>');
+      if (tag != null) sb.write('</$tag>');
+      return sb.toString();
+    }
+
+    return emit(0);
+  }
+
   /// The selection as HTML — the clipboard's rich flavor, built straight from the
   /// block model (headings, lists, quotes, code, tables + inline marks) so
   /// Markdown editors that read `text/html` keep the formatting. Consecutive list
-  /// items / quotes group into one `<ul>`/`<ol>`/`<blockquote>`.
+  /// items / quotes group into one `<ul>`/`<ol>`/`<blockquote>`; nested list
+  /// levels (`data.indent`) become nested `<ul>`/`<ol>`.
   String selectionHtml({Map<String, String>? imageUrls}) {
     final slices = _selectionSlices();
     if (slices.isEmpty) return '';
     final buf = StringBuffer();
-    String? openList; // 'ul' | 'ol' while inside a list run
-    var inQuote = false;
-    void closeList() {
-      if (openList != null) {
-        buf.write('</$openList>');
-        openList = null;
-      }
-    }
-
-    void closeQuote() {
-      if (inQuote) {
+    // Open <blockquote> nesting: adjusted per block to its quoteDepth, so
+    // depth-2 quotes emit nested blockquotes and heading/list/code blocks
+    // living INSIDE a quote (data.quote > 0) keep their wrapper instead of
+    // being dumped outside it.
+    var quoteDepth = 0;
+    void setQuote(int depth) {
+      while (quoteDepth > depth) {
         buf.write('</blockquote>');
-        inQuote = false;
+        quoteDepth--;
+      }
+      while (quoteDepth < depth) {
+        buf.write('<blockquote>');
+        quoteDepth++;
       }
     }
 
-    for (final sl in slices) {
+    String inlineHtmlOf(EditorNode node, int a, int b) {
+      final clipped = <Mark>[];
+      for (final m in marksFromData(node.data)) {
+        final s = m.start.clamp(a, b);
+        final e = m.end.clamp(a, b);
+        if (e > s) {
+          clipped.add(Mark(s - a, e - a, m.type, href: m.href, title: m.title));
+        }
+      }
+      return inlineToHtml(node.text.substring(a, b), clipped);
+    }
+
+    bool fullListItem(({int node, int from, int to}) sl) {
+      final node = nodes[sl.node];
+      final len = node.text.length;
+      if (!(sl.from.clamp(0, len) == 0 && sl.to.clamp(0, len) == len)) {
+        return false;
+      }
+      return node.kind == 'bulleted_list' ||
+          node.kind == 'numbered_list' ||
+          node.kind == 'todo';
+    }
+
+    var si = 0;
+    while (si < slices.length) {
+      final sl = slices[si];
       final node = nodes[sl.node];
       final len = node.text.length;
       final a = sl.from.clamp(0, len);
       final b = sl.to.clamp(0, len);
       final full = a == 0 && b == len;
-      String inlineHtml() {
-        final clipped = <Mark>[];
-        for (final m in marksFromData(node.data)) {
-          final s = m.start.clamp(a, b);
-          final e = m.end.clamp(a, b);
-          if (e > s) {
-            clipped.add(
-                Mark(s - a, e - a, m.type, href: m.href, title: m.title));
-          }
-        }
-        return inlineToHtml(node.text.substring(a, b), clipped);
-      }
 
       if (node.kind == 'image') {
-        closeList();
-        closeQuote();
+        setQuote(0);
         final fileId = node.data['file_id'] as String?;
         final src = (imageUrls?[fileId] ??
             node.data['url'] ??
@@ -920,66 +1005,99 @@ class EditorController extends ChangeNotifier {
             '') as String;
         buf.write('<p><img src="${escapeHtmlAttr(src)}" '
             'alt="${escapeHtmlAttr(node.text)}"></p>');
+        si++;
         continue;
       }
       if (node.kind == 'divider') {
-        closeList();
-        closeQuote();
+        setQuote(0);
         buf.write('<hr>');
+        si++;
         continue;
       }
       if (node.kind == 'table') {
-        closeList();
-        closeQuote();
+        setQuote(0);
         buf.write(_tableHtml(TableData.fromBlock(node.data)));
+        si++;
         continue;
       }
       if (node.kind == 'code_block') {
-        closeList();
-        closeQuote();
-        buf.write('<pre><code>${escapeHtml(node.text.substring(a, b))}'
+        setQuote(full ? node.quoteDepth : 0);
+        final lang = (node.data['language'] as String?) ?? '';
+        final cls = lang.isEmpty
+            ? ''
+            : ' class="language-${escapeHtmlAttr(lang)}"';
+        buf.write('<pre><code$cls>${escapeHtml(node.text.substring(a, b))}'
             '</code></pre>');
+        si++;
+        continue;
+      }
+      if (node.kind == 'math_block') {
+        // `$$…$$` inside a data-mica-math wrapper: external editors see the
+        // TeX; our converter passes it through verbatim so it re-parses as a
+        // math block instead of a paragraph of raw LaTeX.
+        setQuote(0);
+        buf.write('<p><span data-mica-math="1">\$\$'
+            '${escapeHtml(node.text)}\$\$</span></p>');
+        si++;
+        continue;
+      }
+      if (node.kind == 'footnote_def') {
+        // The GFM definition leader travels in an attribute; the converter
+        // reconstructs `[^label]: …` (escaping would kill a literal leader).
+        setQuote(0);
+        final label = (node.data['label'] ?? '') as String;
+        buf.write('<p data-mica-fndef="${escapeHtmlAttr(label)}">'
+            '${inlineHtmlOf(node, a, b)}</p>');
+        si++;
         continue;
       }
 
-      final isListItem = full &&
-          (node.kind == 'bulleted_list' ||
-              node.kind == 'numbered_list' ||
-              node.kind == 'todo');
-      if (isListItem) {
-        closeQuote();
-        final want = node.kind == 'numbered_list' ? 'ol' : 'ul';
-        if (openList != want) {
-          closeList();
-          buf.write('<$want>');
-          openList = want;
+      if (fullListItem(sl)) {
+        // Collect the unbroken run of fully-selected list items AT THE SAME
+        // quote depth, then emit it as PROPERLY NESTED <ul>/<ol> from each
+        // item's `data.indent` — the old flat single-<ul> writer erased
+        // nesting, so pasting a multi-level list (even mica → mica, where the
+        // HTML flavor wins) lost its levels.
+        setQuote(node.quoteDepth);
+        final run = <EditorNode>[];
+        while (si < slices.length &&
+            fullListItem(slices[si]) &&
+            nodes[slices[si].node].quoteDepth == node.quoteDepth) {
+          run.add(nodes[slices[si].node]);
+          si++;
         }
-        final box =
-            node.kind == 'todo' ? (node.todoChecked ? '☑ ' : '☐ ') : '';
-        buf.write('<li>$box${inlineHtml()}</li>');
+        buf.write(_listRunHtml(run, (n) {
+          final box = n.kind == 'todo'
+              ? '<input type="checkbox"${n.todoChecked ? ' checked' : ''}'
+                  ' disabled> '
+              : '';
+          return '$box${inlineHtmlOf(n, 0, n.text.length)}';
+        }));
         continue;
       }
-      closeList();
 
       if (full && node.kind == 'quote') {
-        if (!inQuote) {
-          buf.write('<blockquote>');
-          inQuote = true;
-        }
-        buf.write('<p>${inlineHtml()}</p>');
+        // qbreak marks the start of a NEW quote group: close the open one so
+        // two separate bars don't fuse into a single blockquote on paste.
+        if (node.data['qbreak'] == true) setQuote(0);
+        setQuote(node.quoteDepth.clamp(1, 16));
+        buf.write('<p>${inlineHtmlOf(node, a, b)}</p>');
+        si++;
         continue;
       }
-      closeQuote();
 
       if (full && node.kind == 'heading') {
+        setQuote(node.quoteDepth);
         final lvl = node.headingLevel.clamp(1, 6);
-        buf.write('<h$lvl>${inlineHtml()}</h$lvl>');
+        buf.write('<h$lvl>${inlineHtmlOf(node, a, b)}</h$lvl>');
+        si++;
         continue;
       }
-      buf.write('<p>${inlineHtml()}</p>');
+      setQuote(full ? node.quoteDepth : 0);
+      buf.write('<p>${inlineHtmlOf(node, a, b)}</p>');
+      si++;
     }
-    closeList();
-    closeQuote();
+    setQuote(0);
     return buf.toString();
   }
 
@@ -1995,6 +2113,13 @@ class EditorController extends ChangeNotifier {
     final i = sel.focus.node;
     if (i >= nodes.length) return;
     final node = nodes[i];
+    if (node.isAtomic || node.kind == 'table') {
+      // Atomic blocks have no caret-editable text — splicing into node.text
+      // silently corrupted an image's alt / a math block's LaTeX / a table's
+      // dead text. Route the paste to a fresh paragraph below instead.
+      insertBlocksAfterFocus([(kind: 'paragraph', text: text, data: <String, dynamic>{})]);
+      return;
+    }
     final len = node.text.length;
     final from = (sel.start.node == i ? sel.start.offset : 0).clamp(0, len);
     final to = (sel.end.node == i ? sel.end.offset : len).clamp(0, len);
