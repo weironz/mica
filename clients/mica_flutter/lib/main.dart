@@ -2794,8 +2794,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<Map<String, String>> _resolveEditorImageUrls(List<String> ids) async {
     final workspace = _selectedWorkspace;
     if (workspace == null || ids.isEmpty) return {};
-    final base = _api.baseUri;
-    final origin = '${base.scheme}://${base.host}:${base.port}';
+    final origin = apiOrigin(_api.baseUri);
     return {
       for (final id in ids)
         id: '$origin/api/workspaces/${workspace.id}/files/$id/blob',

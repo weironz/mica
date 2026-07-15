@@ -8,6 +8,19 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../upload/sha256.dart';
 import 'models.dart';
 
+/// `scheme://host[:port]` for [base], omitting the port when it IS the
+/// scheme's default. `Uri.port` always answers with a number (443 for https),
+/// so building an origin from it verbatim produced links like
+/// `https://mica.cloudcele.com:443/…` — valid, but noise in a url people copy
+/// and paste around. Non-default ports (a dev server on :8080) are kept.
+String apiOrigin(Uri base) {
+  final isDefault = (base.scheme == 'https' && base.port == 443) ||
+      (base.scheme == 'http' && base.port == 80);
+  return isDefault
+      ? '${base.scheme}://${base.host}'
+      : '${base.scheme}://${base.host}:${base.port}';
+}
+
 class ApiClient {
   ApiClient() : baseUri = _resolveBaseUri();
 
