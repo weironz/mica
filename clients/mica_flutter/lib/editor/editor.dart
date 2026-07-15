@@ -4000,13 +4000,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: Text(
             isExternal
                 ? '外部链接 · ${_urlHost(data['url'] as String? ?? '')}'
-                : '已存储到 Mica',
+                // Naming it "public" matters: the blob url is unauthenticated
+                // by design (the UUID is the capability) so copied images keep
+                // rendering elsewhere. Copying the link IS sharing the image.
+                : '已存储到 Mica · 链接公开可访问',
             style: TextStyle(fontSize: 12, color: EditorTheme.muted),
           ),
         ),
         const PopupMenuDivider(height: 1),
-        if (isExternal) ...[
+        if (isExternal)
           const PopupMenuItem(value: 'rehost', child: Text('转存到 Mica 存储')),
+        // Both forms have a link worth copying. A stored image's is its Mica
+        // blob url: stable, never-expiring, and PUBLIC — the file_id UUID is
+        // the capability, which is what lets a copied image still render in
+        // Typora/a browser. Copy/export already emit it; there was just no way
+        // to get at it deliberately.
+        if (_imageLinkOf(data) != null) ...[
           const PopupMenuItem(value: 'copyLink', child: Text('复制图片链接')),
           const PopupMenuItem(value: 'openLink', child: Text('在浏览器中打开')),
         ],
@@ -4020,12 +4029,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       case 'rehost':
         await _rehostImage(node);
       case 'copyLink':
-        await Clipboard.setData(
-          ClipboardData(text: (data['url'] as String?) ?? ''),
-        );
+        final link = _imageLinkOf(data);
+        if (link != null) {
+          await Clipboard.setData(ClipboardData(text: link));
+          if (mounted) {
+            _toast(isExternal ? '已复制原始链接' : '已复制图片链接(公开可访问)');
+          }
+        }
       case 'openLink':
-        final url = data['url'] as String?;
-        if (url != null) openUrl(url);
+        final link = _imageLinkOf(data);
+        if (link != null) openUrl(link);
       case 'copy':
         await _copyImage(node);
       case 'download':
@@ -4040,6 +4053,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   static String _urlHost(String url) {
     final h = Uri.tryParse(url)?.host ?? '';
     return h.isEmpty ? url : h;
+  }
+
+  /// A viewable link for an image block: the external url, or our own blob url
+  /// for a stored one (resolved eagerly into [_imageUrlCache] for copy/export).
+  /// Null when a stored image's link hasn't resolved yet (offline / local-only
+  /// workspace) — the menu then just omits the link entries rather than
+  /// offering one that copies an empty string.
+  String? _imageLinkOf(Map<String, dynamic> data) {
+    final url = data['url'] as String?;
+    if (url != null && url.startsWith('http')) return url;
+    final fileId = data['file_id'] as String?;
+    return fileId == null ? null : _imageUrlCache[fileId];
   }
 
   /// Re-host one external image into Mica storage (right-click action). Uses

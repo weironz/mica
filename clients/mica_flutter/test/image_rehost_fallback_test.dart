@@ -185,7 +185,7 @@ void main() {
       );
       await g.up();
       await tester.pumpAndSettle();
-      expect(find.text('已存储到 Mica'), findsOneWidget);
+      expect(find.text('已存储到 Mica · 链接公开可访问'), findsOneWidget);
       expect(find.text('转存到 Mica 存储'), findsNothing);
     });
   });
