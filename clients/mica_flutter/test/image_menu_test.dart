@@ -79,14 +79,21 @@ void main() {
     for (final label in [
       '全屏查看',
       '编辑图片…',
-      '左对齐',
-      '居中',
-      '右对齐',
       '复制图片',
+      '剪切图片',
       '下载',
       '删除',
     ]) {
       expect(find.text(label), findsOneWidget, reason: label);
+    }
+  });
+
+  testWidgets('alignment stays on the hover toolbar, not in the menu',
+      (tester) async {
+    await pump(tester, nodes: [storedImage()]);
+    await rightClickImage(tester);
+    for (final label in ['左对齐', '居中', '右对齐']) {
+      expect(find.text(label), findsNothing, reason: label);
     }
   });
 
@@ -96,14 +103,6 @@ void main() {
   Map<String, dynamic> lastBlockData(List<Map<String, dynamic>> ops) =>
       (ops.lastWhere((o) => o['type'] == 'update_block')['data'] as Map)
           .cast<String, dynamic>();
-
-  testWidgets('the align entries set data.align', (tester) async {
-    final ops = await pump(tester, nodes: [storedImage()]);
-    await rightClickImage(tester);
-    await tester.tap(find.text('右对齐'));
-    await tester.pumpAndSettle();
-    expect(lastBlockData(ops)['align'], 'right');
-  });
 
   // NOT covered here: that the fullscreen viewer actually appears. It paints
   // the canvas's DECODED image, and decoding runs ui.instantiateImageCodec —
@@ -124,6 +123,23 @@ void main() {
     // No crash, no dialog, and the caret parked on the atomic block.
     expect(find.byType(InteractiveViewer), findsNothing,
         reason: 'a single click must never open the viewer');
+  });
+
+  // Cut = copy + delete. The delete MUST hang on the copy having landed —
+  // otherwise a clipboard failure destroys the image with nothing to paste
+  // back. Here the image has no loadable bytes, so the copy cannot succeed.
+  testWidgets('cut does NOT delete when the image could not be copied',
+      (tester) async {
+    final ops = await pump(
+      tester,
+      nodes: [storedImage()],
+      loadBytes: (_) async => null, // bytes unavailable -> copy fails
+    );
+    await rightClickImage(tester);
+    await tester.tap(find.text('剪切图片'));
+    await tester.pumpAndSettle();
+    expect(ops.where((o) => o['type'] == 'delete_block'), isEmpty,
+        reason: 'a failed copy must never destroy the image');
   });
 
   group('编辑图片 dialog', () {

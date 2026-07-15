@@ -4048,31 +4048,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         const PopupMenuDivider(height: 1),
         const PopupMenuItem(value: 'expand', child: Text('全屏查看')),
         const PopupMenuItem(value: 'edit', child: Text('编辑图片…')),
-        // Alignment also lives on the hover toolbar; mirrored here so the
-        // right-click menu is a complete surface on its own (the toolbar only
-        // appears on hover, which touch and keyboard users never get). Three
-        // plain items, NOT a row of IconButtons inside one item: the menu
-        // item's own InkWell swallows taps aimed at a nested button, and a
-        // flat item is keyboard-navigable.
-        for (final a in const [
-          ('left', '左对齐', Icons.format_align_left),
-          ('center', '居中', Icons.format_align_center),
-          ('right', '右对齐', Icons.format_align_right),
-        ])
-          PopupMenuItem(
-            value: 'align:${a.$1}',
-            child: Row(
-              children: [
-                Icon(a.$3, size: 18, color: EditorTheme.muted),
-                const SizedBox(width: 10),
-                Text(a.$2),
-                if ((data['align'] as String? ?? 'center') == a.$1) ...[
-                  const Spacer(),
-                  Icon(Icons.check, size: 16, color: EditorTheme.muted),
-                ],
-              ],
-            ),
-          ),
+        // Alignment is deliberately NOT here — the hover toolbar over the
+        // picture already owns it.
         const PopupMenuDivider(height: 1),
         if (isExternal)
           const PopupMenuItem(value: 'rehost', child: Text('转存到 Mica 存储')),
@@ -4086,15 +4063,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           const PopupMenuItem(value: 'openLink', child: Text('在浏览器中打开')),
         ],
         const PopupMenuItem(value: 'copy', child: Text('复制图片')),
+        const PopupMenuItem(value: 'cut', child: Text('剪切图片')),
+        // Reading a bitmap off the clipboard is a desktop-only pull: on web the
+        // clipboard only arrives through the DOM paste event, so the facade
+        // returns null and this could never do anything but fail.
+        if (!kIsWeb && widget.onUploadImage != null)
+          const PopupMenuItem(value: 'paste', child: Text('粘贴图片(替换)')),
         const PopupMenuItem(value: 'download', child: Text('下载')),
         const PopupMenuItem(value: 'delete', child: Text('删除')),
       ],
     );
     if (choice == null || !mounted) return;
-    if (choice.startsWith('align:')) {
-      _controller.setImageAlign(node, choice.substring(6));
-      return;
-    }
     switch (choice) {
       case 'expand':
         _openImageViewer(node);
@@ -4115,12 +4094,48 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         if (link != null) openUrl(link);
       case 'copy':
         await _copyImage(node);
+      case 'cut':
+        await _cutImage(node);
+      case 'paste':
+        await _pasteImageOver(node);
       case 'download':
         await _downloadImage(node);
       case 'delete':
         _controller.deleteNode(node);
         _syncImeFromSelection(force: true);
     }
+  }
+
+  /// Cut = copy, then delete — but ONLY if the copy actually landed. Deleting
+  /// after a failed clipboard write would destroy the image with nothing to
+  /// paste back.
+  Future<void> _cutImage(int node) async {
+    if (!await _copyImage(node)) return;
+    if (!mounted || node < 0 || node >= _controller.nodes.length) return;
+    _controller.deleteNode(node);
+    _syncImeFromSelection(force: true);
+  }
+
+  /// Replace this image with the bitmap on the clipboard (upload it first, so
+  /// the block ends up on our storage like any pasted screenshot).
+  Future<void> _pasteImageOver(int node) async {
+    final upload = widget.onUploadImage;
+    if (upload == null || node < 0 || node >= _controller.nodes.length) return;
+    final id = _controller.nodes[node].id;
+    final bytes = await readClipboardImage();
+    if (!mounted) return;
+    if (bytes == null || bytes.isEmpty) {
+      _toast('剪贴板里没有图片');
+      return;
+    }
+    final result = await upload(bytes, 'pasted-image.png', 'image/png');
+    if (!mounted) return;
+    if (result == null) {
+      _toast('上传失败');
+      return;
+    }
+    _primeImage(result.fileId, bytes);
+    _controller.setImageSource(id, fileId: result.fileId, name: result.name);
   }
 
   /// Image properties + replace. Shows where the image actually lives — its
@@ -4227,15 +4242,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
   }
 
-  Future<void> _copyImage(int node) async {
+  /// True when the bytes actually reached the clipboard — [_cutImage] hangs the
+  /// delete on this answer.
+  Future<bool> _copyImage(int node) async {
     final data = await _imageData(node);
     if (data == null || !mounted) {
-      _toast('Could not load the image');
-      return;
+      _toast('图片读取失败');
+      return false;
     }
     final ok = await copyImageToClipboard(data.bytes, data.mime);
-    if (!mounted) return;
-    _toast(ok ? 'Image copied' : 'Copy failed — try Download instead');
+    if (!mounted) return ok;
+    _toast(ok ? '图片已复制' : '复制失败 —— 可改用“下载”');
+    return ok;
   }
 
   Future<void> _downloadImage(int node) async {
