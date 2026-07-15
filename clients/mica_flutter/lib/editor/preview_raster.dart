@@ -53,6 +53,14 @@ class RasterPreviewPipeline {
   final Map<String, Map<String, GlobalKey>> _keys = {};
   final Map<String, Map<String, int>> _tries = {};
 
+  /// Top-to-alphabetic-baseline distance of each captured preview, logical px
+  /// at the offstage widget's own size (pre-pixelRatio), keyed like [_cache].
+  /// Inline atoms align formulas to the text baseline with this; block
+  /// renderers ignore it. Nullable per source: an error-fallback capture may
+  /// not report one, and consumers must degrade (to middle alignment), not
+  /// crash.
+  final Map<String, Map<String, double>> _baselines = {};
+
   /// Sources whose preview failed (bad mermaid syntax, capture gave up).
   /// Negative cache: without it the renderer re-requests the same failing
   /// source every layout pass, looping the producer forever. An edit changes
@@ -67,6 +75,12 @@ class RasterPreviewPipeline {
 
   /// All captured images, per previewer id — the render object's view.
   Map<String, Map<String, ui.Image>> get images => _cache;
+
+  /// Baselines for [id], keyed by source (see [_baselines]).
+  Map<String, double> baselinesOf(String id) => _baselines[id] ??= {};
+
+  /// All captured baselines, per previewer id — the render object's view.
+  Map<String, Map<String, double>> get baselines => _baselines;
 
   /// Ask for a preview of [source]. Safe to call from layout: work is
   /// deferred post-frame. No-op when cached, already pending, or unknown id.
@@ -106,19 +120,31 @@ class RasterPreviewPipeline {
 
   /// The off-screen paint host. Must be POSITIONED far off-screen, not
   /// Offstage — Offstage skips painting and toImage would capture nothing.
+  ///
+  /// The [_BaselineTap] sits INSIDE the boundary: it is a transparent proxy,
+  /// so toImage captures the same pixels, while its performLayout — the one
+  /// place getDistanceToBaseline is legal — files the widget's baseline away
+  /// for the capture in [_capture] to publish. Probed through this exact tree
+  /// (Column + RepaintBoundary): \frac{a}{b} reports 19.936, within 0.004px
+  /// of a bare layout.
   Widget offstageHost() => Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final p in previewers)
-            for (final source in (_pending[p.id] ?? const <String>{}))
-              if (_keys[p.id]?[source] != null)
-                RepaintBoundary(
-                  key: _keys[p.id]![source],
-                  child: p.buildOffstage(source) ?? const SizedBox.shrink(),
-                ),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      for (final p in previewers)
+        for (final source in (_pending[p.id] ?? const <String>{}))
+          if (_keys[p.id]?[source] != null)
+            RepaintBoundary(
+              key: _keys[p.id]![source],
+              child: _BaselineTap(
+                onBaseline: (v) {
+                  if (v != null) baselinesOf(p.id)[source] = v;
+                },
+                child: p.buildOffstage(source) ?? const SizedBox.shrink(),
+              ),
+            ),
+    ],
+  );
 
   Future<void> _capture() async {
     var any = false;
@@ -128,12 +154,13 @@ class RasterPreviewPipeline {
       if (pending == null || pending.isEmpty) continue;
       final captured = <String>[];
       for (final source in pending.toList()) {
-        final boundary =
-            _keys[p.id]?[source]?.currentContext?.findRenderObject();
+        final boundary = _keys[p.id]?[source]?.currentContext
+            ?.findRenderObject();
         if (boundary is! RenderRepaintBoundary) continue; // not built yet
         try {
-          final img =
-              await boundary.toImage(pixelRatio: EditorTheme.mathPixelRatio);
+          final img = await boundary.toImage(
+            pixelRatio: EditorTheme.mathPixelRatio,
+          );
           imagesOf(p.id)[source] = img;
           captured.add(source);
         } catch (_) {
@@ -144,6 +171,9 @@ class RasterPreviewPipeline {
           if (tries > 20) {
             captured.add(source);
             (_failed[p.id] ??= {}).add(source);
+            // Layout may have filed a baseline before the capture gave up; a
+            // baseline without its image would lie to consumers.
+            _baselines[p.id]?.remove(source);
           }
         }
       }
@@ -187,15 +217,52 @@ class MathPreviewer extends RasterPreviewer {
 
   @override
   Widget buildOffstage(String source) => Math.tex(
-        source,
-        textStyle: const TextStyle(fontSize: 18, color: EditorTheme.text),
-        onErrorFallback: (e) => Text(
-          source,
-          style: const TextStyle(
-            fontFamily: kMonoFont,
-            fontSize: 14,
-            color: Color(0xFFB91C1C),
-          ),
-        ),
-      );
+    source,
+    textStyle: const TextStyle(
+      fontSize: EditorTheme.mathRasterFontSize,
+      color: EditorTheme.text,
+    ),
+    onErrorFallback: (e) => Text(
+      source,
+      style: const TextStyle(
+        fontFamily: kMonoFont,
+        fontSize: 14,
+        color: Color(0xFFB91C1C),
+      ),
+    ),
+  );
+}
+
+/// Transparent proxy that reports its child's alphabetic baseline from inside
+/// its own performLayout — the one phase where [RenderBox.getDistanceToBaseline]
+/// is legal to call. Painting and hit-testing pass straight through, so a
+/// RepaintBoundary above it captures identical pixels.
+class _BaselineTap extends SingleChildRenderObjectWidget {
+  const _BaselineTap({required this.onBaseline, super.child});
+
+  final ValueChanged<double?> onBaseline;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderBaselineTap(onBaseline);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderBaselineTap renderObject,
+  ) {
+    renderObject.onBaseline = onBaseline;
+  }
+}
+
+class _RenderBaselineTap extends RenderProxyBox {
+  _RenderBaselineTap(this.onBaseline);
+
+  ValueChanged<double?> onBaseline;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    onBaseline(child?.getDistanceToBaseline(TextBaseline.alphabetic));
+  }
 }

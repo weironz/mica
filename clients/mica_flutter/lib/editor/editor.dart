@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -236,7 +235,8 @@ class MicaEditor extends StatefulWidget {
     Uint8List bytes,
     String fileName,
     String mimeType,
-  )? onUploadImage;
+  )?
+  onUploadImage;
 
   /// Re-host a pasted image URL server-side (avoids dead links), returning the
   /// new `(file_id, name)`. When null, pasted image URLs are left as text.
@@ -302,7 +302,8 @@ class MicaEditor extends StatefulWidget {
 /// text flow (see [parseInlineMath]). A line with surrounding prose fails the
 /// full-line anchors and returns null, staying literal text.
 String? pastedFormulaSource(String line) {
-  final m = RegExp(r'^\$\$(.+)\$\$$').firstMatch(line) ??
+  final m =
+      RegExp(r'^\$\$(.+)\$\$$').firstMatch(line) ??
       RegExp(r'^\\\[(.+)\\\]$').firstMatch(line);
   return m?.group(1)?.trim();
 }
@@ -530,10 +531,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   /// Case-insensitive, non-overlapping scan of every node's text for the query.
   void _recomputeFind({bool reveal = false}) {
-    final matches = findTextMatches(
-      [for (final n in _controller.nodes) n.text],
-      _findCtrl.text,
-    );
+    final matches = findTextMatches([
+      for (final n in _controller.nodes) n.text,
+    ], _findCtrl.text);
     setState(() {
       _findMatches = matches;
       _findIndex = 0;
@@ -571,15 +571,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final label = _findCtrl.text.isEmpty
         ? ''
         : (total == 0 ? '无结果' : '${_findIndex + 1}/$total');
-    Widget iconBtn(IconData icon, String tip, VoidCallback? onTap) => IconButton(
-      icon: Icon(icon, size: 18),
-      tooltip: tip,
-      onPressed: onTap,
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-      color: const Color(0xFF475569),
-    );
+    Widget iconBtn(IconData icon, String tip, VoidCallback? onTap) =>
+        IconButton(
+          icon: Icon(icon, size: 18),
+          tooltip: tip,
+          onPressed: onTap,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+          color: const Color(0xFF475569),
+        );
     return Material(
       elevation: 4,
       borderRadius: BorderRadius.circular(8),
@@ -619,7 +620,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 child: Text(
                   label,
                   textAlign: TextAlign.right,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF94A3B8),
+                  ),
                 ),
               ),
               iconBtn(
@@ -738,8 +742,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final globalY = r.localToGlobal(Offset(0, top)).dy;
     final viewTop = box.localToGlobal(Offset.zero).dy;
     final pos = scrollable.position;
-    final target = (pos.pixels + (globalY - viewTop) - 16)
-        .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    final target = (pos.pixels + (globalY - viewTop) - 16).clamp(
+      pos.minScrollExtent,
+      pos.maxScrollExtent,
+    );
     pos.animateTo(
       target,
       duration: const Duration(milliseconds: 300),
@@ -908,8 +914,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// Native paste interceptor (web): rich HTML or multi-line text is converted to
   /// Markdown and inserted as structured blocks; a single line of plain text
   /// falls through to the normal inline paste. Returns true when consumed.
-  bool _handleRichPaste(String markdown, String plain, bool rich,
-      {bool requireFocus = true}) {
+  bool _handleRichPaste(
+    String markdown,
+    String plain,
+    bool rich, {
+    bool requireFocus = true,
+  }) {
     if (!mounted || (requireFocus && !_focus.hasFocus) || !widget.canEdit) {
       return false;
     }
@@ -945,7 +955,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // A bare image URL: re-host it (server-side fetch) so the link can't rot,
     // then insert an image block instead of pasting the raw link text.
     final trimmed = plain.trim();
-    if (!rich && widget.onImportImageUrl != null && _looksLikeImageUrl(trimmed)) {
+    if (!rich &&
+        widget.onImportImageUrl != null &&
+        _looksLikeImageUrl(trimmed)) {
       _importAndInsertImageUrl(trimmed);
       return true;
     }
@@ -981,8 +993,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (node != null && !node.isAtomic && node.kind != 'table') {
       final src = pastedFormulaSource(trimmed);
       if (src != null && src.isNotEmpty && !src.contains('\n')) {
-        _controller
-            .insertBlocksAfterFocus([(kind: 'math_block', text: src, data: {})]);
+        _controller.insertBlocksAfterFocus([
+          (kind: 'math_block', text: src, data: {}),
+        ]);
         _syncImeFromSelection(force: true);
         return true;
       }
@@ -1005,7 +1018,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
           final to = sel.end.node == sel.focus.node ? sel.end.offset : from;
           _controller.insertInlineSpan(
-              sel.focus.node, from, to, parsed.text, parsed.marks);
+            sel.focus.node,
+            from,
+            to,
+            parsed.text,
+            parsed.marks,
+          );
           _syncImeFromSelection(force: true);
           return true;
         }
@@ -1032,7 +1050,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           final to = sel.end.node == sel.focus.node ? sel.end.offset : from;
           final spec = specs.single;
           _controller.insertInlineSpan(
-              sel.focus.node, from, to, spec.text, marksFromData(spec.data));
+            sel.focus.node,
+            from,
+            to,
+            spec.text,
+            marksFromData(spec.data),
+          );
           _syncImeFromSelection(force: true);
           return true;
         }
@@ -1087,8 +1110,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Future<void> _pastePlainText() async {
     if (!mounted || !widget.canEdit) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text =
-        (data?.text ?? '').replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final text = (data?.text ?? '')
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n');
     if (text.isEmpty || !mounted) return;
     final node = _controller.focusedNode;
     final sel0 = _controller.selection;
@@ -1125,8 +1149,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final tableMd = await readClipboardTableAsMarkdown();
     if (tableMd != null && live()) {
       final tData = await Clipboard.getData(Clipboard.kTextPlain);
-      if (_handleRichPaste(tableMd, tData?.text ?? '', true,
-          requireFocus: requireFocus)) {
+      if (_handleRichPaste(
+        tableMd,
+        tData?.text ?? '',
+        true,
+        requireFocus: requireFocus,
+      )) {
         return;
       }
     }
@@ -1156,8 +1184,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
-  static final RegExp _bareUrlRe =
-      RegExp(r'^https?://\S+$', caseSensitive: false);
+  static final RegExp _bareUrlRe = RegExp(
+    r'^https?://\S+$',
+    caseSensitive: false,
+  );
 
   bool _looksLikeUrl(String text) =>
       text.isNotEmpty && _bareUrlRe.hasMatch(text);
@@ -1209,7 +1239,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     for (final node in [..._controller.nodes]) {
       if (node.kind != 'image') continue;
       final url = node.data['url'] as String?;
-      if (node.data['file_id'] != null || url == null || !url.startsWith('http')) {
+      if (node.data['file_id'] != null ||
+          url == null ||
+          !url.startsWith('http')) {
         continue;
       }
       if (!_rehostPending.add(url)) continue; // already in flight
@@ -1241,8 +1273,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         final result = await import(url);
         if (result != null) {
           if (!mounted) return false;
-          _controller
-              .setImageSource(nodeId, fileId: result.fileId, name: result.name);
+          _controller.setImageSource(
+            nodeId,
+            fileId: result.fileId,
+            name: result.name,
+          );
           return true;
         }
       } catch (_) {
@@ -1261,8 +1296,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final result = await upload(bytes, name, _mimeFromName(name));
       if (result == null || !mounted) return false;
       _primeImage(result.fileId, bytes);
-      _controller
-          .setImageSource(nodeId, fileId: result.fileId, name: result.name);
+      _controller.setImageSource(
+        nodeId,
+        fileId: result.fileId,
+        name: result.name,
+      );
       return true;
     } catch (_) {
       return false;
@@ -1445,7 +1483,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final idx = (caret > 0 && text[caret - 1] == '\n')
           ? caret - 1
           : text.indexOf('\n');
-      _controller.applyNewlineSplit(text.substring(0, idx), text.substring(idx + 1));
+      _controller.applyNewlineSplit(
+        text.substring(0, idx),
+        text.substring(idx + 1),
+      );
       _lastSentIme = _imeValue();
       _syncImeFromSelection(force: true);
       return;
@@ -1531,7 +1572,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   @override
-  void didChangeInputControl(TextInputControl? oldControl, TextInputControl? newControl) {}
+  void didChangeInputControl(
+    TextInputControl? oldControl,
+    TextInputControl? newControl,
+  ) {}
 
   @override
   void performSelector(String selectorName) {}
@@ -1655,7 +1699,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (key == LogicalKeyboardKey.delete ||
           key == LogicalKeyboardKey.backspace) {
         _controller.clearTableCells(
-            area.node, area.r0, area.c0, area.r1, area.c1);
+          area.node,
+          area.r0,
+          area.c0,
+          area.r1,
+          area.c1,
+        );
         return KeyEventResult.handled;
       }
     }
@@ -1811,7 +1860,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         if (n != null && o > 0 && o <= n.text.length) {
           final head = n.text.substring(0, o).characters.skipLast(1).toString();
           _controller.setFocusedText(
-              head + n.text.substring(o), head.length, head.length);
+            head + n.text.substring(o),
+            head.length,
+            head.length,
+          );
           _syncImeFromSelection(force: true);
           return KeyEventResult.handled;
         }
@@ -1976,7 +2028,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // the whole code node is already selected) to escalate to the whole document.
     if (node != null && node.isCode && sel != null) {
       final i = sel.focus.node;
-      final wholeNode = sel.start.node == i &&
+      final wholeNode =
+          sel.start.node == i &&
           sel.end.node == i &&
           sel.start.offset == 0 &&
           sel.end.offset == node.text.length;
@@ -2203,7 +2256,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _closeCellEditor();
     final r = _render;
     if (r == null || node >= _controller.nodes.length) return;
-    r.tableBlockSelection = null; // editing a cell clears a row/column selection
+    r.tableBlockSelection =
+        null; // editing a cell clears a row/column selection
     final localRect = r.tableCellRect(node, row, col);
     if (localRect == null) return;
     final table = TableData.fromBlock(_controller.nodes[node].data);
@@ -2231,6 +2285,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         if (!committed && entry.mounted) entry.markNeedsBuild();
       });
     }
+
     controller.addListener(onCellChanged);
 
     void commit() {
@@ -2259,6 +2314,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         focus.dispose();
       });
     }
+
     _commitCellEditor = commit;
 
     void moveTo(int nextRow, int nextCol) {
@@ -2283,7 +2339,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
       // Inline formatting inside the cell (WYSIWYG marks), same accelerators as
       // the body: Ctrl/Cmd+B/I/E over a ranged selection.
-      final accel = HardwareKeyboard.instance.isControlPressed ||
+      final accel =
+          HardwareKeyboard.instance.isControlPressed ||
           HardwareKeyboard.instance.isMetaPressed;
       if (accel) {
         final mark = switch (key) {
@@ -2328,8 +2385,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         if (HardwareKeyboard.instance.isShiftPressed || !sel.isCollapsed) {
           return KeyEventResult.ignored;
         }
-        if (!_cellCaretOnEdgeLine(node, row, col, controller,
-            sel.baseOffset, last: !up)) {
+        if (!_cellCaretOnEdgeLine(
+          node,
+          row,
+          col,
+          controller,
+          sel.baseOffset,
+          last: !up,
+        )) {
           return KeyEventResult.ignored; // move within the cell's lines
         }
         if (up ? row > 0 : row + 1 < rows) {
@@ -2358,44 +2421,48 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         // widths), and a stale position would visibly detach the editor.
         final rr = _render;
         final liveRect = rr?.tableCellRect(node, row, col) ?? localRect;
-        final liveTopLeft =
-            rr != null ? rr.localToGlobal(liveRect.topLeft) : topLeft;
+        final liveTopLeft = rr != null
+            ? rr.localToGlobal(liveRect.topLeft)
+            : topLeft;
         return Positioned(
-        left: liveTopLeft.dx,
-        top: liveTopLeft.dy,
-        width: liveRect.width,
-        child: Focus(
-          onKeyEvent: onKey,
-          // The overlay mounts above the app's Material, but TextField needs a
-          // Material ancestor (ink/selection) — a transparent one adds no chrome.
-          child: Material(
-            type: MaterialType.transparency,
-            child: Container(
-              constraints: BoxConstraints(minHeight: liveRect.height),
-              color: Colors.transparent,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-              child: TextField(
-                controller: controller,
-                focusNode: focus,
-                autofocus: true,
-                maxLines: null,
-                // Enter inserts a newline inside the cell (the cell grows); it
-                // does NOT commit. Commit is click-away / Esc / Tab / arrows.
-                keyboardType: TextInputType.multiline,
-                textInputAction: TextInputAction.newline,
-                cursorColor: const Color(0xFF2563EB),
-                style: const TextStyle(fontSize: 15, height: 1.4),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  contentPadding: EdgeInsets.zero,
-                  border: InputBorder.none,
-                  isCollapsed: true,
+          left: liveTopLeft.dx,
+          top: liveTopLeft.dy,
+          width: liveRect.width,
+          child: Focus(
+            onKeyEvent: onKey,
+            // The overlay mounts above the app's Material, but TextField needs a
+            // Material ancestor (ink/selection) — a transparent one adds no chrome.
+            child: Material(
+              type: MaterialType.transparency,
+              child: Container(
+                constraints: BoxConstraints(minHeight: liveRect.height),
+                color: Colors.transparent,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 9,
+                ),
+                child: TextField(
+                  controller: controller,
+                  focusNode: focus,
+                  autofocus: true,
+                  maxLines: null,
+                  // Enter inserts a newline inside the cell (the cell grows); it
+                  // does NOT commit. Commit is click-away / Esc / Tab / arrows.
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.newline,
+                  cursorColor: const Color(0xFF2563EB),
+                  style: const TextStyle(fontSize: 15, height: 1.4),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                    border: InputBorder.none,
+                    isCollapsed: true,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      );
+        );
       },
     );
     _cellEntry = entry;
@@ -2619,7 +2686,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Future<void> _promptLink() async {
     final sel = _controller.selection;
     final node = _controller.focusedNode;
-    if (sel == null || sel.isCollapsed || sel.isMultiNode || node == null) return;
+    if (sel == null || sel.isCollapsed || sel.isMultiNode || node == null)
+      return;
     if (rangeHasMark(
       marksFromData(node.data),
       sel.start.offset,
@@ -2668,10 +2736,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final ac = _activeCell;
     final cellSel = ac?.ctl.selection;
     final inCell =
-        ac != null && cellSel != null && cellSel.isValid && !cellSel.isCollapsed;
+        ac != null &&
+        cellSel != null &&
+        cellSel.isValid &&
+        !cellSel.isCollapsed;
     // Show on any ranged selection: inline marks for a single text block, plus
     // block-type conversion (list/quote/heading/code) for any selection.
-    final show = widget.canEdit &&
+    final show =
+        widget.canEdit &&
         (inCell ||
             (_focus.hasFocus &&
                 sel != null &&
@@ -2721,7 +2793,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final ac = _activeCell;
     final cellSel = ac?.ctl.selection;
     final inCell =
-        ac != null && cellSel != null && cellSel.isValid && !cellSel.isCollapsed;
+        ac != null &&
+        cellSel != null &&
+        cellSel.isValid &&
+        !cellSel.isCollapsed;
     final Offset origin;
     if (inCell) {
       final cellRect = r.tableCellRect(ac.node, ac.row, ac.col);
@@ -2739,7 +2814,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final top = (origin.dy - 44).clamp(8.0, screen.height - 8);
 
     final docSel = _controller.selection;
-    final singleText = inCell ||
+    final singleText =
+        inCell ||
         (docSel != null &&
             !docSel.isMultiNode &&
             _controller.focusedNode != null &&
@@ -2749,7 +2825,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // document blocks, never to inline cell content.
     final showBlocks = !inCell;
 
-    Widget markBtn(IconData icon, String type, String tip, {VoidCallback? custom}) {
+    Widget markBtn(
+      IconData icon,
+      String type,
+      String tip, {
+      VoidCallback? custom,
+    }) {
       return IconButton(
         iconSize: 18,
         visualDensity: VisualDensity.compact,
@@ -2759,8 +2840,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
-    Widget blockBtn(IconData icon, String kind, String tip,
-        {Map<String, dynamic>? data}) {
+    Widget blockBtn(
+      IconData icon,
+      String kind,
+      String tip, {
+      Map<String, dynamic>? data,
+    }) {
       return IconButton(
         iconSize: 18,
         visualDensity: VisualDensity.compact,
@@ -2773,8 +2858,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // The focused block's heading level lights up the matching control, so
     // a selected title tells you its level at a glance.
     final focused = _controller.focusedNode;
-    final currentLevel =
-        focused != null && focused.kind == 'heading' ? focused.headingLevel : 0;
+    final currentLevel = focused != null && focused.kind == 'heading'
+        ? focused.headingLevel
+        : 0;
 
     // T1/T2/T3 as labeled buttons — heavier label for bigger headings, a
     // tinted pill when it is the selection's current level.
@@ -2795,8 +2881,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             color: active ? EditorTheme.text : EditorTheme.muted,
           ),
         ),
-        onPressed: () => _controller
-            .setSelectedBlocksKind('heading', data: {'level': level}),
+        onPressed: () => _controller.setSelectedBlocksKind(
+          'heading',
+          data: {'level': level},
+        ),
       );
     }
 
@@ -2808,13 +2896,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         builder: (btnContext) => IconButton(
           iconSize: 16,
           visualDensity: VisualDensity.compact,
-          tooltip:
-              activeDeep ? 'Heading $currentLevel' : 'More headings',
+          tooltip: activeDeep ? 'Heading $currentLevel' : 'More headings',
           style: activeDeep
               ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
               : null,
-          icon: Icon(Icons.expand_more,
-              color: activeDeep ? EditorTheme.text : EditorTheme.muted),
+          icon: Icon(
+            Icons.expand_more,
+            color: activeDeep ? EditorTheme.text : EditorTheme.muted,
+          ),
           onPressed: () async {
             final box = btnContext.findRenderObject() as RenderBox?;
             if (box == null) return;
@@ -2824,8 +2913,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 ('$l', '${l == currentLevel ? '✓ ' : '   '}Heading $l'),
             ]);
             if (pick != null) {
-              _controller.setSelectedBlocksKind('heading',
-                  data: {'level': int.parse(pick)});
+              _controller.setSelectedBlocksKind(
+                'heading',
+                data: {'level': int.parse(pick)},
+              );
             }
           },
         ),
@@ -2841,44 +2932,56 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // onPressed (pointer-up) could apply the mark.
       child: TextFieldTapRegion(
         child: ExcludeFocus(
-        child: Material(
-          elevation: 6,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (singleText) ...[
-                  markBtn(Icons.format_bold, 'bold', 'Bold'),
-                  markBtn(Icons.format_italic, 'italic', 'Italic'),
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (singleText) ...[
+                    markBtn(Icons.format_bold, 'bold', 'Bold'),
+                    markBtn(Icons.format_italic, 'italic', 'Italic'),
+                  ],
+                  // Code block sits just before inline code — the two code
+                  // affordances read as one group (document blocks only).
+                  if (showBlocks)
+                    blockBtn(Icons.terminal, 'code_block', 'Code block'),
+                  if (singleText) ...[
+                    markBtn(Icons.code, 'code', 'Inline code'),
+                    markBtn(Icons.strikethrough_s, 'strike', 'Strikethrough'),
+                    markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
+                  ],
+                  if (showBlocks) ...[
+                    const VerticalDivider(width: 9, indent: 8, endIndent: 8),
+                    // The three everyday heading levels are one click; the rare
+                    // H4–H6 hide behind the chevron.
+                    for (var level = 1; level <= 3; level++) headingBtn(level),
+                    moreHeadingsBtn(),
+                    blockBtn(Icons.notes, 'paragraph', 'Text'),
+                    blockBtn(
+                      Icons.format_list_bulleted,
+                      'bulleted_list',
+                      'Bulleted list',
+                    ),
+                    blockBtn(
+                      Icons.format_list_numbered,
+                      'numbered_list',
+                      'Numbered list',
+                    ),
+                    blockBtn(
+                      Icons.check_box_outlined,
+                      'todo',
+                      'To-do',
+                      data: {'checked': false},
+                    ),
+                    blockBtn(Icons.format_quote, 'quote', 'Quote'),
+                  ],
                 ],
-                // Code block sits just before inline code — the two code
-                // affordances read as one group (document blocks only).
-                if (showBlocks) blockBtn(Icons.terminal, 'code_block', 'Code block'),
-                if (singleText) ...[
-                  markBtn(Icons.code, 'code', 'Inline code'),
-                  markBtn(Icons.strikethrough_s, 'strike', 'Strikethrough'),
-                  markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
-                ],
-                if (showBlocks) ...[
-                  const VerticalDivider(width: 9, indent: 8, endIndent: 8),
-                  // The three everyday heading levels are one click; the rare
-                  // H4–H6 hide behind the chevron.
-                  for (var level = 1; level <= 3; level++)
-                    headingBtn(level),
-                  moreHeadingsBtn(),
-                  blockBtn(Icons.notes, 'paragraph', 'Text'),
-                  blockBtn(Icons.format_list_bulleted, 'bulleted_list', 'Bulleted list'),
-                  blockBtn(Icons.format_list_numbered, 'numbered_list', 'Numbered list'),
-                  blockBtn(Icons.check_box_outlined, 'todo', 'To-do',
-                      data: {'checked': false}),
-                  blockBtn(Icons.format_quote, 'quote', 'Quote'),
-                ],
-              ],
+              ),
             ),
           ),
-        ),
         ),
       ),
     );
@@ -2966,7 +3069,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     Offset globalPosition,
     List<(String, String)> items,
   ) {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (overlay == null) return Future.value(null);
     return showMenu<String>(
       context: context,
@@ -3008,7 +3112,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final hit = _linkMarkHitAt(r, local);
     if (hit != null) {
       _linkBarHide?.cancel();
-      final same = _linkBar != null &&
+      final same =
+          _linkBar != null &&
           _linkBarNode == hit.node &&
           _linkBarMark?.start == hit.mark.start &&
           _linkBarMark?.href == hit.mark.href;
@@ -3233,7 +3338,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (r.tableColBorderAt(local) != null || r.imageResizeAt(local) != null) {
       return SystemMouseCursors.resizeLeftRight;
     }
-    final clickable = r.codeLanguageAt(local) != null ||
+    final clickable =
+        r.codeLanguageAt(local) != null ||
         r.codeCopyAt(local) != null ||
         r.codeWrapAt(local) != null ||
         r.scrollbarAt(local) != null ||
@@ -3259,8 +3365,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     if (event is! PointerScrollEvent) return;
     if (HardwareKeyboard.instance.isControlPressed) {
-      if (r.zoomPreviewBy(r.globalToLocal(event.position),
-          event.scrollDelta.dy > 0 ? 0.9 : 1.1)) {
+      if (r.zoomPreviewBy(
+        r.globalToLocal(event.position),
+        event.scrollDelta.dy > 0 ? 0.9 : 1.1,
+      )) {
         return;
       }
     }
@@ -3312,9 +3420,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       for (var c = area.c0; c <= area.c1 && c < table.rows[r].length; c++) {
         if (c < 0) continue;
         final parsed = parseInline(table.rows[r][c]);
-        plainCells.add(
-          parsed.text.replaceAll('\t', ' ').replaceAll('\n', ' '),
-        );
+        plainCells.add(parsed.text.replaceAll('\t', ' ').replaceAll('\n', ' '));
         htmlRows.write('<td>${inlineToHtml(parsed.text, parsed.marks)}</td>');
       }
       htmlRows.write('</tr>');
@@ -3325,7 +3431,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       richHtml: '<table>$htmlRows</table>',
     );
     if (cut) {
-      _controller.clearTableCells(area.node, area.r0, area.c0, area.r1, area.c1);
+      _controller.clearTableCells(
+        area.node,
+        area.r0,
+        area.c0,
+        area.r1,
+        area.c1,
+      );
     }
   }
 
@@ -3344,20 +3456,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }) {
     final rect = _render?.tableCellRect(node, row, col);
     final caret = offset.clamp(0, controller.text.length);
-    final tp = TextPainter(
-      text: buildMarkedSpan(
-        controller.text,
-        controller.marks,
-        const TextStyle(fontSize: 15, height: 1.4),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout(
-        maxWidth:
-            ((rect?.width ?? double.infinity) - 20).clamp(1.0, double.infinity),
-      );
+    final tp =
+        TextPainter(
+          text: buildMarkedSpan(
+            controller.text,
+            controller.marks,
+            const TextStyle(fontSize: 15, height: 1.4),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(
+          maxWidth: ((rect?.width ?? double.infinity) - 20).clamp(
+            1.0,
+            double.infinity,
+          ),
+        );
     final lines = tp.computeLineMetrics();
-    final caretY =
-        tp.getOffsetForCaret(TextPosition(offset: caret), Rect.zero).dy;
+    final caretY = tp
+        .getOffsetForCaret(TextPosition(offset: caret), Rect.zero)
+        .dy;
     tp.dispose();
     if (lines.length <= 1) return true;
     // Find the caret's line index by walking cumulative line heights.
@@ -3435,8 +3551,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // hijacking the text selection into a pan and yanking the picture out
     // of its viewport.
     final r = _render;
-    _panDownDiagram =
-        r == null ? null : r.diagramAt(r.globalToLocal(d.globalPosition));
+    _panDownDiagram = r == null
+        ? null
+        : r.diagramAt(r.globalToLocal(d.globalPosition));
   }
 
   void _onPanStart(DragStartDetails d) {
@@ -3509,8 +3626,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (ac != null) {
         final off = _cellOffsetAt(r, ac, local);
         ac.ctl.selection = TextSelection.collapsed(offset: off);
-        _cellDrag =
-            (ctl: ac.ctl, node: ac.node, row: ac.row, col: ac.col, anchor: off);
+        _cellDrag = (
+          ctl: ac.ctl,
+          node: ac.node,
+          row: ac.row,
+          col: ac.col,
+          anchor: off,
+        );
       }
       return;
     }
@@ -3565,13 +3687,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _cellDrag = null;
         return;
       }
-      final off = _cellOffsetAt(
-        r,
-        (ctl: cd.ctl, node: cd.node, row: cd.row, col: cd.col),
-        local,
+      final off = _cellOffsetAt(r, (
+        ctl: cd.ctl,
+        node: cd.node,
+        row: cd.row,
+        col: cd.col,
+      ), local);
+      cd.ctl.selection = TextSelection(
+        baseOffset: cd.anchor,
+        extentOffset: off,
       );
-      cd.ctl.selection =
-          TextSelection(baseOffset: cd.anchor, extentOffset: off);
       return;
     }
     if (_blockDrag != null) {
@@ -3722,7 +3847,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (delta == 0) return;
 
     final pos = scrollable.position;
-    final target = (pos.pixels + delta).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    final target = (pos.pixels + delta).clamp(
+      pos.minScrollExtent,
+      pos.maxScrollExtent,
+    );
     if (target == pos.pixels) return;
     pos.jumpTo(target);
     final p = r.positionAt(r.globalToLocal(global));
@@ -4040,7 +4168,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// formulas (the app's own convention) which the typesetter can't parse.
   static String _stripMathDelimiters(String source) {
     var src = source.trim();
-    final m = RegExp(r'^\$\$(.*)\$\$$', dotAll: true).firstMatch(src) ??
+    final m =
+        RegExp(r'^\$\$(.*)\$\$$', dotAll: true).firstMatch(src) ??
         RegExp(r'^\\\[(.*)\\\]$', dotAll: true).firstMatch(src) ??
         RegExp(r'^\\\((.*)\\\)$', dotAll: true).firstMatch(src) ??
         RegExp(r'^\$([^$]+)\$$', dotAll: true).firstMatch(src);
@@ -4114,11 +4243,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _showImageMenu(int node, Offset globalPosition) async {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (overlay == null) return;
     final data = _controller.nodes[node].data;
     final isExternal =
-        data['file_id'] == null && (data['url'] as String?)?.startsWith('http') == true;
+        data['file_id'] == null &&
+        (data['url'] as String?)?.startsWith('http') == true;
     final choice = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -4245,7 +4376,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (node < 0 || node >= _controller.nodes.length) return;
     final id = _controller.nodes[node].id;
     final data = _controller.nodes[node].data;
-    final external = data['file_id'] == null &&
+    final external =
+        data['file_id'] == null &&
         (data['url'] as String?)?.startsWith('http') == true;
     final link = _imageLinkOf(data) ?? '(链接尚未解析)';
     // Returns the url to replace with; '' = handled already (a file upload) or
@@ -4256,8 +4388,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         link: link,
         external: external,
         reHost: widget.reHostImages,
-        onUploadReplace:
-            widget.onUploadImage == null ? null : () => _replaceImageFromFile(id),
+        onUploadReplace: widget.onUploadImage == null
+            ? null
+            : () => _replaceImageFromFile(id),
       ),
     );
     if (url == null || url.isEmpty || !mounted) return;
@@ -4287,8 +4420,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return false;
     }
     _primeImage(result.fileId, picked.bytes);
-    _controller
-        .setImageSource(nodeId, fileId: result.fileId, name: result.name);
+    _controller.setImageSource(
+      nodeId,
+      fileId: result.fileId,
+      name: result.name,
+    );
     return true;
   }
 
@@ -4326,7 +4462,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   /// Bytes + filename for an image node (re-fetched via the host loader).
-  Future<({Uint8List bytes, String name, String mime})?> _imageData(int node) async {
+  Future<({Uint8List bytes, String name, String mime})?> _imageData(
+    int node,
+  ) async {
     if (node < 0 || node >= _controller.nodes.length) return null;
     final data = _controller.nodes[node].data;
     final key = (data['file_id'] ?? data['url']) as String?;
@@ -4472,9 +4610,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   /// Upload a pasted bitmap (screenshot / copied image) and insert it.
-  Future<void> _handlePasteImage(Uint8List bytes, String mime, String name) async {
+  Future<void> _handlePasteImage(
+    Uint8List bytes,
+    String mime,
+    String name,
+  ) async {
     final upload = widget.onUploadImage;
-    if (upload == null || !mounted || !_focus.hasFocus || !widget.canEdit) return;
+    if (upload == null || !mounted || !_focus.hasFocus || !widget.canEdit)
+      return;
     final result = await upload(bytes, name, mime);
     if (result == null || !mounted) return;
     _primeImage(result.fileId, bytes);
@@ -4523,40 +4666,46 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // would dismiss the menu). Taps still work — they are pointer-based.
       child: ExcludeFocus(
         child: Material(
-        elevation: 8,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          width: 248,
-          constraints: const BoxConstraints(maxHeight: 288),
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: ListView.builder(
-            shrinkWrap: true,
-            padding: EdgeInsets.zero,
-            itemCount: items.length,
-            itemBuilder: (context, i) {
-              final o = items[i];
-              final active = i == _slashIndex;
-              return InkWell(
-                onTap: () => _applySlash(o),
-                child: Container(
-                  color: active ? const Color(0x142563EB) : null,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(o.icon, size: 18, color: const Color(0xFF475569)),
-                      const SizedBox(width: 10),
-                      Text(
-                        o.label,
-                        style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A)),
-                      ),
-                    ],
+          elevation: 8,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: 248,
+            constraints: const BoxConstraints(maxHeight: 288),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: items.length,
+              itemBuilder: (context, i) {
+                final o = items[i];
+                final active = i == _slashIndex;
+                return InkWell(
+                  onTap: () => _applySlash(o),
+                  child: Container(
+                    color: active ? const Color(0x142563EB) : null,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(o.icon, size: 18, color: const Color(0xFF475569)),
+                        const SizedBox(width: 10),
+                        Text(
+                          o.label,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF0F172A),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -4599,13 +4748,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   images: _imageCache,
                   imageErrors: _imageErrors,
                   previewImages: _previews.images,
+                  previewBaselines: _previews.baselines,
                   onRequestPreview: _previews.request,
                   onRequestImage: _requestImage,
                   onImagePainted: _onImagePainted,
                   remoteCursors: widget.remoteCursors,
                 ),
                 // Far off-screen: painted (capturable) but never visible.
-                Positioned(left: -100000, top: 0, child: _previews.offstageHost()),
+                Positioned(
+                  left: -100000,
+                  top: 0,
+                  child: _previews.offstageHost(),
+                ),
                 if (_findOpen)
                   Positioned(top: 6, right: 6, child: _buildFindBar()),
               ],
@@ -4673,32 +4827,34 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
       _error = null;
       _buffer.clear();
     });
-    _sub = widget.onStream(prompt).listen(
-      (delta) {
-        setState(() => _buffer.write(delta));
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scroll.hasClients) {
-            _scroll.jumpTo(_scroll.position.maxScrollExtent);
-          }
-        });
-      },
-      onError: (Object error) {
-        if (mounted) {
-          setState(() {
-            _streaming = false;
-            _error = error.toString();
-          });
-        }
-      },
-      onDone: () {
-        if (mounted) {
-          setState(() {
-            _streaming = false;
-            _done = true;
-          });
-        }
-      },
-    );
+    _sub = widget
+        .onStream(prompt)
+        .listen(
+          (delta) {
+            setState(() => _buffer.write(delta));
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) {
+                _scroll.jumpTo(_scroll.position.maxScrollExtent);
+              }
+            });
+          },
+          onError: (Object error) {
+            if (mounted) {
+              setState(() {
+                _streaming = false;
+                _error = error.toString();
+              });
+            }
+          },
+          onDone: () {
+            if (mounted) {
+              setState(() {
+                _streaming = false;
+                _done = true;
+              });
+            }
+          },
+        );
   }
 
   @override
@@ -4773,7 +4929,10 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
                 ),
                 child: Text(
                   _error!,
-                  style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 13),
+                  style: const TextStyle(
+                    color: Color(0xFFB91C1C),
+                    fontSize: 13,
+                  ),
                 ),
               ),
             ],
@@ -4894,11 +5053,16 @@ class _LanguagePickerState extends State<_LanguagePicker> {
   void _reveal(int count) {
     if (!_scroll.hasClients || count == 0) return;
     const itemH = 34.0;
-    final target = (_index * itemH).clamp(0.0, _scroll.position.maxScrollExtent);
+    final target = (_index * itemH).clamp(
+      0.0,
+      _scroll.position.maxScrollExtent,
+    );
     final top = _scroll.offset;
     final bottom = top + 240 - itemH;
     if (target < top || target > bottom) {
-      _scroll.jumpTo((target - 100).clamp(0.0, _scroll.position.maxScrollExtent));
+      _scroll.jumpTo(
+        (target - 100).clamp(0.0, _scroll.position.maxScrollExtent),
+      );
     }
   }
 
@@ -4982,9 +5146,11 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                                       SizedBox(
                                         width: 20,
                                         child: items[i] == widget.current
-                                            ? const Icon(Icons.check,
+                                            ? const Icon(
+                                                Icons.check,
                                                 size: 14,
-                                                color: Color(0xFF2563EB))
+                                                color: Color(0xFF2563EB),
+                                              )
                                             : null,
                                       ),
                                       Text(
@@ -5072,9 +5238,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                widget.external
-                    ? '外部链接 · 原站失效后图片会丢失'
-                    : '已存储到 Mica · 链接公开可访问',
+                widget.external ? '外部链接 · 原站失效后图片会丢失' : '已存储到 Mica · 链接公开可访问',
                 style: TextStyle(fontSize: 12, color: EditorTheme.muted),
               ),
               const SizedBox(height: 6),

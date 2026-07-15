@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -11,6 +11,7 @@ import 'model.dart';
 import 'table.dart';
 
 part 'block_renderers.dart';
+part 'inline_atoms.dart';
 
 /// User-adjustable editor appearance (document font). Page width is applied by
 /// the surrounding page layout, not here.
@@ -72,6 +73,10 @@ class EditorTheme {
 
   /// Pixel ratio formulas are rasterized at (capture and draw agree).
   static const double mathPixelRatio = 2.0;
+
+  /// Font size formulas are rasterized at ([MathPreviewer]'s Math.tex).
+  /// Inline atoms scale the raster by (text font size / this).
+  static const double mathRasterFontSize = 18.0;
 
   /// Keep-off distance for the inline-math preview card (_paintMathPreview).
   static const double mathCardMargin = 8.0;
@@ -229,6 +234,12 @@ class _NodeLayout {
   /// text even though its kind says otherwise.
   AtomicBlockRenderer? renderedBy;
 
+  /// Inline atoms folded into [painter]'s text, or null when the node shows
+  /// plain source (no atom marks, node under the selection, rasters pending).
+  /// Non-null means painter offsets differ from doc offsets: every crossing
+  /// must go through [FoldPlan.docToPainter]/[FoldPlan.painterToDoc].
+  FoldPlan? fold;
+
   double contentLeft = 0; // x where text starts
   double textTop = 0; // y of text top
   double textHeight = 0;
@@ -377,8 +388,31 @@ class RenderDocument extends RenderBox {
   DocSelection? _selection;
   set selection(DocSelection? value) {
     if (_selection == value) return;
+    final before = _selectionNodes(_selection);
+    final after = _selectionNodes(value);
     _selection = value;
-    markNeedsPaint();
+    // Fold state is a function of which nodes the selection touches: entering
+    // a node with inline atoms unfolds it into editable source, leaving folds
+    // it back — that is layout, not paint. Gated on the affected nodes really
+    // carrying atom marks, so ordinary caret movement stays paint-only.
+    if (!setEquals(before, after) && before.union(after).any(_hasInlineAtoms)) {
+      markNeedsLayout();
+    } else {
+      markNeedsPaint();
+    }
+  }
+
+  Set<int> _selectionNodes(DocSelection? s) =>
+      s == null ? const <int>{} : {s.anchor.node, s.focus.node};
+
+  bool _hasInlineAtoms(int index) {
+    if (index < 0 || index >= _nodes.length) return false;
+    final raw = _nodes[index].data['marks'];
+    if (raw is! List) return false;
+    for (final m in raw) {
+      if (m is Map && _inlineAtomRenderers.containsKey(m['type'])) return true;
+    }
+    return false;
   }
 
   List<RemoteCursor> _remoteCursors = const [];
@@ -532,6 +566,14 @@ class RenderDocument extends RenderBox {
   set previewImages(Map<String, Map<String, ui.Image>> value) {
     _previewImages = value;
     markNeedsLayout();
+  }
+
+  /// See [DocumentSurface.previewBaselines]. No markNeedsLayout of its own:
+  /// baselines land strictly alongside their images, and the images setter
+  /// above already relayouts.
+  Map<String, Map<String, double>> _previewBaselines = const {};
+  set previewBaselines(Map<String, Map<String, double>> value) {
+    _previewBaselines = value;
   }
 
   /// Ask the host pipeline for a preview of [source] under previewer [id],
@@ -846,21 +888,104 @@ class RenderDocument extends RenderBox {
       final String? codeLang = isCode
           ? resolveCodeLanguage(node.text, node.data['language'] as String?)
           : null;
-      final TextSpan span;
+      final marks = isCode ? const <Mark>[] : marksFromData(node.data);
+
+      // Inline atoms (math): marked runs render as one typeset object — but
+      // NOT in the node the selection touches. That node shows plain source,
+      // the caret walks real characters, and every offset is identity; folding
+      // applies only where nobody is editing. This is what keeps IME, caret
+      // motion and backspace out of the mapping business (the Zed fold model;
+      // block math's "caret inside shows source" is the same convention).
+      final selNow = _selection;
+      final active =
+          selNow != null &&
+          (selNow.anchor.node == nodeIndex || selNow.focus.node == nodeIndex);
+      FoldPlan? fold;
+      if (!isCode && !active && marks.isNotEmpty) {
+        final atoms = <InlineAtom>[];
+        for (final m in marks) {
+          final r = _inlineAtomRenderers[m.type];
+          if (r == null) continue;
+          final s = m.start.clamp(0, node.text.length);
+          final e = m.end.clamp(0, node.text.length);
+          if (e <= s) continue;
+          final source = node.text.substring(s, e);
+          final measured = r.measure(
+            this,
+            source,
+            (style.fontSize ?? 16) * _appearance.fontScale,
+            textWidth,
+          );
+          if (measured == null) continue; // declined: run stays styled source
+          atoms.add(
+            InlineAtom(
+              docStart: s,
+              docEnd: e,
+              source: source,
+              size: measured.size,
+              baseline: measured.baseline,
+              renderer: r,
+            ),
+          );
+        }
+        // The parser emits sorted, disjoint runs; concurrent-edit clamping can
+        // break that, and an overlapping pair would corrupt the offset map —
+        // decline the whole fold instead.
+        atoms.sort((a, b) => a.docStart.compareTo(b.docStart));
+        var disjoint = atoms.isNotEmpty;
+        for (var k = 1; k < atoms.length; k++) {
+          if (atoms[k].docStart < atoms[k - 1].docEnd) {
+            disjoint = false;
+            break;
+          }
+        }
+        if (disjoint) fold = FoldPlan(atoms);
+      }
+
+      TextSpan span;
+      List<PlaceholderDimensions>? dims;
       if (isCode && node.text.isNotEmpty) {
         span = buildCodeSpan(node.text, codeLang!, style);
+      } else if (fold != null) {
+        final folded = buildFoldedSpan(node.text, marks, style, fold.atoms);
+        span = folded.span;
+        dims = folded.dims;
       } else {
-        span = buildMarkedSpan(node.text, marksFromData(node.data), style);
+        span = buildMarkedSpan(node.text, marks, style);
       }
 
       final codeWrap = isCode && node.data['wrap'] == true;
-      final painter = TextPainter(
+      var painter = TextPainter(
         text: span,
         textDirection: TextDirection.ltr,
         textWidthBasis: TextWidthBasis.parent,
-      )..layout(maxWidth: (isCode && !codeWrap) ? double.infinity : textWidth);
+      );
+      if (dims != null) painter.setPlaceholderDimensions(dims);
+      painter.layout(
+        maxWidth: (isCode && !codeWrap) ? double.infinity : textWidth,
+      );
+      if (fold != null) {
+        final boxes = painter.inlinePlaceholderBoxes ?? const <ui.TextBox>[];
+        if (boxes.length == fold.atoms.length) {
+          for (var k = 0; k < boxes.length; k++) {
+            fold.atoms[k].rect = boxes[k].toRect();
+          }
+        } else {
+          // The engine dropped a placeholder (never observed — probed on this
+          // Flutter). A folded painter without its geometry would misplace
+          // every offset in the node; rebuild unfolded instead.
+          fold = null;
+          painter.dispose();
+          painter = TextPainter(
+            text: buildMarkedSpan(node.text, marks, style),
+            textDirection: TextDirection.ltr,
+            textWidthBasis: TextWidthBasis.parent,
+          )..layout(maxWidth: textWidth);
+        }
+      }
 
       final layout = _NodeLayout(painter)
+        ..fold = fold
         ..contentLeft = contentLeft
         ..kind = node.kind
         ..nodeId = node.id
@@ -1740,6 +1865,15 @@ class RenderDocument extends RenderBox {
       canvas.restore();
     } else {
       l.painter.paint(canvas, origin);
+      // Inline atoms: the painter reserved each placeholder's box; draw the
+      // typeset object into it. Rects are painter-local, same origin as text.
+      final fold = l.fold;
+      if (fold != null) {
+        for (final a in fold.atoms) {
+          if (a.rect.isEmpty) continue;
+          a.renderer.paint(this, canvas, a.rect.shift(origin), a.source);
+        }
+      }
     }
   }
 
@@ -1763,8 +1897,13 @@ class RenderDocument extends RenderBox {
         final s = m.start.clamp(0, len);
         final e = m.end.clamp(0, len);
         if (e <= s) continue;
+        // Code runs never overlap atom runs (the parser keeps them disjoint),
+        // so on a folded node this is a pure shift — mapped anyway, because a
+        // stale mark from a concurrent edit must misplace a pill, not corrupt.
+        final ps = l.fold?.docToPainter(s) ?? s;
+        final pe = l.fold?.docToPainter(e, ceilInsideAtom: true) ?? e;
         final boxes = l.painter.getBoxesForSelection(
-          TextSelection(baseOffset: s, extentOffset: e),
+          TextSelection(baseOffset: ps, extentOffset: pe),
           boxHeightStyle: ui.BoxHeightStyle.tight,
         );
         for (final b in boxes) {
@@ -1816,11 +1955,17 @@ class RenderDocument extends RenderBox {
         }
         continue;
       }
+      // A folded node's painter wants placeholder offsets. Floor the start and
+      // ceil the end when they land inside an atom's run, so a selection that
+      // clips a formula still highlights the whole placeholder — you cannot
+      // select half of a typeset object.
+      final pFrom = l.fold?.docToPainter(from) ?? from;
+      final pTo = l.fold?.docToPainter(to, ceilInsideAtom: true) ?? to;
       // BoxHeightStyle.max stretches every run's box to the full line
       // height: CJK and Latin glyphs run at different intrinsic heights, and
       // per-run boxes give the highlight a jagged top edge on mixed lines.
       final boxes = l.painter.getBoxesForSelection(
-        TextSelection(baseOffset: from, extentOffset: to),
+        TextSelection(baseOffset: pFrom, extentOffset: pTo),
         boxHeightStyle: ui.BoxHeightStyle.max,
       );
       if (isCode) {
@@ -2038,7 +2183,11 @@ class RenderDocument extends RenderBox {
     if (pos.node < 0 || pos.node >= _layouts.length) return null;
     final l = _layouts[pos.node];
     if (EditorNode.isAtomicKind(l.kind)) return null; // no inline caret
-    final off = pos.offset.clamp(0, _nodes[pos.node].text.length);
+    final doc = pos.offset.clamp(0, _nodes[pos.node].text.length);
+    // The local caret's node is never folded (it is selection-active), but a
+    // REMOTE collaborator's caret can sit in a folded node — map it onto the
+    // placeholder's edge rather than into text that isn't displayed.
+    final off = l.fold?.docToPainter(doc) ?? doc;
     final caret = l.painter.getOffsetForCaret(
       TextPosition(offset: off),
       Rect.zero,
@@ -2090,9 +2239,13 @@ class RenderDocument extends RenderBox {
     final scroll = l.kind == 'code_block' ? (_codeScroll[l.nodeId] ?? 0) : 0.0;
     final localText = Offset(local.dx - l.contentLeft + scroll, y - l.textTop);
     final tp = l.painter.getPositionForOffset(localText);
+    // A folded painter answers in placeholder space; the caret (and everything
+    // downstream) lives in doc space. Clicking an atom lands on whichever run
+    // edge the hit snapped to — never inside it.
+    final doc = l.fold?.painterToDoc(tp.offset) ?? tp.offset;
     final offset = _nodes[idx].text.isEmpty
         ? 0
-        : tp.offset.clamp(0, _nodes[idx].text.length);
+        : doc.clamp(0, _nodes[idx].text.length);
     return DocPosition(idx, offset);
   }
 
@@ -2155,17 +2308,23 @@ class RenderDocument extends RenderBox {
   }
 
   /// Start of the visual line containing [pos].
+  ///
+  /// The caret's node is unfolded in practice (Home/End act on the selection
+  /// node), so the fold mapping here is identity today — kept anyway so this
+  /// stays correct if a caller ever asks about another node.
   DocPosition lineStart(DocPosition pos) {
     final l = _layouts[pos.node];
-    final lb = l.painter.getLineBoundary(TextPosition(offset: pos.offset));
-    return DocPosition(pos.node, lb.start);
+    final p = l.fold?.docToPainter(pos.offset) ?? pos.offset;
+    final lb = l.painter.getLineBoundary(TextPosition(offset: p));
+    return DocPosition(pos.node, l.fold?.painterToDoc(lb.start) ?? lb.start);
   }
 
-  /// End of the visual line containing [pos].
+  /// End of the visual line containing [pos]. See [lineStart] on folding.
   DocPosition lineEnd(DocPosition pos) {
     final l = _layouts[pos.node];
-    final lb = l.painter.getLineBoundary(TextPosition(offset: pos.offset));
-    return DocPosition(pos.node, lb.end);
+    final p = l.fold?.docToPainter(pos.offset) ?? pos.offset;
+    final lb = l.painter.getLineBoundary(TextPosition(offset: p));
+    return DocPosition(pos.node, l.fold?.painterToDoc(lb.end) ?? lb.end);
   }
 
   /// Local top y of the node with [nodeId], or null if absent (for scroll-to).
@@ -2288,6 +2447,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.onRequestImage,
     this.onImagePainted,
     this.previewImages = const {},
+    this.previewBaselines = const {},
     this.onRequestPreview,
     this.remoteCursors = const [],
     super.key,
@@ -2307,6 +2467,11 @@ class DocumentSurface extends LeafRenderObjectWidget {
   /// Rasterized formulas keyed by LaTeX source (captured by the editor via
   /// an offstage flutter_math_fork widget at device pixel ratio).
   final Map<String, Map<String, ui.Image>> previewImages;
+
+  /// Top-to-baseline distances matching [previewImages] (logical px at the
+  /// offstage widget's size). Inline atoms sit formulas on the text baseline
+  /// with these; a missing entry degrades to middle alignment.
+  final Map<String, Map<String, double>> previewBaselines;
   final void Function(String id, String source, double targetWidth)?
   onRequestPreview;
 
@@ -2324,6 +2489,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
         ..onRequestPreview = onRequestPreview
         ..imageErrors = imageErrors
         ..previewImages = previewImages
+        ..previewBaselines = previewBaselines
         ..remoteCursors = remoteCursors
         ..images = images;
 
@@ -2340,6 +2506,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..onRequestPreview = onRequestPreview
       ..imageErrors = imageErrors
       ..previewImages = previewImages
+      ..previewBaselines = previewBaselines
       ..remoteCursors = remoteCursors
       ..images = images;
   }
