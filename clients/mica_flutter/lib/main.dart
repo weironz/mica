@@ -361,19 +361,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Add a server and make it active. Returns an error message, or null on
-  /// success — a URL we can't parse must not silently become a dead entry.
+  /// Add a server to the list — and only that. Switching to it is a separate,
+  /// explicit act (the button under the dropdown): adding a server you intend
+  /// to use later must not yank the whole app over to it.
+  ///
+  /// Returns an error message, or null on success — a URL we can't parse must
+  /// not silently become a dead entry.
   Future<String?> _addServer(String url) async {
     final parsed = Uri.tryParse(url.trim());
     if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
       return '请输入完整的服务器地址(含 https://)';
     }
     final normalized = parsed.toString();
-    if (!_servers.contains(normalized)) {
-      setState(() => _servers = [..._servers, normalized]);
-      _saveServers();
+    if (_servers.contains(normalized)) {
+      return '这台服务器已经在列表里了';
     }
-    await _setActiveConnection(normalized);
+    setState(() => _servers = [..._servers, normalized]);
+    _saveServers();
     return null;
   }
 

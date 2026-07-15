@@ -1001,14 +1001,18 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
-  /// Settings → 服务器. A list of connections — this device, then every
+  /// Settings → 服务器. One dropdown of connections — this device, then every
   /// configured server — of which exactly one is live.
   ///
-  /// Selecting is a DRAFT; Save commits. The switch that lived here before
-  /// applied on tap and closed the dialog out from under you, so there was no
-  /// way to look before leaping. Modelled on AppFlowy's cloud settings, where
-  /// the dropdown writes nothing (`CloudSettingBloc.updateCloudType` only emits
-  /// state) and an explicit button commits.
+  /// A dropdown rather than a list of rows: the list grew with every server and
+  /// would eventually push the Save button out of the dialog. A dropdown is a
+  /// fixed-height control that scrolls its own popup, so N servers cost no
+  /// layout at all. (AppFlowy uses a dropdown here for the same reason.)
+  ///
+  /// Selecting is a DRAFT; the button below commits. The switch that lived here
+  /// before applied on tap and closed the dialog out from under you, so there
+  /// was no way to look before leaping — AppFlowy's `CloudSettingBloc` likewise
+  /// writes nothing on select and commits from an explicit button.
   List<Widget> _serverSection(BuildContext context) => [
     _sectionTitle(context, Icons.dns_outlined, '服务器', const Color(0xFF2563EB)),
     const SizedBox(height: 8),
@@ -1018,20 +1022,44 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         context,
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
     ),
-    const SizedBox(height: 10),
-    DecoratedBox(
-      decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        children: [
-          for (final origin in widget.connections)
-            _connectionRow(context, origin),
-        ],
-      ),
+    const SizedBox(height: 12),
+    Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: widget.connections.contains(_draftOrigin)
+                ? _draftOrigin
+                : widget.connections.first,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: '当前连接',
+              border: OutlineInputBorder(),
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+            items: [
+              for (final origin in widget.connections)
+                DropdownMenuItem(value: origin, child: _connectionLabel(origin)),
+            ],
+            onChanged: _serverSaving
+                ? null
+                : (v) => setState(() => _draft = v),
+          ),
+        ),
+        const SizedBox(width: 6),
+        // Acts on whatever the dropdown shows. 本地模式 is not deletable: it is
+        // not a server, it is where the on-device workspaces live — a server's
+        // mirror can be re-fetched, those exist nowhere else.
+        IconButton(
+          tooltip: _draftOrigin == 'local' ? '本地模式不可删除' : '删除这台服务器',
+          onPressed: (_serverSaving || _draftOrigin == 'local')
+              ? null
+              : () => _confirmRemoveServer(_draftOrigin),
+          icon: const Icon(Icons.delete_outline, size: 20),
+        ),
+      ],
     ),
-    const SizedBox(height: 10),
+    const SizedBox(height: 6),
     Align(
       alignment: Alignment.centerLeft,
       child: TextButton.icon(
@@ -1058,82 +1086,46 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : const Icon(Icons.sync, size: 18),
-        label: const Text('Save & switch'),
+        label: const Text('切换并保存'),
       ),
     ),
   ];
 
-  /// The draft selection. Null until touched, so the list reads from
-  /// [widget.activeOrigin] and Save stays disabled while nothing has changed.
+  /// The draft selection. Null until touched, so the dropdown reads from
+  /// [widget.activeOrigin] and the switch button stays disabled until it would
+  /// actually do something.
   String? _draft;
 
   String get _draftOrigin => _draft ?? widget.activeOrigin;
 
-  Widget _connectionRow(BuildContext context, String origin) {
+  Widget _connectionLabel(String origin) {
     final local = origin == 'local';
-    final selected = _draftOrigin == origin;
     final signedIn = widget.signedInOrigins.contains(origin);
-    final label = local ? '本地模式' : (Uri.tryParse(origin)?.host ?? origin);
-    final subtitle = local
-        ? '这台设备上的工作区,不需要账号,也不同步'
-        : (signedIn ? '已登录' : '未登录 — 切过去后登录');
-    return InkWell(
-      onTap: _serverSaving ? null : () => setState(() => _draft = origin),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        child: Row(
-          children: [
-            Radio<String>(
-              value: origin,
-              groupValue: _draftOrigin,
-              onChanged: _serverSaving
-                  ? null
-                  : (v) => setState(() => _draft = v),
-            ),
-            Icon(
-              local ? Icons.computer_outlined : Icons.cloud_outlined,
-              size: 18,
-              color: const Color(0xFF475569),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                      color: const Color(0xFF0F172A),
-                    ),
-                  ),
-                  Text(
-                    subtitle,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF94A3B8),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // 本地模式 has no delete: it is not a server, it is where the
-            // on-device workspaces live — and unlike a server's mirror, those
-            // exist nowhere else.
-            if (!local)
-              IconButton(
-                tooltip: '删除服务器',
-                visualDensity: VisualDensity.compact,
-                onPressed: _serverSaving
-                    ? null
-                    : () => _confirmRemoveServer(origin),
-                icon: const Icon(Icons.delete_outline, size: 18),
-              ),
-          ],
+    return Row(
+      children: [
+        Icon(
+          local ? Icons.computer_outlined : Icons.cloud_outlined,
+          size: 16,
+          color: const Color(0xFF475569),
         ),
-      ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            local ? '本地模式' : (Uri.tryParse(origin)?.host ?? origin),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (!local) ...[
+          const SizedBox(width: 8),
+          Text(
+            signedIn ? '已登录' : '未登录',
+            style: TextStyle(
+              fontSize: 11,
+              color: signedIn ? const Color(0xFF16A34A) : const Color(0xFF94A3B8),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -1163,7 +1155,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('添加并切换'),
+            child: const Text('添加'),
           ),
         ],
       ),
@@ -1178,11 +1170,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _serverSaving = false;
       _serverMsg = error;
-      _draft = null; // adding switched us; re-read the active connection
+      // Adding is not switching: the new server is only selected in the
+      // dropdown, and the button below is what commits it. Keeping the two
+      // apart is the whole point — you can add one now and switch later.
+      _draft = null;
     });
-    // Adding a server switches to it — the user just said where they want to
-    // be. Close so they land there, unless it failed and they must see why.
-    if (error == null && mounted) Navigator.of(context).pop();
   }
 
   Future<void> _confirmRemoveServer(String origin) async {
@@ -1230,7 +1222,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _serverMsg = null;
     });
     await widget.onSetActiveConnection(target);
-    // Close so the user sees the world they just chose.
+    // Close so the user lands in the world they just chose.
     if (mounted) Navigator.of(context).pop();
   }
 
