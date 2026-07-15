@@ -497,6 +497,25 @@ class ApiClient {
     return response.bodyBytes;
   }
 
+  /// Download one folder's subtree as a Markdown ZIP (same shape as the
+  /// workspace export: relative paths + shared `assets/` + manifest).
+  Future<Uint8List> exportFolderZip(
+    String token,
+    String workspaceId,
+    String viewId,
+  ) async {
+    final response = await http.get(
+      baseUri.replace(
+        path: '/api/workspaces/$workspaceId/views/$viewId/export.zip',
+      ),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('export failed (HTTP ${response.statusCode})');
+    }
+    return response.bodyBytes;
+  }
+
   /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
   Future<Uint8List> exportWorkspaceZip(String token, String workspaceId) async {
     final response = await http.get(

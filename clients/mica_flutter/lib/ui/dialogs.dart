@@ -1,63 +1,7 @@
-// Modal dialogs for the Mica client (export / search / settings / AI /
+// Modal dialogs for the Mica client (search / settings / AI /
 // recycle bin). `part of main.dart` — same library, so they keep using its
 // imports and private helpers. Extracted 2026-07 for navigability.
 part of '../main.dart';
-
-/// Shows exported Markdown in a selectable box with a one-tap copy.
-class _ExportDialog extends StatelessWidget {
-  const _ExportDialog({required this.title, required this.markdown});
-
-  final String title;
-  final String markdown;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(title),
-      content: SizedBox(
-        width: 560,
-        height: 460,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-          ),
-          child: SingleChildScrollView(
-            child: SelectableText(
-              markdown.isEmpty ? '(empty)' : markdown,
-              style: const TextStyle(
-                fontFamily: kMonoFont,
-                fontSize: 13,
-                height: 1.5,
-              ),
-            ),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
-        ),
-        FilledButton.icon(
-          onPressed: () async {
-            await copyTextToClipboard(markdown);
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Copied to clipboard')),
-              );
-            }
-          },
-          icon: const Icon(Icons.copy, size: 18),
-          label: const Text('Copy'),
-        ),
-      ],
-    );
-  }
-}
 
 /// Workspace search: type to find pages by title or body text; click to open.
 class _SearchDialog extends StatefulWidget {

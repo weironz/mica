@@ -41,6 +41,10 @@ pub fn api_router() -> Router<AppState> {
     .route("/auth/tokens/{id}", delete(tokens::revoke_token))
     .route("/export/markdown", get(documents::export_all_markdown))
     .route(
+      "/workspaces/{workspace_id}/views/{view_id}/export.zip",
+      get(documents::export_folder_zip),
+    )
+    .route(
       "/workspaces/{workspace_id}/export.zip",
       get(documents::export_workspace_zip),
     )

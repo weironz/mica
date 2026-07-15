@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
-import 'editor/clipboard_copy.dart';
 import 'cloud/cloud_sync.dart';
 import 'cloud/doc_store_platform.dart';
 import 'cloud/pending_uploads.dart';
@@ -1162,20 +1161,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.aiStream(session.accessToken, prompt, system: system);
   }
 
-  Future<String> _exportPageMarkdown() async {
-    final session = _requireSession();
-    final workspace = _requireWorkspace();
-    final bootstrap = _selectedBootstrap;
-    if (bootstrap == null) {
-      throw const ApiException('Open a page first.');
-    }
-    return _api.exportMarkdown(
-      session.accessToken,
-      workspace.id,
-      bootstrap.document.id,
-    );
-  }
-
   Future<Uint8List> _exportPageZip() async {
     final session = _requireSession();
     final workspace = _requireWorkspace();
@@ -1190,20 +1175,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  Future<String> _exportWorkspaceMarkdown() async {
+  Future<Uint8List> _exportFolderZip(DocumentView folder) async {
     final session = _requireSession();
     final workspace = _requireWorkspace();
-    return _api.exportWorkspaceMarkdown(session.accessToken, workspace.id);
+    return _api.exportFolderZip(session.accessToken, workspace.id, folder.id);
   }
 
   Future<Uint8List> _exportWorkspaceZip(String workspaceId) async {
     final session = _requireSession();
     return _api.exportWorkspaceZip(session.accessToken, workspaceId);
-  }
-
-  Future<String> _exportAllMarkdown() async {
-    final session = _requireSession();
-    return _api.exportAllMarkdown(session.accessToken);
   }
 
   Future<List<SearchResult>> _searchWorkspace(String query) async {
@@ -3363,6 +3343,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onCreateChildFolder: local
           ? (parent, name) => _localCreateFolder(name, parentViewId: parent.id)
           : _createChildFolder,
+      // Null in a local workspace: the archive is built server-side, and the
+      // menu entry hides itself rather than failing after the click.
+      onExportFolderZip: local ? null : _exportFolderZip,
       onReorderViews: local ? _localReorderViews : _reorderViews,
       onLoadTrash: local ? _localLoadTrash : _loadTrash,
       onRestoreView: local ? _localRestoreView : _restoreView,
@@ -3444,12 +3427,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       },
       onSearch: local ? (_) async => const <SearchResult>[] : _searchWorkspace,
       onOpenSearchResult: local ? (_) async {} : _openViewById,
-      onExportPageMarkdown: local ? () async => '' : _exportPageMarkdown,
-      onExportPageZip: local ? () async => Uint8List(0) : _exportPageZip,
+      // Local workspaces have no server to bundle the zip; SAY so rather than
+      // handing back Uint8List(0), which the caller happily saved as a 0-byte
+      // page.zip and called it a successful export.
+      onExportPageZip: local
+          ? () async => throw const ApiException('本地工作区暂不支持导出,请先上云')
+          : _exportPageZip,
       onImportMarkdown: local ? (_, _) async {} : _importMarkdownAsPage,
-      onExportWorkspaceMarkdown: local
-          ? () async => ''
-          : _exportWorkspaceMarkdown,
       onExportWorkspaceZip: local
           ? (_) async => Uint8List(0)
           : _exportWorkspaceZip,
@@ -3459,7 +3443,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onImportWorkspaceTreeInto: local
           ? _localImportVaultTree
           : _importTreeIntoWorkspace,
-      onExportAllMarkdown: local ? () async => '' : _exportAllMarkdown,
       onExportMarkdown: local ? () async {} : _exportSelectedMarkdown,
       onAddMember: local ? (_, _) async {} : _addWorkspaceMember,
       onUpdateMember: local ? (_, _) async {} : _updateWorkspaceMember,
@@ -3723,6 +3706,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onCreateChildDocument,
     required this.onCreateFolder,
     required this.onCreateChildFolder,
+    this.onExportFolderZip,
     required this.onReorderViews,
     required this.onLoadTrash,
     required this.onRestoreView,
@@ -3769,14 +3753,11 @@ class WorkspaceView extends StatefulWidget {
     required this.onAppearanceChanged,
     required this.onSearch,
     required this.onOpenSearchResult,
-    required this.onExportPageMarkdown,
     required this.onExportPageZip,
     required this.onImportMarkdown,
-    required this.onExportWorkspaceMarkdown,
     required this.onExportWorkspaceZip,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
-    required this.onExportAllMarkdown,
     required this.onExportMarkdown,
     required this.onAddMember,
     required this.onUpdateMember,
@@ -3848,6 +3829,9 @@ class WorkspaceView extends StatefulWidget {
   final Future<String?> Function(String name) onCreateFolder;
   final Future<String?> Function(DocumentView parent, String name)
   onCreateChildFolder;
+
+  /// Export a folder's subtree as a ZIP. Null (local workspace) hides the entry.
+  final Future<Uint8List> Function(DocumentView folder)? onExportFolderZip;
   final Future<void> Function(String? parentViewId, List<DocumentView> ordered)
   onReorderViews;
   final Future<List<DocumentView>> Function() onLoadTrash;
@@ -3922,17 +3906,14 @@ class WorkspaceView extends StatefulWidget {
   onAppearanceChanged;
   final Future<List<SearchResult>> Function(String query) onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
-  final Future<String> Function() onExportPageMarkdown;
   final Future<Uint8List> Function() onExportPageZip;
   final Future<void> Function(String fileName, String markdown)
   onImportMarkdown;
-  final Future<String> Function() onExportWorkspaceMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   onImportWorkspaceTreeInto;
-  final Future<String> Function() onExportAllMarkdown;
   final Future<void> Function() onExportMarkdown;
   final Future<void> Function(String email, WorkspaceRole role) onAddMember;
   final Future<void> Function(WorkspaceMember member, WorkspaceRole role)
@@ -4629,6 +4610,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               () => widget.onCreateChildFolder(item.view, '新文件夹'),
             );
           },
+          onExportFolder: widget.onExportFolderZip == null
+              ? null
+              : () => _exportFolderFile(item.view),
           onRename: () => _beginRename(item.view),
           onRenameSubmit: (name) => _commitRename(item.view, name),
           onRenameCancel: _cancelRename,
@@ -5241,22 +5225,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         icon: const Icon(Icons.expand_more),
                         onSelected: _onPageMenu,
                         itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'export-md',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: Icon(Icons.download_outlined),
-                              title: Text('Export Markdown'),
-                            ),
-                          ),
+                          // One export, always a ZIP. The old "Export Markdown"
+                          // handed back a lone .md whose images pointed at
+                          // `![](photo.png)` — a file that was nowhere in the
+                          // download. A zip can carry them; a .md cannot.
                           const PopupMenuItem(
                             value: 'export-zip',
                             child: ListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: Icon(Icons.folder_zip_outlined),
-                              title: Text('Export ZIP (with images)'),
+                              title: Text('导出(ZIP,含图片)'),
                             ),
                           ),
                           const PopupMenuDivider(),
@@ -5886,10 +5865,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Page title menu: Markdown export/import + ZIP export.
   Future<void> _onPageMenu(String value) async {
     switch (value) {
-      case 'export-md':
-        await _downloadPageMarkdown();
       case 'export-zip':
-        await _onExport('page-zip');
+        await _exportPageFile();
       case 'import-md':
         await _importMarkdownFile();
       case 'restore-checkpoint':
@@ -5919,17 +5896,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  Future<void> _downloadPageMarkdown() async {
+
+  Future<void> _importMarkdownFile() async {
+    final picked = await pickTextFile();
+    if (picked == null || !mounted) return;
+    await widget.onImportMarkdown(picked.name, picked.text);
+  }
+
+  /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
+  /// Export one folder's subtree as a ZIP, named after the folder.
+  Future<void> _exportFolderFile(DocumentView view) async {
+    final export = widget.onExportFolderZip;
+    if (export == null) return;
     try {
-      final markdown = await widget.onExportPageMarkdown();
-      final title = _pageTitle.text.trim().isEmpty
-          ? 'page'
-          : _pageTitle.text.trim();
-      downloadImage(
-        Uint8List.fromList(utf8.encode(markdown)),
-        '$title.md',
-        'text/markdown',
-      );
+      final bytes = await export(view);
+      if (bytes.isEmpty) throw const ApiException('导出返回了空内容');
+      final name = view.name.trim().isEmpty ? 'folder' : view.name.trim();
+      downloadImage(bytes, '$name.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -5939,16 +5922,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  Future<void> _importMarkdownFile() async {
-    final picked = await pickTextFile();
-    if (picked == null || !mounted) return;
-    await widget.onImportMarkdown(picked.name, picked.text);
-  }
-
-  /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
   Future<void> _exportWorkspaceFile(WorkspaceEntry entry) async {
     try {
       final bytes = await widget.onExportEntryZip(entry);
+      // Same guard as the page/folder exports: an empty archive is a failure,
+      // not a file worth saving.
+      if (bytes.isEmpty) throw const ApiException('导出返回了空内容');
       final name = entry.workspace.name.trim().isEmpty
           ? 'workspace'
           : entry.workspace.name.trim();
@@ -5962,41 +5941,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  Future<void> _onExport(String kind) async {
-    if (kind == 'page-zip') {
-      try {
-        final bytes = await widget.onExportPageZip();
-        downloadImage(bytes, 'page.zip', 'application/zip');
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
-        }
-      }
-      return;
-    }
-    final (title, future) = switch (kind) {
-      'page' => ('Export current page', widget.onExportPageMarkdown()),
-      'workspace' => ('Export workspace', widget.onExportWorkspaceMarkdown()),
-      _ => ('Export all workspaces', widget.onExportAllMarkdown()),
-    };
-    String markdown;
+  /// Export the open page as a ZIP (markdown + its images under `assets/`).
+  /// There is no markdown-only export any more: a lone .md silently dropped
+  /// every image, emitting `![](photo.png)` for a file it never handed over.
+  Future<void> _exportPageFile() async {
     try {
-      markdown = await future;
+      final bytes = await widget.onExportPageZip();
+      // Never write an empty archive and call it success — that's how the
+      // local-workspace stub used to produce a 0-byte page.zip silently.
+      if (bytes.isEmpty) throw const ApiException('导出返回了空内容');
+      downloadImage(bytes, 'page.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
       }
-      return;
     }
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => _ExportDialog(title: title, markdown: markdown),
-    );
   }
 
   void _openSearch() {

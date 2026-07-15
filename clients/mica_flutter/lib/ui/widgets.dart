@@ -658,6 +658,7 @@ class DocumentListItem extends StatefulWidget {
     required this.onPressed,
     required this.onCreateChild,
     required this.onCreateChildFolder,
+    this.onExportFolder,
     required this.onRename,
     required this.onRenameSubmit,
     required this.onRenameCancel,
@@ -682,6 +683,10 @@ class DocumentListItem extends StatefulWidget {
   final VoidCallback onPressed;
   final VoidCallback onCreateChild;
   final VoidCallback onCreateChildFolder;
+
+  /// Export this folder's subtree as a ZIP. Null hides the entry — local
+  /// workspaces have no server to build the archive.
+  final VoidCallback? onExportFolder;
   final VoidCallback onRename;
 
   /// Commit the inline-edited name (Enter or blur); cancel on Esc.
@@ -832,6 +837,16 @@ class _DocumentListItemState extends State<DocumentListItem> {
               label: widget.isCollapsed ? '展开子项' : '收起子项',
             ),
           ),
+        // Folder subtree -> ZIP, same as a page or a workspace. Every level
+        // exports the same way and carries its images; see onExportFolder.
+        if (widget._isFolder && widget.onExportFolder != null)
+          const PopupMenuItem(
+            value: 'export',
+            child: _MenuRow(
+              icon: Icons.folder_zip_outlined,
+              label: '导出(ZIP,含图片)',
+            ),
+          ),
         const PopupMenuDivider(),
         const PopupMenuItem(
           value: 'delete',
@@ -853,6 +868,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
         widget.onRename();
       case 'toggle':
         widget.onToggle();
+      case 'export':
+        widget.onExportFolder?.call();
       case 'delete':
         widget.onDelete();
     }

@@ -1160,7 +1160,67 @@ pub async fn export_workspace_zip(
 ) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let entries = build_tree_zip(&state, workspace_id, None).await?;
+  Ok(zip_response(build_zip(&entries), "workspace.zip"))
+}
 
+/// `GET /api/workspaces/{workspace_id}/views/{view_id}/export.zip`
+///
+/// One folder's subtree as an archive — same shape as the workspace export
+/// (paths relative to the folder, shared `assets/`, `manifest.json`), so it
+/// imports back the same way. Every export level is a zip on purpose: a bare
+/// `.md` cannot carry the images, and used to emit `![](photo.png)` pointing at
+/// a file that was nowhere in the download.
+pub async fn export_folder_zip(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Response> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+
+  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+  let folder = views.iter().find(|v| v.id == view_id).ok_or(ApiError::NotFound)?;
+  if folder.object_type != "folder" {
+    return Err(ApiError::BadRequest(
+      "only a folder can be exported this way".to_string(),
+    ));
+  }
+  let filename = format!("{}.zip", zip_safe_name(&folder.name, "folder"));
+  let entries = build_tree_zip(&state, workspace_id, Some(view_id)).await?;
+  Ok(zip_response(build_zip(&entries), &filename))
+}
+
+/// A filename-safe rendition of a user-authored name, for the download's
+/// `Content-Disposition` (path separators / control chars must not escape it).
+fn zip_safe_name(name: &str, fallback: &str) -> String {
+  let cleaned: String = name
+    .chars()
+    .map(|c| {
+      if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+        '-'
+      } else {
+        c
+      }
+    })
+    .collect();
+  let cleaned = cleaned.trim().trim_matches('.').trim();
+  if cleaned.is_empty() {
+    fallback.to_string()
+  } else {
+    cleaned.chars().take(80).collect()
+  }
+}
+
+/// Build the archive entries for a subtree: [root] `None` = the whole
+/// workspace, `Some(view_id)` = that folder's children. Paths are relative to
+/// the root, image assets are de-duplicated into a shared `assets/`, and a
+/// `manifest.json` records the tree for round-tripping back through import.
+async fn build_tree_zip(
+  state: &AppState,
+  workspace_id: Uuid,
+  root: Option<Uuid>,
+) -> ApiResult<Vec<ZipEntry>> {
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
   let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
     std::collections::HashMap::new();
@@ -1171,7 +1231,9 @@ pub async fn export_workspace_zip(
     list.sort_by(|a, b| a.position.cmp(&b.position));
   }
   let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
-  collect_page_paths(&by_parent, None, &Vec::new(), &mut pages);
+  // Rooting the walk at a folder gives that subtree with paths relative to it —
+  // the same builder serves the whole workspace (`root: None`) and one folder.
+  collect_page_paths(&by_parent, root, &Vec::new(), &mut pages);
 
   let storage = state.storage.clone();
   let client = reqwest::Client::new();
@@ -1322,10 +1384,10 @@ pub async fn export_workspace_zip(
   if entries.is_empty() {
     entries.push(ZipEntry {
       name: "README.md".to_string(),
-      data: b"(empty workspace)".to_vec(),
+      data: b"(empty)".to_vec(),
     });
   }
-  Ok(zip_response(build_zip(&entries), "workspace.zip"))
+  Ok(entries)
 }
 
 /// Rewrite internal page links (`mica://page/<viewId>`) in link marks to
