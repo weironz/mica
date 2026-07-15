@@ -33,6 +33,7 @@ pub fn api_router() -> Router<AppState> {
     .route("/auth/register", post(auth::register))
     .route("/auth/login", post(auth::login))
     .route("/auth/refresh", post(auth::refresh))
+    .route("/auth/logout", post(auth::logout))
     .route("/auth/me", get(auth::me).patch(auth::update_me))
     .route("/auth/password", post(auth::change_password))
     .route(

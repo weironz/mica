@@ -516,7 +516,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         return;
       }
       try {
-        session = await _api.refreshSession(refreshToken);
+        // Through _refresher, not _api directly: it holds the single-flight
+        // latch, and startup restore can overlap with a _run() the user just
+        // triggered. Two refreshes of one token is what the server reads as
+        // theft — we would burn the session we came here to rescue.
+        session = await _refresher.ensureFresh(session) ?? session;
         if (!mounted) return;
         _persistSession(session);
       } on ApiException catch (error) {
@@ -3015,6 +3019,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Explicit sign-out: forget the stored credentials, then disconnect.
   void _signOut() {
+    // Tell the server first — clearing the local copy would otherwise leave the
+    // refresh token live for its full 30 days, so "sign out" would mean nothing
+    // to anyone holding a copy of it (a shared machine, a stolen backup).
+    // Fire-and-forget: signing out locally must not hinge on the network.
+    final refreshToken = _session?.refreshToken ?? '';
+    if (refreshToken.isNotEmpty) {
+      unawaited(_api.logout(refreshToken).catchError((_) {}));
+    }
     _clearPersistedSession();
     _disconnectCloudSession();
   }

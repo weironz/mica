@@ -50,6 +50,15 @@ class ApiClient {
     return AuthSession.fromJson(response);
   }
 
+  /// End a sign-in server-side. Best-effort: the caller is signing out either
+  /// way, so a failure here must not strand it — but without this the refresh
+  /// token stays live for its full 30 days, and "sign out" would mean nothing
+  /// to anyone holding a copy of it.
+  Future<void> logout(String refreshToken) async {
+    if (refreshToken.isEmpty) return;
+    await _post('/api/auth/logout', {'refresh_token': refreshToken});
+  }
+
   /// Trade a refresh token for a new session. Needs no access token — the whole
   /// point is that yours is dead.
   ///

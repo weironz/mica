@@ -315,10 +315,20 @@ pub async fn mint_refresh_token(
   let token = format!("{REFRESH_PREFIX}{secret}");
   let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
 
-  sqlx::query(
+  // Never mint into a family that has been revoked. `refresh` spends the old
+  // token and then mints the new one, so a replay burning the family in between
+  // would otherwise resurrect it with a live token. INSERT…SELECT…WHERE NOT
+  // EXISTS is one statement, so the check and the insert cannot be split.
+  //
+  // A fresh sign-in passes trivially: its family has no rows yet.
+  let inserted = sqlx::query(
     r#"
       INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
-      VALUES ($1, $2, $3, $4)
+      SELECT $1, $2, $3, $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM refresh_tokens
+        WHERE family_id = $3 AND revoked_at IS NOT NULL
+      )
     "#,
   )
   .bind(user_id)
@@ -327,6 +337,10 @@ pub async fn mint_refresh_token(
   .bind(expires_at)
   .execute(db)
   .await?;
+
+  if inserted.rows_affected() == 0 {
+    return Err(ApiError::Unauthorized);
+  }
 
   Ok(token)
 }
@@ -352,19 +366,23 @@ pub async fn rotate_refresh_token(
   .await?
   .ok_or(ApiError::Unauthorized)?;
 
+  // A fast, friendly rejection only. The UPDATE below is the authority for BOTH
+  // conditions — this snapshot is already stale by the time we act on it.
   if row.revoked_at.is_some() || row.expires_at <= Utc::now() {
     return Err(ApiError::Unauthorized);
   }
 
-  // Spend it. Conditional on still being unspent, so this doubles as the
-  // concurrency guard: of two simultaneous refreshes of the same token exactly
-  // one updates a row, and the loser falls into the replay branch below —
-  // Postgres decides, not a check-then-act we could lose.
+  // Spend it. Every condition that decides "may this token be spent" lives in
+  // the WHERE, so the decision is the UPDATE itself: of two simultaneous
+  // refreshes exactly one updates a row, and a family revoked concurrently (a
+  // replay landing between the SELECT and here) takes effect immediately rather
+  // than one rotation too late. Postgres decides — not a check-then-act we
+  // could lose. `revoked_at` was such a check-then-act until it moved here.
   let spent = sqlx::query(
     r#"
       UPDATE refresh_tokens
       SET used_at = now()
-      WHERE token_hash = $1 AND used_at IS NULL
+      WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL
     "#,
   )
   .bind(&token_hash)
@@ -406,6 +424,36 @@ pub async fn refresh(
   Ok(Json(
     auth_response_in_family(&state, user, family_id).await?,
   ))
+}
+
+/// `POST /api/auth/logout` — end this sign-in server-side.
+///
+/// Public, and takes only the refresh token: signing out must work even when
+/// the access token has already expired, and the token itself is the proof that
+/// the caller owns the session it is ending. Presenting someone else's would
+/// require already having stolen it — at which point they can end their own
+/// session, which is the worst they can do here.
+///
+/// Best-effort by design: an unknown/expired token is a 204, not a 404. The
+/// client is signing out either way and a failure would only strand it in a
+/// state it cannot leave.
+pub async fn logout(
+  State(state): State<AppState>,
+  Json(payload): Json<RefreshRequest>,
+) -> ApiResult<StatusCode> {
+  let family: Option<Uuid> =
+    sqlx::query_scalar("SELECT family_id FROM refresh_tokens WHERE token_hash = $1")
+      .bind(sha256_hex(&payload.refresh_token))
+      .fetch_optional(&state.db)
+      .await?;
+
+  // The whole family, not just this token: rotation means the sign-in is a
+  // chain, and leaving its other links alive would sign nothing out.
+  if let Some(family) = family {
+    revoke_family(&state.db, family).await?;
+  }
+
+  Ok(StatusCode::NO_CONTENT)
 }
 
 /// Burn every sign-in a user has, everywhere. The access tokens already issued
@@ -604,6 +652,10 @@ fn is_public(path: &str) -> bool {
     // silently 401'd the blob endpoint for a month (see below), so this is
     // pinned by a test rather than left to be rediscovered.
     || path.ends_with("/auth/refresh")
+    // Signing out must work with a dead access token — that is the normal case
+    // for someone who left the app closed. The refresh token in the body is the
+    // credential.
+    || path.ends_with("/auth/logout")
     || is_blob_path(path)
 }
 
@@ -977,6 +1029,107 @@ mod refresh_pg {
       rotate_refresh_token(&db, &bob_token).await.is_ok(),
       "one user changing their password must not sign out everyone else"
     );
+  }
+
+  #[tokio::test]
+  async fn a_revoked_family_can_never_be_minted_back_into() {
+    // `refresh` spends the old token and THEN mints the new one. A replay
+    // burning the family in between would otherwise leave a live token in a
+    // family that was just declared compromised — resurrecting it.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    revoke_family(&db, family).await.unwrap();
+
+    assert!(
+      mint_refresh_token(&db, DAY, user, family).await.is_err(),
+      "a dead family must stay dead"
+    );
+  }
+
+  #[tokio::test]
+  async fn spending_is_refused_the_moment_the_family_dies() {
+    // Spending checks `revoked_at` in the UPDATE's WHERE, not in an earlier
+    // SELECT: a snapshot read is a check-then-act, and a revoke landing between
+    // the two would let one more rotation slip through.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    let token = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    revoke_family(&db, family).await.unwrap();
+    assert!(rotate_refresh_token(&db, &token).await.is_err());
+
+    // Still unspent: refused, not consumed — the row is evidence, not a
+    // casualty.
+    let used: Option<Option<DateTime<Utc>>> =
+      sqlx::query_scalar("SELECT used_at FROM refresh_tokens WHERE token_hash = $1")
+        .bind(sha256_hex(&token))
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+    assert!(used.unwrap().is_none());
+  }
+
+  #[tokio::test]
+  async fn a_replay_racing_a_real_rotation_leaves_nothing_spendable() {
+    // The interleaving the reviewer named: an attacker replays a spent token
+    // (burning the family) at the same moment the honest client rotates its
+    // live one. However it interleaves, the family must end up with no
+    // spendable token — that is the invariant, not who wins.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+
+    let stolen = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+    rotate_refresh_token(&db, &stolen).await.unwrap(); // now spent
+    let live = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    let _ = tokio::join!(
+      rotate_refresh_token(&db, &stolen), // replay -> burns the family
+      rotate_refresh_token(&db, &live),   // honest client, racing it
+    );
+
+    let spendable: i64 = sqlx::query_scalar(
+      r#"
+        SELECT count(*) FROM refresh_tokens
+        WHERE family_id = $1 AND used_at IS NULL AND revoked_at IS NULL
+      "#,
+    )
+    .bind(family)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+      spendable, 0,
+      "a family declared compromised must not keep a usable token, whichever \
+       way the race fell"
+    );
+    assert!(rotate_refresh_token(&db, &live).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn logout_kills_the_family_the_token_belongs_to() {
+    // Signing out cleared only the client's own copy. Anyone holding a stolen
+    // one kept the account for 30 more days — and rotation meant they could
+    // roll it forward indefinitely.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let family = Uuid::new_v4();
+    let token = mint_refresh_token(&db, DAY, user, family).await.unwrap();
+
+    // What the handler does.
+    let found: Option<Uuid> =
+      sqlx::query_scalar("SELECT family_id FROM refresh_tokens WHERE token_hash = $1")
+        .bind(sha256_hex(&token))
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+    revoke_family(&db, found.unwrap()).await.unwrap();
+
+    assert!(rotate_refresh_token(&db, &token).await.is_err());
   }
 
   #[tokio::test]

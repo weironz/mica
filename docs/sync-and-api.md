@@ -45,10 +45,17 @@ an already-spent token and the server cannot tell "the client raced itself" from
 "someone stole this" — so it assumes the worse and **revokes the whole family**.
 The user signs in again; a thief gets nothing. (RFC 6819 §5.2.2.3.)
 
-Spending is a conditional `UPDATE ... WHERE used_at IS NULL`, not a read-then-write:
-that is what makes two concurrent refreshes resolve to exactly one winner, decided
-by Postgres. The **client** must therefore never run two refreshes at once either
-(see `SessionRefresher`) or it would burn its own session.
+Spending is one conditional `UPDATE ... WHERE used_at IS NULL AND revoked_at IS
+NULL`, not a read-then-write. **Every** condition that decides "may this be spent"
+has to live in that WHERE: two concurrent refreshes then resolve to exactly one
+winner, and a family revoked mid-request takes effect at once instead of one
+rotation too late. A preceding `SELECT` is a snapshot, and acting on it is a
+check-then-act you can lose. Minting is guarded the same way (`INSERT … WHERE NOT
+EXISTS (revoked in family)`), so a replay burning a family between the spend and
+the mint can't resurrect it.
+
+The **client** must never run two refreshes at once either (see
+`SessionRefresher`) or it would burn its own session.
 
 Changing a password revokes **all** of that user's families — people change
 passwords because they think someone else is in there, so the intruder's refresh
@@ -79,14 +86,18 @@ Preferred browser auth later:
 POST /api/auth/register
 POST /api/auth/login
 POST /api/auth/refresh   # public: {refresh_token} -> a new access+refresh pair
+POST /api/auth/logout    # public: {refresh_token} -> revokes that family. 204 always
 GET  /api/auth/me
 PATCH /api/auth/me
 POST /api/auth/password  # revokes every session of this user
 ```
 
-There is no `/logout`: signing out is a client-side drop of the pair. A server
-one would only matter for revoking OTHER devices, which nothing asks for yet;
-`revoke_user_sessions` is the piece that would back it.
+`/logout` revokes the whole family, not just the token presented — rotation makes
+a sign-in a chain, and leaving the other links alive would sign nothing out. It
+is public (you must be able to sign out with a dead access token) and always 204:
+the client is signing out either way, and failing would strand it in a state it
+cannot leave. Clearing only the client's copy — which is all sign-out used to do
+— left anyone holding a stolen copy with 30 more days, renewable indefinitely.
 
 ### Workspaces
 
