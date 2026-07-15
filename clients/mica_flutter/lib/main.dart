@@ -421,7 +421,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final parsed = Uri.tryParse(url.trim());
     if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) return;
     final normalized = parsed.toString();
-    if (normalized == _cloudOrigin) return;
+    if (normalized == _cloudOrigin) {
+      // Nothing to rebind — which never meant nothing to do. 本地模式 drops the
+      // session but leaves _cloudOrigin pointing here, so coming back lands on
+      // this branch with credentials sitting in prefs and no session to show
+      // for them. Returning early here is what made cloud → 本地模式 → cloud
+      // ask for a password.
+      if (_session == null) await _restoreSession();
+      return;
+    }
     _disconnectCloudSession(); // keep the old origin's stored credentials
     setState(() => _cloudOrigin = normalized);
     savePref('cloudOrigin', normalized);
