@@ -69,3 +69,4 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 - 编辑器:单 RenderBox 自绘画布(`render.dart`),marks-over-plain-text 模型,IME 走 TextInputClient;硬换行存储约定 = 文本里的 `\`+换行。
 - 块级嵌套是扁平模型:`data.indent`(列表层级)、`data.quote`/`qbreak`(引用深度/分组)、`data.li`(item 容器子块),HTML 导出端重建嵌套。
 - 代码字体:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。
+- 键盘快捷键清单见 **`docs/shortcuts.md`**(权威)。加/改快捷键三处同步:`editor.dart` key handler(编辑器)+ `main.dart` `_appShortcuts`(应用级)+ `dialogs.dart` `_shortcutsSection`(设置面板)+ 该文档。

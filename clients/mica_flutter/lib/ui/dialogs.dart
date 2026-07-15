@@ -1215,20 +1215,31 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     return [
       head('App'),
       row('Ctrl + N', 'New page'),
-      row('Ctrl + F', 'Search'),
+      row('Ctrl + F', 'Find in page'),
+      row('Ctrl + Shift + F', 'Search workspace'),
       row('Ctrl + ,', 'Open settings'),
       const SizedBox(height: 8),
-      head('Editor'),
+      head('Editor — format'),
       row('Ctrl + B', 'Bold'),
       row('Ctrl + I', 'Italic'),
       row('Ctrl + E', 'Inline code'),
       row('Ctrl + K', 'Link'),
+      row('Ctrl + Alt + 1…6', 'Heading 1–6'),
+      row('Ctrl + Alt + 0', 'Turn into text (paragraph)'),
+      row('Tab / Shift + Tab', 'Indent / outdent list item'),
+      const SizedBox(height: 8),
+      head('Editor — edit'),
       row('Ctrl + Z', 'Undo'),
       row('Ctrl + Shift + Z', 'Redo'),
-      row('Tab / Shift + Tab', 'Indent / outdent'),
+      row('Ctrl + A', 'Select all'),
+      row('Ctrl + C / X / V', 'Copy / Cut / Paste'),
+      row('Ctrl + Shift + V', 'Paste as plain text'),
       row('/', 'Slash command menu'),
       const SizedBox(height: 12),
       Text(
+        'On macOS use ⌘ in place of Ctrl. Heading shortcuts follow the '
+        'Notion/Word convention (Ctrl+Alt+N) — the web build can’t see a bare '
+        'Ctrl+N, which the browser owns for tab switching.\n'
         'Note: Ctrl+, can be swallowed by a Chinese IME (punctuation toggle); '
         'switch to English input if it doesn’t respond.',
         style: Theme.of(
