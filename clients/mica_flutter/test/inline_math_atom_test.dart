@@ -30,6 +30,17 @@ void main() {
     test('no marks, no snap', () {
       expect(snapOutOfMathRun(const [], 3), 3);
     });
+
+    test('arrow-key crossing needs direction, not nearest-edge', () {
+      // The trap (run is [2,7)): caret at run.start 2, press Right → target 3
+      // (inside). Nearest-edge snap pulls 3 back to 2 (1 away, vs 4 to the end)
+      // — the caret never leaves the formula's left side. _moveHorizontal must
+      // snap toward travel instead: Right → run.end, Left → run.start.
+      expect(snapOutOfMathRun(marks, 3), 2, reason: 'nearest-edge alone stalls');
+      final run = mathRunAt(marks, 3)!;
+      expect(run.end, 7, reason: 'Right lands past the formula');
+      expect(run.start, 2, reason: 'Left lands before it');
+    });
   });
 
   group('delete-target lookups', () {

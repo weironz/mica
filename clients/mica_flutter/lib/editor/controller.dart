@@ -265,13 +265,29 @@ class EditorController extends ChangeNotifier {
           if (prefix > selS) prefix = selS;
           if (oldEnd < selE) oldEnd = selE;
         }
-        final shifted = shiftMarks(
+        var shifted = shiftMarks(
           marks,
           prefix,
           oldEnd,
           text.length - old.length,
           text.length,
         );
+        // Typing at a formula's LEADING edge must leave the character OUTSIDE
+        // the atom. shiftMarks pins a mark's start and pushes its end, so an
+        // insert at run.start swallows the char into the LaTeX (and strands the
+        // caret inside the run). Pull the run's start up to the caret so it
+        // covers only the original source again — the char lands before it.
+        final caret = selEnd.clamp(0, text.length);
+        final swallowed = mathRunAt(shifted, caret);
+        if (swallowed != null) {
+          shifted = [
+            for (final m in shifted)
+              if (identical(m, swallowed))
+                Mark(caret, m.end, m.type, href: m.href, title: m.title)
+              else
+                m,
+          ];
+        }
         node.data = {...node.data, 'marks': marksToJson(shifted)};
       }
     }
@@ -297,6 +313,14 @@ class EditorController extends ChangeNotifier {
     final node = nodes[i];
     final old = node.text;
     if (start < 0 || end > old.length || start >= end) return false;
+    // A math run must still cover exactly [start, end). The dialog captured
+    // these before awaiting; a concurrent remote edit could have shifted the
+    // source, and splicing blind would rewrite the wrong slice. Refuse rather
+    // than corrupt.
+    final hasRun = marksFromData(
+      node.data,
+    ).any((m) => m.type == 'math' && m.start == start && m.end == end);
+    if (!hasRun) return false;
     final newText = old.substring(0, start) + newSource + old.substring(end);
     final shifted = shiftMarks(
       marksFromData(node.data),

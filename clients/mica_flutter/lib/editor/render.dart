@@ -2197,9 +2197,11 @@ class RenderDocument extends RenderBox {
     final l = _layouts[pos.node];
     if (EditorNode.isAtomicKind(l.kind)) return null; // no inline caret
     final doc = pos.offset.clamp(0, _nodes[pos.node].text.length);
-    // The local caret's node is never folded (it is selection-active), but a
-    // REMOTE collaborator's caret can sit in a folded node — map it onto the
-    // placeholder's edge rather than into text that isn't displayed.
+    // Folding is unconditional now, so the caret's own node is folded too
+    // (local and remote alike). docToPainter maps the caret onto the
+    // placeholder's edge — run.start → leading, run.end → trailing — rather
+    // than into the collapsed source that isn't displayed. The caret only ever
+    // rests on those edges (setSelection snaps it out of a run's interior).
     final off = l.fold?.docToPainter(doc) ?? doc;
     final caret = l.painter.getOffsetForCaret(
       TextPosition(offset: off),

@@ -1983,6 +1983,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         target = DocPosition(cur.node + 1, 0);
       }
     }
+    // A typeset formula is one atom: step OVER it, to its far edge in the travel
+    // direction. Without this, target lands one char inside the run and
+    // setSelection's snap (nearest edge) pulls it back to the edge it came from
+    // — the caret would sit stuck at the formula's near side forever.
+    if (target.node == cur.node) {
+      final run = mathRunAt(
+        marksFromData(nodes[target.node].data),
+        target.offset,
+      );
+      if (run != null) {
+        target = target.withOffset(dir < 0 ? run.start : run.end);
+      }
+    }
     _apply(target, shift);
   }
 
@@ -4194,6 +4207,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// but writes back to the `[start, end)` run of node [i]. Empty source
   /// deletes the formula.
   Future<void> _editInlineMath(int i, int start, int end, String source) async {
+    if (i < 0 || i >= _controller.nodes.length) return;
+    // Capture the id: the dialog awaits, and a remote op could reorder nodes
+    // while it's open, leaving the index pointing at a different block.
+    final nodeId = _controller.nodes[i].id;
     final controller = TextEditingController(text: source);
     final edited = await showDialog<String>(
       context: context,
@@ -4227,15 +4244,27 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
     controller.dispose();
     if (edited == null) return;
-    // Re-read the run: the dialog was modal, but stay defensive.
-    if (i < 0 || i >= _controller.nodes.length) return;
+    // Resolve the node by id, not the stale index (see capture above). Bail if
+    // it's gone, or if the run no longer covers [start, end) — a concurrent
+    // edit could have shifted the source out from under us.
+    final j = _controller.nodes.indexWhere((n) => n.id == nodeId);
+    if (j < 0) return;
     _controller.setInlineMathSource(
-      i,
+      j,
       start,
       end,
       _stripMathDelimiters(edited).trim(),
     );
-    _syncImeFromSelection(force: true);
+    // Sync IME on the NEXT frame, not here: when showDialog's future resolves,
+    // the popped dialog route is still deactivating, and pushing editing state
+    // into the input connection synchronously trips framework.dart's
+    // `_dependents.isEmpty` assert (a debug-only crash — release swallows it,
+    // which is why the web build never showed it). The block-math editor dodges
+    // this only because its node is atomic and never syncs IME; every other
+    // caret-moving call site is safe because none runs mid-route-teardown.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncImeFromSelection(force: true);
+    });
   }
 
   /// LaTeX sources are stored bare; users habitually paste `$$…$$`-wrapped
