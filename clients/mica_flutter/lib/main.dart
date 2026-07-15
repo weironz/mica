@@ -24,6 +24,7 @@ import 'window_setup.dart';
 import 'upload/zip_writer.dart';
 import 'api/client.dart';
 import 'api/models.dart';
+import 'api/session_refresher.dart';
 import 'api/sync_client.dart';
 
 // The API/data layer lives in lib/api/*.dart; re-export it so existing
@@ -58,24 +59,6 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
 const String kAppVersion = '0.5.0';
 
-/// The `exp` (expiry) claim of a JWT as a UTC time, or null if it can't be
-/// parsed. Used to cheaply reject an expired persisted token on startup before
-/// hitting the network.
-DateTime? jwtExpiry(String token) {
-  try {
-    final parts = token.split('.');
-    if (parts.length != 3) return null;
-    var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
-    payload = payload.padRight((payload.length + 3) ~/ 4 * 4, '=');
-    final map =
-        jsonDecode(utf8.decode(base64.decode(payload))) as Map<String, dynamic>;
-    final exp = map['exp'];
-    if (exp is! int) return null;
-    return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
-  } catch (_) {
-    return null;
-  }
-}
 
 /// One-time migration (P3c-2) of the legacy world-switch prefs
 /// (`serverMode`/`serverUrl`, the pre-P3 ServerMode model) into the dissolved
@@ -431,15 +414,58 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void _persistSession(AuthSession session) {
     savePref('authToken:$_cloudOrigin', session.accessToken);
     savePref('authUser:$_cloudOrigin', jsonEncode(session.user.toJson()));
+    // The refresh token rotates on every use, so this write is what keeps the
+    // sign-in alive across a restart: persist the replacement or the next launch
+    // spends a burnt token and the user is bounced to the login screen.
+    savePref('refreshToken:$_cloudOrigin', session.refreshToken);
   }
 
   void _clearPersistedSession() {
     savePref('authToken:$_cloudOrigin', '');
     savePref('authUser:$_cloudOrigin', '');
+    savePref('refreshToken:$_cloudOrigin', '');
     // Also clear the legacy single-key copies so an explicit sign-out can't be
     // resurrected by a future migration re-run.
     savePref('authToken', '');
     savePref('authUser', '');
+  }
+
+  /// Renews the access token before it lapses. See [SessionRefresher] for the
+  /// two rules it exists to enforce (renew early; never two at once).
+  late final SessionRefresher _refresher = SessionRefresher(
+    refresh: (token) => _api.refreshSession(token),
+  );
+
+  Future<void> _ensureFreshSession() async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final next = await _refresher.ensureFresh(session);
+      if (next == null || !mounted) return;
+      setState(() => _session = next);
+      // Persist immediately: the refresh token just rotated, and the copy on
+      // disk is now burnt. Losing this write costs the sign-in at next launch.
+      _persistSession(next);
+    } on ApiException catch (error) {
+      // The server refused the refresh token: 30 days idle, revoked, or its
+      // family burnt by reuse detection. Nothing to recover — say so, rather
+      // than firing doomed requests and leaving the user at `unauthorized`.
+      if (error.isUnauthorized) _endExpiredSession();
+    } catch (_) {
+      // Offline / server down: keep the session. The token may well still be
+      // good, and local-first means there is work to do without a network.
+    }
+  }
+
+  /// The sign-in is over and cannot be renewed. Drop it and say so plainly.
+  void _endExpiredSession() {
+    if (!mounted || _session == null) return;
+    _clearPersistedSession();
+    setState(() {
+      _session = null;
+      _message = '会话已过期,请重新登录';
+    });
+    _fallBackToLocalWorld();
   }
 
   /// Restore a persisted cloud/self-hosted session on startup so the user isn't
@@ -466,24 +492,49 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         userJson.isEmpty) {
       return;
     }
-    final exp = jwtExpiry(token);
-    if (exp != null && !exp.isAfter(DateTime.now().toUtc())) {
-      _clearPersistedSession();
-      _fallBackToLocalWorld();
-      return;
-    }
-    final AuthSession session;
+    final refreshToken = loadPref('refreshToken:$_cloudOrigin') ?? '';
+    AuthSession session;
     try {
       session = AuthSession(
         accessToken: token,
+        refreshToken: refreshToken,
         user: User.fromJson(jsonDecode(userJson) as Map<String, dynamic>),
       );
     } catch (_) {
       _clearPersistedSession();
       return;
     }
+
+    // The access token died while the app was closed — which, at a 24h TTL, is
+    // most mornings. With a refresh token that is a non-event; without one (an
+    // older server, or 30 days idle) the sign-in really is over.
+    final exp = jwtExpiry(token);
+    if (exp != null && !exp.isAfter(DateTime.now().toUtc())) {
+      if (refreshToken.isEmpty) {
+        _clearPersistedSession();
+        _fallBackToLocalWorld();
+        return;
+      }
+      try {
+        session = await _api.refreshSession(refreshToken);
+        if (!mounted) return;
+        _persistSession(session);
+      } on ApiException catch (error) {
+        if (error.isUnauthorized) {
+          _clearPersistedSession();
+          _fallBackToLocalWorld();
+        }
+        // Anything else (server down) keeps the session for the next launch.
+        return;
+      } catch (_) {
+        return; // offline: try again next launch, don't destroy credentials
+      }
+    }
     try {
-      final workspaces = await _api.listWorkspaces(token);
+      // `session.accessToken`, not the `token` we loaded: a refresh above
+      // replaced it, and spending the dead one here would 401 and throw the
+      // freshly-renewed sign-in away.
+      final workspaces = await _api.listWorkspaces(session.accessToken);
       if (!mounted) return;
       setState(() {
         _session = session;
@@ -501,7 +552,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     } catch (error) {
       if (!mounted) return;
       // Revoked/invalid token → drop it; desktop falls back to the local world.
-      if (error.toString().toLowerCase().contains('unauthorized')) {
+      // Keyed on the status, not on the message text: sniffing for the word
+      // "unauthorized" both missed 401s worded differently and would fire on a
+      // 400 that merely mentioned the word.
+      if (error is ApiException && error.isUnauthorized) {
         _clearPersistedSession();
         _fallBackToLocalWorld();
         return;
@@ -521,8 +575,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
 
     try {
+      // Renew first if the token is about to lapse. Proactive rather than
+      // retry-on-401 on purpose: [action] is not generally idempotent (it may
+      // create a document), so replaying one after a refresh could duplicate
+      // work. Renewing beforehand means it never gets refused in the first place.
+      await _ensureFreshSession();
       await action();
       _reconcileSync();
+    } on ApiException catch (error) {
+      // A 401 that survived the renewal above: revoked, or the server's JWT
+      // secret rotated. The session is unusable — say so instead of parroting
+      // the server's bare `unauthorized`, which told the user nothing and left
+      // the local mirror rendering a half-dead page that merely looked broken.
+      if (error.isUnauthorized && _session != null) {
+        _endExpiredSession();
+      } else {
+        setState(() => _message = error.toString());
+      }
     } catch (error) {
       setState(() {
         _message = error.toString();
@@ -1207,7 +1276,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _requireSession();
     final user = await _api.updateMe(session.accessToken, displayName);
     if (mounted) {
-      final updated = AuthSession(accessToken: session.accessToken, user: user);
+      // copyWith, not a fresh AuthSession: rebuilding it here dropped the
+      // refresh token to '' — renaming yourself would quietly cost you the
+      // ability to renew, and you'd be signed out that night.
+      final updated = session.copyWith(user: user);
       setState(() => _session = updated);
       _persistSession(updated); // keep the saved display name fresh for restart
     }

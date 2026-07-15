@@ -2,6 +2,8 @@
 // views, documents, blocks, presence. Pure data — no widgets, no I/O.
 // Extracted from main.dart (2026-07) and re-exported by it, so existing
 // `import 'main.dart'` users keep seeing these symbols.
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../local/local_offline.dart' show CloudPageTreeCache;
@@ -99,17 +101,65 @@ class UploadedFile {
 }
 
 class AuthSession {
-  const AuthSession({required this.accessToken, required this.user});
+  const AuthSession({
+    required this.accessToken,
+    required this.user,
+    this.refreshToken = '',
+  });
 
   factory AuthSession.fromJson(Map<String, dynamic> json) {
     return AuthSession(
       accessToken: json['access_token'] as String,
+      // Absent when talking to a server older than refresh tokens: the session
+      // then behaves exactly as it always did — good until the access token
+      // expires, then a re-login.
+      refreshToken: (json['refresh_token'] as String?) ?? '',
       user: User.fromJson(json['user'] as Map<String, dynamic>),
     );
   }
 
   final String accessToken;
+
+  /// Spends on `/auth/refresh` for a fresh [accessToken]. **Single-use**: the
+  /// server rotates it on every refresh and treats a second spend of the same
+  /// token as a theft, killing the whole sign-in. So whoever refreshes must
+  /// persist the replacement, and only one refresh may ever be in flight.
+  final String refreshToken;
+
   final User user;
+
+  /// When [accessToken] dies, read from the token itself rather than kept as
+  /// separate state that could drift from it.
+  DateTime? get expiresAt => jwtExpiry(accessToken);
+
+  AuthSession copyWith({String? accessToken, String? refreshToken, User? user}) {
+    return AuthSession(
+      accessToken: accessToken ?? this.accessToken,
+      refreshToken: refreshToken ?? this.refreshToken,
+      user: user ?? this.user,
+    );
+  }
+}
+
+/// The `exp` claim of a JWT, or null if it has none / isn't one.
+///
+/// Not a security check — anyone can write any `exp` — the server is what
+/// enforces it. This is only so the client can renew *before* being refused,
+/// instead of discovering the expiry as a failed request.
+DateTime? jwtExpiry(String token) {
+  try {
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+    payload = payload.padRight((payload.length + 3) ~/ 4 * 4, '=');
+    final map =
+        jsonDecode(utf8.decode(base64.decode(payload))) as Map<String, dynamic>;
+    final exp = map['exp'];
+    if (exp is! int) return null;
+    return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+  } catch (_) {
+    return null;
+  }
 }
 
 class User {
@@ -565,9 +615,22 @@ class DocumentSnapshot {
 }
 
 class ApiException implements Exception {
-  const ApiException(this.message);
+  const ApiException(this.message, {this.statusCode});
 
   final String message;
+
+  /// The HTTP status, when the failure came from a response. Null for the
+  /// hand-thrown cases (no server involved).
+  ///
+  /// Carried because the server's *message* is not something a person should be
+  /// shown or reasoned about: dropping the status is why an expired session
+  /// surfaced as a bare `unauthorized` banner with no hint that signing in again
+  /// was the fix.
+  final int? statusCode;
+
+  /// The session is gone (expired / revoked / the JWT secret rotated), as
+  /// opposed to any other failure. See `_MicaAppState._endExpiredSession`.
+  bool get isUnauthorized => statusCode == 401;
 
   @override
   String toString() => message;

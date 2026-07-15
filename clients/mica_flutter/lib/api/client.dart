@@ -50,6 +50,20 @@ class ApiClient {
     return AuthSession.fromJson(response);
   }
 
+  /// Trade a refresh token for a new session. Needs no access token — the whole
+  /// point is that yours is dead.
+  ///
+  /// The returned session carries a NEW refresh token: the server rotates on
+  /// every refresh and treats a second spend of the old one as theft, killing
+  /// the sign-in. So the caller must persist what comes back, and must never
+  /// run two of these at once — see `_MicaAppState._refreshSession`.
+  Future<AuthSession> refreshSession(String refreshToken) async {
+    final response = await _post('/api/auth/refresh', {
+      'refresh_token': refreshToken,
+    });
+    return AuthSession.fromJson(response);
+  }
+
   Future<List<Map<String, dynamic>>> listTokens(String token) async {
     final response = await _get('/api/auth/tokens', token);
     return (response['tokens'] as List<dynamic>).cast<Map<String, dynamic>>();
@@ -677,7 +691,7 @@ class ApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final message =
           body['message'] as String? ?? 'HTTP ${response.statusCode}';
-      throw ApiException(message);
+      throw ApiException(message, statusCode: response.statusCode);
     }
     return body;
   }
