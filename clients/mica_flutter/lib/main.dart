@@ -59,7 +59,6 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
 const String kAppVersion = '0.5.1';
 
-
 /// One-time migration (P3c-2) of the legacy world-switch prefs
 /// (`serverMode`/`serverUrl`, the pre-P3 ServerMode model) into the dissolved
 /// model: which cloud server is configured ([cloudOrigin]) and which world
@@ -285,8 +284,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // restored when one was persisted. The active world comes from the
     // persisted `activeOrigin` (written by the P3c-2 legacy migration in
     // _loadPrefs on first run).
-    _activeOrigin = loadPref('activeOrigin') ??
-        (_local.available ? 'local' : _cloudOrigin);
+    _activeOrigin =
+        loadPref('activeOrigin') ?? (_local.available ? 'local' : _cloudOrigin);
     if (!_local.available && _activeOrigin == 'local') {
       // Web has no local world — the cloud origin is the only one.
       _activeOrigin = _cloudOrigin;
@@ -493,7 +492,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _showFormatBar = loadPref('showFormatBar') == 'true';
     _showPageTitle = loadPref('showPageTitle') != 'false';
     _aiEnabled = loadPref('aiEnabled') == 'true';
-    if (!kIsWeb) _pending = PendingUploads.fromJson(loadPref('pendingBlobUploads'));
+    if (!kIsWeb)
+      _pending = PendingUploads.fromJson(loadPref('pendingBlobUploads'));
   }
 
   void _savePrefs() {
@@ -788,7 +788,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     if (clientId == null || !mounted) return;
     // The selection may have moved while we awaited the device id.
-    if (_selectedBootstrap?.document.id != documentId || _sync?.documentId != documentId) {
+    if (_selectedBootstrap?.document.id != documentId ||
+        _sync?.documentId != documentId) {
       return;
     }
     // C1: unacked local diffs persist per-document, so a crash / hard close
@@ -923,7 +924,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// it. Surfacing it to the user (a "sync paused — reload" banner) + resetting
   /// on recovery is B3, the next M-R item.
   void _onCloudSyncFault(String documentId, String reason, int count) {
-    debugPrint('[cloud-sync] integrity fault ($reason) on $documentId — #$count');
+    debugPrint(
+      '[cloud-sync] integrity fault ($reason) on $documentId — #$count',
+    );
     // The session auto-heals (capped re-bootstrap) for the first few consecutive
     // faults; past that it's genuinely stuck (B3). Surface it once so the user
     // knows edits may not be reaching the cloud — with a one-tap retry — instead
@@ -932,9 +935,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _syncBannerShown = true;
     ScaffoldMessenger.maybeOf(context)?.showMaterialBanner(
       MaterialBanner(
-        content: const Text(
-          '云同步已暂停，最近的编辑可能还没保存到云端。请重试或刷新页面。',
-        ),
+        content: const Text('云同步已暂停，最近的编辑可能还没保存到云端。请重试或刷新页面。'),
         leading: const Icon(Icons.cloud_off_outlined),
         actions: [
           TextButton(onPressed: _retryCloudSync, child: const Text('重试')),
@@ -949,7 +950,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void _clearSyncBanner() {
     if (!_syncBannerShown) return;
     _syncBannerShown = false;
-    if (mounted) ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
+    if (mounted)
+      ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
   }
 
   /// Retry a stuck cloud sync (B3): tear the session down and reconcile, which
@@ -1187,8 +1189,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // Auto-open the first DOCUMENT, never a folder (a folder has no mirrored
     // doc → blank editor + a folder wrongly highlighted as selected).
     final firstView = firstOpenableView(views);
-    final bootstrap =
-        firstView == null ? null : await _offlineCloudBootstrap(firstView);
+    final bootstrap = firstView == null
+        ? null
+        : await _offlineCloudBootstrap(firstView);
     if (!mounted) return;
     setState(() {
       _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
@@ -1962,12 +1965,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     position: v.position,
   );
 
-  Workspace _workspaceFromData(WorkspaceData w) => Workspace(
-    id: w.id,
-    name: w.name,
-    ownerId: 'local',
-    role: 'owner',
-  );
+  Workspace _workspaceFromData(WorkspaceData w) =>
+      Workspace(id: w.id, name: w.name, ownerId: 'local', role: 'owner');
 
   /// Reload the workspace list and keep (or re-anchor) the selection. The store
   /// always has at least one workspace.
@@ -2078,9 +2077,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _localCreateWorkspace(String name) async {
     final title = name.trim().isEmpty ? '工作区' : name.trim();
     final id = 'ws_${DateTime.now().microsecondsSinceEpoch}';
-    _local.saveWorkspace(
-      (id: id, name: title, position: _nextWorkspacePosition(), role: 'owner'),
-    );
+    _local.saveWorkspace((
+      id: id,
+      name: title,
+      position: _nextWorkspacePosition(),
+      role: 'owner',
+    ));
     if (!mounted) return;
     setState(() {
       _reloadLocalWorkspaces();
@@ -2113,13 +2115,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         .listWorkspaces()
         .firstWhere(
           (w) => w.id == workspace.id,
-          orElse: () =>
-              (id: workspace.id, name: title, position: '0000000010', role: 'owner'),
+          orElse: () => (
+            id: workspace.id,
+            name: title,
+            position: '0000000010',
+            role: 'owner',
+          ),
         )
         .position;
-    _local.saveWorkspace(
-      (id: workspace.id, name: title, position: pos, role: 'owner'),
-    );
+    _local.saveWorkspace((
+      id: workspace.id,
+      name: title,
+      position: pos,
+      role: 'owner',
+    ));
     if (mounted) {
       setState(() {
         _reloadLocalWorkspaces();
@@ -2156,7 +2165,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  Future<String?> _localCreateDocument(String name, {String? parentViewId}) async {
+  Future<String?> _localCreateDocument(
+    String name, {
+    String? parentViewId,
+  }) async {
     final title = name.trim().isEmpty ? kUntitledPage : name.trim();
     final created = _local.newDoc();
     final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
@@ -2189,7 +2201,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Create a local folder (pure container) — a view with object_type='folder'
   /// and no document. Not opened in the editor; pages are created under it.
-  Future<String?> _localCreateFolder(String name, {String? parentViewId}) async {
+  Future<String?> _localCreateFolder(
+    String name, {
+    String? parentViewId,
+  }) async {
     final title = name.trim().isEmpty ? '新文件夹' : name.trim();
     final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
     _local.saveView((
@@ -2377,8 +2392,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     setState(() {
       _reloadLocalWorkspaces();
-      _message =
-          '已把 “${entry.workspace.name}” 复制为本地工作区(${result.docs} 页有内容)。';
+      _message = '已把 “${entry.workspace.name}” 复制为本地工作区(${result.docs} 页有内容)。';
     });
     // Land in the fresh local copy.
     final target = _localWorkspaces
@@ -2415,8 +2429,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       for (final v in ordered) {
         final doc = _local.openDoc(v.objectId);
         if (doc == null) continue;
-        final cloudParent =
-            v.parentId == null ? null : localToCloudView[v.parentId];
+        final cloudParent = v.parentId == null
+            ? null
+            : localToCloudView[v.parentId];
         final created = await _api.createDocument(
           token,
           cloudWs.id,
@@ -2438,7 +2453,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             bytes: bytes,
           );
           idMap[sha] = up.id;
-          _local.putBlobAs(up.id, bytes); // mirror so the cloud copy renders offline
+          _local.putBlobAs(
+            up.id,
+            bytes,
+          ); // mirror so the cloud copy renders offline
         }
 
         // Faithfully replay the local tree onto the cloud doc's root.
@@ -2456,12 +2474,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         try {
           yrs.connect();
           await yrs.ready.timeout(const Duration(seconds: 20));
-          yrs.applyLocalOps(buildMigrationOps(
-            blocks: doc.blocks,
-            localRootId: doc.rootBlockId,
-            cloudRootId: yrs.rootBlockId,
-            idMap: idMap,
-          ));
+          yrs.applyLocalOps(
+            buildMigrationOps(
+              blocks: doc.blocks,
+              localRootId: doc.rootBlockId,
+              cloudRootId: yrs.rootBlockId,
+              idMap: idMap,
+            ),
+          );
           await yrs.drainOutbox();
         } finally {
           yrs.dispose();
@@ -2529,7 +2549,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   ///  - sign-in-and-migrate ([migrateWorkspace] set to a local workspace name):
   ///    the caller copies that local workspace to the cloud afterwards.
   /// Only the copy differs — the returned creds and the behavior are identical.
-  Future<(AuthMode, AuthFormValue)?> _promptCloudAuth({String? migrateWorkspace}) {
+  Future<(AuthMode, AuthFormValue)?> _promptCloudAuth({
+    String? migrateWorkspace,
+  }) {
     final migrate = migrateWorkspace != null;
     final email = TextEditingController();
     final name = TextEditingController();
@@ -2620,7 +2642,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Re-host an externally-pasted image URL into the local CAS by downloading it.
-  Future<({String fileId, String name})?> _localImportImageUrl(String url) async {
+  Future<({String fileId, String name})?> _localImportImageUrl(
+    String url,
+  ) async {
     try {
       final resp = await http.get(Uri.parse(url));
       if (resp.statusCode != 200) return null;
@@ -2799,7 +2823,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         if (!v.trashed) v.id,
     };
     final root = _local.listViews().where((v) => v.id == view.id).firstOrNull;
-    if (root != null && root.parentId != null && !active.contains(root.parentId)) {
+    if (root != null &&
+        root.parentId != null &&
+        !active.contains(root.parentId)) {
       _local.saveView((
         id: root.id,
         workspaceId: root.workspaceId,
@@ -2889,7 +2915,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     required String docId,
     required String name,
   }) {
-    if (_pending.add((sha: sha, workspaceId: workspaceId, docId: docId, name: name))) {
+    if (_pending.add((
+      sha: sha,
+      workspaceId: workspaceId,
+      docId: docId,
+      name: name,
+    ))) {
       savePref('pendingBlobUploads', _pending.toJson());
     }
   }
@@ -2907,7 +2938,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _session;
     final workspace = _selectedWorkspace;
     final cloud = _cloudSession;
-    if (session == null || workspace == null || cloud == null || !cloud.isReady) {
+    if (session == null ||
+        workspace == null ||
+        cloud == null ||
+        !cloud.isReady) {
       return;
     }
     final entries = _pending.forDoc(workspace.id, documentId);
@@ -2920,7 +2954,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         if (bytes == null) {
           // Bytes evicted from the CAS — unrecoverable; drop so we don't retry
           // forever.
-          if (_pending.remove(workspace.id, documentId, entry.sha)) changed = true;
+          if (_pending.remove(workspace.id, documentId, entry.sha))
+            changed = true;
           continue;
         }
         String uuid;
@@ -2946,7 +2981,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           toId: uuid,
         );
         if (ops.isNotEmpty) cloud.applyLocalOps(ops);
-        if (_pending.remove(workspace.id, documentId, entry.sha)) changed = true;
+        if (_pending.remove(workspace.id, documentId, entry.sha))
+          changed = true;
       }
       if (changed) {
         savePref('pendingBlobUploads', _pending.toJson());
@@ -3024,11 +3060,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return null;
     try {
-      final urls = await _api.resolveFiles(
-        session.accessToken,
-        workspace.id,
-        [key],
-      );
+      final urls = await _api.resolveFiles(session.accessToken, workspace.id, [
+        key,
+      ]);
       final url = urls[key];
       if (url == null) return null;
       final resp = await http.get(Uri.parse(url));
@@ -3234,7 +3268,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           id: w.id,
           name: w.name,
           position: ((i + 1) * 10).toString().padLeft(10, '0'),
-          role: w.role, // mirror the real role so offline editing knows its rights
+          role: w
+              .role, // mirror the real role so offline editing knows its rights
         ),
     ];
     final views = <ViewData>[
@@ -3278,8 +3313,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // doc → the editor would sit blank with a folder marked selected, and the
     // online path already skips folders — keep offline consistent).
     final firstView = firstOpenableView(views);
-    final bootstrap =
-        firstView == null ? null : await _offlineCloudBootstrap(firstView);
+    final bootstrap = firstView == null
+        ? null
+        : await _offlineCloudBootstrap(firstView);
     if (!mounted) return false;
     setState(() {
       _session = session;
@@ -3321,10 +3357,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<DocumentBootstrap?> _offlineCloudBootstrap(DocumentView view) async {
     // A folder has no document to open.
     if (view.objectType == 'folder') return null;
-    final data = _local.openCloudDocMirror(view.objectId) ??
+    final data =
+        _local.openCloudDocMirror(view.objectId) ??
         await openWebDocMirror(_cloudOrigin, view.objectId);
     if (data == null) return null;
-    return _localBootstrapFrom(view.objectId, data.rootBlockId, data.blocks, view);
+    return _localBootstrapFrom(
+      view.objectId,
+      data.rootBlockId,
+      data.blocks,
+      view,
+    );
   }
 
   // ── P3b: unified workspace layer ───────────────────────────────────────────
@@ -3365,8 +3407,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ? _localRenameWorkspace(e.workspace, name)
       : _renameWorkspace(e.workspace, name);
 
-  Future<void> _deleteEntry(WorkspaceEntry e) =>
-      e.isLocal ? _localDeleteWorkspace(e.workspace) : _deleteWorkspace(e.workspace);
+  Future<void> _deleteEntry(WorkspaceEntry e) => e.isLocal
+      ? _localDeleteWorkspace(e.workspace)
+      : _deleteWorkspace(e.workspace);
 
   Future<Uint8List> _exportEntryZip(WorkspaceEntry e) => e.isLocal
       ? Future.value(Uint8List(0)) // parity with the old local-shell stub
@@ -3463,10 +3506,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onExportEntryZip: _exportEntryZip,
       onImportTreeIntoEntry: _importTreeIntoEntry,
       onCreateWorkspaceTyped: _createWorkspaceTyped,
-      cloudOriginLabel:
-          _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
-              ? 'Mica Cloud'
-              : _api.baseUri.host,
+      cloudOriginLabel: _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
+          ? 'Mica Cloud'
+          : _api.baseUri.host,
       onSignIn: session == null ? _promptSignIn : null,
       localAvailable: _local.available,
       isBusy: local ? false : _isBusy,
@@ -3506,7 +3548,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onDeleteWorkspace: local ? _localDeleteWorkspace : _deleteWorkspace,
       onCreateDocument: local ? _localCreateDocument : _createDocument,
       onCreateChildDocument: local
-          ? (parent, name) => _localCreateDocument(name, parentViewId: parent.id)
+          ? (parent, name) =>
+                _localCreateDocument(name, parentViewId: parent.id)
           : _createChildDocument,
       onCreateFolder: local ? _localCreateFolder : _createFolder,
       onCreateChildFolder: local
@@ -3529,7 +3572,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateBlock: local ? (_, _, _) async {} : _updateBlock,
       onDeleteBlock: local ? (_) async {} : _deleteBlock,
       onMoveBlock: local ? (_, _) async {} : _moveBlock,
-      onApplyOperations: _applyEditorOperations, // P3d: one entry, self-dispatches
+      onApplyOperations:
+          _applyEditorOperations, // P3d: one entry, self-dispatches
       onUploadImage: local ? _localUploadImage : _uploadEditorImage,
       onImportImageUrl: local ? _localImportImageUrl : _importEditorImageUrl,
       onLoadImageBytes: local ? _localLoadImageBytes : _loadEditorImageBytes,
@@ -3674,7 +3718,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     return Scaffold(body: SafeArea(child: _unifiedWorkspaceView(session)));
   }
-
 }
 
 class SidePanel extends StatefulWidget {
@@ -4065,10 +4108,12 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String id)? onRevokeToken;
   final String userName;
   final String userEmail;
+
   /// Null in 本地模式 — no account there, so Settings drops the Account tab
   /// entirely rather than showing controls that do nothing.
   final Future<void> Function(String displayName)? onUpdateProfile;
   final Future<void> Function(String current, String next)? onChangePassword;
+
   /// The configured cloud server's origin URL (P3c-2) — Settings shows it and
   /// [onConnectCloud] switches it.
   final String cloudOrigin;
@@ -4355,36 +4400,35 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return CallbackShortcuts(
       bindings: _appShortcuts(),
       child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (_navCollapsed)
-          _collapsedNavRail(context)
-        else ...[
-          SizedBox(width: _navWidth, child: _navigationPane(context)),
-          _resizeHandle(
-            onDrag: (dx) => setState(() {
-              // Dragging takes manual control — stop auto-fitting from here on.
-              _navWidthManual = true;
-              _navWidth =
-                  (_navWidth + dx).clamp(_navWidthMin, _navWidthMax);
-            }),
-            onDragEnd: () {
-              savePref('navWidth', _navWidth.toStringAsFixed(1));
-              savePref('navWidthManual', 'true');
-            },
-          ),
-        ],
-        Expanded(child: _editorPane(context)),
-        if (_toolsExpanded) ...[
-          _resizeHandle(
-            onDrag: (dx) => setState(
-              () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_navCollapsed)
+            _collapsedNavRail(context)
+          else ...[
+            SizedBox(width: _navWidth, child: _navigationPane(context)),
+            _resizeHandle(
+              onDrag: (dx) => setState(() {
+                // Dragging takes manual control — stop auto-fitting from here on.
+                _navWidthManual = true;
+                _navWidth = (_navWidth + dx).clamp(_navWidthMin, _navWidthMax);
+              }),
+              onDragEnd: () {
+                savePref('navWidth', _navWidth.toStringAsFixed(1));
+                savePref('navWidthManual', 'true');
+              },
             ),
-          ),
-          SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
+          ],
+          Expanded(child: _editorPane(context)),
+          if (_toolsExpanded) ...[
+            _resizeHandle(
+              onDrag: (dx) => setState(
+                () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
+              ),
+            ),
+            SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
+          ],
         ],
-      ],
-    ),
+      ),
     );
   }
 
@@ -4403,8 +4447,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _openInPageFind,
       const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
           _openInPageFind,
-      const SingleActivator(LogicalKeyboardKey.keyF, control: true, shift: true):
-          _openSearch,
+      const SingleActivator(
+        LogicalKeyboardKey.keyF,
+        control: true,
+        shift: true,
+      ): _openSearch,
       const SingleActivator(LogicalKeyboardKey.keyF, meta: true, shift: true):
           _openSearch,
       // Ctrl+, is the convention (works on English layouts / macOS Cmd+,), but a
@@ -4413,7 +4460,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // reachable from the menu.
       const SingleActivator(LogicalKeyboardKey.comma, control: true):
           _openSettings,
-      const SingleActivator(LogicalKeyboardKey.comma, meta: true): _openSettings,
+      const SingleActivator(LogicalKeyboardKey.comma, meta: true):
+          _openSettings,
     };
   }
 
@@ -4477,10 +4525,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     tooltip: 'Collapse sidebar',
                     visualDensity: VisualDensity.compact,
                     onPressed: () => setState(() => _navCollapsed = true),
-                    icon: const Icon(
-                      Icons.view_sidebar_outlined,
-                      size: 20,
-                    ),
+                    icon: const Icon(Icons.view_sidebar_outlined, size: 20),
                   ),
                 ],
               ),
@@ -4793,7 +4838,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onToggle: () => _toggleViewExpand(item.view),
           onPressed: () => _navigateToView(item.view),
           onCreateChild: () {
-            setState(() => _expandForChildOf(item.view.id)); // reveal the new child
+            setState(
+              () => _expandForChildOf(item.view.id),
+            ); // reveal the new child
             _createThenRename(
               () => widget.onCreateChildDocument(item.view, kUntitledPage),
             );
@@ -5209,9 +5256,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             child: Icon(
               icon,
               size: 18,
-              color: active
-                  ? const Color(0xFF2563EB)
-                  : const Color(0xFF475569),
+              color: active ? const Color(0xFF2563EB) : const Color(0xFF475569),
             ),
           ),
         ),
@@ -5233,109 +5278,126 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // the table-cell editor's TextField — onTapOutside would unfocus/commit the
     // cell on pointer-down, so the command would land after the cell closed.
     return TextFieldTapRegion(
-        child: Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-      ),
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      // Align the buttons with the page's centered text column (not the pane
-      // edge): same horizontal padding + max width + left gutter as the body.
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 28),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: widget.pageWidth),
-            child: Padding(
-              padding: const EdgeInsets.only(left: EditorTheme.gutter),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-            btn(Icons.undo, 'Undo (Ctrl+Z)', h.undo),
-            btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
-            divider(),
-            btn(
-              Icons.notes,
-              'Text (Ctrl+Alt+0)',
-              () => h.setBlock('paragraph'),
-              active: k == 'paragraph',
-            ),
-            btn(
-              Icons.looks_one_outlined,
-              'Heading 1 (Ctrl+Alt+1)',
-              () => h.setBlock('heading', {'level': 1}),
-              active: onHeading(1),
-            ),
-            btn(
-              Icons.looks_two_outlined,
-              'Heading 2 (Ctrl+Alt+2)',
-              () => h.setBlock('heading', {'level': 2}),
-              active: onHeading(2),
-            ),
-            btn(
-              Icons.looks_3_outlined,
-              'Heading 3 (Ctrl+Alt+3)',
-              () => h.setBlock('heading', {'level': 3}),
-              active: onHeading(3),
-            ),
-            divider(),
-            btn(Icons.format_bold, 'Bold (Ctrl+B)', () => h.toggleMark('bold')),
-            btn(
-              Icons.format_italic,
-              'Italic (Ctrl+I)',
-              () => h.toggleMark('italic'),
-            ),
-            btn(
-              Icons.format_strikethrough,
-              'Strikethrough',
-              () => h.toggleMark('strike'),
-            ),
-            btn(Icons.code, 'Inline code (Ctrl+E)', () => h.toggleMark('code')),
-            btn(Icons.link, 'Link (Ctrl+K)', h.editLink),
-            divider(),
-            btn(
-              Icons.format_list_bulleted,
-              'Bulleted list',
-              () => h.setBlock('bulleted_list'),
-              active: k == 'bulleted_list',
-            ),
-            btn(
-              Icons.format_list_numbered,
-              'Numbered list',
-              () => h.setBlock('numbered_list'),
-              active: k == 'numbered_list',
-            ),
-            btn(
-              Icons.check_box_outlined,
-              'To-do list',
-              () => h.setBlock('todo', {'checked': false}),
-              active: k == 'todo',
-            ),
-            btn(
-              Icons.format_quote,
-              'Quote',
-              () => h.setBlock('quote'),
-              active: k == 'quote',
-            ),
-            btn(
-              Icons.terminal,
-              'Code block',
-              () => h.setBlock('code_block'),
-              active: k == 'code_block',
-            ),
-            divider(),
-            btn(Icons.horizontal_rule, 'Divider', () => h.insert('divider')),
-            btn(Icons.grid_on, 'Table', () => h.insert('table')),
-            btn(Icons.image_outlined, 'Image', () => h.insert('image')),
-                  ],
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        // Align the buttons with the page's centered text column (not the pane
+        // edge): same horizontal padding + max width + left gutter as the body.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: widget.pageWidth),
+              child: Padding(
+                padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      btn(Icons.undo, 'Undo (Ctrl+Z)', h.undo),
+                      btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
+                      divider(),
+                      btn(
+                        Icons.notes,
+                        'Text (Ctrl+Alt+0)',
+                        () => h.setBlock('paragraph'),
+                        active: k == 'paragraph',
+                      ),
+                      btn(
+                        Icons.looks_one_outlined,
+                        'Heading 1 (Ctrl+Alt+1)',
+                        () => h.setBlock('heading', {'level': 1}),
+                        active: onHeading(1),
+                      ),
+                      btn(
+                        Icons.looks_two_outlined,
+                        'Heading 2 (Ctrl+Alt+2)',
+                        () => h.setBlock('heading', {'level': 2}),
+                        active: onHeading(2),
+                      ),
+                      btn(
+                        Icons.looks_3_outlined,
+                        'Heading 3 (Ctrl+Alt+3)',
+                        () => h.setBlock('heading', {'level': 3}),
+                        active: onHeading(3),
+                      ),
+                      divider(),
+                      btn(
+                        Icons.format_bold,
+                        'Bold (Ctrl+B)',
+                        () => h.toggleMark('bold'),
+                      ),
+                      btn(
+                        Icons.format_italic,
+                        'Italic (Ctrl+I)',
+                        () => h.toggleMark('italic'),
+                      ),
+                      btn(
+                        Icons.format_strikethrough,
+                        'Strikethrough',
+                        () => h.toggleMark('strike'),
+                      ),
+                      btn(
+                        Icons.code,
+                        'Inline code (Ctrl+E)',
+                        () => h.toggleMark('code'),
+                      ),
+                      btn(Icons.link, 'Link (Ctrl+K)', h.editLink),
+                      divider(),
+                      btn(
+                        Icons.format_list_bulleted,
+                        'Bulleted list',
+                        () => h.setBlock('bulleted_list'),
+                        active: k == 'bulleted_list',
+                      ),
+                      btn(
+                        Icons.format_list_numbered,
+                        'Numbered list',
+                        () => h.setBlock('numbered_list'),
+                        active: k == 'numbered_list',
+                      ),
+                      btn(
+                        Icons.check_box_outlined,
+                        'To-do list',
+                        () => h.setBlock('todo', {'checked': false}),
+                        active: k == 'todo',
+                      ),
+                      btn(
+                        Icons.format_quote,
+                        'Quote',
+                        () => h.setBlock('quote'),
+                        active: k == 'quote',
+                      ),
+                      btn(
+                        Icons.terminal,
+                        'Code block',
+                        () => h.setBlock('code_block'),
+                        active: k == 'code_block',
+                      ),
+                      divider(),
+                      btn(
+                        Icons.horizontal_rule,
+                        'Divider',
+                        () => h.insert('divider'),
+                      ),
+                      btn(Icons.grid_on, 'Table', () => h.insert('table')),
+                      btn(
+                        Icons.image_outlined,
+                        'Image',
+                        () => h.insert('image'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
         ),
       ),
-    ));
+    );
   }
 
   Widget _editorScroll(
@@ -5494,7 +5556,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
                   child: MicaEditor(
-                    key: ValueKey('${bootstrap.document.id}#${widget.editorEpoch}'),
+                    key: ValueKey(
+                      '${bootstrap.document.id}#${widget.editorEpoch}',
+                    ),
                     focusNode: _editorFocus,
                     rootBlockId: bootstrap.document.rootBlockId,
                     nodes: [
@@ -5872,10 +5936,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     const SizedBox(height: 6),
                     const Text(
                       '登录后可创建云端工作区。',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF94A3B8),
-                      ),
+                      style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
                     ),
                   ],
                 ],
@@ -6089,7 +6150,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         if (ok == true) await restore();
     }
   }
-
 
   Future<void> _importMarkdownFile() async {
     final picked = await pickTextFile();

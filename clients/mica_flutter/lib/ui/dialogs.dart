@@ -225,6 +225,7 @@ class _SettingsDialog extends StatefulWidget {
 
   final String userName;
   final String userEmail;
+
   /// Null in 本地模式 — there is no account to edit, so the Account tab is not
   /// offered at all. Null, not a do-nothing function: the same distinction
   /// [onLoadTokens] already draws. A no-op here rendered a whole page of live
@@ -456,9 +457,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // user (auth.rs `revoke_user_sessions`) — this device included. Saying
       // "other devices" would be a lie, and the surprise would land later, when
       // this session quietly fails to renew.
-      setState(
-        () => _accountMsg = '密码已修改。所有设备(含这台)都需要重新登录。',
-      );
+      setState(() => _accountMsg = '密码已修改。所有设备(含这台)都需要重新登录。');
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -1103,11 +1102,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               labelText: '当前连接',
               border: OutlineInputBorder(),
               isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
             ),
             items: [
               for (final origin in widget.connections())
-                DropdownMenuItem(value: origin, child: _connectionLabel(origin)),
+                DropdownMenuItem(
+                  value: origin,
+                  child: _connectionLabel(origin),
+                ),
             ],
             onChanged: _serverSaving
                 ? null
