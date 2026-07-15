@@ -31,7 +31,9 @@ class EditorAppearance {
     final scaled = (base.fontSize ?? 16) * fontScale;
     return base.copyWith(
       fontSize: scaled,
-      fontFamily: (fontFamily != null && !isCode) ? fontFamily : base.fontFamily,
+      fontFamily: (fontFamily != null && !isCode)
+          ? fontFamily
+          : base.fontFamily,
       fontFamilyFallback: cjkFallback,
     );
   }
@@ -58,6 +60,7 @@ class EditorTheme {
   static const Color caret = Color(0xFF2563EB);
   static const Color selection = Color(0x332563EB);
   static const Color codeBg = Color(0xFFF4F4F6);
+
   /// Inline `code` span pill — a soft neutral chip behind the mono text (drawn
   /// in _paintInlineCode). Translucent so a text selection tints through it.
   static const Color inlineCodeBg = Color(0x1A64748B);
@@ -69,6 +72,9 @@ class EditorTheme {
 
   /// Pixel ratio formulas are rasterized at (capture and draw agree).
   static const double mathPixelRatio = 2.0;
+
+  /// Keep-off distance for the inline-math preview card (_paintMathPreview).
+  static const double mathCardMargin = 8.0;
 
   static const double caretWidth = 2;
   static const double bottomPad = 96;
@@ -88,17 +94,51 @@ class EditorTheme {
       case 'heading':
         switch (node.headingLevel) {
           case 1:
-            return const TextStyle(color: text, fontSize: 30, height: 1.3, fontWeight: FontWeight.w700, letterSpacing: -0.5);
+            return const TextStyle(
+              color: text,
+              fontSize: 30,
+              height: 1.3,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
+            );
           case 2:
-            return const TextStyle(color: text, fontSize: 24, height: 1.35, fontWeight: FontWeight.w700, letterSpacing: -0.3);
+            return const TextStyle(
+              color: text,
+              fontSize: 24,
+              height: 1.35,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.3,
+            );
           case 3:
-            return const TextStyle(color: text, fontSize: 20, height: 1.4, fontWeight: FontWeight.w600, letterSpacing: -0.2);
+            return const TextStyle(
+              color: text,
+              fontSize: 20,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.2,
+            );
           case 4:
-            return const TextStyle(color: text, fontSize: 18, height: 1.45, fontWeight: FontWeight.w600, letterSpacing: -0.1);
+            return const TextStyle(
+              color: text,
+              fontSize: 18,
+              height: 1.45,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.1,
+            );
           case 5:
-            return const TextStyle(color: text, fontSize: 16, height: 1.5, fontWeight: FontWeight.w600);
+            return const TextStyle(
+              color: text,
+              fontSize: 16,
+              height: 1.5,
+              fontWeight: FontWeight.w600,
+            );
           default: // H6 — smallest; a muted ink keeps it distinct from body.
-            return const TextStyle(color: muted, fontSize: 15, height: 1.5, fontWeight: FontWeight.w600);
+            return const TextStyle(
+              color: muted,
+              fontSize: 15,
+              height: 1.5,
+              fontWeight: FontWeight.w600,
+            );
         }
       case 'quote':
         // Upright, not italic: the left bar + muted ink already mark a quote
@@ -111,7 +151,12 @@ class EditorTheme {
         // in the gutter (see _paintNode), so the text itself stays plain.
         return const TextStyle(color: muted, fontSize: 13, height: 1.5);
       case 'code_block':
-        return const TextStyle(color: text, fontSize: 14, height: 1.5, fontFamily: kMonoFont);
+        return const TextStyle(
+          color: text,
+          fontSize: 14,
+          height: 1.5,
+          fontFamily: kMonoFont,
+        );
       case 'math_block':
         return const TextStyle(
           color: Color(0xFF7C3AED),
@@ -232,7 +277,8 @@ class _NodeLayout {
   Rect? addRowBar;
   Rect? tableHandle; // top-left block handle
   Rect? tableDelete; // top-right delete icon
-  Rect? tableGridRect; // the grid alone (no top gutter / bottom bar) — selection hugs this
+  Rect?
+  tableGridRect; // the grid alone (no top gutter / bottom bar) — selection hugs this
 
   // Image layout (kind == 'image'): the destination rect (local) the decoded
   // image (or its placeholder) is painted into, plus hover affordances.
@@ -253,7 +299,14 @@ const List<String> _imageActions = [
 
 /// One laid-out table cell.
 class _TableCell {
-  _TableCell(this.rect, this.painter, this.header, this.row, this.col, this.textAt);
+  _TableCell(
+    this.rect,
+    this.painter,
+    this.header,
+    this.row,
+    this.col,
+    this.textAt,
+  );
   final Rect rect; // full cell rect (local)
   final TextPainter painter;
   final bool header;
@@ -275,8 +328,10 @@ class _TableHover {
     this.onAddRow = false,
   });
   final int node;
-  final int? row; // hovered cell's row (or the row whose left handle is under it)
-  final int? col; // hovered cell's col (or the column whose top handle is under it)
+  final int?
+  row; // hovered cell's row (or the row whose left handle is under it)
+  final int?
+  col; // hovered cell's col (or the column whose top handle is under it)
   final bool onAddCol; // pointer sits on the add-column strip itself
   final bool onAddRow; // pointer sits on the add-row strip itself
 
@@ -453,7 +508,8 @@ class RenderDocument extends RenderBox {
   void replaceImage(String key, ui.Image frame) {
     final old = _images[key];
     _images[key] = frame;
-    if (old != null && (old.width != frame.width || old.height != frame.height)) {
+    if (old != null &&
+        (old.width != frame.width || old.height != frame.height)) {
       markNeedsLayout();
     } else {
       markNeedsPaint();
@@ -646,11 +702,15 @@ class RenderDocument extends RenderBox {
   /// The grab rect of block [i]'s drag handle (gutter rail, first line).
   Rect _handleRectFor(int i) {
     final l = _layouts[i];
-    final cy = l.painter.text != null && l.kind != 'divider' && l.kind != 'image'
+    final cy =
+        l.painter.text != null && l.kind != 'divider' && l.kind != 'image'
         ? l.textTop + l.painter.preferredLineHeight * 0.5
         : l.boxTop + (l.boxHeight < 40 ? l.boxHeight / 2 : 20.0);
     return Rect.fromCenter(
-        center: Offset(l.boxLeft - 12, cy), width: 18, height: 22);
+      center: Offset(l.boxLeft - 12, cy),
+      width: 18,
+      height: 22,
+    );
   }
 
   /// The block whose box contains [local], if any.
@@ -713,7 +773,9 @@ class RenderDocument extends RenderBox {
 
   @override
   void performLayout() {
-    final maxWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : 600.0;
+    final maxWidth = constraints.maxWidth.isFinite
+        ? constraints.maxWidth
+        : 600.0;
     for (final l in _layouts) {
       l.painter.dispose();
       for (final cell in l.tableCells) {
@@ -723,7 +785,8 @@ class RenderDocument extends RenderBox {
     _layouts.clear();
 
     final sel = _selection;
-    final caretKey = (sel != null && sel.isCollapsed && sel.focus.node < _nodes.length)
+    final caretKey =
+        (sel != null && sel.isCollapsed && sel.focus.node < _nodes.length)
         ? '${_nodes[sel.focus.node].id}:${sel.focus.offset}'
         : '';
     final caretMoved = caretKey != _lastCaretKey;
@@ -758,22 +821,28 @@ class RenderDocument extends RenderBox {
       // Item-child blocks (`data.li`) align under the owning item's text;
       // quoted blocks (`data.quote`) inset 16px per depth for the bars (the
       // `quote` kind's own leadingInset already covers the first bar).
-      final liInset =
-          node.liLevel != null ? 26.0 + 24.0 * node.liLevel! : 0.0;
+      final liInset = node.liLevel != null ? 26.0 + 24.0 * node.liLevel! : 0.0;
       final quoteExtra =
-          (16.0 * node.quoteDepth - (node.kind == 'quote' ? 16.0 : 0.0))
-              .clamp(0.0, double.infinity);
-      final contentLeft = EditorTheme.gutter +
+          (16.0 * node.quoteDepth - (node.kind == 'quote' ? 16.0 : 0.0)).clamp(
+            0.0,
+            double.infinity,
+          );
+      final contentLeft =
+          EditorTheme.gutter +
           EditorTheme.leadingInset(node.kind) +
           (node.isListKind ? 24.0 * node.indent : 0.0) +
           liInset +
           quoteExtra;
       final isCode = node.isCode;
-      final textWidth = (maxWidth - contentLeft - (isCode ? EditorTheme.codePadH : 0))
-          .clamp(0.0, double.infinity);
+      final textWidth =
+          (maxWidth - contentLeft - (isCode ? EditorTheme.codePadH : 0)).clamp(
+            0.0,
+            double.infinity,
+          );
 
-      final String? pinnedLang =
-          isCode ? canonicalCodeLanguage((node.data['language'] as String?) ?? '') : null;
+      final String? pinnedLang = isCode
+          ? canonicalCodeLanguage((node.data['language'] as String?) ?? '')
+          : null;
       final String? codeLang = isCode
           ? resolveCodeLanguage(node.text, node.data['language'] as String?)
           : null;
@@ -800,8 +869,7 @@ class RenderDocument extends RenderBox {
         ..boxLeft = EditorTheme.gutter + liInset
         ..todoChecked = node.todoChecked
         ..langText = codeLang ?? ''
-        ..langAuto =
-            isCode && (pinnedLang!.isEmpty || pinnedLang == 'auto')
+        ..langAuto = isCode && (pinnedLang!.isEmpty || pinnedLang == 'auto')
         ..footnoteLabel = node.kind == 'footnote_def'
             ? (node.data['label'] as String? ?? '')
             : ''
@@ -814,7 +882,8 @@ class RenderDocument extends RenderBox {
       layout.boxTop = y;
       layout.textTop = y + innerTop;
       layout.textHeight = painter.height;
-      layout.boxHeight = painter.height + (isCode ? 2 * EditorTheme.codePadV : 0);
+      layout.boxHeight =
+          painter.height + (isCode ? 2 * EditorTheme.codePadV : 0);
 
       if (node.isListKind) {
         final level = node.indent;
@@ -833,8 +902,7 @@ class RenderDocument extends RenderBox {
           // by bullets/code/quotes resumes (`<ol start>` semantics) instead
           // of restarting at 1.
           final start = (node.data['start'] as num?)?.toInt();
-          numberedCounters[level] =
-              start ?? (numberedCounters[level] + 1);
+          numberedCounters[level] = start ?? (numberedCounters[level] + 1);
           layout.ordinal = numberedCounters[level];
         } else if (numberedCounters.length > level) {
           numberedCounters.removeRange(level, numberedCounters.length);
@@ -848,15 +916,21 @@ class RenderDocument extends RenderBox {
         final lh = painter.preferredLineHeight;
         const box = 18.0;
         layout.checkbox = Rect.fromLTWH(
-            EditorTheme.gutter + 2, layout.textTop + (lh - box) / 2, box, box);
+          EditorTheme.gutter + 2,
+          layout.textTop + (lh - box) / 2,
+          box,
+          box,
+        );
       }
       if (isCode) {
         // Keep the caret visible by auto-scrolling the code horizontally — but
         // only when the caret actually moved, so blink/re-layout or a manual
         // scrollbar drag is never yanked back to the caret.
         // The current node's index is `_layouts.length` (not yet appended).
-        final visible = (maxWidth - contentLeft - EditorTheme.codePadH)
-            .clamp(0.0, double.infinity);
+        final visible = (maxWidth - contentLeft - EditorTheme.codePadH).clamp(
+          0.0,
+          double.infinity,
+        );
         var scroll = _codeScroll[node.id] ?? 0;
         if (caretMoved &&
             sel != null &&
@@ -864,14 +938,19 @@ class RenderDocument extends RenderBox {
             sel.focus.node == _layouts.length) {
           final caretX = painter
               .getOffsetForCaret(
-                TextPosition(offset: sel.focus.offset.clamp(0, node.text.length)),
+                TextPosition(
+                  offset: sel.focus.offset.clamp(0, node.text.length),
+                ),
                 Rect.zero,
               )
               .dx;
           if (caretX - scroll > visible - 12) scroll = caretX - visible + 12;
           if (caretX - scroll < 0) scroll = caretX;
         }
-        final maxScroll = (layout.codeWidth - visible).clamp(0.0, double.infinity);
+        final maxScroll = (layout.codeWidth - visible).clamp(
+          0.0,
+          double.infinity,
+        );
         _codeScroll[node.id] = scroll.clamp(0.0, maxScroll);
 
         layout.codeVisible = visible;
@@ -901,12 +980,21 @@ class RenderDocument extends RenderBox {
         final labelW = marker.width + 14;
         final labelH = marker.height + 6;
         marker.dispose();
-        final bottomLimit = layout.scrollTrack?.top ?? (layout.boxTop + layout.boxHeight);
+        final bottomLimit =
+            layout.scrollTrack?.top ?? (layout.boxTop + layout.boxHeight);
         final iconY = bottomLimit - iconBox - 4;
-        layout.copyButton =
-            Rect.fromLTWH(maxWidth - iconBox - 8, iconY, iconBox, iconBox);
-        layout.wrapButton =
-            Rect.fromLTWH(maxWidth - 2 * iconBox - 12, iconY, iconBox, iconBox);
+        layout.copyButton = Rect.fromLTWH(
+          maxWidth - iconBox - 8,
+          iconY,
+          iconBox,
+          iconBox,
+        );
+        layout.wrapButton = Rect.fromLTWH(
+          maxWidth - 2 * iconBox - 12,
+          iconY,
+          iconBox,
+          iconBox,
+        );
         layout.langLabel = Rect.fromLTWH(
           maxWidth - 2 * iconBox - 12 - labelW - 6,
           iconY + (iconBox - labelH) / 2,
@@ -920,8 +1008,12 @@ class RenderDocument extends RenderBox {
           final tabY = iconY + (iconBox - 20) / 2;
           final right = layout.langLabel!.left - 8;
           layout.viewCodeTab = Rect.fromLTWH(right - 44, tabY, 44, 20);
-          layout.viewPreviewTab =
-              Rect.fromLTWH(right - 44 - 2 - 56, tabY, 56, 20);
+          layout.viewPreviewTab = Rect.fromLTWH(
+            right - 44 - 2 - 56,
+            tabY,
+            56,
+            20,
+          );
         }
       }
 
@@ -932,7 +1024,10 @@ class RenderDocument extends RenderBox {
 
     y += EditorTheme.bottomPad;
     size = constraints.constrain(
-      Size(maxWidth, y < EditorTheme.minSurfaceHeight ? EditorTheme.minSurfaceHeight : y),
+      Size(
+        maxWidth,
+        y < EditorTheme.minSurfaceHeight ? EditorTheme.minSurfaceHeight : y,
+      ),
     );
   }
 
@@ -977,12 +1072,127 @@ class RenderDocument extends RenderBox {
       _paintNode(canvas, offset, i);
     }
     for (var i = 0; i < _layouts.length; i++) {
-      _layouts[i].renderedBy?.paintOverlay(this, canvas, offset, _layouts[i], i);
+      _layouts[i].renderedBy?.paintOverlay(
+        this,
+        canvas,
+        offset,
+        _layouts[i],
+        i,
+      );
     }
     _paintAtomicSelection(canvas, offset);
     _paintScrollbars(canvas, offset);
     _paintCaret(canvas, offset);
     _paintRemoteCursors(canvas, offset);
+    // Last: it floats over everything, including the caret it belongs to.
+    _paintMathPreview(canvas, offset);
+  }
+
+  /// The typeset formula for the math run the caret is inside, floated above it.
+  ///
+  /// Deliberately NOT inline typesetting. The LaTeX stays exactly where it is —
+  /// in the buffer, editable, and every offset in this file goes on meaning what
+  /// it has always meant. Putting the formula *in* the line would need a
+  /// doc↔painter offset mapping through the text pipeline, and
+  /// docs/render-architecture.md calls that pipeline the load-bearing wall. The
+  /// need this answers is "did I write that formula right?", not "make my notes
+  /// pretty", and a card answers it for ~1% of the cost.
+  ///
+  /// It also keeps the `$` misfires loud: `--master_addr=$MASTER_ADDR` still
+  /// reads as purple source, because nothing about the line is rewritten.
+  ///
+  /// Reuses the block previewer whole — same 'math' id, same source-keyed cache,
+  /// same 18pt raster. A popup wants that size anyway, which is why this needs
+  /// no previewer of its own and no font-size in the cache key.
+  void _paintMathPreview(Canvas canvas, Offset offset) {
+    final sel = _selection;
+    // Only a resting caret. A drag is selecting text, not asking to look.
+    if (sel == null || !sel.isCollapsed) return;
+    final i = sel.focus.node;
+    if (i < 0 || i >= _layouts.length || i >= _nodes.length) return;
+    final l = _layouts[i];
+    if (EditorNode.isAtomicKind(l.kind) ||
+        l.kind == 'code_block' ||
+        l.renderedBy != null) {
+      return;
+    }
+    final node = _nodes[i];
+    final len = node.text.length;
+    final caret = sel.focus.offset.clamp(0, len);
+
+    final run = mathRunAt(marksFromData(node.data), caret);
+    if (run == null) return;
+    final s = run.start.clamp(0, len);
+    final e = run.end.clamp(0, len);
+    if (e <= s) return;
+    final source = node.text.substring(s, e);
+    if (source.trim().isEmpty) return;
+
+    final img = _previewImages['math']?[source];
+    if (img == null) {
+      // Safe from inside paint: request() only registers and schedules — every
+      // rebuild it causes is behind an addPostFrameCallback.
+      onRequestPreview?.call('math', source, 0);
+      return; // the card appears on the frame the raster lands
+    }
+
+    final boxes = l.painter.getBoxesForSelection(
+      TextSelection(baseOffset: s, extentOffset: e),
+      boxHeightStyle: ui.BoxHeightStyle.tight,
+    );
+    if (boxes.isEmpty) return;
+    final anchor = boxes.first.toRect().shift(
+      offset + Offset(l.contentLeft, l.textTop),
+    );
+
+    const dpr = EditorTheme.mathPixelRatio;
+    var w = img.width / dpr;
+    var h = img.height / dpr;
+    const pad = 8.0;
+    // A long formula shrinks to fit rather than running off the pane.
+    final avail = size.width - 2 * EditorTheme.mathCardMargin - 2 * pad;
+    if (w > avail && w > 0) {
+      h *= avail / w;
+      w = avail;
+    }
+
+    final cardW = w + 2 * pad;
+    final cardH = h + 2 * pad;
+    // Above the run, nudged onto the pane; below it when there is no room up
+    // there (the first line of a document).
+    var left = anchor.left - pad;
+    left = left.clamp(
+      EditorTheme.mathCardMargin,
+      (size.width - EditorTheme.mathCardMargin - cardW).clamp(
+        EditorTheme.mathCardMargin,
+        double.infinity,
+      ),
+    );
+    var top = anchor.top - cardH - 6;
+    if (top < offset.dy + EditorTheme.mathCardMargin) top = anchor.bottom + 6;
+    final card = Rect.fromLTWH(left, top, cardW, cardH);
+    final rr = RRect.fromRectAndRadius(card, const Radius.circular(6));
+
+    canvas.drawRRect(
+      rr.shift(const Offset(0, 1)),
+      Paint()
+        ..color = const Color(0x1A000000)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+    canvas.drawRRect(rr, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = const Color(0xFFE2E8F0),
+    );
+    canvas.drawImageRect(
+      img,
+      Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+      Rect.fromLTWH(card.left + pad, card.top + pad, w, h),
+      Paint()..filterQuality = FilterQuality.medium,
+    );
   }
 
   /// Highlight selected atomic nodes (image/divider/table) on top of their
@@ -997,14 +1207,23 @@ class RenderDocument extends RenderBox {
       }
       return;
     }
-    for (var i = sel.start.node; i <= sel.end.node && i < _layouts.length; i++) {
+    for (
+      var i = sel.start.node;
+      i <= sel.end.node && i < _layouts.length;
+      i++
+    ) {
       if (_isAtomicNode(i) && (i != sel.start.node || i != sel.end.node)) {
         _drawAtomicHighlight(canvas, offset, i, border: false);
       }
     }
   }
 
-  void _drawAtomicHighlight(Canvas canvas, Offset offset, int i, {required bool border}) {
+  void _drawAtomicHighlight(
+    Canvas canvas,
+    Offset offset,
+    int i, {
+    required bool border,
+  }) {
     final l = _layouts[i];
     // A selected table hugs the grid exactly — no tint in the top gutter (column
     // handles) or the bottom add-row bar, and no rounded spill past the outer
@@ -1027,8 +1246,12 @@ class RenderDocument extends RenderBox {
     // tint into the drag-handle gutter, left of the page's text column.
     final box = (l.kind == 'image' && l.imageDst != null)
         ? l.imageDst!.shift(offset)
-        : Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop,
-            size.width - l.boxLeft, l.boxHeight);
+        : Rect.fromLTWH(
+            offset.dx + l.boxLeft,
+            offset.dy + l.boxTop,
+            size.width - l.boxLeft,
+            l.boxHeight,
+          );
     final rr = RRect.fromRectAndRadius(
       box.inflate(border ? 2 : 0),
       const Radius.circular(6),
@@ -1056,7 +1279,11 @@ class RenderDocument extends RenderBox {
         canvas.drawRRect(
           RRect.fromRectAndRadius(
             Rect.fromLTWH(
-                offset.dx + bgLeft, offset.dy + l.boxTop, size.width - bgLeft, l.boxHeight),
+              offset.dx + bgLeft,
+              offset.dy + l.boxTop,
+              size.width - bgLeft,
+              l.boxHeight,
+            ),
             const Radius.circular(6),
           ),
           Paint()..color = EditorTheme.codeBg,
@@ -1075,8 +1302,12 @@ class RenderDocument extends RenderBox {
           top = prev.boxTop + prev.boxHeight; // bridge the gap above
         }
         canvas.drawRect(
-          Rect.fromLTWH(offset.dx + l.boxLeft + 2 + 16.0 * k, offset.dy + top, 3,
-              l.boxHeight + (l.boxTop - top)),
+          Rect.fromLTWH(
+            offset.dx + l.boxLeft + 2 + 16.0 * k,
+            offset.dy + top,
+            3,
+            l.boxHeight + (l.boxTop - top),
+          ),
           Paint()..color = EditorTheme.quoteBar,
         );
       }
@@ -1108,7 +1339,11 @@ class RenderDocument extends RenderBox {
           : _layouts.last.boxTop + _layouts.last.boxHeight + 2;
       canvas.drawRect(
         Rect.fromLTWH(
-            offset.dx + EditorTheme.gutter, offset.dy + y, size.width - EditorTheme.gutter, 2.5),
+          offset.dx + EditorTheme.gutter,
+          offset.dy + y,
+          size.width - EditorTheme.gutter,
+          2.5,
+        ),
         Paint()..color = EditorTheme.dropLine,
       );
     }
@@ -1120,9 +1355,10 @@ class RenderDocument extends RenderBox {
       final r = label.shift(offset);
       canvas.drawRRect(
         RRect.fromRectAndRadius(r, const Radius.circular(5)),
-        Paint()..color = _hoverIcon == _CodeIcon.lang
-            ? const Color(0xFFCBD5E1)
-            : const Color(0xFFE2E8F0),
+        Paint()
+          ..color = _hoverIcon == _CodeIcon.lang
+              ? const Color(0xFFCBD5E1)
+              : const Color(0xFFE2E8F0),
       );
       final marker = TextPainter(
         text: TextSpan(
@@ -1164,8 +1400,12 @@ class RenderDocument extends RenderBox {
 
   /// The [code|preview] switch shown on diagram blocks while hovered — the
   /// same control on both forms, with the current form's tab highlighted.
-  void _paintViewTabs(Canvas canvas, Offset offset, _NodeLayout l,
-      {required String active}) {
+  void _paintViewTabs(
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l, {
+    required String active,
+  }) {
     void tab(Rect? r0, String text, _CodeIcon icon, bool isActive) {
       if (r0 == null) return;
       final r = r0.shift(offset);
@@ -1175,8 +1415,8 @@ class RenderDocument extends RenderBox {
           ..color = isActive
               ? const Color(0xFF1E293B)
               : (_hoverIcon == icon
-                  ? const Color(0xFFCBD5E1)
-                  : const Color(0xFFE2E8F0)),
+                    ? const Color(0xFFCBD5E1)
+                    : const Color(0xFFE2E8F0)),
       );
       final tp = TextPainter(
         text: TextSpan(
@@ -1188,14 +1428,16 @@ class RenderDocument extends RenderBox {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(
-          canvas,
-          r.center - Offset(tp.width / 2, tp.height / 2));
+      tp.paint(canvas, r.center - Offset(tp.width / 2, tp.height / 2));
       tp.dispose();
     }
 
-    tab(l.viewPreviewTab, 'preview', _CodeIcon.viewPreview,
-        active == 'preview');
+    tab(
+      l.viewPreviewTab,
+      'preview',
+      _CodeIcon.viewPreview,
+      active == 'preview',
+    );
     tab(l.viewCodeTab, 'code', _CodeIcon.viewCode, active == 'code');
   }
 
@@ -1230,7 +1472,11 @@ class RenderDocument extends RenderBox {
     )..layout();
     glyph.paint(
       canvas,
-      rect.topLeft + Offset((rect.width - glyph.width) / 2, (rect.height - glyph.height) / 2),
+      rect.topLeft +
+          Offset(
+            (rect.width - glyph.width) / 2,
+            (rect.height - glyph.height) / 2,
+          ),
     );
     glyph.dispose();
 
@@ -1309,8 +1555,10 @@ class RenderDocument extends RenderBox {
     for (final l in _layouts) {
       if (l.kind != 'code_block') continue;
       if (local.dy < l.boxTop || local.dy > l.boxTop + l.boxHeight) continue;
-      final visible = (size.width - l.contentLeft - EditorTheme.codePadH)
-          .clamp(0.0, double.infinity);
+      final visible = (size.width - l.contentLeft - EditorTheme.codePadH).clamp(
+        0.0,
+        double.infinity,
+      );
       final maxScroll = (l.codeWidth - visible).clamp(0.0, double.infinity);
       if (maxScroll <= 0) return false;
       final current = _codeScroll[l.nodeId] ?? 0;
@@ -1480,8 +1728,10 @@ class RenderDocument extends RenderBox {
     if (l.kind == 'code_block') {
       // Code does not wrap; clip to the block and offset by its scroll.
       final scroll = _codeScroll[l.nodeId] ?? 0;
-      final visible = (size.width - l.contentLeft - EditorTheme.codePadH)
-          .clamp(0.0, double.infinity);
+      final visible = (size.width - l.contentLeft - EditorTheme.codePadH).clamp(
+        0.0,
+        double.infinity,
+      );
       canvas.save();
       canvas.clipRect(
         Rect.fromLTWH(origin.dx, origin.dy, visible, l.textHeight),
@@ -1555,7 +1805,12 @@ class RenderDocument extends RenderBox {
         if (i != end.node) {
           // Empty / fully-included blank line: show a thin marker.
           canvas.drawRect(
-            Rect.fromLTWH(origin.dx, origin.dy, 6, l.painter.preferredLineHeight),
+            Rect.fromLTWH(
+              origin.dx,
+              origin.dy,
+              6,
+              l.painter.preferredLineHeight,
+            ),
             paint,
           );
         }
@@ -1572,12 +1827,14 @@ class RenderDocument extends RenderBox {
         final visible = (size.width - l.contentLeft - EditorTheme.codePadH)
             .clamp(0.0, double.infinity);
         canvas.save();
-        canvas.clipRect(Rect.fromLTWH(
-          offset.dx + l.contentLeft,
-          offset.dy + l.textTop,
-          visible,
-          l.textHeight,
-        ));
+        canvas.clipRect(
+          Rect.fromLTWH(
+            offset.dx + l.contentLeft,
+            offset.dy + l.textTop,
+            visible,
+            l.textHeight,
+          ),
+        );
       }
       for (final b in boxes) {
         canvas.drawRect(b.toRect().shift(origin), paint);
@@ -1659,7 +1916,8 @@ class RenderDocument extends RenderBox {
       final l = _layouts[i];
       if (l.kind != 'table') continue;
       if (l.addColBar?.contains(local) ?? false) return (node: i, column: true);
-      if (l.addRowBar?.contains(local) ?? false) return (node: i, column: false);
+      if (l.addRowBar?.contains(local) ?? false)
+        return (node: i, column: false);
     }
     return null;
   }
@@ -1781,7 +2039,10 @@ class RenderDocument extends RenderBox {
     final l = _layouts[pos.node];
     if (EditorNode.isAtomicKind(l.kind)) return null; // no inline caret
     final off = pos.offset.clamp(0, _nodes[pos.node].text.length);
-    final caret = l.painter.getOffsetForCaret(TextPosition(offset: off), Rect.zero);
+    final caret = l.painter.getOffsetForCaret(
+      TextPosition(offset: off),
+      Rect.zero,
+    );
     final scroll = l.kind == 'code_block' ? (_codeScroll[l.nodeId] ?? 0) : 0.0;
     return Rect.fromLTWH(
       l.contentLeft + caret.dx - scroll,
@@ -1852,7 +2113,8 @@ class RenderDocument extends RenderBox {
     final x = goalX ?? rect.left;
     final probe = positionAt(Offset(x, rect.top - rect.height * 0.5));
     if (probe != pos && probe.node == pos.node) return probe; // moved up a line
-    return _stepToNode(pos.node - 1, x, fromBottom: true) ?? const DocPosition(0, 0);
+    return _stepToNode(pos.node - 1, x, fromBottom: true) ??
+        const DocPosition(0, 0);
   }
 
   /// Position one visual line below [pos], tracking [goalX] (a local x).
@@ -1864,7 +2126,8 @@ class RenderDocument extends RenderBox {
     if (rect == null) return null;
     final x = goalX ?? rect.left;
     final probe = positionAt(Offset(x, rect.bottom + rect.height * 0.5));
-    if (probe != pos && probe.node == pos.node) return probe; // moved down a line
+    if (probe != pos && probe.node == pos.node)
+      return probe; // moved down a line
     final last = _layouts.length - 1;
     return _stepToNode(pos.node + 1, x, fromBottom: false) ??
         DocPosition(last, _nodes[last].text.length);
@@ -2006,7 +2269,12 @@ class RenderDocument extends RenderBox {
 /// Widget wrapper for [RenderDocument].
 /// A remote collaborator's caret to paint: block id + UTF-16 offset + color +
 /// name label (P2 awareness).
-typedef RemoteCursor = ({String blockId, int offset, Color color, String label});
+typedef RemoteCursor = ({
+  String blockId,
+  int offset,
+  Color color,
+  String label,
+});
 
 class DocumentSurface extends LeafRenderObjectWidget {
   const DocumentSurface({
@@ -2040,23 +2308,24 @@ class DocumentSurface extends LeafRenderObjectWidget {
   /// an offstage flutter_math_fork widget at device pixel ratio).
   final Map<String, Map<String, ui.Image>> previewImages;
   final void Function(String id, String source, double targetWidth)?
-      onRequestPreview;
+  onRequestPreview;
 
   @override
-  RenderDocument createRenderObject(BuildContext context) => RenderDocument(
-    nodes: nodes,
-    selection: selection,
-    showCaret: showCaret,
-    caretOn: caretOn,
-    appearance: appearance,
-  )
-    ..onRequestImage = onRequestImage
-    ..onImagePainted = onImagePainted
-    ..onRequestPreview = onRequestPreview
-    ..imageErrors = imageErrors
-    ..previewImages = previewImages
-    ..remoteCursors = remoteCursors
-    ..images = images;
+  RenderDocument createRenderObject(BuildContext context) =>
+      RenderDocument(
+          nodes: nodes,
+          selection: selection,
+          showCaret: showCaret,
+          caretOn: caretOn,
+          appearance: appearance,
+        )
+        ..onRequestImage = onRequestImage
+        ..onImagePainted = onImagePainted
+        ..onRequestPreview = onRequestPreview
+        ..imageErrors = imageErrors
+        ..previewImages = previewImages
+        ..remoteCursors = remoteCursors
+        ..images = images;
 
   @override
   void updateRenderObject(BuildContext context, RenderDocument renderObject) {

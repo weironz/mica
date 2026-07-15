@@ -131,6 +131,21 @@ bool rangeHasMark(List<Mark> marks, int from, int to, String type) {
   return marks.any((m) => m.type == type && m.start <= from && m.end >= to);
 }
 
+/// The math run a caret at [caret] sits inside, or null — what decides whether
+/// the editor floats a typeset preview over the formula you are editing
+/// (`_paintMathPreview` in render.dart).
+///
+/// STRICTLY inside. A caret on an edge belongs to the text as much as to the
+/// formula, and calling that a hit would pop the card open every time you typed
+/// your way past one. `$x$` (nothing between the delimiters) can never match,
+/// which is right: there is no formula there to preview.
+Mark? mathRunAt(List<Mark> marks, int caret) {
+  for (final m in marks) {
+    if (m.type == 'math' && caret > m.start && caret < m.end) return m;
+  }
+  return null;
+}
+
 /// Add or remove [type] over `[from, to)` (toggle decided by the caller).
 List<Mark> applyMark(
   List<Mark> marks,
