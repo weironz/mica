@@ -4434,19 +4434,55 @@ fn is_md_punct(c: char) -> bool {
         | '\u{FF1A}'..='\u{FF20}' | '\u{FF3B}'..='\u{FF40}' | '\u{FF5B}'..='\u{FF65}')
 }
 
-/// Left/right flanking → (can_open, can_close) per the spec, including the
-/// `_` intraword restrictions.
+/// A CJK character (BMP): ideographs, kana, hangul, bopomofo, AND CJK
+/// punctuation (`。、！？「」…`). Used to make emphasis CJK-friendly — see
+/// [`flanking`]. Kept byte-identical to the Dart `_isCjk` (marks.dart).
+fn is_cjk(c: char) -> bool {
+  matches!(c,
+    '\u{1100}'..='\u{11FF}'   // Hangul Jamo
+      | '\u{2E80}'..='\u{2EFF}' // CJK Radicals Supplement
+      | '\u{3000}'..='\u{303F}' // CJK Symbols and Punctuation
+      | '\u{3040}'..='\u{30FF}' // Hiragana + Katakana
+      | '\u{3100}'..='\u{312F}' // Bopomofo
+      | '\u{3130}'..='\u{318F}' // Hangul Compatibility Jamo
+      | '\u{31C0}'..='\u{31EF}' // CJK Strokes
+      | '\u{3200}'..='\u{33FF}' // Enclosed CJK + CJK Compatibility
+      | '\u{3400}'..='\u{4DBF}' // CJK Ext A
+      | '\u{4E00}'..='\u{9FFF}' // CJK Unified Ideographs
+      | '\u{A000}'..='\u{A4CF}' // Yi
+      | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
+      | '\u{F900}'..='\u{FAFF}' // CJK Compatibility Ideographs
+      | '\u{FE30}'..='\u{FE4F}' // CJK Compatibility Forms
+      | '\u{FF00}'..='\u{FFEF}') // Halfwidth and Fullwidth Forms
+}
+
+/// Left/right flanking → (can_open, can_close), with the CJK-friendly amendment
+/// (markdown-cjk-friendly). Plain CommonMark treats CJK punctuation (`。`) as
+/// "punctuation", so `**加粗。**后文` can't close — a `。` before the `**` and a
+/// letter after fail the flanking test. A Chinese sentence ends in `。`/`,` far
+/// more often than a space, so this bit constantly (and broke round-trip: the
+/// exporter emits `**…。**x` which then wouldn't re-parse). Fix: split
+/// "punctuation" into NON-CJK punctuation (strict rule kept) and CJK
+/// punctuation/characters, which instead RELAX flanking the way whitespace does
+/// in Latin (a CJK char is a word boundary). ASCII inputs are unaffected
+/// (`is_cjk` is false), so the CommonMark scoreboard stays 641/641. Mirrored in
+/// the Dart `_flanking` (marks.dart).
 fn flanking(c: char, prev: Option<char>, next: Option<char>) -> (bool, bool) {
   let prev_ws = prev.is_none_or(char::is_whitespace);
   let next_ws = next.is_none_or(char::is_whitespace);
-  let prev_punct = prev.is_some_and(is_md_punct);
-  let next_punct = next.is_some_and(is_md_punct);
+  let prev_cjk = prev.is_some_and(is_cjk);
+  let next_cjk = next.is_some_and(is_cjk);
+  let prev_ncp = prev.is_some_and(is_md_punct) && !prev_cjk; // non-CJK punct
+  let next_ncp = next.is_some_and(is_md_punct) && !next_cjk;
 
-  let left = !next_ws && (!next_punct || prev_ws || prev_punct);
-  let right = !prev_ws && (!prev_punct || next_ws || next_punct);
+  let left = !next_ws && (!next_ncp || prev_ws || prev_ncp || prev_cjk);
+  let right = !prev_ws && (!prev_ncp || next_ws || next_ncp || next_cjk);
 
   if c == '_' {
-    (left && (!right || prev_punct), right && (!left || next_punct))
+    (
+      left && (!right || prev_ncp || prev_cjk),
+      right && (!left || next_ncp || next_cjk),
+    )
   } else {
     (left, right)
   }

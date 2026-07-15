@@ -905,6 +905,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // carriage returns, breaking the round-trip and caret math).
     markdown = markdown.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     plain = plain.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    // Repair the LLM "double-fence" artifact (ChatGPT/Codex wrap a code or
+    // mermaid block in a SECOND equal-length fence). Paste-only — the core
+    // CommonMark parser and file import stay strict.
+    markdown = unwrapNestedFences(markdown);
 
     // Inside a code block, paste raw text verbatim (keep newlines, stay
     // inside) — but only when the selection is confined to that block: a

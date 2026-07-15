@@ -1195,17 +1195,52 @@ bool _isMdPunct(String? c) {
       (u >= 0xFF5B && u <= 0xFF65);
 }
 
+/// A CJK character (BMP): ideographs, kana, hangul, bopomofo, AND CJK
+/// punctuation (`。、！？「」…`). Used to make emphasis CJK-friendly — see
+/// [_flanking]. Kept byte-identical to the Rust `is_cjk` (crates/markdown).
+bool _isCjk(String? c) {
+  if (c == null || c.isEmpty) return false;
+  final u = c.codeUnitAt(0);
+  return (u >= 0x1100 && u <= 0x11FF) || // Hangul Jamo
+      (u >= 0x2E80 && u <= 0x2EFF) || //    CJK Radicals Supplement
+      (u >= 0x3000 && u <= 0x303F) || //    CJK Symbols and Punctuation
+      (u >= 0x3040 && u <= 0x30FF) || //    Hiragana + Katakana
+      (u >= 0x3100 && u <= 0x312F) || //    Bopomofo
+      (u >= 0x3130 && u <= 0x318F) || //    Hangul Compatibility Jamo
+      (u >= 0x31C0 && u <= 0x31EF) || //    CJK Strokes
+      (u >= 0x3200 && u <= 0x33FF) || //    Enclosed CJK + CJK Compatibility
+      (u >= 0x3400 && u <= 0x4DBF) || //    CJK Ext A
+      (u >= 0x4E00 && u <= 0x9FFF) || //    CJK Unified Ideographs
+      (u >= 0xA000 && u <= 0xA4CF) || //    Yi
+      (u >= 0xAC00 && u <= 0xD7AF) || //    Hangul Syllables
+      (u >= 0xF900 && u <= 0xFAFF) || //    CJK Compatibility Ideographs
+      (u >= 0xFE30 && u <= 0xFE4F) || //    CJK Compatibility Forms
+      (u >= 0xFF00 && u <= 0xFFEF); //      Halfwidth and Fullwidth Forms
+}
+
+// CJK-friendly emphasis (markdown-cjk-friendly amendment). Plain CommonMark
+// flanking treats CJK punctuation (`。`) as "punctuation", so `**加粗。**后文`
+// can't close — the `。` before `**` and a letter after fail the flanking test.
+// A Chinese sentence ends in `。`/`,` far more often than in a space, so this
+// bit constantly (and broke mica's OWN round trip: it exports `**…。**x` and
+// then couldn't re-parse it). Fix: split "punctuation" into NON-CJK punctuation
+// (keeps the strict rule) and CJK punctuation/characters (which instead RELAX
+// flanking the way whitespace does in Latin — a CJK char is a word boundary).
+// ASCII inputs are unaffected (`_isCjk` is false), so the CommonMark scoreboard
+// stays 641/641. Mirrors the Rust `flanking` in crates/markdown.
 ({bool open, bool close}) _flanking(String c, String? prev, String? next) {
   final prevWs = prev == null || prev.trim().isEmpty;
   final nextWs = next == null || next.trim().isEmpty;
-  final prevPunct = _isMdPunct(prev);
-  final nextPunct = _isMdPunct(next);
-  final left = !nextWs && (!nextPunct || prevWs || prevPunct);
-  final right = !prevWs && (!prevPunct || nextWs || nextPunct);
+  final prevCjk = _isCjk(prev);
+  final nextCjk = _isCjk(next);
+  final prevNcp = _isMdPunct(prev) && !prevCjk; // non-CJK punctuation
+  final nextNcp = _isMdPunct(next) && !nextCjk;
+  final left = !nextWs && (!nextNcp || prevWs || prevNcp || prevCjk);
+  final right = !prevWs && (!prevNcp || nextWs || nextNcp || nextCjk);
   if (c == '_') {
     return (
-      open: left && (!right || prevPunct),
-      close: right && (!left || nextPunct),
+      open: left && (!right || prevNcp || prevCjk),
+      close: right && (!left || nextNcp || nextCjk),
     );
   }
   return (open: left, close: right);

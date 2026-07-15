@@ -245,6 +245,98 @@ String deindentColumns(String line, int columns) {
   return '';
 }
 
+/// Repair the "double-fence" artifact that LLM chat UIs (ChatGPT / Codex)
+/// produce when they show a code or mermaid block as copyable source: they
+/// wrap it in a SECOND fence of the SAME length —
+///
+///     ```                 ← redundant outer opener (bare)
+///     ```mermaid           ← the real block
+///     …
+///     ```                  ← closes the real block
+///     ```                  ← redundant outer closer
+///
+/// CommonMark can't nest equal-length fences, so it reads the first close as
+/// the OUTER close and the trailing ``` opens a PHANTOM block that swallows the
+/// rest of the document as code. We drop the two redundant outer fence lines so
+/// the inner block (e.g. a mermaid diagram) becomes top-level and renders.
+///
+/// PASTE-ONLY: applied to pasted text before [markdownToBlocks], never to
+/// stored documents or file import — the core parser stays strict CommonMark.
+/// Precise by construction: it fires only when a BARE fence opener (not while
+/// inside a code block) is immediately followed by an equal-marker, equal-length
+/// fence. A legit `````\n```mermaid` (4-outer/3-inner) has different lengths and
+/// is left alone; two adjacent independent code blocks are distinguished by
+/// tracking open/close state.
+String unwrapNestedFences(String md) {
+  final lines = md.split('\n');
+  final fenceRe = RegExp(r'^( {0,3})(`{3,}|~{3,})([^`]*)$');
+  ({String ch, int len})? closeOf(String line) {
+    final m = fenceRe.firstMatch(line);
+    if (m == null || m.group(3)!.trim().isNotEmpty) return null; // closers bare
+    return (ch: m.group(2)![0], len: m.group(2)!.length);
+  }
+
+  final drop = <int>{};
+  ({String ch, int len})? open; // currently-open fence, null = not in code
+  var i = 0;
+  while (i < lines.length) {
+    final m = fenceRe.firstMatch(lines[i]);
+    if (m == null) {
+      i++;
+      continue;
+    }
+    final ch = m.group(2)![0];
+    final len = m.group(2)!.length;
+    final bare = m.group(3)!.trim().isEmpty;
+    if (open != null) {
+      // Inside a code block: only a bare, same-char, long-enough fence closes.
+      if (bare && ch == open.ch && len >= open.len) open = null;
+      i++;
+      continue;
+    }
+    // Not in code → lines[i] is an OPENER. A bare opener immediately followed
+    // by an equal fence is the LLM wrapper (a real nested block would need a
+    // longer outer fence).
+    if (bare && i + 1 < lines.length) {
+      final inner = fenceRe.firstMatch(lines[i + 1]);
+      if (inner != null &&
+          inner.group(2)![0] == ch &&
+          inner.group(2)!.length == len) {
+        final innerLen = inner.group(2)!.length;
+        var close = -1;
+        for (var j = i + 2; j < lines.length; j++) {
+          final f = closeOf(lines[j]);
+          if (f != null && f.ch == ch && f.len >= innerLen) {
+            close = j;
+            break;
+          }
+        }
+        if (close != -1) {
+          drop.add(i); // redundant outer opener
+          // The redundant outer closer, if present: the next non-blank line
+          // after the inner close, when it is another equal bare fence.
+          for (var j = close + 1; j < lines.length; j++) {
+            if (lines[j].trim().isEmpty) continue;
+            final f = closeOf(lines[j]);
+            if (f != null && f.ch == ch && f.len == len) drop.add(j);
+            break;
+          }
+          i = close + 1; // inner block content already accounted for
+          continue;
+        }
+      }
+    }
+    open = (ch: ch, len: len); // ordinary opener
+    i++;
+  }
+  if (drop.isEmpty) return md;
+  final out = <String>[
+    for (var k = 0; k < lines.length; k++)
+      if (!drop.contains(k)) lines[k],
+  ];
+  return out.join('\n');
+}
+
 List<BlockSpec> markdownToBlocks(String markdown) {
   final result = <BlockSpec>[];
   final lines = markdown.replaceAll('\r\n', '\n').split('\n');
