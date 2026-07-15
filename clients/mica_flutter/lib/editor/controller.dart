@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import 'highlight.dart' show kCodeLanguages;
+import 'highlight.dart' show kCodeLanguages, detectLanguage;
 import 'marks.dart';
 import 'model.dart';
 import 'table.dart';
@@ -762,8 +762,7 @@ class EditorController extends ChangeNotifier {
       final sub = node.text.substring(a, b);
       if (node.kind == 'code_block') {
         if (!full) return sub;
-        final lang = (node.data['language'] as String?) ?? '';
-        return '```$lang\n$sub\n```';
+        return '```${_copyLanguage(node)}\n$sub\n```';
       }
       final marks = <Mark>[];
       for (final m in marksFromData(node.data)) {
@@ -1066,7 +1065,7 @@ class EditorController extends ChangeNotifier {
       }
       if (node.kind == 'code_block') {
         setQuote(full ? node.quoteDepth : 0);
-        final lang = (node.data['language'] as String?) ?? '';
+        final lang = _copyLanguage(node);
         final cls = lang.isEmpty
             ? ''
             : ' class="language-${escapeHtmlAttr(lang)}"';
@@ -1344,6 +1343,34 @@ class EditorController extends ChangeNotifier {
       _sendNow(ops);
       notifyListeners();
     }
+  }
+
+  /// The language label to put on a code block **leaving Mica** — the
+  /// clipboard, in Markdown or HTML.
+  ///
+  /// An `auto` block stores no language at all (detection runs live, at paste
+  /// time), so copying one emitted a bare ``` and Typora/GitHub/VS Code got a
+  /// block with no language and no way to work one out: on their side `auto`
+  /// simply doesn't exist. So the clipboard drops the idea of `auto` and hands
+  /// over the resolved answer.
+  ///
+  /// Deliberately NOT what `export_markdown` does (crates/markdown). Export is
+  /// document serialization and round-trip is an invariant there (CLAUDE.md #4;
+  /// `conformance.rs::fixtures_round_trip` pins it, bare fences and all) — the
+  /// author wrote no language, so the file gets no language. The clipboard has
+  /// no such contract: it is interchange, aimed at a reader that cannot detect.
+  ///
+  /// A label the author pinned goes out **verbatim** — `py` stays `py`. It is
+  /// their word, it is not wrong, and canonicalising it would be churn (the
+  /// same reason `retagMislabeledFences` leaves a correct alias alone). Only an
+  /// auto block, which has no word of its own, gets detection filled in — and
+  /// `plaintext` still goes out bare, because that is detection saying "no
+  /// idea" and stamping the guess on would dress it up as a decision.
+  static String _copyLanguage(EditorNode node) {
+    final pinned = (node.data['language'] as String?)?.trim() ?? '';
+    if (pinned.isNotEmpty && pinned != 'auto') return pinned;
+    final detected = detectLanguage(node.text);
+    return detected == 'plaintext' ? '' : detected;
   }
 
   /// Set a code block's language (null/`auto` clears it, re-enabling detection).
