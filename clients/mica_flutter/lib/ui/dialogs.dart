@@ -288,6 +288,22 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   final _model = TextEditingController();
   final _apiKey = TextEditingController();
   _AiPreset _preset = _AiPreset.deepseek;
+
+  /// The AI fields commit when they lose focus — settings here apply as you
+  /// touch them, and a text field's equivalent of a toggle flipping is you
+  /// finishing with it. Not on every keystroke: each save is a network call,
+  /// and half an API key is not a value anyone wants stored.
+  late final List<FocusNode> _aiFocus = [
+    for (var i = 0; i < 3; i++) FocusNode()..addListener(_saveAiOnBlur),
+  ];
+
+  /// What the server already has, so blurring an untouched field is silent.
+  String _aiSaved = '';
+
+  String get _aiNow =>
+      '${_preset.provider}|${_baseUrl.text.trim()}|${_model.text.trim()}|'
+      '${_apiKey.text.trim()}';
+
   int _tab = 0; // 0 Appearance, 1 AI provider, 2 Account
   bool _loading = true;
   bool _saving = false;
@@ -379,6 +395,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _baseUrl.dispose();
     _model.dispose();
     _apiKey.dispose();
+    for (final f in _aiFocus) {
+      f.dispose();
+    }
     _name.dispose();
     _curPass.dispose();
     _newPass.dispose();
@@ -440,6 +459,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         _hasKey = settings['has_key'] == true;
         _loading = false;
       });
+      // Baseline: what the server already has. Without it, merely tabbing
+      // through the AI fields would look like a change and save on blur.
+      _aiSaved = _aiNow;
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -464,6 +486,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         _model.text = preset.model;
       }
     });
+    // Commit it: this rewrites the provider, url and model, and it blurs
+    // nothing — so nothing else would ever carry the change to the server.
+    // An empty key field means "leave the stored key alone", so switching
+    // preset can't cost you the key you already saved.
+    if (_aiNow != _aiSaved) unawaited(_saveAi());
   }
 
   /// The built-in About popup, marking the current app version. Opened from the
@@ -715,10 +742,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ];
   }
 
-  /// The AI page's Save. Was called `_save` and wired to the dialog's only
-  /// button, so it ran on every page — pressing Save while looking at Server
-  /// re-saved the AI settings and closed, doing nothing you had asked for.
+  /// Commit the AI fields when one loses focus — and only if something actually
+  /// changed, so tabbing through untouched fields is silent.
+  void _saveAiOnBlur() {
+    if (_loading || _aiFocus.any((f) => f.hasFocus)) return;
+    if (_aiNow == _aiSaved) return;
+    unawaited(_saveAi());
+  }
+
+  /// Persist the AI provider settings. No longer behind a Save button: every
+  /// other setting here applies as you touch it (toggles, sliders), and this was
+  /// the only holdout — the button existed for these three text fields and then
+  /// sat under every page, saving AI settings no matter what you were looking at.
   Future<void> _saveAi() async {
+    final attempt = _aiNow;
     setState(() {
       _saving = true;
       _error = null;
@@ -730,8 +767,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         model: _model.text.trim(),
         apiKey: _apiKey.text.trim().isEmpty ? null : _apiKey.text.trim(),
       );
-      if (mounted)
-        Navigator.of(context).pop(); // saved → close, like server config
+      if (!mounted) return;
+      // Stay open. Saving is not leaving — the dialog closes when the user says
+      // so, which is the whole point of settings that apply as you go.
+      setState(() {
+        _saving = false;
+        _aiSaved = attempt;
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -888,6 +930,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     TextField(
       controller: _baseUrl,
+      focusNode: _aiFocus[0],
       enabled: !_saving,
       decoration: const InputDecoration(
         labelText: 'API base URL',
@@ -898,6 +941,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     TextField(
       controller: _model,
+      focusNode: _aiFocus[1],
       enabled: !_saving,
       decoration: const InputDecoration(
         labelText: 'Model',
@@ -908,6 +952,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     TextField(
       controller: _apiKey,
+      focusNode: _aiFocus[2],
       enabled: !_saving,
       obscureText: true,
       decoration: InputDecoration(
@@ -1041,7 +1086,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             ],
             onChanged: _serverSaving
                 ? null
-                : (v) => setState(() => _draft = v),
+                : (v) => v == null ? null : _switchTo(v),
           ),
         ),
         const SizedBox(width: 6),
@@ -1074,12 +1119,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // one screen is two sources of truth about what "save" means.
   ];
 
-  /// The draft selection. Null until touched, so the dropdown reads from
-  /// [widget.activeOrigin] and the switch button stays disabled until it would
-  /// actually do something.
-  String? _draft;
+  /// The connection this dialog has switched to, if any. Not a draft — the
+  /// switch already happened; this is only how the dropdown remembers it, since
+  /// a dialog is its own route and never sees `widget.activeOrigin` change.
+  String? _picked;
 
-  String get _draftOrigin => _draft ?? widget.activeOrigin;
+  String get _draftOrigin => _picked ?? widget.activeOrigin;
 
   /// Just what the connection IS. Deliberately no sign-in state: signing in
   /// does not happen in Settings (it is the sidebar's job, in the world you are
@@ -1146,10 +1191,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _serverSaving = false;
       _serverMsg = error;
-      // Adding is not switching: the new server is only selected in the
-      // dropdown, and the button below is what commits it. Keeping the two
-      // apart is the whole point — you can add one now and switch later.
-      _draft = null;
+      // Adding is not switching: the new server joins the dropdown and nothing
+      // else moves. Picking it is a separate act — you can add one now and
+      // switch to it whenever.
     });
   }
 
@@ -1186,26 +1230,34 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     if (!mounted) return;
     setState(() {
       _serverSaving = false;
-      _draft = null; // the active connection moved; re-read it
+      // Removing the live server drops us to 本地模式 (see _removeServer), and
+      // this dialog can't see that happen — say so ourselves.
+      _picked = 'local';
     });
   }
 
-  /// The Server page's Save: commit the drafted connection.
+  /// Switch to [target] the moment it is picked — settings here apply as you
+  /// touch them, and this is no exception.
   ///
-  /// Sets `_saving`, not `_serverSaving`: the button that shows the progress is
-  /// the dialog's, so it has to be the dialog's flag or the switch would run
-  /// with no sign of it. `_serverSaving` stays for the section's own async work
-  /// (add / delete), which spins nothing down there.
-  Future<void> _saveServer() async {
-    final target = _draftOrigin;
-    if (target == widget.activeOrigin) return;
+  /// Does NOT close the dialog. That is what made the original switch
+  /// intolerable: it applied on tap *and* slammed Settings shut, so the change
+  /// and the disappearance were one event and you couldn't look before leaping.
+  /// Applying while staying put is the opposite — the sidebar changes behind
+  /// the dialog and you decide when to leave.
+  ///
+  /// [_picked] is what the dropdown then shows: this dialog was built with the
+  /// old `activeOrigin` and, being a separate route, never sees the parent
+  /// rebuild — reading `widget.activeOrigin` after this would show the world we
+  /// just left.
+  Future<void> _switchTo(String target) async {
+    if (target == _draftOrigin) return;
     setState(() {
-      _saving = true;
+      _picked = target;
+      _serverSaving = true;
       _serverMsg = null;
     });
     await widget.onSetActiveConnection(target);
-    // Close so the user lands in the world they just chose.
-    if (mounted) Navigator.of(context).pop();
+    if (mounted) setState(() => _serverSaving = false);
   }
 
   List<Widget> _dataSection(BuildContext context) => [
@@ -1314,66 +1366,47 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // Server selection is desktop-only: the web client is served by (and talks
     // same-origin to) its own backend, and Local-offline needs the native core
     // that isn't compiled for web. Hide the whole tab on web.
-    // `onSave` is what the bottom Save button does ON THIS PAGE, or null
-    // when the page has nothing to commit (Appearance applies live;
-    // Shortcuts is a reference list). The button asks the page rather than
-    // an if-chain asking which page — and it means Save can no longer be
-    // pressed on a page it does nothing for, which is what it used to be:
-    // it saved the AI settings no matter where you were standing.
-    final tabs =
-        <({
-          String title,
-          IconData icon,
-          List<Widget> section,
-          Future<void> Function()? onSave,
-        })>[
-          (
-            title: 'Appearance',
-            icon: Icons.tune,
-            section: _appearanceSection(context),
-            onSave: null,
-          ),
-          (
-            title: 'AI provider',
-            icon: Icons.auto_awesome,
-            section: _aiSection(context),
-            onSave: _saveAi,
-          ),
-          (
-            title: 'Account',
-            icon: Icons.person_outline,
-            section: _accountSection(context),
-            onSave: null,
-          ),
-          if (widget.onLoadTokens != null)
-            (
-              title: 'API Tokens',
-              icon: Icons.key_outlined,
-              section: _tokensSection(context),
-              onSave: null,
-            ),
-          if (!kIsWeb)
-            (
-              title: 'Server',
-              icon: Icons.dns_outlined,
-              section: _serverSection(context),
-              // Only when the pick differs from what is live; picking is a
-              // draft until this button commits it.
-              onSave: _draftOrigin == widget.activeOrigin ? null : _saveServer,
-            ),
-          (
-            title: 'Data',
-            icon: Icons.import_export,
-            section: _dataSection(context),
-            onSave: null,
-          ),
-          (
-            title: 'Shortcuts',
-            icon: Icons.keyboard_outlined,
-            section: _shortcutsSection(context),
-            onSave: null,
-          ),
-        ];
+    // No `onSave` per tab any more: there is no Save button to feed. Each
+    // section commits its own changes as they are made.
+    final tabs = <({String title, IconData icon, List<Widget> section})>[
+      (
+        title: 'Appearance',
+        icon: Icons.tune,
+        section: _appearanceSection(context),
+      ),
+      (
+        title: 'AI provider',
+        icon: Icons.auto_awesome,
+        section: _aiSection(context),
+      ),
+      (
+        title: 'Account',
+        icon: Icons.person_outline,
+        section: _accountSection(context),
+      ),
+      if (widget.onLoadTokens != null)
+        (
+          title: 'API Tokens',
+          icon: Icons.key_outlined,
+          section: _tokensSection(context),
+        ),
+      if (!kIsWeb)
+        (
+          title: 'Server',
+          icon: Icons.dns_outlined,
+          section: _serverSection(context),
+        ),
+      (
+        title: 'Data',
+        icon: Icons.import_export,
+        section: _dataSection(context),
+      ),
+      (
+        title: 'Shortcuts',
+        icon: Icons.keyboard_outlined,
+        section: _shortcutsSection(context),
+      ),
+    ];
     final titles = [for (final t in tabs) t.title];
     final icons = [for (final t in tabs) t.icon];
     final sections = [for (final t in tabs) t.section];
@@ -1433,23 +1466,27 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                 ],
               ),
       ),
+      // No Save button. Everything here applies as you touch it — toggles and
+      // sliders always did, the connection switches on pick, and the AI fields
+      // commit when they lose focus. AppFlowy, AFFiNE and Notion all settle in
+      // the same place, and the button we had was worse than redundant: it only
+      // ever saved the AI section, from under every page.
+      //
+      // The spinner rides here so a commit in flight is visible without a
+      // button to host it.
       actions: [
+        if (_saving)
+          const Padding(
+            padding: EdgeInsets.only(right: 12),
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
           child: const Text('Close'),
-        ),
-        FilledButton.icon(
-          onPressed: (_saving || _loading || tabs[_tab].onSave == null)
-              ? null
-              : tabs[_tab].onSave,
-          icon: _saving
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.save, size: 18),
-          label: const Text('Save'),
         ),
       ],
     );
