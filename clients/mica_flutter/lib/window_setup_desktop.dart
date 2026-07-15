@@ -36,6 +36,16 @@ Future<void> initDesktopWindow() async {
     if (pos != null) {
       await windowManager.setBounds(null, position: pos);
     }
+    // Maximized is part of where the window was, and it is the one part the
+    // rect above deliberately does NOT carry: _save refuses to record
+    // maximized geometry, so that un-maximizing has somewhere sane to go. The
+    // cost was that anyone who works maximized got a small window every single
+    // launch, forever.
+    //
+    // Before show(), not after: the Windows side posts SC_MAXIMIZE rather than
+    // resizing inline, so showing first means showing the small window and
+    // then watching it snap.
+    if (saved.maximized) await windowManager.maximize();
     await windowManager.show();
     await windowManager.focus();
   });
@@ -43,16 +53,21 @@ Future<void> initDesktopWindow() async {
   windowManager.addListener(_BoundsPersister());
 }
 
-({Size? size, Offset? position}) _loadBounds() {
+({Size? size, Offset? position, bool maximized}) _loadBounds() {
   final w = double.tryParse(loadPref('windowWidth') ?? '');
   final h = double.tryParse(loadPref('windowHeight') ?? '');
   final x = double.tryParse(loadPref('windowX') ?? '');
   final y = double.tryParse(loadPref('windowY') ?? '');
-  final size = (w != null && h != null && w >= _minSize.width && h >= _minSize.height)
+  final size =
+      (w != null && h != null && w >= _minSize.width && h >= _minSize.height)
       ? Size(w, h)
       : null;
   final position = (x != null && y != null) ? Offset(x, y) : null;
-  return (size: size, position: position);
+  return (
+    size: size,
+    position: position,
+    maximized: loadPref('windowMaximized') == 'true',
+  );
 }
 
 /// Persists the window rect after the user finishes a resize or move. Skips
@@ -64,6 +79,15 @@ class _BoundsPersister with WindowListener {
 
   @override
   void onWindowMoved() => _save();
+
+  /// Maximized rides on its own key precisely because [_save] refuses to touch
+  /// the rect while maximized — the two facts are separate, and the window
+  /// needs both to come back the way it left.
+  @override
+  void onWindowMaximize() => savePref('windowMaximized', 'true');
+
+  @override
+  void onWindowUnmaximize() => savePref('windowMaximized', 'false');
 
   Future<void> _save() async {
     if (await windowManager.isMaximized() ||

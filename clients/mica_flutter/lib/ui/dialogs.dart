@@ -292,7 +292,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       '${_apiKey.text.trim()}';
 
   int _tab = 0; // 0 Appearance, 1 AI provider, 2 Account
-  bool _loading = true;
+
+  /// Gates the WHOLE dialog (build: `_loading ? spinner : the tabs`), but the
+  /// only thing it ever waits for is [_load]'s AI-settings fetch. So it starts
+  /// true only when there is a fetch: in 本地模式 [onLoadAiSettings] is null,
+  /// _load returns straight away, and every line that clears this sits after
+  /// that return — Settings was a spinner that never resolved.
+  late bool _loading = widget.onLoadAiSettings != null;
   bool _saving = false;
   bool _hasKey = false;
   // API Tokens tab state.
