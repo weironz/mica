@@ -3554,6 +3554,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateProfile: local ? (_) async {} : _updateProfile,
       onChangePassword: local ? (_, _) async {} : _changePassword,
       cloudOrigin: _cloudOrigin,
+      connections: _connections,
+      signedInOrigins: {
+        for (final s in _servers)
+          if ((loadPref('authToken:\$s') ?? '').isNotEmpty) s,
+      },
+      onSetActiveConnection: _setActiveConnection,
+      onAddServer: _addServer,
+      onRemoveServer: _removeServer,
       onConnectCloud: _connectCloudServer,
       appearance: _appearance,
       pageWidth: _pageWidth,
@@ -3899,6 +3907,11 @@ class WorkspaceView extends StatefulWidget {
     required this.onUpdateProfile,
     required this.onChangePassword,
     required this.cloudOrigin,
+    required this.connections,
+    required this.signedInOrigins,
+    required this.onSetActiveConnection,
+    required this.onAddServer,
+    required this.onRemoveServer,
     required this.onConnectCloud,
     required this.appearance,
     required this.pageWidth,
@@ -4050,6 +4063,16 @@ class WorkspaceView extends StatefulWidget {
   /// The configured cloud server's origin URL (P3c-2) — Settings shows it and
   /// [onConnectCloud] switches it.
   final String cloudOrigin;
+
+  /// `['local', ...servers]` — the Settings connection list.
+  final List<String> connections;
+
+  /// Servers that already have stored credentials.
+  final Set<String> signedInOrigins;
+
+  final Future<void> Function(String origin) onSetActiveConnection;
+  final Future<String?> Function(String url) onAddServer;
+  final Future<void> Function(String origin) onRemoveServer;
   final Future<void> Function(String url) onConnectCloud;
   final EditorAppearance appearance;
   final double pageWidth;
@@ -4460,7 +4483,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     child: _WorkspaceSelector(
                       entries: widget.entries,
                       activeIsLocal: widget.activeIsLocal,
-                      cloudLabel: widget.cloudOriginLabel,
                       selectedRef: widget.selectedRef,
                       cloudEmail: widget.session?.user.email,
                       onSignIn: widget.onSignIn,
@@ -6148,6 +6170,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onUpdateProfile: widget.onUpdateProfile,
         onChangePassword: widget.onChangePassword,
         cloudOrigin: widget.cloudOrigin,
+        connections: widget.connections,
+        activeOrigin: widget.activeIsLocal ? 'local' : widget.cloudOrigin,
+        signedInOrigins: widget.signedInOrigins,
+        onSetActiveConnection: widget.onSetActiveConnection,
+        onAddServer: widget.onAddServer,
+        onRemoveServer: widget.onRemoveServer,
         onConnectCloud: widget.onConnectCloud,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,

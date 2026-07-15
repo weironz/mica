@@ -203,6 +203,12 @@ class _SettingsDialog extends StatefulWidget {
     required this.onChangePassword,
     required this.cloudOrigin,
     required this.onConnectCloud,
+    required this.connections,
+    required this.activeOrigin,
+    required this.signedInOrigins,
+    required this.onSetActiveConnection,
+    required this.onAddServer,
+    required this.onRemoveServer,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -224,6 +230,26 @@ class _SettingsDialog extends StatefulWidget {
   final Future<void> Function(String current, String next) onChangePassword;
   final String cloudOrigin;
   final Future<void> Function(String url) onConnectCloud;
+
+  /// `['local', ...servers]` — this device and every configured server, one
+  /// list because they are the same kind of choice: which single world the app
+  /// shows. `'local'` is first and cannot be removed.
+  final List<String> connections;
+
+  /// Which of [connections] is live. Picking a different one here is a draft
+  /// until Save — switching worlds under the user mid-dialog is what the old
+  /// segmented button did, and it also slammed Settings shut.
+  final String activeOrigin;
+
+  /// Servers with stored credentials, so the list can say which are signed in
+  /// without the caller reaching into per-origin prefs.
+  final Set<String> signedInOrigins;
+
+  final Future<void> Function(String origin) onSetActiveConnection;
+
+  /// Returns an error message, or null on success.
+  final Future<String?> Function(String url) onAddServer;
+  final Future<void> Function(String origin) onRemoveServer;
   final Future<Map<String, dynamic>> Function() onLoadAiSettings;
   final Future<void> Function({
     required String provider,
@@ -975,40 +1001,44 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
+  /// Settings → 服务器. A list of connections — this device, then every
+  /// configured server — of which exactly one is live.
+  ///
+  /// Selecting is a DRAFT; Save commits. The switch that lived here before
+  /// applied on tap and closed the dialog out from under you, so there was no
+  /// way to look before leaping. Modelled on AppFlowy's cloud settings, where
+  /// the dropdown writes nothing (`CloudSettingBloc.updateCloudType` only emits
+  /// state) and an explicit button commits.
   List<Widget> _serverSection(BuildContext context) => [
     _sectionTitle(context, Icons.dns_outlined, '服务器', const Color(0xFF2563EB)),
     const SizedBox(height: 8),
-    // No 本地/云服务器 switch here any more. It used to sit at the top of this
-    // section and, on tap, persist the world AND close Settings out from under
-    // you. It is gone rather than fixed: it was a *navigation* action wearing a
-    // setting's clothes, and the workspace switcher already navigates — picking
-    // a workspace is what decides which world you are in, because each one
-    // carries its own origin. What remains here is the actual setting: which
-    // server the cloud workspaces live on.
-    TextField(
-      controller: _serverUrl,
-      enabled: !_serverSaving,
-      keyboardType: TextInputType.url,
-      autocorrect: false,
-      decoration: const InputDecoration(
-        labelText: 'Server URL',
-        hintText: 'https://mica.cloudcele.com',
-        prefixIcon: Icon(Icons.link),
-        border: OutlineInputBorder(),
-      ),
-    ),
-    // "Use Mica Cloud" lived here as a button that only typed the default URL
-    // into the field above — which the field's own hint already shows. AppFlowy
-    // doesn't even give its hosted cloud a URL box (it's a constant); a button
-    // whose whole job is to fill in a default is noise.
-    const SizedBox(height: 10),
     Text(
-      '云端工作区住在这台服务器上;本地工作区始终在这台设备上,与服务器'
-      '无关。两者都列在左上角的工作区切换器里 —— 点哪个就打开哪个。换服务器'
-      '会断开当前云端连接(凭证按服务器保留,换回即恢复登录)。',
+      '一次只连一个。切换后左侧只显示这一个世界的工作区。',
       style: Theme.of(
         context,
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+    ),
+    const SizedBox(height: 10),
+    DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          for (final origin in widget.connections)
+            _connectionRow(context, origin),
+        ],
+      ),
+    ),
+    const SizedBox(height: 10),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: _serverSaving ? null : _promptAddServer,
+        icon: const Icon(Icons.add, size: 16),
+        label: const Text('添加服务器'),
+      ),
     ),
     if (_serverMsg != null) ...[
       const SizedBox(height: 12),
@@ -1018,7 +1048,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     Align(
       alignment: Alignment.centerLeft,
       child: FilledButton.icon(
-        onPressed: _serverSaving ? null : _saveServer,
+        onPressed: (_serverSaving || _draftOrigin == widget.activeOrigin)
+            ? null
+            : _saveServer,
         icon: _serverSaving
             ? const SizedBox(
                 width: 16,
@@ -1026,30 +1058,179 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : const Icon(Icons.sync, size: 18),
-        label: const Text('Save & reconnect'),
+        label: const Text('Save & switch'),
       ),
     ),
   ];
 
-  Future<void> _saveServer() async {
-    final url = _serverUrl.text.trim();
-    final parsed = Uri.tryParse(url);
-    if (url.isEmpty ||
-        parsed == null ||
-        !parsed.hasScheme ||
-        parsed.host.isEmpty) {
-      setState(
-        () => _serverMsg = 'Enter a valid URL, e.g. https://mica.example.com',
-      );
-      return;
-    }
+  /// The draft selection. Null until touched, so the list reads from
+  /// [widget.activeOrigin] and Save stays disabled while nothing has changed.
+  String? _draft;
+
+  String get _draftOrigin => _draft ?? widget.activeOrigin;
+
+  Widget _connectionRow(BuildContext context, String origin) {
+    final local = origin == 'local';
+    final selected = _draftOrigin == origin;
+    final signedIn = widget.signedInOrigins.contains(origin);
+    final label = local ? '本地模式' : (Uri.tryParse(origin)?.host ?? origin);
+    final subtitle = local
+        ? '这台设备上的工作区,不需要账号,也不同步'
+        : (signedIn ? '已登录' : '未登录 — 切过去后登录');
+    return InkWell(
+      onTap: _serverSaving ? null : () => setState(() => _draft = origin),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Row(
+          children: [
+            Radio<String>(
+              value: origin,
+              groupValue: _draftOrigin,
+              onChanged: _serverSaving
+                  ? null
+                  : (v) => setState(() => _draft = v),
+            ),
+            Icon(
+              local ? Icons.computer_outlined : Icons.cloud_outlined,
+              size: 18,
+              color: const Color(0xFF475569),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                      color: const Color(0xFF0F172A),
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF94A3B8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 本地模式 has no delete: it is not a server, it is where the
+            // on-device workspaces live — and unlike a server's mirror, those
+            // exist nowhere else.
+            if (!local)
+              IconButton(
+                tooltip: '删除服务器',
+                visualDensity: VisualDensity.compact,
+                onPressed: _serverSaving
+                    ? null
+                    : () => _confirmRemoveServer(origin),
+                icon: const Icon(Icons.delete_outline, size: 18),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _promptAddServer() async {
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('添加服务器'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: const InputDecoration(
+            labelText: 'Server URL',
+            hintText: 'https://mica.example.com',
+            prefixIcon: Icon(Icons.link),
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('添加并切换'),
+          ),
+        ],
+      ),
+    );
+    if (url == null || url.trim().isEmpty || !mounted) return;
     setState(() {
       _serverSaving = true;
       _serverMsg = null;
     });
-    await widget.onConnectCloud(url);
-    // The switch lands the user in the local world (or restores the new
-    // origin's session); close the dialog so they see it.
+    final error = await widget.onAddServer(url);
+    if (!mounted) return;
+    setState(() {
+      _serverSaving = false;
+      _serverMsg = error;
+      _draft = null; // adding switched us; re-read the active connection
+    });
+    // Adding a server switches to it — the user just said where they want to
+    // be. Close so they land there, unless it failed and they must see why.
+    if (error == null && mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _confirmRemoveServer(String origin) async {
+    final host = Uri.tryParse(origin)?.host ?? origin;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('删除 $host?'),
+        content: const Text(
+          '会清除这台服务器在本机的登录状态和离线镜像。服务器上的数据不受影响 '
+          '—— 重新添加并登录即可恢复。\n\n'
+          '还没同步上去的离线修改只存在于本机,会随镜像一起消失(删除前会先尝试'
+          '把它们推上去)。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _serverSaving = true);
+    await widget.onRemoveServer(origin);
+    if (!mounted) return;
+    setState(() {
+      _serverSaving = false;
+      _draft = null; // the active connection moved; re-read it
+    });
+  }
+
+  Future<void> _saveServer() async {
+    final target = _draftOrigin;
+    if (target == widget.activeOrigin) return;
+    setState(() {
+      _serverSaving = true;
+      _serverMsg = null;
+    });
+    await widget.onSetActiveConnection(target);
+    // Close so the user sees the world they just chose.
     if (mounted) Navigator.of(context).pop();
   }
 

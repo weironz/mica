@@ -1,15 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
 
-// Local and cloud were modelled as a global MODE: the workspace menu showed
-// only the active world and a toggle in Settings chose which. But every
-// workspace already carries its own origin — `'local'` or the server it lives
-// on — so the active origin is derivable from the workspace you opened, and the
-// mode was a filter bolted on top of a model that never needed it.
+// The app is connected to exactly ONE world at a time — `本地模式` or a server —
+// picked from one list in Settings. Tiling both worlds in the workspace menu was
+// tried and rejected: a local and a cloud workspace look alike but are not, and
+// listing them together invites treating them as interchangeable.
 //
-// Deleting it is what fixes the reported symptoms: a footer showing the cloud
-// account while you stand in a local workspace, and a Settings toggle that
-// switched worlds (and closed the dialog) the instant you touched it.
+// What survives from that attempt is the part that was right: `origin` already
+// says where each workspace lives, so nothing needs a second source of truth for
+// it. The connection decides which world is on screen; the entry decides how a
+// row behaves.
 
 const _cloud = 'https://mica.cloudcele.com';
 
@@ -20,16 +20,17 @@ WorkspaceEntry entry(String origin, String id, String name) => WorkspaceEntry(
     );
 
 void main() {
-  group('origin is the flavour — no mode needed', () {
+  group('origin says where a workspace lives', () {
     final entries = [
       entry(_cloud, 'c1', 'devops'),
       entry('local', 'l1', '本地工作区'),
       entry(_cloud, 'c2', 'network'),
     ];
 
-    test('every workspace says where it lives, on its own', () {
-      // This is AFFiNE's `flavour` — a server id with `local` reserved — and
-      // Mica already had it. Nothing needs to ask a global "which mode".
+    test('a workspace carries its own origin', () {
+      // Same shape as AFFiNE's `flavour`: a server id, with `local` reserved.
+      // It is what the menu filters on and what row actions dispatch on — no
+      // second source of truth for where a workspace lives.
       expect(entries.where((e) => e.isLocal).map((e) => e.workspace.name),
           ['本地工作区']);
       expect(entries.where((e) => !e.isLocal).map((e) => e.workspace.name),
@@ -45,13 +46,25 @@ void main() {
       expect(b.origin, _cloud);
     });
 
-    test('the active origin is DERIVED from the picked row', () {
-      // What _selectEntry does: it reads entry.origin. There is no toggle whose
-      // value could disagree with the workspace on screen.
-      for (final e in entries) {
-        final active = e.origin; // _selectEntry: _activeOrigin = entry.origin
-        expect(active == 'local', e.isLocal);
-      }
+    test('the menu lists only the connected world', () {
+      // What the switcher does. A cloud connection must never tile the local
+      // workspaces beside the server's, nor the reverse.
+      List<String> shown({required bool local}) => [
+            for (final e in entries)
+              if (e.isLocal == local) e.workspace.name,
+          ];
+      expect(shown(local: false), ['devops', 'network']);
+      expect(shown(local: true), ['本地工作区']);
+    });
+
+    test('the connection list offers this device first, then servers', () {
+      // `_connections` = ['local', ...servers]: one list, same kind of choice.
+      // Local leads because it always exists and needs no account — AFFiNE's
+      // server picker puts its LocalSelectorItem in the same place.
+      const servers = ['https://a.example.com', 'https://b.example.com'];
+      const connections = ['local', ...servers];
+      expect(connections.first, 'local');
+      expect(connections.length, servers.length + 1);
     });
   });
 
