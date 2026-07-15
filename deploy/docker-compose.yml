@@ -52,7 +52,7 @@ services:
       traefik.http.services.mica-s3.loadbalancer.server.port: "9000"
 
   # The three mica images are built + pushed together by CI on a `v*` tag
-  # (.github/workflows/release-windows.yml) and MUST move as a set —
+  # (.github/workflows/release.yml) and MUST move as a set —
   # MICA_VERSION keys all of them.
   #
   # MICA_REGISTRY defaults to Aliyun ACR: prod is in CN, and pulling from

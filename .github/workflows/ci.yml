@@ -24,15 +24,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cache cargo + target
-        uses: actions/cache@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # rust-cache, NOT a hand-rolled actions/cache of `target`: caching the
+      # whole target dir stored ~2.5GB PER ENTRY (and entries are scoped per
+      # ref, so every tag push doubled it) — 5.1GB of the repo's 10GB cache
+      # budget, blowing it past the limit and evicting everyone else's caches.
+      # rust-cache prunes the workspace's own artifacts (they change every
+      # commit and are worthless to restore) and keeps only deps: the cli job
+      # using it sits at ~115MB, 20x smaller, for the same speedup.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: workspace
       # rust-toolchain.toml pins `stable` (+ rustfmt, clippy); rustup honors it.
       # sqlx uses the runtime query API (not compile-time macros), so the
       # workspace builds without a live database.
