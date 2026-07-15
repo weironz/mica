@@ -128,6 +128,10 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 
 - `just dev-web`:构建 web bundle(末尾自动 chmod);dev nginx 已配 `Cache-Control: no-store`(防 stale bundle,这个坑栽过三次)
 - 验证流:改完 → `flutter test`(目前 176 个)→ `just dev-web` → playwright-cli 实测截图;**开测前确认没有旧标签页连着同一文档**(幽灵会话曾污染过协同数据,杀法:`playwright-cli kill-all` + 查 `ps aux | grep chrome`)
+- **本地 web 测试环路**(我自己的浏览器就能跑,不碰 prod、不碰你的桌面客户端数据):
+  `just dev-web`(构建 bundle 到 `clients/mica_flutter/build/web`)→ `docker compose up -d --force-recreate web` → http://localhost:8090,nginx 把 `/api` 代理到本地 api。配 `demo@mica.dev` / `password123` 就是一套完整的可写环境。
+  **`--force-recreate` 不是可选的**:`up -d` 见配置哈希没变就只重启老容器 —— 2026-07-15 撞到过一个 7/11 建的 web 容器,重启后 `HostConfig.PortBindings` 里明明写着 8090,`docker port` 却是空的、host 上没人在听(HTTP 000)。重建才真正发布端口。
+  **web 验不了的**(别在这儿浪费时间):账号栏的世界切换器整块是 `if (!kIsWeb)`;本地模式在 web 上不存在(`_local.available == false`);窗口几何/最大化;FFI 本地库。这些只能桌面端实测。
 - **本地 Docker 栈不跟着代码走**:`docker compose up -d` 只保证容器在跑,不重建镜像 —— 改了 `crates/` 必须 `docker compose build api && docker compose up -d api`。
   **怎么发现自己中招**:`curl -s localhost:8080/api/health` 报的 version 是 `env!("CARGO_PKG_VERSION")`,编译期烤进去的,和 `crates/api-server/Cargo.toml` 比一下就知道镜像多老(2026-07-15 撞过:镜像停在 7/11 的 0.1.5,落后 4 个发版,登录压根不返回 refresh_token,差点把"功能没做"当成"功能坏了"查)。
   **迁移同理**:`sqlx::migrate!("../../migrations")` 是编译进二进制的,compose 没挂 `./migrations` —— 旧镜像 = 旧迁移。
