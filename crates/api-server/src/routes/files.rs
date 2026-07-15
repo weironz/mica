@@ -181,11 +181,23 @@ pub async fn import_url(
     .build()
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-  let response = client
-    .get(url)
-    .send()
-    .await
-    .map_err(|_| ApiError::BadRequest("could not fetch the image url".to_string()))?;
+  // Say WHY. `map_err(|_| ..)` threw the cause away, so a server that simply
+  // cannot reach the host (blocked/DNS-poisoned CDN — routine for a CN-hosted
+  // server pulling from medium/imgur/…) was indistinguishable from a bad URL,
+  // and the UI could only shrug. The client falls back to loading the url
+  // itself when this fails, so this is a diagnostic, not a dead end.
+  let response = client.get(url).send().await.map_err(|e| {
+    let why = if e.is_timeout() {
+      "timed out — this server may have no route to that host"
+    } else if e.is_connect() {
+      "connection failed — DNS or network unreachable from this server"
+    } else if e.is_redirect() {
+      "too many redirects"
+    } else {
+      "request failed"
+    };
+    ApiError::BadRequest(format!("could not fetch the image url: {why}"))
+  })?;
   if !response.status().is_success() {
     return Err(ApiError::BadRequest(format!(
       "image url returned {}",

@@ -1157,14 +1157,34 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final import = widget.onImportImageUrl;
     if (import == null) return;
     final result = await import(url);
-    if (result == null || !mounted) return;
+    if (!mounted) return;
+    if (result == null) {
+      // Re-hosting failed (commonly: the SERVER can't reach that host, even
+      // though this client can). Dropping the paste on the floor lost the
+      // content outright — keep the block on its external url instead, and let
+      // [_requestImage] load it directly.
+      _controller.insertImage(url: url);
+      _syncImeFromSelection(force: true);
+      return;
+    }
     _controller.insertImage(fileId: result.fileId, name: result.name);
     _syncImeFromSelection(force: true);
   }
 
+  /// External image urls with a re-host CURRENTLY in flight. [_requestImage]
+  /// skips these (the url is about to become a file_id — fetching it would be
+  /// a wasted CORS round trip), and only these: gating on the global
+  /// `reHostImages` flag instead meant a url was skipped even when no re-host
+  /// was running or possible — re-hosting only ever fires right after a paste,
+  /// so an image block arriving any other way (a synced doc, a reopened page,
+  /// a failed re-host) stayed blank forever, waiting on a file_id nobody was
+  /// coming to create.
+  final Set<String> _rehostPending = {};
+
   /// Re-host any image blocks that still reference an external `url` (e.g. from
   /// pasted/AI Markdown) into our own storage, so they render on the canvas and
   /// can't rot. Runs in the background; each conversion repaints when done.
+  /// Best-effort: on failure the block keeps its url and renders from there.
   void _rehostExternalImages() {
     if (!widget.reHostImages) return;
     final import = widget.onImportImageUrl;
@@ -1175,11 +1195,33 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (node.data['file_id'] != null || url == null || !url.startsWith('http')) {
         continue;
       }
+      if (!_rehostPending.add(url)) continue; // already in flight
       final id = node.id;
-      import(url).then((result) {
-        if (result == null || !mounted) return;
-        _controller.setImageSource(id, fileId: result.fileId, name: result.name);
-      });
+      Future<({String fileId, String name})?> job;
+      try {
+        job = import(url);
+      } catch (_) {
+        _rehostPending.remove(url);
+        continue;
+      }
+      job.then(
+        (result) {
+          if (!mounted) return;
+          if (result != null) {
+            _controller
+                .setImageSource(id, fileId: result.fileId, name: result.name);
+            _rehostPending.remove(url);
+            return;
+          }
+          // Fall back to rendering the original url: re-hosting is a
+          // durability nicety, not a precondition for showing the image.
+          setState(() => _rehostPending.remove(url));
+        },
+        onError: (_) {
+          if (!mounted) return;
+          setState(() => _rehostPending.remove(url));
+        },
+      );
     }
   }
 
@@ -2297,10 +2339,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _imageErrors.contains(fileId)) {
       return;
     }
-    // An external url that we're about to re-host: don't CORS-fetch it (it will
-    // become a file_id shortly). When re-hosting is off, fetch it best-effort.
+    // An external url with a re-host in flight: don't CORS-fetch it, it will
+    // become a file_id shortly. Any other url — re-hosting off, already
+    // failed, or a block that never went through the paste path at all — is
+    // fetched best-effort. See [_rehostPending].
     final isUrl = fileId.startsWith('http://') || fileId.startsWith('https://');
-    if (isUrl && widget.reHostImages) return;
+    if (isUrl && _rehostPending.contains(fileId)) return;
     final load = widget.onLoadImageBytes;
     if (load == null) return;
     _imageLoading.add(fileId);

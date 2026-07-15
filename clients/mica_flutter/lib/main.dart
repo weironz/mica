@@ -2795,7 +2795,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       return (fileId: file.id, name: file.name);
     } catch (error) {
-      if (mounted) setState(() => _message = error.toString());
+      // Re-hosting is best-effort — the editor falls back to the original url
+      // and the image still renders (this client can usually reach hosts the
+      // SERVER cannot: a CN-hosted server has no route to medium/imgur/…).
+      // So this is a heads-up that the link can rot, not a failure; the raw
+      // ApiError ("bad request: could not fetch the image url") read like the
+      // paste had broken.
+      if (mounted) {
+        setState(() => _message = '图片未能转存到本地存储,已保留原始链接(链接失效后图片会丢失)。$error');
+      }
       return null;
     }
   }

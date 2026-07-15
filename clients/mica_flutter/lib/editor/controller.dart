@@ -2222,23 +2222,28 @@ class EditorController extends ChangeNotifier {
     collapseTo(DocPosition(afterIndex, 0));
   }
 
-  /// Insert an image block (atomic) at the caret, carrying its `file_id` and
-  /// original `name` (+ optional `alt`). Like [insertDivider], an empty focused
-  /// paragraph becomes the image; otherwise it is inserted after the focused
-  /// node, and a trailing paragraph is ensured for the caret.
+  /// Insert an image block (atomic) at the caret. Normally it carries our
+  /// storage [fileId] + original [name]; pass [url] instead to reference an
+  /// external image (the fallback when server-side re-hosting failed — the
+  /// renderer loads a `url` block directly). Like [insertDivider], an empty
+  /// focused paragraph becomes the image; otherwise it is inserted after the
+  /// focused node, and a trailing paragraph is ensured for the caret.
   void insertImage({
-    required String fileId,
-    required String name,
+    String? fileId,
+    String? name,
+    String? url,
     String alt = '',
     String? align,
   }) {
+    assert((fileId != null) != (url != null), 'pass exactly one of fileId/url');
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
     if (i >= nodes.length) return;
     final data = <String, dynamic>{
-      'file_id': fileId,
-      'name': name,
+      if (fileId != null) 'file_id': fileId,
+      if (url != null) 'url': url,
+      'name': name ?? (url == null ? '' : url.split('/').last),
       'align': ?align,
     };
     final node = nodes[i];
