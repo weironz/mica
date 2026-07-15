@@ -35,3 +35,17 @@ baseline for P4 — see docs/editor-engine.md Milestone 8.
 | Tabs | 11 | 11 | 100% |
 | Textual content | 3 | 3 | 100% |
 | Thematic breaks | 19 | 19 | 100% |
+
+## 方言扩展(超出 CommonMark 底座)
+
+底座之上叠的方言(读侧对官方 641 例零回归 = 硬门):
+
+- **CJK-friendly 强调**(2026-07-15):`**加粗。**后文` / `_强调_文字` 这类
+  紧贴 CJK 标点/字符的强调能正确配对。严格 CommonMark 把 `。` 当"标点"→
+  闭合 `**` 的 flanking 失败,中文场景常年咬人(且破 round-trip:导出的
+  `**…。**x` 无法再解析)。采用 markdown-cjk-friendly 的权威修正:把 flanking
+  的"标点"拆成非 CJK 标点(严格照旧)与 CJK 标点/字符(像空格一样放宽)。
+  ASCII 输入字节不变 → 记分牌稳 641。实现在 Rust `flanking`/`is_cjk`
+  (crates/markdown)与 Dart `_flanking`/`_isCjk`(marks.dart),两端同步;
+  回归 `crates/markdown/tests/cjk_emphasis.rs` + `cjk_emphasis_and_fence_test.dart`。
+- 脚注、YAML front matter、Pandoc `$…$`/`$$…$$` 数学约定(见 CLAUDE.md #4)。
