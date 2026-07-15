@@ -3273,10 +3273,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _openLanguageMenu(int nodeIndex, Offset globalPosition) async {
+    if (nodeIndex < 0 || nodeIndex >= _controller.nodes.length) return;
+    final pinned = canonicalCodeLanguage(
+      (_controller.nodes[nodeIndex].data['language'] as String?) ?? '',
+    );
     final selected = await showDialog<String>(
       context: context,
       barrierColor: Colors.transparent,
-      builder: (context) => _LanguagePicker(anchor: globalPosition),
+      builder: (context) => _LanguagePicker(
+        anchor: globalPosition,
+        current: pinned.isEmpty ? 'auto' : pinned,
+      ),
     );
     if (selected != null) {
       _controller.setCodeLanguage(nodeIndex, selected);
@@ -4821,9 +4828,13 @@ const List<_SlashOption> _slashOptions = [
 /// the language list is long, so filtering beats scrolling. ↑/↓ move the
 /// highlight, Enter picks, Esc dismisses; pops with the chosen language.
 class _LanguagePicker extends StatefulWidget {
-  const _LanguagePicker({required this.anchor});
+  const _LanguagePicker({required this.anchor, required this.current});
 
   final Offset anchor;
+
+  /// The block's own setting — `auto` when it has none. Not the *resolved*
+  /// language: the point is to show whether the block is pinned or detecting.
+  final String current;
 
   @override
   State<_LanguagePicker> createState() => _LanguagePickerState();
@@ -4961,9 +4972,31 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                                     horizontal: 10,
                                   ),
                                   alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    items[i],
-                                    style: const TextStyle(fontSize: 13),
+                                  child: Row(
+                                    children: [
+                                      // Which one is this block actually on?
+                                      // Without the tick the list gave no
+                                      // feedback at all, so a block pinned to
+                                      // `python` looked exactly like one on
+                                      // `auto` that had detected python.
+                                      SizedBox(
+                                        width: 20,
+                                        child: items[i] == widget.current
+                                            ? const Icon(Icons.check,
+                                                size: 14,
+                                                color: Color(0xFF2563EB))
+                                            : null,
+                                      ),
+                                      Text(
+                                        items[i],
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: items[i] == widget.current
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),

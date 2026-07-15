@@ -147,6 +147,64 @@ void main() {
     });
   });
 
+  group('auto-detection covers what people actually paste', () {
+    // YAML was missing outright, so pasting a config into an `auto` block
+    // resolved to `plaintext` — the "just set it to auto" answer didn't even
+    // work. CSS was missing too.
+    const compose =
+        'services:\n  api:\n    image: mica\n    ports:\n      - "8080:80"\n';
+
+    test('yaml is detected at all', () {
+      expect(detectLanguage(compose), 'yaml');
+      expect(
+        detectLanguage('name: CI\non:\n  push:\n    tags: ["v*"]\n'),
+        'yaml',
+      );
+      expect(detectLanguage('---\ntitle: hi\ndate: 2026-01-01\n---\n'), 'yaml',
+          reason: 'a document marker is enough on its own');
+    });
+
+    test('an auto block follows pasted yaml', () {
+      // The scenario as reported: this is what `auto` is for, and it returned
+      // plaintext before.
+      expect(resolveCodeLanguage(compose, 'auto'), 'yaml');
+      expect(resolveCodeLanguage(compose, null), 'yaml');
+    });
+
+    test('a pinned block does NOT follow pasted yaml', () {
+      // Deliberately: the author chose python. A choice that the next edit
+      // silently overturns is not a choice.
+      expect(resolveCodeLanguage(compose, 'python'), 'python');
+    });
+
+    test('yaml holding a python one-liner is still yaml', () {
+      // `command: python -c "print(1)"` trips detectLanguage's weak `print(`
+      // rule — hence YAML sits above it, and Python's real signature (`def
+      // f():`) wins earlier via strongLanguageSignature regardless.
+      expect(
+        detectLanguage('services:\n  x:\n    command: python -c "print(1)"\n'),
+        'yaml',
+      );
+    });
+
+    test('css is detected, and not mistaken for yaml', () {
+      // `color: red;` inside braces looks exactly like a YAML key.
+      expect(detectLanguage('body {\n  color: red;\n  margin: 0;\n}\n'), 'css');
+      expect(
+        detectLanguage('@media (max-width: 600px) {\n  .a { display: none; }\n}\n'),
+        'css',
+      );
+    });
+
+    test('yaml does not steal from its neighbours', () {
+      expect(detectLanguage('{\n  "a": 1,\n  "b": "x"\n}'), 'json');
+      expect(detectLanguage('def f(x):\n    return x\n'), 'python');
+      expect(detectLanguage('#!/bin/bash\necho hi\n'), 'bash');
+      expect(detectLanguage('package main\n\nfunc main() {\n}\n'), 'go');
+      expect(detectLanguage('just some words\nand more words\n'), 'plaintext');
+    });
+  });
+
   group('a pasted fence that lies about its language', () {
     // The reported case, verbatim in shape: ChatGPT hands over Python inside a
     // ```bash fence.

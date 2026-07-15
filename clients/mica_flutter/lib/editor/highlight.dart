@@ -369,9 +369,33 @@ String detectLanguage(String code) {
   final c = code;
   if (c.isEmpty) return 'plaintext';
   bool has(String pattern) => RegExp(pattern).hasMatch(c);
+  bool hasLine(String pattern) => RegExp(pattern, multiLine: true).hasMatch(c);
+
+  // Structural syntax outranks every heuristic below — a shebang, a `def f():`.
+  final strong = strongLanguageSignature(c);
+  if (strong != null) return strong;
 
   if (has(r'^\s*<\?xml') || has(r'<\w+[^>]*>.*</\w+>') || has(r'<!DOCTYPE')) {
     return 'html';
+  }
+  // CSS before YAML: a rule body is full of `prop: value;` lines, which are
+  // indistinguishable from YAML keys once you're inside the braces.
+  if (has(r'\{[^{}]*[\w-]+\s*:\s*[^;{}]+;') || hasLine(r'^\s*@(?:media|import|keyframes|font-face)\b')) {
+    return 'css';
+  }
+  // YAML — and this was missing entirely, so a pasted config resolved to
+  // `plaintext` even on `auto`. It has no keywords to key off: `key:` at the
+  // head of a line IS the language. Two of them, or a document marker.
+  //
+  // Placed above Python's weaker rules on purpose: a compose file's
+  // `command: python -c "print(1)"` would otherwise trip Python's `print(`.
+  // Python's real signature (`def f():`) already won above, via [strong].
+  if (hasLine(r'^---\s*$') ||
+      RegExp(r'^[ \t]*-?[ \t]*[\w.-]+:(?:[ \t]|$)', multiLine: true)
+              .allMatches(c)
+              .length >=
+          2) {
+    return 'yaml';
   }
   if (has(r'\bfn\s+\w+') && (c.contains('->') || c.contains('let mut') || c.contains('println!'))) {
     return 'rust';

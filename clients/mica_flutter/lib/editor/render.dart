@@ -198,6 +198,14 @@ class _NodeLayout {
   Rect? viewCodeTab; // mermaid view switch: source tab (local), if any
   Rect? viewPreviewTab; // mermaid view switch: preview tab (local), if any
   String langText = ''; // resolved code language
+  bool langAuto = false; // resolved by detection, not pinned by the author
+
+  /// The language chip's text. An auto block is *live* — it re-detects as the
+  /// content changes — while a pinned one never moves, and the two were
+  /// indistinguishable because the chip only ever showed the resolved name. So
+  /// you could not tell whether pasting YAML into a block would relabel it, nor
+  /// that switching to `auto` was the way to make it.
+  String get langChipText => langAuto ? 'auto · $langText' : langText;
   String footnoteLabel = ''; // `[label]` gutter marker (kind == 'footnote_def')
   String nodeId = '';
   bool codeWrap = false; // whether this code block wraps
@@ -764,6 +772,8 @@ class RenderDocument extends RenderBox {
       final textWidth = (maxWidth - contentLeft - (isCode ? EditorTheme.codePadH : 0))
           .clamp(0.0, double.infinity);
 
+      final String? pinnedLang =
+          isCode ? canonicalCodeLanguage((node.data['language'] as String?) ?? '') : null;
       final String? codeLang = isCode
           ? resolveCodeLanguage(node.text, node.data['language'] as String?)
           : null;
@@ -790,6 +800,8 @@ class RenderDocument extends RenderBox {
         ..boxLeft = EditorTheme.gutter + liInset
         ..todoChecked = node.todoChecked
         ..langText = codeLang ?? ''
+        ..langAuto =
+            isCode && (pinnedLang!.isEmpty || pinnedLang == 'auto')
         ..footnoteLabel = node.kind == 'footnote_def'
             ? (node.data['label'] as String? ?? '')
             : ''
@@ -881,7 +893,7 @@ class RenderDocument extends RenderBox {
         const iconBox = 22.0;
         final marker = TextPainter(
           text: TextSpan(
-            text: '${layout.langText}  ▾',
+            text: '${layout.langChipText}  ▾',
             style: const TextStyle(fontSize: 11, color: EditorTheme.muted),
           ),
           textDirection: TextDirection.ltr,
@@ -1114,7 +1126,7 @@ class RenderDocument extends RenderBox {
       );
       final marker = TextPainter(
         text: TextSpan(
-          text: '${l.langText}  ▾',
+          text: '${l.langChipText}  ▾',
           style: const TextStyle(fontSize: 11, color: EditorTheme.muted),
         ),
         textDirection: TextDirection.ltr,
@@ -1900,6 +1912,11 @@ class RenderDocument extends RenderBox {
     }
     return null;
   }
+
+  /// The language chip's text for node [i] — the pinned/auto distinction is
+  /// only ever painted onto the canvas, so a test has no other way to read it.
+  @visibleForTesting
+  String debugLangChipAt(int i) => _layouts[i].langChipText;
 
   /// Node index of an atomic block whose renderer takes a click as "select me"
   /// and whose box contains [local], or null.
