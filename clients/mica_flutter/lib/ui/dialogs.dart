@@ -201,13 +201,6 @@ class _SettingsDialog extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
-    required this.cloudOrigin,
-    required this.onConnectCloud,
-    required this.connections,
-    required this.activeOrigin,
-    required this.onSetActiveConnection,
-    required this.onAddServer,
-    required this.onRemoveServer,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -233,36 +226,19 @@ class _SettingsDialog extends StatefulWidget {
   /// change — that silently did nothing.
   final Future<void> Function(String displayName)? onUpdateProfile;
   final Future<void> Function(String current, String next)? onChangePassword;
-  final String cloudOrigin;
-  final Future<void> Function(String url) onConnectCloud;
 
-  /// `['local', ...servers]` — this device and every configured server, one
-  /// list because they are the same kind of choice: which single world the app
-  /// shows. `'local'` is first and cannot be removed.
-  ///
-  /// A getter, not a list. A dialog is its own route: it is built once and
-  /// never rebuilt by the parent, so a snapshot taken at `showDialog` time goes
-  /// stale the instant a server is added or removed — the add landed, the list
-  /// just never showed it, and adding again then said "already in the list".
-  /// Reading through a closure means every rebuild sees the truth.
-  final List<String> Function() connections;
-
-  /// Which of [connections] is live. Same reason as above: read it, don't
-  /// snapshot it, or the dropdown keeps showing the world you just left.
-  final String Function() activeOrigin;
-
-  final Future<void> Function(String origin) onSetActiveConnection;
-
-  /// Returns an error message, or null on success.
-  final Future<String?> Function(String url) onAddServer;
-  final Future<void> Function(String origin) onRemoveServer;
-  final Future<Map<String, dynamic>> Function() onLoadAiSettings;
+  /// Null in 本地模式 — AI settings live on the server, so there is nothing to
+  /// configure and the tab is absent. Null, not a no-op: same rule as
+  /// [onUpdateProfile] and [onLoadTokens]. These two were the stragglers, and
+  /// a no-op here meant a whole provider form — base URL, model, API key —
+  /// that took your typing and dropped it.
+  final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
   final Future<void> Function({
     required String provider,
     required String baseUrl,
     required String model,
     String? apiKey,
-  })
+  })?
   onSaveAiSettings;
   final Future<List<Map<String, dynamic>>> Function()? onLoadTokens;
   final Future<Map<String, dynamic>> Function(
@@ -343,14 +319,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late bool _showPageTitle = widget.showPageTitle;
   late bool _aiEnabled = widget.aiEnabled;
 
-  // Cloud server connection (P3c-2: no mode anymore — the local world always
-  // exists; this only configures WHICH cloud server the cloud section uses).
-  late final _serverUrl = TextEditingController(
-    text: widget.cloudOrigin.isEmpty ? kMicaCloudUrl : widget.cloudOrigin,
-  );
-  bool _serverSaving = false;
-  String? _serverMsg;
-
   @override
   void initState() {
     super.initState();
@@ -412,7 +380,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _name.dispose();
     _curPass.dispose();
     _newPass.dispose();
-    _serverUrl.dispose();
     _tokenName.dispose();
     _tokenExpiry.dispose();
     super.dispose();
@@ -466,8 +433,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   Future<void> _load() async {
+    // 本地模式: no AI provider to load, and no AI tab to load it into. initState
+    // calls this unconditionally, so the absence has to be handled here.
+    final load = widget.onLoadAiSettings;
+    if (load == null) return;
     try {
-      final settings = await widget.onLoadAiSettings();
+      final settings = await load();
       if (!mounted) return;
       final provider = settings['provider'] as String? ?? 'openai';
       final base = settings['base_url'] as String? ?? '';
@@ -775,13 +746,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// the only holdout — the button existed for these three text fields and then
   /// sat under every page, saving AI settings no matter what you were looking at.
   Future<void> _saveAi() async {
+    // Unreachable in 本地模式 (the blur listeners belong to fields that only the
+    // AI tab builds), but this is what makes that a fact rather than a hope.
+    final save = widget.onSaveAiSettings;
+    if (save == null) return;
     final attempt = _aiNow;
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await widget.onSaveAiSettings(
+      await save(
         provider: _preset.provider,
         baseUrl: _baseUrl.text.trim(),
         model: _model.text.trim(),
@@ -1064,227 +1039,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
-  /// Settings → 服务器. One dropdown of connections — this device, then every
-  /// configured server — of which exactly one is live.
-  ///
-  /// A dropdown rather than a list of rows: the list grew with every server and
-  /// would eventually push the Save button out of the dialog. A dropdown is a
-  /// fixed-height control that scrolls its own popup, so N servers cost no
-  /// layout at all. (AppFlowy uses a dropdown here for the same reason.)
-  ///
-  /// Selecting is a DRAFT; the dialog's Save commits it. The switch that lived
-  /// here before applied on tap and closed the dialog out from under you, so
-  /// there was no way to look before leaping — AppFlowy's `CloudSettingBloc`
-  /// likewise writes nothing on select and commits from an explicit button.
-  List<Widget> _serverSection(BuildContext context) => [
-    _sectionTitle(context, Icons.dns_outlined, '服务器', const Color(0xFF2563EB)),
-    const SizedBox(height: 8),
-    Text(
-      '一次只连一个。切换后左侧只显示这一个世界的工作区。',
-      style: Theme.of(
-        context,
-      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
-    ),
-    const SizedBox(height: 12),
-    Row(
-      children: [
-        // `initialValue` does follow later changes here — _DropdownButtonFormFieldState
-        // overrides didUpdateWidget to `setValue(widget.initialValue)`. (Only
-        // FormFieldState, the base, ignores it; reading that one and stopping is
-        // how this briefly became a hand-rolled DropdownButton for no reason.)
-        Expanded(
-          child: DropdownButtonFormField<String>(
-            initialValue: widget.connections().contains(_draftOrigin)
-                ? _draftOrigin
-                : widget.connections().first,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: '当前连接',
-              border: OutlineInputBorder(),
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 12,
-              ),
-            ),
-            items: [
-              for (final origin in widget.connections())
-                DropdownMenuItem(
-                  value: origin,
-                  child: _connectionLabel(origin),
-                ),
-            ],
-            onChanged: _serverSaving
-                ? null
-                : (v) => v == null ? null : _switchTo(v),
-          ),
-        ),
-        const SizedBox(width: 6),
-        // Acts on whatever the dropdown shows. 本地模式 is not deletable: it is
-        // not a server, it is where the on-device workspaces live — a server's
-        // mirror can be re-fetched, those exist nowhere else.
-        IconButton(
-          tooltip: _draftOrigin == 'local' ? '本地模式不可删除' : '删除这台服务器',
-          onPressed: (_serverSaving || _draftOrigin == 'local')
-              ? null
-              : () => _confirmRemoveServer(_draftOrigin),
-          icon: const Icon(Icons.delete_outline, size: 20),
-        ),
-      ],
-    ),
-    const SizedBox(height: 6),
-    Align(
-      alignment: Alignment.centerLeft,
-      child: TextButton.icon(
-        onPressed: _serverSaving ? null : _promptAddServer,
-        icon: const Icon(Icons.add, size: 16),
-        label: const Text('添加服务器'),
-      ),
-    ),
-    if (_serverMsg != null) ...[
-      const SizedBox(height: 12),
-      ErrorBanner(_serverMsg!),
-    ],
-    // No switch button here: the dialog's own Save is it. Two Save buttons on
-    // one screen is two sources of truth about what "save" means.
-  ];
-
-  /// The live connection. No local copy: [widget.activeOrigin] is a getter, and
-  /// every action here calls setState afterwards, so a rebuild always reads the
-  /// current truth. Mirroring it in a field was how this dialog used to cope
-  /// with being a separate route — and mirroring `connections` the same way is
-  /// exactly what would have been the next bug.
-  String get _draftOrigin => widget.activeOrigin();
-
-  /// Just what the connection IS. Deliberately no sign-in state: signing in
-  /// does not happen in Settings (it is the sidebar's job, in the world you are
-  /// actually in), and a server you just added is always signed-out — so the
-  /// marker could only ever state the obvious or the irrelevant.
-  Widget _connectionLabel(String origin) {
-    final local = origin == 'local';
-    return Row(
-      children: [
-        Icon(
-          local ? Icons.computer_outlined : Icons.cloud_outlined,
-          size: 16,
-          color: const Color(0xFF475569),
-        ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            local ? '本地模式' : (Uri.tryParse(origin)?.host ?? origin),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _promptAddServer() async {
-    final controller = TextEditingController();
-    final url = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('添加服务器'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.url,
-          autocorrect: false,
-          decoration: const InputDecoration(
-            labelText: 'Server URL',
-            hintText: 'https://mica.example.com',
-            prefixIcon: Icon(Icons.link),
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (v) => Navigator.of(context).pop(v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('添加'),
-          ),
-        ],
-      ),
-    );
-    if (url == null || url.trim().isEmpty || !mounted) return;
-    setState(() {
-      _serverSaving = true;
-      _serverMsg = null;
-    });
-    final error = await widget.onAddServer(url);
-    if (!mounted) return;
-    setState(() {
-      _serverSaving = false;
-      _serverMsg = error;
-      // Adding is not switching: the new server joins the dropdown and nothing
-      // else moves. Picking it is a separate act — you can add one now and
-      // switch to it whenever.
-    });
-  }
-
-  Future<void> _confirmRemoveServer(String origin) async {
-    final host = Uri.tryParse(origin)?.host ?? origin;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('删除 $host?'),
-        content: const Text(
-          '会清除这台服务器在本机的登录状态和离线镜像。服务器上的数据不受影响 '
-          '—— 重新添加并登录即可恢复。\n\n'
-          '还没同步上去的离线修改只存在于本机,会随镜像一起消失(删除前会先尝试'
-          '把它们推上去)。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFDC2626),
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    setState(() => _serverSaving = true);
-    await widget.onRemoveServer(origin);
-    if (!mounted) return;
-    setState(() {
-      _serverSaving = false;
-      // The list and the active connection are both read live now, so the
-      // rebuild this setState triggers is all it takes to reflect the
-      // removal — including _removeServer having dropped us to 本地模式.
-    });
-  }
-
-  /// Switch to [target] the moment it is picked — settings here apply as you
-  /// touch them, and this is no exception.
-  ///
-  /// Does NOT close the dialog. That is what made the original switch
-  /// intolerable: it applied on tap *and* slammed Settings shut, so the change
-  /// and the disappearance were one event and you couldn't look before leaping.
-  /// Applying while staying put is the opposite — the sidebar changes behind
-  /// the dialog and you decide when to leave.
-  Future<void> _switchTo(String target) async {
-    if (target == _draftOrigin) return;
-    setState(() {
-      _serverSaving = true;
-      _serverMsg = null;
-    });
-    await widget.onSetActiveConnection(target);
-    // The rebuild re-reads widget.activeOrigin(), so the dropdown follows.
-    if (mounted) setState(() => _serverSaving = false);
-  }
-
   List<Widget> _dataSection(BuildContext context) => [
     _sectionTitle(
       context,
@@ -1388,9 +1142,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // Server selection is desktop-only: the web client is served by (and talks
-    // same-origin to) its own backend, and Local-offline needs the native core
-    // that isn't compiled for web. Hide the whole tab on web.
+    // These are the settings of the world you are in — WHICH world that is gets
+    // picked on the account tile, not here. A null callback means the active
+    // world does not have that thing, so the tab is absent rather than present
+    // and inert. In 本地模式 that leaves three tabs, every one of them a
+    // this-device preference, and not one ternary among them.
+    //
     // No `onSave` per tab any more: there is no Save button to feed. Each
     // section commits its own changes as they are made.
     final tabs = <({String title, IconData icon, List<Widget> section})>[
@@ -1399,11 +1156,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         icon: Icons.tune,
         section: _appearanceSection(context),
       ),
-      (
-        title: 'AI provider',
-        icon: Icons.auto_awesome,
-        section: _aiSection(context),
-      ),
+      // AI settings live on the server — 本地模式 has none to configure.
+      if (widget.onLoadAiSettings != null)
+        (
+          title: 'AI provider',
+          icon: Icons.auto_awesome,
+          section: _aiSection(context),
+        ),
       // 本地模式 has no account — same reason API Tokens below is absent there.
       if (widget.onUpdateProfile != null)
         (
@@ -1416,12 +1175,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           title: 'API Tokens',
           icon: Icons.key_outlined,
           section: _tokensSection(context),
-        ),
-      if (!kIsWeb)
-        (
-          title: 'Server',
-          icon: Icons.dns_outlined,
-          section: _serverSection(context),
         ),
       (
         title: 'Data',

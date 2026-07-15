@@ -197,13 +197,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// nothing to keep — switching back to one restores its sign-in.
   ///
   /// `'local'` is deliberately NOT in here: it is a peer of these in the
-  /// Settings list, but it is not a server and has no URL, credentials or
+  /// account menu, but it is not a server and has no URL, credentials or
   /// session. See [_connections].
   List<String> _servers = const [];
 
-  /// What the Settings list offers, in order: this device, then every server.
+  /// What the account menu offers, in order: this device, then every server.
   /// One list, one choice — [_activeOrigin] is whichever is picked.
-  List<String> get _connections => ['local', ..._servers];
+  ///
+  /// 本地模式 is only a choice where there is a local store to switch to:
+  /// [_local.available] is false on web, which is why startup at :289 falls
+  /// back to the cloud there. Nothing observable turns on this today — the menu
+  /// that reads this list is desktop-only anyway, so the two guards say the
+  /// same thing. It is here so the list states what is true on its own, rather
+  /// than being wrong and covered for by its one consumer's gate.
+  List<String> get _connections => [if (_local.available) 'local', ..._servers];
 
   AuthSession? _session;
   List<Workspace> _workspaces = const [];
@@ -343,6 +350,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// they go through the same door rather than a bool toggle.
   Future<void> _setActiveConnection(String origin) async {
     if (origin == _activeOrigin) return;
+    // A Settings dialog belongs to the world that opened it: three of its tabs
+    // are that server's (Account, API Tokens, AI provider), so it cannot
+    // survive the switch it would be describing. Today it cannot even be open
+    // here — it is modal and the account menu is behind its barrier — so this
+    // is a no-op and a fuse for the day that stops being true (Settings as a
+    // side panel, say). _importWorkspaceFile has been doing this by hand.
+    Navigator.of(
+      context,
+      rootNavigator: true,
+    ).popUntil((r) => r.settings.name != 'settings');
     if (origin == 'local') {
       // Keep the server's credentials — switching back must not cost a re-login.
       _disconnectCloudSession();
@@ -3498,7 +3515,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return WorkspaceView(
       session: session,
       entries: _workspaceEntries,
-      activeIsLocal: local,
+      activeOrigin: _activeOrigin,
       selectedRef: _selectedEntry?.ref,
       onSelectEntry: _selectEntry,
       onRenameEntry: _renameEntry,
@@ -3588,15 +3605,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? null
           : _aiCurrentFromMarkdown,
       onAiNewWorkspace: local ? (_) async {} : _aiNewWorkspaceFromMarkdown,
-      onLoadAiSettings: local ? () async => const {} : _loadAiSettings,
-      onSaveAiSettings: local
-          ? ({
-              required String provider,
-              required String baseUrl,
-              required String model,
-              String? apiKey,
-            }) async {}
-          : _saveAiSettings,
+      // Null, not a no-op — absence is what hides the AI tab, the same rule
+      // onLoadTokens/onUpdateProfile below already follow. These two were the
+      // ones that got missed: AI settings live on the server, so in 本地模式 the
+      // tab was a live provider form whose Save went into a function that
+      // returned immediately.
+      onLoadAiSettings: local ? null : _loadAiSettings,
+      onSaveAiSettings: local ? null : _saveAiSettings,
       onLoadTokens: local ? null : _loadTokens,
       onCreateToken: local ? null : _createToken,
       onRevokeToken: local ? null : _revokeToken,
@@ -3609,12 +3624,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Null, not a no-op: absence is what hides the tab. See onLoadTokens.
       onUpdateProfile: local ? null : _updateProfile,
       onChangePassword: local ? null : _changePassword,
-      cloudOrigin: _cloudOrigin,
-      connections: () => _connections,
+      connections: _connections,
       onSetActiveConnection: _setActiveConnection,
       onAddServer: _addServer,
       onRemoveServer: _removeServer,
-      onConnectCloud: _connectCloudServer,
       appearance: _appearance,
       pageWidth: _pageWidth,
       reHostImages: _reHostImages,
@@ -3633,13 +3646,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _savePrefs();
       },
       showAi: local ? false : _aiEnabled && _aiConfigured,
-      aiEnabled: local ? false : _aiEnabled,
-      onAiEnabledChanged: local
-          ? (_) {}
-          : (value) {
-              setState(() => _aiEnabled = value);
-              _savePrefs();
-            },
+      // No 本地模式 ternary: the AI tab is absent there (onLoadAiSettings is
+      // null), so nothing reads these.
+      aiEnabled: _aiEnabled,
+      onAiEnabledChanged: (value) {
+        setState(() => _aiEnabled = value);
+        _savePrefs();
+      },
       onAppearanceChanged: (appearance, pageWidth) {
         setState(() {
           _appearance = appearance;
@@ -3895,7 +3908,7 @@ class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.session,
     required this.entries,
-    required this.activeIsLocal,
+    required this.activeOrigin,
     required this.selectedRef,
     required this.onSelectEntry,
     required this.onRenameEntry,
@@ -3957,12 +3970,10 @@ class WorkspaceView extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
-    required this.cloudOrigin,
     required this.connections,
     required this.onSetActiveConnection,
     required this.onAddServer,
     required this.onRemoveServer,
-    required this.onConnectCloud,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -4000,12 +4011,16 @@ class WorkspaceView extends StatefulWidget {
   /// origin in the switcher. Row actions dispatch on the ROW's entry.
   final List<WorkspaceEntry> entries;
 
-  /// Whether the ACTIVE world is local — the Level-1 world toggle reflects it,
-  /// and the switcher shows only this world's workspaces (one world at a time).
-  final bool activeIsLocal;
+  /// The one world on screen: `'local'` or a server's origin URL. The account
+  /// tile picks it, the switcher shows only its workspaces, and the tile itself
+  /// names its identity — one world at a time.
+  final String activeOrigin;
 
-  /// Switch the whole switcher to a world (true = local). Signed-out cloud
-  /// prompts sign-in first. In-place; no restart.
+  /// Derived, not passed: two props for one fact is how the Settings dialog
+  /// ended up rebuilding the active origin out of `activeIsLocal` and
+  /// `cloudOrigin` — reconstructing a truth that was sitting right there.
+  bool get activeIsLocal => activeOrigin == 'local';
+
   final WorkspaceRef? selectedRef;
   final Future<void> Function(WorkspaceEntry entry) onSelectEntry;
   final Future<void> Function(WorkspaceEntry entry, String name) onRenameEntry;
@@ -4090,13 +4105,16 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String markdown) onAiNewPage;
   final Future<void> Function(String markdown)? onAiCurrentPage;
   final Future<void> Function(String markdown) onAiNewWorkspace;
-  final Future<Map<String, dynamic>> Function() onLoadAiSettings;
+
+  /// Null in 本地模式 — AI settings live on the server, so there is no provider
+  /// to configure and Settings drops the tab. Same rule as [onLoadTokens].
+  final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
   final Future<void> Function({
     required String provider,
     required String baseUrl,
     required String model,
     String? apiKey,
-  })
+  })?
   onSaveAiSettings;
   final Future<List<Map<String, dynamic>>> Function()? onLoadTokens;
   final Future<Map<String, dynamic>> Function(
@@ -4114,20 +4132,19 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String displayName)? onUpdateProfile;
   final Future<void> Function(String current, String next)? onChangePassword;
 
-  /// The configured cloud server's origin URL (P3c-2) — Settings shows it and
-  /// [onConnectCloud] switches it.
-  final String cloudOrigin;
-
-  /// Reads `['local', ...servers]` live. A getter because Settings is a
-  /// separate route that never rebuilds with us: a snapshot would go stale the
-  /// moment a server is added or removed, and the dialog would keep showing the
-  /// old list while prefs said otherwise.
-  final List<String> Function() connections;
+  /// `['local', ...servers]` — this device and every configured server, one
+  /// list because they are the same kind of choice: which single world the app
+  /// shows. The account menu offers exactly these.
+  ///
+  /// A plain list. It used to be a getter, because Settings is a separate route
+  /// that never rebuilds with its parent and a snapshot went stale the moment a
+  /// server was added. The menu lives in this tree and rebuilds with us, so
+  /// that whole class of bug has nowhere to land here.
+  final List<String> connections;
 
   final Future<void> Function(String origin) onSetActiveConnection;
   final Future<String?> Function(String url) onAddServer;
   final Future<void> Function(String origin) onRemoveServer;
-  final Future<void> Function(String url) onConnectCloud;
   final EditorAppearance appearance;
   final double pageWidth;
   final bool reHostImages;
@@ -4695,8 +4712,22 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// Account row pinned to the bottom of the left sidebar. Tapping opens a menu
-  /// with Settings and (when a cloud account is attached) Sign out, or Sign in.
+  /// The sidebar's content width (280 panel − 16 padding each side), so the
+  /// menu lines up with the tile that opens it.
+  static const _kAccountMenuWidth = 248.0;
+
+  final _accountMenu = MenuController();
+
+  /// Account row pinned to the bottom of the left sidebar, and the app's ONE
+  /// world switcher: which world you are in, plus the way to change it.
+  ///
+  /// It lives here because this tile is the only control in the app whose
+  /// content already IS "which world am I in" — [accountIdentity] is a pure
+  /// function of (activeOrigin, session), no fetch. It is supposed to change
+  /// when you switch. Every other home put the switcher inside a container
+  /// whose contents it changes: the workspace dropdown (which then had to list
+  /// both worlds side by side), and Settings (whose Account / API Tokens / AI
+  /// tabs belong to whichever server the switcher was pointing at).
   Widget _accountTile(BuildContext context) {
     final id = accountIdentity(
       local: widget.activeIsLocal,
@@ -4705,101 +4736,292 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final initial = widget.activeIsLocal
         ? '本'
         : (id.name.isNotEmpty ? id.name.substring(0, 1).toUpperCase() : '?');
-    return PopupMenuButton<String>(
-      tooltip: 'Account',
-      position: PopupMenuPosition.under,
-      // Match the sidebar content width (280 panel − 16 padding each side).
-      constraints: const BoxConstraints(minWidth: 248, maxWidth: 248),
-      onSelected: (value) {
-        switch (value) {
-          case 'settings':
-            _openSettings();
-          case 'signout':
-            widget.onSignOut();
-          case 'signin':
-            widget.onSignIn?.call();
-        }
-      },
-      itemBuilder: (context) => [
-        const PopupMenuItem(
-          value: 'settings',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.settings_outlined),
-            title: Text('Settings'),
-          ),
-        ),
+    // Width comes from the rows (each a SizedBox of _kAccountMenuWidth), not
+    // from a MenuStyle: that is how _WorkspaceSelector — the other menu in this
+    // same sidebar — does it, and a panel constrained to the same width as its
+    // children has nowhere to put its own padding.
+    return MenuAnchor(
+      controller: _accountMenu,
+      menuChildren: [
+        // Desktop only — the same gate the Settings page had. Web has no local
+        // store to switch to (_local.available is false there) and is served
+        // BY a server, so its menu stays exactly what it has always been.
+        if (!kIsWeb) ...[
+          for (final origin in widget.connections) _connectionRow(origin),
+          _addServerRow(),
+          const Divider(height: 8),
+        ],
+        _menuAction(Icons.settings_outlined, 'Settings', _openSettings),
+        // Signing in stays a top-level action, not a per-row one: you sign in
+        // to the world you are in. In 本地模式 there is neither — and now the
+        // reason is one line above it (pick a world first) instead of a comment
+        // pointing somewhere else.
         if (id.canSignOut)
-          const PopupMenuItem(
-            value: 'signout',
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.logout),
-              title: Text('Sign out'),
-            ),
-          )
+          _menuAction(Icons.logout, 'Sign out', widget.onSignOut)
         else if (id.canSignIn && widget.onSignIn != null)
-          const PopupMenuItem(
-            value: 'signin',
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.login),
-              title: Text('登录云端'),
-            ),
-          ),
+          _menuAction(Icons.login, '登录云端', widget.onSignIn!),
       ],
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: const Color(0xFFE2E8F0),
-              child: Text(
-                initial,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF334155),
+      builder: (context, controller, child) => InkWell(
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: const Color(0xFFE2E8F0),
+                child: Text(
+                  initial,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF334155),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    id.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  if (id.email != null)
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Text(
-                      id.email!,
+                      id.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF64748B),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                ],
+                    if (id.email != null)
+                      Text(
+                        id.email!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            const Icon(Icons.more_vert, size: 18, color: Color(0xFF94A3B8)),
-          ],
+              const Icon(Icons.more_vert, size: 18, color: Color(0xFF94A3B8)),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  /// One connection: what it IS, and nothing else. Deliberately no sign-in
+  /// state — signing in does not happen here (it is the action below, in the
+  /// world you are actually in), and a server you just added is always
+  /// signed-out, so the marker could only ever state the obvious.
+  Widget _connectionRow(String origin) {
+    final local = origin == 'local';
+    final selected = origin == widget.activeOrigin;
+    return SizedBox(
+      width: _kAccountMenuWidth,
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              // _setActiveConnection no-ops when this is already the world, so
+              // tapping the checked row costs nothing.
+              onTap: () {
+                _accountMenu.close();
+                widget.onSetActiveConnection(origin);
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    // The check LEADS; it does not replace the type icon the
+                    // way the workspace switcher's does. 🖥 vs ☁ is the entire
+                    // statement that these two are not the same kind of thing,
+                    // and the selected row is exactly where it still matters.
+                    SizedBox(
+                      width: 14,
+                      child: selected
+                          ? const Icon(
+                              Icons.check,
+                              size: 14,
+                              color: Color(0xFF2563EB),
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 6),
+                    Icon(
+                      local ? Icons.computer_outlined : Icons.cloud_outlined,
+                      size: 16,
+                      color: const Color(0xFF475569),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        local ? '本地模式' : (Uri.tryParse(origin)?.host ?? origin),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                          color: const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // 本地模式 is not deletable: it is not a server, it is where the
+          // on-device workspaces live — a server's mirror can be re-fetched,
+          // those exist nowhere else. One action needs no ⋮ submenu.
+          if (!local)
+            IconButton(
+              tooltip: '删除这台服务器',
+              visualDensity: VisualDensity.compact,
+              onPressed: () {
+                _accountMenu.close();
+                _confirmRemoveServer(origin);
+              },
+              icon: const Icon(
+                Icons.delete_outline,
+                size: 16,
+                color: Color(0xFF94A3B8),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _addServerRow() => SizedBox(
+    width: _kAccountMenuWidth,
+    child: InkWell(
+      onTap: () {
+        _accountMenu.close();
+        _promptAddServer();
+      },
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            SizedBox(width: 20),
+            Icon(Icons.add, size: 16, color: Color(0xFF2563EB)),
+            SizedBox(width: 8),
+            Text(
+              '添加服务器…',
+              style: TextStyle(
+                color: Color(0xFF2563EB),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _menuAction(IconData icon, String label, VoidCallback onTap) =>
+      SizedBox(
+        width: _kAccountMenuWidth,
+        child: InkWell(
+          onTap: () {
+            _accountMenu.close();
+            onTap();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: const Color(0xFF475569)),
+                const SizedBox(width: 10),
+                Text(label, style: const TextStyle(color: Color(0xFF0F172A))),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  Future<void> _promptAddServer() async {
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('添加服务器'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: const InputDecoration(
+            labelText: 'Server URL',
+            hintText: 'https://mica.example.com',
+            prefixIcon: Icon(Icons.link),
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('添加'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (url == null || url.trim().isEmpty || !mounted) return;
+    // Adding is not switching: the new server joins the menu and nothing else
+    // moves. Picking it is a separate act — adding one to use later must not
+    // yank the whole app over to it.
+    final error = await widget.onAddServer(url);
+    if (!mounted || error == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+  }
+
+  Future<void> _confirmRemoveServer(String origin) async {
+    final host = Uri.tryParse(origin)?.host ?? origin;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('删除 $host?'),
+        content: const Text(
+          '会清除这台服务器在本机的登录状态和离线镜像。服务器上的数据不受影响 '
+          '—— 重新添加并登录即可恢复。\n\n'
+          '还没同步上去的离线修改只存在于本机,会随镜像一起消失(删除前会先尝试'
+          '把它们推上去)。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    // No local "saving" flag to clear: the shell owns the list and the active
+    // connection, and it rebuilds us — including _removeServer having dropped
+    // us to 本地模式 if we just deleted the world we were in.
+    await widget.onRemoveServer(origin);
   }
 
   Widget _pageTree(BuildContext context, bool canEdit) {
@@ -6227,9 +6449,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
+  /// Settings for the world we are in. Which world that is gets chosen on the
+  /// account tile, NOT in here — the control that changes what a container
+  /// holds cannot live inside it. (It did, and the question "these settings
+  /// apply to whom?" had no answer while it did.)
   void _openSettings() {
     showDialog<void>(
       context: context,
+      // Named so _setActiveConnection can close it if a switch ever reaches
+      // this app from somewhere that is not the tile behind this barrier.
+      routeSettings: const RouteSettings(name: 'settings'),
       builder: (context) => _SettingsDialog(
         onLoadAiSettings: widget.onLoadAiSettings,
         onSaveAiSettings: widget.onSaveAiSettings,
@@ -6240,15 +6469,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         userEmail: widget.userEmail,
         onUpdateProfile: widget.onUpdateProfile,
         onChangePassword: widget.onChangePassword,
-        cloudOrigin: widget.cloudOrigin,
-        connections: widget.connections,
-        // Also a getter: switching worlds must move the dropdown, and this
-        // dialog cannot see our rebuild.
-        activeOrigin: () => widget.activeIsLocal ? 'local' : widget.cloudOrigin,
-        onSetActiveConnection: widget.onSetActiveConnection,
-        onAddServer: widget.onAddServer,
-        onRemoveServer: widget.onRemoveServer,
-        onConnectCloud: widget.onConnectCloud,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
         maxPageWidth: _editorAvailWidth,

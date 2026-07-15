@@ -5,8 +5,9 @@ part of '../main.dart';
 
 /// Workspace switcher: the workspaces of the ONE world the app is connected
 /// to — a server (with its account, or a sign-in row when signed out) or this
-/// device. Which world that is, is chosen in Settings → 服务器, where `本地模式`
-/// and each server sit in one list as the same kind of choice.
+/// device. Which world that is, is chosen on the account tile at the bottom of
+/// the sidebar, where `本地模式` and each server sit in one menu as the same kind
+/// of choice.
 ///
 /// Listing both worlds here at once was tried (AFFiNE does exactly that: `local`
 /// is a reserved server id in one flat list) and rejected on sight: a local and
@@ -98,7 +99,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         // tried and rejected: a local workspace and a cloud one look alike but
         // are not — one syncs and has an account, the other is a file on this
         // disk — and tiling them invites you to treat them as interchangeable.
-        // Which world you are connected to is chosen in Settings → 服务器.
+        // Which world you are connected to is chosen on the account tile.
         if (!widget.activeIsLocal &&
             widget.cloudEmail == null &&
             widget.onSignIn != null)
