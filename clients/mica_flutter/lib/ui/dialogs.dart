@@ -238,12 +238,17 @@ class _SettingsDialog extends StatefulWidget {
   /// `['local', ...servers]` — this device and every configured server, one
   /// list because they are the same kind of choice: which single world the app
   /// shows. `'local'` is first and cannot be removed.
-  final List<String> connections;
+  ///
+  /// A getter, not a list. A dialog is its own route: it is built once and
+  /// never rebuilt by the parent, so a snapshot taken at `showDialog` time goes
+  /// stale the instant a server is added or removed — the add landed, the list
+  /// just never showed it, and adding again then said "already in the list".
+  /// Reading through a closure means every rebuild sees the truth.
+  final List<String> Function() connections;
 
-  /// Which of [connections] is live. Picking a different one here is a draft
-  /// until Save — switching worlds under the user mid-dialog is what the old
-  /// segmented button did, and it also slammed Settings shut.
-  final String activeOrigin;
+  /// Which of [connections] is live. Same reason as above: read it, don't
+  /// snapshot it, or the dropdown keeps showing the world you just left.
+  final String Function() activeOrigin;
 
   final Future<void> Function(String origin) onSetActiveConnection;
 
@@ -1084,11 +1089,15 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     Row(
       children: [
+        // `initialValue` does follow later changes here — _DropdownButtonFormFieldState
+        // overrides didUpdateWidget to `setValue(widget.initialValue)`. (Only
+        // FormFieldState, the base, ignores it; reading that one and stopping is
+        // how this briefly became a hand-rolled DropdownButton for no reason.)
         Expanded(
           child: DropdownButtonFormField<String>(
-            initialValue: widget.connections.contains(_draftOrigin)
+            initialValue: widget.connections().contains(_draftOrigin)
                 ? _draftOrigin
-                : widget.connections.first,
+                : widget.connections().first,
             isExpanded: true,
             decoration: const InputDecoration(
               labelText: '当前连接',
@@ -1097,7 +1106,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
             items: [
-              for (final origin in widget.connections)
+              for (final origin in widget.connections())
                 DropdownMenuItem(value: origin, child: _connectionLabel(origin)),
             ],
             onChanged: _serverSaving
@@ -1135,12 +1144,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // one screen is two sources of truth about what "save" means.
   ];
 
-  /// The connection this dialog has switched to, if any. Not a draft — the
-  /// switch already happened; this is only how the dropdown remembers it, since
-  /// a dialog is its own route and never sees `widget.activeOrigin` change.
-  String? _picked;
-
-  String get _draftOrigin => _picked ?? widget.activeOrigin;
+  /// The live connection. No local copy: [widget.activeOrigin] is a getter, and
+  /// every action here calls setState afterwards, so a rebuild always reads the
+  /// current truth. Mirroring it in a field was how this dialog used to cope
+  /// with being a separate route — and mirroring `connections` the same way is
+  /// exactly what would have been the next bug.
+  String get _draftOrigin => widget.activeOrigin();
 
   /// Just what the connection IS. Deliberately no sign-in state: signing in
   /// does not happen in Settings (it is the sidebar's job, in the world you are
@@ -1246,9 +1255,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     if (!mounted) return;
     setState(() {
       _serverSaving = false;
-      // Removing the live server drops us to 本地模式 (see _removeServer), and
-      // this dialog can't see that happen — say so ourselves.
-      _picked = 'local';
+      // The list and the active connection are both read live now, so the
+      // rebuild this setState triggers is all it takes to reflect the
+      // removal — including _removeServer having dropped us to 本地模式.
     });
   }
 
@@ -1260,19 +1269,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// and the disappearance were one event and you couldn't look before leaping.
   /// Applying while staying put is the opposite — the sidebar changes behind
   /// the dialog and you decide when to leave.
-  ///
-  /// [_picked] is what the dropdown then shows: this dialog was built with the
-  /// old `activeOrigin` and, being a separate route, never sees the parent
-  /// rebuild — reading `widget.activeOrigin` after this would show the world we
-  /// just left.
   Future<void> _switchTo(String target) async {
     if (target == _draftOrigin) return;
     setState(() {
-      _picked = target;
       _serverSaving = true;
       _serverMsg = null;
     });
     await widget.onSetActiveConnection(target);
+    // The rebuild re-reads widget.activeOrigin(), so the dropdown follows.
     if (mounted) setState(() => _serverSaving = false);
   }
 

@@ -3558,7 +3558,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateProfile: local ? null : _updateProfile,
       onChangePassword: local ? null : _changePassword,
       cloudOrigin: _cloudOrigin,
-      connections: _connections,
+      connections: () => _connections,
       onSetActiveConnection: _setActiveConnection,
       onAddServer: _addServer,
       onRemoveServer: _removeServer,
@@ -4065,8 +4065,11 @@ class WorkspaceView extends StatefulWidget {
   /// [onConnectCloud] switches it.
   final String cloudOrigin;
 
-  /// `['local', ...servers]` — the Settings connection list.
-  final List<String> connections;
+  /// Reads `['local', ...servers]` live. A getter because Settings is a
+  /// separate route that never rebuilds with us: a snapshot would go stale the
+  /// moment a server is added or removed, and the dialog would keep showing the
+  /// old list while prefs said otherwise.
+  final List<String> Function() connections;
 
   final Future<void> Function(String origin) onSetActiveConnection;
   final Future<String?> Function(String url) onAddServer;
@@ -6171,7 +6174,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onChangePassword: widget.onChangePassword,
         cloudOrigin: widget.cloudOrigin,
         connections: widget.connections,
-        activeOrigin: widget.activeIsLocal ? 'local' : widget.cloudOrigin,
+        // Also a getter: switching worlds must move the dropdown, and this
+        // dialog cannot see our rebuild.
+        activeOrigin: () => widget.activeIsLocal ? 'local' : widget.cloudOrigin,
         onSetActiveConnection: widget.onSetActiveConnection,
         onAddServer: widget.onAddServer,
         onRemoveServer: widget.onRemoveServer,
