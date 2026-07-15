@@ -141,6 +141,36 @@ class AuthSession {
   }
 }
 
+/// What the sidebar's account tile says: the identity of the world you are
+/// LOOKING AT, not "do you happen to hold a session".
+///
+/// The local world has no account — it is files on this device, owned by
+/// nobody — so showing the cloud account there claims you are editing them as
+/// that person, which isn't true. The old predicate (`session?.x ?? '本地'`)
+/// asked the wrong question: its fallback only ever fired for someone who had
+/// never signed in at all, so anyone who had signed in once saw their cloud
+/// identity forever, in every world.
+///
+/// A top-level function so a test can drive THIS, rather than a copy of it
+/// living in the test file — a copy stays green while the shipped code drifts,
+/// which is exactly how the first attempt at this fix passed its tests while
+/// changing the wrong screen entirely.
+({String name, String? email, bool canSignOut, bool canSignIn}) accountIdentity({
+  required bool local,
+  required User? user,
+}) {
+  if (local) {
+    // No sign-out (you are not signed in HERE) and no sign-in (there is no
+    // server in this world to sign in to — that is a choice made in Settings).
+    return (name: '本地工作区', email: '这台设备', canSignOut: false, canSignIn: false);
+  }
+  if (user == null) {
+    return (name: '未登录', email: null, canSignOut: false, canSignIn: true);
+  }
+  final name = user.displayName.isNotEmpty ? user.displayName : user.email;
+  return (name: name, email: user.email, canSignOut: true, canSignIn: false);
+}
+
 /// The `exp` claim of a JWT, or null if it has none / isn't one.
 ///
 /// Not a security check — anyone can write any `exp` — the server is what

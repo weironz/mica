@@ -68,52 +68,63 @@ void main() {
     });
   });
 
-  group('the footer names the world you are in, not the session you have', () {
-    // The reported bug: standing in a local workspace, the sidebar footer showed
-    // `willmica / willzhmic@outlook.com`, claiming you were editing files on this
-    // device as that person. The old predicate was
-    // `_session?.user.displayName ?? (local ? '本地' : '')` — it asked "is there
-    // a session", so the fallback only ever fired for someone who had never
-    // signed in at all.
-    ({String name, String email}) footer({
-      required bool local,
-      required AuthSession? session,
-    }) {
-      return (
-        name: local ? '本地工作区' : (session?.user.displayName ?? ''),
-        email: local ? '这台设备' : (session?.user.email ?? ''),
-      );
-    }
-
-    const signedIn = AuthSession(
-      accessToken: 'a',
-      user: User(id: 'u1', email: 'willzhmic@outlook.com', displayName: 'willmica'),
+  // These drive the REAL accountIdentity the sidebar calls. The first attempt at
+  // this fix defined its own `footer()` helper here and asserted against that —
+  // so it passed while the shipped code was untouched, and the bug shipped. A
+  // test that re-implements the thing it tests only ever tests itself.
+  group('the account tile names the world you are in', () {
+    const signedIn = User(
+      id: 'u1',
+      email: 'willzhmic@outlook.com',
+      displayName: 'willmica',
     );
 
     test('local + a live cloud session shows the DEVICE, not the account', () {
-      final f = footer(local: true, session: signedIn);
-      expect(f.name, '本地工作区');
-      expect(f.email, '这台设备');
-      expect(f.email, isNot(contains('@')),
+      // The reported bug: standing in a local workspace, the sidebar footer
+      // showed `willmica / willzhmic@outlook.com`, claiming you were editing
+      // files on this device as that person.
+      final id = accountIdentity(local: true, user: signedIn);
+      expect(id.name, '本地工作区');
+      expect(id.email, '这台设备');
+      expect(id.email, isNot(contains('@')),
           reason: 'the local world has no account — these files are nobody\'s');
     });
 
-    test('cloud shows the account', () {
-      final f = footer(local: false, session: signedIn);
-      expect(f.name, 'willmica');
-      expect(f.email, 'willzhmic@outlook.com');
+    test('local with no session is identical to local with one', () {
+      // The world decides, full stop. Holding a session is irrelevant here,
+      // and asking about it is what produced the bug.
+      expect(accountIdentity(local: true, user: null),
+          accountIdentity(local: true, user: signedIn));
     });
 
-    test('local with no session ever is identical to local with one', () {
-      // The world decides, full stop. Whether a session exists is irrelevant.
-      expect(footer(local: true, session: null),
-          footer(local: true, session: signedIn));
+    test('local offers neither sign-out nor sign-in', () {
+      // Sign-out: you are not signed in HERE. Sign-in: there is no server in
+      // this world to sign in to — that is a choice made in Settings.
+      final id = accountIdentity(local: true, user: signedIn);
+      expect(id.canSignOut, isFalse);
+      expect(id.canSignIn, isFalse);
     });
 
-    test('cloud, signed out, shows nothing rather than inventing a name', () {
-      final f = footer(local: false, session: null);
-      expect(f.name, isEmpty);
-      expect(f.email, isEmpty);
+    test('cloud shows the account and offers sign-out', () {
+      final id = accountIdentity(local: false, user: signedIn);
+      expect(id.name, 'willmica');
+      expect(id.email, 'willzhmic@outlook.com');
+      expect(id.canSignOut, isTrue);
+      expect(id.canSignIn, isFalse);
+    });
+
+    test('cloud, signed out, offers sign-in and invents no name', () {
+      final id = accountIdentity(local: false, user: null);
+      expect(id.name, '未登录');
+      expect(id.email, isNull);
+      expect(id.canSignIn, isTrue);
+      expect(id.canSignOut, isFalse);
+    });
+
+    test('a nameless cloud account falls back to its email', () {
+      const noName = User(id: 'u1', email: 'a@b.c', displayName: '');
+      final id = accountIdentity(local: false, user: noName);
+      expect(id.name, 'a@b.c');
     });
   });
 }

@@ -205,7 +205,6 @@ class _SettingsDialog extends StatefulWidget {
     required this.onConnectCloud,
     required this.connections,
     required this.activeOrigin,
-    required this.signedInOrigins,
     required this.onSetActiveConnection,
     required this.onAddServer,
     required this.onRemoveServer,
@@ -240,10 +239,6 @@ class _SettingsDialog extends StatefulWidget {
   /// until Save — switching worlds under the user mid-dialog is what the old
   /// segmented button did, and it also slammed Settings shut.
   final String activeOrigin;
-
-  /// Servers with stored credentials, so the list can say which are signed in
-  /// without the caller reaching into per-origin prefs.
-  final Set<String> signedInOrigins;
 
   final Future<void> Function(String origin) onSetActiveConnection;
 
@@ -1098,9 +1093,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   String get _draftOrigin => _draft ?? widget.activeOrigin;
 
+  /// Just what the connection IS. Deliberately no sign-in state: signing in
+  /// does not happen in Settings (it is the sidebar's job, in the world you are
+  /// actually in), and a server you just added is always signed-out — so the
+  /// marker could only ever state the obvious or the irrelevant.
   Widget _connectionLabel(String origin) {
     final local = origin == 'local';
-    final signedIn = widget.signedInOrigins.contains(origin);
     return Row(
       children: [
         Icon(
@@ -1115,16 +1113,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        if (!local) ...[
-          const SizedBox(width: 8),
-          Text(
-            signedIn ? '已登录' : '未登录',
-            style: TextStyle(
-              fontSize: 11,
-              color: signedIn ? const Color(0xFF16A34A) : const Color(0xFF94A3B8),
-            ),
-          ),
-        ],
       ],
     );
   }

@@ -3559,10 +3559,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onChangePassword: local ? (_, _) async {} : _changePassword,
       cloudOrigin: _cloudOrigin,
       connections: _connections,
-      signedInOrigins: {
-        for (final s in _servers)
-          if ((loadPref('authToken:\$s') ?? '').isNotEmpty) s,
-      },
       onSetActiveConnection: _setActiveConnection,
       onAddServer: _addServer,
       onRemoveServer: _removeServer,
@@ -3912,7 +3908,6 @@ class WorkspaceView extends StatefulWidget {
     required this.onChangePassword,
     required this.cloudOrigin,
     required this.connections,
-    required this.signedInOrigins,
     required this.onSetActiveConnection,
     required this.onAddServer,
     required this.onRemoveServer,
@@ -4070,9 +4065,6 @@ class WorkspaceView extends StatefulWidget {
 
   /// `['local', ...servers]` — the Settings connection list.
   final List<String> connections;
-
-  /// Servers that already have stored credentials.
-  final Set<String> signedInOrigins;
 
   final Future<void> Function(String origin) onSetActiveConnection;
   final Future<String?> Function(String url) onAddServer;
@@ -4648,11 +4640,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Account row pinned to the bottom of the left sidebar. Tapping opens a menu
   /// with Settings and (when a cloud account is attached) Sign out, or Sign in.
   Widget _accountTile(BuildContext context) {
-    final user = widget.session?.user;
-    final name = user?.displayName.isNotEmpty == true
-        ? user!.displayName
-        : (user?.email ?? '本地');
-    final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '?';
+    final id = accountIdentity(
+      local: widget.activeIsLocal,
+      user: widget.session?.user,
+    );
+    final initial = widget.activeIsLocal
+        ? '本'
+        : (id.name.isNotEmpty ? id.name.substring(0, 1).toUpperCase() : '?');
     return PopupMenuButton<String>(
       tooltip: 'Account',
       position: PopupMenuPosition.under,
@@ -4678,7 +4672,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             title: Text('Settings'),
           ),
         ),
-        if (widget.session != null)
+        if (id.canSignOut)
           const PopupMenuItem(
             value: 'signout',
             child: ListTile(
@@ -4688,7 +4682,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               title: Text('Sign out'),
             ),
           )
-        else if (widget.onSignIn != null)
+        else if (id.canSignIn && widget.onSignIn != null)
           const PopupMenuItem(
             value: 'signin',
             child: ListTile(
@@ -4722,7 +4716,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    name,
+                    id.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -4730,9 +4724,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  if (user?.email != null)
+                  if (id.email != null)
                     Text(
-                      user!.email,
+                      id.email!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -6176,7 +6170,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         cloudOrigin: widget.cloudOrigin,
         connections: widget.connections,
         activeOrigin: widget.activeIsLocal ? 'local' : widget.cloudOrigin,
-        signedInOrigins: widget.signedInOrigins,
         onSetActiveConnection: widget.onSetActiveConnection,
         onAddServer: widget.onAddServer,
         onRemoveServer: widget.onRemoveServer,
