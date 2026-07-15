@@ -238,6 +238,13 @@ pub async fn change_password(
   .execute(&state.db)
   .await?;
 
+  // Changing a password is what people do when they think someone else is in
+  // their account, so every other sign-in has to die with it — otherwise the
+  // intruder keeps a 30-day refresh token and the password change achieves
+  // nothing. The caller's own session dies too and it simply signs in again;
+  // that is cheaper than reasoning about which family is "this" device.
+  revoke_user_sessions(&state.db, user_id).await?;
+
   Ok(StatusCode::NO_CONTENT)
 }
 
@@ -399,6 +406,24 @@ pub async fn refresh(
   Ok(Json(
     auth_response_in_family(&state, user, family_id).await?,
   ))
+}
+
+/// Burn every sign-in a user has, everywhere. The access tokens already issued
+/// are JWTs and cannot be recalled — they die on their own within
+/// `access_token_ttl_seconds` (24h by default), which is the price of them being
+/// stateless. Nothing can mint a new one after this.
+pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
+  sqlx::query(
+    r#"
+      UPDATE refresh_tokens
+      SET revoked_at = now()
+      WHERE user_id = $1 AND revoked_at IS NULL
+    "#,
+  )
+  .bind(user_id)
+  .execute(db)
+  .await?;
+  Ok(())
 }
 
 /// Burn every token of one sign-in. Used on reuse detection: the chain is
@@ -912,6 +937,46 @@ mod refresh_pg {
 
     revoke_family(&db, family).await.unwrap();
     assert!(rotate_refresh_token(&db, &token).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn changing_the_password_kills_every_sign_in() {
+    // The reason people change a password is that they think someone else is
+    // in there. If the intruder's refresh token survives it, they keep the
+    // account for another 30 days and the password change achieved nothing.
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let laptop = mint_refresh_token(&db, DAY, user, Uuid::new_v4())
+      .await
+      .unwrap();
+    let intruder = mint_refresh_token(&db, DAY, user, Uuid::new_v4())
+      .await
+      .unwrap();
+
+    revoke_user_sessions(&db, user).await.unwrap();
+
+    assert!(rotate_refresh_token(&db, &laptop).await.is_err());
+    assert!(
+      rotate_refresh_token(&db, &intruder).await.is_err(),
+      "every family dies, not just the one that asked"
+    );
+  }
+
+  #[tokio::test]
+  async fn revoking_one_user_leaves_other_users_alone() {
+    let Some(db) = pool().await else { return };
+    let alice = seed_user(&db).await;
+    let bob = seed_user(&db).await;
+    let bob_token = mint_refresh_token(&db, DAY, bob, Uuid::new_v4())
+      .await
+      .unwrap();
+
+    revoke_user_sessions(&db, alice).await.unwrap();
+
+    assert!(
+      rotate_refresh_token(&db, &bob_token).await.is_ok(),
+      "one user changing their password must not sign out everyone else"
+    );
   }
 
   #[tokio::test]

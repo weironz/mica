@@ -25,7 +25,45 @@ WebSocket:
 
 ## Authentication
 
-MVP can use email/password plus JWT access token.
+Email/password → a **short-lived JWT access token** + a **long-lived refresh
+token**. Two kinds of credential because they answer opposite needs:
+
+| | access token | refresh token |
+|---|---|---|
+| form | JWT, stateless | opaque random, a row in `refresh_tokens` |
+| lifetime | `ACCESS_TOKEN_TTL_SECONDS`, default **24h** | `REFRESH_TOKEN_TTL_SECONDS`, default **30d** |
+| revocable | **no** — nothing is stored to revoke | yes |
+| used for | every API/WS call | `POST /api/auth/refresh`, nothing else |
+
+The access token can't be recalled once issued, which is exactly why it stays
+short. The refresh token is the revocable half, and it is the only thing that
+mints new access tokens.
+
+**Rotation + reuse detection.** A refresh token is single-use: refreshing stamps
+`used_at` on it and issues a new one in the same `family_id` (one sign-in). Spend
+an already-spent token and the server cannot tell "the client raced itself" from
+"someone stole this" — so it assumes the worse and **revokes the whole family**.
+The user signs in again; a thief gets nothing. (RFC 6819 §5.2.2.3.)
+
+Spending is a conditional `UPDATE ... WHERE used_at IS NULL`, not a read-then-write:
+that is what makes two concurrent refreshes resolve to exactly one winner, decided
+by Postgres. The **client** must therefore never run two refreshes at once either
+(see `SessionRefresher`) or it would burn its own session.
+
+Changing a password revokes **all** of that user's families — people change
+passwords because they think someone else is in there, so the intruder's refresh
+token has to die with it. Access tokens already out there still live out their
+≤24h; that is the stateless-JWT trade.
+
+`/api/auth/refresh` is **public** by necessity: you refresh precisely because your
+access token is dead, and the request's own credential is the refresh token in its
+body. (`is_public`, pinned by a test — the same router-wide guard once silently
+401'd the blob endpoint for a month.)
+
+Never logged, never in a URL. Only the SHA-256 of a refresh token is stored;
+plaintext exists once, in the response. Unsalted SHA-256 is right here and wrong
+for a password: this is 244 bits of CSPRNG randomness (two v4 UUIDs, `getrandom`),
+so there is nothing to brute-force and no reason to pay argon2's cost per request.
 
 Preferred browser auth later:
 
@@ -40,9 +78,15 @@ Preferred browser auth later:
 ```text
 POST /api/auth/register
 POST /api/auth/login
-POST /api/auth/logout
+POST /api/auth/refresh   # public: {refresh_token} -> a new access+refresh pair
 GET  /api/auth/me
+PATCH /api/auth/me
+POST /api/auth/password  # revokes every session of this user
 ```
+
+There is no `/logout`: signing out is a client-side drop of the pair. A server
+one would only matter for revoking OTHER devices, which nothing asks for yet;
+`revoke_user_sessions` is the piece that would back it.
 
 ### Workspaces
 
