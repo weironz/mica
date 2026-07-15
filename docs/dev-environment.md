@@ -1,6 +1,6 @@
 # Mica 开发环境与辅助工具
 
-> 换机/新机重配环境的清单。核心工具链(Flutter、Rust、Docker、平台 SDK)见 `docs/desktop-plan.md` 的「环境备忘」；本文专记 **AI 辅助开发工具**(MCP、codebase-memory-mcp、skills)。
+> 换机/新机重配环境的清单。核心工具链(Flutter、Rust、Docker、平台 SDK)见 `docs/desktop-plan.md` 的「环境备忘」;发版/构建工具链(just、Inno Setup、docker login)见 `docs/release.md`;本文专记 **AI 辅助开发工具**(MCP、codebase-memory-mcp、skills)。
 
 ## MCP 服务器
 
