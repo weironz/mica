@@ -14,7 +14,7 @@ use rmcp::{
         router::tool::ToolRouter,
         wrapper::{Json, Parameters},
     },
-    model::{Implementation, ServerInfo},
+    model::{Implementation, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
 };
@@ -462,6 +462,13 @@ impl MicaMcp {
 impl ServerHandler for MicaMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
+            // Declaring `tools` is NOT optional and NOT implied by having them.
+            // `#[tool_handler]` implements tools/list and tools/call, but a
+            // client reads `capabilities` during initialize and never calls a
+            // method the server did not advertise — so with the default (empty)
+            // capabilities the server connects, reports healthy, and exposes
+            // exactly nothing. Every tool below is dead without this line.
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: "mica-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -575,5 +582,40 @@ mod tests {
     #[test]
     fn a_tab_after_a_dollar_in_a_code_span_is_not_math() {
         assert!(reject_mangled_latex("`$HOME`\tand `$PATH`\tare paths").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    use rmcp::ServerHandler;
+
+    /// The bug this pins shipped and reached a real client: `get_info` filled
+    /// `capabilities` from `Default` (i.e. empty), so initialize answered
+    /// `capabilities: {}`. Clients read that and register nothing — Claude Code
+    /// logged `hasTools:false` and exposed zero tools while still reporting the
+    /// server "✓ Connected". Every tool in this file was dead.
+    ///
+    /// It survived because the probe used to "verify" it called `tools/list`
+    /// explicitly, which `#[tool_handler]` answers regardless of what was
+    /// advertised. A real client never asks for a capability the server did not
+    /// declare — so the check has to be on the DECLARATION, not on whether
+    /// tools/list happens to work.
+    #[test]
+    fn initialize_advertises_the_tools_capability() {
+        let info = MicaMcp::new("https://example.test".into(), "pat".into(), false).get_info();
+        assert!(
+            info.capabilities.tools.is_some(),
+            "server must advertise `tools` or every client registers zero tools"
+        );
+    }
+
+    /// Read-only must not hide the tools: writes refuse at call time (see
+    /// `ensure_writable`) but stay listed, so the model can see them and be told
+    /// why rather than silently lacking them.
+    #[test]
+    fn read_only_still_advertises_tools() {
+        let info = MicaMcp::new("https://example.test".into(), "pat".into(), true).get_info();
+        assert!(info.capabilities.tools.is_some());
     }
 }
