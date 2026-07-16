@@ -10,11 +10,11 @@
 
 ## 一次性准备
 
-```bash
-# 1. 拿二进制:GitHub Release 下载 mica-cli-<版本>-<平台>,或本地构建
-cargo build -p mica-cli --release
+先装 `mica-cli`(安装/更新方式以 [`cli.md`](cli.md#install) 为准 —— Windows 一键:
+`irm https://raw.githubusercontent.com/weironz/mica/main/install.ps1 | iex`)。然后:
 
-# 2. 登录并创建一个长期 token(写权限;--expires-days 可选)
+```bash
+# 登录并创建一个长期 token(写权限;--expires-days 可选)
 mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
 mica-cli auth token create --name claude-code --scope read --scope write
 # 记下输出里的 "token": "mica_pat_…" —— 只显示这一次

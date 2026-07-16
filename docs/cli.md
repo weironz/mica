@@ -9,11 +9,45 @@ dedicated tool (restic/rustic/rclone/borg) at it (see [`backup.md`](backup.md)).
 
 ## Install
 
-Prebuilt binaries ship with each GitHub Release, named
-`mica-cli-<version>-<os>-<arch>` (Windows / Linux / macOS). Download, make
-executable, put it on your `PATH`.
+**Quick install (recommended).** One line, and re-running it updates to the
+latest release — the fast way to keep current.
 
-Or build from source (pure Rust + rustls, no OpenSSL):
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/weironz/mica/main/install.ps1 | iex
+```
+
+Linux / macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/weironz/mica/main/install.sh | sh
+```
+
+The script downloads the prebuilt binary from the GitHub release (nothing is
+built), drops it in a per-user dir, and puts it on your `PATH`:
+
+- Windows → `%LOCALAPPDATA%\Mica\bin\mica-cli.exe`
+- Linux / macOS → `~/.local/bin/mica-cli` (override with `MICA_BIN_DIR`)
+
+Pin a specific version instead of latest:
+
+```powershell
+$env:MICA_VERSION='0.5.4'; irm https://raw.githubusercontent.com/weironz/mica/main/install.ps1 | iex
+```
+```bash
+MICA_VERSION=0.5.4 curl -fsSL https://raw.githubusercontent.com/weironz/mica/main/install.sh | sh
+```
+
+> Prebuilt platforms: `windows-x64`, `linux-x64`, `macos-arm64` (Apple Silicon).
+> On anything else, build from source. The binary is fetched from GitHub — if
+> that network is slow or blocked, prefer manual/source install below.
+
+**Manual.** Grab `mica-cli-<version>-<platform>` from the
+[GitHub Releases](https://github.com/weironz/mica/releases), make it executable,
+put it on your `PATH`.
+
+**From source** (pure Rust + rustls, no OpenSSL):
 
 ```bash
 cargo build --release -p mica-cli      # → target/release/mica-cli
