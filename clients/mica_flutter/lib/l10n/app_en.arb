@@ -1,0 +1,25 @@
+{
+  "@@locale": "en",
+
+  "languageLabel": "Language",
+  "@languageLabel": { "description": "Settings row label for the UI language selector" },
+  "languageSystem": "Follow system",
+  "languageChinese": "中文",
+  "languageEnglish": "English",
+
+  "closeWindowTitle": "Close Mica window",
+  "@closeWindowTitle": { "description": "Title of the dialog shown when the window X is clicked" },
+  "closeWindowPrompt": "When you click the close button, Mica should:",
+  "closeRemember": "Remember my choice (changeable in Settings)",
+  "closeCancel": "Cancel",
+  "closeMinimizeTaskbar": "Minimize to taskbar",
+  "closeMinimizeTray": "Minimize to tray",
+  "closeQuit": "Quit",
+
+  "trayShow": "Show Mica",
+  "trayExit": "Exit",
+
+  "newPage": "New page",
+  "newFolder": "New folder",
+  "search": "Search…"
+}

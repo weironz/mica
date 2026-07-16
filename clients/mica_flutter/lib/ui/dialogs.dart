@@ -378,6 +378,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     );
   }
 
+  /// UI-language chip. Writes through [setLanguage] (persists + flips
+  /// localeController), which rebuilds MaterialApp — the whole app, including
+  /// this open dialog, re-renders in the chosen language immediately.
+  Widget _langChip(String label, String choice) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: currentLanguageChoice == choice,
+      onSelected: (_) => setState(() => setLanguage(choice)),
+    );
+  }
+
   @override
   void dispose() {
     _baseUrl.dispose();
@@ -805,6 +816,22 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   List<Widget> _appearanceSection(BuildContext context) => [
     _sectionTitle(context, Icons.tune, 'Appearance', const Color(0xFF2563EB)),
     const SizedBox(height: 12),
+    Row(
+      children: [
+        SizedBox(width: 90, child: Text(context.l10n.languageLabel)),
+        Expanded(
+          child: Wrap(
+            spacing: 8,
+            children: [
+              _langChip(context.l10n.languageSystem, kLangSystem),
+              _langChip(context.l10n.languageChinese, kLangChinese),
+              _langChip(context.l10n.languageEnglish, kLangEnglish),
+            ],
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
     _sliderRow(
       label: 'Page width',
       // Max = the realizable full-bleed width (measured at the editor), so the

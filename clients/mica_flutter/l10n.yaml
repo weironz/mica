@@ -1,0 +1,7 @@
+# gen-l10n config. `flutter pub get` / build generates AppLocalizations from
+# lib/l10n/*.arb. Template (keys + @metadata) is English; app_zh.arb translates.
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+nullable-getter: false

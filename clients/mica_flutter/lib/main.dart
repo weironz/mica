@@ -5,7 +5,11 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
+
+import 'l10n/app_localizations.dart';
+import 'l10n/locale_controller.dart';
 
 import 'cloud/cloud_sync.dart';
 import 'cloud/doc_store_platform.dart';
@@ -112,6 +116,9 @@ void main() async {
   // Desktop: restore window size/position + enforce a min size before the first
   // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
   await initDesktopWindow();
+  // Seed the UI language from the persisted choice (prefs are file/localStorage
+  // backed and loaded synchronously) before the first frame renders.
+  loadPersistedLocale();
   // Suppress the browser's native right-click menu so the editor can show its
   // own (e.g. image actions) on web.
   if (kIsWeb) BrowserContextMenu.disableContextMenu();
@@ -156,25 +163,38 @@ class MicaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Mica',
-      // The window's close listener lives outside the widget tree and has no
-      // context of its own — this is how it reaches a Navigator to ask whether
-      // X should quit or minimise. No-op on web.
-      navigatorKey: appNavigatorKey,
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2563EB),
-          brightness: Brightness.light,
+    // Rebuild MaterialApp when the UI language changes (Settings → localeController).
+    // `locale: null` means follow the system, resolved against supportedLocales.
+    return ValueListenableBuilder<Locale?>(
+      valueListenable: localeController,
+      builder: (context, locale, _) => MaterialApp(
+        title: 'Mica',
+        // The window's close listener lives outside the widget tree and has no
+        // context of its own — this is how it reaches a Navigator to ask whether
+        // X should quit or minimise. No-op on web.
+        navigatorKey: appNavigatorKey,
+        debugShowCheckedModeBanner: false,
+        locale: locale,
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: kSupportedLocales,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF2563EB),
+            brightness: Brightness.light,
+          ),
+          scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+          useMaterial3: true,
+          // Crisp system CJK fonts on desktop (Windows 微软雅黑 / macOS 苹方 /
+          // Linux Noto CJK); the bundled font is the tail + web's only option.
+          fontFamilyFallback: cjkFontFallback,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-        useMaterial3: true,
-        // Crisp system CJK fonts on desktop (Windows 微软雅黑 / macOS 苹方 /
-        // Linux Noto CJK); the bundled font is the tail + web's only option.
-        fontFamilyFallback: cjkFontFallback,
+        home: const WorkspaceShell(),
       ),
-      home: const WorkspaceShell(),
     );
   }
 }
@@ -4859,13 +4879,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     // node (see _createLocated) — inside a focused folder, or
                     // beside a focused page.
                     IconButton(
-                      tooltip: '新建页面',
+                      tooltip: context.l10n.newPage,
                       visualDensity: VisualDensity.compact,
                       onPressed: () => _createLocated(folder: false),
                       icon: const Icon(Icons.note_add_outlined, size: 20),
                     ),
                     IconButton(
-                      tooltip: '新建文件夹',
+                      tooltip: context.l10n.newFolder,
                       visualDensity: VisualDensity.compact,
                       onPressed: () => _createLocated(folder: true),
                       icon: const Icon(

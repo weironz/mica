@@ -1,0 +1,23 @@
+{
+  "@@locale": "zh",
+
+  "languageLabel": "语言",
+  "languageSystem": "跟随系统",
+  "languageChinese": "中文",
+  "languageEnglish": "English",
+
+  "closeWindowTitle": "关闭 Mica 窗口",
+  "closeWindowPrompt": "点关闭按钮时，你希望 Mica：",
+  "closeRemember": "记住我的选择（以后可在设置里改）",
+  "closeCancel": "取消",
+  "closeMinimizeTaskbar": "最小化到任务栏",
+  "closeMinimizeTray": "最小化到托盘",
+  "closeQuit": "退出",
+
+  "trayShow": "显示 Mica",
+  "trayExit": "退出",
+
+  "newPage": "新建页面",
+  "newFolder": "新建文件夹",
+  "search": "搜索…"
+}

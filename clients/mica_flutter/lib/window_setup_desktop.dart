@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'l10n/app_localizations.dart';
+import 'l10n/locale_controller.dart';
 import 'prefs.dart';
 
 const Size _minSize = Size(860, 600);
@@ -133,12 +135,13 @@ Future<bool> ensureTray() async {
   try {
     await trayManager.setIcon('assets/tray_icon.ico');
     await trayManager.setToolTip('Mica');
+    final l = l10nNoContext;
     await trayManager.setContextMenu(
       Menu(
         items: [
-          MenuItem(key: 'show', label: '显示 Mica'),
+          MenuItem(key: 'show', label: l.trayShow),
           MenuItem.separator(),
-          MenuItem(key: 'exit', label: '退出'),
+          MenuItem(key: 'exit', label: l.trayExit),
         ],
       ),
     );
@@ -219,45 +222,46 @@ Future<String?> _askCloseBehavior() async {
   final context = appNavigatorKey.currentContext;
   // No navigator (closed before first frame) → the safe reading of X is "quit".
   if (context == null) return kCloseQuit;
+  final l = AppLocalizations.of(context);
 
   var remember = true;
   final choice = await showDialog<String>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        title: const Text('关闭 Mica 窗口'),
+        title: Text(l.closeWindowTitle),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('点关闭按钮时,你希望 Mica:'),
+            Text(l.closeWindowPrompt),
             const SizedBox(height: 8),
             CheckboxListTile(
               value: remember,
               onChanged: (v) => setState(() => remember = v ?? true),
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
-              title: const Text('记住我的选择(以后可在设置里改)'),
+              title: Text(l.closeRemember),
             ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+            child: Text(l.closeCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, kCloseMinimize),
-            child: const Text('最小化到任务栏'),
+            child: Text(l.closeMinimizeTaskbar),
           ),
           if (trayIsSupported)
             TextButton(
               onPressed: () => Navigator.pop(context, kCloseTray),
-              child: const Text('最小化到托盘'),
+              child: Text(l.closeMinimizeTray),
             ),
           FilledButton(
             onPressed: () => Navigator.pop(context, kCloseQuit),
-            child: const Text('退出'),
+            child: Text(l.closeQuit),
           ),
         ],
       ),

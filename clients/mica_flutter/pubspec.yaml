@@ -10,6 +10,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Official Flutter/Dart-team localization (gen-l10n + ARB). Not a third-party
+  # dep to avoid under principle #1 — flutter_localizations ships in the SDK and
+  # intl is the Dart team's own package; this is the framework's i18n, not glue.
+  flutter_localizations:
+    sdk: flutter
+  intl: any
   flutter_math_fork: ^0.7.4
   http: ^1.4.0
   web_socket_channel: ^3.0.0
@@ -70,6 +76,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Generate AppLocalizations from lib/l10n/*.arb (config in l10n.yaml).
+  generate: true
   assets:
     # Tray icon (desktop "close to tray"). .ico because Windows is the only
     # platform where we enable the tray — see close_behavior in
