@@ -254,7 +254,8 @@ fn strip_leading_h1(markdown: &str, title: &str) -> String {
 /// Resolve a Markdown reference (`../assets/图 1.png`, `Page%20<id>.md`)
 /// found inside [from_file] to an archive path in [paths]. Returns None when
 /// the reference is external (has a URL scheme) or matches nothing. Tries
-/// the file's own folder first, then the archive root.
+/// the file's own folder first, then the archive root, then — only if the path
+/// structure doesn't line up — a UNIQUE basename anywhere in the archive.
 pub fn resolve_ref(from_file: &str, href: &str, paths: &HashSet<String>) -> Option<String> {
   let mut u = href.trim();
   if u.is_empty() || has_scheme(u) {
@@ -283,7 +284,29 @@ pub fn resolve_ref(from_file: &str, href: &str, paths: &HashSet<String>) -> Opti
       return Some(candidate);
     }
   }
-  None
+
+  // Fallback: match by BASENAME when the folder structure doesn't line up.
+  // Foreign exports routinely write `![](screenshot.png)` while the bytes sit
+  // under `assets/screenshot.png` (or the reverse, or a differently-named
+  // folder) — the path match above misses that, and the image was silently
+  // dropped: the asset never uploaded and the ref left a dead link. Only a
+  // UNIQUE basename is safe; an ambiguous one (two `logo.png` in different
+  // folders) stays unresolved rather than guessing wrong. Reaching here already
+  // means no exact-path match exists, so a root file cannot collide with itself.
+  let base = decoded.rsplit('/').next().unwrap_or(&decoded);
+  if base.is_empty() {
+    return None;
+  }
+  let mut unique: Option<&String> = None;
+  for p in paths {
+    if p.rsplit('/').next() == Some(base) {
+      if unique.is_some() {
+        return None; // ambiguous — do not guess
+      }
+      unique = Some(p);
+    }
+  }
+  unique.cloned()
 }
 
 fn has_scheme(s: &str) -> bool {
@@ -325,6 +348,56 @@ mod tests {
 
   fn e(name: &str, bytes: &str) -> ZipFileEntry {
     ZipFileEntry { name: name.to_string(), bytes: bytes.as_bytes().to_vec() }
+  }
+
+  fn paths(items: &[&str]) -> HashSet<String> {
+    items.iter().map(|s| s.to_string()).collect()
+  }
+
+  /// A foreign export often writes `![](screenshot.png)` while the bytes sit
+  /// under `assets/screenshot.png`. The strict path match finds neither
+  /// `screenshot.png` (root) nor `<md dir>/screenshot.png`, so the image used to
+  /// be dropped and the ref left dead. The unique-basename fallback recovers it.
+  #[test]
+  fn a_bare_ref_resolves_to_the_asset_under_a_subfolder() {
+    let ps = paths(&["assets/screenshot.png", "note.md"]);
+    assert_eq!(
+      resolve_ref("note.md", "screenshot.png", &ps),
+      Some("assets/screenshot.png".to_string())
+    );
+    // Also the reverse (href names a folder the archive doesn't use) and a
+    // percent-encoded name.
+    let ps2 = paths(&["images/图 1.png"]);
+    assert_eq!(
+      resolve_ref("note.md", "media/%E5%9B%BE%201.png", &ps2),
+      Some("images/图 1.png".to_string())
+    );
+  }
+
+  /// An exact path still wins — the fallback is a last resort, never a detour.
+  #[test]
+  fn an_exact_path_is_preferred_over_a_basename_match() {
+    let ps = paths(&["photo.png", "assets/photo.png"]);
+    // `photo.png` from root resolves to the ROOT file, not the subfolder one.
+    assert_eq!(resolve_ref("note.md", "photo.png", &ps), Some("photo.png".to_string()));
+  }
+
+  /// An ambiguous basename must NOT be guessed — two `logo.png` in different
+  /// folders and a bare ref stays unresolved (the old behaviour), so we never
+  /// silently wire an image to the wrong file.
+  #[test]
+  fn an_ambiguous_basename_is_left_unresolved() {
+    let ps = paths(&["a/logo.png", "b/logo.png"]);
+    assert_eq!(resolve_ref("note.md", "logo.png", &ps), None);
+  }
+
+  /// A basename that matches nothing is still None; an external URL never even
+  /// reaches the fallback.
+  #[test]
+  fn no_match_and_external_urls_stay_none() {
+    let ps = paths(&["assets/a.png"]);
+    assert_eq!(resolve_ref("note.md", "missing.png", &ps), None);
+    assert_eq!(resolve_ref("note.md", "https://x.test/a.png", &ps), None);
   }
 
   /// Build the `manifest.json` a Mica export emits for the given entries.
