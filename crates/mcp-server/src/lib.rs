@@ -86,7 +86,42 @@ impl MicaMcp {
   async fn delete(&self, path: &str) -> Result<Value, McpError> {
     self.send(self.http.delete(self.url(path))).await
   }
+
+  /// Fetch raw bytes (not JSON) plus the served content type. Used only for
+  /// blobs, which are the one thing here that is not text.
+  async fn get_bytes(&self, url: &str) -> Result<(Vec<u8>, Option<String>), McpError> {
+    let resp = self
+      .http
+      .get(url)
+      .send()
+      .await
+      .map_err(|e| McpError::internal_error(format!("Mica blob fetch failed: {e}"), None))?;
+    let status = resp.status();
+    if !status.is_success() {
+      return Err(McpError::internal_error(
+        format!("Mica blob fetch {status}"),
+        None,
+      ));
+    }
+    let mime = resp
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|v| v.to_str().ok())
+      .map(|v| v.split(';').next().unwrap_or(v).trim().to_string());
+    let bytes = resp
+      .bytes()
+      .await
+      .map_err(|e| McpError::internal_error(format!("Mica blob read failed: {e}"), None))?;
+    Ok((bytes.to_vec(), mime))
+  }
 }
+
+/// Refuse to inline an image so large it would blow the context it is being
+/// read into. MCP has no streaming for ImageContent — it is one base64 string
+/// in one tool result — and base64 inflates by 4/3 before the model's encoder
+/// ever sees it. A cap with a readable reason beats a 40MB reply that wedges
+/// the conversation; the href still works in a browser.
+const MAX_INLINE_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
 // ── Tool parameters ─────────────────────────────────────────────────────────
 
@@ -224,6 +259,21 @@ struct MoveDocArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AddImageArgs {
+  workspace_id: String,
+  /// A public http(s) URL. The server fetches it once and keeps the bytes;
+  /// identical bytes deduplicate to one stored file.
+  url: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct FileArgs {
+  workspace_id: String,
+  /// The file's id — the uuid in an image href's `/files/{file_id}/blob/…`.
+  file_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TrashArgs {
   workspace_id: String,
   /// The VIEW id to trash (its whole subtree goes to the recycle bin).
@@ -306,6 +356,27 @@ fn write_ack(value: Value) -> Result<CallToolResult, McpError> {
   tool_result(Ok(Value::Object(ack)))
 }
 
+/// Answer a write whose endpoint replies with a LIST rather than the thing
+/// written. Move and trash both return the workspace's remaining views, because
+/// the sidebar re-renders from that — but the model already knows the id it
+/// acted on (it supplied it), so echoing the tree back is pure cost: 6.4KB on a
+/// 14-page workspace to report one deletion. `action` says which side of the
+/// call happened, so "did it land?" needs no follow-up read.
+fn action_ack(
+  result: Result<Value, McpError>,
+  action: &str,
+  view_id: &str,
+) -> Result<CallToolResult, McpError> {
+  match result {
+    Ok(_) => tool_result(Ok(json!({
+        "ok": true,
+        "action": action,
+        "view_id": view_id,
+    }))),
+    Err(error) => Ok(tool_error(error)),
+  }
+}
+
 #[tool_router]
 impl MicaMcp {
   #[tool(
@@ -332,8 +403,17 @@ impl MicaMcp {
     )
   }
 
+  // The description is the model's ONLY knowledge of what this can do, and it
+  // used to say "by title" — which was false, and quietly expensive: the
+  // endpoint has always scanned body text too, so every agent was told the
+  // index did not exist and fell back to reading whole pages to find a
+  // phrase. Say what it actually does, and say what it costs.
   #[tool(
-    description = "Search a workspace's pages by title.",
+    description = "Find pages by TITLE **and body text**. Returns each hit's view_id, \
+                       object_id, page name, and a snippet of the matching body text \
+                       (`title_match` tells you which side matched). Prefer this over reading \
+                       pages when looking for something: a hit costs a fraction of a whole \
+                       document, and the snippet is often answer enough on its own.",
     annotations(read_only_hint = true)
   )]
   async fn mica_search(
@@ -498,6 +578,140 @@ impl MicaMcp {
     }
   }
 
+  // Images were the one thing an agent could neither put in nor get out. The
+  // REST file layer (presign/complete/import-url/blob) existed all along but
+  // only the Flutter client ever called it, so `![](https://…)` written
+  // through MCP stayed an EXTERNAL link: the bytes never entered Mica, and
+  // the page broke whenever the origin did.
+  #[tool(
+    description = "Store an image in this workspace from a public http(s) URL and return \
+                       its file_id plus the exact Markdown to paste. Use this instead of \
+                       writing `![](https://…)` directly: a bare external URL is only a link — \
+                       Mica never holds the bytes, so the image dies with its origin. The \
+                       returned `markdown` embeds the stored copy.",
+    annotations(title = "Store image", read_only_hint = false)
+  )]
+  async fn mica_add_image(
+    &self,
+    Parameters(AddImageArgs { workspace_id, url }): Parameters<AddImageArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let stored = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/files/import-url"),
+        json!({ "url": url }),
+      )
+      .await;
+    let value = match stored {
+      Ok(value) => value,
+      Err(error) => return Ok(tool_error(error)),
+    };
+    let file_id = value
+      .pointer("/file/id")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .to_string();
+    let name = value
+      .pointer("/file/original_name")
+      .and_then(Value::as_str)
+      .unwrap_or("image");
+    // Hand back the finished snippet, not the parts. The alternative is the
+    // model assembling a path from a spec it has to be told — a step that
+    // buys nothing and can only go wrong.
+    tool_result(Ok(json!({
+        "ok": true,
+        "action": "stored",
+        "file_id": file_id,
+        "name": name,
+        "bytes": value.pointer("/file/byte_size").and_then(Value::as_i64),
+        "markdown": format!(
+            "![{name}](/api/workspaces/{workspace_id}/files/{file_id}/blob/{name})"
+        ),
+    })))
+  }
+
+  #[tool(
+    description = "Fetch a stored image's actual pixels, so you can SEE it. Takes the \
+                       file_id from an image href in a page's Markdown \
+                       (`/files/{file_id}/blob/…`) or from mica_add_image. Reading the page \
+                       gives you the link; this gives you the picture.",
+    annotations(title = "Read image", read_only_hint = true)
+  )]
+  async fn mica_read_image(
+    &self,
+    Parameters(FileArgs {
+      workspace_id,
+      file_id,
+    }): Parameters<FileArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let meta = match self
+      .get(&format!("/api/workspaces/{workspace_id}/files/{file_id}"))
+      .await
+    {
+      Ok(value) => value,
+      Err(error) => return Ok(tool_error(error)),
+    };
+    let Some(download_url) = meta.pointer("/download_url").and_then(Value::as_str) else {
+      return Ok(tool_error(McpError::internal_error(
+        "Mica returned no download url for that file".to_string(),
+        None,
+      )));
+    };
+    let declared = meta
+      .pointer("/file/mime_type")
+      .and_then(Value::as_str)
+      .unwrap_or("");
+    let size = meta
+      .pointer("/file/byte_size")
+      .and_then(Value::as_i64)
+      .unwrap_or(0);
+    if size as usize > MAX_INLINE_IMAGE_BYTES {
+      return Ok(tool_error(McpError::invalid_params(
+        format!(
+          "that image is {size} bytes — too large to inline (limit \
+                     {MAX_INLINE_IMAGE_BYTES}). Open its href in a browser instead."
+        ),
+        None,
+      )));
+    }
+
+    let (bytes, served) = match self.get_bytes(download_url).await {
+      Ok(pair) => pair,
+      Err(error) => return Ok(tool_error(error)),
+    };
+    // Trust the DECLARED type over the served one: object storage answers
+    // `application/octet-stream` for anything it was handed without a type,
+    // and a client that believes that renders nothing.
+    let mime = if declared.starts_with("image/") {
+      declared.to_string()
+    } else {
+      served.unwrap_or_else(|| "application/octet-stream".to_string())
+    };
+    if !mime.starts_with("image/") {
+      return Ok(tool_error(McpError::invalid_params(
+        format!("that file is {mime}, not an image — this tool only reads images"),
+        None,
+      )));
+    }
+    // The size check above used the RECORDED size; this one is the real
+    // one. A row can lie; the bytes cannot.
+    if bytes.len() > MAX_INLINE_IMAGE_BYTES {
+      return Ok(tool_error(McpError::invalid_params(
+        format!(
+          "that image is {} bytes — too large to inline (limit {MAX_INLINE_IMAGE_BYTES})",
+          bytes.len()
+        ),
+        None,
+      )));
+    }
+    Ok(CallToolResult::success(vec![Content::image(
+      base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
+      mime,
+    )]))
+  }
+
   #[tool(
     description = "Move a page under a new parent folder (or to the top level).",
     annotations(read_only_hint = false)
@@ -514,14 +728,13 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     let body = json!({ "parent_view_id": parent_view_id });
-    tool_result(
-      self
-        .post(
-          &format!("/api/workspaces/{workspace_id}/views/{view_id}/move"),
-          body,
-        )
-        .await,
-    )
+    let moved = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}/move"),
+        body,
+      )
+      .await;
+    action_ack(moved, "moved", &view_id)
   }
 
   #[tool(
@@ -547,11 +760,10 @@ impl MicaMcp {
         None,
       ));
     }
-    tool_result(
-      self
-        .delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
-        .await,
-    )
+    let trashed = self
+      .delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
+      .await;
+    action_ack(trashed, "trashed", &view_id)
   }
 
   #[tool(
@@ -731,6 +943,79 @@ mod handshake_tests {
     );
   }
 
+  /// Move and trash reply with the workspace's REMAINING views (the sidebar
+  /// rebuilds from that list), so `write_ack` finds no id to lift and falls
+  /// back to forwarding the lot — a whole page tree to report one deletion.
+  /// These two take the id from the caller instead and never read the body.
+  #[test]
+  fn move_and_trash_ack_the_action_not_the_page_tree() {
+    let views: Vec<Value> = (0..14)
+      .map(|i| {
+        json!({
+            "id": format!("view_{i}"),
+            "workspace_id": "ws-1",
+            "created_by": "user-1",
+            "name": format!("Page {i}"),
+            "position": "0000000010",
+        })
+      })
+      .collect();
+    let tree = json!({ "views": views });
+    let fat = serde_json::to_string(&tree).unwrap().len();
+
+    let out = action_ack(Ok(tree), "trashed", "view-9").expect("ack");
+    let text = format!("{:?}", out.content);
+    assert!(text.contains("view-9"), "the id acted on");
+    assert!(text.contains("trashed"), "WHICH action landed");
+    assert!(!text.contains("view_3"), "no sibling views");
+    assert!(!text.contains("Page 7"), "no sibling names");
+    assert!(
+      text.len() * 5 < fat,
+      "ack must be a fraction of the tree: {} vs {fat}",
+      text.len()
+    );
+  }
+
+  /// A failed move must not report `ok` — the ack ignores the body, so the
+  /// error is the ONLY thing separating "moved" from "did nothing".
+  #[test]
+  fn a_failed_action_is_an_error_not_an_ok() {
+    let out = action_ack(
+      Err(McpError::internal_error("Mica API 403".to_string(), None)),
+      "moved",
+      "view-9",
+    )
+    .expect("result");
+    assert_eq!(out.is_error, Some(true));
+    assert!(format!("{:?}", out.content).contains("403"));
+  }
+
+  /// Images were the one thing an agent could neither store nor see: writing
+  /// `![](https://…)` left the bytes outside Mica, and reading a page gave
+  /// back `![](pasted-image.png)` — every uploaded image, in every workspace,
+  /// under the same unresolvable name. Both halves must be reachable, and
+  /// `mica_add_image`'s whole point is handing back paste-ready Markdown.
+  #[test]
+  fn the_image_tools_are_listed_and_carry_their_arguments() {
+    let router = MicaMcp::tool_router();
+    let listed = router.list_all();
+    let names: Vec<&str> = listed.iter().map(|t| t.name.as_ref()).collect();
+    assert!(names.contains(&"mica_add_image"), "store: {names:?}");
+    assert!(names.contains(&"mica_read_image"), "read back: {names:?}");
+
+    let add = listed
+      .into_iter()
+      .find(|t| t.name == "mica_add_image")
+      .expect("listed");
+    let props = add.input_schema.get("properties").expect("properties");
+    assert!(props.get("url").is_some() && props.get("workspace_id").is_some());
+    // The description must promise the paste-ready snippet — that promise is
+    // the only reason a model reaches for this instead of writing the raw
+    // URL, which is the exact mistake it exists to prevent.
+    let desc = add.description.unwrap_or_default().to_lowercase();
+    assert!(desc.contains("markdown"), "must offer the snippet: {desc}");
+  }
+
   /// If an endpoint changes shape, show the caller everything rather than
   /// swallow the answer into a confident, empty "ok".
   #[test]
@@ -785,7 +1070,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 10, "all ten tools must be listed");
+    assert_eq!(tools.len(), 12, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

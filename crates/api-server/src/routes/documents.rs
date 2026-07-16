@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentOperation, DocumentSnapshotPayload, export_html, export_markdown,
-    export_markdown_with_assets, import_markdown,
+    DocumentOperation, DocumentSnapshotPayload, export_html, export_markdown_with_assets,
+    import_markdown,
   },
   store::{self, DocumentRecord, SnapshotRecord, UpdateRecord},
 };
@@ -387,7 +387,8 @@ pub async fn import_document_markdown(
   .fetch_one(&mut *tx)
   .await?;
 
-  let imported = import_markdown(&payload.markdown, &root_block_id);
+  let mut imported = import_markdown(&payload.markdown, &root_block_id);
+  rewire_blob_hrefs(&mut imported.blocks, workspace_id);
   let snapshot = store::insert_root_snapshot(&mut tx, document.id, &imported).await?;
 
   let position = Uuid::now_v7().to_string();
@@ -741,8 +742,9 @@ pub async fn export_document_markdown(
   let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  let markdown =
-    export_markdown(&payload).map_err(|error| ApiError::BadRequest(error.to_string()))?;
+  let assets = blob_asset_map(&payload.blocks, workspace_id);
+  let markdown = export_markdown_with_assets(&payload, &assets)
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
   Ok(Json(MarkdownExportResponse { markdown }))
 }
@@ -887,7 +889,7 @@ pub async fn update_document_markdown(
   // TOCTOU: an anchor index / delete target can't drift under a concurrent edit).
   let applied =
     store::apply_derived_operations(&state.db, workspace_id, document_id, user_id, |payload| {
-      markdown_update_ops(payload, &request)
+      markdown_update_ops(payload, &request, workspace_id)
     })
     .await?;
   ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
@@ -904,9 +906,12 @@ pub async fn update_document_markdown(
 /// (delete cascades their subtrees); then the parsed markdown tree is grafted
 /// under the root — each block inserted with its `children` stripped and re-linked
 /// via `parent_id`, in pre-order so parents exist first. Testable without a DB.
+/// [workspace_id] scopes the blob hrefs this may rewire back into file
+/// references — see [rewire_blob_hrefs].
 fn markdown_update_ops(
   current: &mica_app_core::documents::DocumentSnapshotPayload,
   request: &UpdateMarkdownRequest,
+  workspace_id: Uuid,
 ) -> Result<Vec<DocumentOperation>, String> {
   let root_id = current.root_block_id.as_str();
 
@@ -957,7 +962,8 @@ fn markdown_update_ops(
   // Parse the incoming markdown up front so an empty body is rejected BEFORE any
   // destructive delete (a replace_all with empty markdown must not wipe the doc).
   let tmp_root = format!("block_{}", Uuid::new_v4().simple());
-  let parsed = import_markdown(&request.markdown, &tmp_root);
+  let mut parsed = import_markdown(&request.markdown, &tmp_root);
+  rewire_blob_hrefs(&mut parsed.blocks, workspace_id);
   let has_content = parsed
     .blocks
     .iter()
@@ -1526,6 +1532,122 @@ fn unique_sibling_base(view: &View, used: &mut std::collections::HashSet<String>
   base
 }
 
+/// The canonical, workspace-scoped path that serves one blob's bytes.
+///
+/// The trailing name is cosmetic — `files::blob_named` ignores it — but it
+/// keeps the exported Markdown readable and survives a re-import (see
+/// [parse_blob_href]).
+fn blob_href(workspace_id: Uuid, file_id: &str, name: &str) -> String {
+  format!(
+    "/api/workspaces/{workspace_id}/files/{file_id}/blob/{}",
+    safe_segment(name)
+  )
+}
+
+/// `file_id -> a path that actually serves the bytes`, for the Markdown exports
+/// that ship no bytes of their own.
+///
+/// With no map an uploaded image degrades to its ORIGINAL FILENAME, and every
+/// client names a pasted image `pasted-image.png` — so a reader got
+/// `![](pasted-image.png)` for every image in the workspace: unresolvable, and
+/// not even distinguishable from one another. The file_id is already in the
+/// block; spending it on a href costs no query and makes the export fetchable.
+/// The ZIP exports keep their own `assets/` map — bytes travel with those.
+fn blob_asset_map(
+  blocks: &[mica_app_core::documents::Block],
+  workspace_id: Uuid,
+) -> BTreeMap<String, String> {
+  let mut map = BTreeMap::new();
+  for block in blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let Some(file_id) = block.data.get("file_id").and_then(|v| v.as_str()) else {
+      continue;
+    };
+    let name = block
+      .data
+      .get("name")
+      .and_then(|v| v.as_str())
+      .unwrap_or("image");
+    map.insert(file_id.to_string(), blob_href(workspace_id, file_id, name));
+  }
+  map
+}
+
+/// Recognise one of our own blob hrefs and recover `(file_id, name)`.
+///
+/// Only paths for THIS workspace resolve. A href aimed at another workspace's
+/// blob is not ours to claim: blob GC recomputes each workspace's reference set
+/// from its OWN views, so a cross-workspace reference is invisible to the GC
+/// that owns the bytes — it would collect them and break this page. Left as a
+/// plain link, it stays exactly as honest as it is: a link to someone else's
+/// file.
+fn parse_blob_href(href: &str, workspace_id: Uuid) -> Option<(String, String)> {
+  let path = href.split(['?', '#']).next()?;
+  let at = path.find("/api/workspaces/")?;
+  let rest = &path[at + "/api/workspaces/".len()..];
+  let (ws, rest) = rest.split_once('/')?;
+  if ws != workspace_id.to_string() {
+    return None;
+  }
+  let rest = rest.strip_prefix("files/")?;
+  let (file_id, rest) = rest.split_once('/')?;
+  Uuid::parse_str(file_id).ok()?;
+  let name = match rest {
+    "blob" => String::new(),
+    other => percent_decode(other.strip_prefix("blob/")?),
+  };
+  let name = if name.is_empty() {
+    "image".to_string()
+  } else {
+    name
+  };
+  Some((file_id.to_string(), name))
+}
+
+/// Turn `![](…/files/{id}/blob/…)` back into Mica's `{file_id, name}` form.
+///
+/// Symmetric with [blob_asset_map]. Without it a Markdown round-trip would
+/// quietly downgrade every uploaded image into an external link pointing at
+/// itself — still rendering, but no longer a reference, so blob GC would stop
+/// counting it and eventually delete the bytes out from under the page.
+fn rewire_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], workspace_id: Uuid) {
+  for block in blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let Some(url) = block.data.get("url").and_then(|v| v.as_str()) else {
+      continue;
+    };
+    if let Some((file_id, name)) = parse_blob_href(url, workspace_id) {
+      block.data = serde_json::json!({"file_id": file_id, "name": name});
+    }
+  }
+}
+
+/// Decode `%XX` escapes back to a UTF-8 string; leave malformed escapes alone.
+/// In-house rather than a dependency: this is the only percent-decode in the
+/// server, and it is a dozen lines.
+fn percent_decode(input: &str) -> String {
+  let bytes = input.as_bytes();
+  let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'%'
+      && i + 2 < bytes.len()
+      && let Ok(byte) = u8::from_str_radix(&input[i + 1..i + 3], 16)
+    {
+      out.push(byte);
+      i += 3;
+    } else {
+      out.push(bytes[i]);
+      i += 1;
+    }
+  }
+  String::from_utf8_lossy(&out).into_owned()
+}
+
 /// A path segment safe for a filename: keep letters/digits of any script plus
 /// `-_.`, collapse other runs to `_`; never empty.
 fn safe_segment(name: &str) -> String {
@@ -1663,7 +1785,8 @@ async fn workspace_markdown(
 
     if let Some(payload) = store::current_payload(db, view.object_id).await? {
       {
-        if let Ok(markdown) = export_markdown(&payload) {
+        let assets = blob_asset_map(&payload.blocks, workspace_id);
+        if let Ok(markdown) = export_markdown_with_assets(&payload, &assets) {
           let body = markdown.trim();
           if !body.is_empty() {
             out.push_str(body);
@@ -1980,6 +2103,92 @@ fn normalize_position(position: Option<String>) -> ApiResult<String> {
 
 #[cfg(test)]
 mod tests {
+  /// An image block carrying [data] — the only field these tests vary.
+  fn image_block(data: serde_json::Value) -> mica_app_core::documents::Block {
+    mica_app_core::documents::Block {
+      id: "img_1".to_string(),
+      kind: "image".to_string(),
+      text: String::new(),
+      data,
+      children: Vec::new(),
+    }
+  }
+
+  /// An uploaded image must survive `export → import` as the SAME file, not as
+  /// a link. Before the asset map, a Markdown export fell back to the block's
+  /// original filename — and every client names a pasted image
+  /// `pasted-image.png`, so nine images across three real workspaces all
+  /// exported as `![](pasted-image.png)`: unfetchable, and indistinguishable.
+  /// Re-importing that produced an image block pointing at a bare filename,
+  /// silently dropping the file reference — which would also make blob GC stop
+  /// counting the file and eventually delete the bytes.
+  #[test]
+  fn an_uploaded_image_round_trips_through_markdown_as_the_same_file() {
+    let ws = Uuid::new_v4();
+    let file_id = Uuid::new_v4().to_string();
+    let block = image_block(serde_json::json!({"file_id": file_id, "name": "pasted-image.png"}));
+
+    let assets = blob_asset_map(std::slice::from_ref(&block), ws);
+    let href = assets.get(&file_id).expect("the file_id gets a href");
+    assert!(
+      href.contains(&file_id) && href.starts_with(&format!("/api/workspaces/{ws}/files/")),
+      "the href must actually serve the bytes: {href}"
+    );
+
+    // …and the import side recognises what the export side wrote.
+    let mut back = vec![image_block(serde_json::json!({"url": href}))];
+    rewire_blob_hrefs(&mut back, ws);
+    assert_eq!(back[0].data["file_id"], serde_json::json!(file_id));
+    assert_eq!(back[0].data["name"], serde_json::json!("pasted-image.png"));
+    assert!(back[0].data.get("url").is_none(), "no longer a plain link");
+  }
+
+  /// A href for a DIFFERENT workspace must stay a link. Rewiring it would forge
+  /// a reference to a file this workspace's readers may not be allowed to see —
+  /// and would let a pasted URL smuggle another tenant's blob into a page.
+  #[test]
+  fn a_blob_href_from_another_workspace_is_never_claimed() {
+    let mine = Uuid::new_v4();
+    let theirs = Uuid::new_v4();
+    let file_id = Uuid::new_v4().to_string();
+    let href = blob_href(theirs, &file_id, "secret.png");
+
+    let mut blocks = vec![image_block(serde_json::json!({"url": href}))];
+    rewire_blob_hrefs(&mut blocks, mine);
+    assert!(blocks[0].data.get("file_id").is_none(), "not ours to claim");
+    assert!(blocks[0].data.get("url").is_some(), "stays a plain link");
+
+    // Nor does an external look-alike get claimed.
+    let mut evil = vec![image_block(
+      serde_json::json!({"url": "https://evil.test/api/workspaces/nope/files/x/blob/a.png"}),
+    )];
+    rewire_blob_hrefs(&mut evil, mine);
+    assert!(evil[0].data.get("file_id").is_none());
+  }
+
+  /// A plain external image is not ours and must pass through untouched — the
+  /// whole point of the guard is that it only claims what it wrote.
+  #[test]
+  fn an_external_image_url_survives_import_as_a_link() {
+    let mut blocks = vec![image_block(
+      serde_json::json!({"url": "https://example.com/photo.png"}),
+    )];
+    rewire_blob_hrefs(&mut blocks, Uuid::new_v4());
+    assert_eq!(
+      blocks[0].data["url"],
+      serde_json::json!("https://example.com/photo.png")
+    );
+  }
+
+  #[test]
+  fn percent_decode_recovers_utf8_and_leaves_junk_alone() {
+    assert_eq!(percent_decode("pasted-image.png"), "pasted-image.png");
+    assert_eq!(percent_decode("%E5%9B%BE.png"), "图.png");
+    // A malformed escape is data, not a parse error.
+    assert_eq!(percent_decode("100%zz"), "100%zz");
+    assert_eq!(percent_decode("%"), "%");
+  }
+
   /// `safe_segment` is the whole of the name→file-name rule, and since the body
   /// is exported verbatim the file name is now the ONLY place a page's name
   /// survives an export. A bug here loses it silently.
@@ -2212,6 +2421,7 @@ mod tests {
     let ops = markdown_update_ops(
       &current,
       &upd(MarkdownUpdateMode::Append, "# Title\n\nhello"),
+      Uuid::new_v4(),
     )
     .unwrap();
     assert!(
@@ -2243,8 +2453,12 @@ mod tests {
   fn markdown_update_replace_all_deletes_existing_top_level_first() {
     use mica_app_core::documents::DocumentOperation;
     let current = doc_with_children(&["a", "b"]);
-    let ops =
-      markdown_update_ops(&current, &upd(MarkdownUpdateMode::ReplaceAll, "fresh body")).unwrap();
+    let ops = markdown_update_ops(
+      &current,
+      &upd(MarkdownUpdateMode::ReplaceAll, "fresh body"),
+      Uuid::new_v4(),
+    )
+    .unwrap();
     let deletes: Vec<&str> = ops
       .iter()
       .filter_map(|o| match o {
@@ -2271,7 +2485,7 @@ mod tests {
     let current = doc_with_children(&["a", "b", "c"]);
     let mut request = upd(MarkdownUpdateMode::InsertAt, "inserted");
     request.anchor = Some("a".into());
-    let ops = markdown_update_ops(&current, &request).unwrap();
+    let ops = markdown_update_ops(&current, &request, Uuid::new_v4()).unwrap();
     // The (single) new top-level paragraph lands at index 1 — right after "a".
     let top = ops
       .iter()
@@ -2290,7 +2504,7 @@ mod tests {
     let current = doc_with_children(&["a"]);
     let mut request = upd(MarkdownUpdateMode::InsertAt, "x");
     request.anchor = Some("ghost".into());
-    assert!(markdown_update_ops(&current, &request).is_err());
+    assert!(markdown_update_ops(&current, &request, Uuid::new_v4()).is_err());
   }
 
   #[test]
@@ -2304,7 +2518,7 @@ mod tests {
       find: Some("existing".into()),
       replace: Some("updated".into()),
     };
-    let ops = markdown_update_ops(&current, &request).unwrap();
+    let ops = markdown_update_ops(&current, &request, Uuid::new_v4()).unwrap();
     let updated: Vec<(&str, &str)> = ops
       .iter()
       .filter_map(|o| match o {
@@ -2320,7 +2534,7 @@ mod tests {
     // No matches → an error, not a silent no-op.
     let mut miss = request;
     miss.find = Some("nope".into());
-    assert!(markdown_update_ops(&current, &miss).is_err());
+    assert!(markdown_update_ops(&current, &miss, Uuid::new_v4()).is_err());
   }
 
   #[test]
@@ -2355,7 +2569,7 @@ mod tests {
       find: Some("see ".into()),
       replace: Some(String::new()),
     };
-    let err = markdown_update_ops(&payload, &request).unwrap_err();
+    let err = markdown_update_ops(&payload, &request, Uuid::new_v4()).unwrap_err();
     assert!(
       err.contains("formatted"),
       "should refuse formatted blocks, got: {err}"
@@ -2365,8 +2579,12 @@ mod tests {
   #[test]
   fn markdown_update_replace_all_empty_refuses_to_wipe() {
     let current = doc_with_children(&["a", "b"]);
-    let err =
-      markdown_update_ops(&current, &upd(MarkdownUpdateMode::ReplaceAll, "  \n ")).unwrap_err();
+    let err = markdown_update_ops(
+      &current,
+      &upd(MarkdownUpdateMode::ReplaceAll, "  \n "),
+      Uuid::new_v4(),
+    )
+    .unwrap_err();
     assert!(
       err.contains("wipe") || err.contains("content"),
       "empty replace_all must not wipe the doc, got: {err}",

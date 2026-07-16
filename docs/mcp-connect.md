@@ -80,11 +80,13 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。
 | --- | --- |
 | `mica_list_workspaces` | 列工作区(id/name/role) |
 | `mica_list_pages` | 页树(文档+文件夹;拿 object_id / view id) |
-| `mica_search` | 按标题搜页面 |
+| `mica_search` | 按**标题 + 正文**搜页面,返回命中片段(`title_match` 说明是哪边命中) |
 | `mica_read_document` | 读文档(Markdown) |
 | `mica_get_outline` | 大纲(标题+block id,`insert_at` 的锚点来源) |
 | `mica_create_document` | 建页面(可带 Markdown 正文) |
 | `mica_update_document` | 写入已有文档:`append`(默认、安全)/ `replace_all` / `insert_at` / `find_replace` |
+| `mica_add_image` | 从 http(s) URL 把图片**存进**工作区,返回 file_id + 可直接粘的 Markdown |
+| `mica_read_image` | 按 file_id 取回图片**像素**(MCP ImageContent),让模型真的看见 |
 | `mica_move_document` | 移动页面 |
 | `mica_trash_view` | 软删到回收站(需 `confirm: true`) |
 | `mica_export_workspace` | 导出整个工作区为 Markdown |
@@ -99,6 +101,26 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。
 
 Markdown 里的 `$…$` 行内公式、`$$…$$` 块级公式、代码块、表格都会被服务端
 解析成对应的块/标记,在客户端里正常排版。
+
+### 图片:`![](https://…)` 只是热链,不是存进来
+
+直接写 `![](https://example.com/x.png)`,Mica **只存这个 URL**,字节从没进来过 ——
+源站挂了图就没了,离线也看不到。要真正存进来用 `mica_add_image`:
+
+1. `mica_add_image(workspace_id, url: "https://…")`
+   → `{"ok":true,"file_id":"…","markdown":"![name](/api/workspaces/…/files/…/blob/name)"}`
+2. 把返回的 `markdown` 原样写进文档。
+
+相同字节按 sha256 去重,不会存两份。
+
+**读**:`mica_read_document` 里的图片就是这种 blob 路径
+`![alt](/api/workspaces/{ws}/files/{file_id}/blob/{name})`。把里面的 `file_id` 交给
+`mica_read_image` 就能拿到真实像素(MCP ImageContent);路径本身也能直接在浏览器里
+打开。上限 4MB —— MCP 的图片是一整条 base64,没有流式。
+
+**往返是闭合的**:导出写出 blob 路径,导入认得自己的路径并还原成 file_id 引用
+(不是外链)。只认**本工作区**的路径 —— 别的工作区的 blob 不归这里引用,否则那边的
+GC 会把字节回收掉,这边的页面就烂了。
 
 ### ⚠️ 公式里的反斜杠必须在 JSON 里双写
 

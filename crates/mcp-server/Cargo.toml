@@ -22,3 +22,6 @@ tracing-subscriber.workspace = true
 # (not the workspace) since it's this binary's concern only.
 rmcp = { version = "0.9", features = ["server", "transport-io", "macros"] }
 schemars = "1"
+# MCP carries image bytes as base64 in an ImageContent block — that IS the wire
+# format, so `mica_read_image` has to encode.
+base64 = "0.22"
