@@ -709,6 +709,16 @@ class CloudSyncSession {
     return drained;
   }
 
+  /// Fast, synchronous local-durability flush for a hard app-exit(0): write the
+  /// 300ms-debounced state to the local store so quitting loses no edits. Skips
+  /// compaction (a reopen-speed optimization, not correctness) and the socket
+  /// (we're quitting; unacked edits sit in the local outbox and resend). Cheap
+  /// enough to run on the close path without stalling the quit.
+  void flushForExit() {
+    if (_disposed) return;
+    _persistNow();
+  }
+
   void dispose() {
     // Best-effort: if the socket is still live, transmit anything not yet sent
     // before we close. Does not wait for acks — [drainAndDispose] is the

@@ -292,6 +292,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void initState() {
     super.initState();
     _loadPrefs();
+    // Desktop quits via exit(0) (see window_setup_desktop): make that hard exit
+    // safe by persisting debounced local state first. No-op on web.
+    appExitFlush = _flushForExit;
     // P3c: both worlds live side by side — the local store always opens (it
     // backs local workspaces AND the cloud mirrors), and a cloud session is
     // restored when one was persisted. The active world comes from the
@@ -921,6 +924,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _cursorTimer = Timer(const Duration(milliseconds: 120), () {
       _sync?.sendCursor(blockId, offset);
     });
+  }
+
+  /// Installed as [appExitFlush]: a fast, synchronous local-durability flush run
+  /// on the desktop quit path just before exit(0), so terminating the process
+  /// hard loses no debounced edits. Persists both worlds' active state; the
+  /// cloud socket is intentionally not drained (unacked edits already sit in the
+  /// local outbox and resend next launch). Each guard is independent so one
+  /// failing store never blocks the other — or the quit.
+  void _flushForExit() {
+    try {
+      _cloudSession?.flushForExit();
+    } catch (_) {}
+    try {
+      _local.flush();
+    } catch (_) {}
   }
 
   void _closeDocumentSync() {
@@ -4288,6 +4306,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // beside a focused page. Kept in sync with the open doc in didUpdateWidget so a
   // single highlight follows the last interaction. Null = create at the root.
   String? _focusedNavId;
+  // The user explicitly "located" the root by tapping the tree's blank area:
+  // clears the located node (and its row highlight) even while a doc is open,
+  // so the top New-page/New-folder buttons create at the workspace root. Any
+  // row tap / opened doc turns this back off. Distinct from `_focusedNavId ==
+  // null`, which merely falls back to the open doc.
+  bool _rootFocused = false;
   // True only while a page is being dragged in the tree. The drop zones overlay
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
@@ -4433,6 +4457,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // highlight follows and a stale folder focus doesn't linger.
     if (widget.selectedView?.id != oldWidget.selectedView?.id) {
       _focusedNavId = widget.selectedView?.id;
+      _rootFocused = false; // opening a doc re-locates it, off the root
     }
     final selected = widget.selectedWorkspace;
     final wsChanged =
@@ -5267,8 +5292,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // The single highlighted row = the located node (last-tapped folder/page),
     // falling back to the open doc. So a focused folder highlights just like the
     // open page, and the two never light up at once.
-    final activeId = _focusedNavId ?? widget.selectedView?.id;
-    return ListView(
+    final activeId = _rootFocused ? null : (_focusedNavId ?? widget.selectedView?.id);
+    // Tapping the tree's blank area (below/around the rows) deselects the
+    // located node so the top New buttons create at the root. Rows keep their
+    // own tap handlers (they win the gesture arena); only taps that miss a row
+    // reach this. Opaque so the empty space below the last row is hittable.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _focusRoot,
+      child: ListView(
       key: _treeListKey,
       controller: _treeScroll,
       children: _visibleDocumentTree().map((item) {
@@ -5311,7 +5343,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         }
         return _draggableTreeRow(item.view, row);
       }).toList(),
+      ),
     );
+  }
+
+  /// Tapping the tree's blank area deselects the located node: nothing is
+  /// highlighted and the top New-page/New-folder buttons create at the
+  /// workspace root (the only way to reach the root while a doc stays open).
+  void _focusRoot() {
+    if (_rootFocused && _focusedNavId == null) return;
+    setState(() {
+      _rootFocused = true;
+      _focusedNavId = null;
+    });
   }
 
   /// Wrap a page row so it can be dragged to reorder among its siblings (its
@@ -5578,6 +5622,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // never become `selectedView`, so this is how a folder becomes the target
       // for the top New-page/New-folder buttons (and gets the row highlight).
       _focusedNavId = view.id;
+      _rootFocused = false; // locating a folder takes us off the root
+
       if (!_expandedViewIds.add(view.id)) {
         _expandedViewIds.remove(view.id);
       }
@@ -6581,7 +6627,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// The node the top New-page/New-folder buttons create relative to: the last
   /// folder/page the user tapped, else the open doc, else null (root).
   DocumentView? _locatedView() =>
-      _viewById(_focusedNavId ?? widget.selectedView?.id);
+      _rootFocused ? null : _viewById(_focusedNavId ?? widget.selectedView?.id);
 
   /// Create a page ([folder] false) or folder ([folder] true) relative to the
   /// currently located sidebar node, then drop it into inline-rename:
@@ -6811,6 +6857,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// — otherwise the switch races the async apply and drops the edits. The host
   /// then drains the cloud session before disposing it.
   Future<void> _navigateToView(DocumentView view) async {
+    // Re-tapping the already-open page keeps `selectedView` unchanged (so
+    // didUpdateWidget won't clear it) — drop root focus here so the tap
+    // re-locates the row.
+    if (_rootFocused) setState(() => _rootFocused = false);
     await _commandHook.flush();
     if (!mounted) return;
     // On the narrow shell the drawer covers the page it just opened — get out of

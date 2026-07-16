@@ -3,6 +3,8 @@
 /// decide what the window's X button does.
 library;
 
+import 'dart:io' show exit;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -12,6 +14,28 @@ import 'prefs.dart';
 
 const Size _minSize = Size(860, 600);
 const Size _defaultSize = Size(1280, 800);
+
+/// A fast, synchronous local-durability flush the app installs (from the root
+/// state) so quitting can hard-`exit(0)` without losing debounced edits. Quit
+/// goes `exit(0)` rather than `windowManager.destroy()` because the graceful
+/// engine teardown blocks for seconds waiting on plugin/thread/socket shutdown
+/// (notably the cloud WebSocket close handshake, which stalls to a TCP timeout
+/// on a flaky connection) — that is the "几秒卡顿" on close. exit(0) is instant;
+/// this hook makes it safe by persisting local state first. Cloud unacked edits
+/// already sit in the local outbox and resend next launch, so dropping the
+/// socket loses nothing.
+void Function()? appExitFlush;
+
+/// Persist local state, then terminate the process immediately. The single quit
+/// path for both the X button and the tray "退出".
+Never _quitNow() {
+  try {
+    appExitFlush?.call();
+  } catch (_) {
+    // A flush failure must not wedge the quit — exit regardless.
+  }
+  exit(0);
+}
 
 bool get _isDesktop =>
     defaultTargetPlatform == TargetPlatform.windows ||
@@ -142,9 +166,10 @@ Future<void> applyCloseBehavior(String behavior) async {
         await windowManager.minimize();
       }
     default:
-      // destroy(), not close(): setPreventClose means close() would just bounce
-      // back into onWindowClose forever.
-      await windowManager.destroy();
+      // Quit. exit(0), not windowManager.destroy(): destroy() runs the engine's
+      // graceful teardown, which blocks for seconds on plugin/socket shutdown
+      // (the "几秒卡顿"). _quitNow() persists local state first, then exits now.
+      _quitNow();
   }
 }
 
@@ -162,7 +187,7 @@ class _TrayHandler with TrayListener {
         windowManager.show();
         windowManager.focus();
       case 'exit':
-        windowManager.destroy();
+        _quitNow();
     }
   }
 }

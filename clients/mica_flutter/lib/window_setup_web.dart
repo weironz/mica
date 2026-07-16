@@ -21,5 +21,9 @@ Future<bool> ensureTray() async => false;
 
 bool get trayIsSupported => false;
 
+/// Unused on web (the browser owns tab close; no exit(0) path), but main.dart
+/// assigns it unconditionally — mirror the desktop surface so it compiles.
+void Function()? appExitFlush;
+
 /// Unused on web, but MaterialApp still takes it — one key, one code path.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
