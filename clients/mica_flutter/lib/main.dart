@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -4231,6 +4232,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
   bool _navCollapsed = false;
+  // Narrow shell only: the sidebar is an overlay, and this is whether it is up.
+  // Never true on a roomy shell — there the sidebar is resident and `_navCollapsed`
+  // is the control that matters.
+  bool _navDrawerOpen = false;
   // Pane widths, drag-resizable via the splitters (long page names need room).
   double _navWidth = 280;
   double _toolsWidth = 300;
@@ -4240,6 +4245,24 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   bool _navWidthManual = false;
   static const double _navWidthMin = 220;
   static const double _navWidthMax = 480;
+
+  /// Below this the shell stops being a Row of resident panes and the sidebar
+  /// becomes an overlay (see [_narrowShell]).
+  ///
+  /// 768 is not taste — it is where AppFlowy and AFFiNE independently landed for
+  /// the same transition (`PageBreaks.tabletPortrait = 768` gates AppFlowy's
+  /// `menuIsDrawer`; AFFiNE's `useResponsiveSidebar` takes `floatThreshold =
+  /// 768`). Two products converging on one number from different stacks is worth
+  /// more than a number of our own, and it sits right where our sidebar's floor
+  /// (220) plus a readable text column stop fitting side by side.
+  ///
+  /// Note both of them ALSO auto-hide a resident sidebar at a wider tier
+  /// (AppFlowy 1024, AFFiNE 540). We deliberately don't: that tier has to be
+  /// edge-triggered and remember whether the user collapsed it by hand
+  /// (AppFlowy carries a `hasColappsedMenuManually` flag for exactly this), or
+  /// it fights the user as they drag. This threshold needs no such state — under
+  /// it the sidebar simply is not a pane, which is a pure function of width.
+  static const double kNarrowShellWidth = 768;
   final EditorScrollHook _scrollHook = EditorScrollHook();
   // The realizable page-column width (editor pane minus the scroll padding),
   // measured live so the Settings "Page width" slider maxes at full-bleed
@@ -4414,39 +4437,144 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // P3c: no sign-in gate — a null session just means no cloud account is
     // attached; local workspaces work regardless, and the switcher's cloud
     // section offers sign-in.
+    //
+    // LayoutBuilder, not MediaQuery: the shell reacts to the space it is
+    // actually given, so a widget test can drive the breakpoint by sizing the
+    // host — and a desktop window dragged narrow crosses it just like a phone.
     return CallbackShortcuts(
       bindings: _appShortcuts(),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_navCollapsed)
-            _collapsedNavRail(context)
-          else ...[
-            SizedBox(width: _navWidth, child: _navigationPane(context)),
-            _resizeHandle(
-              onDrag: (dx) => setState(() {
-                // Dragging takes manual control — stop auto-fitting from here on.
-                _navWidthManual = true;
-                _navWidth = (_navWidth + dx).clamp(_navWidthMin, _navWidthMax);
-              }),
-              onDragEnd: () {
-                savePref('navWidth', _navWidth.toStringAsFixed(1));
-                savePref('navWidthManual', 'true');
-              },
-            ),
-          ],
-          Expanded(child: _editorPane(context)),
-          if (_toolsExpanded) ...[
-            _resizeHandle(
-              onDrag: (dx) => setState(
-                () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
-              ),
-            ),
-            SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
-          ],
-        ],
+      child: LayoutBuilder(
+        builder: (context, c) => c.maxWidth < kNarrowShellWidth
+            ? _narrowShell(context, c.maxWidth)
+            : _wideShell(context),
       ),
     );
+  }
+
+  /// Roomy: the classic three-pane split, every pane resident at once.
+  Widget _wideShell(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_navCollapsed)
+          _collapsedNavRail(context)
+        else ...[
+          SizedBox(width: _navWidth, child: _navigationPane(context)),
+          _resizeHandle(
+            onDrag: (dx) => setState(() {
+              // Dragging takes manual control — stop auto-fitting from here on.
+              _navWidthManual = true;
+              _navWidth = (_navWidth + dx).clamp(_navWidthMin, _navWidthMax);
+            }),
+            onDragEnd: () {
+              savePref('navWidth', _navWidth.toStringAsFixed(1));
+              savePref('navWidthManual', 'true');
+            },
+          ),
+        ],
+        Expanded(child: _editorPane(context)),
+        if (_toolsExpanded) ...[
+          _resizeHandle(
+            onDrag: (dx) => setState(
+              () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
+            ),
+          ),
+          SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
+        ],
+      ],
+    );
+  }
+
+  /// Narrow: one pane at a time. The editor takes the whole width and the
+  /// sidebar slides OVER it, summoned from the top bar and dismissed by the
+  /// scrim or by opening a page.
+  ///
+  /// A resident sidebar cannot survive here. It has a 220px floor of its own
+  /// ([_navWidthMin]) and does not yield, so at a 390px phone viewport it kept
+  /// its full 280 and left the editor ~110px — narrow enough to wrap CJK text
+  /// to one glyph per line. Splitting a phone screen between two panes has no
+  /// win: whatever the editor loses comes straight out of the text column,
+  /// which is the entire point of the app.
+  ///
+  /// The tools pane is dropped rather than stacked — two overlays competing for
+  /// 390px helps nobody, and it is an auxiliary view.
+  Widget _narrowShell(BuildContext context, double maxWidth) {
+    // Always leave a strip of editor showing beside the drawer: it is the scrim
+    // you tap to dismiss, and it keeps "there is a page behind this" legible.
+    final drawerWidth = math.min(_navWidth, math.max(maxWidth - 56, 200.0));
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _narrowTopBar(context),
+              Expanded(child: _editorPane(context)),
+            ],
+          ),
+        ),
+        if (_navDrawerOpen) ...[
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: _closeNavDrawer,
+              child: const ColoredBox(color: Color(0x66000000)),
+            ),
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: drawerWidth,
+            child: Material(
+              elevation: 8,
+              child: _navigationPane(context, narrow: true),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Narrow-only top bar: the one always-reachable way back to the sidebar.
+  ///
+  /// It has to live outside the editor's scroll view — the page header (title +
+  /// page menu) scrolls away with the content, so a hamburger parked there
+  /// would strand you in a document with no route back to the tree.
+  Widget _narrowTopBar(BuildContext context) {
+    final title = widget.selectedBootstrap?.view.name ?? 'Mica';
+    return Material(
+      color: Colors.white,
+      child: SizedBox(
+        height: 48,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Open sidebar',
+              onPressed: _openNavDrawer,
+              icon: const Icon(Icons.menu, size: 22),
+            ),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openNavDrawer() => setState(() => _navDrawerOpen = true);
+
+  void _closeNavDrawer() {
+    if (_navDrawerOpen) setState(() => _navDrawerOpen = false);
   }
 
   /// App-level keyboard shortcuts (desktop feel): new page, search, settings.
@@ -4515,7 +4643,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  Widget _navigationPane(BuildContext context) {
+  /// [narrow] = this pane is the overlay drawer, not a resident column. It only
+  /// changes what the header's sidebar button means: there is no "collapse to a
+  /// rail" on a phone, so it dismisses the drawer instead.
+  Widget _navigationPane(BuildContext context, {bool narrow = false}) {
     final canEdit = matchesEditRole(widget.selectedWorkspace?.role);
 
     return ColoredBox(
@@ -4548,10 +4679,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       ),
                     ),
                   IconButton(
-                    tooltip: 'Collapse sidebar',
+                    tooltip: narrow ? 'Close sidebar' : 'Collapse sidebar',
                     visualDensity: VisualDensity.compact,
-                    onPressed: () => setState(() => _navCollapsed = true),
-                    icon: const Icon(Icons.view_sidebar_outlined, size: 20),
+                    onPressed: narrow
+                        ? _closeNavDrawer
+                        : () => setState(() => _navCollapsed = true),
+                    icon: Icon(
+                      narrow ? Icons.close : Icons.view_sidebar_outlined,
+                      size: 20,
+                    ),
                   ),
                 ],
               ),
@@ -6522,6 +6658,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _navigateToView(DocumentView view) async {
     await _commandHook.flush();
     if (!mounted) return;
+    // On the narrow shell the drawer covers the page it just opened — get out of
+    // the way. Only for an actual page: toggling a folder open leaves the drawer
+    // up, because you are still browsing the tree.
+    _closeNavDrawer();
     widget.onSelectView(view);
   }
 
