@@ -4,10 +4,10 @@
 //! or storage access of its own. "Backup/restore" here is just export/import —
 //! real backups are the job of external tools pointed at the exports.
 //!
-//! Config (env): `MICA_API_BASE_URL` (e.g. https://mica.cloudcele.com) and
-//! `MICA_PAT` (a Mica personal access token). Optional `MICA_MCP_READ_ONLY=1`
-//! makes every write tool refuse at call time (the read tools stay listed).
-use anyhow::Context as _;
+//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
+//! server URL + PAT through its usual chain — env, flags, saved login — and
+//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
+//! time while the read tools stay listed.
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{
@@ -31,21 +31,14 @@ struct MicaMcp {
 }
 
 impl MicaMcp {
-    fn from_env() -> anyhow::Result<Self> {
-        let base = std::env::var("MICA_API_BASE_URL")
-            .context("MICA_API_BASE_URL is required (e.g. https://mica.cloudcele.com)")?;
-        let pat = std::env::var("MICA_PAT").context("MICA_PAT is required (a Mica access token)")?;
-        let read_only = matches!(
-            std::env::var("MICA_MCP_READ_ONLY").as_deref(),
-            Ok("1") | Ok("true")
-        );
-        Ok(Self {
+    fn new(base: String, pat: String, read_only: bool) -> Self {
+        Self {
             http: reqwest::Client::new(),
             base: base.trim_end_matches('/').to_string(),
             pat,
             read_only,
             tool_router: Self::tool_router(),
-        })
+        }
     }
 
     /// Guard every mutating tool: refuse when the server is started read-only.
@@ -426,17 +419,25 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Serve the Mica MCP server over stdio until the client disconnects.
+///
+/// A LIBRARY entry rather than a binary: `mica-cli mcp` is the shipped front
+/// door (one artifact per platform instead of two — CI only ever published
+/// mica-cli anyway, so a standalone mica-mcp binary was a build users could
+/// not download). The caller resolves [base]/[pat] from its own config chain;
+/// this crate no longer reads the environment.
+pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::Result<()> {
     // Logs go to stderr — stdout is the MCP JSON-RPC channel and must stay clean.
-    tracing_subscriber::fmt()
+    // try_init, not init: the embedding CLI may set up tracing itself one day,
+    // and a second init would panic mid-handshake.
+    let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .init();
+        .try_init();
 
-    let service = MicaMcp::from_env()?.serve(stdio()).await?;
+    let service = MicaMcp::new(base, pat, read_only).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }

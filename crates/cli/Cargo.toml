@@ -19,7 +19,11 @@ anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
 mica-interchange = { path = "../interchange" }
+mica-mcp-server = { path = "../mcp-server" }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+# Only the `mcp` subcommand is async (rmcp stdio server); the rest of the CLI
+# stays blocking. One runtime is built on demand in that arm.
+tokio.workspace = true

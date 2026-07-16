@@ -47,6 +47,17 @@ enum Command {
   /// Export workspaces to a directory of Markdown + images (mirrored) — point an
   /// external backup tool (restic / rclone / borg) at the output.
   Export(ExportArgs),
+  /// Serve the Mica MCP server over stdio (for Claude Code / Desktop and any
+  /// MCP client): list, read, create and write documents through the REST API.
+  Mcp(McpArgs),
+}
+
+#[derive(Args)]
+struct McpArgs {
+  /// Refuse every write tool at call time; read tools stay available.
+  /// Also honored from the environment: MICA_MCP_READ_ONLY=1.
+  #[arg(long)]
+  read_only: bool,
 }
 
 #[derive(Subcommand)]
@@ -138,6 +149,7 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
+    Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
   }
 }
 
@@ -323,6 +335,40 @@ fn cmd_export(cli: &Cli, cfg: &Config, args: &ExportArgs) -> Result<()> {
     );
   }
   Ok(())
+}
+
+// ---------------------------------------------------------------- mcp
+
+/// Serve MCP over stdio. Credentials resolve through the SAME chain every
+/// other command uses (env > flag > saved login), plus the standalone
+/// server's historical names (`MICA_API_BASE_URL`/`MICA_PAT`) so an existing
+/// Claude Code config keeps working after the binary merge — `mica-cli auth
+/// login` once and `mica-cli mcp` needs zero further configuration.
+fn cmd_mcp(cli: &Cli, cfg: &Config, args: &McpArgs) -> Result<()> {
+  let base = std::env::var("MICA_API_BASE_URL")
+    .ok()
+    .or_else(|| cli.server.clone())
+    .or_else(|| cfg.server.clone())
+    .context(
+      "no server — set MICA_API_BASE_URL / --server / MICA_SERVER, or run `mica-cli auth login`",
+    )?;
+  let pat = std::env::var("MICA_PAT")
+    .ok()
+    .or_else(|| std::env::var("MICA_TOKEN").ok())
+    .or_else(|| cfg.token.clone())
+    .context("no token — set MICA_PAT / MICA_TOKEN, or run `mica-cli auth login`")?;
+  let read_only = args.read_only
+    || matches!(
+      std::env::var("MICA_MCP_READ_ONLY").as_deref(),
+      Ok("1") | Ok("true")
+    );
+  // The only async command: the rest of the CLI is blocking reqwest, so the
+  // runtime lives here rather than on main.
+  tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()
+    .context("starting the async runtime for the MCP server")?
+    .block_on(mica_mcp_server::serve_stdio(base, pat, read_only))
 }
 
 // ---------------------------------------------------------------- helpers
