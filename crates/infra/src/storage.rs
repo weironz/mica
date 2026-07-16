@@ -80,6 +80,13 @@ impl S3Config {
     }
   }
 
+  /// Presigned `DELETE` URL for an object. Server-side only — this is the blob
+  /// GC's hand, and is never issued to a client. Not `public_base_url`: that is
+  /// the read path and may be a CDN with no write access at all.
+  pub fn presign_delete(&self, key: &str) -> String {
+    self.presign("DELETE", key, Utc::now())
+  }
+
   /// URL a client uses to read an object: the public base URL when configured,
   /// otherwise a presigned `GET`.
   pub fn download_url(&self, key: &str) -> String {

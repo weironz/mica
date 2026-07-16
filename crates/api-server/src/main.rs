@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
+mod blob_gc;
 mod routes;
 
 #[tokio::main]
@@ -32,6 +33,12 @@ async fn main() -> anyhow::Result<()> {
 
   let addr = config.http_addr;
   let state = AppState::new(config, db);
+  // Reclaim blobs no page points at any more. Backgrounded and best-effort: a
+  // GC that stops is a disk-space problem, never a reason to fail a request.
+  // No-op when object storage is not configured — nothing to reclaim.
+  if let Some(storage) = state.storage.clone() {
+    blob_gc::spawn(state.db.clone(), storage);
+  }
   let app = app_router(state);
 
   let listener = TcpListener::bind(addr)
