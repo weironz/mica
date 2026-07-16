@@ -104,7 +104,8 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。
 | `mica_update_document` | 写入已有文档:`append`(默认、安全)/ `replace_all` / `insert_at` / `find_replace` |
 | `mica_add_image` | 从 http(s) URL 把图片**存进**工作区,返回 file_id + 可直接粘的 Markdown |
 | `mica_read_image` | 按 file_id 取回图片**像素**(MCP ImageContent),让模型真的看见 |
-| `mica_move_document` | 移动页面 |
+| `mica_move_document` | 移动页面(改父) |
+| `mica_reorder` | 一次调用重排某文件夹(或顶层)的所有子项 —— 传有序 view_id 列表;排序/整理用它 |
 | `mica_trash_view` | 软删到回收站(需 `confirm: true`) |
 | `mica_export_workspace` | 导出整个工作区为 Markdown |
 

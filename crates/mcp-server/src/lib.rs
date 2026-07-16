@@ -259,6 +259,19 @@ struct MoveDocArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReorderArgs {
+  workspace_id: String,
+  /// The folder whose children to reorder (a folder's view id), or omit/null
+  /// for the workspace's top level.
+  #[serde(default)]
+  parent_view_id: Option<String>,
+  /// The COMPLETE list of that parent's child VIEW ids, in the order you want
+  /// them. Pass every child — leaving one out keeps it at a stale position that
+  /// interleaves with the sorted ones.
+  ordered_view_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct AddImageArgs {
   workspace_id: String,
   /// A public http(s) URL. The server fetches it once and keeps the bytes;
@@ -776,6 +789,44 @@ impl MicaMcp {
   }
 
   #[tool(
+    description = "Reorder a folder's children (or the workspace's top level) in ONE call: pass \
+                   the complete list of child view ids in the order you want. Use this to SORT — \
+                   the per-page move tool would take one call per item. Get the current children \
+                   and their ids from mica_list_pages.",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_reorder(
+    &self,
+    Parameters(ReorderArgs {
+      workspace_id,
+      parent_view_id,
+      ordered_view_ids,
+    }): Parameters<ReorderArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let count = ordered_view_ids.len();
+    let body = json!({
+      "parent_view_id": parent_view_id,
+      "ordered_view_ids": ordered_view_ids,
+    });
+    let done = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/reorder"),
+        body,
+      )
+      .await;
+    // The endpoint already answers with a count; forward what happened, not a tree.
+    match done {
+      Ok(_) => tool_result(Ok(
+        json!({ "ok": true, "action": "reordered", "count": count }),
+      )),
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
     description = "Move a page (and its subtree) to the recycle bin — a SOFT delete, \
                        recoverable in the app. Requires confirm=true. Permanent deletion is \
                        not exposed here.",
@@ -1025,20 +1076,36 @@ mod handshake_tests {
     let slim = slim_pages(full);
     let text = serde_json::to_string(&slim).unwrap();
     // Every navigation field a tool consumes survives.
-    for kept in ["view-1", "doc-1", "document", "Notes", "📄", "view-2", "folder"] {
+    for kept in [
+      "view-1", "doc-1", "document", "Notes", "📄", "view-2", "folder",
+    ] {
       assert!(text.contains(kept), "dropped a needed field: {kept}");
     }
     // parent linkage is kept (it is the tree), but only when present — the root
     // page's null parent is elided, not echoed.
-    assert!(text.contains("\"parent_view_id\":\"view-1\""), "child keeps parent");
+    assert!(
+      text.contains("\"parent_view_id\":\"view-1\""),
+      "child keeps parent"
+    );
     // The bookkeeping is gone. workspace_id is the marquee case: same on every
     // row and the caller passed it in.
-    for gone in ["ws-1", "user-1", "0000000010", "is_deleted", "created_at", "updated_at"] {
+    for gone in [
+      "ws-1",
+      "user-1",
+      "0000000010",
+      "is_deleted",
+      "created_at",
+      "updated_at",
+    ] {
       assert!(!text.contains(gone), "should have dropped: {gone}");
     }
     // A null icon is noise, not information.
     assert!(!text.contains("\"icon\":null"), "null icon elided");
-    assert!(text.len() * 2 < fat, "slim must be well under half: {} vs {fat}", text.len());
+    assert!(
+      text.len() * 2 < fat,
+      "slim must be well under half: {} vs {fat}",
+      text.len()
+    );
   }
 
   /// If the endpoint stops returning `{views: [...]}`, forward what it did send
@@ -1122,6 +1189,37 @@ mod handshake_tests {
     assert!(desc.contains("markdown"), "must offer the snippet: {desc}");
   }
 
+  /// Reordering was impossible through MCP: `mica_move_document` dropped the
+  /// `position` the move endpoint accepts, so "sort this folder" had no path.
+  /// `mica_reorder` closes that gap, and its whole value is doing it in ONE call
+  /// with the ordered list — the description must say so, and it must carry the
+  /// ordered ids.
+  #[test]
+  fn reorder_is_listed_and_takes_an_ordered_list() {
+    let router = MicaMcp::tool_router();
+    let listed = router.list_all();
+    let names: Vec<&str> = listed.iter().map(|t| t.name.as_ref()).collect();
+    assert!(
+      names.contains(&"mica_reorder"),
+      "reorder missing: {names:?}"
+    );
+
+    let t = listed
+      .into_iter()
+      .find(|t| t.name == "mica_reorder")
+      .expect("listed");
+    let props = t.input_schema.get("properties").expect("properties");
+    assert!(
+      props.get("ordered_view_ids").is_some(),
+      "must take the ordered ids: {props:?}"
+    );
+    let desc = t.description.unwrap_or_default().to_lowercase();
+    assert!(
+      desc.contains("one call") || desc.contains("sort"),
+      "must sell the one-call sort: {desc}"
+    );
+  }
+
   /// If an endpoint changes shape, show the caller everything rather than
   /// swallow the answer into a confident, empty "ok".
   #[test]
@@ -1176,7 +1274,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 12, "every tool must be listed");
+    assert_eq!(tools.len(), 13, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

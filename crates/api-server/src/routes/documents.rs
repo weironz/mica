@@ -48,6 +48,22 @@ pub struct MoveViewRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ReorderRequest {
+  /// Parent that every listed view becomes a child of (null = top level).
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  /// The COMPLETE desired order of that parent's children. Positions are
+  /// reassigned evenly-spaced in this order; pass the full set so nothing keeps
+  /// a stale position that interleaves with the reordered ones.
+  ordered_view_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReorderResponse {
+  reordered: usize,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ApplyDocumentUpdateRequest {
   operations: Vec<DocumentOperation>,
 }
@@ -682,6 +698,70 @@ pub async fn move_view(
   .ok_or(ApiError::NotFound)?;
 
   Ok(Json(ViewResponse { view }))
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/reorder`
+///
+/// Reorder a parent's children in ONE atomic call: every id in
+/// `ordered_view_ids` is set as a child of `parent_view_id` (null = top level)
+/// and given an evenly-spaced position in the given order. This is what a "sort
+/// this folder" operation needs — the per-view `move` endpoint would take one
+/// request per sibling and could interleave a failure. Positions are 10-spaced,
+/// zero-padded to a fixed width so they sort lexicographically like the rest.
+pub async fn reorder_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<ReorderRequest>,
+) -> ApiResult<Json<ReorderResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+
+  if payload.ordered_view_ids.is_empty() {
+    return Err(ApiError::BadRequest(
+      "ordered_view_ids cannot be empty".to_string(),
+    ));
+  }
+  // A duplicate id would leave one of the two at a stale position — reject
+  // rather than silently keep only the last.
+  let mut seen = std::collections::HashSet::new();
+  for id in &payload.ordered_view_ids {
+    if !seen.insert(*id) {
+      return Err(ApiError::BadRequest(format!("duplicate view id {id}")));
+    }
+  }
+  // Validate everything BEFORE writing anything: each id belongs to the
+  // workspace, and re-parenting under `parent_view_id` neither escapes the
+  // workspace nor forms a cycle (a view under its own descendant).
+  for id in &payload.ordered_view_ids {
+    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
+    if let Some(parent) = payload.parent_view_id {
+      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
+    }
+  }
+
+  let mut tx = state.db.begin().await?;
+  for (i, id) in payload.ordered_view_ids.iter().enumerate() {
+    let position = format!("{:010}", (i + 1) * 10);
+    sqlx::query(
+      r#"
+        UPDATE views
+        SET parent_view_id = $1, position = $2, updated_at = now()
+        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
+      "#,
+    )
+    .bind(payload.parent_view_id)
+    .bind(&position)
+    .bind(id)
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await?;
+  }
+  tx.commit().await?;
+
+  Ok(Json(ReorderResponse {
+    reordered: payload.ordered_view_ids.len(),
+  }))
 }
 
 pub async fn bootstrap_document(

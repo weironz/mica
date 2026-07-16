@@ -94,6 +94,10 @@ pub fn api_router() -> Router<AppState> {
       post(documents::move_view),
     )
     .route(
+      "/workspaces/{workspace_id}/views/reorder",
+      post(documents::reorder_views),
+    )
+    .route(
       "/workspaces/{workspace_id}/views/{view_id}/restore",
       post(documents::restore_view),
     )
