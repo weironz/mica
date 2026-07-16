@@ -2012,6 +2012,49 @@ fn code_span_close(chars: &[char], start: usize) -> Option<usize> {
   None
 }
 
+/// Delimiter-inclusive char spans of every inline math run in [src] — both the
+/// `$ … $` and `\( … \)` forms — judged by exactly the rules the parser uses.
+///
+/// Public so callers outside the parser can ask "is this offset inside a
+/// formula?" without restating the Pandoc rules and drifting from them (the MCP
+/// write guard needs it to tell a corrupted `\times` from an ordinary tab).
+/// Mirrors Dart `mathRunSpans` in `lib/editor/marks.dart` — CLAUDE.md #2 keeps
+/// the two sides in step, with this one authoritative.
+pub fn math_run_spans(src: &str) -> Vec<(usize, usize)> {
+  let chars: Vec<char> = src.chars().collect();
+  let mut out = Vec::new();
+  let mut i = 0;
+  while i < chars.len() {
+    // `\( … \)` first — the escape arm below would otherwise eat the `\(`.
+    if chars[i] == '\\'
+      && chars.get(i + 1) == Some(&'(')
+      && let Some(close) = find_pair(&chars, i + 2, '\\', ')')
+    {
+      out.push((i, close + 2));
+      i = close + 2;
+      continue;
+    }
+    // A code span binds tighter than math (§6.1) — step over it whole so a `$`
+    // inside cannot open a run.
+    if chars[i] == '`'
+      && let Some(after) = code_span_close(&chars, i)
+    {
+      i = after;
+      continue;
+    }
+    if chars[i] == '$'
+      && chars.get(i + 1) != Some(&'$')
+      && let Some(close) = find_math_closer(&chars, i + 1)
+    {
+      out.push((i, close + 1));
+      i = close + 1;
+      continue;
+    }
+    i += 1;
+  }
+  out
+}
+
 /// A valid `$` math closer per the Pandoc rules: content non-empty with
 /// non-space edges, closer not followed by a digit, no newline inside, and no
 /// crossing into a code span.

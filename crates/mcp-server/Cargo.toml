@@ -8,6 +8,9 @@ rust-version = "1.85"
 
 [dependencies]
 anyhow.workspace = true
+# The authority on where a math run starts and ends (CLAUDE.md #2). The write
+# guard must judge formulas by the same rules the parser does, not its own.
+mica-markdown = { path = "../markdown" }
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true

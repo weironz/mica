@@ -113,6 +113,73 @@ struct DocArg {
     document_id: String,
 }
 
+/// Control characters a JSON unescape produces from a LaTeX command, paired with
+/// the escape that made them, and an example of the command each one eats.
+/// `\times` under-escaped in JSON is not an error — `\t` is a legal escape — so
+/// it decodes silently to TAB + "imes" and the formula is destroyed with no
+/// diagnostic anywhere.
+///
+/// These four are safe to condemn: none has a legitimate reason to appear inside
+/// a formula. `\n` and `\r` collide the same way (`\nabla`, `\rho`) but are
+/// deliberately absent — a real newline is ordinary markdown and we cannot tell
+/// the two apart. Their damage is at least visible: a newline breaks the math
+/// run outright, so the page shows literal `$…$` rather than quietly wrong math.
+const JSON_ESCAPE_COLLISIONS: [(char, &str, &str); 4] = [
+    ('\u{0009}', r"\t", r"\times"),
+    ('\u{000C}', r"\f", r"\frac"),
+    ('\u{000B}', r"\v", r"\vec"),
+    ('\u{0008}', r"\b", r"\beta"),
+];
+
+/// Reject markdown whose LaTeX was mangled by an under-escaped JSON string.
+///
+/// We are not the ones corrupting it — the server stores faithfully what it is
+/// given, and a correctly escaped `\\times` round-trips fine. But this arrives
+/// as valid JSON that is silently wrong, and the caller is usually a model
+/// hand-writing escapes, which gets LaTeX wrong often enough that "AI writes its
+/// answer into a page" (formulas and all) cannot be trusted without a check.
+/// Refusing with a precise message lets the caller retry correctly; storing it
+/// loses the formula forever, which is the failure this guard exists to stop.
+///
+/// Two rules, both chosen to be false-positive-free rather than thorough:
+///  - FF / VT / BS anywhere: no legitimate markdown contains them.
+///  - TAB *inside a math run only*: a tab is ordinary indentation elsewhere, but
+///    inside `$…$` it is meaningless to LaTeX and means `\t…` was eaten.
+fn reject_mangled_latex(markdown: &str) -> Result<(), McpError> {
+    for (ch, escape, example) in JSON_ESCAPE_COLLISIONS {
+        if !markdown.contains(ch) {
+            continue;
+        }
+        // A tab is ordinary indentation outside a formula, so it only condemns
+        // itself within one. The other three have no innocent reading anywhere.
+        if ch == '\u{0009}' && !tab_inside_math(markdown) {
+            continue;
+        }
+        return Err(mangled_latex_error(escape, example));
+    }
+    Ok(())
+}
+
+fn tab_inside_math(markdown: &str) -> bool {
+    let chars: Vec<char> = markdown.chars().collect();
+    mica_markdown::math_run_spans(markdown)
+        .into_iter()
+        .any(|(start, end)| chars[start..end].contains(&'\u{0009}'))
+}
+
+fn mangled_latex_error(escape: &str, example: &str) -> McpError {
+    McpError::invalid_params(
+        format!(
+            "The markdown contains a raw control character where a LaTeX command should be: \
+             `{escape}` was read as a JSON escape, so `{example}` arrived as a control character \
+             instead of a command. The backslashes in the JSON string were under-escaped — in \
+             JSON a literal backslash must be doubled. Send \"$\\\\times$\", not \"$\\times$\" \
+             (the latter is a tab). Nothing was written; resend with every backslash doubled."
+        ),
+        None,
+    )
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CreateDocArgs {
     workspace_id: String,
@@ -261,6 +328,7 @@ impl MicaMcp {
         // Markdown → the import endpoint (parses content server-side); empty →
         // the plain create endpoint.
         if let Some(markdown) = markdown {
+            reject_mangled_latex(&markdown)?;
             let body = json!({
                 "name": name,
                 "markdown": markdown,
@@ -302,6 +370,12 @@ impl MicaMcp {
         }): Parameters<UpdateDocArgs>,
     ) -> Result<Json<Value>, McpError> {
         self.ensure_writable()?;
+        // Every field that carries authored content, not just `markdown`:
+        // find_replace writes through `replace`, and a swapped-in formula is
+        // mangled by the same under-escaping.
+        for text in [markdown.as_deref(), replace.as_deref()].into_iter().flatten() {
+            reject_mangled_latex(text)?;
+        }
         let body = json!({
             "mode": mode,
             "markdown": markdown.unwrap_or_default(),
@@ -444,12 +518,62 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 
 #[cfg(test)]
 mod tests {
-    use super::urlencode;
+    use super::{reject_mangled_latex, urlencode};
 
     #[test]
     fn urlencode_escapes_reserved_keeps_unreserved() {
         assert_eq!(urlencode("hello world"), "hello%20world");
         assert_eq!(urlencode("a&b=c/d?e"), "a%26b%3Dc%2Fd%3Fe");
         assert_eq!(urlencode("keep-_.~AZaz09"), "keep-_.~AZaz09");
+    }
+
+    /// Byte-for-byte what reached the database from a real MCP write of
+    /// `$\eta = 2 \times \frac{N-1}{N}$` with under-escaped backslashes. Spelled
+    /// with \u{..} rather than Rust's own `\t`, because `"\times"` in Rust
+    /// source IS tab+"imes" — the very confusion that caused the bug, and not
+    /// something a test about it should re-enact.
+    #[test]
+    fn rejects_the_corruption_that_actually_shipped() {
+        let mangled = concat!(
+            "**A**: For $N$ nodes it is $\\eta = 2 ",
+            "\u{0009}imes \u{000C}rac{N-1}{N}$, approaching $2$."
+        );
+        // Precondition: this really is the shape we saw — \eta intact, the
+        // other two commands eaten down to a control char.
+        assert!(mangled.contains(r"\eta"));
+        assert!(!mangled.contains(r"\times") && !mangled.contains(r"\frac"));
+        assert!(reject_mangled_latex(mangled).is_err());
+    }
+
+    #[test]
+    fn rejects_each_collision_char() {
+        // \f, \v, \b are impossible in real markdown — rejected anywhere.
+        assert!(reject_mangled_latex("a \u{000C}rac b").is_err()); // \frac
+        assert!(reject_mangled_latex("a \u{000B}ec b").is_err()); // \vec
+        assert!(reject_mangled_latex("a \u{0008}eta b").is_err()); // \beta
+        // A tab only condemns itself inside a formula.
+        assert!(reject_mangled_latex("$x \u{0009}imes y$").is_err()); // \times
+    }
+
+    /// The guard must never fire on content someone legitimately wrote, or it
+    /// blocks the very workflow it protects.
+    #[test]
+    fn accepts_legitimate_content() {
+        // Correctly escaped LaTeX — the whole point.
+        assert!(reject_mangled_latex(r"$\eta = 2 \times \frac{N-1}{N}$").is_ok());
+        // A tab outside math is ordinary indentation / code.
+        assert!(reject_mangled_latex("- item\n\u{0009}continued\n\n\u{0009}code();").is_ok());
+        assert!(reject_mangled_latex("| a\u{0009}| b |\n|---|---|").is_ok());
+        // Currency is not math (no valid closer), so its tabs stay innocent.
+        assert!(reject_mangled_latex("costs $5\u{0009}and $10").is_ok());
+        // Plain prose, newlines and CR are untouched.
+        assert!(reject_mangled_latex("line one\r\nline two\n").is_ok());
+    }
+
+    /// A `$` inside a code span never opens a run (§6.1), so a tab after it is
+    /// not "inside math" — proves the guard uses the parser's real rules.
+    #[test]
+    fn a_tab_after_a_dollar_in_a_code_span_is_not_math() {
+        assert!(reject_mangled_latex("`$HOME`\tand `$PATH`\tare paths").is_ok());
     }
 }
