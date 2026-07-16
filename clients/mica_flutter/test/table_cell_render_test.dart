@@ -36,7 +36,7 @@ void main() {
     final span = RenderDocument.cellDisplaySpan(r'list **pods** fast', base);
     expect(span.toPlainText(), 'list pods fast');
     final bold = leaves(span).firstWhere((s) => s.text == 'pods');
-    expect(bold.style?.fontWeight, FontWeight.w700);
+    expect(bold.style?.fontWeight, FontWeight.w600);
   });
 
   test('plain text and unmatched markers stay literal', () {

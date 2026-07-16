@@ -88,7 +88,11 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
     for (final m in active) {
       switch (m.type) {
         case 'bold':
-          style = style.copyWith(fontWeight: FontWeight.w700);
+          // w600, matching the headings. w700 read too heavy in body text —
+          // though see the caveat in inline_code_style_test.dart: for CJK this
+          // may not change anything, because we bundle only a Regular face and
+          // both weights land on the same synthesized bold.
+          style = style.copyWith(fontWeight: FontWeight.w600);
         case 'italic':
           style = style.copyWith(fontStyle: FontStyle.italic);
         case 'code':

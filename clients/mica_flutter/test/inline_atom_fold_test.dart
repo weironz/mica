@@ -144,9 +144,9 @@ void main() {
 
       walk(r.span);
       final bold = leaves.firstWhere((l) => l.text == 'bb');
-      expect(bold.style?.fontWeight, FontWeight.w700);
+      expect(bold.style?.fontWeight, FontWeight.w600);
       final tail = leaves.firstWhere((l) => l.text == 'tt');
-      expect(tail.style?.fontWeight, isNot(FontWeight.w700));
+      expect(tail.style?.fontWeight, isNot(FontWeight.w600));
     });
 
     test('no baseline degrades to middle alignment', () {

@@ -29,7 +29,7 @@ void main() {
         (buildMarkedSpan('x', [Mark(0, 1, type)], base).children!.first
                 as TextSpan)
             .style!;
-    expect(only('bold').fontWeight, FontWeight.w700);
+    expect(only('bold').fontWeight, FontWeight.w600);
     expect(only('italic').fontStyle, FontStyle.italic);
     expect(only('strike').decoration, TextDecoration.lineThrough);
   });
@@ -56,7 +56,7 @@ void _boldTests() {
 
   test('bold changes weight only — never the font size', () {
     final s = styleOf('bold');
-    expect(s.fontWeight, FontWeight.w700);
+    expect(s.fontWeight, FontWeight.w600);
     expect(s.fontSize, 16, reason: 'bold must not scale the text');
     expect(s.fontFamily, isNull, reason: 'bold must not swap the family');
   });
