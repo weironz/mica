@@ -1,9 +1,11 @@
 /// Desktop window setup (selected for non-web via window_setup.dart):
-/// enforce a minimum size and remember the last window size/position in prefs.
+/// enforce a minimum size, remember the last window size/position in prefs, and
+/// decide what the window's X button does.
 library;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
+import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'prefs.dart';
@@ -15,6 +17,41 @@ bool get _isDesktop =>
     defaultTargetPlatform == TargetPlatform.windows ||
     defaultTargetPlatform == TargetPlatform.linux ||
     defaultTargetPlatform == TargetPlatform.macOS;
+
+// ── Close behaviour ─────────────────────────────────────────────────────────
+// What the window's X does. Persisted under `closeBehavior`; [kCloseAsk] is the
+// default so the first X asks instead of guessing (quitting an editor someone
+// meant to minimise loses their place).
+
+/// Ask on the next close, and remember what they pick.
+const kCloseAsk = 'ask';
+const kCloseQuit = 'quit';
+const kCloseMinimize = 'minimize';
+const kCloseTray = 'tray';
+
+String loadCloseBehavior() => loadPref('closeBehavior') ?? kCloseAsk;
+void saveCloseBehavior(String v) => savePref('closeBehavior', v);
+
+/// Whether this platform can put an icon in the tray.
+///
+/// Windows only, deliberately. `tray_manager` on Linux needs
+/// `libayatana-appindicator3` at build AND run time (it aborts at startup when
+/// the lib is missing, even if you never call it), fails to compile on Debian
+/// 13 / recent Ubuntu where the deprecated `app_indicator_new` meets `-Werror`,
+/// and on GNOME needs a user-installed extension before the icon appears at all.
+/// Any of those turns "hide to tray" into "the window is gone and there is no
+/// way back". macOS additionally needs an AppDelegate change to survive its last
+/// window closing. Neither ships from CI today (the release workflow builds the
+/// Flutter desktop app on windows-latest only), so neither is exercised.
+bool get trayIsSupported =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+/// The navigator used to ask the close question. It lives here because the
+/// close listener has no BuildContext of its own; main.dart hands it to
+/// MaterialApp.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+
+bool _trayReady = false;
 
 /// Restore saved bounds (or center at a default), enforce the minimum size, and
 /// start persisting bounds on resize/move. No-op on mobile, where
@@ -50,7 +87,159 @@ Future<void> initDesktopWindow() async {
     await windowManager.focus();
   });
 
+  // Take over the X button. Without this the window is destroyed before any of
+  // the branching below gets a say. NOTE this also makes windowManager.close()
+  // re-enter onWindowClose — only destroy() actually quits from here on.
+  await windowManager.setPreventClose(true);
   windowManager.addListener(_BoundsPersister());
+  windowManager.addListener(_CloseHandler());
+
+  // Register the tray up front when it's the standing choice, so the icon is
+  // already there when the user hits X — and so a failure is discovered now,
+  // while the window is still visible, rather than after we hide it.
+  if (loadCloseBehavior() == kCloseTray) await ensureTray();
+}
+
+/// Put Mica in the tray. Returns whether the icon is actually up — the caller
+/// MUST NOT hide the window unless this is true, since the icon is the only way
+/// back. Never throws: a tray that fails to register is a downgrade, not a crash.
+Future<bool> ensureTray() async {
+  if (!trayIsSupported) return false;
+  if (_trayReady) return true;
+  try {
+    await trayManager.setIcon('assets/tray_icon.ico');
+    await trayManager.setToolTip('Mica');
+    await trayManager.setContextMenu(
+      Menu(
+        items: [
+          MenuItem(key: 'show', label: '显示 Mica'),
+          MenuItem.separator(),
+          MenuItem(key: 'exit', label: '退出'),
+        ],
+      ),
+    );
+    trayManager.addListener(_TrayHandler());
+    _trayReady = true;
+    return true;
+  } catch (e) {
+    debugPrint('tray unavailable, will minimize instead: $e');
+    return false;
+  }
+}
+
+/// Do what [behavior] says. Split out so Settings can preview a choice and the
+/// close listener can reuse it.
+Future<void> applyCloseBehavior(String behavior) async {
+  switch (behavior) {
+    case kCloseMinimize:
+      await windowManager.minimize();
+    case kCloseTray:
+      // Fall back to a plain minimize if the tray didn't come up: hiding a
+      // window whose only restore path is a missing icon strands the user.
+      if (await ensureTray()) {
+        await windowManager.hide();
+      } else {
+        await windowManager.minimize();
+      }
+    default:
+      // destroy(), not close(): setPreventClose means close() would just bounce
+      // back into onWindowClose forever.
+      await windowManager.destroy();
+  }
+}
+
+class _TrayHandler with TrayListener {
+  @override
+  void onTrayIconMouseDown() => windowManager.show();
+
+  @override
+  void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    switch (menuItem.key) {
+      case 'show':
+        windowManager.show();
+        windowManager.focus();
+      case 'exit':
+        windowManager.destroy();
+    }
+  }
+}
+
+class _CloseHandler with WindowListener {
+  bool _asking = false;
+
+  @override
+  Future<void> onWindowClose() async {
+    final saved = loadCloseBehavior();
+    if (saved != kCloseAsk) {
+      await applyCloseBehavior(saved);
+      return;
+    }
+    // Don't stack dialogs if X is clicked again while the question is up.
+    if (_asking) return;
+    _asking = true;
+    final choice = await _askCloseBehavior();
+    _asking = false;
+    // Dismissed (Esc / clicked away) = "I didn't mean to close" → stay open.
+    if (choice == null) return;
+    await applyCloseBehavior(choice);
+  }
+}
+
+/// The first-close question. Returns the chosen behaviour, or null to stay open.
+/// Whatever they pick becomes the standing answer (Settings can change it).
+Future<String?> _askCloseBehavior() async {
+  final context = appNavigatorKey.currentContext;
+  // No navigator (closed before first frame) → the safe reading of X is "quit".
+  if (context == null) return kCloseQuit;
+
+  var remember = true;
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: const Text('关闭 Mica 窗口'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('点关闭按钮时,你希望 Mica:'),
+            const SizedBox(height: 8),
+            CheckboxListTile(
+              value: remember,
+              onChanged: (v) => setState(() => remember = v ?? true),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('记住我的选择(以后可在设置里改)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, kCloseMinimize),
+            child: const Text('最小化到任务栏'),
+          ),
+          if (trayIsSupported)
+            TextButton(
+              onPressed: () => Navigator.pop(context, kCloseTray),
+              child: const Text('最小化到托盘'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, kCloseQuit),
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (choice != null && remember) saveCloseBehavior(choice);
+  return choice;
 }
 
 ({Size? size, Offset? position, bool maximized}) _loadBounds() {

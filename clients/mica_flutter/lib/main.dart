@@ -157,6 +157,10 @@ class MicaApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Mica',
+      // The window's close listener lives outside the widget tree and has no
+      // context of its own — this is how it reaches a Navigator to ask whether
+      // X should quit or minimise. No-op on web.
+      navigatorKey: appNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

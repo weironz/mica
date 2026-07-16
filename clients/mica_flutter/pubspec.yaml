@@ -16,6 +16,12 @@ dependencies:
   # Desktop-only: window min-size + size/position memory (M2). Gated behind a
   # conditional import so it never enters the web bundle. In-house exemption #2.
   window_manager: ^0.5.0
+  # Exemption #8 (CLAUDE.md): system tray for "close to tray". window_manager
+  # has no tray API at all — its own example app pulls this package in to demo a
+  # tray — so the alternative is hand-writing Win32 Shell_NotifyIcon plus a Linux
+  # StatusNotifier/DBus channel: two native layers, exactly the platform glue the
+  # rule says to buy. Same author/publisher as window_manager (leanflutter.dev).
+  tray_manager: ^0.5.3
   # Native file dialogs (open/save/directory) for desktop+mobile — used only by
   # the non-web (_stub) variants of pick_file/pick_image/image_actions. Web keeps
   # its dart:html implementations. In-house exemption #3 (platform glue).
@@ -64,6 +70,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # Tray icon (desktop "close to tray"). .ico because Windows is the only
+    # platform where we enable the tray — see close_behavior in
+    # window_setup_desktop.dart.
+    - assets/tray_icon.ico
   fonts:
     # Crisp CJK for the web (CanvasKit can't use system fonts by name, unlike
     # desktop which defers to 微软雅黑/苹方 — see lib/cjk_fonts.dart). Noto Sans

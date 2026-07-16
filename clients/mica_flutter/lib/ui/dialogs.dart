@@ -322,6 +322,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late double _pageWidth = widget.pageWidth;
   late bool _reHostImages = widget.reHostImages;
   late bool _showFormatBar = widget.showFormatBar;
+  // Read straight from prefs rather than threaded through widget params: the
+  // window layer owns this one, and Settings is its only editor.
+  late String _closeBehavior = loadCloseBehavior();
   late bool _showPageTitle = widget.showPageTitle;
   late bool _aiEnabled = widget.aiEnabled;
 
@@ -886,6 +889,52 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         widget.onShowPageTitleChanged(value);
       },
     ),
+    // Desktop only — a browser tab's close button belongs to the browser, and
+    // no app code can intercept it.
+    if (!kIsWeb) ...[
+      const SizedBox(height: 8),
+      const Text(
+        '关闭窗口时',
+        style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF64748B)),
+      ),
+      // RadioGroup, not per-tile groupValue/onChanged — those were deprecated
+      // after Flutter 3.32 in favour of this ancestor.
+      RadioGroup<String>(
+        groupValue: _closeBehavior,
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => _closeBehavior = value);
+          saveCloseBehavior(value);
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final option in _closeBehaviorOptions)
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: option.$1,
+                title: Text(option.$2),
+                subtitle: Text(option.$3),
+              ),
+          ],
+        ),
+      ),
+    ],
+  ];
+
+  /// The X-button choices. "Ask every time" is not offered as a standing
+  /// setting — it is only the pre-answer default; once you have answered, an
+  /// explicit choice is what you want, and the question is reachable again by
+  /// picking a different option here.
+  ///
+  /// Tray is Windows-only for now (see `trayIsSupported`): where it is not
+  /// available, offering it would promise a restore path we cannot deliver.
+  List<(String, String, String)> get _closeBehaviorOptions => [
+    (kCloseQuit, '退出 Mica', '关闭窗口即退出程序(默认行为)。'),
+    (kCloseMinimize, '最小化到任务栏', '窗口收起,程序继续运行,点任务栏图标回来。'),
+    if (trayIsSupported)
+      (kCloseTray, '最小化到系统托盘', '窗口隐藏,只在右下角托盘留图标;点图标或右键菜单回来。'),
   ];
 
   List<Widget> _aiSection(BuildContext context) => [
