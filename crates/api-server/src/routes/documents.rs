@@ -1926,12 +1926,186 @@ pub async fn export_document_html(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
-  let payload = store::current_payload(&state.db, document_id)
+  let mut payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
+  inline_blob_hrefs(&mut payload.blocks, workspace_id);
   let html = export_html(&payload).map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
   Ok(Json(HtmlExportResponse { html }))
+}
+
+/// Point each uploaded-image block's `url` at its public blob path so a renderer
+/// that reads `url` (export_html) can show it. Uploaded images store
+/// `{file_id, name}` and NO `url`, so without this they render `<img src="">`.
+/// External images (already a `url`) are left alone. The blob path is a public
+/// capability URL (`is_blob_path`), so it resolves on an unauthenticated share
+/// page too.
+fn inline_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], workspace_id: Uuid) {
+  for block in blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let Some(file_id) = block
+      .data
+      .get("file_id")
+      .and_then(|v| v.as_str())
+      .map(str::to_string)
+    else {
+      continue;
+    };
+    let name = block
+      .data
+      .get("name")
+      .and_then(|v| v.as_str())
+      .unwrap_or("image")
+      .to_string();
+    if let Some(obj) = block.data.as_object_mut() {
+      obj.insert(
+        "url".to_string(),
+        serde_json::json!(blob_href(workspace_id, &file_id, &name)),
+      );
+    }
+  }
+}
+
+// ── Public sharing (publish a page to a /s/{token} URL) ──────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct ShareResponse {
+  /// Whether the document currently has an active public link.
+  shared: bool,
+  /// The share token when shared; the client composes `{origin}/s/{token}`.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  token: Option<String>,
+}
+
+/// `GET /api/workspaces/{ws}/documents/{id}/share` — current share status.
+pub async fn get_share(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<ShareResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+  let share = store::fetch_active_share_for_doc(&state.db, workspace_id, document_id).await?;
+  Ok(Json(ShareResponse {
+    shared: share.is_some(),
+    token: share.map(|s| s.token),
+  }))
+}
+
+/// `POST …/share` — publish (create-or-return the active share). Idempotent:
+/// re-publishing returns the SAME link.
+pub async fn create_share(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<ShareResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+  let share = store::create_or_get_share(&state.db, workspace_id, document_id, user_id).await?;
+  Ok(Json(ShareResponse {
+    shared: true,
+    token: Some(share.token),
+  }))
+}
+
+/// `DELETE …/share` — unpublish (soft-revoke). The public link 404s at once.
+pub async fn delete_share(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<ShareResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+  store::revoke_share(&state.db, workspace_id, document_id).await?;
+  Ok(Json(ShareResponse {
+    shared: false,
+    token: None,
+  }))
+}
+
+/// `GET /s/{token}` — the PUBLIC read-only page. No auth: the unguessable token
+/// is the only credential, and it is re-checked (`revoked_at IS NULL`) on every
+/// hit so revocation is instant. A missing/revoked/wrong token and a private
+/// doc all return the SAME 404 — the page never reveals that a document exists.
+/// Renders the server-side HTML (Rust-first data-plane) wrapped in a minimal
+/// shell; images resolve through the public blob capability URLs.
+pub async fn public_share_page(
+  State(state): State<AppState>,
+  Path(token): Path<String>,
+) -> Response {
+  let not_found = || {
+    (
+      axum::http::StatusCode::NOT_FOUND,
+      [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+      "<!doctype html><meta charset=utf-8><title>Not found</title><p>This page is not available.</p>",
+    )
+      .into_response()
+  };
+
+  let Ok(Some(share)) = store::fetch_share_by_token(&state.db, &token).await else {
+    return not_found();
+  };
+  let Ok(Some(mut payload)) = store::current_payload(&state.db, share.document_id).await else {
+    return not_found();
+  };
+  inline_blob_hrefs(&mut payload.blocks, share.workspace_id);
+  let Ok(body) = export_html(&payload) else {
+    return not_found();
+  };
+  let title = fetch_document_view(&state.db, share.workspace_id, share.document_id)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v.name)
+    .unwrap_or_default();
+
+  let html = render_share_shell(&title, &body, share.allow_indexing);
+  ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
+}
+
+/// Wrap the HTML export fragment in a standalone, readable page. `noindex`
+/// unless the share opted into indexing, so a shared page is not silently
+/// crawlable.
+fn render_share_shell(title: &str, body_html: &str, allow_indexing: bool) -> String {
+  let safe_title = escape_html_min(title);
+  let robots = if allow_indexing {
+    ""
+  } else {
+    "<meta name=\"robots\" content=\"noindex\">"
+  };
+  format!(
+    "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
+     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+     {robots}\n<title>{safe_title}</title>\n<style>\n\
+     body{{max-width:720px;margin:2.5rem auto;padding:0 1.25rem;\
+     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
+     'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
+     img{{max-width:100%;height:auto;border-radius:6px;}}\n\
+     pre{{background:#f6f8fa;padding:1rem;border-radius:6px;overflow:auto;}}\n\
+     code{{background:#f6f8fa;padding:.15em .35em;border-radius:4px;}}\n\
+     pre code{{background:none;padding:0;}}\n\
+     blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
+     table{{border-collapse:collapse;}}\ntd,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
+     hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
+     h1{{margin-bottom:1.5rem;}}\n\
+     .mica-footer{{margin-top:3rem;padding-top:1rem;border-top:1px solid #eaeef2;\
+     color:#8c959f;font-size:.85rem;}}\n</style>\n</head>\n<body>\n\
+     <h1>{safe_title}</h1>\n{body_html}\n\
+     <div class=\"mica-footer\">用 Mica 制作</div>\n</body>\n</html>\n"
+  )
+}
+
+/// Minimal HTML-text escaping for the title (the body is escaped by export_html).
+fn escape_html_min(s: &str) -> String {
+  s.replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('>', "&gt;")
 }
 
 async fn fetch_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec<View>> {

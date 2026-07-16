@@ -271,7 +271,11 @@ pub async fn current_payload(
       ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}"))
     })?;
     payload.root_block_id = doc.root_block_id();
-    payload.blocks = doc.to_blocks().into_iter().map(md_block_from_core).collect();
+    payload.blocks = doc
+      .to_blocks()
+      .into_iter()
+      .map(md_block_from_core)
+      .collect();
   }
   Ok(Some(payload))
 }
@@ -391,6 +395,104 @@ pub async fn list_versions(db: &PgPool, document_id: Uuid) -> ApiResult<Vec<Vers
   )
   .bind(document_id)
   .fetch_all(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+// ── Public sharing (publish a page to a /s/{token} URL) ──────────────────────
+
+/// An active public share of a document. `token` is the unguessable capability
+/// that grants read-only access at the public route.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct ShareRecord {
+  pub id: Uuid,
+  pub token: String,
+  pub workspace_id: Uuid,
+  pub document_id: Uuid,
+  pub created_by: Uuid,
+  pub created_at: DateTime<Utc>,
+  pub allow_indexing: bool,
+}
+
+/// The document's active (non-revoked) share, if any.
+pub async fn fetch_active_share_for_doc(
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+) -> ApiResult<Option<ShareRecord>> {
+  sqlx::query_as::<_, ShareRecord>(
+    "SELECT id, token, workspace_id, document_id, created_by, created_at, allow_indexing \
+     FROM document_shares \
+     WHERE workspace_id = $1 AND document_id = $2 AND revoked_at IS NULL",
+  )
+  .bind(workspace_id)
+  .bind(document_id)
+  .fetch_optional(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// Return the document's active share, minting one (a fresh token) if none
+/// exists. findOrCreate — re-sharing a page yields the SAME link, not a new one.
+pub async fn create_or_get_share(
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  user_id: Uuid,
+) -> ApiResult<ShareRecord> {
+  if let Some(existing) = fetch_active_share_for_doc(db, workspace_id, document_id).await? {
+    return Ok(existing);
+  }
+  // 244 bits from two v4 UUIDs — the same recipe as a PAT (tokens.rs), no extra
+  // crate. Unguessable is the whole security model, so this is not thrift.
+  let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+  // `DO NOTHING` guards the race where two requests share at once: the partial
+  // unique index (one active share per doc) makes the loser a no-op; we then
+  // re-read the winner rather than erroring.
+  let inserted = sqlx::query_as::<_, ShareRecord>(
+    "INSERT INTO document_shares (token, workspace_id, document_id, created_by) \
+     VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING \
+     RETURNING id, token, workspace_id, document_id, created_by, created_at, allow_indexing",
+  )
+  .bind(&token)
+  .bind(workspace_id)
+  .bind(document_id)
+  .bind(user_id)
+  .fetch_optional(db)
+  .await?;
+  match inserted {
+    Some(share) => Ok(share),
+    None => fetch_active_share_for_doc(db, workspace_id, document_id)
+      .await?
+      .ok_or_else(|| ApiError::Internal("share vanished after conflict".to_string())),
+  }
+}
+
+/// Soft-revoke the document's active share. Returns true if one was active.
+/// Every public read re-checks `revoked_at IS NULL`, so this takes effect at
+/// once — there is no token cache to invalidate.
+pub async fn revoke_share(db: &PgPool, workspace_id: Uuid, document_id: Uuid) -> ApiResult<bool> {
+  let result = sqlx::query(
+    "UPDATE document_shares SET revoked_at = now() \
+     WHERE workspace_id = $1 AND document_id = $2 AND revoked_at IS NULL",
+  )
+  .bind(workspace_id)
+  .bind(document_id)
+  .execute(db)
+  .await?;
+  Ok(result.rows_affected() > 0)
+}
+
+/// The public read path: resolve a token to its active share. The token is the
+/// only credential; there is no workspace/auth context. A missing OR revoked
+/// token both return None so the caller answers with an indistinguishable 404.
+pub async fn fetch_share_by_token(db: &PgPool, token: &str) -> ApiResult<Option<ShareRecord>> {
+  sqlx::query_as::<_, ShareRecord>(
+    "SELECT id, token, workspace_id, document_id, created_by, created_at, allow_indexing \
+     FROM document_shares WHERE token = $1 AND revoked_at IS NULL",
+  )
+  .bind(token)
+  .fetch_optional(db)
   .await
   .map_err(ApiError::from)
 }

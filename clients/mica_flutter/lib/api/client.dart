@@ -352,6 +352,50 @@ class ApiClient {
     );
   }
 
+  /// A document's public-share status: whether it has an active link, and the
+  /// token (compose `{baseUri.origin}/s/{token}` for the shareable URL).
+  Future<({bool shared, String? token})> getShare(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/documents/$documentId/share',
+      token,
+    );
+    return (
+      shared: response['shared'] == true,
+      token: response['token'] as String?,
+    );
+  }
+
+  /// Publish the document to a public read-only link. Idempotent — returns the
+  /// existing token if already shared.
+  Future<String> createShare(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/documents/$documentId/share',
+      const {},
+      token: token,
+    );
+    return response['token'] as String;
+  }
+
+  /// Turn off the public link (it 404s immediately).
+  Future<void> deleteShare(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    await _delete(
+      '/api/workspaces/$workspaceId/documents/$documentId/share',
+      token,
+    );
+  }
+
   Future<void> purgeView(
     String token,
     String workspaceId,

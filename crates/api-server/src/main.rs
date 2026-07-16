@@ -65,6 +65,7 @@ fn app_router(state: AppState) -> Router {
   Router::new()
     .nest("/api", api)
     .merge(routes::ws_router())
+    .merge(routes::share_router())
     .layer(TraceLayer::new_for_http())
     .layer(CorsLayer::permissive())
     .with_state(state)

@@ -108,6 +108,8 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。
 | `mica_create_folder` | 建文件夹(纯容器),返回 view_id 好往里放东西 |
 | `mica_move_document` | 移动页面(改父) |
 | `mica_reorder` | 一次调用重排某文件夹(或顶层)的所有子项 —— 传有序 view_id 列表;排序/整理用它 |
+| `mica_share` | 把文档发布成**公开只读链接**,返回可打开的 URL(幂等,再分享返回同一个) |
+| `mica_unshare` | 关闭公开链接(立即 404) |
 | `mica_trash_view` | 软删到回收站(需 `confirm: true`) |
 | `mica_list_trash` | 列回收站(找要恢复的东西) |
 | `mica_restore_view` | 从回收站恢复页面/文件夹(撤销软删) |

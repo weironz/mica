@@ -1582,6 +1582,165 @@ class _AiDialogState extends State<_AiDialog> {
 /// Recycle bin: lists soft-deleted pages and offers restore / delete-forever.
 /// Only the roots of each deleted subtree are shown; restoring a root brings its
 /// whole subtree back.
+/// Publish the open (cloud) document to a public read-only link. Toggle on to
+/// mint/return the link, off to revoke it (the public URL 404s at once).
+class _ShareDialog extends StatefulWidget {
+  const _ShareDialog({
+    required this.onLoad,
+    required this.onEnable,
+    required this.onDisable,
+    required this.buildUrl,
+  });
+
+  final Future<({bool shared, String? token})> Function() onLoad;
+  final Future<String> Function() onEnable; // returns the token
+  final Future<void> Function() onDisable;
+  final String Function(String token) buildUrl;
+
+  @override
+  State<_ShareDialog> createState() => _ShareDialogState();
+}
+
+class _ShareDialogState extends State<_ShareDialog> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+  bool _shared = false;
+  String? _url;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final status = await widget.onLoad();
+      if (!mounted) return;
+      setState(() {
+        _shared = status.shared;
+        _url = status.token == null ? null : widget.buildUrl(status.token!);
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _toggle(bool on) async {
+    setState(() => _busy = true);
+    try {
+      if (on) {
+        final token = await widget.onEnable();
+        if (!mounted) return;
+        setState(() {
+          _shared = true;
+          _url = widget.buildUrl(token);
+        });
+      } else {
+        await widget.onDisable();
+        if (!mounted) return;
+        setState(() {
+          _shared = false;
+          _url = null;
+        });
+      }
+    } catch (error) {
+      _snack('操作失败: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _copy() {
+    final url = _url;
+    if (url == null) return;
+    Clipboard.setData(ClipboardData(text: url));
+    _snack('链接已复制');
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('分享'),
+      content: SizedBox(
+        width: 440,
+        child: _loading
+            ? const SizedBox(
+                height: 80,
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : _error != null
+            ? SizedBox(height: 80, child: Center(child: Text('加载失败: $_error')))
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _shared,
+                    onChanged: _busy ? null : _toggle,
+                    title: const Text('公开访问'),
+                    subtitle: const Text('任何有链接的人都能只读查看,无需登录'),
+                  ),
+                  if (_shared && _url != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF6F8FA),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SelectableText(
+                              _url!,
+                              maxLines: 1,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '复制链接',
+                            icon: const Icon(Icons.copy, size: 18),
+                            onPressed: _copy,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+}
+
 /// Version history for the open (cloud) document: list named checkpoints, pin
 /// the current state as a new one, or roll back to an old one. Restore reflects
 /// live in the editor via the normal sync path (the server broadcasts it as an

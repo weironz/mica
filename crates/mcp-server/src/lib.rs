@@ -1104,6 +1104,70 @@ impl MicaMcp {
   }
 
   #[tool(
+    description = "Publish a document to a PUBLIC read-only web link and return the URL. Anyone \
+                   with the link can read it (no login); re-sharing returns the same link. Use \
+                   mica_unshare to turn it off.",
+    annotations(title = "Share to web", read_only_hint = false)
+  )]
+  async fn mica_share(
+    &self,
+    Parameters(DocArg {
+      workspace_id,
+      document_id,
+    }): Parameters<DocArg>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let shared = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+        json!({}),
+      )
+      .await;
+    match shared {
+      Ok(value) => {
+        let token = value
+          .pointer("/token")
+          .and_then(Value::as_str)
+          .unwrap_or_default();
+        // Hand back the full, openable URL — the token alone is not actionable.
+        tool_result(Ok(json!({
+          "ok": true,
+          "shared": true,
+          "url": format!("{}/s/{}", self.base, token),
+        })))
+      }
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
+    description = "Turn off a document's public link (the URL 404s immediately).",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_unshare(
+    &self,
+    Parameters(DocArg {
+      workspace_id,
+      document_id,
+    }): Parameters<DocArg>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let done = self
+      .delete(&format!(
+        "/api/workspaces/{workspace_id}/documents/{document_id}/share"
+      ))
+      .await;
+    match done {
+      Ok(_) => tool_result(Ok(json!({ "ok": true, "shared": false }))),
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
     description = "Export a whole workspace as Markdown (all pages, in tree order). Read-only \
                        — use it to snapshot content for review or to hand to an external backup.",
     annotations(read_only_hint = true)
@@ -1548,7 +1612,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 20, "every tool must be listed");
+    assert_eq!(tools.len(), 22, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

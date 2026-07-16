@@ -3146,6 +3146,30 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
+  /// Open the public-share dialog for the selected cloud page. The share URL is
+  /// composed from the server origin this client talks to (`/s/{token}`).
+  Future<void> _openShare() async {
+    final bootstrap = _selectedBootstrap;
+    final workspace = _selectedWorkspace;
+    if (bootstrap == null || workspace == null || _session == null) {
+      return;
+    }
+    final wsId = workspace.id;
+    final docId = bootstrap.document.id;
+    final origin = _api.baseUri.origin;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _ShareDialog(
+        onLoad: () => _api.getShare(_requireSession().accessToken, wsId, docId),
+        onEnable: () =>
+            _api.createShare(_requireSession().accessToken, wsId, docId),
+        onDisable: () =>
+            _api.deleteShare(_requireSession().accessToken, wsId, docId),
+        buildUrl: (token) => '$origin/s/$token',
+      ),
+    );
+  }
+
   Future<void> _addWorkspaceMember(String email, WorkspaceRole role) {
     return _run(() async {
       final session = _requireSession();
@@ -3719,6 +3743,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onRestoreCheckpoint: local ? _localRollbackDoc : null,
       // Cloud-only: version history lives server-side (local has no history).
       onVersionHistory: local ? null : _openVersionHistory,
+      onShare: local ? null : _openShare,
       // P3f: both live on the workspace ROW's menu, dispatching per entry —
       // null on web (no local world / no on-device store).
       onMigrateEntry: _local.available ? _migrateEntry : null,
@@ -4035,6 +4060,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onRemoveMember,
     this.onRestoreCheckpoint,
     this.onVersionHistory,
+    this.onShare,
     this.onMigrateEntry,
     this.onDetachEntry,
     this.onCursorChanged,
@@ -4217,6 +4243,8 @@ class WorkspaceView extends StatefulWidget {
   /// Opens the cloud document's version history (null for local workspaces,
   /// which have no server-side history).
   final Future<void> Function()? onVersionHistory;
+  /// Opens the share dialog (public link) — cloud-only.
+  final Future<void> Function()? onShare;
 
   /// Upload a LOCAL workspace row to the cloud (P3f §6.1). Null on web, which
   /// hides the row action.
@@ -5970,6 +5998,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text('Import Markdown…'),
                             ),
                           ),
+                          if (widget.onShare != null) ...[
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: 'share',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.public),
+                                title: Text('分享'),
+                              ),
+                            ),
+                          ],
                           if (widget.onVersionHistory != null) ...[
                             const PopupMenuDivider(),
                             const PopupMenuItem(
@@ -6620,6 +6660,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         await _exportPageFile();
       case 'import-md':
         await _importMarkdownFile();
+      case 'share':
+        await widget.onShare?.call();
       case 'version-history':
         await widget.onVersionHistory?.call();
       case 'restore-checkpoint':
