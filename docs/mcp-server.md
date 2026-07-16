@@ -1,4 +1,8 @@
-# mica-mcp-server
+# mica-mcp-server — design notes
+
+Why the MCP server is shaped the way it is. **To set it up, read
+[mcp-connect.md](mcp-connect.md)** — that is the authoritative guide and the one
+kept current; this file is the rationale behind it.
 
 An [MCP](https://modelcontextprotocol.io) server that exposes Mica as tools an AI
 (Claude Desktop, Claude Code, or any MCP client) can call — list, read, create,
@@ -22,39 +26,17 @@ does **not** do backups — see [External backup](#backup) below.
 
 ## Configure
 
-Environment:
+`mica-cli mcp` — the MCP server is a library folded into the CLI, so CI ships one
+binary per platform rather than two. There is no separate `mica-mcp` executable
+(there was, briefly; it was never published, which is exactly why it merged).
 
-| Var | Required | Meaning |
-| --- | --- | --- |
-| `MICA_API_BASE_URL` | yes | e.g. `https://mica.cloudcele.com` |
-| `MICA_PAT` | yes | a Mica personal access token (Settings → API Tokens) |
-| `MICA_MCP_READ_ONLY` | no | `1`/`true` registers writes but refuses them |
+It resolves the server URL and PAT through the CLI's usual chain — `--server` /
+`MICA_SERVER`, `MICA_TOKEN`, or a saved `mica-cli auth login` — and still honours
+the historical `MICA_API_BASE_URL` / `MICA_PAT` so existing MCP configs keep
+working. `MICA_MCP_READ_ONLY=1` registers the write tools but refuses them at
+call time.
 
-Build: `cargo build --release -p mica-mcp-server` → `target/release/mica-mcp`.
-
-### Claude Code
-
-```bash
-claude mcp add mica -- \
-  env MICA_API_BASE_URL=https://mica.cloudcele.com MICA_PAT=<token> \
-  /path/to/mica-mcp
-```
-
-### Claude Desktop (`claude_desktop_config.json`)
-
-```json
-{
-  "mcpServers": {
-    "mica": {
-      "command": "/path/to/mica-mcp",
-      "env": {
-        "MICA_API_BASE_URL": "https://mica.cloudcele.com",
-        "MICA_PAT": "<token>"
-      }
-    }
-  }
-}
-```
+Full setup, client config, tool list and troubleshooting: **[mcp-connect.md](mcp-connect.md)**.
 
 ## Tools
 
@@ -80,16 +62,8 @@ Write:
 Note the two id kinds: reads/writes use a page's **`document_id`** (its
 `object_id`, from `mica_list_pages`); move/trash use its **`view_id`**.
 
-## <a name="backup"></a>External backup
+## External backup
 
-Backups are deliberately **not** a Mica feature. Export your data and point a
-real backup tool at it — Markdown is text, so it dedups and diffs beautifully:
-
-```bash
-# dump every workspace to Markdown, then let restic/rclone/borg do the backup
-mica-cli export --out ./mica-export
-restic -r s3:… backup ./mica-export      # or: rclone sync ./mica-export remote:mica
-```
-
-Run it on a cron/systemd timer. Restore = `mica-cli import ./mica-export/<ws>.zip`
-(the AI-facing equivalent is per-page `mica_create_document` / `mica_update_document`).
+Backups are deliberately **not** a Mica feature, and the MCP server does not do
+them either — it is a thin proxy with no storage of its own. Export and point a
+real backup tool at the result: see **[backup.md](backup.md)**.
