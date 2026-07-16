@@ -99,8 +99,21 @@ and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
    straight to S3 (deduped again by sha256 object keys) and the block is
    rewired to Mica's `{file_id, name}` image form. External URLs stay
    links.
-4. **Skips a leading `# H1`** that duplicates the page title (the export
-   prepends one; round-trips must not double it).
+4. **Takes the body verbatim.** A page's name is a property of the page, not a
+   line inside it: the name travels in the file name (and the manifest `title`),
+   never welded into the text. So the export writes no `# {name}` and the import
+   harvests none — what you wrote is what comes back, both directions.
+
+   The editor already renders the name as the page title, so a body that ALSO
+   opened with its own heading showed the title twice on screen and doubled it
+   again in every export. That is what this rule removes.
+
+   **Notion archives are the one exception**, and it is not ours to fix: Notion
+   puts the title in the file name *and* repeats it as the body's first `# H1`
+   (hence the "remove duplicate title" step in every third-party Notion
+   importer). Importing that verbatim would show it twice, so it is stripped —
+   only for Notion, and only on an exact match with the name, so a heading that
+   merely happens to lead the page survives.
 
 ### Archive normalization (`normalize.rs`)
 

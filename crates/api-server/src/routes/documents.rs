@@ -1359,10 +1359,15 @@ async fn build_tree_zip(
       "title": view.name,
       "type": "document",
     }));
-    let content = format!("# {}\n\n{}", view.name, body);
+    // The body, verbatim. The page NAME is carried by the file name (and the
+    // manifest `title`), not by a heading welded onto the text: a page is its
+    // content, and its name is a property of the page, not a line inside it.
+    // Prepending `# {name}` here is what produced two stacked titles — the
+    // editor already renders the name as the page title, so a doc that also
+    // opened with its own heading showed it twice, and every export re-added it.
     entries.push(ZipEntry {
       name: path,
-      data: content.into_bytes(),
+      data: body.into_bytes(),
     });
   }
 

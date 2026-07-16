@@ -182,9 +182,12 @@ fn plan_full_archive_with_manifest_links_and_assets() {
   assert_eq!(titles, ["Zeta", "Sub", "Alpha"]); // manifest order, not alphabetical
   assert_eq!(plan.pages[1].parent, Some(0)); // Zeta/Sub.md under Zeta.md
   assert_eq!(plan.pages[2].parent, None);
-  // Leading duplicate H1 stripped, body kept.
+  // Body verbatim: our own archives never weld the name into the text, so there
+  // is nothing to strip and a leading heading is the author's, not ours to eat.
+  // (Notion archives DO repeat the title as an H1 — that one case is stripped at
+  // import; see `strip_leading_h1`'s call site.)
   assert!(plan.pages[0].markdown.contains("see [Sub](Zeta/Sub.md)"));
-  assert!(!plan.pages[0].markdown.contains("# Zeta"));
+  assert!(plan.pages[0].markdown.contains("# Zeta"));
   // Asset present and resolvable from the page that references it.
   assert!(plan.files.contains_key("assets/p.png"));
   let file_paths: HashSet<String> = plan.files.keys().cloned().collect();

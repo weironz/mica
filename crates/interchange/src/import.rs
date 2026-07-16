@@ -166,8 +166,23 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
     let fallback = clean(
       base.strip_suffix(".md").or_else(|| base.strip_suffix(".MD")).unwrap_or(base),
     );
-    let title = title_from_markdown(markdown, &fallback);
-    let body = strip_leading_h1(markdown, &title);
+    // The file name IS the page name; the body is the body. Nothing is promoted
+    // out of the text and nothing is stripped from it — a page's name is a
+    // property of the page, not a line inside it, and our own export writes the
+    // name into the file name, never into the text.
+    //
+    // Notion is the one exception, and it is not ours to fix: a Notion export
+    // puts the title in the file name AND repeats it as the body's first `# H1`
+    // (which is why every third-party Notion importer ships a "remove duplicate
+    // title" step). Importing that verbatim would show the title twice on every
+    // page. So strip it there, and ONLY there — and only when it matches the
+    // name exactly, so a heading that merely happens to lead the page survives.
+    let title = fallback;
+    let body = if notion {
+      strip_leading_h1(markdown, &title)
+    } else {
+      markdown.clone()
+    };
     pages.push(PagePlan {
       archive_path: Some(path.clone()),
       title,
@@ -216,23 +231,9 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool, Option<St
     .collect()
 }
 
-/// First `# ` heading, else the fallback (cleaned filename).
-fn title_from_markdown(markdown: &str, fallback: &str) -> String {
-  for line in markdown.lines() {
-    let t = line.trim();
-    if t.is_empty() {
-      continue;
-    }
-    if let Some(h) = t.strip_prefix("# ") {
-      return h.trim().to_string();
-    }
-    break;
-  }
-  fallback.to_string()
-}
-
-/// Drop a leading `# <title>` line that duplicates the page title (exports
-/// prepend one; round-trips must not double it).
+/// Drop a leading `# <title>` that duplicates the page name. Notion-import only
+/// — see the call site. Exact match, nothing else: a leading heading that says
+/// something different is the author's content and must survive.
 fn strip_leading_h1(markdown: &str, title: &str) -> String {
   let mut lines = markdown.lines();
   let mut head = Vec::new();
@@ -242,7 +243,8 @@ fn strip_leading_h1(markdown: &str, title: &str) -> String {
       continue;
     }
     if line.trim().strip_prefix("# ").map(str::trim) == Some(title) {
-      return lines.collect::<Vec<_>>().join("\n");
+      return lines.collect::<Vec<_>>().join("
+");
     }
     break;
   }
@@ -358,7 +360,11 @@ mod tests {
     assert!(chapter.archive_path.is_none() && chapter.markdown.is_empty());
     let intro = find(&plan, "Intro");
     assert!(!intro.is_folder);
-    assert_eq!(intro.markdown.trim(), "hello");
+    // Verbatim: the leading heading is the author's content, not a title to
+    // harvest. The name came from the file name (`Intro.md`), as it should.
+    assert_eq!(intro.markdown.trim(), "# Intro
+
+hello");
     assert_eq!(parent_title(&plan, "Intro"), Some("Chapter"));
   }
 
@@ -390,7 +396,9 @@ mod tests {
     let plan = plan_import(raw, false);
     let doc = find(&plan, "Doc");
     assert!(!doc.is_folder, "Doc keeps document identity");
-    assert_eq!(doc.markdown.trim(), "parent body");
+    assert_eq!(doc.markdown.trim(), "# Doc
+
+parent body");
     assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
   }
 
