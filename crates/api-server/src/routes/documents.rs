@@ -1045,6 +1045,15 @@ pub async fn export_document_zip(
     .await?
     .ok_or(ApiError::NotFound)?;
 
+  // The page's name rides on the FILE NAME — it is nowhere in the text (the body
+  // is exported verbatim), so hardcoding `document.md` silently threw the name
+  // away: you got a zip of "document.md" whichever page you exported, and an
+  // import could only ever call it "document".
+  let base = fetch_document_view(&state.db, workspace_id, document_id)
+    .await?
+    .map(|view| safe_segment(&view.name))
+    .unwrap_or_else(|| "document".to_string());
+
   let mut entries = Vec::new();
   let assets = collect_assets(&state, workspace_id, &payload.blocks, &mut entries).await?;
   let markdown = export_markdown_with_assets(&payload, &assets)
@@ -1052,12 +1061,12 @@ pub async fn export_document_zip(
   entries.insert(
     0,
     ZipEntry {
-      name: "document.md".to_string(),
+      name: format!("{base}.md"),
       data: markdown.into_bytes(),
     },
   );
 
-  Ok(zip_response(build_zip(&entries), "document.zip"))
+  Ok(zip_response(build_zip(&entries), &format!("{base}.zip")))
 }
 
 /// Gather image assets referenced by [blocks]: fetch each Mica image's bytes,
@@ -1940,6 +1949,24 @@ fn normalize_position(position: Option<String>) -> ApiResult<String> {
 
 #[cfg(test)]
 mod tests {
+  /// `safe_segment` is the whole of the name→file-name rule, and since the body
+  /// is exported verbatim the file name is now the ONLY place a page's name
+  /// survives an export. A bug here loses it silently.
+  #[test]
+  fn safe_segment_makes_a_usable_file_name_from_any_page_name() {
+    assert_eq!(safe_segment("mica-cli"), "mica-cli");
+    assert_eq!(safe_segment("无引用 blob 自动回收"), "无引用_blob_自动回收");
+    // Path separators and Windows-hostile characters cannot survive as-is —
+    // one `/` would silently fabricate a directory inside the archive.
+    assert_eq!(safe_segment("a/b"), "a_b");
+    assert_eq!(safe_segment("what? really!"), "what_really");
+    // Runs collapse and edges are trimmed, so names stay readable.
+    assert_eq!(safe_segment("  spaced   out  "), "spaced_out");
+    // A name that survives nothing still must yield a file name.
+    assert_eq!(safe_segment("///"), "untitled");
+    assert_eq!(safe_segment(""), "untitled");
+  }
+
   use super::*;
 
   fn view(id: u128, parent: Option<u128>, name: &str, otype: &str) -> View {
