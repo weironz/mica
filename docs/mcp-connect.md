@@ -104,9 +104,16 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。
 | `mica_update_document` | 写入已有文档:`append`(默认、安全)/ `replace_all` / `insert_at` / `find_replace` |
 | `mica_add_image` | 从 http(s) URL 把图片**存进**工作区,返回 file_id + 可直接粘的 Markdown |
 | `mica_read_image` | 按 file_id 取回图片**像素**(MCP ImageContent),让模型真的看见 |
+| `mica_rename` | 重命名页面或文件夹(只改名,不动内容) |
+| `mica_create_folder` | 建文件夹(纯容器),返回 view_id 好往里放东西 |
 | `mica_move_document` | 移动页面(改父) |
 | `mica_reorder` | 一次调用重排某文件夹(或顶层)的所有子项 —— 传有序 view_id 列表;排序/整理用它 |
 | `mica_trash_view` | 软删到回收站(需 `confirm: true`) |
+| `mica_list_trash` | 列回收站(找要恢复的东西) |
+| `mica_restore_view` | 从回收站恢复页面/文件夹(撤销软删) |
+| `mica_list_versions` | 列文档的命名版本(可回滚的检查点),不含原始编辑日志 |
+| `mica_create_version` | 把文档当前状态钉成命名版本(改前打检查点) |
+| `mica_restore_version` | 回滚文档到某版本(仍 append-only,可再撤销) |
 | `mica_export_workspace` | 导出整个工作区为 Markdown |
 
 ## 用例:把对话存进 Mica

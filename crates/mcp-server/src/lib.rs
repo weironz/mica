@@ -272,6 +272,50 @@ struct ReorderArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RenameArgs {
+  workspace_id: String,
+  /// The VIEW id to rename (a page OR a folder), from `mica_list_pages`.
+  view_id: String,
+  /// The new name.
+  name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateFolderArgs {
+  workspace_id: String,
+  /// The new folder's name.
+  name: String,
+  /// Parent folder view id, or omit/null for the workspace's top level.
+  #[serde(default)]
+  parent_view_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ViewArg {
+  workspace_id: String,
+  /// The VIEW id (page or folder).
+  view_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateVersionArgs {
+  workspace_id: String,
+  /// The document's object id (a page view's `object_id`).
+  document_id: String,
+  /// A label for this checkpoint (e.g. "before the rewrite").
+  name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RestoreVersionArgs {
+  workspace_id: String,
+  /// The document's object id.
+  document_id: String,
+  /// The version id to restore to (from `mica_list_versions`).
+  version_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct AddImageArgs {
   workspace_id: String,
   /// A public http(s) URL. The server fetches it once and keeps the bytes;
@@ -827,6 +871,210 @@ impl MicaMcp {
   }
 
   #[tool(
+    description = "Rename a page or a folder (changes its display name only, not its content).",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_rename(
+    &self,
+    Parameters(RenameArgs {
+      workspace_id,
+      view_id,
+      name,
+    }): Parameters<RenameArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let renamed = self
+      .patch(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
+        json!({ "name": name }),
+      )
+      .await;
+    match renamed {
+      Ok(_) => tool_result(Ok(
+        json!({ "ok": true, "action": "renamed", "view_id": view_id, "name": name }),
+      )),
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
+    description = "Create a folder — a pure container for organizing pages (no content of its own). \
+                   Returns its view_id so you can move pages into it or nest folders under it.",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_create_folder(
+    &self,
+    Parameters(CreateFolderArgs {
+      workspace_id,
+      name,
+      parent_view_id,
+    }): Parameters<CreateFolderArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let created = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/folders"),
+        json!({ "name": name, "parent_view_id": parent_view_id }),
+      )
+      .await;
+    // Hand back the id — the whole point of creating a folder is to put things
+    // in it, which needs its view_id.
+    match created {
+      Ok(value) => {
+        let view_id = value
+          .pointer("/view/id")
+          .and_then(Value::as_str)
+          .unwrap_or_default();
+        tool_result(Ok(json!({
+          "ok": true, "action": "created_folder", "view_id": view_id, "name": name
+        })))
+      }
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
+    description = "List the workspace's recycle bin (soft-deleted pages/folders) so you can find \
+                   something to restore.",
+    annotations(read_only_hint = true)
+  )]
+  async fn mica_list_trash(
+    &self,
+    Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
+  ) -> Result<CallToolResult, McpError> {
+    tool_result(
+      self
+        .get(&format!("/api/workspaces/{workspace_id}/trash"))
+        .await,
+    )
+  }
+
+  #[tool(
+    description = "Restore a page or folder from the recycle bin back into the tree (undo a trash).",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_restore_view(
+    &self,
+    Parameters(ViewArg {
+      workspace_id,
+      view_id,
+    }): Parameters<ViewArg>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let restored = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}/restore"),
+        json!({}),
+      )
+      .await;
+    action_ack(restored, "restored", &view_id)
+  }
+
+  #[tool(
+    description = "List a document's named versions (restorable checkpoints), newest first. The \
+                   raw edit log is omitted — these are the points you can roll back to.",
+    annotations(read_only_hint = true)
+  )]
+  async fn mica_list_versions(
+    &self,
+    Parameters(DocArg {
+      workspace_id,
+      document_id,
+    }): Parameters<DocArg>,
+  ) -> Result<CallToolResult, McpError> {
+    let history = self
+      .get(&format!(
+        "/api/workspaces/{workspace_id}/documents/{document_id}/history"
+      ))
+      .await;
+    // Forward only the named `versions` — the `updates` op log is large and not
+    // something a model acts on.
+    match history {
+      Ok(value) => {
+        let versions = value.pointer("/versions").cloned().unwrap_or(json!([]));
+        tool_result(Ok(json!({ "versions": versions })))
+      }
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
+    description = "Pin the document's CURRENT state as a named, restorable version — a checkpoint \
+                   before a risky edit. Returns the version_id.",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_create_version(
+    &self,
+    Parameters(CreateVersionArgs {
+      workspace_id,
+      document_id,
+      name,
+    }): Parameters<CreateVersionArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let created = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/versions"),
+        json!({ "name": name }),
+      )
+      .await;
+    match created {
+      Ok(value) => {
+        let version_id = value
+          .pointer("/version/id")
+          .and_then(Value::as_str)
+          .unwrap_or_default();
+        tool_result(Ok(json!({
+          "ok": true, "action": "created_version", "version_id": version_id, "name": name
+        })))
+      }
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
+    description = "Roll a document back to a named version (from mica_list_versions). History stays \
+                   append-only — the restore is itself a new edit, so it is undoable.",
+    annotations(
+      title = "Restore version",
+      read_only_hint = false,
+      destructive_hint = true
+    )
+  )]
+  async fn mica_restore_version(
+    &self,
+    Parameters(RestoreVersionArgs {
+      workspace_id,
+      document_id,
+      version_id,
+    }): Parameters<RestoreVersionArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let restored = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/restore"),
+        json!({ "version_id": version_id }),
+      )
+      .await;
+    match restored {
+      Ok(_) => tool_result(Ok(json!({
+        "ok": true, "action": "restored_version", "version_id": version_id
+      }))),
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  #[tool(
     description = "Move a page (and its subtree) to the recycle bin — a SOFT delete, \
                        recoverable in the app. Requires confirm=true. Permanent deletion is \
                        not exposed here.",
@@ -1220,6 +1468,32 @@ mod handshake_tests {
     );
   }
 
+  /// The organize + history toolkit an agent needs to actually tidy a knowledge
+  /// base — every one was a gap the app had but MCP didn't expose. If any is
+  /// dropped, "rename this", "make a folder", "roll back" silently can't be done.
+  #[test]
+  fn the_organize_and_history_tools_are_all_listed() {
+    let names: Vec<String> = MicaMcp::tool_router()
+      .list_all()
+      .iter()
+      .map(|t| t.name.to_string())
+      .collect();
+    for expected in [
+      "mica_rename",
+      "mica_create_folder",
+      "mica_list_trash",
+      "mica_restore_view",
+      "mica_list_versions",
+      "mica_create_version",
+      "mica_restore_version",
+    ] {
+      assert!(
+        names.iter().any(|n| n == expected),
+        "{expected} missing from {names:?}"
+      );
+    }
+  }
+
   /// If an endpoint changes shape, show the caller everything rather than
   /// swallow the answer into a confident, empty "ok".
   #[test]
@@ -1274,7 +1548,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 13, "every tool must be listed");
+    assert_eq!(tools.len(), 20, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),
