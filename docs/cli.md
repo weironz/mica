@@ -161,6 +161,47 @@ Only GETs — a **read-scoped** token suffices.
 > is the authoritative `id → name → dir` map — key automation off the **id**, not
 > the dir name, since names can be renamed or non-ASCII.
 
+### `mcp` — Model Context Protocol server (for AI clients)
+
+`mica-cli mcp` serves the Mica tools to any MCP client (Claude Code / Desktop,
+Cursor, Codex, Gemini, Windsurf …) over stdio. See [`mcp-connect.md`](mcp-connect.md)
+for the full tool list.
+
+```bash
+mica-cli mcp [--read-only]        # serve over stdio (what the client launches)
+```
+
+#### `mcp install` — configure a client for you
+
+Instead of hand-editing each client's config file and pasting a token:
+
+```bash
+mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
+mica-cli mcp install --client claude-desktop      # one client
+mica-cli mcp install --all                        # every client present on this machine
+```
+
+It **merges** a `mica` server entry into the client's config (pointing at this
+binary), preserving everything else, and by default mints a fresh PAT and embeds
+it. Clients: `claude-desktop`, `claude-code`, `cursor`, `codex`, `gemini`,
+`windsurf`. Restart the client afterward.
+
+| Flag | Effect |
+| --- | --- |
+| `--client <name>` | Configure one client. |
+| `--all` | Configure every client whose config is present. |
+| `--no-token` | Don't embed a token — rely on this machine's saved login instead. |
+| `--pat <mica_pat_…>` | Embed an existing PAT rather than creating one. |
+| `--dry-run` | Print what would change; write nothing. |
+
+> The default mints a PAT (`read`+`write`) and writes it into the client config
+> in plaintext — the same trust model every MCP setup uses. Revoke with
+> `mica-cli auth token revoke <id>`. `--no-token` avoids the secret-on-disk but
+> then the MCP server rides your saved login, which can expire. Config paths are
+> the standard per-client locations (e.g. Claude Desktop's
+> `%APPDATA%\Claude\claude_desktop_config.json`); Claude Desktop is macOS/Windows
+> only. VS Code / Copilot isn't wired yet — configure it manually for now.
+
 ## Backup
 
 `mica-cli` deliberately has no `backup` command (that engine was retired). The

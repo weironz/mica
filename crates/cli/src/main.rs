@@ -13,6 +13,7 @@
 
 mod client;
 mod config;
+mod mcp_install;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -49,15 +50,26 @@ enum Command {
   Export(ExportArgs),
   /// Serve the Mica MCP server over stdio (for Claude Code / Desktop and any
   /// MCP client): list, read, create and write documents through the REST API.
+  /// With no subcommand it serves; `mica-cli mcp install` writes the config.
   Mcp(McpArgs),
 }
 
 #[derive(Args)]
 struct McpArgs {
-  /// Refuse every write tool at call time; read tools stay available.
+  /// `install` configures a client; omit to serve the MCP server over stdio.
+  #[command(subcommand)]
+  action: Option<McpAction>,
+  /// (serve) Refuse every write tool at call time; read tools stay available.
   /// Also honored from the environment: MICA_MCP_READ_ONLY=1.
   #[arg(long)]
   read_only: bool,
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+  /// Write the Mica MCP server entry into an MCP client's config file, so you
+  /// don't have to hand-edit JSON/TOML or paste a token.
+  Install(mcp_install::InstallArgs),
 }
 
 #[derive(Subcommand)]
@@ -149,7 +161,10 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
-    Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
+    Command::Mcp(args) => match &args.action {
+      Some(McpAction::Install(install)) => mcp_install::run(&cli, &cfg, install),
+      None => cmd_mcp(&cli, &cfg, args),
+    },
   }
 }
 
@@ -373,7 +388,7 @@ fn cmd_mcp(cli: &Cli, cfg: &Config, args: &McpArgs) -> Result<()> {
 
 // ---------------------------------------------------------------- helpers
 
-fn authed_client(cli: &Cli, cfg: &Config) -> Result<Client> {
+pub(crate) fn authed_client(cli: &Cli, cfg: &Config) -> Result<Client> {
   let server = cli
     .server
     .clone()

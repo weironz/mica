@@ -20,7 +20,24 @@ mica-cli auth token create --name claude-code --scope read --scope write
 # 记下输出里的 "token": "mica_pat_…" —— 只显示这一次
 ```
 
-## Claude Code
+## 最快:让 mica-cli 自己配
+
+装好 `mica-cli`(见 [`cli.md`](cli.md#install))后,一条命令写好客户端配置 + 生成并嵌入
+token,免去手改 JSON/TOML:
+
+```bash
+mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
+mica-cli mcp install --client claude-desktop   # 或 claude-code / cursor / codex / gemini / windsurf
+mica-cli mcp install --all                     # 本机装了的客户端一次全配
+```
+
+它把 `mica` 这个 MCP server **合并**进目标客户端配置(保留其它条目)、指向当前 mica-cli
+二进制、默认建一个 PAT 写进去。配好重启客户端即可。细节(`--no-token`/`--pat`/`--dry-run`、
+各客户端配置路径)见 [`cli.md`](cli.md#mcp--model-context-protocol-server-for-ai-clients)。
+
+下面是**手动**配法(想自己控制,或客户端尚未被 `mcp install` 支持时)。
+
+## Claude Code(手动)
 
 ```bash
 claude mcp add mica --scope user \
