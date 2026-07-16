@@ -164,39 +164,62 @@ pub async fn search_workspace(
   }
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
-  let mut results = Vec::new();
-  for view in views {
-    if view.object_type != "document" {
-      continue;
-    }
-    let title_match = view.name.to_lowercase().contains(&needle);
+  // Only documents carry body text; folders have none.
+  let docs: Vec<View> = views
+    .into_iter()
+    .filter(|v| v.object_type == "document")
+    .collect();
 
+  // Each document's current text is reconstructed from its yrs base (a DB round
+  // trip + a CRDT decode) — the body is NOT a queryable column, so a workspace
+  // with N documents is N reconstructions no matter what. Two things keep that
+  // from being O(N) latency: run them concurrently (`buffered` preserves tree
+  // order), and STOP once 50 hits are in hand — buffered stops polling new
+  // futures the moment we stop consuming, so a 5000-doc workspace reconstructs
+  // ~50-plus-a-window, not all 5000. Before this it was a sequential await loop.
+  let db = &state.db;
+  let needle = needle.as_str();
+  use futures_util::StreamExt as _;
+  let mut hits = futures_util::stream::iter(docs.into_iter().map(|view| async move {
+    let title_match = view.name.to_lowercase().contains(needle);
     let mut snippet = String::new();
-    if let Some(payload) = store::current_payload(&state.db, view.object_id).await? {
+    // A single corrupt/unreadable document drops out of the results rather than
+    // 500-ing the whole search — discovery is best-effort by nature.
+    if let Ok(Some(payload)) = store::current_payload(db, view.object_id).await {
       for block in &payload.blocks {
-        if let Some(found) = snippet_for(&block.text, &needle) {
+        if let Some(found) = snippet_for(&block.text, needle) {
           snippet = found;
           break;
         }
       }
     }
+    (title_match || !snippet.is_empty()).then(|| SearchResult {
+      view_id: view.id,
+      object_id: view.object_id,
+      name: view.name,
+      snippet,
+      title_match,
+    })
+  }))
+  .buffered(SEARCH_CONCURRENCY);
 
-    if title_match || !snippet.is_empty() {
-      results.push(SearchResult {
-        view_id: view.id,
-        object_id: view.object_id,
-        name: view.name,
-        snippet,
-        title_match,
-      });
-    }
-    if results.len() >= 50 {
-      break;
+  let mut results = Vec::new();
+  while let Some(hit) = hits.next().await {
+    if let Some(result) = hit {
+      results.push(result);
+      if results.len() >= 50 {
+        break;
+      }
     }
   }
 
   Ok(Json(SearchResponse { results }))
 }
+
+/// How many document reconstructions run at once during a search. Bounded so a
+/// large workspace cannot drain the connection pool; small enough to leave room
+/// for everything else the server is doing.
+const SEARCH_CONCURRENCY: usize = 8;
 
 /// First ~160 chars of a block that contains the query, or `None`.
 fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {

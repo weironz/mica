@@ -377,6 +377,45 @@ fn action_ack(
   }
 }
 
+/// Keep only the fields a model navigates by; drop the storage bookkeeping.
+///
+/// The `/views` endpoint answers the Flutter client, which needs every column
+/// (position for lexo-ordering, icon, timestamps, is_deleted…). A model needs
+/// none of that — just enough to pick a page and hand its ids to another tool.
+/// On a 14-page workspace the full list was 6.3KB, more than half of it
+/// `workspace_id` (identical on every row, and supplied by the caller in the
+/// first place), `created_by`, `position`, and timestamps. This is the read-side
+/// twin of `write_ack`: the API stays whole and honest, the proxy fits the
+/// answer to its audience.
+fn slim_pages(value: Value) -> Value {
+  let Some(views) = value.get("views").and_then(Value::as_array) else {
+    return value;
+  };
+  let slim: Vec<Value> = views
+    .iter()
+    .map(|v| {
+      let mut row = serde_json::Map::new();
+      // id → the view id, for move/trash. object_id → the document id, for
+      // read/outline/update. object_type → folder vs document. The rest is what
+      // a human-facing tree needs and a model does not.
+      for key in ["id", "object_id", "object_type", "name", "parent_view_id"] {
+        if let Some(found) = v.get(key)
+          && !found.is_null()
+        {
+          row.insert(key.to_string(), found.clone());
+        }
+      }
+      // icon only when set — an emoji is a cheap, useful disambiguator; a null
+      // is just noise.
+      if let Some(icon) = v.get("icon").filter(|i| !i.is_null()) {
+        row.insert("icon".to_string(), icon.clone());
+      }
+      Value::Object(row)
+    })
+    .collect();
+  json!({ "pages": slim })
+}
+
 #[tool_router]
 impl MicaMcp {
   #[tool(
@@ -396,11 +435,10 @@ impl MicaMcp {
     &self,
     Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
   ) -> Result<CallToolResult, McpError> {
-    tool_result(
-      self
-        .get(&format!("/api/workspaces/{workspace_id}/views"))
-        .await,
-    )
+    let listed = self
+      .get(&format!("/api/workspaces/{workspace_id}/views"))
+      .await;
+    tool_result(listed.map(slim_pages))
   }
 
   // The description is the model's ONLY knowledge of what this can do, and it
@@ -941,6 +979,74 @@ mod handshake_tests {
       "ack must be a fraction of the payload: {} vs {fat}",
       text.len()
     );
+  }
+
+  /// The page list is what a model reads to navigate, and it was 6.3KB on 14
+  /// pages — more than half of it storage bookkeeping the model never uses. The
+  /// slim keeps exactly the navigation fields and drops the rest, and the whole
+  /// point is that `workspace_id` (identical on every row, and supplied by the
+  /// caller) is gone.
+  #[test]
+  fn list_pages_keeps_navigation_fields_and_drops_bookkeeping() {
+    let full = json!({
+      "views": [
+        {
+          "id": "view-1",
+          "workspace_id": "ws-1",
+          "parent_view_id": null,
+          "object_id": "doc-1",
+          "object_type": "document",
+          "name": "Notes",
+          "icon": "📄",
+          "position": "0000000010",
+          "is_deleted": false,
+          "created_by": "user-1",
+          "created_at": "2026-07-16T00:00:00Z",
+          "updated_at": "2026-07-16T00:00:00Z"
+        },
+        {
+          "id": "view-2",
+          "workspace_id": "ws-1",
+          "parent_view_id": "view-1",
+          "object_id": "obj-2",
+          "object_type": "folder",
+          "name": "Sub",
+          "icon": null,
+          "position": "0000000020",
+          "is_deleted": false,
+          "created_by": "user-1",
+          "created_at": "2026-07-16T00:00:00Z",
+          "updated_at": "2026-07-16T00:00:00Z"
+        }
+      ]
+    });
+    let fat = serde_json::to_string(&full).unwrap().len();
+
+    let slim = slim_pages(full);
+    let text = serde_json::to_string(&slim).unwrap();
+    // Every navigation field a tool consumes survives.
+    for kept in ["view-1", "doc-1", "document", "Notes", "📄", "view-2", "folder"] {
+      assert!(text.contains(kept), "dropped a needed field: {kept}");
+    }
+    // parent linkage is kept (it is the tree), but only when present — the root
+    // page's null parent is elided, not echoed.
+    assert!(text.contains("\"parent_view_id\":\"view-1\""), "child keeps parent");
+    // The bookkeeping is gone. workspace_id is the marquee case: same on every
+    // row and the caller passed it in.
+    for gone in ["ws-1", "user-1", "0000000010", "is_deleted", "created_at", "updated_at"] {
+      assert!(!text.contains(gone), "should have dropped: {gone}");
+    }
+    // A null icon is noise, not information.
+    assert!(!text.contains("\"icon\":null"), "null icon elided");
+    assert!(text.len() * 2 < fat, "slim must be well under half: {} vs {fat}", text.len());
+  }
+
+  /// If the endpoint stops returning `{views: [...]}`, forward what it did send
+  /// rather than silently return an empty page list.
+  #[test]
+  fn list_pages_forwards_an_unexpected_shape() {
+    let odd = json!({"surprise": "shape"});
+    assert_eq!(slim_pages(odd.clone()), odd);
   }
 
   /// Move and trash reply with the workspace's REMAINING views (the sidebar
