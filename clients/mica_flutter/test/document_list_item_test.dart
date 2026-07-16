@@ -342,6 +342,43 @@ void main() {
     expect(submits, 1);
   });
 
+  // Pins the "rename is F2, never double-click" decision (docs/shortcuts.md).
+  // Registering an onDoubleTap on the row would put a DoubleTapGestureRecognizer
+  // in the arena, and it calls hold() on the first tap — so EVERY single click
+  // (open a page, expand a folder: the sidebar's hot path) would stall for
+  // kDoubleTapTimeout before doing anything. The other tap tests here settle,
+  // which advances past that timeout and would NOT catch it; this one must not.
+  testWidgets('a single click acts at once — no double-tap tax on the row',
+      (tester) async {
+    var opened = false;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () => opened = true,
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onDelete: () {},
+    )));
+
+    await tester.tap(find.byType(DocumentListItem));
+    await tester.pump(); // deliberately no settle: zero time advanced
+    expect(
+      opened,
+      isTrue,
+      reason: 'onTap must resolve on pointer-up, not after kDoubleTapTimeout',
+    );
+  });
+
   testWidgets('a folder row shows the quick create-folder icon on hover',
       (tester) async {
     await tester.pumpWidget(_host(DocumentListItem(

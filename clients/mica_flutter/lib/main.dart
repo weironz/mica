@@ -4479,6 +4479,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _openSettings,
       const SingleActivator(LogicalKeyboardKey.comma, meta: true):
           _openSettings,
+      // Rename the highlighted sidebar row. Keyboard-only on purpose: binding
+      // this to a double-click would put a DoubleTapGestureRecognizer on every
+      // tree row, and it holds the gesture arena — taxing EVERY single click
+      // with kDoubleTapTimeout (300ms) to serve a rare rename. Single-click-to-
+      // open is the sidebar's hot path. AppFlowy (Flutter, same arena) and
+      // AFFiNE (React, no such cost) both bind rename to F2/menu and leave
+      // double-click unbound, matching Explorer/Finder/VS Code muscle memory
+      // where a double-click on a tree row means *open*.
+      const SingleActivator(LogicalKeyboardKey.f2): _renameLocated,
     };
   }
 
@@ -6229,11 +6238,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   // ── Inline rename (no dialog) ──────────────────────────────────────────────
   // The sidebar row renders a focused TextField for `_renamingViewId`; these
-  // drive it. Renaming starts from the row's "重命名" action or automatically
-  // right after creating a page/folder (see `_createThenRename`).
+  // drive it. Renaming starts from the row's "重命名" action, from F2 (see
+  // `_renameLocated`), or automatically right after creating a page/folder
+  // (see `_createThenRename`).
 
   void _beginRename(DocumentView view) {
     setState(() => _renamingViewId = view.id);
+  }
+
+  /// F2: rename the highlighted sidebar row — the located node, i.e. the same
+  /// row `_navigationPane` highlights (last-tapped folder/page, else the open
+  /// doc), so what you see is what gets renamed.
+  void _renameLocated() {
+    if (!matchesEditRole(widget.selectedWorkspace?.role)) return;
+    final view = _locatedView();
+    if (view == null) return;
+    // The located row can sit inside a collapsed parent — switching workspaces
+    // re-opens its doc but restores the remembered (possibly all-collapsed)
+    // expand state. An unbuilt row has no TextField to focus, so F2 would look
+    // dead; reveal it first.
+    setState(() {
+      if (_revealAncestors(view.id)) _saveExpanded();
+    });
+    _beginRename(view);
   }
 
   void _cancelRename() {

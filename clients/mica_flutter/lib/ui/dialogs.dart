@@ -1115,6 +1115,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       row('Ctrl + F', 'Find in page'),
       row('Ctrl + Shift + F', 'Search workspace'),
       row('Ctrl + ,', 'Open settings'),
+      row('F2', 'Rename the highlighted page/folder'),
       const SizedBox(height: 8),
       head('Editor — format'),
       row('Ctrl + B', 'Bold'),
