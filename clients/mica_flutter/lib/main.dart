@@ -18,6 +18,7 @@ import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'widgets/mica_logo.dart';
+import 'ui/autoscroll.dart';
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -4229,6 +4230,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
   bool _draggingTree = false;
+  // Auto-scroll while dragging near the tree's top/bottom edge, so a long tree
+  // can be reordered past what fits on screen (a drag that reaches the edge
+  // otherwise stalls — you cannot drop below the last visible row). The list
+  // owns its own controller; the key gets its viewport RenderBox to measure how
+  // close the pointer is to an edge.
+  final ScrollController _treeScroll = ScrollController();
+  final GlobalKey _treeListKey = GlobalKey();
+  Timer? _autoScrollTimer;
+  double _autoScrollVelocity = 0;
   // Pointer is over the navigation sidebar — reveals the tree's expand
   // toggles (AppFlowy-style: they live in their own slim column, opacity 0
   // at rest so the page icons keep one aligned column).
@@ -4433,6 +4443,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitleSaveTimer?.cancel();
     _outlineHook.dispose();
     _activeBlockHook.dispose();
+    _stopAutoScroll();
+    _treeScroll.dispose();
     super.dispose();
   }
 
@@ -5195,6 +5207,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // open page, and the two never light up at once.
     final activeId = _focusedNavId ?? widget.selectedView?.id;
     return ListView(
+      key: _treeListKey,
+      controller: _treeScroll,
       children: _visibleDocumentTree().map((item) {
         final row = DocumentListItem(
           key: ValueKey(item.view.id),
@@ -5251,9 +5265,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         data: view,
         dragAnchorStrategy: pointerDragAnchorStrategy,
         onDragStarted: () => setState(() => _draggingTree = true),
-        onDragEnd: (_) => setState(() => _draggingTree = false),
-        onDraggableCanceled: (_, _) => setState(() => _draggingTree = false),
-        onDragCompleted: () => setState(() => _draggingTree = false),
+        onDragUpdate: (d) => _updateTreeAutoScroll(d.globalPosition),
+        onDragEnd: (_) => _endTreeDrag(),
+        onDraggableCanceled: (_, _) => _endTreeDrag(),
+        onDragCompleted: _endTreeDrag,
         feedback: Material(
           elevation: 6,
           borderRadius: BorderRadius.circular(6),
@@ -5299,6 +5314,52 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
       ),
     );
+  }
+
+  /// While dragging, scroll the tree when the pointer nears its top/bottom edge
+  /// so items off-screen become reachable. Called on every drag move with the
+  /// pointer's GLOBAL position.
+  void _updateTreeAutoScroll(Offset globalPointer) {
+    final box = _treeListKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !_treeScroll.hasClients) {
+      _stopAutoScroll();
+      return;
+    }
+    final velocity = edgeAutoScrollVelocity(
+      box.globalToLocal(globalPointer).dy,
+      box.size.height,
+    );
+    if (velocity == 0) {
+      _stopAutoScroll();
+      return;
+    }
+    _autoScrollVelocity = velocity;
+    // A single ticking timer reads the latest velocity each frame; onDragUpdate
+    // only fires while the pointer MOVES, but the pointer often rests inside the
+    // edge zone, so the timer — not the callback — must drive the scroll.
+    _autoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!_treeScroll.hasClients) {
+        _stopAutoScroll();
+        return;
+      }
+      final pos = _treeScroll.position;
+      final next = (pos.pixels + _autoScrollVelocity)
+          .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+      if (next == pos.pixels) {
+        return; // already at an end — keep the timer for when the pointer moves
+      }
+      _treeScroll.jumpTo(next);
+    });
+  }
+
+  void _stopAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+  }
+
+  void _endTreeDrag() {
+    _stopAutoScroll();
+    setState(() => _draggingTree = false);
   }
 
   Widget _dropSlot(DocumentView target, _DropMode mode) {
