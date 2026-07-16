@@ -1582,6 +1582,211 @@ class _AiDialogState extends State<_AiDialog> {
 /// Recycle bin: lists soft-deleted pages and offers restore / delete-forever.
 /// Only the roots of each deleted subtree are shown; restoring a root brings its
 /// whole subtree back.
+/// Version history for the open (cloud) document: list named checkpoints, pin
+/// the current state as a new one, or roll back to an old one. Restore reflects
+/// live in the editor via the normal sync path (the server broadcasts it as an
+/// update), so there is no manual reload here.
+class _VersionHistoryDialog extends StatefulWidget {
+  const _VersionHistoryDialog({
+    required this.onList,
+    required this.onCreate,
+    required this.onRestore,
+  });
+
+  final Future<List<DocVersion>> Function() onList;
+  final Future<void> Function(String name) onCreate;
+  final Future<void> Function(String versionId) onRestore;
+
+  @override
+  State<_VersionHistoryDialog> createState() => _VersionHistoryDialogState();
+}
+
+class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
+  bool _loading = true;
+  bool _busy = false; // a create/restore is in flight
+  String? _error;
+  List<DocVersion> _versions = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final vs = await widget.onList();
+      if (!mounted) return;
+      setState(() {
+        _versions = vs;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _createCheckpoint() async {
+    final name = await _promptName();
+    if (name == null || name.trim().isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onCreate(name.trim());
+      await _refresh();
+      _snack('已保存检查点');
+    } catch (error) {
+      _snack('保存失败: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _restore(DocVersion version) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('恢复到这个版本?'),
+        content: Text(
+          '把当前页恢复到「${version.name}」。这本身也是一次可撤销的编辑 —— '
+          '恢复后再存个检查点就能回到现在。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('恢复'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onRestore(version.id);
+      if (!mounted) return;
+      _snack('已恢复到「${version.name}」');
+      Navigator.of(context).pop();
+    } catch (error) {
+      _snack('恢复失败: $error');
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<String?> _promptName() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('保存检查点'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '给这个版本起个名字,如「改版前」',
+          ),
+          onSubmitted: (v) => Navigator.pop(context, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Text('版本历史'),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: _busy ? null : _createCheckpoint,
+            icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+            label: const Text('保存检查点'),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 440,
+        height: 360,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Center(child: Text('加载失败: $_error'))
+            : _versions.isEmpty
+            ? const Center(
+                child: Text(
+                  '还没有版本。\n点右上角「保存检查点」把当前状态存下来。',
+                  textAlign: TextAlign.center,
+                ),
+              )
+            : ListView.separated(
+                itemCount: _versions.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final v = _versions[i];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.history, size: 20),
+                    title: Text(
+                      v.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(_formatTime(v.createdAt)),
+                    trailing: TextButton(
+                      onPressed: _busy ? null : () => _restore(v),
+                      child: const Text('恢复'),
+                    ),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+}
+
+/// `2026-07-16T14:04:05Z` → `2026-07-16 22:04`, in local time. No intl dep for
+/// one label: parse, localize, pad.
+String _formatTime(String iso) {
+  final dt = DateTime.tryParse(iso)?.toLocal();
+  if (dt == null) return iso;
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+}
+
 class _RecycleBinDialog extends StatefulWidget {
   const _RecycleBinDialog({
     required this.onLoad,

@@ -316,6 +316,30 @@ class SearchResult {
   final bool titleMatch;
 }
 
+/// A named, restorable checkpoint of a document (the server's version history).
+class DocVersion {
+  const DocVersion({
+    required this.id,
+    required this.name,
+    required this.versionSeq,
+    required this.createdAt,
+  });
+
+  factory DocVersion.fromJson(Map<String, dynamic> json) {
+    return DocVersion(
+      id: json['id'] as String,
+      name: json['name'] as String? ?? '未命名版本',
+      versionSeq: (json['version_seq'] as num?)?.toInt() ?? 0,
+      createdAt: json['created_at'] as String? ?? '',
+    );
+  }
+
+  final String id;
+  final String name;
+  final int versionSeq;
+  final String createdAt;
+}
+
 class DocumentCreateResult {
   const DocumentCreateResult({required this.document, required this.view});
 

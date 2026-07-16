@@ -305,6 +305,53 @@ class ApiClient {
         .toList();
   }
 
+  /// A document's named versions (restorable checkpoints), newest first. The
+  /// server's `/history` also returns the raw op log; we take only `versions`.
+  Future<List<DocVersion>> listVersions(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/documents/$documentId/history',
+      token,
+    );
+    final items = (response['versions'] as List<dynamic>?) ?? const [];
+    return items
+        .map((item) => DocVersion.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Pin the document's CURRENT state as a named, restorable version.
+  Future<DocVersion> createVersion(
+    String token,
+    String workspaceId,
+    String documentId,
+    String name,
+  ) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/documents/$documentId/versions',
+      {'name': name},
+      token: token,
+    );
+    return DocVersion.fromJson(response['version'] as Map<String, dynamic>);
+  }
+
+  /// Roll the document back to [versionId]. History stays append-only — the
+  /// restore is itself a new update the server broadcasts to open editors.
+  Future<void> restoreVersion(
+    String token,
+    String workspaceId,
+    String documentId,
+    String versionId,
+  ) async {
+    await _post(
+      '/api/workspaces/$workspaceId/documents/$documentId/restore',
+      {'version_id': versionId},
+      token: token,
+    );
+  }
+
   Future<void> purgeView(
     String token,
     String workspaceId,

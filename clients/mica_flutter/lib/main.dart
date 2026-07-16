@@ -3118,6 +3118,34 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Open version history for the currently-selected cloud page. Each dialog
+  /// callback reads the session token FRESH (so a silent refresh mid-dialog is
+  /// picked up) and is scoped to this workspace + document.
+  Future<void> _openVersionHistory() async {
+    final bootstrap = _selectedBootstrap;
+    final workspace = _selectedWorkspace;
+    if (bootstrap == null || workspace == null || _session == null) {
+      return;
+    }
+    final wsId = workspace.id;
+    final docId = bootstrap.document.id;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _VersionHistoryDialog(
+        onList: () =>
+            _api.listVersions(_requireSession().accessToken, wsId, docId),
+        onCreate: (name) =>
+            _api.createVersion(_requireSession().accessToken, wsId, docId, name),
+        onRestore: (versionId) => _api.restoreVersion(
+          _requireSession().accessToken,
+          wsId,
+          docId,
+          versionId,
+        ),
+      ),
+    );
+  }
+
   Future<void> _addWorkspaceMember(String email, WorkspaceRole role) {
     return _run(() async {
       final session = _requireSession();
@@ -3689,6 +3717,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateMember: local ? (_, _) async {} : _updateWorkspaceMember,
       onRemoveMember: local ? (_) async {} : _removeWorkspaceMember,
       onRestoreCheckpoint: local ? _localRollbackDoc : null,
+      // Cloud-only: version history lives server-side (local has no history).
+      onVersionHistory: local ? null : _openVersionHistory,
       // P3f: both live on the workspace ROW's menu, dispatching per entry —
       // null on web (no local world / no on-device store).
       onMigrateEntry: _local.available ? _migrateEntry : null,
@@ -4004,6 +4034,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onUpdateMember,
     required this.onRemoveMember,
     this.onRestoreCheckpoint,
+    this.onVersionHistory,
     this.onMigrateEntry,
     this.onDetachEntry,
     this.onCursorChanged,
@@ -4183,6 +4214,9 @@ class WorkspaceView extends StatefulWidget {
   /// Restore the open document to its last on-device checkpoint (local mode
   /// only — null elsewhere, which hides the menu item).
   final Future<void> Function()? onRestoreCheckpoint;
+  /// Opens the cloud document's version history (null for local workspaces,
+  /// which have no server-side history).
+  final Future<void> Function()? onVersionHistory;
 
   /// Upload a LOCAL workspace row to the cloud (P3f §6.1). Null on web, which
   /// hides the row action.
@@ -5936,6 +5970,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text('Import Markdown…'),
                             ),
                           ),
+                          if (widget.onVersionHistory != null) ...[
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: 'version-history',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.history),
+                                title: Text('版本历史'),
+                              ),
+                            ),
+                          ],
                           if (widget.onRestoreCheckpoint != null) ...[
                             const PopupMenuDivider(),
                             const PopupMenuItem(
@@ -6574,6 +6620,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         await _exportPageFile();
       case 'import-md':
         await _importMarkdownFile();
+      case 'version-history':
+        await widget.onVersionHistory?.call();
       case 'restore-checkpoint':
         final restore = widget.onRestoreCheckpoint;
         if (restore == null) return;
