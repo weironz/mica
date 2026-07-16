@@ -41,7 +41,52 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace
       - name: Test pure crates (no database needed)
-        run: cargo test -p mica-markdown -p mica-core -p mica-interchange
+        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server
+
+  mcp-conformance:
+    # Drive `mica-cli mcp` with the OFFICIAL MCP client and fail on anything
+    # it rejects. This exists because hand-rolled probes do not catch protocol
+    # bugs: ours shipped a server that declared no `tools` capability and an
+    # `outputSchema` of "AnyValue", and it looked perfectly healthy — the probe
+    # called tools/list directly and never validated a thing, so every real
+    # client registered ZERO tools while we believed it worked. A conforming
+    # client is the only thing that reads what we actually declare.
+    name: MCP (official inspector against mica-cli mcp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: workspace
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build mica-cli
+        run: cargo build -p mica-cli
+      # No live Mica needed: the handshake and tools/list are answered before
+      # any REST call, which is exactly the surface that broke. A dummy PAT
+      # keeps the credential chain satisfied without a server.
+      - name: tools/list must survive a conforming client
+        env:
+          MICA_API_BASE_URL: https://mica.invalid
+          MICA_PAT: dummy-not-used-for-handshake
+        run: |
+          set -euo pipefail
+          npx -y @modelcontextprotocol/inspector@latest --cli \n            ./target/debug/mica-cli mcp --method tools/list > tools.json
+          python3 - <<'EOF'
+          import json, sys
+          tools = json.load(open("tools.json"))["tools"]
+          assert tools, "the inspector returned no tools"
+          for t in tools:
+              # The two bugs that shipped, pinned on the wire the client reads.
+              assert t["inputSchema"].get("type") == "object", t["name"]
+              out = t.get("outputSchema")
+              assert out is None or out.get("type") == "object", (
+                  f"{t['name']}: outputSchema must be an object schema or absent; "
+                  "one invalid entry makes a client discard the whole list")
+          print(f"{len(tools)} tools accepted by the official client")
+          EOF
 
   flutter:
     name: Flutter (analyze + Dart unit tests)

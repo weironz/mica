@@ -247,9 +247,27 @@ struct TrashArgs {
 /// registered nothing, even though the handshake and every tool were fine.
 /// `outputSchema` is optional; the honest move for a proxy returning whatever
 /// the REST API said is to not declare one at all.
-fn ok_json(value: Value) -> Result<CallToolResult, McpError> {
-    let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
-    Ok(CallToolResult::success(vec![Content::text(text)]))
+fn tool_result(result: Result<Value, McpError>) -> Result<CallToolResult, McpError> {
+    match result {
+        Ok(value) => {
+            let text =
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+            Ok(CallToolResult::success(vec![Content::text(text)]))
+        }
+        // An API failure is a TOOL error, not a protocol error. The spec splits
+        // them by who can act on them: JSON-RPC errors are for structural faults
+        // the model cannot fix (unknown tool, malformed request), while anything
+        // the model could react to — API failures, validation, business rules —
+        // must come back as `isError: true` content so it can read the reason and
+        // retry. Reporting a 403 or a bad-input message as a protocol error hides
+        // it from the very reader it was written for.
+        Err(error) => Ok(tool_error(error)),
+    }
+}
+
+/// Turn an internal error into a tool-execution error the model can read.
+fn tool_error(error: McpError) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(error.message.to_string())])
 }
 
 #[tool_router]
@@ -259,7 +277,7 @@ impl MicaMcp {
         annotations(read_only_hint = true)
     )]
     async fn mica_list_workspaces(&self) -> Result<CallToolResult, McpError> {
-        ok_json(self.get("/api/workspaces").await?)
+        tool_result(self.get("/api/workspaces").await)
     }
 
     #[tool(
@@ -271,9 +289,9 @@ impl MicaMcp {
         &self,
         Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
     ) -> Result<CallToolResult, McpError> {
-        ok_json(
+        tool_result(
             self.get(&format!("/api/workspaces/{workspace_id}/views"))
-                .await?,
+                .await,
         )
     }
 
@@ -286,9 +304,9 @@ impl MicaMcp {
         Parameters(SearchArgs { workspace_id, query }): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, McpError> {
         let q = urlencode(&query);
-        ok_json(
+        tool_result(
             self.get(&format!("/api/workspaces/{workspace_id}/search?q={q}"))
-                .await?,
+                .await,
         )
     }
 
@@ -300,11 +318,11 @@ impl MicaMcp {
         &self,
         Parameters(DocArg { workspace_id, document_id }): Parameters<DocArg>,
     ) -> Result<CallToolResult, McpError> {
-        ok_json(
+        tool_result(
             self.get(&format!(
                 "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
             ))
-            .await?,
+            .await,
         )
     }
 
@@ -318,11 +336,11 @@ impl MicaMcp {
         &self,
         Parameters(DocArg { workspace_id, document_id }): Parameters<DocArg>,
     ) -> Result<CallToolResult, McpError> {
-        ok_json(
+        tool_result(
             self.get(&format!(
                 "/api/workspaces/{workspace_id}/documents/{document_id}/outline"
             ))
-            .await?,
+            .await,
         )
     }
 
@@ -339,28 +357,32 @@ impl MicaMcp {
             parent_view_id,
         }): Parameters<CreateDocArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.ensure_writable()?;
+        if let Err(error) = self.ensure_writable() {
+            return Ok(tool_error(error));
+        }
         // Markdown → the import endpoint (parses content server-side); empty →
         // the plain create endpoint.
         if let Some(markdown) = markdown {
-            reject_mangled_latex(&markdown)?;
+            if let Err(error) = reject_mangled_latex(&markdown) {
+                return Ok(tool_error(error));
+            }
             let body = json!({
                 "name": name,
                 "markdown": markdown,
                 "parent_view_id": parent_view_id,
             });
-            ok_json(
+            tool_result(
                 self.post(
                     &format!("/api/workspaces/{workspace_id}/documents/import/markdown"),
                     body,
                 )
-                .await?,
+                .await,
             )
         } else {
             let body = json!({ "name": name, "parent_view_id": parent_view_id });
-            ok_json(
+            tool_result(
                 self.post(&format!("/api/workspaces/{workspace_id}/documents"), body)
-                    .await?,
+                    .await,
             )
         }
     }
@@ -384,12 +406,16 @@ impl MicaMcp {
             replace,
         }): Parameters<UpdateDocArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.ensure_writable()?;
+        if let Err(error) = self.ensure_writable() {
+            return Ok(tool_error(error));
+        }
         // Every field that carries authored content, not just `markdown`:
         // find_replace writes through `replace`, and a swapped-in formula is
         // mangled by the same under-escaping.
         for text in [markdown.as_deref(), replace.as_deref()].into_iter().flatten() {
-            reject_mangled_latex(text)?;
+            if let Err(error) = reject_mangled_latex(text) {
+                return Ok(tool_error(error));
+            }
         }
         let body = json!({
             "mode": mode,
@@ -398,12 +424,12 @@ impl MicaMcp {
             "find": find,
             "replace": replace,
         });
-        ok_json(
+        tool_result(
             self.patch(
                 &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
                 body,
             )
-            .await?,
+            .await,
         )
     }
 
@@ -419,14 +445,16 @@ impl MicaMcp {
             parent_view_id,
         }): Parameters<MoveDocArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.ensure_writable()?;
+        if let Err(error) = self.ensure_writable() {
+            return Ok(tool_error(error));
+        }
         let body = json!({ "parent_view_id": parent_view_id });
-        ok_json(
+        tool_result(
             self.post(
                 &format!("/api/workspaces/{workspace_id}/views/{view_id}/move"),
                 body,
             )
-            .await?,
+            .await,
         )
     }
 
@@ -444,16 +472,18 @@ impl MicaMcp {
             confirm,
         }): Parameters<TrashArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.ensure_writable()?;
+        if let Err(error) = self.ensure_writable() {
+            return Ok(tool_error(error));
+        }
         if !confirm {
             return Err(McpError::invalid_params(
                 "refusing to trash without confirm=true".to_string(),
                 None,
             ));
         }
-        ok_json(
+        tool_result(
             self.delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
-                .await?,
+                .await,
         )
     }
 
@@ -466,9 +496,9 @@ impl MicaMcp {
         &self,
         Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
     ) -> Result<CallToolResult, McpError> {
-        ok_json(
+        tool_result(
             self.get(&format!("/api/workspaces/{workspace_id}/export/markdown"))
-                .await?,
+                .await,
         )
     }
 }
@@ -670,5 +700,50 @@ mod handshake_tests {
                 t.name
             );
         }
+    }
+    /// The spec splits errors by who can act on them: JSON-RPC errors are for
+    /// structural faults the model cannot fix; anything it could react to —
+    /// API failures, validation, business rules — must come back as
+    /// `isError: true` content so it can read the reason and retry (SEP-1303).
+    ///
+    /// This was wrong in all three places, and the LaTeX guard was the sharpest
+    /// case: it exists precisely so the caller re-sends with doubled
+    /// backslashes, yet it reported through the one channel meant for errors
+    /// the model is NOT expected to act on.
+    #[tokio::test]
+    async fn a_read_only_refusal_is_a_tool_error_not_a_protocol_error() {
+        let server = MicaMcp::new("https://example.invalid".into(), "pat".into(), true);
+        let result = server
+            .mica_create_document(Parameters(CreateDocArgs {
+                workspace_id: "w".into(),
+                name: "n".into(),
+                markdown: None,
+                parent_view_id: None,
+            }))
+            .await
+            .expect("read-only must not surface as a protocol error");
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn mangled_latex_is_a_tool_error_the_model_can_read() {
+        let server = MicaMcp::new("https://example.invalid".into(), "pat".into(), false);
+        // tab + "imes" — exactly what an under-escaped `\times` decodes to.
+        let mangled = format!("$x {}imes y$", '\u{0009}');
+        let result = server
+            .mica_create_document(Parameters(CreateDocArgs {
+                workspace_id: "w".into(),
+                name: "n".into(),
+                markdown: Some(mangled),
+                parent_view_id: None,
+            }))
+            .await
+            .expect("validation must not surface as a protocol error");
+        assert_eq!(result.is_error, Some(true));
+        let text = format!("{:?}", result.content);
+        assert!(
+            text.contains("doubled"),
+            "the message must tell the caller how to fix it, got: {text}"
+        );
     }
 }
