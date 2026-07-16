@@ -33,4 +33,37 @@ void main() {
     expect(only('italic').fontStyle, FontStyle.italic);
     expect(only('strike').decoration, TextDecoration.lineThrough);
   });
+
+  _boldTests();
+}
+
+// Bold: does applying it change the SIZE, or only the weight? Asked directly
+// because 加粗 CJK reads noticeably heavier on screen and "the font got bigger"
+// is the natural suspicion. It does not: the answer is fake-bold. We bundle
+// only NotoSansSC-Regular (no bold face), so for CJK the engine synthesizes
+// weight by widening strokes, which looks heavier and slightly wider without
+// any fontSize change. Shipping a real bold CJK face would cost ~10MB in the
+// web bundle — a deliberate trade, not an oversight.
+void _boldTests() {
+  TextStyle styleOf(String type) {
+    final span = buildMarkedSpan(
+      'text',
+      [Mark(0, 4, type)],
+      const TextStyle(color: Color(0xFF24292F), fontSize: 16),
+    );
+    return (span.children!.first as TextSpan).style!;
+  }
+
+  test('bold changes weight only — never the font size', () {
+    final s = styleOf('bold');
+    expect(s.fontWeight, FontWeight.w700);
+    expect(s.fontSize, 16, reason: 'bold must not scale the text');
+    expect(s.fontFamily, isNull, reason: 'bold must not swap the family');
+  });
+
+  test('no inline mark rescales the text', () {
+    for (final type in ['bold', 'italic', 'strike', 'code']) {
+      expect(styleOf(type).fontSize, 16, reason: '$type changed fontSize');
+    }
+  });
 }

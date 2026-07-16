@@ -965,7 +965,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                               decoration: const InputDecoration(
                                 isDense: true,
                                 contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 6,
+                                  horizontal: 0,
                                   vertical: 5,
                                 ),
                                 border: OutlineInputBorder(),

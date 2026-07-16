@@ -316,6 +316,47 @@ void main() {
     expect(submitted, 'New name');
   });
 
+  testWidgets('the name barely moves when the rename field opens', (
+    tester,
+  ) async {
+    // Entering rename swaps a Text for a TextField in the same slot, so any
+    // contentPadding on the field shows up as the title visibly jumping right.
+    // It used to jump 10px; the remaining ~4 is the outline border's own inset,
+    // which reads as deliberate padding rather than a lurch. Pinned because the
+    // regression is invisible in code review — you only see it on screen.
+    Widget host(bool renaming) => _host(DocumentListItem(
+          view: _view(name: '欢迎'),
+          depth: 0,
+          hasChildren: false,
+          revealToggle: false,
+          isCollapsed: false,
+          isSelected: false,
+          canEdit: true,
+          isRenaming: renaming,
+          onRenameSubmit: (_) {},
+          onRenameCancel: () {},
+          onToggle: () {},
+          onPressed: () {},
+          onCreateChild: () {},
+          onCreateChildFolder: () {},
+          onRename: () {},
+          onDelete: () {},
+        ));
+
+    await tester.pumpWidget(host(false));
+    final restingX = tester.getTopLeft(find.text('欢迎')).dx;
+
+    await tester.pumpWidget(host(true));
+    await tester.pumpAndSettle();
+    final editingX = tester.getTopLeft(find.byType(EditableText)).dx;
+
+    expect(
+      editingX - restingX,
+      lessThanOrEqualTo(4.0),
+      reason: 'the title must not lurch sideways when you start renaming',
+    );
+  });
+
   testWidgets('commit fires exactly once on blur (click-away)', (tester) async {
     var submits = 0;
     await tester.pumpWidget(_host(DocumentListItem(
