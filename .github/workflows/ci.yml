@@ -73,7 +73,8 @@ jobs:
           MICA_PAT: dummy-not-used-for-handshake
         run: |
           set -euo pipefail
-          npx -y @modelcontextprotocol/inspector@latest --cli \n            ./target/debug/mica-cli mcp --method tools/list > tools.json
+          npx -y @modelcontextprotocol/inspector@latest --cli \
+            ./target/debug/mica-cli mcp --method tools/list > tools.json
           python3 - <<'EOF'
           import json, sys
           tools = json.load(open("tools.json"))["tools"]
