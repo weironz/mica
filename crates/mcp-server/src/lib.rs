@@ -12,9 +12,9 @@ use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{
         router::tool::ToolRouter,
-        wrapper::{Json, Parameters},
+        wrapper::Parameters,
     },
-    model::{Implementation, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
 };
@@ -237,14 +237,29 @@ struct TrashArgs {
 
 // ── Tools ───────────────────────────────────────────────────────────────────
 
+/// Return an API payload as MCP text content.
+///
+/// Deliberately NOT `Json<Value>`, which is what the tools used to return: rmcp
+/// derives an `outputSchema` from the return type, and `Value` is "any", so it
+/// emitted `{"title": "AnyValue"}` with no `"type": "object"`. The MCP spec
+/// requires an object schema there, so a validating client REJECTS the whole
+/// tools/list — Claude Code logged `tools/list failed … expected "object"` and
+/// registered nothing, even though the handshake and every tool were fine.
+/// `outputSchema` is optional; the honest move for a proxy returning whatever
+/// the REST API said is to not declare one at all.
+fn ok_json(value: Value) -> Result<CallToolResult, McpError> {
+    let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}
+
 #[tool_router]
 impl MicaMcp {
     #[tool(
         description = "List all Mica workspaces (id, name, role) the token can access.",
         annotations(read_only_hint = true)
     )]
-    async fn mica_list_workspaces(&self) -> Result<Json<Value>, McpError> {
-        Ok(Json(self.get("/api/workspaces").await?))
+    async fn mica_list_workspaces(&self) -> Result<CallToolResult, McpError> {
+        ok_json(self.get("/api/workspaces").await?)
     }
 
     #[tool(
@@ -255,11 +270,11 @@ impl MicaMcp {
     async fn mica_list_pages(
         &self,
         Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
-    ) -> Result<Json<Value>, McpError> {
-        Ok(Json(
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
             self.get(&format!("/api/workspaces/{workspace_id}/views"))
                 .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -269,12 +284,12 @@ impl MicaMcp {
     async fn mica_search(
         &self,
         Parameters(SearchArgs { workspace_id, query }): Parameters<SearchArgs>,
-    ) -> Result<Json<Value>, McpError> {
+    ) -> Result<CallToolResult, McpError> {
         let q = urlencode(&query);
-        Ok(Json(
+        ok_json(
             self.get(&format!("/api/workspaces/{workspace_id}/search?q={q}"))
                 .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -284,13 +299,13 @@ impl MicaMcp {
     async fn mica_read_document(
         &self,
         Parameters(DocArg { workspace_id, document_id }): Parameters<DocArg>,
-    ) -> Result<Json<Value>, McpError> {
-        Ok(Json(
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
             self.get(&format!(
                 "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
             ))
             .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -302,13 +317,13 @@ impl MicaMcp {
     async fn mica_get_outline(
         &self,
         Parameters(DocArg { workspace_id, document_id }): Parameters<DocArg>,
-    ) -> Result<Json<Value>, McpError> {
-        Ok(Json(
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
             self.get(&format!(
                 "/api/workspaces/{workspace_id}/documents/{document_id}/outline"
             ))
             .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -323,7 +338,7 @@ impl MicaMcp {
             markdown,
             parent_view_id,
         }): Parameters<CreateDocArgs>,
-    ) -> Result<Json<Value>, McpError> {
+    ) -> Result<CallToolResult, McpError> {
         self.ensure_writable()?;
         // Markdown → the import endpoint (parses content server-side); empty →
         // the plain create endpoint.
@@ -334,19 +349,19 @@ impl MicaMcp {
                 "markdown": markdown,
                 "parent_view_id": parent_view_id,
             });
-            Ok(Json(
+            ok_json(
                 self.post(
                     &format!("/api/workspaces/{workspace_id}/documents/import/markdown"),
                     body,
                 )
                 .await?,
-            ))
+            )
         } else {
             let body = json!({ "name": name, "parent_view_id": parent_view_id });
-            Ok(Json(
+            ok_json(
                 self.post(&format!("/api/workspaces/{workspace_id}/documents"), body)
                     .await?,
-            ))
+            )
         }
     }
 
@@ -368,7 +383,7 @@ impl MicaMcp {
             find,
             replace,
         }): Parameters<UpdateDocArgs>,
-    ) -> Result<Json<Value>, McpError> {
+    ) -> Result<CallToolResult, McpError> {
         self.ensure_writable()?;
         // Every field that carries authored content, not just `markdown`:
         // find_replace writes through `replace`, and a swapped-in formula is
@@ -383,13 +398,13 @@ impl MicaMcp {
             "find": find,
             "replace": replace,
         });
-        Ok(Json(
+        ok_json(
             self.patch(
                 &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
                 body,
             )
             .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -403,16 +418,16 @@ impl MicaMcp {
             view_id,
             parent_view_id,
         }): Parameters<MoveDocArgs>,
-    ) -> Result<Json<Value>, McpError> {
+    ) -> Result<CallToolResult, McpError> {
         self.ensure_writable()?;
         let body = json!({ "parent_view_id": parent_view_id });
-        Ok(Json(
+        ok_json(
             self.post(
                 &format!("/api/workspaces/{workspace_id}/views/{view_id}/move"),
                 body,
             )
             .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -428,7 +443,7 @@ impl MicaMcp {
             view_id,
             confirm,
         }): Parameters<TrashArgs>,
-    ) -> Result<Json<Value>, McpError> {
+    ) -> Result<CallToolResult, McpError> {
         self.ensure_writable()?;
         if !confirm {
             return Err(McpError::invalid_params(
@@ -436,10 +451,10 @@ impl MicaMcp {
                 None,
             ));
         }
-        Ok(Json(
+        ok_json(
             self.delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
                 .await?,
-        ))
+        )
     }
 
     #[tool(
@@ -450,11 +465,11 @@ impl MicaMcp {
     async fn mica_export_workspace(
         &self,
         Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
-    ) -> Result<Json<Value>, McpError> {
-        Ok(Json(
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
             self.get(&format!("/api/workspaces/{workspace_id}/export/markdown"))
                 .await?,
-        ))
+        )
     }
 }
 
@@ -617,5 +632,43 @@ mod handshake_tests {
     fn read_only_still_advertises_tools() {
         let info = MicaMcp::new("https://example.test".into(), "pat".into(), true).get_info();
         assert!(info.capabilities.tools.is_some());
+    }
+    /// The second half of the same outage. With `tools` finally advertised, the
+    /// client fetched tools/list and REJECTED it wholesale:
+    ///   `path: ["tools",0,"outputSchema","type"] — expected "object"`.
+    /// rmcp derives outputSchema from the return type, and the tools returned
+    /// `Json<Value>`; `Value` is "any", so it emitted `{"title":"AnyValue"}` with
+    /// no `"type"`. MCP requires an object schema there — one bad tool and the
+    /// whole list is thrown away.
+    ///
+    /// outputSchema is optional, so the fix is to declare none (see `ok_json`).
+    /// Pinned on the WIRE shape, because that is what the client validates; a
+    /// test that only called a tool would pass while every client saw zero tools.
+    #[test]
+    fn no_tool_declares_an_output_schema() {
+        let router = MicaMcp::tool_router();
+        let tools = router.list_all();
+        assert_eq!(tools.len(), 10, "all ten tools must be listed");
+        for t in &tools {
+            assert!(
+                t.output_schema.is_none(),
+                "{}: an outputSchema derived from Value is not an object schema,                  and one invalid entry makes a client discard the entire tools/list",
+                t.name
+            );
+        }
+    }
+
+    /// Inputs, by contrast, MUST be object schemas — that half was always right,
+    /// and this keeps it that way.
+    #[test]
+    fn every_tool_input_schema_is_an_object() {
+        for t in MicaMcp::tool_router().list_all() {
+            assert_eq!(
+                t.input_schema.get("type").and_then(|v| v.as_str()),
+                Some("object"),
+                "{}: inputSchema must be an object schema",
+                t.name
+            );
+        }
     }
 }
