@@ -270,6 +270,46 @@ fn tool_error(error: McpError) -> CallToolResult {
     CallToolResult::error(vec![Content::text(error.message.to_string())])
 }
 
+/// Answer a write with WHAT HAPPENED, not with the document itself.
+///
+/// A tool result is the model's context — that is MCP's whole design — and it is
+/// re-sent on every later turn, so a fat result is not a one-off cost, it
+/// compounds for the rest of the conversation. The REST API returns the full
+/// snapshot because the EDITOR needs the blocks to render; a model needs the id
+/// and nothing else. Forwarding it verbatim turned a 558-byte page into a 6.4KB
+/// reply (~2k tokens), and a real page into far more — measured, not guessed.
+///
+/// Falls back to the whole payload when nothing is recognisable: if an endpoint
+/// changes shape, the caller should see too much rather than a silent "ok".
+fn write_ack(value: Value) -> Result<CallToolResult, McpError> {
+    let mut ack = serde_json::Map::new();
+    for (at, key) in [
+        ("/document/id", "document_id"),
+        ("/view/id", "view_id"),
+        ("/view/name", "name"),
+    ] {
+        if let Some(found) = value.pointer(at).and_then(Value::as_str) {
+            ack.insert(key.to_string(), json!(found));
+        }
+    }
+    // A count, not the blocks: enough to confirm the write landed and roughly
+    // how big it is, without shipping the tree.
+    if let Some(blocks) = value
+        .pointer("/snapshot/payload/blocks")
+        .and_then(Value::as_array)
+    {
+        ack.insert("blocks".to_string(), json!(blocks.len()));
+    }
+    if let Some(seq) = value.pointer("/update/seq").and_then(Value::as_i64) {
+        ack.insert("seq".to_string(), json!(seq));
+    }
+    if ack.is_empty() {
+        return tool_result(Ok(value));
+    }
+    ack.insert("ok".to_string(), json!(true));
+    tool_result(Ok(Value::Object(ack)))
+}
+
 #[tool_router]
 impl MicaMcp {
     #[tool(
@@ -371,19 +411,25 @@ impl MicaMcp {
                 "markdown": markdown,
                 "parent_view_id": parent_view_id,
             });
-            tool_result(
-                self.post(
+            match self
+                .post(
                     &format!("/api/workspaces/{workspace_id}/documents/import/markdown"),
                     body,
                 )
-                .await,
-            )
+                .await
+            {
+                Ok(value) => write_ack(value),
+                Err(error) => Ok(tool_error(error)),
+            }
         } else {
             let body = json!({ "name": name, "parent_view_id": parent_view_id });
-            tool_result(
-                self.post(&format!("/api/workspaces/{workspace_id}/documents"), body)
-                    .await,
-            )
+            match self
+                .post(&format!("/api/workspaces/{workspace_id}/documents"), body)
+                .await
+            {
+                Ok(value) => write_ack(value),
+                Err(error) => Ok(tool_error(error)),
+            }
         }
     }
 
@@ -424,13 +470,16 @@ impl MicaMcp {
             "find": find,
             "replace": replace,
         });
-        tool_result(
-            self.patch(
+        match self
+            .patch(
                 &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
                 body,
             )
-            .await,
-        )
+            .await
+        {
+            Ok(value) => write_ack(value),
+            Err(error) => Ok(tool_error(error)),
+        }
     }
 
     #[tool(
@@ -632,6 +681,44 @@ mod tests {
 
 #[cfg(test)]
 mod handshake_tests {
+    /// A write must answer "what happened", never hand the document back. The
+    /// REST payload carries the whole block tree for the editor's benefit; a
+    /// 558-byte page measured 6.4KB (~2k tokens) of tool result, re-sent every
+    /// later turn. Pinned on SIZE, because the regression is silent: forwarding
+    /// more is always "correct", just ruinous.
+    #[test]
+    fn a_write_ack_carries_ids_not_the_document() {
+        let blocks: Vec<Value> = (0..40)
+            .map(|i| json!({"id": format!("block_{i}"), "text": "x".repeat(200)}))
+            .collect();
+        let rest = json!({
+            "document": {"id": "doc-1", "root_block_id": "block_0", "current_seq": 0},
+            "snapshot": {"payload": {"blocks": blocks}},
+            "view": {"id": "view-1", "name": "Notes", "position": "0000000010"},
+        });
+        let fat = serde_json::to_string(&rest).unwrap().len();
+
+        let out = write_ack(rest).expect("ack");
+        let text = format!("{:?}", out.content);
+        assert!(text.contains("doc-1") && text.contains("view-1") && text.contains("Notes"));
+        assert!(text.contains("40"), "block COUNT, so the write is confirmable");
+        assert!(!text.contains("block_39"), "no block ids");
+        assert!(!text.contains(&"x".repeat(200)), "no block text");
+        assert!(
+            text.len() * 20 < fat,
+            "ack must be a fraction of the payload: {} vs {fat}",
+            text.len()
+        );
+    }
+
+    /// If an endpoint changes shape, show the caller everything rather than
+    /// swallow the answer into a confident, empty "ok".
+    #[test]
+    fn an_unrecognised_payload_is_forwarded_whole() {
+        let out = write_ack(json!({"surprise": "shape"})).expect("ack");
+        assert!(format!("{:?}", out.content).contains("surprise"));
+    }
+
     use super::*;
     use rmcp::ServerHandler;
 
