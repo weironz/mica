@@ -683,8 +683,8 @@ pub async fn bootstrap_document(
   // frozen at the pre-yrs seed, so materialize the current blocks from the yrs
   // base — otherwise re-opening the page renders a near-blank stub.
   if let Some(payload) = store::current_payload(&state.db, document_id).await? {
-    snapshot.payload = serde_json::to_value(&payload)
-      .map_err(|error| ApiError::Internal(error.to_string()))?;
+    snapshot.payload =
+      serde_json::to_value(&payload).map_err(|error| ApiError::Internal(error.to_string()))?;
   }
 
   Ok(Json(DocumentBootstrapResponse {
@@ -793,8 +793,16 @@ fn outline_from_payload(
     payload.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
   let mut headings = Vec::new();
   let mut block_ids = Vec::new();
-  outline_walk(&payload.root_block_id, &by_id, &mut headings, &mut block_ids);
-  DocumentOutlineResponse { headings, block_ids }
+  outline_walk(
+    &payload.root_block_id,
+    &by_id,
+    &mut headings,
+    &mut block_ids,
+  );
+  DocumentOutlineResponse {
+    headings,
+    block_ids,
+  }
 }
 
 fn outline_walk(
@@ -816,7 +824,11 @@ fn outline_walk(
       if child.kind == "heading" {
         headings.push(OutlineHeading {
           block_id: child.id.clone(),
-          level: child.data.get("level").and_then(|v| v.as_i64()).unwrap_or(1),
+          level: child
+            .data
+            .get("level")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1),
           text: child.text.clone(),
         });
       }
@@ -873,14 +885,11 @@ pub async fn update_document_markdown(
 
   // Derive the ops from the snapshot INSIDE the write lock (no read-then-apply
   // TOCTOU: an anchor index / delete target can't drift under a concurrent edit).
-  let applied = store::apply_derived_operations(
-    &state.db,
-    workspace_id,
-    document_id,
-    user_id,
-    |payload| markdown_update_ops(payload, &request),
-  )
-  .await?;
+  let applied =
+    store::apply_derived_operations(&state.db, workspace_id, document_id, user_id, |payload| {
+      markdown_update_ops(payload, &request)
+    })
+    .await?;
   ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
 
   Ok(Json(DocumentUpdateResponse {
@@ -961,11 +970,15 @@ fn markdown_update_ops(
   let start_index = match request.mode {
     MarkdownUpdateMode::ReplaceAll => {
       if !has_content {
-        return Err("replace_all needs markdown content — refusing to wipe the document".to_string());
+        return Err(
+          "replace_all needs markdown content — refusing to wipe the document".to_string(),
+        );
       }
       if let Some(root) = current.blocks.iter().find(|b| b.id == root_id) {
         for child in &root.children {
-          ops.push(DocumentOperation::DeleteBlock { block_id: child.clone() });
+          ops.push(DocumentOperation::DeleteBlock {
+            block_id: child.clone(),
+          });
         }
       }
       None
@@ -1120,7 +1133,11 @@ async fn collect_assets(
     let Some(record) = by_id.get(&file_id) else {
       continue;
     };
-    let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+    let bytes = match client
+      .get(storage.download_url(&record.object_key))
+      .send()
+      .await
+    {
       Ok(resp) if resp.status().is_success() => match resp.bytes().await {
         Ok(b) => b.to_vec(),
         Err(_) => continue,
@@ -1189,7 +1206,10 @@ pub async fn export_folder_zip(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
-  let folder = views.iter().find(|v| v.id == view_id).ok_or(ApiError::NotFound)?;
+  let folder = views
+    .iter()
+    .find(|v| v.id == view_id)
+    .ok_or(ApiError::NotFound)?;
   if folder.object_type != "folder" {
     return Err(ApiError::BadRequest(
       "only a folder can be exported this way".to_string(),
@@ -1338,7 +1358,11 @@ async fn build_tree_zip(
           let asset = if let Some(existing) = asset_by_object.get(&record.object_key) {
             existing.clone()
           } else {
-            let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+            let bytes = match client
+              .get(storage.download_url(&record.object_key))
+              .send()
+              .await
+            {
               Ok(resp) if resp.status().is_success() => match resp.bytes().await {
                 Ok(b) => b.to_vec(),
                 Err(_) => continue,
@@ -1415,7 +1439,10 @@ fn rewrite_page_links(
 ) {
   const SCHEME: &str = "mica://page/";
   for block in &mut payload.blocks {
-    let Some(marks) = block.data.get_mut("marks").and_then(serde_json::Value::as_array_mut)
+    let Some(marks) = block
+      .data
+      .get_mut("marks")
+      .and_then(serde_json::Value::as_array_mut)
     else {
       continue;
     };
@@ -1514,7 +1541,11 @@ fn safe_segment(name: &str) -> String {
     }
   }
   let tidy = out.trim_matches('_').to_string();
-  if tidy.is_empty() { "untitled".to_string() } else { tidy }
+  if tidy.is_empty() {
+    "untitled".to_string()
+  } else {
+    tidy
+  }
 }
 
 /// Make [candidate] unique within [used], appending `-2`, `-3`… before any
@@ -2023,11 +2054,17 @@ mod tests {
       (folder.clone(), base.clone())
     };
     assert_eq!(seg("Chapter"), (vec![], "Chapter".to_string()));
-    assert_eq!(seg("Intro"), (vec!["Chapter".to_string()], "Intro".to_string()));
+    assert_eq!(
+      seg("Intro"),
+      (vec!["Chapter".to_string()], "Intro".to_string())
+    );
     assert_eq!(seg("Sub"), (vec!["Chapter".to_string()], "Sub".to_string()));
     assert_eq!(
       seg("Deep"),
-      (vec!["Chapter".to_string(), "Sub".to_string()], "Deep".to_string())
+      (
+        vec!["Chapter".to_string(), "Sub".to_string()],
+        "Deep".to_string()
+      )
     );
     // => the export loop writes the empty folder "Sub" as directory path
     //    "Chapter/Sub" (manifest type:'folder', no `.md`), and "Deep" as
@@ -2073,7 +2110,10 @@ mod tests {
     };
     let doc_path = emit("notes");
     let folder_path = emit("notes.md");
-    assert_eq!(doc_path, "notes.md", "the document keeps its natural file path");
+    assert_eq!(
+      doc_path, "notes.md",
+      "the document keeps its natural file path"
+    );
     assert_ne!(
       doc_path, folder_path,
       "folder dir and document file must not share a manifest path",
@@ -2094,16 +2134,35 @@ mod tests {
       schema_version: 1,
       root_block_id: "root".into(),
       blocks: vec![
-        blk("root", "page", "", serde_json::Value::Null, vec!["h1", "p", "h2"]),
-        blk("h1", "heading", "Intro", serde_json::json!({"level": 1}), vec![]),
+        blk(
+          "root",
+          "page",
+          "",
+          serde_json::Value::Null,
+          vec!["h1", "p", "h2"],
+        ),
+        blk(
+          "h1",
+          "heading",
+          "Intro",
+          serde_json::json!({"level": 1}),
+          vec![],
+        ),
         blk("p", "paragraph", "body", serde_json::Value::Null, vec![]),
-        blk("h2", "heading", "Details", serde_json::json!({"level": 2}), vec![]),
+        blk(
+          "h2",
+          "heading",
+          "Details",
+          serde_json::json!({"level": 2}),
+          vec![],
+        ),
       ],
     };
     let out = outline_from_payload(&payload);
     assert_eq!(out.block_ids, ["h1", "p", "h2"]);
     assert_eq!(
-      out.headings
+      out
+        .headings
         .iter()
         .map(|h| (h.level, h.text.as_str()))
         .collect::<Vec<_>>(),
@@ -2129,7 +2188,11 @@ mod tests {
         children: vec![],
       });
     }
-    DocumentSnapshotPayload { schema_version: 1, root_block_id: "root".into(), blocks }
+    DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".into(),
+      blocks,
+    }
   }
 
   fn upd(mode: MarkdownUpdateMode, markdown: &str) -> UpdateMarkdownRequest {
@@ -2146,17 +2209,27 @@ mod tests {
   fn markdown_update_append_grafts_under_root_without_deletes() {
     use mica_app_core::documents::DocumentOperation;
     let current = doc_with_children(&["old"]);
-    let ops = markdown_update_ops(&current, &upd(MarkdownUpdateMode::Append, "# Title\n\nhello"))
-      .unwrap();
+    let ops = markdown_update_ops(
+      &current,
+      &upd(MarkdownUpdateMode::Append, "# Title\n\nhello"),
+    )
+    .unwrap();
     assert!(
-      ops.iter().all(|o| !matches!(o, DocumentOperation::DeleteBlock { .. })),
+      ops
+        .iter()
+        .all(|o| !matches!(o, DocumentOperation::DeleteBlock { .. })),
       "append never deletes",
     );
     let top_inserts = ops
       .iter()
-      .filter(|o| matches!(o, DocumentOperation::InsertBlock { parent_id, .. } if parent_id == "root"))
+      .filter(
+        |o| matches!(o, DocumentOperation::InsertBlock { parent_id, .. } if parent_id == "root"),
+      )
       .count();
-    assert!(top_inserts >= 2, "heading + paragraph grafted under the existing root");
+    assert!(
+      top_inserts >= 2,
+      "heading + paragraph grafted under the existing root"
+    );
     assert!(
       ops.iter().all(|o| match o {
         DocumentOperation::InsertBlock { block, .. } => block.children.is_empty(),
@@ -2179,9 +2252,15 @@ mod tests {
         _ => None,
       })
       .collect();
-    assert_eq!(deletes, ["a", "b"], "existing top-level children deleted first");
+    assert_eq!(
+      deletes,
+      ["a", "b"],
+      "existing top-level children deleted first"
+    );
     assert!(
-      ops.iter().any(|o| matches!(o, DocumentOperation::InsertBlock { .. })),
+      ops
+        .iter()
+        .any(|o| matches!(o, DocumentOperation::InsertBlock { .. })),
       "then the new markdown is grafted in",
     );
   }
@@ -2196,7 +2275,9 @@ mod tests {
     // The (single) new top-level paragraph lands at index 1 — right after "a".
     let top = ops
       .iter()
-      .find(|o| matches!(o, DocumentOperation::InsertBlock { parent_id, .. } if parent_id == "root"))
+      .find(
+        |o| matches!(o, DocumentOperation::InsertBlock { parent_id, .. } if parent_id == "root"),
+      )
       .expect("a top-level insert");
     match top {
       DocumentOperation::InsertBlock { index, .. } => assert_eq!(*index, Some(1)),
@@ -2227,9 +2308,11 @@ mod tests {
     let updated: Vec<(&str, &str)> = ops
       .iter()
       .filter_map(|o| match o {
-        DocumentOperation::UpdateBlock { block_id, text: Some(t), .. } => {
-          Some((block_id.as_str(), t.as_str()))
-        }
+        DocumentOperation::UpdateBlock {
+          block_id,
+          text: Some(t),
+          ..
+        } => Some((block_id.as_str(), t.as_str())),
         _ => None,
       })
       .collect();
@@ -2273,13 +2356,17 @@ mod tests {
       replace: Some(String::new()),
     };
     let err = markdown_update_ops(&payload, &request).unwrap_err();
-    assert!(err.contains("formatted"), "should refuse formatted blocks, got: {err}");
+    assert!(
+      err.contains("formatted"),
+      "should refuse formatted blocks, got: {err}"
+    );
   }
 
   #[test]
   fn markdown_update_replace_all_empty_refuses_to_wipe() {
     let current = doc_with_children(&["a", "b"]);
-    let err = markdown_update_ops(&current, &upd(MarkdownUpdateMode::ReplaceAll, "  \n ")).unwrap_err();
+    let err =
+      markdown_update_ops(&current, &upd(MarkdownUpdateMode::ReplaceAll, "  \n ")).unwrap_err();
     assert!(
       err.contains("wipe") || err.contains("content"),
       "empty replace_all must not wipe the doc, got: {err}",
