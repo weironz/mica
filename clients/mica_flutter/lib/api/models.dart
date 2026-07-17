@@ -351,6 +351,50 @@ class DocVersion {
   final String createdAt;
 }
 
+/// Result of moving/copying a view's subtree into another workspace (the
+/// server's `/transfer` endpoint). Counts are what the copy touched; a
+/// `dryRun` report predicts them without mutating. [danglingLinks] names the
+/// documents that hold a link pointing at a page OUTSIDE the transferred
+/// subtree — those links break, since the target does not travel along.
+class TransferReport {
+  const TransferReport({
+    required this.newRootViewId,
+    required this.documents,
+    required this.folders,
+    required this.images,
+    required this.danglingLinks,
+    required this.removedSource,
+    required this.dryRun,
+  });
+
+  factory TransferReport.fromJson(Map<String, dynamic> json) {
+    // Keep only the document name from each dangling-link record — that's all
+    // the UI shows ("these pages have links that will break"); the target view
+    // id is server-side detail we don't surface.
+    final links = (json['dangling_links'] as List<dynamic>? ?? const [])
+        .map((e) => (e as Map<String, dynamic>)['document'] as String? ?? '')
+        .where((name) => name.isNotEmpty)
+        .toList();
+    return TransferReport(
+      newRootViewId: json['new_root_view_id'] as String?,
+      documents: (json['documents'] as num?)?.toInt() ?? 0,
+      folders: (json['folders'] as num?)?.toInt() ?? 0,
+      images: (json['images'] as num?)?.toInt() ?? 0,
+      danglingLinks: links,
+      removedSource: json['removed_source'] == true,
+      dryRun: json['dry_run'] == true,
+    );
+  }
+
+  final String? newRootViewId;
+  final int documents;
+  final int folders;
+  final int images;
+  final List<String> danglingLinks;
+  final bool removedSource;
+  final bool dryRun;
+}
+
 class DocumentCreateResult {
   const DocumentCreateResult({required this.document, required this.view});
 

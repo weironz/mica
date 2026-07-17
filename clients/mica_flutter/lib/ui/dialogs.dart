@@ -1769,6 +1769,236 @@ class _ShareDialogState extends State<_ShareDialog> {
   }
 }
 
+/// Move / copy a page-or-folder subtree into another cloud workspace. Picking a
+/// destination runs a server dry-run (report only, no mutation) so the user
+/// sees the counts and any breaking links BEFORE committing. Confirm runs the
+/// real transfer and pops with the report + destination name for the caller to
+/// refresh + snackbar.
+///
+/// v1 has no destination-folder picker: everything lands at the destination
+/// ROOT (`parent_view_id: null`). See [_WorkspaceShellState._openTransfer].
+class _TransferDialog extends StatefulWidget {
+  const _TransferDialog({
+    required this.copy,
+    required this.destinations,
+    required this.onTransfer,
+  });
+
+  /// true = copy (source kept); false = move (source soft-deleted after copy).
+  final bool copy;
+
+  /// Cloud workspaces the subtree can go to — the source is already excluded.
+  final List<({String id, String name})> destinations;
+
+  /// Runs one transfer against the picked destination. [dryRun] true = preview
+  /// (no mutation); false = commit. Source workspace + view + move/copy are
+  /// bound by the caller.
+  final Future<TransferReport> Function({
+    required String destWorkspaceId,
+    required bool dryRun,
+  })
+  onTransfer;
+
+  @override
+  State<_TransferDialog> createState() => _TransferDialogState();
+}
+
+class _TransferDialogState extends State<_TransferDialog> {
+  String? _destId;
+  TransferReport? _preview; // dry-run result for the current destination
+  bool _loadingPreview = false;
+  bool _submitting = false;
+  String? _error;
+
+  ({String id, String name})? get _dest {
+    final id = _destId;
+    if (id == null) return null;
+    return widget.destinations.where((d) => d.id == id).firstOrNull;
+  }
+
+  Future<void> _selectDest(String? id) async {
+    if (id == null || id == _destId) return;
+    setState(() {
+      _destId = id;
+      _preview = null;
+      _error = null;
+      _loadingPreview = true;
+    });
+    try {
+      final report = await widget.onTransfer(destWorkspaceId: id, dryRun: true);
+      if (!mounted || _destId != id) return; // superseded by a newer pick
+      setState(() {
+        _preview = report;
+        _loadingPreview = false;
+      });
+    } catch (error) {
+      if (!mounted || _destId != id) return;
+      setState(() {
+        _error = context.l10n.transferFailed(error.toString());
+        _loadingPreview = false;
+      });
+    }
+  }
+
+  Future<void> _confirm() async {
+    final dest = _dest;
+    if (dest == null || _submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      final report = await widget.onTransfer(
+        destWorkspaceId: dest.id,
+        dryRun: false,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop((report: report, destName: dest.name));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = context.l10n.transferFailed(error.toString());
+        _submitting = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final report = _preview;
+    return AlertDialog(
+      title: Text(widget.copy ? l10n.transferCopyTitle : l10n.transferMoveTitle),
+      content: SizedBox(
+        width: 440,
+        child: widget.destinations.isEmpty
+            ? Text(l10n.transferNoDestinations)
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: _destId,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: l10n.transferPickWorkspace,
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: widget.destinations
+                        .map(
+                          (d) => DropdownMenuItem(
+                            value: d.id,
+                            child: Text(d.name, overflow: TextOverflow.ellipsis),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _submitting ? null : _selectDest,
+                  ),
+                  const SizedBox(height: 16),
+                  if (_loadingPreview)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Center(
+                        child: SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    )
+                  else if (report != null) ...[
+                    Text(
+                      l10n.transferPreview(
+                        report.documents,
+                        report.folders,
+                        report.images,
+                      ),
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    if (report.danglingLinks.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      _TransferNotice(
+                        icon: Icons.link_off,
+                        color: const Color(0xFFB54708),
+                        text: l10n.transferDanglingWarning(
+                          report.danglingLinks.length,
+                        ),
+                      ),
+                    ],
+                  ],
+                  // A move can't carry version history (checkpoints stay on the
+                  // source; the copy starts fresh) — always warn before a move.
+                  if (!widget.copy) ...[
+                    const SizedBox(height: 10),
+                    _TransferNotice(
+                      icon: Icons.info_outline,
+                      color: const Color(0xFF64748B),
+                      text: l10n.transferVersionNotice,
+                    ),
+                  ],
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _error!,
+                      style: const TextStyle(color: Color(0xFFB42318), fontSize: 13),
+                    ),
+                  ],
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: Text(l10n.commonCancel),
+        ),
+        FilledButton(
+          // Enabled only once a destination is picked and no request is in
+          // flight — the confirm re-runs the transfer for real (dryRun: false).
+          onPressed: (_dest == null || _submitting || _loadingPreview)
+              ? null
+              : _confirm,
+          child: _submitting
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(widget.copy ? l10n.transferCopy : l10n.transferMove),
+        ),
+      ],
+    );
+  }
+}
+
+/// A small icon + text row for the transfer dialog's inline notices (broken
+/// links, version-history caveat). Kept tiny and local — not worth a shared
+/// widget.
+class _TransferNotice extends StatelessWidget {
+  const _TransferNotice({
+    required this.icon,
+    required this.color,
+    required this.text,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text, style: TextStyle(fontSize: 13, color: color)),
+        ),
+      ],
+    );
+  }
+}
+
 /// Version history for the open (cloud) document: list named checkpoints, pin
 /// the current state as a new one, or roll back to an old one. Restore reflects
 /// live in the editor via the normal sync path (the server broadcasts it as an

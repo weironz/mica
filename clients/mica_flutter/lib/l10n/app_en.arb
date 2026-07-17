@@ -658,5 +658,64 @@
         "type": "int"
       }
     }
+  },
+  "transferMoveTitle": "Move to workspace",
+  "transferCopyTitle": "Copy to workspace",
+  "transferPickWorkspace": "Destination workspace",
+  "transferNoDestinations": "No other workspace to transfer to. Create another cloud workspace first.",
+  "transferPreview": "Will copy {docs} documents, {folders} folders, {images} images",
+  "@transferPreview": {
+    "placeholders": {
+      "docs": {
+        "type": "int"
+      },
+      "folders": {
+        "type": "int"
+      },
+      "images": {
+        "type": "int"
+      }
+    }
+  },
+  "transferDanglingWarning": "{count, plural, =1{1 link pointing to a page outside the transferred subtree will break} other{{count} links pointing to pages outside the transferred subtree will break}}",
+  "@transferDanglingWarning": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "transferVersionNotice": "Version history won't follow — the moved copy starts fresh, and the original checkpoints stay in the source.",
+  "transferMove": "Move",
+  "transferCopy": "Copy",
+  "transferMovedDone": "Moved {docs, plural, =1{1 document} other{{docs} documents}} to {dest}",
+  "@transferMovedDone": {
+    "placeholders": {
+      "docs": {
+        "type": "int"
+      },
+      "dest": {
+        "type": "String"
+      }
+    }
+  },
+  "transferCopiedDone": "Copied {docs, plural, =1{1 document} other{{docs} documents}} to {dest}",
+  "@transferCopiedDone": {
+    "placeholders": {
+      "docs": {
+        "type": "int"
+      },
+      "dest": {
+        "type": "String"
+      }
+    }
+  },
+  "transferFailed": "Transfer failed: {error}",
+  "@transferFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   }
 }

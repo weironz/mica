@@ -396,6 +396,32 @@ class ApiClient {
     );
   }
 
+  /// Move (`removeSource: true`) or copy (`false`) the view's subtree into
+  /// [destWorkspaceId], under [parentViewId] there (null = destination root).
+  /// With [dryRun] the server reports what it WOULD do and mutates nothing —
+  /// the dialog uses that for its preview before the user commits.
+  Future<TransferReport> transferView({
+    required String token,
+    required String workspaceId,
+    required String viewId,
+    required String destWorkspaceId,
+    String? parentViewId,
+    required bool removeSource,
+    required bool dryRun,
+  }) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/views/$viewId/transfer',
+      {
+        'dest_workspace_id': destWorkspaceId,
+        'parent_view_id': parentViewId,
+        'remove_source': removeSource,
+        'dry_run': dryRun,
+      },
+      token: token,
+    );
+    return TransferReport.fromJson(response);
+  }
+
   Future<void> purgeView(
     String token,
     String workspaceId,

@@ -675,6 +675,8 @@ class DocumentListItem extends StatefulWidget {
     required this.onCreateChild,
     required this.onCreateChildFolder,
     this.onExportFolder,
+    this.onTransferMove,
+    this.onTransferCopy,
     required this.onRename,
     required this.onRenameSubmit,
     required this.onRenameCancel,
@@ -703,6 +705,12 @@ class DocumentListItem extends StatefulWidget {
   /// Export this folder's subtree as a ZIP. Null hides the entry — local
   /// workspaces have no server to build the archive.
   final VoidCallback? onExportFolder;
+
+  /// Move / copy this row's subtree into another cloud workspace. Both null in
+  /// a local workspace (no cross-workspace transfer there) — the pair hides
+  /// together, mirroring how the whole cloud-only block gates on one callback.
+  final VoidCallback? onTransferMove;
+  final VoidCallback? onTransferCopy;
   final VoidCallback onRename;
 
   /// Commit the inline-edited name (Enter or blur); cancel on Esc.
@@ -871,6 +879,25 @@ class _DocumentListItemState extends State<DocumentListItem> {
               label: context.l10n.rowExportZipImages,
             ),
           ),
+        // Cross-workspace move/copy — cloud-only, so both hide in a local
+        // workspace. Works for pages AND folders (the folder carries its
+        // subtree), matching the server endpoint's semantics.
+        if (widget.onTransferMove != null) ...[
+          PopupMenuItem(
+            value: 'transferMove',
+            child: _MenuRow(
+              icon: Icons.drive_file_move_outlined,
+              label: context.l10n.transferMoveTitle,
+            ),
+          ),
+          PopupMenuItem(
+            value: 'transferCopy',
+            child: _MenuRow(
+              icon: Icons.copy_all_outlined,
+              label: context.l10n.transferCopyTitle,
+            ),
+          ),
+        ],
         const PopupMenuDivider(),
         PopupMenuItem(
           value: 'delete',
@@ -894,6 +921,10 @@ class _DocumentListItemState extends State<DocumentListItem> {
         widget.onToggle();
       case 'export':
         widget.onExportFolder?.call();
+      case 'transferMove':
+        widget.onTransferMove?.call();
+      case 'transferCopy':
+        widget.onTransferCopy?.call();
       case 'delete':
         widget.onDelete();
     }

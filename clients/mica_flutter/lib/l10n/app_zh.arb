@@ -392,5 +392,17 @@
   "versionUntitled": "未命名版本",
   "updaterGithubError": "GitHub 返回 {code}",
   "updaterWindowsOnly": "自动更新目前仅支持 Windows。",
-  "updaterDownloadFailed": "下载失败：HTTP {code}"
+  "updaterDownloadFailed": "下载失败：HTTP {code}",
+  "transferMoveTitle": "移动到工作区",
+  "transferCopyTitle": "复制到工作区",
+  "transferPickWorkspace": "目标工作区",
+  "transferNoDestinations": "没有可转移到的其他工作区,请先新建一个云端工作区。",
+  "transferPreview": "将复制 {docs} 篇文档、{folders} 个文件夹、{images} 张图片",
+  "transferDanglingWarning": "{count, plural, other{有 {count} 处指向源工作区其他页面的链接会失效}}",
+  "transferVersionNotice": "版本历史不会跟随(移动后新建,原检查点留在源)。",
+  "transferMove": "移动",
+  "transferCopy": "复制",
+  "transferMovedDone": "已移动 {docs} 篇文档到 {dest}",
+  "transferCopiedDone": "已复制 {docs} 篇文档到 {dest}",
+  "transferFailed": "转移失败:{error}"
 }

@@ -3222,6 +3222,67 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
+  /// Open the move/copy-to-workspace dialog for a sidebar row. The SOURCE is
+  /// the workspace whose tree is currently shown; the destination is any OTHER
+  /// cloud workspace. [copy] false = move (source soft-deleted after copy),
+  /// true = copy (source kept).
+  ///
+  /// The dialog runs its own dry-run preview and the final transfer; it pops
+  /// with the report + chosen destination name so we can refresh + confirm.
+  Future<void> _openTransfer(DocumentView view, bool copy) async {
+    final source = _selectedWorkspace;
+    if (source == null || _session == null) return;
+    // Destinations: every cloud workspace except the source (you can't transfer
+    // a page into the workspace it already lives in).
+    final destinations = _workspaces
+        .where((w) => w.id != source.id)
+        .map((w) => (id: w.id, name: w.name))
+        .toList();
+    final result = await showDialog<({TransferReport report, String destName})>(
+      context: context,
+      builder: (context) => _TransferDialog(
+        copy: copy,
+        destinations: destinations,
+        // The dialog supplies (destWorkspaceId, dryRun); we bind source + view
+        // + move/copy here. v1 always targets the destination ROOT
+        // (parentViewId: null) — no destination-folder picker yet.
+        onTransfer: ({required destWorkspaceId, required dryRun}) =>
+            _api.transferView(
+              token: _requireSession().accessToken,
+              workspaceId: source.id,
+              viewId: view.id,
+              destWorkspaceId: destWorkspaceId,
+              parentViewId: null,
+              removeSource: !copy,
+              dryRun: dryRun,
+            ),
+      ),
+    );
+    if (result == null || !mounted) return; // cancelled
+    final report = result.report;
+    // A MOVE soft-deletes the source subtree, so the current (source) tree must
+    // reload to drop it; a COPY leaves the source tree unchanged but reloading
+    // is harmless and keeps one path. The DESTINATION tree isn't refreshed here
+    // — we're not viewing it, and switching workspaces would reload it anyway
+    // (acceptable for v1; see the dialog's parentViewId note).
+    if (!copy) {
+      await _run(() async {
+        await _loadSelectedWorkspaceViews();
+      });
+    }
+    if (!mounted) return;
+    final l10n = context.l10n;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          copy
+              ? l10n.transferCopiedDone(report.documents, result.destName)
+              : l10n.transferMovedDone(report.documents, result.destName),
+        ),
+      ),
+    );
+  }
+
   Future<void> _addWorkspaceMember(String email, WorkspaceRole role) {
     return _run(() async {
       final session = _requireSession();
@@ -3796,6 +3857,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Cloud-only: version history lives server-side (local has no history).
       onVersionHistory: local ? null : _openVersionHistory,
       onShare: local ? null : _openShare,
+      // Cross-workspace move/copy — cloud-only (the destination is another
+      // cloud workspace; local worlds don't participate). Null hides both
+      // row-menu entries in 本地模式.
+      onTransfer: local ? null : _openTransfer,
       // P3f: both live on the workspace ROW's menu, dispatching per entry —
       // null on web (no local world / no on-device store).
       onMigrateEntry: _local.available ? _migrateEntry : null,
@@ -4117,6 +4182,7 @@ class WorkspaceView extends StatefulWidget {
     this.onRestoreCheckpoint,
     this.onVersionHistory,
     this.onShare,
+    this.onTransfer,
     this.onMigrateEntry,
     this.onDetachEntry,
     this.onCursorChanged,
@@ -4301,6 +4367,11 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function()? onVersionHistory;
   /// Opens the share dialog (public link) — cloud-only.
   final Future<void> Function()? onShare;
+
+  /// Move (`copy: false`) or copy (`copy: true`) a sidebar row's subtree into
+  /// another cloud workspace. Null for local workspaces — they have no
+  /// cross-workspace transfer, so the row menu drops both entries.
+  final Future<void> Function(DocumentView view, bool copy)? onTransfer;
 
   /// Upload a LOCAL workspace row to the cloud (P3f §6.1). Null on web, which
   /// hides the row action.
@@ -5369,6 +5440,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onExportFolder: widget.onExportFolderZip == null
               ? null
               : () => _exportFolderFile(item.view),
+          // Cross-workspace move/copy — cloud-only (onTransfer is null in a
+          // local workspace, which hides both entries). Works for pages and
+          // folders alike; the folder carries its subtree server-side.
+          onTransferMove: widget.onTransfer == null
+              ? null
+              : () => widget.onTransfer!(item.view, false),
+          onTransferCopy: widget.onTransfer == null
+              ? null
+              : () => widget.onTransfer!(item.view, true),
           onRename: () => _beginRename(item.view),
           onRenameSubmit: (name) => _commitRename(item.view, name),
           onRenameCancel: _cancelRename,
