@@ -717,5 +717,16 @@
         "type": "String"
       }
     }
-  }
+  },
+  "worldDetachDoneTitle": "Converted to a local copy",
+  "worldDetachDoneBody": "\"{name}\" has been copied to a local workspace. The cloud original still exists (and keeps syncing). Keep it, or delete it and keep only the local copy?",
+  "@worldDetachDoneBody": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "worldKeepCloudOriginal": "Keep cloud original",
+  "worldDeleteCloudOriginal": "Delete cloud original"
 }

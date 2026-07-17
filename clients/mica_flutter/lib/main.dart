@@ -2457,6 +2457,37 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _reloadLocalWorkspaces();
       _message = l10n.worldDetachedMsg(entry.workspace.name, result.docs);
     });
+    // The "move" variant, symmetric to 上云's delete-local (#4): once the copy
+    // exists locally, an owner may delete the cloud original. Gated to the
+    // ACTIVE cloud connection (entry.origin == _api's origin) so the cloud
+    // delete can't target the wrong server; anyone else gets copy-only, as
+    // before. Delete BEFORE landing in the local copy, while the cloud API/
+    // session context is still the active one.
+    final canDeleteCloud =
+        matchesManageRole(entry.role) && entry.origin == _api.baseUri.toString();
+    if (canDeleteCloud && mounted) {
+      final delete = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(l10n.worldDetachDoneTitle),
+          content: Text(l10n.worldDetachDoneBody(entry.workspace.name)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(l10n.worldKeepCloudOriginal),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(l10n.worldDeleteCloudOriginal),
+            ),
+          ],
+        ),
+      );
+      if (delete == true && mounted) {
+        await _deleteWorkspace(entry.workspace);
+      }
+    }
+    if (!mounted) return;
     // Land in the fresh local copy.
     final target = _localWorkspaces
         .where((w) => w.id == result.workspaceId)

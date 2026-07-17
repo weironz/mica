@@ -404,5 +404,9 @@
   "transferCopy": "复制",
   "transferMovedDone": "已移动 {docs} 篇文档到 {dest}",
   "transferCopiedDone": "已复制 {docs} 篇文档到 {dest}",
-  "transferFailed": "转移失败:{error}"
+  "transferFailed": "转移失败:{error}",
+  "worldDetachDoneTitle": "已转为本地副本",
+  "worldDetachDoneBody": "「{name}」已复制为本地工作区。云端原工作区仍在(还在同步)。要保留云端原件,还是删掉它、只留本地副本?",
+  "worldKeepCloudOriginal": "保留云端原件",
+  "worldDeleteCloudOriginal": "删除云端原件"
 }
