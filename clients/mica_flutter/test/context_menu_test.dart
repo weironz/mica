@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 // Body-text right-click context menu: 复制/剪切 only over a ranged selection,
 // 粘贴/粘贴为纯文本 whenever editable — and paste-as-plain inserts the text
@@ -15,6 +16,9 @@ void main() {
     final ops = <Map<String, dynamic>>[];
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',

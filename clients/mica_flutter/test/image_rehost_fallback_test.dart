@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 // Pasted image urls are re-hosted server-side so links can't rot. But
 // re-hosting is best-effort: a CN-hosted server routinely cannot reach the
@@ -30,6 +31,9 @@ void main() {
   }) async {
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',

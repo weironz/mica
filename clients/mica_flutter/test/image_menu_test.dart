@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/editor/model.dart';
 
 // The image right-click menu is the complete surface for an image: the hover
@@ -31,6 +32,9 @@ void main() {
     final ops = <Map<String, dynamic>>[];
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 // A divider is a line with no text: RenderDocument.positionAt refuses to park
 // the caret on any atomic node, so a click on the line landed in the paragraph
@@ -109,6 +110,9 @@ void main() {
       final selected = <String?>[];
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          locale: const Locale('zh'),
           home: Scaffold(
             body: MicaEditor(
               rootBlockId: 'root',

@@ -1,5 +1,7 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
+import 'package:mica_flutter/l10n/locale_controller.dart';
 
 // The app is connected to exactly ONE world at a time — `本地模式` or a server —
 // picked from one list in Settings. Tiling both worlds in the workspace menu was
@@ -20,6 +22,12 @@ WorkspaceEntry entry(String origin, String id, String name) => WorkspaceEntry(
     );
 
 void main() {
+  // accountIdentity resolves its labels through `l10nNoContext`, which reads
+  // `WidgetsBinding.instance` when no locale override is set — unavailable in a
+  // plain (non-widget) unit test. Pinning the override to zh both skips that
+  // binding lookup and matches the Chinese labels these tests assert.
+  setUpAll(() => localeController.value = const Locale('zh'));
+
   group('origin says where a workspace lives', () {
     final entries = [
       entry(_cloud, 'c1', 'devops'),

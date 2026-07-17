@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 /// Double-click selects the word under the caret; triple-click selects the whole
 /// block. Driven through the real gesture pipeline (the multi-tap counting lives
@@ -12,6 +13,9 @@ void main() {
       WidgetTester tester, List<EditorNode> nodes) async {
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',

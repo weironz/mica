@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 // End-to-end wiring for the Ctrl+F in-page find bar: the host opens it via
 // EditorFindHook, the bar renders inside the editor, shows a live match count,
@@ -13,6 +14,9 @@ void main() {
     final findHook = EditorFindHook();
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',
