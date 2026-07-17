@@ -2385,6 +2385,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           HardwareKeyboard.instance.isControlPressed ||
           HardwareKeyboard.instance.isMetaPressed;
       if (accel) {
+        // Ctrl+C / Ctrl+X inside a cell. The default TextField copy puts ONLY
+        // the cell's raw markdown (`**bold**`) on the clipboard as text/plain —
+        // so pasting it into the body inserted the literal source (the body's
+        // own copy also writes a text/html flavor, which is what carries the
+        // marks across a mica→mica paste). Write both flavors here too, from the
+        // selected cell markdown; cut then deletes the run.
+        if ((key == LogicalKeyboardKey.keyC || key == LogicalKeyboardKey.keyX) &&
+            !sel.isCollapsed) {
+          final selectedMd = sel.textInside(controller.text);
+          final parsed = parseInline(selectedMd);
+          copyRichToClipboard(
+            plain: selectedMd,
+            richHtml: inlineToHtml(parsed.text, parsed.marks),
+          );
+          if (key == LogicalKeyboardKey.keyX) {
+            controller.value = TextEditingValue(
+              text: controller.text.replaceRange(sel.start, sel.end, ''),
+              selection: TextSelection.collapsed(offset: sel.start),
+            );
+          }
+          return KeyEventResult.handled;
+        }
         final mark = switch (key) {
           LogicalKeyboardKey.keyB => 'bold',
           LogicalKeyboardKey.keyI => 'italic',
