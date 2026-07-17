@@ -3,33 +3,45 @@ import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 
-/// Regression: copying formatted text OUT of a table cell and pasting it into
-/// the body dropped the formatting and showed the literal markdown source
-/// (`**bold**`). Cause: a cell is a Flutter TextField, and its default Ctrl+C
-/// puts only the cell's raw markdown on the clipboard as text/plain — no
-/// text/html — so the paste path's single-line plain branch inserted it
-/// verbatim (Typora worked because it re-parses markdown; mica does not for a
-/// lone plain line). The fix has the cell's own Ctrl+C write a text/html flavor
-/// too, via `inlineToHtml(parseInline(selectedCellMarkdown))`. This pins the two
-/// ends of that flavor: the html mica writes, and the marks mica reads back.
+/// Regression: Ctrl+A → copy → paste a page containing a table turned every
+/// bold/inline-code cell into visible markdown source (`**你好**`). Cause:
+/// `_tableHtml` (used by `selectionHtml`, the text/html copy flavor) emitted the
+/// cell's raw markdown via `escapeHtml` — `<td>**你好**</td>` — instead of real
+/// html marks, so the paste side's `htmlToMarkdown` backslash-escaped the `**`
+/// (`\*\*你好\*\*`), which a table cell renders as literal `**你好**`. The fix
+/// renders each cell through `inlineToHtml(parseInline(cell))`, the same
+/// conversion `_copyTableArea` and the cell-edit Ctrl+C already use. This pins
+/// that conversion end-to-end for the content that broke.
 void main() {
-  test('cell Ctrl+C html flavor round-trips bold + inline code as MARKS', () {
-    // What the fixed cell copy computes for a selection of the cell's markdown.
-    const selectedCellMd = r'**bold** and `code`';
-    final parsed = parseInline(selectedCellMd);
-    final richHtml = inlineToHtml(parsed.text, parsed.marks);
-    expect(richHtml, contains('<strong>bold</strong>'));
-    expect(richHtml, contains('<code>code</code>'));
+  test('cell markdown -> copy html -> paste keeps MARKS, not literal source', () {
+    for (final cellMd in [
+      r'**bold** and `code`',
+      r'**你好**',
+      r'**真·GPU 掉卡**',
+      r'`GPUMissing` 带外',
+    ]) {
+      // What the fixed table/cell copy writes into the <td> (and clipboard html).
+      final parsed = parseInline(cellMd);
+      final cellHtml = inlineToHtml(parsed.text, parsed.marks);
 
-    // What the paste path does with that clipboard html.
-    final md = htmlToMarkdown(richHtml);
-    final blocks = markdownToBlocks(md);
-    expect(blocks.length, 1);
-    final block = blocks.single;
-    expect(block.kind, 'paragraph');
-    // The marks must survive as REAL marks — not as literal `**`/`` ` `` in text.
-    expect(block.text, 'bold and code');
-    final marks = marksFromData(block.data);
-    expect(marks.map((m) => m.type).toSet(), {'bold', 'code'});
+      // What the paste side turns that html back into.
+      final md = htmlToMarkdown('<table><tr><td>$cellHtml</td></tr></table>');
+
+      // The bug: a backslash-escaped `\*` / `` \` `` in the round-tripped
+      // markdown — which renders as literal source, not a mark.
+      expect(md.contains(r'\*'), isFalse,
+          reason: 'bold must not come back backslash-escaped for <<$cellMd>>: $md');
+      expect(md.contains(r'\`'), isFalse,
+          reason: 'code must not come back backslash-escaped for <<$cellMd>>: $md');
+
+      // And the pasted cell text carries real marks, not literal `**`/`` ` ``.
+      final blocks = markdownToBlocks(md);
+      final table = blocks.single;
+      expect(table.kind, 'table');
+      final cellText = (table.data['rows'] as List).first.first as String;
+      final marks = parseInline(cellText).marks;
+      expect(marks, isNotEmpty,
+          reason: 'pasted cell <<$cellText>> must parse back to a mark');
+    }
   });
 }

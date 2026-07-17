@@ -1320,7 +1320,13 @@ class EditorController extends ChangeNotifier {
       buf.write('<tr>');
       final tag = r == 0 ? 'th' : 'td';
       for (final cell in table.rows[r]) {
-        buf.write('<$tag>${escapeHtml(cell)}</$tag>');
+        // A cell stores its INLINE MARKDOWN (`**你好**`). Render it to real html
+        // marks (`<strong>你好</strong>`) — NOT escapeHtml, which would emit the
+        // literal `**` text and make the paste side backslash-escape it, so a
+        // Ctrl+A→copy→paste of a table turned every bold/code cell into visible
+        // markdown source. Same conversion _copyTableArea already uses.
+        final parsed = parseInline(cell);
+        buf.write('<$tag>${inlineToHtml(parsed.text, parsed.marks)}</$tag>');
       }
       buf.write('</tr>');
     }
