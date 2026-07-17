@@ -154,6 +154,17 @@ pub fn run(cli: &Cli, cfg: &Config, args: &InstallArgs) -> Result<()> {
       .install(path, &exe, &server, pat.as_deref())
       .with_context(|| format!("configuring {} at {}", kind.label(), path.display()))?;
     println!("configured {} → {}", kind.label(), path.display());
+    if *kind == ClientKind::ClaudeDesktop {
+      // claude_desktop_config.json is NOT durable under wrapper runtimes: Claude
+      // Code Desktop (and similar) regenerate it on launch and wipe any entry we
+      // add, so the server silently never connects. Point at the reliable path.
+      println!(
+        "  note: some runtimes (e.g. Claude Code Desktop) rewrite this file on \
+         launch and will drop the Mica entry. If it doesn't connect, use the \
+         durable path instead:\n         mica-cli mcp install --client claude-code \
+         (writes ~/.claude.json, survives restarts)."
+      );
+    }
   }
 
   if args.dry_run {

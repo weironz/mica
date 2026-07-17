@@ -27,9 +27,15 @@ token,免去手改 JSON/TOML:
 
 ```bash
 mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
-mica-cli mcp install --client claude-desktop   # 或 claude-code / cursor / codex / gemini / windsurf
+mica-cli mcp install --client claude-code      # 或 cursor / codex / gemini / windsurf / claude-desktop
 mica-cli mcp install --all                     # 本机装了的客户端一次全配
 ```
+
+> **Claude Code 是最可靠的接法**:它写进 `~/.claude.json` 顶层 `mcpServers.mica`
+> (内嵌永不过期的 PAT),持久、跨重启不丢。**`--client claude-desktop` 慎用**:
+> 它写的 `claude_desktop_config.json` 会被某些 wrapper 运行时(如 Claude Code
+> Desktop)**启动时重写抹掉**,于是那条 mica 一直连不上——`mcp install` 配置
+> Claude Desktop 时也会打这个提示。碰到就改用 `--client claude-code`。
 
 它把 `mica` 这个 MCP server **合并**进目标客户端配置(保留其它条目)、指向当前 mica-cli
 二进制、默认建一个 PAT 写进去。配好重启客户端即可。细节(`--no-token`/`--pat`/`--dry-run`、
