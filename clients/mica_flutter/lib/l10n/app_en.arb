@@ -1,25 +1,318 @@
 {
   "@@locale": "en",
-
   "languageLabel": "Language",
-  "@languageLabel": { "description": "Settings row label for the UI language selector" },
+  "@languageLabel": {
+    "description": "Settings row label for the UI language selector"
+  },
   "languageSystem": "Follow system",
   "languageChinese": "中文",
   "languageEnglish": "English",
-
   "closeWindowTitle": "Close Mica window",
-  "@closeWindowTitle": { "description": "Title of the dialog shown when the window X is clicked" },
+  "@closeWindowTitle": {
+    "description": "Title of the dialog shown when the window X is clicked"
+  },
   "closeWindowPrompt": "When you click the close button, Mica should:",
   "closeRemember": "Remember my choice (changeable in Settings)",
   "closeCancel": "Cancel",
   "closeMinimizeTaskbar": "Minimize to taskbar",
   "closeMinimizeTray": "Minimize to tray",
   "closeQuit": "Quit",
-
   "trayShow": "Show Mica",
   "trayExit": "Exit",
-
   "newPage": "New page",
   "newFolder": "New folder",
-  "search": "Search…"
+  "search": "Search…",
+  "commonCancel": "Cancel",
+  "commonSave": "Save",
+  "commonDelete": "Delete",
+  "commonClose": "Close",
+  "commonConfirm": "Confirm",
+  "commonOk": "OK",
+  "commonRename": "Rename",
+  "commonExport": "Export",
+  "commonImport": "Import",
+  "commonCopy": "Copy",
+  "commonDone": "Done",
+  "commonRetry": "Retry",
+  "commonRemove": "Remove",
+  "commonBack": "Back",
+  "commonSignIn": "Sign in",
+  "commonSignOut": "Sign out",
+  "workspaceRowImportFromZip": "From ZIP (Mica export)",
+  "workspaceRowImportFromNotion": "From Notion (Markdown & CSV ZIP)",
+  "workspaceRowImportWorkspace": "Import workspace",
+  "workspaceRowSelectWorkspace": "Select workspace",
+  "workspaceRowSignInCloud": "Sign in to cloud…",
+  "workspaceRowExportZip": "Export (ZIP)",
+  "workspaceRowImportFiles": "Files (.md / .zip)",
+  "workspaceRowImportFolder": "Folder",
+  "workspaceRowMigrate": "Upload to cloud…",
+  "workspaceRowDetach": "Convert to local copy…",
+  "workspaceRowMenu": "Workspace menu",
+  "workspaceRowNewWorkspace": "New workspace",
+  "widgetRoleLabel": "Role",
+  "widgetEmptyBlock": "(empty)",
+  "rowMoveUp": "Move up",
+  "rowMoveDown": "Move down",
+  "rowEdit": "Edit",
+  "rowNewChildPage": "New subpage",
+  "rowNewChildFolder": "New subfolder",
+  "rowExpandChildren": "Expand children",
+  "rowCollapseChildren": "Collapse children",
+  "rowExportZipImages": "Export (ZIP, with images)",
+  "rowExpand": "Expand",
+  "rowCollapse": "Collapse",
+  "rowMoreActions": "Delete, rename, and more",
+  "presenceEditing": "{count, plural, =1{1 editing} other{{count} editing}}",
+  "@presenceEditing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "updateDialogTitle": "Update to v{version}",
+  "@updateDialogTitle": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateDialogBody": "This will download the installer, then close and restart Mica to finish updating. Continue?",
+  "updateAndRestart": "Update and restart",
+  "updateCheck": "Check for updates",
+  "updateChecking": "Checking…",
+  "updateUpToDate": "You're on the latest version (v{version})",
+  "@updateUpToDate": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateRecheck": "Check again",
+  "updateFound": "New version v{version} available (current v{current})",
+  "@updateFound": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "current": {
+        "type": "String"
+      }
+    }
+  },
+  "updateNow": "Update now",
+  "updateDownloading": "Downloading {percent}%…",
+  "@updateDownloading": {
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "updateWillRestart": "Mica will close and restart automatically when done.",
+  "updateFailed": "Operation failed: {error}",
+  "@updateFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "searchTitle": "Search pages",
+  "searchHint": "Search titles and content…",
+  "searchEmptyTitle": "Search this workspace",
+  "searchEmptyDetail": "Find pages by title or content.",
+  "searchNoMatches": "No matches",
+  "searchFailed": "Search failed — check your connection and try again.",
+  "searchNothingFound": "Nothing found for \"{query}\".",
+  "@searchNothingFound": {
+    "placeholders": {
+      "query": {
+        "type": "String"
+      }
+    }
+  },
+  "searchTitleMatch": "Title match",
+  "accountSaved": "Saved",
+  "accountPasswordTooShort": "New password must be at least 8 characters",
+  "accountPasswordChanged": "Password changed. All devices (including this one) need to sign in again.",
+  "accountDisplayName": "Display name",
+  "accountSaveName": "Save name",
+  "accountCurrentPassword": "Current password",
+  "accountNewPassword": "New password (min 8 chars)",
+  "accountChangePassword": "Change password",
+  "aboutLegalese": "Cloud-first collaborative Markdown workspace.",
+  "aboutTitle": "About",
+  "tokenCreated": "Token created",
+  "tokenCopyNow": "Copy it now — the secret is not shown again.",
+  "tokenTitle": "API Tokens",
+  "tokenDescription": "Long-lived tokens for the API, the CLI, and scheduled backups. The secret is shown once — copy it then. Read-only by default.",
+  "tokenName": "Name",
+  "tokenNameHint": "e.g. backup",
+  "tokenWriteAccess": "Write access",
+  "tokenExpires": "Expires (days)",
+  "tokenNever": "never",
+  "tokenCreate": "Create token",
+  "tokenNameRequired": "Name is required",
+  "tokenNone": "No tokens yet.",
+  "tokenUnnamed": "(unnamed)",
+  "tokenMeta": "{scopes}  ·  used {used}  ·  expires {expires}",
+  "@tokenMeta": {
+    "placeholders": {
+      "scopes": {
+        "type": "String"
+      },
+      "used": {
+        "type": "String"
+      },
+      "expires": {
+        "type": "String"
+      }
+    }
+  },
+  "tokenRevoke": "Revoke",
+  "settingsAppearance": "Appearance",
+  "settingsPageWidth": "Page width",
+  "settingsFontSize": "Font size",
+  "settingsFont": "Font",
+  "settingsFontSystem": "System",
+  "settingsReHostImages": "Re-host network images",
+  "settingsReHostImagesSub": "Pasted image links are saved into Mica storage. Off: keep them as standard external Markdown links.",
+  "settingsFormatBar": "Formatting toolbar",
+  "settingsFormatBarSub": "Show a toolbar of common Markdown actions above the page.",
+  "settingsPageTitle": "Page title",
+  "settingsPageTitleSub": "Show the page title at the top of the page. Hidden, pages start straight at the first line.",
+  "closeWindowHeader": "When closing the window",
+  "closeQuitTitle": "Quit Mica",
+  "closeQuitSub": "Closing the window quits the app (default behavior).",
+  "closeMinimizeTitle": "Minimize to taskbar",
+  "closeMinimizeSub": "The window is hidden, the app keeps running; click the taskbar icon to return.",
+  "closeTrayTitle": "Minimize to system tray",
+  "closeTraySub": "The window hides, leaving only a tray icon at the bottom right; click the icon or its right-click menu to return.",
+  "settingsTitle": "Settings",
+  "settingsData": "Data",
+  "settingsShortcuts": "Shortcuts",
+  "settingsAccount": "Account",
+  "settingsAiProvider": "AI provider",
+  "aiEnable": "Enable AI features",
+  "aiEnableSub": "Show the Ask AI button and the /ai command. They appear only when this is on and a provider below is configured.",
+  "aiProviderLabel": "Provider",
+  "aiBaseUrl": "API base URL",
+  "aiModel": "Model",
+  "aiApiKey": "API key",
+  "aiApiKeyHintHasKey": "•••••••• (leave blank to keep)",
+  "aiApiKeyHintRequired": "Required for hosted providers",
+  "aiKeyHelp": "Local models (Ollama, LM Studio) usually need no key. The key is stored on the server and never returned.",
+  "dataImportDescription": "Import a workspace from a ZIP — a Mica export or a Notion \"Markdown & CSV\" export. The page tree, ordering and images are rebuilt.",
+  "dataImportButton": "Import workspace (ZIP)",
+  "dataExportTip": "Tip: export a single page or a whole workspace from the page menu (▾) or a workspace's ⋯ menu.",
+  "shortcutsGroupApp": "App",
+  "shortcutsNewPage": "New page",
+  "shortcutsFindInPage": "Find in page",
+  "shortcutsSearchWorkspace": "Search workspace",
+  "shortcutsOpenSettings": "Open settings",
+  "shortcutsRename": "Rename the highlighted page/folder",
+  "shortcutsGroupFormat": "Editor — format",
+  "shortcutsBold": "Bold",
+  "shortcutsItalic": "Italic",
+  "shortcutsInlineCode": "Inline code",
+  "shortcutsLink": "Link",
+  "shortcutsHeadings": "Heading 1–6",
+  "shortcutsParagraph": "Turn into text (paragraph)",
+  "shortcutsIndent": "Indent / outdent list item",
+  "shortcutsGroupEdit": "Editor — edit",
+  "shortcutsUndo": "Undo",
+  "shortcutsRedo": "Redo",
+  "shortcutsSelectAll": "Select all",
+  "shortcutsCopyCutPaste": "Copy / Cut / Paste",
+  "shortcutsPastePlain": "Paste as plain text",
+  "shortcutsSlashMenu": "Slash command menu",
+  "shortcutsNote": "On macOS use ⌘ in place of Ctrl. Heading shortcuts follow the Notion/Word convention (Ctrl+Alt+N) — the web build can't see a bare Ctrl+N, which the browser owns for tab switching.\nNote: Ctrl+, can be swallowed by a Chinese IME (punctuation toggle); switch to English input if it doesn't respond.",
+  "aiAskTitle": "Ask AI",
+  "aiPromptHint": "e.g. Write a project kickoff plan with goals, milestones, and risks",
+  "aiTargetNewPage": "New page",
+  "aiTargetCurrentPage": "Current page",
+  "aiTargetNewWorkspace": "New workspace",
+  "aiGenerating": "Generating…",
+  "aiDoneReview": "Done — review, then insert.",
+  "aiRegenerate": "Regenerate",
+  "aiGenerate": "Generate",
+  "aiInsert": "Insert",
+  "shareTitle": "Share",
+  "shareActionFailed": "Action failed: {error}",
+  "@shareActionFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "shareLinkCopied": "Link copied",
+  "shareLoadFailed": "Load failed: {error}",
+  "@shareLoadFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "sharePublicAccess": "Public access",
+  "sharePublicAccessSub": "Anyone with the link can view it read-only, no sign-in required",
+  "shareCopyLink": "Copy link",
+  "versionCheckpointSaved": "Checkpoint saved",
+  "versionSaveFailed": "Save failed: {error}",
+  "@versionSaveFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "versionRestoreConfirmTitle": "Restore to this version?",
+  "versionRestoreConfirmBody": "Restore the current page to \"{name}\". This is itself an undoable edit — save a checkpoint afterward to get back to now.",
+  "@versionRestoreConfirmBody": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "versionRestore": "Restore",
+  "versionRestored": "Restored to \"{name}\"",
+  "@versionRestored": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "versionRestoreFailed": "Restore failed: {error}",
+  "@versionRestoreFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "versionSaveCheckpoint": "Save checkpoint",
+  "versionNameHint": "Give this version a name, e.g. \"Before revision\"",
+  "versionHistoryTitle": "Version history",
+  "versionLoadFailed": "Load failed: {error}",
+  "@versionLoadFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "versionEmpty": "No versions yet.\nClick \"Save checkpoint\" at the top right to save the current state.",
+  "recycleBinTitle": "Recycle bin",
+  "recycleRefresh": "Refresh",
+  "recycleEmpty": "Recycle bin is empty",
+  "recycleEmptyDetail": "Deleted pages appear here and can be restored.",
+  "recycleRestore": "Restore",
+  "recycleDeleteForever": "Delete forever"
 }

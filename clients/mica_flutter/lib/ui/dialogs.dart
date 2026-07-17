@@ -70,7 +70,7 @@ class _SearchDialogState extends State<_SearchDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Search pages'),
+      title: Text(context.l10n.searchTitle),
       content: SizedBox(
         width: 480,
         height: 420,
@@ -81,7 +81,7 @@ class _SearchDialogState extends State<_SearchDialog> {
               autofocus: true,
               onChanged: _onChanged,
               decoration: InputDecoration(
-                hintText: 'Search titles and content…',
+                hintText: context.l10n.searchHint,
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _loading
                     ? const Padding(
@@ -104,7 +104,7 @@ class _SearchDialogState extends State<_SearchDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child: Text(context.l10n.commonClose),
         ),
       ],
     );
@@ -112,19 +112,19 @@ class _SearchDialogState extends State<_SearchDialog> {
 
   Widget _buildResults(BuildContext context) {
     if (_query.text.trim().isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.search,
-        title: 'Search this workspace',
-        detail: 'Find pages by title or content.',
+        title: context.l10n.searchEmptyTitle,
+        detail: context.l10n.searchEmptyDetail,
       );
     }
     if (!_loading && _results.isEmpty) {
       return EmptyState(
         icon: Icons.search_off,
-        title: 'No matches',
+        title: context.l10n.searchNoMatches,
         detail: _failed
-            ? 'Search failed — check your connection and try again.'
-            : 'Nothing found for "$_lastQuery".',
+            ? context.l10n.searchFailed
+            : context.l10n.searchNothingFound(_lastQuery),
       );
     }
     return ListView.separated(
@@ -137,7 +137,7 @@ class _SearchDialogState extends State<_SearchDialog> {
           leading: const Icon(Icons.description_outlined, size: 18),
           title: Text(result.name, overflow: TextOverflow.ellipsis),
           subtitle: result.snippet.isEmpty
-              ? (result.titleMatch ? const Text('Title match') : null)
+              ? (result.titleMatch ? Text(context.l10n.searchTitleMatch) : null)
               : Text(
                   result.snippet,
                   maxLines: 2,
@@ -406,6 +406,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   Future<void> _saveProfile() async {
+    final l10n = context.l10n;
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
@@ -414,7 +415,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       await widget.onUpdateProfile!(_name.text.trim());
       // Stay open: saving is not leaving. ("like server config" — the thing it
       // copied — no longer closes either; nothing in Settings does.)
-      if (mounted) setState(() => _accountMsg = '已保存');
+      if (mounted) setState(() => _accountMsg = l10n.accountSaved);
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -423,9 +424,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   Future<void> _changeAccountPassword() async {
+    final l10n = context.l10n;
     if (_newPass.text.length < 8) {
       setState(
-        () => _accountMsg = 'New password must be at least 8 characters',
+        () => _accountMsg = l10n.accountPasswordTooShort,
       );
       return;
     }
@@ -444,7 +446,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // user (auth.rs `revoke_user_sessions`) — this device included. Saying
       // "other devices" would be a lie, and the surprise would land later, when
       // this session quietly fails to renew.
-      setState(() => _accountMsg = '密码已修改。所有设备(含这台)都需要重新登录。');
+      setState(() => _accountMsg = l10n.accountPasswordChanged);
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -512,7 +514,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       applicationName: 'Mica',
       applicationVersion: 'v$kAppVersion',
       applicationIcon: const MicaLogo(size: 40),
-      applicationLegalese: 'Cloud-first collaborative Markdown workspace.',
+      applicationLegalese: context.l10n.aboutLegalese,
       // Self-update lives here on desktop; hidden where it can't apply (web, and
       // platforms with no packaged installer).
       children: updateSupported
@@ -526,12 +528,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Token created'),
+        title: Text(context.l10n.tokenCreated),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Copy it now — the secret is not shown again.'),
+            Text(context.l10n.tokenCopyNow),
             const SizedBox(height: 12),
             Container(
               width: double.infinity,
@@ -550,12 +552,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         actions: [
           TextButton.icon(
             icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy'),
+            label: Text(context.l10n.commonCopy),
             onPressed: () => Clipboard.setData(ClipboardData(text: token)),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Done'),
+            child: Text(context.l10n.commonDone),
           ),
         ],
       ),
@@ -606,13 +608,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _sectionTitle(
         context,
         Icons.key_outlined,
-        'API Tokens',
+        context.l10n.tokenTitle,
         const Color(0xFF2563EB),
       ),
       const SizedBox(height: 4),
       Text(
-        'Long-lived tokens for the API, the CLI, and scheduled backups. '
-        'The secret is shown once — copy it then. Read-only by default.',
+        context.l10n.tokenDescription,
         style: Theme.of(
           context,
         ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
@@ -620,10 +621,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 16),
       TextField(
         controller: _tokenName,
-        decoration: const InputDecoration(
-          labelText: 'Name',
-          hintText: 'e.g. backup',
-          border: OutlineInputBorder(),
+        decoration: InputDecoration(
+          labelText: context.l10n.tokenName,
+          hintText: context.l10n.tokenNameHint,
+          border: const OutlineInputBorder(),
           isDense: true,
         ),
       ),
@@ -636,17 +637,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                 ? null
                 : (v) => setState(() => _tokenWrite = v),
           ),
-          const Text('Write access'),
+          Text(context.l10n.tokenWriteAccess),
           const Spacer(),
           SizedBox(
             width: 140,
             child: TextField(
               controller: _tokenExpiry,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Expires (days)',
-                hintText: 'never',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: context.l10n.tokenExpires,
+                hintText: context.l10n.tokenNever,
+                border: const OutlineInputBorder(),
                 isDense: true,
               ),
             ),
@@ -658,13 +659,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         alignment: Alignment.centerLeft,
         child: FilledButton.icon(
           icon: const Icon(Icons.add, size: 18),
-          label: const Text('Create token'),
+          label: Text(context.l10n.tokenCreate),
           onPressed: _tokenBusy
               ? null
               : () async {
                   final name = _tokenName.text.trim();
                   if (name.isEmpty) {
-                    setState(() => _tokensError = 'Name is required');
+                    setState(() => _tokensError = context.l10n.tokenNameRequired);
                     return;
                   }
                   setState(() {
@@ -714,7 +715,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Text(
-            'No tokens yet.',
+            context.l10n.tokenNone,
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
@@ -725,15 +726,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: Text(t['name'] as String? ?? '(unnamed)'),
+            title: Text(t['name'] as String? ?? context.l10n.tokenUnnamed),
             subtitle: Text(
-              '${(t['scopes'] as List<dynamic>?)?.join(', ') ?? ''}'
-              '  ·  used ${_shortTime(t['last_used_at'])}'
-              '  ·  expires ${_shortTime(t['expires_at'])}',
+              context.l10n.tokenMeta(
+                (t['scopes'] as List<dynamic>?)?.join(', ') ?? '',
+                _shortTime(t['last_used_at']),
+                _shortTime(t['expires_at']),
+              ),
             ),
             trailing: IconButton(
               icon: const Icon(Icons.delete_outline, size: 20),
-              tooltip: 'Revoke',
+              tooltip: context.l10n.tokenRevoke,
               onPressed: _tokenBusy
                   ? null
                   : () async {
@@ -814,7 +817,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   List<Widget> _appearanceSection(BuildContext context) => [
-    _sectionTitle(context, Icons.tune, 'Appearance', const Color(0xFF2563EB)),
+    _sectionTitle(
+      context,
+      Icons.tune,
+      context.l10n.settingsAppearance,
+      const Color(0xFF2563EB),
+    ),
     const SizedBox(height: 12),
     Row(
       children: [
@@ -833,7 +841,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ),
     const SizedBox(height: 8),
     _sliderRow(
-      label: 'Page width',
+      label: context.l10n.settingsPageWidth,
       // Max = the realizable full-bleed width (measured at the editor), so the
       // slider's whole travel changes the layout instead of the upper half being
       // a no-op once the column already fills the window. The thumb is clamped
@@ -848,7 +856,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       },
     ),
     _sliderRow(
-      label: 'Font size',
+      label: context.l10n.settingsFontSize,
       value: _fontScale,
       min: 0.85,
       max: 1.4,
@@ -861,12 +869,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 4),
     Row(
       children: [
-        const SizedBox(width: 90, child: Text('Font')),
+        SizedBox(width: 90, child: Text(context.l10n.settingsFont)),
         Expanded(
           child: Wrap(
             spacing: 8,
             children: [
-              _fontChip('System', null),
+              _fontChip(context.l10n.settingsFontSystem, null),
               _fontChip('Serif', 'serif'),
               _fontChip('Mono', kMonoFont),
             ],
@@ -879,11 +887,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       contentPadding: EdgeInsets.zero,
       dense: true,
       value: _reHostImages,
-      title: const Text('Re-host network images'),
-      subtitle: const Text(
-        'Pasted image links are saved into Mica storage. Off: keep '
-        'them as standard external Markdown links.',
-      ),
+      title: Text(context.l10n.settingsReHostImages),
+      subtitle: Text(context.l10n.settingsReHostImagesSub),
       onChanged: (value) {
         setState(() => _reHostImages = value);
         widget.onReHostImagesChanged(value);
@@ -893,10 +898,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       contentPadding: EdgeInsets.zero,
       dense: true,
       value: _showFormatBar,
-      title: const Text('Formatting toolbar'),
-      subtitle: const Text(
-        'Show a toolbar of common Markdown actions above the page.',
-      ),
+      title: Text(context.l10n.settingsFormatBar),
+      subtitle: Text(context.l10n.settingsFormatBarSub),
       onChanged: (value) {
         setState(() => _showFormatBar = value);
         widget.onShowFormatBarChanged(value);
@@ -906,11 +909,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       contentPadding: EdgeInsets.zero,
       dense: true,
       value: _showPageTitle,
-      title: const Text('Page title'),
-      subtitle: const Text(
-        'Show the page title at the top of the page. Hidden, pages start '
-        'straight at the first line.',
-      ),
+      title: Text(context.l10n.settingsPageTitle),
+      subtitle: Text(context.l10n.settingsPageTitleSub),
       onChanged: (value) {
         setState(() => _showPageTitle = value);
         widget.onShowPageTitleChanged(value);
@@ -920,9 +920,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // no app code can intercept it.
     if (!kIsWeb) ...[
       const SizedBox(height: 8),
-      const Text(
-        '关闭窗口时',
-        style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF64748B)),
+      Text(
+        context.l10n.closeWindowHeader,
+        style: const TextStyle(
+          fontWeight: FontWeight.w600,
+          color: Color(0xFF64748B),
+        ),
       ),
       // RadioGroup, not per-tile groupValue/onChanged — those were deprecated
       // after Flutter 3.32 in favour of this ancestor.
@@ -958,28 +961,29 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// Tray is Windows-only for now (see `trayIsSupported`): where it is not
   /// available, offering it would promise a restore path we cannot deliver.
   List<(String, String, String)> get _closeBehaviorOptions => [
-    (kCloseQuit, '退出 Mica', '关闭窗口即退出程序(默认行为)。'),
-    (kCloseMinimize, '最小化到任务栏', '窗口收起,程序继续运行,点任务栏图标回来。'),
+    (kCloseQuit, context.l10n.closeQuitTitle, context.l10n.closeQuitSub),
+    (
+      kCloseMinimize,
+      context.l10n.closeMinimizeTitle,
+      context.l10n.closeMinimizeSub,
+    ),
     if (trayIsSupported)
-      (kCloseTray, '最小化到系统托盘', '窗口隐藏,只在右下角托盘留图标;点图标或右键菜单回来。'),
+      (kCloseTray, context.l10n.closeTrayTitle, context.l10n.closeTraySub),
   ];
 
   List<Widget> _aiSection(BuildContext context) => [
     _sectionTitle(
       context,
       Icons.auto_awesome,
-      'AI provider',
+      context.l10n.settingsAiProvider,
       const Color(0xFF7C3AED),
     ),
     SwitchListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
       value: _aiEnabled,
-      title: const Text('Enable AI features'),
-      subtitle: const Text(
-        'Show the Ask AI button and the /ai command. They appear only '
-        'when this is on and a provider below is configured.',
-      ),
+      title: Text(context.l10n.aiEnable),
+      subtitle: Text(context.l10n.aiEnableSub),
       onChanged: (value) {
         setState(() => _aiEnabled = value);
         widget.onAiEnabledChanged(value);
@@ -988,9 +992,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     DropdownButtonFormField<_AiPreset>(
       initialValue: _preset,
-      decoration: const InputDecoration(
-        labelText: 'Provider',
-        border: OutlineInputBorder(),
+      decoration: InputDecoration(
+        labelText: context.l10n.aiProviderLabel,
+        border: const OutlineInputBorder(),
       ),
       items: _AiPreset.values
           .map(
@@ -1009,10 +1013,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       controller: _baseUrl,
       focusNode: _aiFocus[0],
       enabled: !_saving,
-      decoration: const InputDecoration(
-        labelText: 'API base URL',
+      decoration: InputDecoration(
+        labelText: context.l10n.aiBaseUrl,
         hintText: 'https://api.deepseek.com',
-        border: OutlineInputBorder(),
+        border: const OutlineInputBorder(),
       ),
     ),
     const SizedBox(height: 12),
@@ -1020,10 +1024,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       controller: _model,
       focusNode: _aiFocus[1],
       enabled: !_saving,
-      decoration: const InputDecoration(
-        labelText: 'Model',
+      decoration: InputDecoration(
+        labelText: context.l10n.aiModel,
         hintText: 'deepseek-chat',
-        border: OutlineInputBorder(),
+        border: const OutlineInputBorder(),
       ),
     ),
     const SizedBox(height: 12),
@@ -1033,17 +1037,16 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       enabled: !_saving,
       obscureText: true,
       decoration: InputDecoration(
-        labelText: 'API key',
+        labelText: context.l10n.aiApiKey,
         hintText: _hasKey
-            ? '•••••••• (leave blank to keep)'
-            : 'Required for hosted providers',
+            ? context.l10n.aiApiKeyHintHasKey
+            : context.l10n.aiApiKeyHintRequired,
         border: const OutlineInputBorder(),
       ),
     ),
     const SizedBox(height: 6),
     Text(
-      'Local models (Ollama, LM Studio) usually need no key. '
-      'The key is stored on the server and never returned.',
+      context.l10n.aiKeyHelp,
       style: Theme.of(
         context,
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
@@ -1055,7 +1058,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _sectionTitle(
       context,
       Icons.person_outline,
-      'Account',
+      context.l10n.settingsAccount,
       const Color(0xFF2563EB),
     ),
     const SizedBox(height: 4),
@@ -1069,9 +1072,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     TextField(
       controller: _name,
       enabled: !_accountBusy,
-      decoration: const InputDecoration(
-        labelText: 'Display name',
-        border: OutlineInputBorder(),
+      decoration: InputDecoration(
+        labelText: context.l10n.accountDisplayName,
+        border: const OutlineInputBorder(),
       ),
     ),
     const SizedBox(height: 8),
@@ -1080,7 +1083,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       child: OutlinedButton.icon(
         onPressed: _accountBusy ? null : _saveProfile,
         icon: const Icon(Icons.save, size: 16),
-        label: const Text('Save name'),
+        label: Text(context.l10n.accountSaveName),
       ),
     ),
     const SizedBox(height: 16),
@@ -1088,9 +1091,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       controller: _curPass,
       enabled: !_accountBusy,
       obscureText: true,
-      decoration: const InputDecoration(
-        labelText: 'Current password',
-        border: OutlineInputBorder(),
+      decoration: InputDecoration(
+        labelText: context.l10n.accountCurrentPassword,
+        border: const OutlineInputBorder(),
       ),
     ),
     const SizedBox(height: 8),
@@ -1098,9 +1101,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       controller: _newPass,
       enabled: !_accountBusy,
       obscureText: true,
-      decoration: const InputDecoration(
-        labelText: 'New password (min 8 chars)',
-        border: OutlineInputBorder(),
+      decoration: InputDecoration(
+        labelText: context.l10n.accountNewPassword,
+        border: const OutlineInputBorder(),
       ),
     ),
     const SizedBox(height: 8),
@@ -1109,7 +1112,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       child: OutlinedButton.icon(
         onPressed: _accountBusy ? null : _changeAccountPassword,
         icon: const Icon(Icons.lock_outline, size: 16),
-        label: const Text('Change password'),
+        label: Text(context.l10n.accountChangePassword),
       ),
     ),
     if (_accountMsg != null) ...[
@@ -1125,15 +1128,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _sectionTitle(
       context,
       Icons.import_export,
-      'Data',
+      context.l10n.settingsData,
       const Color(0xFF0EA5E9),
     ),
     const SizedBox(height: 12),
-    const Text(
-      'Import a workspace from a ZIP — a Mica export or a Notion '
-      '"Markdown & CSV" export. The page tree, ordering and images are '
-      'rebuilt.',
-      style: TextStyle(color: Color(0xFF64748B)),
+    Text(
+      context.l10n.dataImportDescription,
+      style: const TextStyle(color: Color(0xFF64748B)),
     ),
     const SizedBox(height: 12),
     Align(
@@ -1141,13 +1142,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       child: OutlinedButton.icon(
         onPressed: () => widget.onImportWorkspace(),
         icon: const Icon(Icons.upload_file_outlined, size: 18),
-        label: const Text('Import workspace (ZIP)'),
+        label: Text(context.l10n.dataImportButton),
       ),
     ),
     const SizedBox(height: 16),
     Text(
-      'Tip: export a single page or a whole workspace from the page menu (▾) '
-      'or a workspace’s ⋯ menu.',
+      context.l10n.dataExportTip,
       style: Theme.of(
         context,
       ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
@@ -1186,36 +1186,32 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ),
     );
     return [
-      head('App'),
-      row('Ctrl + N', 'New page'),
-      row('Ctrl + F', 'Find in page'),
-      row('Ctrl + Shift + F', 'Search workspace'),
-      row('Ctrl + ,', 'Open settings'),
-      row('F2', 'Rename the highlighted page/folder'),
+      head(context.l10n.shortcutsGroupApp),
+      row('Ctrl + N', context.l10n.shortcutsNewPage),
+      row('Ctrl + F', context.l10n.shortcutsFindInPage),
+      row('Ctrl + Shift + F', context.l10n.shortcutsSearchWorkspace),
+      row('Ctrl + ,', context.l10n.shortcutsOpenSettings),
+      row('F2', context.l10n.shortcutsRename),
       const SizedBox(height: 8),
-      head('Editor — format'),
-      row('Ctrl + B', 'Bold'),
-      row('Ctrl + I', 'Italic'),
-      row('Ctrl + E', 'Inline code'),
-      row('Ctrl + K', 'Link'),
-      row('Ctrl + Alt + 1…6', 'Heading 1–6'),
-      row('Ctrl + Alt + 0', 'Turn into text (paragraph)'),
-      row('Tab / Shift + Tab', 'Indent / outdent list item'),
+      head(context.l10n.shortcutsGroupFormat),
+      row('Ctrl + B', context.l10n.shortcutsBold),
+      row('Ctrl + I', context.l10n.shortcutsItalic),
+      row('Ctrl + E', context.l10n.shortcutsInlineCode),
+      row('Ctrl + K', context.l10n.shortcutsLink),
+      row('Ctrl + Alt + 1…6', context.l10n.shortcutsHeadings),
+      row('Ctrl + Alt + 0', context.l10n.shortcutsParagraph),
+      row('Tab / Shift + Tab', context.l10n.shortcutsIndent),
       const SizedBox(height: 8),
-      head('Editor — edit'),
-      row('Ctrl + Z', 'Undo'),
-      row('Ctrl + Shift + Z', 'Redo'),
-      row('Ctrl + A', 'Select all'),
-      row('Ctrl + C / X / V', 'Copy / Cut / Paste'),
-      row('Ctrl + Shift + V', 'Paste as plain text'),
-      row('/', 'Slash command menu'),
+      head(context.l10n.shortcutsGroupEdit),
+      row('Ctrl + Z', context.l10n.shortcutsUndo),
+      row('Ctrl + Shift + Z', context.l10n.shortcutsRedo),
+      row('Ctrl + A', context.l10n.shortcutsSelectAll),
+      row('Ctrl + C / X / V', context.l10n.shortcutsCopyCutPaste),
+      row('Ctrl + Shift + V', context.l10n.shortcutsPastePlain),
+      row('/', context.l10n.shortcutsSlashMenu),
       const SizedBox(height: 12),
       Text(
-        'On macOS use ⌘ in place of Ctrl. Heading shortcuts follow the '
-        'Notion/Word convention (Ctrl+Alt+N) — the web build can’t see a bare '
-        'Ctrl+N, which the browser owns for tab switching.\n'
-        'Note: Ctrl+, can be swallowed by a Chinese IME (punctuation toggle); '
-        'switch to English input if it doesn’t respond.',
+        context.l10n.shortcutsNote,
         style: Theme.of(
           context,
         ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
@@ -1235,37 +1231,37 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // section commits its own changes as they are made.
     final tabs = <({String title, IconData icon, List<Widget> section})>[
       (
-        title: 'Appearance',
+        title: context.l10n.settingsAppearance,
         icon: Icons.tune,
         section: _appearanceSection(context),
       ),
       // AI settings live on the server — 本地模式 has none to configure.
       if (widget.onLoadAiSettings != null)
         (
-          title: 'AI provider',
+          title: context.l10n.settingsAiProvider,
           icon: Icons.auto_awesome,
           section: _aiSection(context),
         ),
       // 本地模式 has no account — same reason API Tokens below is absent there.
       if (widget.onUpdateProfile != null)
         (
-          title: 'Account',
+          title: context.l10n.settingsAccount,
           icon: Icons.person_outline,
           section: _accountSection(context),
         ),
       if (widget.onLoadTokens != null)
         (
-          title: 'API Tokens',
+          title: context.l10n.tokenTitle,
           icon: Icons.key_outlined,
           section: _tokensSection(context),
         ),
       (
-        title: 'Data',
+        title: context.l10n.settingsData,
         icon: Icons.import_export,
         section: _dataSection(context),
       ),
       (
-        title: 'Shortcuts',
+        title: context.l10n.settingsShortcuts,
         icon: Icons.keyboard_outlined,
         section: _shortcutsSection(context),
       ),
@@ -1274,11 +1270,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     final icons = [for (final t in tabs) t.icon];
     final sections = [for (final t in tabs) t.section];
     return AlertDialog(
-      title: const Row(
+      title: Row(
         children: [
-          Icon(Icons.settings_outlined, size: 22),
-          SizedBox(width: 8),
-          Text('Settings'),
+          const Icon(Icons.settings_outlined, size: 22),
+          const SizedBox(width: 8),
+          Text(context.l10n.settingsTitle),
         ],
       ),
       contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
@@ -1308,7 +1304,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                         ListTile(
                           dense: true,
                           leading: const Icon(Icons.info_outline, size: 20),
-                          title: const Text('About'),
+                          title: Text(context.l10n.aboutTitle),
                           subtitle: const Text('v$kAppVersion'),
                           onTap: () => _showAboutDialog(context),
                         ),
@@ -1349,7 +1345,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           ),
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child: Text(context.l10n.commonClose),
         ),
       ],
     );
@@ -1472,11 +1468,11 @@ class _AiDialogState extends State<_AiDialog> {
     final canWriteCurrent = widget.onCurrentPage != null;
     final hasOutput = _buffer.isNotEmpty;
     return AlertDialog(
-      title: const Row(
+      title: Row(
         children: [
-          Icon(Icons.auto_awesome, size: 22, color: Color(0xFF7C3AED)),
-          SizedBox(width: 8),
-          Text('Ask AI'),
+          const Icon(Icons.auto_awesome, size: 22, color: Color(0xFF7C3AED)),
+          const SizedBox(width: 8),
+          Text(context.l10n.aiAskTitle),
         ],
       ),
       content: SizedBox(
@@ -1491,10 +1487,9 @@ class _AiDialogState extends State<_AiDialog> {
               minLines: 2,
               maxLines: 5,
               enabled: !_busy,
-              decoration: const InputDecoration(
-                hintText:
-                    'e.g. Write a project kickoff plan with goals, milestones, and risks',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                hintText: context.l10n.aiPromptHint,
+                border: const OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
@@ -1503,7 +1498,7 @@ class _AiDialogState extends State<_AiDialog> {
               children: [
                 if (widget.canEdit)
                   ChoiceChip(
-                    label: const Text('New page'),
+                    label: Text(context.l10n.aiTargetNewPage),
                     selected: _target == _AiTarget.newPage,
                     onSelected: widget.hasWorkspace && !_busy
                         ? (_) => setState(() => _target = _AiTarget.newPage)
@@ -1511,7 +1506,7 @@ class _AiDialogState extends State<_AiDialog> {
                   ),
                 if (widget.canEdit && canWriteCurrent)
                   ChoiceChip(
-                    label: const Text('Current page'),
+                    label: Text(context.l10n.aiTargetCurrentPage),
                     selected: _target == _AiTarget.currentPage,
                     onSelected: _busy
                         ? null
@@ -1519,7 +1514,7 @@ class _AiDialogState extends State<_AiDialog> {
                               setState(() => _target = _AiTarget.currentPage),
                   ),
                 ChoiceChip(
-                  label: const Text('New workspace'),
+                  label: Text(context.l10n.aiTargetNewWorkspace),
                   selected: _target == _AiTarget.newWorkspace,
                   onSelected: _busy
                       ? null
@@ -1556,11 +1551,11 @@ class _AiDialogState extends State<_AiDialog> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                     const SizedBox(width: 8),
-                    const Text('Generating…'),
+                    Text(context.l10n.aiGenerating),
                   ] else if (_done)
-                    const Text(
-                      'Done — review, then insert.',
-                      style: TextStyle(color: Color(0xFF64748B)),
+                    Text(
+                      context.l10n.aiDoneReview,
+                      style: const TextStyle(color: Color(0xFF64748B)),
                     ),
                 ],
               ),
@@ -1575,19 +1570,21 @@ class _AiDialogState extends State<_AiDialog> {
       actions: [
         TextButton(
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.l10n.commonCancel),
         ),
         if (!_done)
           FilledButton.icon(
             onPressed: _busy ? null : _generate,
             icon: const Icon(Icons.auto_awesome, size: 18),
-            label: Text(hasOutput ? 'Regenerate' : 'Generate'),
+            label: Text(
+              hasOutput ? context.l10n.aiRegenerate : context.l10n.aiGenerate,
+            ),
           )
         else ...[
           TextButton.icon(
             onPressed: _applying ? null : _generate,
             icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('Regenerate'),
+            label: Text(context.l10n.aiRegenerate),
           ),
           FilledButton.icon(
             onPressed: _applying ? null : _apply,
@@ -1598,7 +1595,7 @@ class _AiDialogState extends State<_AiDialog> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.check, size: 18),
-            label: const Text('Insert'),
+            label: Text(context.l10n.aiInsert),
           ),
         ],
       ],
@@ -1664,6 +1661,7 @@ class _ShareDialogState extends State<_ShareDialog> {
   }
 
   Future<void> _toggle(bool on) async {
+    final l10n = context.l10n;
     setState(() => _busy = true);
     try {
       if (on) {
@@ -1682,7 +1680,7 @@ class _ShareDialogState extends State<_ShareDialog> {
         });
       }
     } catch (error) {
-      _snack('操作失败: $error');
+      _snack(l10n.shareActionFailed(error.toString()));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1692,7 +1690,7 @@ class _ShareDialogState extends State<_ShareDialog> {
     final url = _url;
     if (url == null) return;
     Clipboard.setData(ClipboardData(text: url));
-    _snack('链接已复制');
+    _snack(context.l10n.shareLinkCopied);
   }
 
   void _snack(String message) {
@@ -1705,7 +1703,7 @@ class _ShareDialogState extends State<_ShareDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('分享'),
+      title: Text(context.l10n.shareTitle),
       content: SizedBox(
         width: 440,
         child: _loading
@@ -1714,7 +1712,10 @@ class _ShareDialogState extends State<_ShareDialog> {
                 child: Center(child: CircularProgressIndicator()),
               )
             : _error != null
-            ? SizedBox(height: 80, child: Center(child: Text('加载失败: $_error')))
+            ? SizedBox(
+                height: 80,
+                child: Center(child: Text(context.l10n.shareLoadFailed(_error!))),
+              )
             : Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1723,8 +1724,8 @@ class _ShareDialogState extends State<_ShareDialog> {
                     contentPadding: EdgeInsets.zero,
                     value: _shared,
                     onChanged: _busy ? null : _toggle,
-                    title: const Text('公开访问'),
-                    subtitle: const Text('任何有链接的人都能只读查看,无需登录'),
+                    title: Text(context.l10n.sharePublicAccess),
+                    subtitle: Text(context.l10n.sharePublicAccessSub),
                   ),
                   if (_shared && _url != null) ...[
                     const SizedBox(height: 12),
@@ -1747,7 +1748,7 @@ class _ShareDialogState extends State<_ShareDialog> {
                             ),
                           ),
                           IconButton(
-                            tooltip: '复制链接',
+                            tooltip: context.l10n.shareCopyLink,
                             icon: const Icon(Icons.copy, size: 18),
                             onPressed: _copy,
                           ),
@@ -1761,7 +1762,7 @@ class _ShareDialogState extends State<_ShareDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('关闭'),
+          child: Text(context.l10n.commonClose),
         ),
       ],
     );
@@ -1821,37 +1822,36 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
   }
 
   Future<void> _createCheckpoint() async {
+    final l10n = context.l10n;
     final name = await _promptName();
     if (name == null || name.trim().isEmpty) return;
     setState(() => _busy = true);
     try {
       await widget.onCreate(name.trim());
       await _refresh();
-      _snack('已保存检查点');
+      _snack(l10n.versionCheckpointSaved);
     } catch (error) {
-      _snack('保存失败: $error');
+      _snack(l10n.versionSaveFailed(error.toString()));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _restore(DocVersion version) async {
+    final l10n = context.l10n;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('恢复到这个版本?'),
-        content: Text(
-          '把当前页恢复到「${version.name}」。这本身也是一次可撤销的编辑 —— '
-          '恢复后再存个检查点就能回到现在。',
-        ),
+        title: Text(context.l10n.versionRestoreConfirmTitle),
+        content: Text(context.l10n.versionRestoreConfirmBody(version.name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('恢复'),
+            child: Text(context.l10n.versionRestore),
           ),
         ],
       ),
@@ -1861,10 +1861,10 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     try {
       await widget.onRestore(version.id);
       if (!mounted) return;
-      _snack('已恢复到「${version.name}」');
+      _snack(l10n.versionRestored(version.name));
       Navigator.of(context).pop();
     } catch (error) {
-      _snack('恢复失败: $error');
+      _snack(l10n.versionRestoreFailed(error.toString()));
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -1874,23 +1874,23 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('保存检查点'),
+        title: Text(context.l10n.versionSaveCheckpoint),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '给这个版本起个名字,如「改版前」',
+          decoration: InputDecoration(
+            hintText: context.l10n.versionNameHint,
           ),
           onSubmitted: (v) => Navigator.pop(context, v),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('保存'),
+            child: Text(context.l10n.commonSave),
           ),
         ],
       ),
@@ -1909,12 +1909,12 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Text('版本历史'),
+          Text(context.l10n.versionHistoryTitle),
           const Spacer(),
           TextButton.icon(
             onPressed: _busy ? null : _createCheckpoint,
             icon: const Icon(Icons.bookmark_add_outlined, size: 18),
-            label: const Text('保存检查点'),
+            label: Text(context.l10n.versionSaveCheckpoint),
           ),
         ],
       ),
@@ -1924,11 +1924,11 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error != null
-            ? Center(child: Text('加载失败: $_error'))
+            ? Center(child: Text(context.l10n.versionLoadFailed(_error!)))
             : _versions.isEmpty
-            ? const Center(
+            ? Center(
                 child: Text(
-                  '还没有版本。\n点右上角「保存检查点」把当前状态存下来。',
+                  context.l10n.versionEmpty,
                   textAlign: TextAlign.center,
                 ),
               )
@@ -1948,7 +1948,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
                     subtitle: Text(_formatTime(v.createdAt)),
                     trailing: TextButton(
                       onPressed: _busy ? null : () => _restore(v),
-                      child: const Text('恢复'),
+                      child: Text(context.l10n.versionRestore),
                     ),
                   );
                 },
@@ -1957,7 +1957,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('关闭'),
+          child: Text(context.l10n.commonClose),
         ),
       ],
     );
@@ -2033,10 +2033,10 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
         children: [
           const Icon(Icons.delete_outline, size: 22),
           const SizedBox(width: 8),
-          const Text('Recycle bin'),
+          Text(context.l10n.recycleBinTitle),
           const Spacer(),
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: context.l10n.recycleRefresh,
             onPressed: _loading ? null : _refresh,
             icon: const Icon(Icons.refresh, size: 20),
           ),
@@ -2046,7 +2046,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child: Text(context.l10n.commonClose),
         ),
       ],
     );
@@ -2060,10 +2060,10 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
       return Center(child: ErrorBanner(_error!));
     }
     if (_roots.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.delete_outline,
-        title: 'Recycle bin is empty',
-        detail: 'Deleted pages appear here and can be restored.',
+        title: context.l10n.recycleEmpty,
+        detail: context.l10n.recycleEmptyDetail,
       );
     }
     return ListView.separated(
@@ -2079,7 +2079,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                tooltip: 'Restore',
+                tooltip: context.l10n.recycleRestore,
                 icon: const Icon(Icons.restore, size: 20),
                 onPressed: () async {
                   await widget.onRestore(view);
@@ -2087,7 +2087,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
                 },
               ),
               IconButton(
-                tooltip: 'Delete forever',
+                tooltip: context.l10n.recycleDeleteForever,
                 color: const Color(0xFFDC2626),
                 icon: const Icon(Icons.delete_forever, size: 20),
                 onPressed: () async {

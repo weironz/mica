@@ -119,18 +119,18 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             menuChildren: [
               _importChoice(
                 Icons.folder_zip_outlined,
-                'From ZIP (Mica export)',
+                context.l10n.workspaceRowImportFromZip,
                 notion: false,
               ),
               _importChoice(
                 Icons.cloud_download_outlined,
-                'From Notion (Markdown & CSV ZIP)',
+                context.l10n.workspaceRowImportFromNotion,
                 notion: true,
               ),
             ],
-            child: const Text(
-              'Import workspace',
-              style: TextStyle(
+            child: Text(
+              context.l10n.workspaceRowImportWorkspace,
+              style: const TextStyle(
                 color: Color(0xFF475569),
                 fontWeight: FontWeight.w600,
               ),
@@ -139,7 +139,9 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         ),
       ],
       builder: (context, controller, child) {
-        final label = _selectedEntry?.workspace.name ?? 'Select workspace';
+        final label =
+            _selectedEntry?.workspace.name ??
+            context.l10n.workspaceRowSelectWorkspace;
         return SizedBox(
           width: double.infinity,
           child: OutlinedButton(
@@ -191,15 +193,15 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           _menu.close();
           widget.onSignIn?.call();
         },
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              Icon(Icons.login, size: 18, color: Color(0xFF2563EB)),
-              SizedBox(width: 10),
+              const Icon(Icons.login, size: 18, color: Color(0xFF2563EB)),
+              const SizedBox(width: 10),
               Text(
-                '登录云端…',
-                style: TextStyle(
+                context.l10n.workspaceRowSignInCloud,
+                style: const TextStyle(
                   color: Color(0xFF2563EB),
                   fontWeight: FontWeight.w600,
                 ),
@@ -264,12 +266,12 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             menuChildren: [
               _wsAction(
                 Icons.edit_outlined,
-                'Rename',
+                context.l10n.commonRename,
                 () => widget.onRename(entry),
               ),
               _wsAction(
                 Icons.folder_zip_outlined,
-                'Export (ZIP)',
+                context.l10n.workspaceRowExportZip,
                 () => widget.onExport(entry),
               ),
               // One Import entry; the native picker can't mix files and
@@ -283,38 +285,38 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 menuChildren: [
                   _wsAction(
                     Icons.upload_file_outlined,
-                    'Files (.md / .zip)',
+                    context.l10n.workspaceRowImportFiles,
                     () => widget.onImportFilesInto(entry),
                   ),
                   _wsAction(
                     Icons.drive_folder_upload_outlined,
-                    'Folder',
+                    context.l10n.workspaceRowImportFolder,
                     () => widget.onImportFolderInto(entry),
                   ),
                 ],
-                child: const Text('Import'),
+                child: Text(context.l10n.commonImport),
               ),
               if (entry.isLocal && widget.onMigrate != null)
                 _wsAction(
                   Icons.cloud_upload_outlined,
-                  '上云…',
+                  context.l10n.workspaceRowMigrate,
                   () => widget.onMigrate!(entry),
                 ),
               if (!entry.isLocal && widget.onDetach != null)
                 _wsAction(
                   Icons.computer_outlined,
-                  '转为本地副本…',
+                  context.l10n.workspaceRowDetach,
                   () => widget.onDetach!(entry),
                 ),
               _wsAction(
                 Icons.delete_outline,
-                'Delete',
+                context.l10n.commonDelete,
                 () => widget.onDelete(entry),
                 color: const Color(0xFFDC2626),
               ),
             ],
             builder: (context, controller, child) => IconButton(
-              tooltip: 'Workspace menu',
+              tooltip: context.l10n.workspaceRowMenu,
               icon: const Icon(Icons.more_horiz, size: 18),
               onPressed: () =>
                   controller.isOpen ? controller.close() : controller.open(),
@@ -334,15 +336,15 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           _menu.close();
           widget.onCreate();
         },
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             children: [
-              Icon(Icons.add, size: 18, color: Color(0xFF2563EB)),
-              SizedBox(width: 10),
+              const Icon(Icons.add, size: 18, color: Color(0xFF2563EB)),
+              const SizedBox(width: 10),
               Text(
-                'New workspace',
-                style: TextStyle(
+                context.l10n.workspaceRowNewWorkspace,
+                style: const TextStyle(
                   color: Color(0xFF2563EB),
                   fontWeight: FontWeight.w600,
                 ),
@@ -477,9 +479,9 @@ class MemberListItem extends StatelessWidget {
                 width: 150,
                 child: DropdownButtonFormField<WorkspaceRole>(
                   initialValue: WorkspaceRole.fromApiValue(member.role),
-                  decoration: const InputDecoration(
-                    labelText: 'Role',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: context.l10n.widgetRoleLabel,
+                    border: const OutlineInputBorder(),
                   ),
                   items: WorkspaceRole.values
                       .map(
@@ -500,7 +502,7 @@ class MemberListItem extends StatelessWidget {
               Chip(label: Text(member.role)),
             const SizedBox(width: 8),
             IconButton(
-              tooltip: 'Remove',
+              tooltip: context.l10n.commonRemove,
               onPressed: canManage && canRemove ? onRemove : null,
               icon: const Icon(Icons.delete_outline),
             ),
@@ -551,22 +553,22 @@ class BlockListItem extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(child: _contentFor(context, kind)),
             IconButton(
-              tooltip: 'Move up',
+              tooltip: context.l10n.rowMoveUp,
               onPressed: canMoveUp ? onMoveUp : null,
               icon: const Icon(Icons.arrow_upward),
             ),
             IconButton(
-              tooltip: 'Move down',
+              tooltip: context.l10n.rowMoveDown,
               onPressed: canMoveDown ? onMoveDown : null,
               icon: const Icon(Icons.arrow_downward),
             ),
             IconButton(
-              tooltip: 'Edit',
+              tooltip: context.l10n.rowEdit,
               onPressed: onEdit,
               icon: const Icon(Icons.edit_outlined),
             ),
             IconButton(
-              tooltip: 'Delete',
+              tooltip: context.l10n.commonDelete,
               onPressed: onDelete,
               icon: const Icon(Icons.delete_outline),
             ),
@@ -577,7 +579,7 @@ class BlockListItem extends StatelessWidget {
   }
 
   Widget _contentFor(BuildContext context, DocumentBlockKind kind) {
-    final text = block.text.isEmpty ? '(empty)' : block.text;
+    final text = block.text.isEmpty ? context.l10n.widgetEmptyBlock : block.text;
     switch (kind) {
       case DocumentBlockKind.heading:
         return SelectableText(
@@ -827,46 +829,54 @@ class _DocumentListItemState extends State<DocumentListItem> {
         // A page is a leaf: only folders can hold children, so the two
         // "new child" entries appear on folder rows only.
         if (widget._isFolder) ...[
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'child',
-            child: _MenuRow(icon: Icons.add, label: '新建子页面'),
+            child: _MenuRow(
+              icon: Icons.add,
+              label: context.l10n.rowNewChildPage,
+            ),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'childFolder',
             child: _MenuRow(
               icon: Icons.create_new_folder_outlined,
-              label: '新建子文件夹',
+              label: context.l10n.rowNewChildFolder,
             ),
           ),
         ],
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'rename',
-          child: _MenuRow(icon: Icons.edit_outlined, label: '重命名'),
+          child: _MenuRow(
+            icon: Icons.edit_outlined,
+            label: context.l10n.commonRename,
+          ),
         ),
         if (widget.hasChildren)
           PopupMenuItem(
             value: 'toggle',
             child: _MenuRow(
               icon: widget.isCollapsed ? Icons.unfold_more : Icons.unfold_less,
-              label: widget.isCollapsed ? '展开子项' : '收起子项',
+              label: widget.isCollapsed
+                  ? context.l10n.rowExpandChildren
+                  : context.l10n.rowCollapseChildren,
             ),
           ),
         // Folder subtree -> ZIP, same as a page or a workspace. Every level
         // exports the same way and carries its images; see onExportFolder.
         if (widget._isFolder && widget.onExportFolder != null)
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'export',
             child: _MenuRow(
               icon: Icons.folder_zip_outlined,
-              label: '导出(ZIP,含图片)',
+              label: context.l10n.rowExportZipImages,
             ),
           ),
         const PopupMenuDivider(),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'delete',
           child: _MenuRow(
             icon: Icons.delete_outline,
-            label: '删除',
+            label: context.l10n.commonDelete,
             danger: true,
           ),
         ),
@@ -925,7 +935,9 @@ class _DocumentListItemState extends State<DocumentListItem> {
                         ? Opacity(
                             opacity: (w.revealToggle || _hovered) ? 1.0 : 0.0,
                             child: IconButton(
-                              tooltip: w.isCollapsed ? 'Expand' : 'Collapse',
+                              tooltip: w.isCollapsed
+                                  ? context.l10n.rowExpand
+                                  : context.l10n.rowCollapse,
                               onPressed: w.onToggle,
                               padding: EdgeInsets.zero,
                               iconSize: 18,
@@ -993,7 +1005,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                       height: 30,
                       child: Builder(
                         builder: (btnCtx) => IconButton(
-                          tooltip: '删除、重命名等',
+                          tooltip: context.l10n.rowMoreActions,
                           onPressed: () => _openMenu(btnCtx),
                           padding: EdgeInsets.zero,
                           iconSize: 17,
@@ -1009,7 +1021,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                         width: 28,
                         height: 30,
                         child: IconButton(
-                          tooltip: '新建子页面',
+                          tooltip: context.l10n.rowNewChildPage,
                           onPressed: w.onCreateChild,
                           padding: EdgeInsets.zero,
                           iconSize: 17,
@@ -1020,7 +1032,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                         width: 28,
                         height: 30,
                         child: IconButton(
-                          tooltip: '新建子文件夹',
+                          tooltip: context.l10n.rowNewChildFolder,
                           onPressed: w.onCreateChildFolder,
                           padding: EdgeInsets.zero,
                           iconSize: 17,
@@ -1198,7 +1210,7 @@ class _PresenceBar extends StatelessWidget {
           ),
         const SizedBox(width: 4),
         Text(
-          presence.length == 1 ? '1 editing' : '${presence.length} editing',
+          context.l10n.presenceEditing(presence.length),
           style: Theme.of(
             context,
           ).textTheme.bodySmall?.copyWith(color: const Color(0xFF16A34A)),
@@ -1258,16 +1270,16 @@ class _UpdateCheckerState extends State<UpdateChecker> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('更新到 v${info.version}'),
-        content: const Text('将下载安装包，然后自动关闭并重启 Mica 完成更新。是否继续?'),
+        title: Text(context.l10n.updateDialogTitle(info.version)),
+        content: Text(context.l10n.updateDialogBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('更新并重启'),
+            child: Text(context.l10n.updateAndRestart),
           ),
         ],
       ),
@@ -1302,21 +1314,21 @@ class _UpdateCheckerState extends State<UpdateChecker> {
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(
             icon: const Icon(Icons.system_update_alt, size: 18),
-            label: const Text('检查更新'),
+            label: Text(context.l10n.updateCheck),
             onPressed: _check,
           ),
         );
       case _UpdateStage.checking:
-        return const Row(
+        return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
+            const SizedBox(
               width: 16,
               height: 16,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            SizedBox(width: 10),
-            Text('检查中…'),
+            const SizedBox(width: 10),
+            Text(context.l10n.updateChecking),
           ],
         );
       case _UpdateStage.upToDate:
@@ -1328,9 +1340,9 @@ class _UpdateCheckerState extends State<UpdateChecker> {
               color: Color(0xFF16A34A),
             ),
             const SizedBox(width: 8),
-            const Text('已是最新版本 (v$kAppVersion)'),
+            Text(context.l10n.updateUpToDate(kAppVersion)),
             const Spacer(),
-            TextButton(onPressed: _check, child: const Text('重新检查')),
+            TextButton(onPressed: _check, child: Text(context.l10n.updateRecheck)),
           ],
         );
       case _UpdateStage.available:
@@ -1347,7 +1359,9 @@ class _UpdateCheckerState extends State<UpdateChecker> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text('发现新版本 v${info.version}（当前 v$kAppVersion）'),
+                  child: Text(
+                    context.l10n.updateFound(info.version, kAppVersion),
+                  ),
                 ),
               ],
             ),
@@ -1356,7 +1370,7 @@ class _UpdateCheckerState extends State<UpdateChecker> {
               alignment: Alignment.centerLeft,
               child: FilledButton.icon(
                 icon: const Icon(Icons.download, size: 18),
-                label: const Text('立即更新'),
+                label: Text(context.l10n.updateNow),
                 onPressed: _update,
               ),
             ),
@@ -1366,13 +1380,13 @@ class _UpdateCheckerState extends State<UpdateChecker> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('下载中 ${(_progress * 100).round()}%…'),
+            Text(context.l10n.updateDownloading((_progress * 100).round())),
             const SizedBox(height: 8),
             LinearProgressIndicator(value: _progress > 0 ? _progress : null),
             const SizedBox(height: 6),
-            const Text(
-              '完成后会自动关闭并重启 Mica。',
-              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            Text(
+              context.l10n.updateWillRestart,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
             ),
           ],
         );
@@ -1390,7 +1404,7 @@ class _UpdateCheckerState extends State<UpdateChecker> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '操作失败：${_error ?? ''}',
+                    context.l10n.updateFailed(_error ?? ''),
                     style: const TextStyle(fontSize: 13),
                   ),
                 ),
@@ -1399,7 +1413,7 @@ class _UpdateCheckerState extends State<UpdateChecker> {
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
-              child: TextButton(onPressed: _check, child: const Text('重试')),
+              child: TextButton(onPressed: _check, child: Text(context.l10n.commonRetry)),
             ),
           ],
         );
