@@ -585,6 +585,15 @@ class CloudSyncSession {
     });
   }
 
+  /// Parity with the io variant so `main.dart`'s exit-flush hook compiles on web.
+  /// The desktop exit(0) path is the only caller (window_setup_desktop); on web
+  /// the browser owns tab close and IndexedDB is already durable, so this never
+  /// fires here — but it must exist for the shared `_cloudSession?.flushForExit()`.
+  void flushForExit() {
+    if (_disposed) return;
+    _persistNow();
+  }
+
   void dispose() {
     // Best-effort flush + synchronous persist before closing (C1/C2 parity).
     if (!_disposed && _channel != null && _ready) {
