@@ -4,7 +4,9 @@
 // always-on icons.
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart';
 
 DocumentView _view({String name = 'A long page name that would truncate'}) =>
@@ -17,8 +19,17 @@ DocumentView _view({String name = 'A long page name that would truncate'}) =>
       position: '0000000010',
     );
 
-Widget _host(DocumentListItem item) =>
-    MaterialApp(home: Scaffold(body: SizedBox(width: 280, child: item)));
+// The row reads its tooltips/menu labels through `context.l10n`, which is
+// `AppLocalizations.of(context)!` — without the delegates every test here dies
+// on that null check, so the host must localize exactly like the real app.
+Widget _host(DocumentListItem item) => MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      // Pinned: the menu assertions below name their labels in Chinese, so the
+      // host must not drift to whatever locale the test binding defaults to.
+      locale: const Locale('zh'),
+      home: Scaffold(body: SizedBox(width: 280, child: item)),
+    );
 
 void main() {
   testWidgets('actions are hidden until the row is hovered', (tester) async {
@@ -381,6 +392,39 @@ void main() {
     FocusManager.instance.primaryFocus?.unfocus(); // click-away
     await tester.pumpAndSettle();
     expect(submits, 1);
+  });
+
+  // Esc must back out of the inline field (the create-then-name flow) without
+  // committing — otherwise the only exits are Enter and blur, and blur COMMITS,
+  // so a mistyped new page name would have no way out.
+  testWidgets('Esc cancels the inline field without committing',
+      (tester) async {
+    var cancels = 0;
+    var submits = 0;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(name: 'Untitled'),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: true,
+      onRenameSubmit: (_) => submits++,
+      onRenameCancel: () => cancels++,
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onDelete: () {},
+    )));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'typed but unwanted');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(cancels, 1, reason: 'Esc should cancel');
+    expect(submits, 0, reason: 'Esc must not commit');
   });
 
   // Pins the "rename is F2, never double-click" decision (docs/shortcuts.md).

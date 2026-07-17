@@ -3942,6 +3942,74 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 }
 
+/// The rename dialog, as a widget that OWNS its controller.
+///
+/// It must own it: disposing a controller right after `showDialog` returns —
+/// the obvious spelling, and what the workspace dialogs above still do — throws
+/// in debug. The pop only *starts* the exit transition, and that transition
+/// rebuilds the field, which re-`addListener`s the controller you just killed
+/// (`ChangeNotifier.debugAssertNotDisposed`, seen as a red screen on cancel).
+/// State.dispose runs after the route is really gone, so it is the safe hook.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.initialName)
+        ..selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: widget.initialName.length,
+        );
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop(_ctrl.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return AlertDialog(
+      title: Text(l10n.commonRename),
+      content: SizedBox(
+        // Wide enough for a real page name; the sidebar row it replaces is
+        // ~180px and is pinned to the screen edge, which is the whole reason
+        // this is a dialog.
+        width: 400,
+        child: TextField(
+          controller: _ctrl,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: l10n.renameNameLabel,
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (_) => _submit(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.commonCancel),
+        ),
+        FilledButton.icon(
+          onPressed: _submit,
+          icon: const Icon(Icons.save),
+          label: Text(l10n.commonSave),
+        ),
+      ],
+    );
+  }
+}
+
 class SidePanel extends StatefulWidget {
   const SidePanel({
     required this.session,
@@ -5480,7 +5548,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onTransferCopy: widget.onTransfer == null
               ? null
               : () => widget.onTransfer!(item.view, true),
-          onRename: () => _beginRename(item.view),
+          onRename: () => _promptRenameView(item.view),
           onRenameSubmit: (name) => _commitRename(item.view, name),
           onRenameCancel: _cancelRename,
           onDelete: () => widget.onDeleteView(item.view),
@@ -6719,14 +6787,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  // ── Inline rename (no dialog) ──────────────────────────────────────────────
-  // The sidebar row renders a focused TextField for `_renamingViewId`; these
-  // drive it. Renaming starts from the row's "重命名" action, from F2 (see
-  // `_renameLocated`), or automatically right after creating a page/folder
-  // (see `_createThenRename`).
+  // ── Rename ─────────────────────────────────────────────────────────────────
+  // Two shapes, split by operation:
+  //  - Renaming an EXISTING row (row menu / F2) opens a centered dialog. An
+  //    inline field can't edit a long name: the sidebar is narrow AND flush
+  //    against the screen's left edge, and a TextField only scrolls in
+  //    proportion to how far the pointer is dragged past its edge — so the
+  //    pointer hits x=0 while the name's head is still off-screen, and you can
+  //    never select back to it. A centered dialog has drag room on both sides.
+  //    (AppFlowy renames through a centered dialog for every view, for the
+  //    same reason; nobody in the field auto-widens an inline field.)
+  //  - Naming a JUST-CREATED row stays inline (`_createThenRename`) — that name
+  //    is empty, so it cannot overflow, and a dialog per create is heavier.
+  // `_renamingViewId` therefore only ever drives the create-then-name flow.
 
-  void _beginRename(DocumentView view) {
-    setState(() => _renamingViewId = view.id);
+  /// Rename [view] through a centered dialog ([_RenameDialog]), pre-filled and
+  /// select-all so the common "replace the whole name" case is still one
+  /// keystroke.
+  Future<void> _promptRenameView(DocumentView view) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameDialog(initialName: view.name),
+    );
+    if (name == null || !mounted) return; // cancelled / Esc → no change
+    await _commitRename(view, name);
   }
 
   /// F2: rename the highlighted sidebar row — the located node, i.e. the same
@@ -6738,12 +6822,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (view == null) return;
     // The located row can sit inside a collapsed parent — switching workspaces
     // re-opens its doc but restores the remembered (possibly all-collapsed)
-    // expand state. An unbuilt row has no TextField to focus, so F2 would look
-    // dead; reveal it first.
+    // expand state. Reveal it so the row being renamed is actually on screen
+    // behind the dialog.
     setState(() {
       if (_revealAncestors(view.id)) _saveExpanded();
     });
-    _beginRename(view);
+    _promptRenameView(view);
   }
 
   void _cancelRename() {

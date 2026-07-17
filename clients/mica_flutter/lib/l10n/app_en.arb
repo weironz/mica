@@ -29,6 +29,7 @@
   "commonConfirm": "Confirm",
   "commonOk": "OK",
   "commonRename": "Rename",
+  "renameNameLabel": "Name",
   "commonExport": "Export",
   "commonImport": "Import",
   "commonCopy": "Copy",

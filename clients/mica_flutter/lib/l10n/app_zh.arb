@@ -23,6 +23,7 @@
   "commonConfirm": "确认",
   "commonOk": "确定",
   "commonRename": "重命名",
+  "renameNameLabel": "名称",
   "commonExport": "导出",
   "commonImport": "导入",
   "commonCopy": "复制",
