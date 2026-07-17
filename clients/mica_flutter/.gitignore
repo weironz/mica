@@ -46,3 +46,7 @@ app.*.map.json
 
 # yjs bundle build artifacts (the built web/yjs_bundle.js IS committed)
 tool/yjs/node_modules/
+
+# Generated localizations (gen-l10n from lib/l10n/*.arb; regenerated on build)
+/lib/l10n/app_localizations.dart
+/lib/l10n/app_localizations_*.dart
