@@ -314,5 +314,160 @@
   "recycleEmpty": "Recycle bin is empty",
   "recycleEmptyDetail": "Deleted pages appear here and can be restored.",
   "recycleRestore": "Restore",
-  "recycleDeleteForever": "Delete forever"
+  "recycleDeleteForever": "Delete forever",
+  "loginActionLogin": "Login",
+  "loginActionRegister": "Register",
+  "loginEmailLabel": "Email",
+  "loginPasswordLabel": "Password",
+  "loginEmptyDetail": "Sign in to open your workspace.",
+  "workspaceTitle": "Workspace",
+  "workspaceNameLabel": "Workspace name",
+  "workspaceCreate": "Create",
+  "workspaceRename": "Rename workspace",
+  "workspaceDeleteTitle": "Delete workspace",
+  "workspaceDeleteConfirm": "Delete \"{name}\" and all of its pages? This cannot be undone.",
+  "@workspaceDeleteConfirm": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "workspaceSettings": "Workspace settings",
+  "workspaceMembers": "Members",
+  "workspaceNoMembers": "No members loaded.",
+  "workspaceMemberEmail": "Member email",
+  "workspaceMemberAdd": "Add",
+  "workspaceCloudNeedsSignIn": "Sign in to create a cloud workspace.",
+  "workspaceKindLocal": "Local",
+  "workspaceKindCloud": "Cloud",
+  "workspaceDefaultName": "Workspace",
+  "workspaceSelectFirst": "Select a workspace first.",
+  "pageWelcomeName": "Welcome",
+  "folderNewDefault": "New folder",
+  "sidebarOpen": "Open sidebar",
+  "sidebarCloseDrawer": "Close sidebar",
+  "sidebarCollapse": "Collapse sidebar",
+  "sidebarExpand": "Expand sidebar",
+  "sidebarSelectWorkspaceDetail": "Pages appear after selecting a workspace.",
+  "sidebarNoPagesTitle": "No pages",
+  "sidebarNoPagesDetail": "Create a page to start writing.",
+  "accountLocalInitial": "L",
+  "accountSignInFirst": "Sign in first.",
+  "worldLocalName": "Local",
+  "serverInvalidUrl": "Enter a full server address (including https://)",
+  "serverAlreadyAdded": "This server is already in the list",
+  "serverAddRow": "Add server…",
+  "serverAddTitle": "Add server",
+  "serverUrlLabel": "Server URL",
+  "serverAdd": "Add",
+  "serverRemoveTooltip": "Remove this server",
+  "serverRemoveTitle": "Remove {host}?",
+  "@serverRemoveTitle": {
+    "placeholders": { "host": { "type": "String" } }
+  },
+  "serverRemoveBody": "This clears this server's sign-in and offline mirror on this device. Data on the server is unaffected — re-add and sign in to restore it.\n\nOffline edits not yet synced exist only on this device and will disappear with the mirror (they are pushed first, before removal).",
+  "editorSelectWorkspaceTitle": "Select a workspace",
+  "editorSelectWorkspaceDetail": "Choose a workspace and open a page from the document tree.",
+  "editorSelectPageTitle": "Select a page",
+  "editorSelectPageDetail": "Open a page from the document tree to edit it.",
+  "pageOutlineTitle": "Outline",
+  "pageOutlineEmptyDetail": "Headings in this page appear here.",
+  "pageMenu": "Page menu",
+  "pageImportMarkdown": "Import Markdown…",
+  "pageHideSidePanel": "Hide side panel",
+  "pageShowSidePanel": "Show side panel",
+  "pageRestoreCheckpoint": "Restore last checkpoint",
+  "pageRestoreCheckpointTitle": "Restore last checkpoint?",
+  "pageRestoreCheckpointBody": "This reverts the page to its last on-device checkpoint and discards changes made since. This cannot be undone.",
+  "pageSelectFirst": "Select a page first.",
+  "pageOpenFirst": "Open a page first.",
+  "pageFormatUndo": "Undo (Ctrl+Z)",
+  "pageFormatRedo": "Redo (Ctrl+Y)",
+  "pageFormatText": "Text (Ctrl+Alt+0)",
+  "pageFormatHeading1": "Heading 1 (Ctrl+Alt+1)",
+  "pageFormatHeading2": "Heading 2 (Ctrl+Alt+2)",
+  "pageFormatHeading3": "Heading 3 (Ctrl+Alt+3)",
+  "pageFormatBold": "Bold (Ctrl+B)",
+  "pageFormatItalic": "Italic (Ctrl+I)",
+  "pageFormatStrikethrough": "Strikethrough",
+  "pageFormatInlineCode": "Inline code (Ctrl+E)",
+  "pageFormatLink": "Link (Ctrl+K)",
+  "pageFormatBulletedList": "Bulleted list",
+  "pageFormatNumberedList": "Numbered list",
+  "pageFormatTodoList": "To-do list",
+  "pageFormatQuote": "Quote",
+  "pageFormatCodeBlock": "Code block",
+  "pageFormatDivider": "Divider",
+  "pageFormatTable": "Table",
+  "pageFormatImage": "Image",
+  "snackSessionExpired": "Your session expired. Please sign in again.",
+  "snackCloudSyncPaused": "Cloud sync is paused; recent edits may not be saved to the cloud yet. Retry or refresh the page.",
+  "snackDismiss": "Dismiss",
+  "snackLocalStoreOpenFailed": "Failed to open local storage: {error}",
+  "@snackLocalStoreOpenFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "snackKeepOneLocalWorkspace": "Keep at least one local workspace.",
+  "snackImageRehostFailed": "The image couldn't be saved to storage; the original link was kept (the image will be lost if the link breaks). {error}",
+  "@snackImageRehostFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "aiNotSignedIn": "Not signed in.",
+  "exportFailed": "Export failed: {error}",
+  "@exportFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "exportEmptyContent": "Export returned empty content",
+  "exportLocalUnsupported": "Local workspaces can't be exported yet; upload to the cloud first",
+  "worldMigrateNoIdentity": "Local identity unavailable; can't migrate",
+  "worldMigratedMsg": "Uploaded \"{name}\" to the cloud ({count, plural, =1{1 page} other{{count} pages}}).",
+  "@worldMigratedMsg": {
+    "placeholders": { "name": { "type": "String" }, "count": { "type": "int" } }
+  },
+  "worldDetachStoreUnavailable": "Local storage is unavailable; can't convert to local.",
+  "worldDetachedMsg": "Copied \"{name}\" to a local workspace ({count, plural, =1{1 page with content} other{{count} pages with content}}).",
+  "@worldDetachedMsg": {
+    "placeholders": { "name": { "type": "String" }, "count": { "type": "int" } }
+  },
+  "worldMigrateDoneTitle": "Upload complete",
+  "worldMigrateDoneBody": "\"{name}\" has been copied to the cloud. The local original is now an independent copy that no longer syncs with the cloud — keeping it will leave two same-named workspaces whose contents diverge.",
+  "@worldMigrateDoneBody": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "worldKeepLocalOriginal": "Keep local original",
+  "worldDeleteLocalOriginal": "Delete local original",
+  "worldDetachTitle": "Convert to local workspace",
+  "worldDetachBody": "Copy \"{name}\" as a new local workspace? The cloud original stays unchanged; the two become independent and no longer sync.",
+  "@worldDetachBody": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "worldDetachConfirm": "Copy to local",
+  "worldMigrateSignInTitle": "Connect a cloud account and migrate",
+  "worldCloudSignInTitle": "Sign in to your cloud account",
+  "worldMigrateSignInDesc": "Copy the local workspace \"{name}\" to the cloud (local data is kept).",
+  "@worldMigrateSignInDesc": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "worldCloudSignInDesc": "Sign in to access your cloud workspaces (local data is unaffected).",
+  "worldMigrateAction": "Migrate",
+  "importNotesCount": "{count, plural, =1{1 note} other{{count} notes}}",
+  "@importNotesCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "importFoldersCount": "{count, plural, =1{1 folder} other{{count} folders}}",
+  "@importFoldersCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "importListSeparator": ", ",
+  "importDone": "Imported {items}",
+  "@importDone": {
+    "placeholders": { "items": { "type": "String" } }
+  },
+  "importSkippedSuffix": " ({count} skipped)",
+  "@importSkippedSuffix": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "importNoMarkdown": "No Markdown files found",
+  "importFailed": "Import failed: {error}",
+  "@importFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "importJobFailed": "import failed"
 }

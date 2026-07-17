@@ -415,11 +415,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<String?> _addServer(String url) async {
     final parsed = Uri.tryParse(url.trim());
     if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
-      return '请输入完整的服务器地址(含 https://)';
+      return context.l10n.serverInvalidUrl;
     }
     final normalized = parsed.toString();
     if (_servers.contains(normalized)) {
-      return '这台服务器已经在列表里了';
+      return context.l10n.serverAlreadyAdded;
     }
     setState(() => _servers = [..._servers, normalized]);
     _saveServers();
@@ -631,7 +631,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _clearPersistedSession();
     setState(() {
       _session = null;
-      _message = '会话已过期,请重新登录';
+      _message = context.l10n.snackSessionExpired;
     });
     _fallBackToLocalWorld();
   }
@@ -994,13 +994,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // of failing silently (red line #1).
     if (count <= 3 || _syncBannerShown || !mounted) return;
     _syncBannerShown = true;
+    final l10n = context.l10n;
     ScaffoldMessenger.maybeOf(context)?.showMaterialBanner(
       MaterialBanner(
-        content: const Text('云同步已暂停，最近的编辑可能还没保存到云端。请重试或刷新页面。'),
+        content: Text(l10n.snackCloudSyncPaused),
         leading: const Icon(Icons.cloud_off_outlined),
         actions: [
-          TextButton(onPressed: _retryCloudSync, child: const Text('重试')),
-          TextButton(onPressed: _clearSyncBanner, child: const Text('忽略')),
+          TextButton(onPressed: _retryCloudSync, child: Text(l10n.commonRetry)),
+          TextButton(onPressed: _clearSyncBanner, child: Text(l10n.snackDismiss)),
         ],
       ),
     );
@@ -1415,7 +1416,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Stream<String> _aiStream(String prompt, {String? system}) {
     final session = _session;
     if (session == null) {
-      return Stream<String>.error(const ApiException('Not signed in.'));
+      return Stream<String>.error(ApiException(context.l10n.aiNotSignedIn));
     }
     return _api.aiStream(session.accessToken, prompt, system: system);
   }
@@ -1425,7 +1426,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final workspace = _requireWorkspace();
     final bootstrap = _selectedBootstrap;
     if (bootstrap == null) {
-      throw const ApiException('Open a page first.');
+      throw ApiException(context.l10n.pageOpenFirst);
     }
     return _api.exportDocumentZip(
       session.accessToken,
@@ -1643,6 +1644,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     bool notion = false,
     String? workspaceId,
   }) {
+    final l10n = context.l10n;
     return _run(() async {
       final session = _requireSession();
       final jobId = await _api.startWorkspaceImport(
@@ -1659,7 +1661,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         await Future<void>.delayed(const Duration(milliseconds: 600));
       }
       if (job.status == 'error') {
-        throw ApiException(job.error ?? 'import failed');
+        throw ApiException(job.error ?? l10n.importJobFailed);
       }
       final workspaces = await _api.listWorkspaces(session.accessToken);
       if (mounted) setState(() => _workspaces = workspaces);
@@ -1694,7 +1696,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final bootstrap = _selectedBootstrap;
       if (bootstrap == null) {
-        throw const ApiException('Open a page first.');
+        throw ApiException(context.l10n.pageOpenFirst);
       }
       final specs = markdownToBlocks(markdown);
       final root = bootstrap.document.rootBlockId;
@@ -1854,7 +1856,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final bootstrap = _selectedBootstrap;
     if (bootstrap == null) {
       return _run(() async {
-        throw const ApiException('Select a page first.');
+        throw ApiException(context.l10n.pageSelectFirst);
       });
     }
 
@@ -1871,7 +1873,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final bootstrap = _selectedBootstrap;
     if (bootstrap == null) {
       return _run(() async {
-        throw const ApiException('Select a page first.');
+        throw ApiException(context.l10n.pageSelectFirst);
       });
     }
 
@@ -1914,7 +1916,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final bootstrap = _selectedBootstrap;
     if (bootstrap == null) {
       return _run(() async {
-        throw const ApiException('Select a page first.');
+        throw ApiException(context.l10n.pageSelectFirst);
       });
     }
 
@@ -1936,7 +1938,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final workspace = _requireWorkspace();
       final bootstrap = _selectedBootstrap;
       if (bootstrap == null) {
-        throw const ApiException('Select a page first.');
+        throw ApiException(context.l10n.pageSelectFirst);
       }
 
       final result = await _api.applyDocumentUpdate(
@@ -2109,12 +2111,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Open the on-device store, load the page tree, and select (or seed) a page.
   Future<void> _initLocalOffline() async {
     if (_localReady) return;
+    final l10n = context.l10n;
     try {
       await _local.open();
     } catch (error) {
       if (mounted) {
         setState(() {
-          _message = '本地存储打开失败: $error';
+          _message = l10n.snackLocalStoreOpenFailed('$error');
           // Unblock the shell (P3c gates on _localReady) — the local world
           // shows empty with the error banner; the cloud world still works.
           _localReady = true;
@@ -2125,7 +2128,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _reloadLocalWorkspaces();
     _reloadLocalViews();
     if (_localViews.isEmpty) {
-      await _localCreateDocument('欢迎');
+      await _localCreateDocument(l10n.pageWelcomeName);
     } else {
       // Open the first document, skipping folders (a folder has no doc to open;
       // _localSelectView would early-return, leaving the editor blank).
@@ -2136,7 +2139,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localCreateWorkspace(String name) async {
-    final title = name.trim().isEmpty ? '工作区' : name.trim();
+    final title = name.trim().isEmpty ? context.l10n.workspaceDefaultName : name.trim();
     final id = 'ws_${DateTime.now().microsecondsSinceEpoch}';
     _local.saveWorkspace((
       id: id,
@@ -2156,7 +2159,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _reloadLocalViews();
     });
     // A new workspace starts empty — seed a first page.
-    await _localCreateDocument('欢迎');
+    await _localCreateDocument(context.l10n.pageWelcomeName);
   }
 
   Future<void> _localSelectWorkspace(Workspace workspace) async {
@@ -2206,7 +2209,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _localDeleteWorkspace(Workspace workspace) async {
     // Keep at least one workspace on the device.
     if (_localWorkspaces.length <= 1) {
-      setState(() => _message = '至少保留一个本地工作区。');
+      setState(() => _message = context.l10n.snackKeepOneLocalWorkspace);
       return;
     }
     _local.deleteWorkspace(workspace.id);
@@ -2266,7 +2269,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String name, {
     String? parentViewId,
   }) async {
-    final title = name.trim().isEmpty ? '新文件夹' : name.trim();
+    final title = name.trim().isEmpty ? context.l10n.folderNewDefault : name.trim();
     final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
     _local.saveView((
       id: viewId,
@@ -2292,6 +2295,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     Workspace workspace,
     List<ArchiveFile> entries,
   ) async {
+    final l10n = context.l10n;
     final files = <({String path, List<int> bytes})>[
       for (final f in entries) (path: f.name, bytes: f.bytes),
     ];
@@ -2299,15 +2303,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (!mounted) return;
     setState(_reloadLocalViews);
     final parts = <String>[
-      if (result.docs > 0) '${result.docs} 篇笔记',
-      if (result.folders > 0) '${result.folders} 个文件夹',
+      if (result.docs > 0) l10n.importNotesCount(result.docs),
+      if (result.folders > 0) l10n.importFoldersCount(result.folders),
     ];
     final msg = parts.isEmpty
         ? (result.errors.isEmpty
-              ? '没找到 Markdown 文件'
-              : '导入失败:${result.errors.first}')
-        : '已导入 ${parts.join('、')}'
-              '${result.errors.isNotEmpty ? '(${result.errors.length} 个跳过)' : ''}';
+              ? l10n.importNoMarkdown
+              : l10n.importFailed(result.errors.first))
+        : l10n.importDone(parts.join(l10n.importListSeparator)) +
+              (result.errors.isNotEmpty
+                  ? l10n.importSkippedSuffix(result.errors.length)
+                  : '');
     ScaffoldMessenger.maybeOf(
       context,
     )?.showSnackBar(SnackBar(content: Text(msg)));
@@ -2359,6 +2365,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _migrateEntry(WorkspaceEntry entry) async {
     if (kIsWeb || !entry.isLocal) return;
     final localWs = entry.workspace;
+    final l10n = context.l10n;
     var session = _session;
     if (session == null) {
       final creds = await _promptCloudAuth(migrateWorkspace: localWs.name);
@@ -2376,7 +2383,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     var migrated = false;
     await _run(() async {
       final clientId = await _local.deviceClientId();
-      if (clientId == null) throw StateError('本地身份不可用,无法迁移');
+      if (clientId == null) throw StateError(l10n.worldMigrateNoIdentity);
       final result = await _runWorkspaceMigration(session!, clientId, localWs);
       // Refresh the cloud list so the new workspace appears in the switcher.
       final workspaces = await _api.listWorkspaces(session.accessToken);
@@ -2384,7 +2391,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       migrated = true;
       setState(() {
         _workspaces = workspaces;
-        _message = '已把 “${localWs.name}” 上云(${result.docCount} 页)。';
+        _message = l10n.worldMigratedMsg(localWs.name, result.docCount);
       });
     });
     if (!migrated || !mounted) return;
@@ -2393,19 +2400,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final delete = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('上云完成'),
-        content: Text(
-          '“${localWs.name}” 已复制到云端。本地原件现在是独立副本,'
-          '不会再和云端同步——保留它会出现两个同名但内容会分叉的工作区。',
-        ),
+        title: Text(l10n.worldMigrateDoneTitle),
+        content: Text(l10n.worldMigrateDoneBody(localWs.name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('保留本地原件'),
+            child: Text(l10n.worldKeepLocalOriginal),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除本地原件'),
+            child: Text(l10n.worldDeleteLocalOriginal),
           ),
         ],
       ),
@@ -2421,22 +2425,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// the copy AND still push from the mirror on reconnect — no loss either way.
   Future<void> _detachEntry(WorkspaceEntry entry) async {
     if (kIsWeb || entry.isLocal) return;
+    final l10n = context.l10n;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('转为本地工作区'),
-        content: Text(
-          '把 “${entry.workspace.name}” 复制为一个新的本地工作区?'
-          '云端原工作区保持不变;两者从此独立,不再互相同步。',
-        ),
+        title: Text(l10n.worldDetachTitle),
+        content: Text(l10n.worldDetachBody(entry.workspace.name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            child: Text(l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('复制为本地'),
+            child: Text(l10n.worldDetachConfirm),
           ),
         ],
       ),
@@ -2448,12 +2450,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       entry.workspace.name,
     );
     if (result == null) {
-      setState(() => _message = '本地存储不可用,无法转为本地。');
+      setState(() => _message = l10n.worldDetachStoreUnavailable);
       return;
     }
     setState(() {
       _reloadLocalWorkspaces();
-      _message = '已把 “${entry.workspace.name}” 复制为本地工作区(${result.docs} 页有内容)。';
+      _message = l10n.worldDetachedMsg(entry.workspace.name, result.docs);
     });
     // Land in the fresh local copy.
     final target = _localWorkspaces
@@ -2614,6 +2616,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? migrateWorkspace,
   }) {
     final migrate = migrateWorkspace != null;
+    final l10n = context.l10n;
     final email = TextEditingController();
     final name = TextEditingController();
     final pass = TextEditingController();
@@ -2622,7 +2625,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: Text(migrate ? '连接云端账号并迁移' : '登录云端账号'),
+          title: Text(
+            migrate ? l10n.worldMigrateSignInTitle : l10n.worldCloudSignInTitle,
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2630,15 +2635,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               children: [
                 Text(
                   migrate
-                      ? '把本地工作区 “$migrateWorkspace” 复制到云端(本地数据保留)。'
-                      : '登录后即可访问你的云端工作区(本地数据不受影响)。',
+                      ? l10n.worldMigrateSignInDesc(migrateWorkspace)
+                      : l10n.worldCloudSignInDesc,
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
                 SegmentedButton<AuthMode>(
-                  segments: const [
-                    ButtonSegment(value: AuthMode.login, label: Text('登录')),
-                    ButtonSegment(value: AuthMode.register, label: Text('注册')),
+                  segments: [
+                    ButtonSegment(
+                      value: AuthMode.login,
+                      label: Text(l10n.loginActionLogin),
+                    ),
+                    ButtonSegment(
+                      value: AuthMode.register,
+                      label: Text(l10n.loginActionRegister),
+                    ),
                   ],
                   selected: {mode},
                   onSelectionChanged: (s) => setLocal(() => mode = s.first),
@@ -2647,17 +2658,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 TextField(
                   controller: email,
                   keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: '邮箱'),
+                  decoration: InputDecoration(labelText: l10n.loginEmailLabel),
                 ),
                 if (mode == AuthMode.register)
                   TextField(
                     controller: name,
-                    decoration: const InputDecoration(labelText: '显示名'),
+                    decoration: InputDecoration(
+                      labelText: l10n.accountDisplayName,
+                    ),
                   ),
                 TextField(
                   controller: pass,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: '密码'),
+                  decoration: InputDecoration(labelText: l10n.loginPasswordLabel),
                 ),
               ],
             ),
@@ -2665,7 +2678,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(null),
-              child: const Text('取消'),
+              child: Text(l10n.commonCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop((
@@ -2676,7 +2689,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   password: pass.text,
                 ),
               )),
-              child: Text(migrate ? '迁移' : '登录'),
+              child: Text(migrate ? l10n.worldMigrateAction : l10n.loginActionLogin),
             ),
           ],
         ),
@@ -3062,6 +3075,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return null;
+    final l10n = context.l10n;
     try {
       final file = await _api.importImageUrl(
         session.accessToken,
@@ -3077,7 +3091,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // ApiError ("bad request: could not fetch the image url") read like the
       // paste had broken.
       if (mounted) {
-        setState(() => _message = '图片未能转存到本地存储,已保留原始链接(链接失效后图片会丢失)。$error');
+        setState(() => _message = l10n.snackImageRehostFailed('$error'));
       }
       return null;
     }
@@ -3141,7 +3155,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final workspace = _requireWorkspace();
       final bootstrap = _selectedBootstrap;
       if (bootstrap == null) {
-        throw const ApiException('Select a page first.');
+        throw ApiException(context.l10n.pageSelectFirst);
       }
 
       final markdown = await _api.exportMarkdown(
@@ -3257,7 +3271,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   AuthSession _requireSession() {
     final session = _session;
     if (session == null) {
-      throw const ApiException('Sign in first.');
+      throw ApiException(context.l10n.accountSignInFirst);
     }
     return session;
   }
@@ -3265,7 +3279,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Workspace _requireWorkspace() {
     final workspace = _selectedWorkspace;
     if (workspace == null) {
-      throw const ApiException('Select a workspace first.');
+      throw ApiException(context.l10n.workspaceSelectFirst);
     }
     return workspace;
   }
@@ -3762,7 +3776,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // handing back Uint8List(0), which the caller happily saved as a 0-byte
       // page.zip and called it a successful export.
       onExportPageZip: local
-          ? () async => throw const ApiException('本地工作区暂不支持导出,请先上云')
+          ? () async => throw ApiException(context.l10n.exportLocalUnsupported)
           : _exportPageZip,
       onImportMarkdown: local ? (_, _) async {} : _importMarkdownAsPage,
       onExportWorkspaceZip: local
@@ -3811,11 +3825,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 ),
               ),
               const VerticalDivider(width: 1),
-              const Expanded(
+              Expanded(
                 child: EmptyState(
                   icon: Icons.description_outlined,
                   title: 'Mica',
-                  detail: 'Sign in to open your workspace.',
+                  detail: context.l10n.loginEmptyDetail,
                 ),
               ),
             ],
@@ -3883,19 +3897,19 @@ class _SidePanelState extends State<SidePanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Account', style: Theme.of(context).textTheme.titleLarge),
+        Text(context.l10n.settingsAccount, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 16),
         SegmentedButton<AuthMode>(
-          segments: const [
+          segments: [
             ButtonSegment(
               value: AuthMode.login,
-              icon: Icon(Icons.login),
-              label: Text('Login'),
+              icon: const Icon(Icons.login),
+              label: Text(context.l10n.loginActionLogin),
             ),
             ButtonSegment(
               value: AuthMode.register,
-              icon: Icon(Icons.person_add),
-              label: Text('Register'),
+              icon: const Icon(Icons.person_add),
+              label: Text(context.l10n.loginActionRegister),
             ),
           ],
           selected: {_mode},
@@ -3912,10 +3926,10 @@ class _SidePanelState extends State<SidePanel> {
           controller: _email,
           enabled: !widget.isBusy,
           keyboardType: TextInputType.emailAddress,
-          decoration: const InputDecoration(
-            labelText: 'Email',
-            prefixIcon: Icon(Icons.alternate_email),
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: context.l10n.loginEmailLabel,
+            prefixIcon: const Icon(Icons.alternate_email),
+            border: const OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
@@ -3923,10 +3937,10 @@ class _SidePanelState extends State<SidePanel> {
           TextField(
             controller: _displayName,
             enabled: !widget.isBusy,
-            decoration: const InputDecoration(
-              labelText: 'Display name',
-              prefixIcon: Icon(Icons.badge),
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: context.l10n.accountDisplayName,
+              prefixIcon: const Icon(Icons.badge),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
@@ -3935,10 +3949,10 @@ class _SidePanelState extends State<SidePanel> {
           controller: _password,
           enabled: !widget.isBusy,
           obscureText: true,
-          decoration: const InputDecoration(
-            labelText: 'Password',
-            prefixIcon: Icon(Icons.lock),
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: context.l10n.loginPasswordLabel,
+            prefixIcon: const Icon(Icons.lock),
+            border: const OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 16),
@@ -3947,7 +3961,11 @@ class _SidePanelState extends State<SidePanel> {
           icon: Icon(
             _mode == AuthMode.register ? Icons.person_add : Icons.login,
           ),
-          label: Text(_mode == AuthMode.register ? 'Register' : 'Login'),
+          label: Text(
+            _mode == AuthMode.register
+                ? context.l10n.loginActionRegister
+                : context.l10n.loginActionLogin,
+          ),
         ),
       ],
     );
@@ -3959,7 +3977,7 @@ class _SidePanelState extends State<SidePanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Workspace', style: Theme.of(context).textTheme.titleLarge),
+        Text(context.l10n.workspaceTitle, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 4),
         Text(
           session.user.email,
@@ -3970,17 +3988,17 @@ class _SidePanelState extends State<SidePanel> {
         TextField(
           controller: _workspaceName,
           enabled: !widget.isBusy,
-          decoration: const InputDecoration(
-            labelText: 'Workspace name',
-            prefixIcon: Icon(Icons.workspaces),
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: context.l10n.workspaceNameLabel,
+            prefixIcon: const Icon(Icons.workspaces),
+            border: const OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: widget.isBusy ? null : _submitWorkspace,
           icon: const Icon(Icons.add),
-          label: const Text('Create'),
+          label: Text(context.l10n.workspaceCreate),
         ),
       ],
     );
@@ -4672,7 +4690,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         child: Row(
           children: [
             IconButton(
-              tooltip: 'Open sidebar',
+              tooltip: context.l10n.sidebarOpen,
               onPressed: _openNavDrawer,
               icon: const Icon(Icons.menu, size: 22),
             ),
@@ -4802,7 +4820,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       ),
                     ),
                   IconButton(
-                    tooltip: narrow ? 'Close sidebar' : 'Collapse sidebar',
+                    tooltip: narrow
+                        ? context.l10n.sidebarCloseDrawer
+                        : context.l10n.sidebarCollapse,
                     visualDensity: VisualDensity.compact,
                     onPressed: narrow
                         ? _closeNavDrawer
@@ -4840,7 +4860,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   ),
                   const SizedBox(width: 4),
                   IconButton(
-                    tooltip: 'Workspace settings',
+                    tooltip: context.l10n.workspaceSettings,
                     visualDensity: VisualDensity.compact,
                     onPressed: widget.selectedWorkspace == null
                         ? null
@@ -4862,14 +4882,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   IconButton(
-                    tooltip: 'Refresh',
+                    tooltip: context.l10n.recycleRefresh,
                     visualDensity: VisualDensity.compact,
                     onPressed: widget.onRefresh,
                     icon: const Icon(Icons.refresh, size: 20),
                   ),
                   if (canEdit) ...[
                     IconButton(
-                      tooltip: 'Recycle bin',
+                      tooltip: context.l10n.recycleBinTitle,
                       visualDensity: VisualDensity.compact,
                       onPressed: _openRecycleBin,
                       icon: const Icon(Icons.delete_outline, size: 20),
@@ -4907,7 +4927,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   child: FilledButton.tonalIcon(
                     onPressed: _openAiDialog,
                     icon: const Icon(Icons.auto_awesome, size: 18),
-                    label: const Text('Ask AI'),
+                    label: Text(context.l10n.aiAskTitle),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -4945,7 +4965,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
             const SizedBox(width: 8),
             Text(
-              'Search…',
+              context.l10n.search,
               style: TextStyle(
                 color: enabled
                     ? const Color(0xFF64748B)
@@ -4969,7 +4989,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             const MicaLogo(size: 24),
             const SizedBox(height: 12),
             IconButton(
-              tooltip: 'Expand sidebar',
+              tooltip: context.l10n.sidebarExpand,
               visualDensity: VisualDensity.compact,
               onPressed: () => setState(() => _navCollapsed = false),
               icon: const Icon(Icons.view_sidebar_outlined, size: 20),
@@ -5002,7 +5022,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       user: widget.session?.user,
     );
     final initial = widget.activeIsLocal
-        ? '本'
+        ? context.l10n.accountLocalInitial
         : (id.name.isNotEmpty ? id.name.substring(0, 1).toUpperCase() : '?');
     // Width comes from the rows (each a SizedBox of _kAccountMenuWidth), not
     // from a MenuStyle: that is how _WorkspaceSelector — the other menu in this
@@ -5019,15 +5039,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _addServerRow(),
           const Divider(height: 8),
         ],
-        _menuAction(Icons.settings_outlined, 'Settings', _openSettings),
+        _menuAction(Icons.settings_outlined, context.l10n.settingsTitle, _openSettings),
         // Signing in stays a top-level action, not a per-row one: you sign in
         // to the world you are in. In 本地模式 there is neither — and now the
         // reason is one line above it (pick a world first) instead of a comment
         // pointing somewhere else.
         if (id.canSignOut)
-          _menuAction(Icons.logout, 'Sign out', widget.onSignOut)
+          _menuAction(Icons.logout, context.l10n.commonSignOut, widget.onSignOut)
         else if (id.canSignIn && widget.onSignIn != null)
-          _menuAction(Icons.login, '登录云端', widget.onSignIn!),
+          _menuAction(Icons.login, context.l10n.workspaceRowSignInCloud, widget.onSignIn!),
       ],
       builder: (context, controller, child) => InkWell(
         onTap: () => controller.isOpen ? controller.close() : controller.open(),
@@ -5132,7 +5152,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        local ? '本地模式' : (Uri.tryParse(origin)?.host ?? origin),
+                        local ? context.l10n.worldLocalName : (Uri.tryParse(origin)?.host ?? origin),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: selected
@@ -5152,7 +5172,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // those exist nowhere else. One action needs no ⋮ submenu.
           if (!local)
             IconButton(
-              tooltip: '删除这台服务器',
+              tooltip: context.l10n.serverRemoveTooltip,
               visualDensity: VisualDensity.compact,
               onPressed: () {
                 _accountMenu.close();
@@ -5176,16 +5196,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _accountMenu.close();
         _promptAddServer();
       },
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            SizedBox(width: 20),
-            Icon(Icons.add, size: 16, color: Color(0xFF2563EB)),
-            SizedBox(width: 8),
+            const SizedBox(width: 20),
+            const Icon(Icons.add, size: 16, color: Color(0xFF2563EB)),
+            const SizedBox(width: 8),
             Text(
-              '添加服务器…',
-              style: TextStyle(
+              context.l10n.serverAddRow,
+              style: const TextStyle(
                 color: Color(0xFF2563EB),
                 fontWeight: FontWeight.w600,
               ),
@@ -5222,28 +5242,28 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final url = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('添加服务器'),
+        title: Text(context.l10n.serverAddTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
           keyboardType: TextInputType.url,
           autocorrect: false,
-          decoration: const InputDecoration(
-            labelText: 'Server URL',
+          decoration: InputDecoration(
+            labelText: context.l10n.serverUrlLabel,
             hintText: 'https://mica.example.com',
-            prefixIcon: Icon(Icons.link),
-            border: OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.link),
+            border: const OutlineInputBorder(),
           ),
           onSubmitted: (v) => Navigator.of(context).pop(v),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('添加'),
+            child: Text(context.l10n.serverAdd),
           ),
         ],
       ),
@@ -5260,27 +5280,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   Future<void> _confirmRemoveServer(String origin) async {
     final host = Uri.tryParse(origin)?.host ?? origin;
+    final l10n = context.l10n;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('删除 $host?'),
-        content: const Text(
-          '会清除这台服务器在本机的登录状态和离线镜像。服务器上的数据不受影响 '
-          '—— 重新添加并登录即可恢复。\n\n'
-          '还没同步上去的离线修改只存在于本机,会随镜像一起消失(删除前会先尝试'
-          '把它们推上去)。',
-        ),
+        title: Text(l10n.serverRemoveTitle(host)),
+        content: Text(l10n.serverRemoveBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            child: Text(l10n.commonCancel),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFFDC2626),
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
+            child: Text(l10n.commonDelete),
           ),
         ],
       ),
@@ -5294,18 +5310,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   Widget _pageTree(BuildContext context, bool canEdit) {
     if (widget.selectedWorkspace == null) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.ads_click,
-        title: 'Select workspace',
-        detail: 'Pages appear after selecting a workspace.',
+        title: context.l10n.workspaceRowSelectWorkspace,
+        detail: context.l10n.sidebarSelectWorkspaceDetail,
       );
     }
 
     if (widget.views.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.note_add,
-        title: 'No pages',
-        detail: 'Create a page to start writing.',
+        title: context.l10n.sidebarNoPagesTitle,
+        detail: context.l10n.sidebarNoPagesDetail,
       );
     }
 
@@ -5347,7 +5363,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onCreateChildFolder: () {
             setState(() => _expandForChildOf(item.view.id));
             _createThenRename(
-              () => widget.onCreateChildFolder(item.view, '新文件夹'),
+              () => widget.onCreateChildFolder(item.view, context.l10n.folderNewDefault),
             );
           },
           onExportFolder: widget.onExportFolderZip == null
@@ -5724,19 +5740,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Widget _editorPane(BuildContext context) {
     final workspace = widget.selectedWorkspace;
     if (workspace == null) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.ads_click,
-        title: 'Select a workspace',
-        detail: 'Choose a workspace and open a page from the document tree.',
+        title: context.l10n.editorSelectWorkspaceTitle,
+        detail: context.l10n.editorSelectWorkspaceDetail,
       );
     }
 
     final bootstrap = widget.selectedBootstrap;
     if (bootstrap == null) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.description_outlined,
-        title: 'Select a page',
-        detail: 'Open a page from the document tree to edit it.',
+        title: context.l10n.editorSelectPageTitle,
+        detail: context.l10n.editorSelectPageDetail,
       );
     }
 
@@ -5857,96 +5873,96 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      btn(Icons.undo, 'Undo (Ctrl+Z)', h.undo),
-                      btn(Icons.redo, 'Redo (Ctrl+Y)', h.redo),
+                      btn(Icons.undo, context.l10n.pageFormatUndo, h.undo),
+                      btn(Icons.redo, context.l10n.pageFormatRedo, h.redo),
                       divider(),
                       btn(
                         Icons.notes,
-                        'Text (Ctrl+Alt+0)',
+                        context.l10n.pageFormatText,
                         () => h.setBlock('paragraph'),
                         active: k == 'paragraph',
                       ),
                       btn(
                         Icons.looks_one_outlined,
-                        'Heading 1 (Ctrl+Alt+1)',
+                        context.l10n.pageFormatHeading1,
                         () => h.setBlock('heading', {'level': 1}),
                         active: onHeading(1),
                       ),
                       btn(
                         Icons.looks_two_outlined,
-                        'Heading 2 (Ctrl+Alt+2)',
+                        context.l10n.pageFormatHeading2,
                         () => h.setBlock('heading', {'level': 2}),
                         active: onHeading(2),
                       ),
                       btn(
                         Icons.looks_3_outlined,
-                        'Heading 3 (Ctrl+Alt+3)',
+                        context.l10n.pageFormatHeading3,
                         () => h.setBlock('heading', {'level': 3}),
                         active: onHeading(3),
                       ),
                       divider(),
                       btn(
                         Icons.format_bold,
-                        'Bold (Ctrl+B)',
+                        context.l10n.pageFormatBold,
                         () => h.toggleMark('bold'),
                       ),
                       btn(
                         Icons.format_italic,
-                        'Italic (Ctrl+I)',
+                        context.l10n.pageFormatItalic,
                         () => h.toggleMark('italic'),
                       ),
                       btn(
                         Icons.format_strikethrough,
-                        'Strikethrough',
+                        context.l10n.pageFormatStrikethrough,
                         () => h.toggleMark('strike'),
                       ),
                       btn(
                         Icons.code,
-                        'Inline code (Ctrl+E)',
+                        context.l10n.pageFormatInlineCode,
                         () => h.toggleMark('code'),
                       ),
-                      btn(Icons.link, 'Link (Ctrl+K)', h.editLink),
+                      btn(Icons.link, context.l10n.pageFormatLink, h.editLink),
                       divider(),
                       btn(
                         Icons.format_list_bulleted,
-                        'Bulleted list',
+                        context.l10n.pageFormatBulletedList,
                         () => h.setBlock('bulleted_list'),
                         active: k == 'bulleted_list',
                       ),
                       btn(
                         Icons.format_list_numbered,
-                        'Numbered list',
+                        context.l10n.pageFormatNumberedList,
                         () => h.setBlock('numbered_list'),
                         active: k == 'numbered_list',
                       ),
                       btn(
                         Icons.check_box_outlined,
-                        'To-do list',
+                        context.l10n.pageFormatTodoList,
                         () => h.setBlock('todo', {'checked': false}),
                         active: k == 'todo',
                       ),
                       btn(
                         Icons.format_quote,
-                        'Quote',
+                        context.l10n.pageFormatQuote,
                         () => h.setBlock('quote'),
                         active: k == 'quote',
                       ),
                       btn(
                         Icons.terminal,
-                        'Code block',
+                        context.l10n.pageFormatCodeBlock,
                         () => h.setBlock('code_block'),
                         active: k == 'code_block',
                       ),
                       divider(),
                       btn(
                         Icons.horizontal_rule,
-                        'Divider',
+                        context.l10n.pageFormatDivider,
                         () => h.insert('divider'),
                       ),
-                      btn(Icons.grid_on, 'Table', () => h.insert('table')),
+                      btn(Icons.grid_on, context.l10n.pageFormatTable, () => h.insert('table')),
                       btn(
                         Icons.image_outlined,
-                        'Image',
+                        context.l10n.pageFormatImage,
                         () => h.insert('image'),
                       ),
                     ],
@@ -6037,7 +6053,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           ),
                         ),
                       PopupMenuButton<String>(
-                        tooltip: 'Page menu',
+                        tooltip: context.l10n.pageMenu,
                         icon: const Icon(Icons.expand_more),
                         onSelected: _onPageMenu,
                         itemBuilder: (context) => [
@@ -6045,58 +6061,58 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           // handed back a lone .md whose images pointed at
                           // `![](photo.png)` — a file that was nowhere in the
                           // download. A zip can carry them; a .md cannot.
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'export-zip',
                             child: ListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              leading: Icon(Icons.folder_zip_outlined),
-                              title: Text('导出(ZIP,含图片)'),
+                              leading: const Icon(Icons.folder_zip_outlined),
+                              title: Text(context.l10n.rowExportZipImages),
                             ),
                           ),
                           const PopupMenuDivider(),
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'import-md',
                             child: ListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              leading: Icon(Icons.upload_file_outlined),
-                              title: Text('Import Markdown…'),
+                              leading: const Icon(Icons.upload_file_outlined),
+                              title: Text(context.l10n.pageImportMarkdown),
                             ),
                           ),
                           if (widget.onShare != null) ...[
                             const PopupMenuDivider(),
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'share',
                               child: ListTile(
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.public),
-                                title: Text('分享'),
+                                leading: const Icon(Icons.public),
+                                title: Text(context.l10n.shareTitle),
                               ),
                             ),
                           ],
                           if (widget.onVersionHistory != null) ...[
                             const PopupMenuDivider(),
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'version-history',
                               child: ListTile(
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.history),
-                                title: Text('版本历史'),
+                                leading: const Icon(Icons.history),
+                                title: Text(context.l10n.versionHistoryTitle),
                               ),
                             ),
                           ],
                           if (widget.onRestoreCheckpoint != null) ...[
                             const PopupMenuDivider(),
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'restore-checkpoint',
                               child: ListTile(
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.restore_outlined),
-                                title: Text('Restore last checkpoint'),
+                                leading: const Icon(Icons.restore_outlined),
+                                title: Text(context.l10n.pageRestoreCheckpoint),
                               ),
                             ),
                           ],
@@ -6105,8 +6121,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       const SizedBox(width: 4),
                       IconButton(
                         tooltip: _toolsExpanded
-                            ? 'Hide side panel'
-                            : 'Show side panel',
+                            ? context.l10n.pageHideSidePanel
+                            : context.l10n.pageShowSidePanel,
                         onPressed: () =>
                             setState(() => _toolsExpanded = !_toolsExpanded),
                         // Mirror of the left sidebar's icon → a symmetric pair
@@ -6284,10 +6300,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         return ColoredBox(
           color: Colors.white,
           child: outline.isEmpty
-              ? const EmptyState(
+              ? EmptyState(
                   icon: Icons.toc,
-                  title: 'Outline',
-                  detail: 'Headings in this page appear here.',
+                  title: context.l10n.pageOutlineTitle,
+                  detail: context.l10n.pageOutlineEmptyDetail,
                 )
               : SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -6299,7 +6315,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           const Icon(Icons.toc, size: 18),
                           const SizedBox(width: 8),
                           Text(
-                            'Outline',
+                            context.l10n.pageOutlineTitle,
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ],
@@ -6324,6 +6340,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final workspace = widget.selectedWorkspace;
     if (workspace == null) return;
     _rename.text = workspace.name;
+    final l10n = context.l10n;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -6332,7 +6349,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           final canManage = matchesManageRole(ws.role);
           final members = widget.members;
           return AlertDialog(
-            title: const Text('Workspace settings'),
+            title: Text(l10n.workspaceSettings),
             content: SizedBox(
               width: 440,
               child: SingleChildScrollView(
@@ -6340,15 +6357,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    DetailRow(label: 'Role', value: ws.role),
+                    DetailRow(label: l10n.widgetRoleLabel, value: ws.role),
                     DetailRow(label: 'ID', value: ws.id),
                     const SizedBox(height: 16),
                     TextField(
                       controller: _rename,
-                      decoration: const InputDecoration(
-                        labelText: 'Rename workspace',
-                        prefixIcon: Icon(Icons.edit),
-                        border: OutlineInputBorder(),
+                      decoration: InputDecoration(
+                        labelText: l10n.workspaceRename,
+                        prefixIcon: const Icon(Icons.edit),
+                        border: const OutlineInputBorder(),
                         isDense: true,
                       ),
                     ),
@@ -6361,7 +6378,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           setLocal(() {});
                         },
                         icon: const Icon(Icons.save, size: 18),
-                        label: const Text('Save'),
+                        label: Text(l10n.commonSave),
                       ),
                     ),
                     const SizedBox(height: 22),
@@ -6370,7 +6387,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         const Icon(Icons.group, size: 18),
                         const SizedBox(width: 8),
                         Text(
-                          'Members',
+                          l10n.workspaceMembers,
                           style: Theme.of(dialogContext).textTheme.titleMedium,
                         ),
                       ],
@@ -6381,9 +6398,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       const SizedBox(height: 14),
                     ],
                     if (members.isEmpty)
-                      const Text(
-                        'No members loaded.',
-                        style: TextStyle(color: Color(0xFF94A3B8)),
+                      Text(
+                        l10n.workspaceNoMembers,
+                        style: const TextStyle(color: Color(0xFF94A3B8)),
                       )
                     else
                       for (final member in members)
@@ -6410,7 +6427,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('Close'),
+                child: Text(l10n.commonClose),
               ),
             ],
           );
@@ -6428,18 +6445,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         TextField(
           controller: _memberEmail,
           keyboardType: TextInputType.emailAddress,
-          decoration: const InputDecoration(
-            labelText: 'Member email',
-            prefixIcon: Icon(Icons.alternate_email),
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: context.l10n.workspaceMemberEmail,
+            prefixIcon: const Icon(Icons.alternate_email),
+            border: const OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 10),
         DropdownButtonFormField<WorkspaceRole>(
           initialValue: _memberRole,
-          decoration: const InputDecoration(
-            labelText: 'Role',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: context.l10n.widgetRoleLabel,
+            border: const OutlineInputBorder(),
           ),
           items: WorkspaceRole.values
               .map(
@@ -6460,7 +6477,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             setLocal(() {});
           },
           icon: const Icon(Icons.person_add),
-          label: const Text('Add'),
+          label: Text(context.l10n.workspaceMemberAdd),
         ),
       ],
     );
@@ -6475,12 +6492,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final canLocal = widget.localAvailable;
     var makeLocal = canLocal && !canCloud;
     if (!canLocal) makeLocal = false;
+    final l10n = context.l10n;
     final result = await showDialog<({String name, bool local})>(
       context: context,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            title: const Text('New workspace'),
+            title: Text(l10n.workspaceRowNewWorkspace),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -6488,9 +6506,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 TextField(
                   controller: controller,
                   autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Workspace name',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: l10n.workspaceNameLabel,
+                    border: const OutlineInputBorder(),
                   ),
                   onSubmitted: (value) => Navigator.of(
                     context,
@@ -6500,15 +6518,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   const SizedBox(height: 14),
                   SegmentedButton<bool>(
                     segments: [
-                      const ButtonSegment(
+                      ButtonSegment(
                         value: true,
-                        icon: Icon(Icons.computer_outlined),
-                        label: Text('本地'),
+                        icon: const Icon(Icons.computer_outlined),
+                        label: Text(l10n.workspaceKindLocal),
                       ),
                       ButtonSegment(
                         value: false,
                         icon: const Icon(Icons.cloud_outlined),
-                        label: const Text('云端'),
+                        label: Text(l10n.workspaceKindCloud),
                         enabled: canCloud,
                       ),
                     ],
@@ -6518,9 +6536,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   ),
                   if (!canCloud) ...[
                     const SizedBox(height: 6),
-                    const Text(
-                      '登录后可创建云端工作区。',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                    Text(
+                      l10n.workspaceCloudNeedsSignIn,
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
                     ),
                   ],
                 ],
@@ -6529,13 +6547,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancel'),
+                child: Text(l10n.commonCancel),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(
                   context,
                 ).pop((name: controller.text, local: makeLocal)),
-                child: const Text('Create'),
+                child: Text(l10n.workspaceCreate),
               ),
             ],
           ),
@@ -6553,29 +6571,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _promptRenameWorkspace(WorkspaceEntry entry) async {
     final workspace = entry.workspace;
     final controller = TextEditingController(text: workspace.name);
+    final l10n = context.l10n;
     final name = await showDialog<String>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Rename workspace'),
+          title: Text(l10n.workspaceRename),
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Workspace name',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: l10n.workspaceNameLabel,
+              border: const OutlineInputBorder(),
             ),
             onSubmitted: (value) => Navigator.of(context).pop(value),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
+              child: Text(l10n.commonCancel),
             ),
             FilledButton.icon(
               onPressed: () => Navigator.of(context).pop(controller.text),
               icon: const Icon(Icons.save),
-              label: const Text('Save'),
+              label: Text(l10n.commonSave),
             ),
           ],
         );
@@ -6660,33 +6679,32 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (parent != null) {
       setState(() => _expandForChildOf(parent.id)); // reveal the new child
     }
+    final folderName = context.l10n.folderNewDefault;
     _createThenRename(() {
       if (parent == null) {
         return folder
-            ? widget.onCreateFolder('新文件夹')
+            ? widget.onCreateFolder(folderName)
             : widget.onCreateDocument(kUntitledPage);
       }
       return folder
-          ? widget.onCreateChildFolder(parent, '新文件夹')
+          ? widget.onCreateChildFolder(parent, folderName)
           : widget.onCreateChildDocument(parent, kUntitledPage);
     });
   }
 
   Future<void> _confirmDeleteWorkspace(WorkspaceEntry entry) async {
     final workspace = entry.workspace;
+    final l10n = context.l10n;
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Delete workspace'),
-          content: Text(
-            'Delete "${workspace.name}" and all of its pages? '
-            'This cannot be undone.',
-          ),
+          title: Text(l10n.workspaceDeleteTitle),
+          content: Text(l10n.workspaceDeleteConfirm(workspace.name)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
+              child: Text(l10n.commonCancel),
             ),
             FilledButton.icon(
               style: FilledButton.styleFrom(
@@ -6694,7 +6712,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ),
               onPressed: () => Navigator.of(context).pop(true),
               icon: const Icon(Icons.delete_outline),
-              label: const Text('Delete'),
+              label: Text(l10n.commonDelete),
             ),
           ],
         );
@@ -6736,19 +6754,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Restore last checkpoint?'),
-            content: const Text(
-              'This reverts the page to its last on-device checkpoint and '
-              'discards changes made since. This cannot be undone.',
-            ),
+            title: Text(context.l10n.pageRestoreCheckpointTitle),
+            content: Text(context.l10n.pageRestoreCheckpointBody),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
+                child: Text(context.l10n.commonCancel),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Restore'),
+                child: Text(context.l10n.versionRestore),
               ),
             ],
           ),
@@ -6768,26 +6783,28 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _exportFolderFile(DocumentView view) async {
     final export = widget.onExportFolderZip;
     if (export == null) return;
+    final l10n = context.l10n;
     try {
       final bytes = await export(view);
-      if (bytes.isEmpty) throw const ApiException('导出返回了空内容');
+      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
       final name = view.name.trim().isEmpty ? 'folder' : view.name.trim();
       downloadImage(bytes, '$name.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
       }
     }
   }
 
   Future<void> _exportWorkspaceFile(WorkspaceEntry entry) async {
+    final l10n = context.l10n;
     try {
       final bytes = await widget.onExportEntryZip(entry);
       // Same guard as the page/folder exports: an empty archive is a failure,
       // not a file worth saving.
-      if (bytes.isEmpty) throw const ApiException('导出返回了空内容');
+      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
       final name = entry.workspace.name.trim().isEmpty
           ? 'workspace'
           : entry.workspace.name.trim();
@@ -6796,7 +6813,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
       }
     }
   }
@@ -6805,17 +6822,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// There is no markdown-only export any more: a lone .md silently dropped
   /// every image, emitting `![](photo.png)` for a file it never handed over.
   Future<void> _exportPageFile() async {
+    final l10n = context.l10n;
     try {
       final bytes = await widget.onExportPageZip();
       // Never write an empty archive and call it success — that's how the
       // local-workspace stub used to produce a 0-byte page.zip silently.
-      if (bytes.isEmpty) throw const ApiException('导出返回了空内容');
+      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
       downloadImage(bytes, 'page.zip', 'application/zip');
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
       }
     }
   }
