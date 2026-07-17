@@ -259,6 +259,24 @@ struct MoveDocArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TransferArgs {
+  /// The SOURCE workspace id (where the page/folder currently lives).
+  workspace_id: String,
+  /// The VIEW id of the page or folder to transfer (from `mica_list_pages`).
+  view_id: String,
+  /// The DESTINATION workspace id (from `mica_list_workspaces`; must differ from
+  /// the source).
+  dest_workspace_id: String,
+  /// Destination parent folder view id; omit/null for the destination root.
+  #[serde(default)]
+  parent_view_id: Option<String>,
+  /// true = COPY (keep the source); false/omit = MOVE (the source is trashed to
+  /// the recycle bin after copying).
+  #[serde(default)]
+  copy: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ReorderArgs {
   workspace_id: String,
   /// The folder whose children to reorder (a folder's view id), or omit/null
@@ -830,6 +848,42 @@ impl MicaMcp {
       )
       .await;
     action_ack(moved, "moved", &view_id)
+  }
+
+  #[tool(
+    description = "Move or COPY a page (its whole subtree) or a folder to ANOTHER workspace on this \
+                   server. copy=true keeps the source; otherwise the source is MOVED (trashed to the \
+                   recycle bin after copying). Images are copied into the destination workspace. Note: \
+                   the transferred page gets a NEW id, so version-history checkpoints do NOT carry \
+                   over, and any links to pages left behind in the source will dangle. Ids come from \
+                   mica_list_workspaces and mica_list_pages.",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_transfer_view(
+    &self,
+    Parameters(TransferArgs {
+      workspace_id,
+      view_id,
+      dest_workspace_id,
+      parent_view_id,
+      copy,
+    }): Parameters<TransferArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let body = json!({
+      "dest_workspace_id": dest_workspace_id,
+      "parent_view_id": parent_view_id,
+      "remove_source": !copy,
+    });
+    let done = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}/transfer"),
+        body,
+      )
+      .await;
+    action_ack(done, if copy { "copied" } else { "moved" }, &view_id)
   }
 
   #[tool(
@@ -1612,7 +1666,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 22, "every tool must be listed");
+    assert_eq!(tools.len(), 23, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),
