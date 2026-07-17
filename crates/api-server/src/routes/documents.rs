@@ -2704,6 +2704,245 @@ pub async fn transfer_view(
   }))
 }
 
+// ── Clone (duplicate a view within the same workspace) ───────────────────────
+// A same-workspace cousin of transfer: enumerate the subtree, give every node a
+// fresh id + doc + snapshot, rewrite in-subtree page links to the new ids. Two
+// deliberate differences from transfer:
+//   - Blobs are NOT copied. object_key is content-addressed and workspace-scoped
+//     (workspaces/{id}/{sha256}.{ext}); within ONE workspace the copy references
+//     the same file_id — sharing the bytes is exactly the sha256-dedup intent,
+//     and there's nothing to re-upload. So file_map stays empty and file_ids
+//     pass through unchanged.
+//   - The source is never removed, and the root copy gets a fresh name (deduped
+//     among its siblings) + a fresh position so it sits beside the original.
+
+#[derive(Debug, Deserialize)]
+pub struct CloneRequest {
+  /// Parent for the copy's root (null = the source's own parent, i.e. beside it).
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  /// The copy's root name, locale-aware, computed by the caller (e.g. "X 副本").
+  /// Deduped against siblings server-side. Absent → a "{source} 副本" fallback.
+  #[serde(default)]
+  name: Option<String>,
+  /// Report what WOULD happen (counts) without mutating anything.
+  #[serde(default)]
+  dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CloneResponse {
+  new_root_view_id: Option<Uuid>,
+  new_name: String,
+  documents: usize,
+  folders: usize,
+  dry_run: bool,
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/{view_id}/clone`
+pub async fn clone_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Json(request): Json<CloneRequest>,
+) -> ApiResult<Json<CloneResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
+
+  // 1. Enumerate the subtree (live rows only) — same shape as transfer.
+  let subtree = sqlx::query_as::<_, TransferRow>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+        FROM views
+        WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+        UNION ALL
+        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        WHERE v.is_deleted = false
+      )
+      SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .fetch_all(&state.db)
+  .await?;
+  let Some(root) = subtree.iter().find(|r| r.id == view_id) else {
+    return Err(ApiError::NotFound);
+  };
+
+  // 2. Resolve the copy's parent: an explicit folder in this workspace, or the
+  //    source's own parent (beside the original).
+  let target_parent = match request.parent_view_id {
+    Some(parent) => {
+      let ok = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM views WHERE id = $1 AND workspace_id = $2 \
+         AND object_type = 'folder' AND is_deleted = false)",
+      )
+      .bind(parent)
+      .bind(workspace_id)
+      .fetch_one(&state.db)
+      .await?;
+      if !ok {
+        return Err(ApiError::BadRequest(
+          "parent_view_id must be a folder in this workspace".to_string(),
+        ));
+      }
+      Some(parent)
+    }
+    None => root.parent_view_id,
+  };
+
+  // 3. Name the copy: caller's locale-aware base (fallback "{source} 副本"),
+  //    deduped against the live siblings under the target parent.
+  let base_name = request
+    .name
+    .clone()
+    .unwrap_or_else(|| format!("{} 副本", root.name));
+  let siblings = sqlx::query_scalar::<_, String>(
+    "SELECT name FROM views WHERE workspace_id = $1 AND is_deleted = false \
+     AND parent_view_id IS NOT DISTINCT FROM $2",
+  )
+  .bind(workspace_id)
+  .bind(target_parent)
+  .fetch_all(&state.db)
+  .await?;
+  let new_name = dedup_sibling_name(&base_name, &siblings);
+
+  // 4. Pre-scan document payloads (needed to rewrite in-subtree links). No blob
+  //    copy, no dangling-link scan: every link target stays in this workspace.
+  let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
+    std::collections::HashMap::new();
+  let mut documents = 0usize;
+  let mut folders = 0usize;
+  for row in &subtree {
+    if row.object_type != "document" {
+      folders += 1;
+      continue;
+    }
+    documents += 1;
+    if let Some(payload) = store::current_payload(&state.db, row.object_id).await? {
+      payloads.insert(row.object_id, payload);
+    }
+  }
+
+  if request.dry_run {
+    return Ok(Json(CloneResponse {
+      new_root_view_id: None,
+      new_name,
+      documents,
+      folders,
+      dry_run: true,
+    }));
+  }
+
+  // 5. One transaction: build the copied tree with fresh ids. file_map is empty
+  //    (blobs shared), view_map remaps in-subtree links to the new ids.
+  let view_map: std::collections::HashMap<Uuid, Uuid> =
+    subtree.iter().map(|r| (r.id, Uuid::new_v4())).collect();
+  let empty_files: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
+  let ordered = topo_order_subtree(&subtree);
+
+  let mut tx = state.db.begin().await?;
+  for row in &ordered {
+    let new_view_id = view_map[&row.id];
+    let is_root = row.id == view_id;
+    let dest_parent = if is_root {
+      target_parent
+    } else {
+      row.parent_view_id.and_then(|p| view_map.get(&p).copied())
+    };
+    // The root sits beside the original: fresh name + fresh position so it does
+    // not collide with the source under the same parent. Inner nodes keep their
+    // name/position — their parent is a new view, so nothing collides there.
+    let node_name = if is_root { &new_name } else { &row.name };
+    let node_position = if is_root {
+      Uuid::now_v7().to_string()
+    } else {
+      row.position.clone()
+    };
+
+    if row.object_type == "document" {
+      let mut payload = payloads
+        .remove(&row.object_id)
+        .unwrap_or_else(|| DocumentSnapshotPayload {
+          schema_version: 1,
+          root_block_id: "root".to_string(),
+          blocks: Vec::new(),
+        });
+      rewrite_transferred_payload(&mut payload, &empty_files, &view_map);
+      let document = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+          INSERT INTO documents (workspace_id, root_block_id, created_by)
+          VALUES ($1, $2, $3)
+          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+        "#,
+      )
+      .bind(workspace_id)
+      .bind(&payload.root_block_id)
+      .bind(user_id)
+      .fetch_one(&mut *tx)
+      .await?;
+      store::insert_root_snapshot(&mut tx, document.id, &payload).await?;
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(workspace_id)
+      .bind(dest_parent)
+      .bind(document.id)
+      .bind(node_name)
+      .bind(&node_position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    } else {
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(workspace_id)
+      .bind(dest_parent)
+      .bind(Uuid::new_v4())
+      .bind(node_name)
+      .bind(&node_position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    }
+  }
+  tx.commit().await?;
+
+  Ok(Json(CloneResponse {
+    new_root_view_id: Some(view_map[&view_id]),
+    new_name,
+    documents,
+    folders,
+    dry_run: false,
+  }))
+}
+
+/// Pick a sibling-unique name: `base` if free, else `base 2`, `base 3`, … The
+/// number is locale-neutral, so the caller supplies the localized base ("X 副本"
+/// / "X copy") and we only break ties.
+fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
+  if !siblings.iter().any(|s| s == base) {
+    return base.to_string();
+  }
+  (2..)
+    .map(|n| format!("{base} {n}"))
+    .find(|c| !siblings.iter().any(|s| s == c))
+    .expect("an unused suffix always exists")
+}
+
 /// The `mica://page/<viewId>` targets referenced by a block's link marks.
 fn page_link_targets(data: &serde_json::Value) -> Vec<String> {
   const SCHEME: &str = "mica://page/";
@@ -3350,6 +3589,27 @@ mod tests {
       serde_json::json!(format!("mica://page/{outside}")),
       "a link to a page left behind is preserved (dangles, warned)",
     );
+  }
+
+  #[test]
+  fn dedup_sibling_name_only_numbers_on_collision() {
+    // Free name → used as-is.
+    assert_eq!(dedup_sibling_name("日志方案 副本", &[]), "日志方案 副本");
+    // Collision → first free numbered suffix (locale-neutral number).
+    assert_eq!(
+      dedup_sibling_name("日志方案 副本", &["日志方案 副本".into()]),
+      "日志方案 副本 2"
+    );
+    // Skips taken numbers, does not reuse them.
+    assert_eq!(
+      dedup_sibling_name(
+        "X 副本",
+        &["X 副本".into(), "X 副本 2".into(), "X 副本 4".into()]
+      ),
+      "X 副本 3"
+    );
+    // Unrelated siblings never force a suffix.
+    assert_eq!(dedup_sibling_name("X 副本", &["Y".into(), "Z".into()]), "X 副本");
   }
 
   #[test]

@@ -49,6 +49,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -89,6 +90,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () => renamed = true,
+      onClone: () {},
       onDelete: () => deleted = true,
     )));
 
@@ -112,6 +114,42 @@ void main() {
     expect(renamed, isFalse);
   });
 
+  testWidgets('the row menu offers 创建副本 and fires onClone', (tester) async {
+    var cloned = false;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: false,
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onClone: () => cloned = true,
+      onDelete: () {},
+    )));
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.byType(DocumentListItem)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
+
+    expect(find.text('创建副本'), findsOneWidget);
+    await tester.tap(find.text('创建副本'));
+    await tester.pumpAndSettle();
+    expect(cloned, isTrue);
+  });
+
   testWidgets('right-click anywhere on the row opens the same menu',
       (tester) async {
     await tester.pumpWidget(_host(DocumentListItem(
@@ -130,6 +168,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -161,6 +200,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -195,6 +235,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -239,6 +280,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -272,6 +314,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () => childFolder = true,
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -309,6 +352,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
     await tester.pumpAndSettle();
@@ -351,6 +395,7 @@ void main() {
           onCreateChild: () {},
           onCreateChildFolder: () {},
           onRename: () {},
+          onClone: () {},
           onDelete: () {},
         ));
 
@@ -386,6 +431,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
     await tester.pumpAndSettle();
@@ -417,6 +463,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
     await tester.pumpAndSettle();
@@ -452,6 +499,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
 
@@ -482,6 +530,7 @@ void main() {
       onCreateChild: () {},
       onCreateChildFolder: () {},
       onRename: () {},
+      onClone: () {},
       onDelete: () {},
     )));
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);

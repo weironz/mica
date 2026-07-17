@@ -1852,6 +1852,28 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Duplicate [view] in place (cloud). The server copies the subtree, shares
+  /// blobs, and dedupes the name; we just reload the tree to show the copy.
+  Future<void> _cloneView(DocumentView view) {
+    final copyName = context.l10n.cloneCopyName(view.name);
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final report = await _api.cloneView(
+        token: session.accessToken,
+        workspaceId: workspace.id,
+        viewId: view.id,
+        name: copyName,
+        dryRun: false,
+      );
+      await _loadSelectedWorkspaceViews();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.cloneDone(report.newName))),
+      );
+    });
+  }
+
   Future<void> _updateRootBlockText(String text) {
     final bootstrap = _selectedBootstrap;
     if (bootstrap == null) {
@@ -2876,6 +2898,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Duplicate [view] in place (local). Reuses the store's loadDoc→saveDoc copy
+  /// primitive; blobs stay shared in the on-device CAS.
+  Future<void> _localCloneView(DocumentView view) async {
+    final copyName = context.l10n.cloneCopyName(view.name);
+    final result = _local.cloneView(viewId: view.id, rootName: copyName);
+    if (result == null || !mounted) return;
+    setState(() => _reloadLocalViews());
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.cloneDone(result.newName))),
+    );
+  }
+
   Future<void> _localReorderViews(
     String? parentViewId,
     List<DocumentView> ordered,
@@ -3784,6 +3818,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onSelectView: local ? _localSelectView : _selectView,
       onRenameView: local ? _localRenameView : _renameView,
       onDeleteView: local ? _localDeleteView : _deleteView,
+      onCloneView: local ? _localCloneView : _cloneView,
       onUpdateRootBlockText: local
           ? _localUpdateRootBlockText
           : _updateRootBlockText,
@@ -4228,6 +4263,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onSelectView,
     required this.onRenameView,
     required this.onDeleteView,
+    required this.onCloneView,
     required this.onUpdateRootBlockText,
     required this.onAddBlock,
     required this.onUpdateBlock,
@@ -4362,6 +4398,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(DocumentView view) onSelectView;
   final Future<void> Function(DocumentView view, String name) onRenameView;
   final Future<void> Function(DocumentView view) onDeleteView;
+
+  /// Duplicate a view's subtree in place (cloud or local). Always provided —
+  /// clone works in both, unlike onTransfer.
+  final Future<void> Function(DocumentView view) onCloneView;
   final Future<void> Function(String text) onUpdateRootBlockText;
   final Future<void> Function(DocumentBlockKind kind, String text) onAddBlock;
   final Future<void> Function(
@@ -5548,6 +5588,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onTransferCopy: widget.onTransfer == null
               ? null
               : () => widget.onTransfer!(item.view, true),
+          onClone: () => widget.onCloneView(item.view),
           onRename: () => _promptRenameView(item.view),
           onRenameSubmit: (name) => _commitRename(item.view, name),
           onRenameCancel: _cancelRename,

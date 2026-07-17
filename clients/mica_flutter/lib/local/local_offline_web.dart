@@ -152,6 +152,11 @@ class LocalOffline {
     String name,
   ) => null;
 
+  ({String rootViewId, String newName, int docs})? cloneView({
+    required String viewId,
+    required String rootName,
+  }) => null;
+
   void purgeView(String viewId, String objectId) {}
 
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})

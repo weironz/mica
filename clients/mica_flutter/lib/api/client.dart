@@ -422,6 +422,29 @@ class ApiClient {
     return TransferReport.fromJson(response);
   }
 
+  /// Duplicate [viewId] within its own workspace. [name] is the caller's
+  /// locale-aware copy name (e.g. "X 副本"); the server dedupes it against
+  /// siblings. [parentViewId] null = beside the original (its own parent).
+  Future<CloneReport> cloneView({
+    required String token,
+    required String workspaceId,
+    required String viewId,
+    String? name,
+    String? parentViewId,
+    required bool dryRun,
+  }) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/views/$viewId/clone',
+      {
+        'name': name,
+        'parent_view_id': parentViewId,
+        'dry_run': dryRun,
+      },
+      token: token,
+    );
+    return CloneReport.fromJson(response);
+  }
+
   Future<void> purgeView(
     String token,
     String workspaceId,

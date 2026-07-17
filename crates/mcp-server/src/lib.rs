@@ -277,6 +277,22 @@ struct TransferArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CloneArgs {
+  /// The workspace id (the copy is created in the SAME workspace).
+  workspace_id: String,
+  /// The VIEW id of the page or folder to duplicate (from `mica_list_pages`).
+  view_id: String,
+  /// Destination parent folder view id; omit/null to place the copy beside the
+  /// original (under its own parent).
+  #[serde(default)]
+  parent_view_id: Option<String>,
+  /// Name for the copy; omit for a "{source} 副本" default. Deduped against
+  /// siblings server-side.
+  #[serde(default)]
+  name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ReorderArgs {
   workspace_id: String,
   /// The folder whose children to reorder (a folder's view id), or omit/null
@@ -884,6 +900,40 @@ impl MicaMcp {
       )
       .await;
     action_ack(done, if copy { "copied" } else { "moved" }, &view_id)
+  }
+
+  #[tool(
+    description = "Duplicate a page (its whole subtree) or a folder IN PLACE — the copy lands in \
+                   the SAME workspace, beside the original by default (or under parent_view_id if \
+                   given). Images are shared with the original (same file, no re-upload). Like \
+                   transfer, the copy gets NEW ids, so version-history checkpoints do NOT carry \
+                   over. Omit name for a \"{source} 副本\" default; the name is deduped against \
+                   siblings. Ids come from mica_list_pages.",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_clone_document(
+    &self,
+    Parameters(CloneArgs {
+      workspace_id,
+      view_id,
+      parent_view_id,
+      name,
+    }): Parameters<CloneArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    let body = json!({
+      "parent_view_id": parent_view_id,
+      "name": name,
+    });
+    let done = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}/clone"),
+        body,
+      )
+      .await;
+    action_ack(done, "cloned", &view_id)
   }
 
   #[tool(
@@ -1599,6 +1649,7 @@ mod handshake_tests {
     for expected in [
       "mica_rename",
       "mica_create_folder",
+      "mica_clone_document",
       "mica_list_trash",
       "mica_restore_view",
       "mica_list_versions",
@@ -1666,7 +1717,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 23, "every tool must be listed");
+    assert_eq!(tools.len(), 24, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

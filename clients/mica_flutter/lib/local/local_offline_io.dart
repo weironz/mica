@@ -337,6 +337,94 @@ class LocalOffline {
     return (workspaceId: wsId, docs: docs);
   }
 
+  /// Duplicate the subtree rooted at [viewId] within its own local workspace.
+  /// Every node gets a fresh view id and a fresh doc (loadDoc → saveDoc under a
+  /// new id, so the copy shares no CRDT state with the source); blobs stay
+  /// shared via the content-addressed CAS (same file_id, zero copy — the same
+  /// dedup intent the cloud path relies on). The copied root sits beside the
+  /// original (same parent) with [rootName] deduped against its live siblings.
+  /// Returns the new root view id, the deduped name, and the copied doc count,
+  /// or null if the store isn't open or the view is gone.
+  ({String rootViewId, String newName, int docs})? cloneView({
+    required String viewId,
+    required String rootName,
+  }) {
+    final store = _store;
+    if (store == null) return null;
+    final all = store.listViews(origin: 'local');
+    final root = all.where((v) => v.id == viewId).firstOrNull;
+    if (root == null) return null;
+
+    // Collect the subtree (root + all descendants).
+    final subtree = <LocalView>[];
+    final queue = <LocalView>[root];
+    while (queue.isNotEmpty) {
+      final v = queue.removeLast();
+      subtree.add(v);
+      for (final c in all) {
+        if (c.parentId == v.id) queue.add(c);
+      }
+    }
+
+    // Dedup the copy's name against live siblings under the same parent, and
+    // place it after them (max position + 10, matching _localCreate*).
+    var maxPos = 0;
+    final siblingNames = <String>[];
+    for (final v in all) {
+      if (v.parentId == root.parentId && !v.trashed) {
+        siblingNames.add(v.name);
+        final n = int.tryParse(v.position) ?? 0;
+        if (n > maxPos) maxPos = n;
+      }
+    }
+    final newName = _dedupName(rootName, siblingNames);
+    final rootPosition = (maxPos + 10).toString().padLeft(10, '0');
+
+    // Fresh ids for every node; copy each doc; remap parents. The root keeps its
+    // parent (beside the original); inner nodes point at their copied parent.
+    final idMap = {for (final v in subtree) v.id: _id('view')};
+    var docs = 0;
+    for (final v in subtree) {
+      final isRoot = v.id == viewId;
+      final doc = store.loadDoc(docId: v.objectId);
+      final newDocId = _id('doc');
+      if (doc != null) {
+        store.saveDoc(docId: newDocId, doc: doc);
+        docs++;
+      } else {
+        store.saveDoc(
+          docId: newDocId,
+          doc: MicaDocument.fromMarkdown(markdown: ''),
+        );
+      }
+      store.saveView(
+        view: LocalView(
+          id: idMap[v.id]!,
+          workspaceId: v.workspaceId,
+          parentId: isRoot ? v.parentId : idMap[v.parentId],
+          objectId: newDocId,
+          name: isRoot ? newName : v.name,
+          position: isRoot ? rootPosition : v.position,
+          trashed: false,
+          origin: 'local',
+          objectType: v.objectType,
+        ),
+      );
+    }
+    return (rootViewId: idMap[viewId]!, newName: newName, docs: docs);
+  }
+
+  /// `base` if free among [siblings], else `base 2`, `base 3`, … (the number is
+  /// locale-neutral; the caller supplies the localized base). Mirrors the
+  /// server's dedup_sibling_name so cloud and local pick the same shape.
+  String _dedupName(String base, List<String> siblings) {
+    if (!siblings.contains(base)) return base;
+    for (var n = 2;; n++) {
+      final candidate = '$base $n';
+      if (!siblings.contains(candidate)) return candidate;
+    }
+  }
+
   /// Next zero-padded position after the last local workspace.
   String _nextLocalWorkspacePosition() {
     var max = 0;

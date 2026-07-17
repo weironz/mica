@@ -677,6 +677,7 @@ class DocumentListItem extends StatefulWidget {
     this.onExportFolder,
     this.onTransferMove,
     this.onTransferCopy,
+    required this.onClone,
     required this.onRename,
     required this.onRenameSubmit,
     required this.onRenameCancel,
@@ -711,6 +712,10 @@ class DocumentListItem extends StatefulWidget {
   /// together, mirroring how the whole cloud-only block gates on one callback.
   final VoidCallback? onTransferMove;
   final VoidCallback? onTransferCopy;
+
+  /// Duplicate this row's subtree in place. Always present — clone works in both
+  /// cloud and local workspaces, unlike the transfer pair above.
+  final VoidCallback onClone;
   final VoidCallback onRename;
 
   /// Commit the inline-edited name (Enter or blur); cancel on Esc.
@@ -859,6 +864,16 @@ class _DocumentListItemState extends State<DocumentListItem> {
             label: context.l10n.commonRename,
           ),
         ),
+        // Duplicate in place — works for pages AND folders (a folder copies its
+        // whole subtree), and in cloud AND local workspaces (unlike transfer,
+        // which is cloud-only), so it's always present.
+        PopupMenuItem(
+          value: 'duplicate',
+          child: _MenuRow(
+            icon: Icons.content_copy_outlined,
+            label: context.l10n.rowDuplicate,
+          ),
+        ),
         if (widget.hasChildren)
           PopupMenuItem(
             value: 'toggle',
@@ -917,6 +932,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
         widget.onCreateChildFolder();
       case 'rename':
         widget.onRename();
+      case 'duplicate':
+        widget.onClone();
       case 'toggle':
         widget.onToggle();
       case 'export':

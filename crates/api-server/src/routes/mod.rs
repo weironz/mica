@@ -105,6 +105,10 @@ pub fn api_router() -> Router<AppState> {
       post(documents::transfer_view),
     )
     .route(
+      "/workspaces/{workspace_id}/views/{view_id}/clone",
+      post(documents::clone_view),
+    )
+    .route(
       "/workspaces/{workspace_id}/views/reorder",
       post(documents::reorder_views),
     )

@@ -395,6 +395,34 @@ class TransferReport {
   final bool dryRun;
 }
 
+/// Result of duplicating a view within its own workspace (the server's `/clone`
+/// endpoint). [newName] is the sibling-deduped name the copy actually got.
+class CloneReport {
+  const CloneReport({
+    required this.newRootViewId,
+    required this.newName,
+    required this.documents,
+    required this.folders,
+    required this.dryRun,
+  });
+
+  factory CloneReport.fromJson(Map<String, dynamic> json) {
+    return CloneReport(
+      newRootViewId: json['new_root_view_id'] as String?,
+      newName: json['new_name'] as String? ?? '',
+      documents: (json['documents'] as num?)?.toInt() ?? 0,
+      folders: (json['folders'] as num?)?.toInt() ?? 0,
+      dryRun: json['dry_run'] == true,
+    );
+  }
+
+  final String? newRootViewId;
+  final String newName;
+  final int documents;
+  final int folders;
+  final bool dryRun;
+}
+
 class DocumentCreateResult {
   const DocumentCreateResult({required this.document, required this.view});
 

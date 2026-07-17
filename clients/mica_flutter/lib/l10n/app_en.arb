@@ -64,6 +64,7 @@
   "rowExpand": "Expand",
   "rowCollapse": "Collapse",
   "rowMoreActions": "Delete, rename, and more",
+  "rowDuplicate": "Duplicate",
   "presenceEditing": "{count, plural, =1{1 editing} other{{count} editing}}",
   "@presenceEditing": {
     "placeholders": {
@@ -713,6 +714,30 @@
   },
   "transferFailed": "Transfer failed: {error}",
   "@transferFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "cloneCopyName": "{name} copy",
+  "@cloneCopyName": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "cloneDone": "Duplicated as \"{name}\"",
+  "@cloneDone": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "cloneFailed": "Duplicate failed: {error}",
+  "@cloneFailed": {
     "placeholders": {
       "error": {
         "type": "String"
