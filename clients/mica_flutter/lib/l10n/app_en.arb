@@ -327,7 +327,11 @@
   "workspaceDeleteTitle": "Delete workspace",
   "workspaceDeleteConfirm": "Delete \"{name}\" and all of its pages? This cannot be undone.",
   "@workspaceDeleteConfirm": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "workspaceSettings": "Workspace settings",
   "workspaceMembers": "Members",
@@ -360,7 +364,11 @@
   "serverRemoveTooltip": "Remove this server",
   "serverRemoveTitle": "Remove {host}?",
   "@serverRemoveTitle": {
-    "placeholders": { "host": { "type": "String" } }
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
   },
   "serverRemoveBody": "This clears this server's sign-in and offline mirror on this device. Data on the server is unaffected — re-add and sign in to restore it.\n\nOffline edits not yet synced exist only on this device and will disappear with the mirror (they are pushed first, before removal).",
   "editorSelectWorkspaceTitle": "Select a workspace",
@@ -402,72 +410,232 @@
   "snackDismiss": "Dismiss",
   "snackLocalStoreOpenFailed": "Failed to open local storage: {error}",
   "@snackLocalStoreOpenFailed": {
-    "placeholders": { "error": { "type": "String" } }
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "snackKeepOneLocalWorkspace": "Keep at least one local workspace.",
   "snackImageRehostFailed": "The image couldn't be saved to storage; the original link was kept (the image will be lost if the link breaks). {error}",
   "@snackImageRehostFailed": {
-    "placeholders": { "error": { "type": "String" } }
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "aiNotSignedIn": "Not signed in.",
   "exportFailed": "Export failed: {error}",
   "@exportFailed": {
-    "placeholders": { "error": { "type": "String" } }
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "exportEmptyContent": "Export returned empty content",
   "exportLocalUnsupported": "Local workspaces can't be exported yet; upload to the cloud first",
   "worldMigrateNoIdentity": "Local identity unavailable; can't migrate",
   "worldMigratedMsg": "Uploaded \"{name}\" to the cloud ({count, plural, =1{1 page} other{{count} pages}}).",
   "@worldMigratedMsg": {
-    "placeholders": { "name": { "type": "String" }, "count": { "type": "int" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "worldDetachStoreUnavailable": "Local storage is unavailable; can't convert to local.",
   "worldDetachedMsg": "Copied \"{name}\" to a local workspace ({count, plural, =1{1 page with content} other{{count} pages with content}}).",
   "@worldDetachedMsg": {
-    "placeholders": { "name": { "type": "String" }, "count": { "type": "int" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "worldMigrateDoneTitle": "Upload complete",
   "worldMigrateDoneBody": "\"{name}\" has been copied to the cloud. The local original is now an independent copy that no longer syncs with the cloud — keeping it will leave two same-named workspaces whose contents diverge.",
   "@worldMigrateDoneBody": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "worldKeepLocalOriginal": "Keep local original",
   "worldDeleteLocalOriginal": "Delete local original",
   "worldDetachTitle": "Convert to local workspace",
   "worldDetachBody": "Copy \"{name}\" as a new local workspace? The cloud original stays unchanged; the two become independent and no longer sync.",
   "@worldDetachBody": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "worldDetachConfirm": "Copy to local",
   "worldMigrateSignInTitle": "Connect a cloud account and migrate",
   "worldCloudSignInTitle": "Sign in to your cloud account",
   "worldMigrateSignInDesc": "Copy the local workspace \"{name}\" to the cloud (local data is kept).",
   "@worldMigrateSignInDesc": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "worldCloudSignInDesc": "Sign in to access your cloud workspaces (local data is unaffected).",
   "worldMigrateAction": "Migrate",
   "importNotesCount": "{count, plural, =1{1 note} other{{count} notes}}",
   "@importNotesCount": {
-    "placeholders": { "count": { "type": "int" } }
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "importFoldersCount": "{count, plural, =1{1 folder} other{{count} folders}}",
   "@importFoldersCount": {
-    "placeholders": { "count": { "type": "int" } }
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "importListSeparator": ", ",
   "importDone": "Imported {items}",
   "@importDone": {
-    "placeholders": { "items": { "type": "String" } }
+    "placeholders": {
+      "items": {
+        "type": "String"
+      }
+    }
   },
   "importSkippedSuffix": " ({count} skipped)",
   "@importSkippedSuffix": {
-    "placeholders": { "count": { "type": "int" } }
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "importNoMarkdown": "No Markdown files found",
   "importFailed": "Import failed: {error}",
   "@importFailed": {
-    "placeholders": { "error": { "type": "String" } }
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
-  "importJobFailed": "import failed"
+  "importJobFailed": "import failed",
+  "editorFindNoResults": "No results",
+  "editorFindHint": "Find in page",
+  "editorFindPrevious": "Previous (Shift+Enter)",
+  "editorFindNext": "Next (Enter)",
+  "editorFindClose": "Close (Esc)",
+  "editorMoreHeadings": "More headings",
+  "editorHeadingN": "Heading {level}",
+  "@editorHeadingN": {
+    "placeholders": {
+      "level": {
+        "type": "int"
+      }
+    }
+  },
+  "editorUntitled": "Untitled",
+  "editorCut": "Cut",
+  "editorPaste": "Paste",
+  "editorCodeCopied": "Code copied",
+  "editorAiPromptHint": "Describe what to write…",
+  "editorSearchLanguage": "Search language…",
+  "linkAddTitle": "Add link",
+  "linkAdd": "Add",
+  "linkUrlHint": "https://…",
+  "linkCopy": "Copy link",
+  "linkEdit": "Edit link",
+  "linkRemove": "Remove link",
+  "linkTextLabel": "Text",
+  "linkUrlLabel": "URL",
+  "slashText": "Text",
+  "slashHeading1": "Heading 1",
+  "slashHeading2": "Heading 2",
+  "slashHeading3": "Heading 3",
+  "slashBulletedList": "Bulleted list",
+  "slashNumberedList": "Numbered list",
+  "slashTodo": "To-do",
+  "slashQuote": "Quote",
+  "slashCode": "Code",
+  "slashMathFormula": "Math formula",
+  "slashTable": "Table",
+  "slashDivider": "Divider",
+  "slashImage": "Image",
+  "tableAlignLeft": "Align left",
+  "tableAlignCenter": "Align center",
+  "tableAlignRight": "Align right",
+  "tableAutofitColumns": "Auto-fit columns",
+  "tableCopy": "Copy table",
+  "tableDelete": "Delete table",
+  "tableCopied": "Table copied",
+  "tableInsertRowAbove": "Insert row above",
+  "tableInsertRowBelow": "Insert row below",
+  "tableDeleteRow": "Delete row",
+  "tableColMoveLeft": "Move left",
+  "tableColMoveRight": "Move right",
+  "tableInsertColLeft": "Insert column left",
+  "tableInsertColRight": "Insert column right",
+  "tableDeleteColumn": "Delete column",
+  "imageExternalHost": "External link · {host}",
+  "@imageExternalHost": {
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "imageStoredPublic": "Stored in Mica · link is publicly accessible",
+  "imageViewFullscreen": "View fullscreen",
+  "imageEditMenu": "Edit image…",
+  "imageRehost": "Save to Mica storage",
+  "imageCopyLink": "Copy image link",
+  "imageOpenInBrowser": "Open in browser",
+  "imageCopy": "Copy image",
+  "imageCut": "Cut image",
+  "imagePasteReplace": "Paste image (replace)",
+  "imageDownload": "Download",
+  "imageOriginalLinkCopied": "Original link copied",
+  "imageLinkCopiedPublic": "Image link copied (publicly accessible)",
+  "imageClipboardEmpty": "No image on the clipboard",
+  "imageUploadFailed": "Upload failed",
+  "imageLinkUnresolved": "(link not resolved yet)",
+  "imageLinkNeedsHttp": "Enter an image link starting with http(s)",
+  "imageRehostFailed": "Save failed: neither this server nor this device could fetch the image",
+  "imageReadFailed": "Failed to read the image",
+  "imageCopied": "Image copied",
+  "imageCopyFailed": "Copy failed — try \"Download\" instead",
+  "imageLoadFailed": "Could not load the image",
+  "imageEditTitle": "Edit image",
+  "imageExternalWarning": "External link · the image is lost if the source site goes down",
+  "imageReplaceHeading": "Replace image",
+  "imageUploadLocal": "Upload local image",
+  "imagePasteLinkLabel": "Or paste an image link",
+  "imageRehostOn": "Auto-save is on: the link will be saved into Mica storage (the original link is kept if it can't be fetched)",
+  "imageRehostOff": "Auto-save is off: the original link is kept as-is",
+  "imageReplaceButton": "Replace",
+  "imageBrokenCaption": "Can't load · {host}",
+  "@imageBrokenCaption": {
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "imageExternalBadge": "External"
 }

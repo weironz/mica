@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../cjk_fonts.dart';
+import '../l10n/locale_controller.dart';
 import 'highlight.dart';
 import 'marks.dart';
 import 'model.dart';

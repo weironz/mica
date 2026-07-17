@@ -23,6 +23,7 @@ import 'render.dart';
 import 'rich_paste.dart';
 import 'cell_edit_controller.dart';
 import 'table.dart';
+import '../l10n/locale_controller.dart';
 
 export 'controller.dart' show DocOp, ApplyOps;
 export 'markdown.dart' show markdownToBlocks, BlockSpec;
@@ -570,7 +571,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final total = _findMatches.length;
     final label = _findCtrl.text.isEmpty
         ? ''
-        : (total == 0 ? '无结果' : '${_findIndex + 1}/$total');
+        : (total == 0
+              ? context.l10n.editorFindNoResults
+              : '${_findIndex + 1}/$total');
     Widget iconBtn(IconData icon, String tip, VoidCallback? onTap) =>
         IconButton(
           icon: Icon(icon, size: 18),
@@ -607,10 +610,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   onSubmitted: (_) => _findStep(1),
                   textInputAction: TextInputAction.search,
                   style: const TextStyle(fontSize: 14),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
-                    hintText: '页内查找',
+                    hintText: context.l10n.editorFindHint,
                   ),
                 ),
               ),
@@ -628,15 +631,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               ),
               iconBtn(
                 Icons.keyboard_arrow_up,
-                '上一个 (Shift+Enter)',
+                context.l10n.editorFindPrevious,
                 total == 0 ? null : () => _findStep(-1),
               ),
               iconBtn(
                 Icons.keyboard_arrow_down,
-                '下一个 (Enter)',
+                context.l10n.editorFindNext,
                 total == 0 ? null : () => _findStep(1),
               ),
-              iconBtn(Icons.close, '关闭 (Esc)', _closeFind),
+              iconBtn(Icons.close, context.l10n.editorFindClose, _closeFind),
             ],
           ),
         ),
@@ -2740,24 +2743,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final url = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add link'),
+        title: Text(context.l10n.linkAddTitle),
         content: TextField(
           controller: field,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'https://…',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            hintText: context.l10n.linkUrlHint,
+            border: const OutlineInputBorder(),
           ),
           onSubmitted: (value) => Navigator.of(context).pop(value),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(field.text),
-            child: const Text('Add'),
+            child: Text(context.l10n.linkAdd),
           ),
         ],
       ),
@@ -2908,7 +2911,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return IconButton(
         iconSize: 18,
         visualDensity: VisualDensity.compact,
-        tooltip: 'Heading $level (Ctrl+Alt+$level)',
+        tooltip: switch (level) {
+          1 => context.l10n.pageFormatHeading1,
+          2 => context.l10n.pageFormatHeading2,
+          _ => context.l10n.pageFormatHeading3,
+        },
         style: active
             ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
             : null,
@@ -2935,7 +2942,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         builder: (btnContext) => IconButton(
           iconSize: 16,
           visualDensity: VisualDensity.compact,
-          tooltip: activeDeep ? 'Heading $currentLevel' : 'More headings',
+          tooltip: activeDeep
+              ? context.l10n.editorHeadingN(currentLevel)
+              : context.l10n.editorMoreHeadings,
           style: activeDeep
               ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
               : null,
@@ -2949,7 +2958,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             final at = box.localToGlobal(Offset(0, box.size.height));
             final pick = await _showSmallMenu(at, [
               for (var l = 4; l <= 6; l++)
-                ('$l', '${l == currentLevel ? '✓ ' : '   '}Heading $l'),
+                (
+                  '$l',
+                  '${l == currentLevel ? '✓ ' : '   '}${context.l10n.editorHeadingN(l)}',
+                ),
             ]);
             if (pick != null) {
               _controller.setSelectedBlocksKind(
@@ -2980,17 +2992,34 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (singleText) ...[
-                    markBtn(Icons.format_bold, 'bold', 'Bold'),
-                    markBtn(Icons.format_italic, 'italic', 'Italic'),
+                    markBtn(Icons.format_bold, 'bold', context.l10n.shortcutsBold),
+                    markBtn(
+                      Icons.format_italic,
+                      'italic',
+                      context.l10n.shortcutsItalic,
+                    ),
                   ],
                   // Code block sits just before inline code — the two code
                   // affordances read as one group (document blocks only).
                   if (showBlocks)
-                    blockBtn(Icons.terminal, 'code_block', 'Code block'),
+                    blockBtn(
+                      Icons.terminal,
+                      'code_block',
+                      context.l10n.pageFormatCodeBlock,
+                    ),
                   if (singleText) ...[
-                    markBtn(Icons.code, 'code', 'Inline code'),
-                    markBtn(Icons.strikethrough_s, 'strike', 'Strikethrough'),
-                    markBtn(Icons.link, 'link', 'Link', custom: _promptLink),
+                    markBtn(Icons.code, 'code', context.l10n.shortcutsInlineCode),
+                    markBtn(
+                      Icons.strikethrough_s,
+                      'strike',
+                      context.l10n.pageFormatStrikethrough,
+                    ),
+                    markBtn(
+                      Icons.link,
+                      'link',
+                      context.l10n.shortcutsLink,
+                      custom: _promptLink,
+                    ),
                   ],
                   if (showBlocks) ...[
                     const VerticalDivider(width: 9, indent: 8, endIndent: 8),
@@ -2998,24 +3027,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     // H4–H6 hide behind the chevron.
                     for (var level = 1; level <= 3; level++) headingBtn(level),
                     moreHeadingsBtn(),
-                    blockBtn(Icons.notes, 'paragraph', 'Text'),
+                    blockBtn(Icons.notes, 'paragraph', context.l10n.slashText),
                     blockBtn(
                       Icons.format_list_bulleted,
                       'bulleted_list',
-                      'Bulleted list',
+                      context.l10n.pageFormatBulletedList,
                     ),
                     blockBtn(
                       Icons.format_list_numbered,
                       'numbered_list',
-                      'Numbered list',
+                      context.l10n.pageFormatNumberedList,
                     ),
                     blockBtn(
                       Icons.check_box_outlined,
                       'todo',
-                      'To-do',
+                      context.l10n.slashTodo,
                       data: {'checked': false},
                     ),
-                    blockBtn(Icons.format_quote, 'quote', 'Quote'),
+                    blockBtn(Icons.format_quote, 'quote', context.l10n.pageFormatQuote),
                   ],
                 ],
               ),
@@ -3027,13 +3056,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _openTableMenu(int node, Offset globalPosition) async {
-    final selected = await _showSmallMenu(globalPosition, const [
-      ('left', 'Align left'),
-      ('center', 'Align center'),
-      ('right', 'Align right'),
-      ('autofit', 'Auto-fit columns'),
-      ('copy', 'Copy table'),
-      ('delete', 'Delete table'),
+    final selected = await _showSmallMenu(globalPosition, [
+      ('left', context.l10n.tableAlignLeft),
+      ('center', context.l10n.tableAlignCenter),
+      ('right', context.l10n.tableAlignRight),
+      ('autofit', context.l10n.tableAutofitColumns),
+      ('copy', context.l10n.tableCopy),
+      ('delete', context.l10n.tableDelete),
     ]);
     switch (selected) {
       case 'left':
@@ -3048,9 +3077,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         await copyTextToClipboard(tableToMarkdown(table));
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Table copied'),
-              duration: Duration(seconds: 1),
+            SnackBar(
+              content: Text(context.l10n.tableCopied),
+              duration: const Duration(seconds: 1),
             ),
           );
         }
@@ -3061,12 +3090,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _openRowMenu(int node, int row, Offset globalPosition) async {
-    final selected = await _showSmallMenu(globalPosition, const [
-      ('moveUp', 'Move up'),
-      ('moveDown', 'Move down'),
-      ('above', 'Insert row above'),
-      ('below', 'Insert row below'),
-      ('delete', 'Delete row'),
+    final selected = await _showSmallMenu(globalPosition, [
+      ('moveUp', context.l10n.rowMoveUp),
+      ('moveDown', context.l10n.rowMoveDown),
+      ('above', context.l10n.tableInsertRowAbove),
+      ('below', context.l10n.tableInsertRowBelow),
+      ('delete', context.l10n.tableDeleteRow),
     ]);
     switch (selected) {
       case 'moveUp':
@@ -3083,12 +3112,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _openColumnMenu(int node, int col, Offset globalPosition) async {
-    final selected = await _showSmallMenu(globalPosition, const [
-      ('moveLeft', 'Move left'),
-      ('moveRight', 'Move right'),
-      ('left', 'Insert column left'),
-      ('right', 'Insert column right'),
-      ('delete', 'Delete column'),
+    final selected = await _showSmallMenu(globalPosition, [
+      ('moveLeft', context.l10n.tableColMoveLeft),
+      ('moveRight', context.l10n.tableColMoveRight),
+      ('left', context.l10n.tableInsertColLeft),
+      ('right', context.l10n.tableInsertColRight),
+      ('delete', context.l10n.tableDeleteColumn),
     ]);
     switch (selected) {
       case 'moveLeft':
@@ -3130,9 +3159,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     copyTextToClipboard(nodes[nodeIndex].text);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Code copied'),
-          duration: Duration(seconds: 1),
+        SnackBar(
+          content: Text(context.l10n.editorCodeCopied),
+          duration: const Duration(seconds: 1),
         ),
       );
     }
@@ -3243,20 +3272,32 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  action(Icons.copy_outlined, 'Copy link', _copyLinkFromBar),
+                  action(
+                    Icons.copy_outlined,
+                    context.l10n.linkCopy,
+                    _copyLinkFromBar,
+                  ),
                   if (widget.canEdit) ...[
                     Container(
                       width: 1,
                       height: 18,
                       color: const Color(0xFFE2E8F0),
                     ),
-                    action(Icons.edit_outlined, 'Edit link', _editLinkFromBar),
+                    action(
+                      Icons.edit_outlined,
+                      context.l10n.linkEdit,
+                      _editLinkFromBar,
+                    ),
                     Container(
                       width: 1,
                       height: 18,
                       color: const Color(0xFFE2E8F0),
                     ),
-                    action(Icons.link_off, 'Remove link', _removeLinkFromBar),
+                    action(
+                      Icons.link_off,
+                      context.l10n.linkRemove,
+                      _removeLinkFromBar,
+                    ),
                   ],
                 ],
               ),
@@ -3301,7 +3342,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Edit link', style: TextStyle(fontSize: 15)),
+        title: Text(context.l10n.linkEdit, style: const TextStyle(fontSize: 15)),
         titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
         contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         actionsPadding: const EdgeInsets.fromLTRB(16, 4, 12, 8),
@@ -3314,21 +3355,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 controller: textField,
                 autofocus: true,
                 style: const TextStyle(fontSize: 13),
-                decoration: const InputDecoration(
-                  labelText: 'Text',
+                decoration: InputDecoration(
+                  labelText: context.l10n.linkTextLabel,
                   isDense: true,
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: urlField,
                 style: const TextStyle(fontSize: 13),
-                decoration: const InputDecoration(
-                  labelText: 'URL',
-                  hintText: 'https://…',
+                decoration: InputDecoration(
+                  labelText: context.l10n.linkUrlLabel,
+                  hintText: context.l10n.linkUrlHint,
                   isDense: true,
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => Navigator.of(context).pop(true),
               ),
@@ -3339,12 +3380,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           TextButton(
             style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Save'),
+            child: Text(context.l10n.commonSave),
           ),
         ],
       ),
@@ -4024,7 +4065,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            p.title.isEmpty ? 'Untitled' : p.title,
+                            p.title.isEmpty ? context.l10n.editorUntitled : p.title,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontSize: 14,
@@ -4056,7 +4097,48 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   List<_SlashOption> _filteredSlash() {
     final q = _slashQuery.toLowerCase();
     if (q.isEmpty) return _slashMenu;
-    return _slashMenu.where((o) => o.label.toLowerCase().contains(q)).toList();
+    return _slashMenu
+        .where((o) => _slashLabel(o).toLowerCase().contains(q))
+        .toList();
+  }
+
+  /// The localized label for a slash-menu option, resolved from its kind
+  /// (headings differ by level). Falls back to the option's built-in English
+  /// label for anything unmapped.
+  String _slashLabel(_SlashOption o) {
+    final l = context.l10n;
+    switch (o.kind) {
+      case _aiSlashKind:
+        return l.aiAskTitle;
+      case 'paragraph':
+        return l.slashText;
+      case 'heading':
+        return switch (o.data['level']) {
+          2 => l.slashHeading2,
+          3 => l.slashHeading3,
+          _ => l.slashHeading1,
+        };
+      case 'bulleted_list':
+        return l.slashBulletedList;
+      case 'numbered_list':
+        return l.slashNumberedList;
+      case 'todo':
+        return l.slashTodo;
+      case 'quote':
+        return l.slashQuote;
+      case 'code_block':
+        return l.slashCode;
+      case 'math_block':
+        return l.slashMathFormula;
+      case 'table':
+        return l.slashTable;
+      case 'divider':
+        return l.slashDivider;
+      case 'image':
+        return l.slashImage;
+      default:
+        return o.label;
+    }
   }
 
   /// Recompute the slash session from the caret: open the menu when a `/` token
@@ -4171,7 +4253,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final source = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Math formula', style: TextStyle(fontSize: 16)),
+        title: Text(
+          context.l10n.slashMathFormula,
+          style: const TextStyle(fontSize: 16),
+        ),
         content: SizedBox(
           width: 420,
           child: TextField(
@@ -4181,6 +4266,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             minLines: 1,
             style: const TextStyle(fontFamily: kMonoFont, fontSize: 14),
             decoration: const InputDecoration(
+              // A LaTeX example (language-neutral) — deliberately not localized.
               hintText: r'E = mc^2',
               isDense: true,
             ),
@@ -4189,11 +4275,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('OK'),
+            child: Text(context.l10n.commonOk),
           ),
         ],
       ),
@@ -4215,7 +4301,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final edited = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Math formula', style: TextStyle(fontSize: 16)),
+        title: Text(
+          context.l10n.slashMathFormula,
+          style: const TextStyle(fontSize: 16),
+        ),
         content: SizedBox(
           width: 420,
           child: TextField(
@@ -4225,6 +4314,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             minLines: 1,
             style: const TextStyle(fontFamily: kMonoFont, fontSize: 14),
             decoration: const InputDecoration(
+              // A LaTeX example (language-neutral) — deliberately not localized.
               hintText: r'\eta = 2 \times \frac{N-1}{N}',
               isDense: true,
             ),
@@ -4233,11 +4323,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('OK'),
+            child: Text(context.l10n.commonOk),
           ),
         ],
       ),
@@ -4325,10 +4415,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final canEdit = widget.canEdit;
     if (!insideSelection && !canEdit) return; // read-only + nothing to copy
     final choice = await _showSmallMenu(globalPosition, [
-      if (insideSelection) ('copy', '复制'),
-      if (insideSelection && canEdit) ('cut', '剪切'),
-      if (canEdit) ('paste', '粘贴'),
-      if (canEdit) ('pastePlain', '粘贴为纯文本'),
+      if (insideSelection) ('copy', context.l10n.commonCopy),
+      if (insideSelection && canEdit) ('cut', context.l10n.editorCut),
+      if (canEdit) ('paste', context.l10n.editorPaste),
+      if (canEdit) ('pastePlain', context.l10n.shortcutsPastePlain),
     ]);
     if (choice == null || !mounted) return;
     switch (choice) {
@@ -4371,40 +4461,54 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           height: 32,
           child: Text(
             isExternal
-                ? '外部链接 · ${_urlHost(data['url'] as String? ?? '')}'
+                ? context.l10n.imageExternalHost(
+                    _urlHost(data['url'] as String? ?? ''),
+                  )
                 // Naming it "public" matters: the blob url is unauthenticated
                 // by design (the UUID is the capability) so copied images keep
                 // rendering elsewhere. Copying the link IS sharing the image.
-                : '已存储到 Mica · 链接公开可访问',
+                : context.l10n.imageStoredPublic,
             style: TextStyle(fontSize: 12, color: EditorTheme.muted),
           ),
         ),
         const PopupMenuDivider(height: 1),
-        const PopupMenuItem(value: 'expand', child: Text('全屏查看')),
-        const PopupMenuItem(value: 'edit', child: Text('编辑图片…')),
+        PopupMenuItem(
+          value: 'expand',
+          child: Text(context.l10n.imageViewFullscreen),
+        ),
+        PopupMenuItem(value: 'edit', child: Text(context.l10n.imageEditMenu)),
         // Alignment is deliberately NOT here — the hover toolbar over the
         // picture already owns it.
         const PopupMenuDivider(height: 1),
         if (isExternal)
-          const PopupMenuItem(value: 'rehost', child: Text('转存到 Mica 存储')),
+          PopupMenuItem(value: 'rehost', child: Text(context.l10n.imageRehost)),
         // Both forms have a link worth copying. A stored image's is its Mica
         // blob url: stable, never-expiring, and PUBLIC — the file_id UUID is
         // the capability, which is what lets a copied image still render in
         // Typora/a browser. Copy/export already emit it; there was just no way
         // to get at it deliberately.
         if (_imageLinkOf(data) != null) ...[
-          const PopupMenuItem(value: 'copyLink', child: Text('复制图片链接')),
-          const PopupMenuItem(value: 'openLink', child: Text('在浏览器中打开')),
+          PopupMenuItem(
+            value: 'copyLink',
+            child: Text(context.l10n.imageCopyLink),
+          ),
+          PopupMenuItem(
+            value: 'openLink',
+            child: Text(context.l10n.imageOpenInBrowser),
+          ),
         ],
-        const PopupMenuItem(value: 'copy', child: Text('复制图片')),
-        const PopupMenuItem(value: 'cut', child: Text('剪切图片')),
+        PopupMenuItem(value: 'copy', child: Text(context.l10n.imageCopy)),
+        PopupMenuItem(value: 'cut', child: Text(context.l10n.imageCut)),
         // Reading a bitmap off the clipboard is a desktop-only pull: on web the
         // clipboard only arrives through the DOM paste event, so the facade
         // returns null and this could never do anything but fail.
         if (!kIsWeb && widget.onUploadImage != null)
-          const PopupMenuItem(value: 'paste', child: Text('粘贴图片(替换)')),
-        const PopupMenuItem(value: 'download', child: Text('下载')),
-        const PopupMenuItem(value: 'delete', child: Text('删除')),
+          PopupMenuItem(
+            value: 'paste',
+            child: Text(context.l10n.imagePasteReplace),
+          ),
+        PopupMenuItem(value: 'download', child: Text(context.l10n.imageDownload)),
+        PopupMenuItem(value: 'delete', child: Text(context.l10n.commonDelete)),
       ],
     );
     if (choice == null || !mounted) return;
@@ -4420,7 +4524,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         if (link != null) {
           await Clipboard.setData(ClipboardData(text: link));
           if (mounted) {
-            _toast(isExternal ? '已复制原始链接' : '已复制图片链接(公开可访问)');
+            _toast(
+              isExternal
+                  ? context.l10n.imageOriginalLinkCopied
+                  : context.l10n.imageLinkCopiedPublic,
+            );
           }
         }
       case 'openLink':
@@ -4459,13 +4567,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final bytes = await readClipboardImage();
     if (!mounted) return;
     if (bytes == null || bytes.isEmpty) {
-      _toast('剪贴板里没有图片');
+      _toast(context.l10n.imageClipboardEmpty);
       return;
     }
     final result = await upload(bytes, 'pasted-image.png', 'image/png');
     if (!mounted) return;
     if (result == null) {
-      _toast('上传失败');
+      _toast(context.l10n.imageUploadFailed);
       return;
     }
     _primeImage(result.fileId, bytes);
@@ -4482,7 +4590,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final external =
         data['file_id'] == null &&
         (data['url'] as String?)?.startsWith('http') == true;
-    final link = _imageLinkOf(data) ?? '(链接尚未解析)';
+    final link = _imageLinkOf(data) ?? context.l10n.imageLinkUnresolved;
     // Returns the url to replace with; '' = handled already (a file upload) or
     // nothing typed; null = cancelled.
     final url = await showDialog<String>(
@@ -4498,7 +4606,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
     if (url == null || url.isEmpty || !mounted) return;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      _toast('请填写 http(s) 开头的图片链接');
+      _toast(context.l10n.imageLinkNeedsHttp);
       return;
     }
     // Show it immediately on its url, then run the same server-then-client
@@ -4519,7 +4627,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (picked == null) return false;
     final result = await upload(picked.bytes, picked.name, picked.mime);
     if (result == null || !mounted) {
-      if (mounted) _toast('上传失败');
+      if (mounted) _toast(context.l10n.imageUploadFailed);
       return false;
     }
     _primeImage(result.fileId, picked.bytes);
@@ -4561,7 +4669,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final ok = await _rehostOne(id, url);
     if (!mounted) return;
     setState(() => _rehostPending.remove(url));
-    if (!ok) _toast('转存失败:这台服务器和本机都取不到该图片');
+    if (!ok) _toast(context.l10n.imageRehostFailed);
   }
 
   /// Bytes + filename for an image node (re-fetched via the host loader).
@@ -4588,19 +4696,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Future<bool> _copyImage(int node) async {
     final data = await _imageData(node);
     if (data == null || !mounted) {
-      _toast('图片读取失败');
+      _toast(context.l10n.imageReadFailed);
       return false;
     }
     final ok = await copyImageToClipboard(data.bytes, data.mime);
     if (!mounted) return ok;
-    _toast(ok ? '图片已复制' : '复制失败 —— 可改用“下载”');
+    _toast(ok ? context.l10n.imageCopied : context.l10n.imageCopyFailed);
     return ok;
   }
 
   Future<void> _downloadImage(int node) async {
     final data = await _imageData(node);
     if (data == null || !mounted) {
-      _toast('Could not load the image');
+      _toast(context.l10n.imageLoadFailed);
       return;
     }
     downloadImage(data.bytes, data.name, data.mime);
@@ -4795,7 +4903,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                         Icon(o.icon, size: 18, color: const Color(0xFF475569)),
                         const SizedBox(width: 10),
                         Text(
-                          o.label,
+                          _slashLabel(o),
                           style: const TextStyle(
                             fontSize: 14,
                             color: Color(0xFF0F172A),
@@ -4964,11 +5072,11 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
   Widget build(BuildContext context) {
     final hasOutput = _buffer.isNotEmpty;
     return AlertDialog(
-      title: const Row(
+      title: Row(
         children: [
-          Icon(Icons.auto_awesome, size: 20, color: Color(0xFF7C3AED)),
-          SizedBox(width: 8),
-          Text('Ask AI'),
+          const Icon(Icons.auto_awesome, size: 20, color: Color(0xFF7C3AED)),
+          const SizedBox(width: 8),
+          Text(context.l10n.aiAskTitle),
         ],
       ),
       content: SizedBox(
@@ -4983,9 +5091,9 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
               minLines: 2,
               maxLines: 4,
               enabled: !_streaming,
-              decoration: const InputDecoration(
-                hintText: 'Describe what to write…',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                hintText: context.l10n.editorAiPromptHint,
+                border: const OutlineInputBorder(),
               ),
             ),
             if (hasOutput || _streaming) ...[
@@ -5009,15 +5117,15 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
               ),
               const SizedBox(height: 6),
               if (_streaming)
-                const Row(
+                Row(
                   children: [
-                    SizedBox(
+                    const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                    SizedBox(width: 8),
-                    Text('Generating…'),
+                    const SizedBox(width: 8),
+                    Text(context.l10n.aiGenerating),
                   ],
                 ),
             ],
@@ -5045,24 +5153,26 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
       actions: [
         TextButton(
           onPressed: _streaming ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.l10n.commonCancel),
         ),
         if (!_done)
           FilledButton.icon(
             onPressed: _streaming ? null : _generate,
             icon: const Icon(Icons.auto_awesome, size: 18),
-            label: Text(hasOutput ? 'Regenerate' : 'Generate'),
+            label: Text(
+              hasOutput ? context.l10n.aiRegenerate : context.l10n.aiGenerate,
+            ),
           )
         else ...[
           TextButton.icon(
             onPressed: _generate,
             icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('Regenerate'),
+            label: Text(context.l10n.aiRegenerate),
           ),
           FilledButton.icon(
             onPressed: () => Navigator.of(context).pop(_buffer.toString()),
             icon: const Icon(Icons.check, size: 18),
-            label: const Text('Insert'),
+            label: Text(context.l10n.aiInsert),
           ),
         ],
       ],
@@ -5200,13 +5310,15 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                       controller: _query,
                       autofocus: true,
                       style: const TextStyle(fontSize: 13),
-                      decoration: const InputDecoration(
-                        hintText: 'Search language…',
-                        prefixIcon: Icon(Icons.search, size: 16),
-                        prefixIconConstraints: BoxConstraints(minWidth: 28),
+                      decoration: InputDecoration(
+                        hintText: context.l10n.editorSearchLanguage,
+                        prefixIcon: const Icon(Icons.search, size: 16),
+                        prefixIconConstraints: const BoxConstraints(
+                          minWidth: 28,
+                        ),
                         isDense: true,
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(
                           horizontal: 8,
                           vertical: 8,
                         ),
@@ -5216,10 +5328,10 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                     const SizedBox(height: 6),
                     Expanded(
                       child: items.isEmpty
-                          ? const Center(
+                          ? Center(
                               child: Text(
-                                'No matches',
-                                style: TextStyle(
+                                context.l10n.searchNoMatches,
+                                style: const TextStyle(
                                   fontSize: 13,
                                   color: Color(0xFF94A3B8),
                                 ),
@@ -5332,7 +5444,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('编辑图片'),
+      title: Text(context.l10n.imageEditTitle),
       content: SizedBox(
         width: 520,
         child: SingleChildScrollView(
@@ -5341,7 +5453,9 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                widget.external ? '外部链接 · 原站失效后图片会丢失' : '已存储到 Mica · 链接公开可访问',
+                widget.external
+                    ? context.l10n.imageExternalWarning
+                    : context.l10n.imageStoredPublic,
                 style: TextStyle(fontSize: 12, color: EditorTheme.muted),
               ),
               const SizedBox(height: 6),
@@ -5362,13 +5476,16 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
                   icon: const Icon(Icons.copy, size: 16),
-                  label: const Text('复制链接'),
+                  label: Text(context.l10n.linkCopy),
                   onPressed: () =>
                       Clipboard.setData(ClipboardData(text: widget.link)),
                 ),
               ),
               const Divider(),
-              const Text('替换图片', style: TextStyle(fontWeight: FontWeight.w600)),
+              Text(
+                context.l10n.imageReplaceHeading,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 icon: _busy
@@ -5378,7 +5495,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.upload_file, size: 18),
-                label: const Text('上传本地图片'),
+                label: Text(context.l10n.imageUploadLocal),
                 onPressed: widget.onUploadReplace == null || _busy
                     ? null
                     : _upload,
@@ -5387,9 +5504,9 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
               TextField(
                 controller: _url,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: '或粘贴图片链接',
-                  hintText: 'https://…',
+                decoration: InputDecoration(
+                  labelText: context.l10n.imagePasteLinkLabel,
+                  hintText: context.l10n.linkUrlHint,
                   isDense: true,
                 ),
                 onSubmitted: (v) => Navigator.pop(context, v.trim()),
@@ -5397,8 +5514,8 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
               const SizedBox(height: 6),
               Text(
                 widget.reHost
-                    ? '已启用自动转存:链接会被转存到 Mica 存储(取不到则保留原链接)'
-                    : '自动转存已关闭:将直接保留原链接',
+                    ? context.l10n.imageRehostOn
+                    : context.l10n.imageRehostOff,
                 style: TextStyle(fontSize: 11, color: EditorTheme.faint),
               ),
             ],
@@ -5408,11 +5525,11 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
+          child: Text(context.l10n.commonCancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _url.text.trim()),
-          child: const Text('替换'),
+          child: Text(context.l10n.imageReplaceButton),
         ),
       ],
     );

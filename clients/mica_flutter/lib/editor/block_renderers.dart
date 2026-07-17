@@ -320,7 +320,7 @@ class ImageRenderer extends AtomicBlockRenderer {
         ? null
         : (TextPainter(
             text: TextSpan(
-              text: '无法加载 · $caption',
+              text: l10nNoContext.imageBrokenCaption(caption),
               style: TextStyle(fontSize: 11, color: EditorTheme.faint),
             ),
             textDirection: TextDirection.ltr,
@@ -347,9 +347,9 @@ class ImageRenderer extends AtomicBlockRenderer {
   /// A small "外链" chip in the image's top-left corner.
   static void _paintExternalBadge(Canvas canvas, Rect r) {
     final label = TextPainter(
-      text: const TextSpan(
-        text: '外链',
-        style: TextStyle(fontSize: 10, color: Color(0xFFFFFFFF)),
+      text: TextSpan(
+        text: l10nNoContext.imageExternalBadge,
+        style: const TextStyle(fontSize: 10, color: Color(0xFFFFFFFF)),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
