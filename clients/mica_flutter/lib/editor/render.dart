@@ -1098,8 +1098,12 @@ class RenderDocument extends RenderBox {
           );
         }
 
-        // Controls float at the bottom-right (above the scrollbar if present):
-        // language selector + wrap + copy, right-aligned.
+        // Controls float at the TOP-right on hover (GitHub/VSCode/Notion-style):
+        // language selector + wrap + copy, right-aligned. Overlaid, not a
+        // reserved row — a resting block shows no empty toolbar strip, which is
+        // why the old always-there top row was dropped (04834a1). The overlay
+        // sits over the first line's right edge (nearly always slack), the
+        // mirror image of how the bottom-right variant sat over the last line.
         const iconBox = 22.0;
         final marker = TextPainter(
           text: TextSpan(
@@ -1111,9 +1115,7 @@ class RenderDocument extends RenderBox {
         final labelW = marker.width + 14;
         final labelH = marker.height + 6;
         marker.dispose();
-        final bottomLimit =
-            layout.scrollTrack?.top ?? (layout.boxTop + layout.boxHeight);
-        final iconY = bottomLimit - iconBox - 4;
+        final iconY = layout.boxTop + 4;
         layout.copyButton = Rect.fromLTWH(
           maxWidth - iconBox - 8,
           iconY,
