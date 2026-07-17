@@ -2378,6 +2378,423 @@ fn normalize_position(position: Option<String>) -> ApiResult<String> {
   Ok(position)
 }
 
+// ── Cross-workspace transfer (move / copy) ───────────────────────────────────
+// Move or copy a page (its whole subtree) or a folder into ANOTHER workspace on
+// this server. No note app re-parents in place across workspaces: doc identity
+// and blobs are both workspace-namespaced, so an in-place move invites doc-id
+// collisions and lets the source's per-workspace blob GC reclaim images the
+// moved page still needs. So this is copy-into-destination (new view + new
+// document + blobs physically copied into the destination workspace), then a
+// soft-delete of the source for a "move". Ordered blobs-first, so a half-failure
+// leaves harmless orphan bytes in the destination (its GC reclaims them), never a
+// page that lost its images — the thing Notion/AFFiNE get wrong and our Postgres
+// transaction lets us beat. See docs/cross-workspace-move.md.
+
+#[derive(Debug, Deserialize)]
+pub struct TransferRequest {
+  dest_workspace_id: Uuid,
+  /// Parent folder in the destination (null = destination root).
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  /// true = move (soft-delete the source after copying); false = copy (keep source).
+  #[serde(default)]
+  remove_source: bool,
+  /// Report what WOULD happen (counts + dangling links) without mutating anything.
+  #[serde(default)]
+  dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DanglingLink {
+  /// Name of the moved document whose link now dangles.
+  document: String,
+  /// The `mica://page/<id>` target that stays in the source workspace.
+  target_view_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransferResponse {
+  new_root_view_id: Option<Uuid>,
+  documents: usize,
+  folders: usize,
+  images: usize,
+  dangling_links: Vec<DanglingLink>,
+  removed_source: bool,
+  dry_run: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct TransferRow {
+  id: Uuid,
+  parent_view_id: Option<Uuid>,
+  object_id: Uuid,
+  object_type: String,
+  name: String,
+  position: String,
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/{view_id}/transfer`
+pub async fn transfer_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((src_workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Json(request): Json<TransferRequest>,
+) -> ApiResult<Json<TransferResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  let dest_workspace_id = request.dest_workspace_id;
+  if dest_workspace_id == src_workspace_id {
+    return Err(ApiError::BadRequest(
+      "destination workspace must differ from the source".to_string(),
+    ));
+  }
+  // Editor in BOTH: to remove from the source and to create in the destination.
+  ensure_workspace_editor(&state.db, src_workspace_id, user_id).await?;
+  ensure_workspace_editor(&state.db, dest_workspace_id, user_id).await?;
+  ensure_view_in_workspace(&state.db, src_workspace_id, view_id).await?;
+
+  // A destination parent, if given, must be a live folder in the destination.
+  if let Some(parent) = request.parent_view_id {
+    let ok = sqlx::query_scalar::<_, bool>(
+      "SELECT EXISTS (SELECT 1 FROM views WHERE id = $1 AND workspace_id = $2 \
+       AND object_type = 'folder' AND is_deleted = false)",
+    )
+    .bind(parent)
+    .bind(dest_workspace_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !ok {
+      return Err(ApiError::BadRequest(
+        "destination parent must be a folder in the destination workspace".to_string(),
+      ));
+    }
+  }
+
+  // 1. Enumerate the subtree (live rows only).
+  let subtree = sqlx::query_as::<_, TransferRow>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+        FROM views
+        WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+        UNION ALL
+        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        WHERE v.is_deleted = false
+      )
+      SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+    "#,
+  )
+  .bind(view_id)
+  .bind(src_workspace_id)
+  .fetch_all(&state.db)
+  .await?;
+  if subtree.is_empty() {
+    return Err(ApiError::NotFound);
+  }
+  let subtree_view_ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
+
+  // 2. Pre-scan documents: referenced file_ids + cross-workspace dangling links.
+  let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
+    std::collections::HashMap::new();
+  let mut referenced_files: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+  let mut dangling_links: Vec<DanglingLink> = Vec::new();
+  let mut documents = 0usize;
+  let mut folders = 0usize;
+  for row in &subtree {
+    if row.object_type != "document" {
+      folders += 1;
+      continue;
+    }
+    documents += 1;
+    let Some(payload) = store::current_payload(&state.db, row.object_id).await? else {
+      continue;
+    };
+    for block in &payload.blocks {
+      if let Some(fid) = block
+        .data
+        .get("file_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+      {
+        referenced_files.insert(fid);
+      }
+      for target in page_link_targets(&block.data) {
+        if let Ok(tid) = Uuid::parse_str(&target) {
+          if !subtree_view_ids.contains(&tid) {
+            dangling_links.push(DanglingLink {
+              document: row.name.clone(),
+              target_view_id: tid,
+            });
+          }
+        }
+      }
+    }
+    payloads.insert(row.object_id, payload);
+  }
+  let images = referenced_files.len();
+
+  if request.dry_run {
+    return Ok(Json(TransferResponse {
+      new_root_view_id: None,
+      documents,
+      folders,
+      images,
+      dangling_links,
+      removed_source: false,
+      dry_run: true,
+    }));
+  }
+
+  // 3. Copy blobs into the destination BEFORE the transaction: content-addressed
+  //    keys make the PUT idempotent, and a half-failure leaves only orphan bytes
+  //    in dest (its GC reclaims them), never a page with broken images.
+  let storage = state
+    .storage
+    .as_ref()
+    .ok_or_else(|| ApiError::Internal("file storage is not configured".to_string()))?;
+  let http = reqwest::Client::new();
+  let mut file_map: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
+  for &src_file_id in &referenced_files {
+    let Some(src_file) = store::fetch_file(&state.db, src_workspace_id, src_file_id).await? else {
+      continue; // dangling reference already; nothing to copy
+    };
+    let suffix = src_file
+      .object_key
+      .strip_prefix(&format!("workspaces/{src_workspace_id}/"))
+      .ok_or_else(|| ApiError::Internal("source object_key not under its workspace".to_string()))?;
+    let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
+
+    let bytes = http
+      .get(storage.download_url(&src_file.object_key))
+      .send()
+      .await
+      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {e}")))?
+      .error_for_status()
+      .map_err(|e| ApiError::Internal(format!("blob fetch returned {e}")))?
+      .bytes()
+      .await
+      .map_err(|e| ApiError::Internal(format!("blob read failed: {e}")))?;
+    let upload = storage.presign_put(&dest_key);
+    let put = http
+      .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, &src_file.mime_type)
+      .body(bytes.to_vec())
+      .send()
+      .await
+      .map_err(|e| ApiError::Internal(format!("blob upload failed: {e}")))?;
+    if !put.status().is_success() {
+      return Err(ApiError::Internal(format!(
+        "blob upload returned {}",
+        put.status()
+      )));
+    }
+
+    let dest_file = store::insert_file(
+      &state.db,
+      dest_workspace_id,
+      user_id,
+      &dest_key,
+      &src_file.original_name,
+      &src_file.mime_type,
+      src_file.byte_size,
+    )
+    .await?;
+    file_map.insert(src_file_id, dest_file.id);
+  }
+
+  // 4. One transaction: build the destination tree (new ids), then soft-delete
+  //    the source subtree for a move.
+  let view_map: std::collections::HashMap<Uuid, Uuid> =
+    subtree.iter().map(|r| (r.id, Uuid::new_v4())).collect();
+  let ordered = topo_order_subtree(&subtree);
+
+  let mut tx = state.db.begin().await?;
+  for row in &ordered {
+    let new_view_id = view_map[&row.id];
+    let dest_parent = if row.id == view_id {
+      request.parent_view_id
+    } else {
+      row.parent_view_id.and_then(|p| view_map.get(&p).copied())
+    };
+    if row.object_type == "document" {
+      let mut payload = payloads
+        .remove(&row.object_id)
+        .unwrap_or_else(|| DocumentSnapshotPayload {
+          schema_version: 1,
+          root_block_id: "root".to_string(),
+          blocks: Vec::new(),
+        });
+      rewrite_transferred_payload(&mut payload, &file_map, &view_map);
+      let document = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+          INSERT INTO documents (workspace_id, root_block_id, created_by)
+          VALUES ($1, $2, $3)
+          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+        "#,
+      )
+      .bind(dest_workspace_id)
+      .bind(&payload.root_block_id)
+      .bind(user_id)
+      .fetch_one(&mut *tx)
+      .await?;
+      store::insert_root_snapshot(&mut tx, document.id, &payload).await?;
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(dest_workspace_id)
+      .bind(dest_parent)
+      .bind(document.id)
+      .bind(&row.name)
+      .bind(&row.position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    } else {
+      // Folder: a view with no document. object_id is a fresh unused uuid.
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(dest_workspace_id)
+      .bind(dest_parent)
+      .bind(Uuid::new_v4())
+      .bind(&row.name)
+      .bind(&row.position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    }
+  }
+
+  if request.remove_source {
+    sqlx::query(
+      r#"
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM views WHERE id = $1 AND workspace_id = $2
+          UNION ALL
+          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        )
+        UPDATE views SET is_deleted = true, updated_at = now()
+        WHERE id IN (SELECT id FROM subtree)
+      "#,
+    )
+    .bind(view_id)
+    .bind(src_workspace_id)
+    .execute(&mut *tx)
+    .await?;
+  }
+
+  tx.commit().await?;
+
+  Ok(Json(TransferResponse {
+    new_root_view_id: Some(view_map[&view_id]),
+    documents,
+    folders,
+    images,
+    dangling_links,
+    removed_source: request.remove_source,
+    dry_run: false,
+  }))
+}
+
+/// The `mica://page/<viewId>` targets referenced by a block's link marks.
+fn page_link_targets(data: &serde_json::Value) -> Vec<String> {
+  const SCHEME: &str = "mica://page/";
+  let Some(marks) = data.get("marks").and_then(|m| m.as_array()) else {
+    return Vec::new();
+  };
+  marks
+    .iter()
+    .filter_map(|mark| {
+      mark
+        .get("href")
+        .and_then(|h| h.as_str())
+        .and_then(|href| href.strip_prefix(SCHEME))
+        .map(str::to_string)
+    })
+    .collect()
+}
+
+/// Rewrite a transferred document's blocks for their new home: remap uploaded-
+/// image `file_id`s to the destination copies, and remap in-subtree page links to
+/// the new view ids. Links to pages left in the source keep their `mica://` href
+/// (they dangle — surfaced to the user as a warning before the move).
+fn rewrite_transferred_payload(
+  payload: &mut DocumentSnapshotPayload,
+  file_map: &std::collections::HashMap<Uuid, Uuid>,
+  view_map: &std::collections::HashMap<Uuid, Uuid>,
+) {
+  const SCHEME: &str = "mica://page/";
+  for block in &mut payload.blocks {
+    let Some(data) = block.data.as_object_mut() else {
+      continue;
+    };
+    // Image file_id → destination copy. Drop any cached blob `url` so the client
+    // re-resolves it against the destination workspace.
+    if let Some(new_id) = data
+      .get("file_id")
+      .and_then(|v| v.as_str())
+      .and_then(|s| Uuid::parse_str(s).ok())
+      .and_then(|old| file_map.get(&old))
+    {
+      let new_id = *new_id;
+      data.insert("file_id".into(), serde_json::json!(new_id.to_string()));
+      data.remove("url");
+    }
+    // In-subtree page links → new view ids.
+    if let Some(marks) = data.get_mut("marks").and_then(|m| m.as_array_mut()) {
+      for mark in marks {
+        let Some(obj) = mark.as_object_mut() else {
+          continue;
+        };
+        let Some(new_href) = obj
+          .get("href")
+          .and_then(|h| h.as_str())
+          .and_then(|href| href.strip_prefix(SCHEME))
+          .and_then(|id| Uuid::parse_str(id).ok())
+          .and_then(|old| view_map.get(&old))
+          .map(|new| format!("{SCHEME}{new}"))
+        else {
+          continue;
+        };
+        obj.insert("href".into(), serde_json::json!(new_href));
+      }
+    }
+  }
+}
+
+/// Order the subtree so a parent always precedes its children (root first). The
+/// recursive CTE does not guarantee parent-first, and we insert with FK-linked
+/// parents, so the order matters.
+fn topo_order_subtree(subtree: &[TransferRow]) -> Vec<&TransferRow> {
+  let ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
+  let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&TransferRow>> =
+    std::collections::HashMap::new();
+  for r in subtree {
+    // The root's real parent is outside the subtree — anchor it at None.
+    let key = r.parent_view_id.filter(|p| ids.contains(p));
+    by_parent.entry(key).or_default().push(r);
+  }
+  let mut out: Vec<&TransferRow> = Vec::with_capacity(subtree.len());
+  let mut stack: Vec<Option<Uuid>> = vec![None];
+  while let Some(parent) = stack.pop() {
+    if let Some(children) = by_parent.get(&parent) {
+      for child in children {
+        out.push(child);
+        stack.push(Some(child.id));
+      }
+    }
+  }
+  out
+}
+
 #[cfg(test)]
 mod tests {
   /// An image block carrying [data] — the only field these tests vary.
@@ -2866,5 +3283,111 @@ mod tests {
       err.contains("wipe") || err.contains("content"),
       "empty replace_all must not wipe the doc, got: {err}",
     );
+  }
+
+  fn text_block(id: &str, data: serde_json::Value) -> mica_app_core::documents::Block {
+    mica_app_core::documents::Block {
+      id: id.to_string(),
+      kind: "text".to_string(),
+      text: "x".to_string(),
+      data,
+      children: Vec::new(),
+    }
+  }
+
+  /// A transferred doc must point its image at the DESTINATION file copy (else
+  /// the source's per-workspace GC reclaims the bytes and the moved page breaks),
+  /// remap links to pages that came along, and leave links to pages left behind
+  /// untouched (they dangle — surfaced as a warning, not silently rewritten).
+  #[test]
+  fn transfer_rewrites_file_ids_and_in_subtree_links_only() {
+    let old_file = Uuid::new_v4();
+    let new_file = Uuid::new_v4();
+    let in_sub_old = Uuid::new_v4();
+    let in_sub_new = Uuid::new_v4();
+    let outside = Uuid::new_v4();
+
+    let file_map = std::collections::HashMap::from([(old_file, new_file)]);
+    let view_map = std::collections::HashMap::from([(in_sub_old, in_sub_new)]);
+
+    let mut payload = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        image_block(serde_json::json!({
+          "file_id": old_file.to_string(),
+          "name": "x.png",
+          "url": format!("/api/workspaces/{}/files/{}/blob/x.png", Uuid::new_v4(), old_file),
+        })),
+        text_block(
+          "t1",
+          serde_json::json!({"marks": [
+            {"type": "link", "href": format!("mica://page/{in_sub_old}")},
+            {"type": "link", "href": format!("mica://page/{outside}")},
+          ]}),
+        ),
+      ],
+    };
+    rewrite_transferred_payload(&mut payload, &file_map, &view_map);
+
+    assert_eq!(
+      payload.blocks[0].data["file_id"],
+      serde_json::json!(new_file.to_string()),
+      "image file_id must point at the destination copy",
+    );
+    assert!(
+      payload.blocks[0].data.get("url").is_none(),
+      "stale cached blob url must be dropped so the client re-resolves",
+    );
+    let marks = payload.blocks[1].data["marks"].as_array().unwrap();
+    assert_eq!(
+      marks[0]["href"],
+      serde_json::json!(format!("mica://page/{in_sub_new}")),
+      "a link to a page that came along is remapped",
+    );
+    assert_eq!(
+      marks[1]["href"],
+      serde_json::json!(format!("mica://page/{outside}")),
+      "a link to a page left behind is preserved (dangles, warned)",
+    );
+  }
+
+  #[test]
+  fn page_link_targets_extracts_only_mica_page_ids() {
+    let a = Uuid::new_v4();
+    let data = serde_json::json!({"marks": [
+      {"type": "link", "href": format!("mica://page/{a}")},
+      {"type": "link", "href": "https://example.com"},
+      {"type": "bold"},
+    ]});
+    assert_eq!(page_link_targets(&data), vec![a.to_string()]);
+    assert!(page_link_targets(&serde_json::json!({})).is_empty());
+  }
+
+  #[test]
+  fn topo_order_puts_parents_before_children() {
+    let root = Uuid::new_v4();
+    let child = Uuid::new_v4();
+    let grandchild = Uuid::new_v4();
+    let outside_parent = Uuid::new_v4(); // root's real parent, outside the subtree
+    let row = |id, parent| TransferRow {
+      id,
+      parent_view_id: parent,
+      object_id: Uuid::new_v4(),
+      object_type: "folder".to_string(),
+      name: "n".to_string(),
+      position: "0".to_string(),
+    };
+    // Deliberately not parent-first, mimicking the CTE's arbitrary order.
+    let subtree = vec![
+      row(grandchild, Some(child)),
+      row(root, Some(outside_parent)),
+      row(child, Some(root)),
+    ];
+    let ordered: Vec<Uuid> = topo_order_subtree(&subtree).iter().map(|r| r.id).collect();
+    let pos = |id: Uuid| ordered.iter().position(|&x| x == id).unwrap();
+    assert_eq!(ordered.len(), 3);
+    assert!(pos(root) < pos(child), "root must precede its child");
+    assert!(pos(child) < pos(grandchild), "child must precede its grandchild");
   }
 }
