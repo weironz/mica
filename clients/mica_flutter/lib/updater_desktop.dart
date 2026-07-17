@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import 'l10n/locale_controller.dart';
 import 'updater_common.dart';
 
 export 'updater_common.dart';
@@ -29,7 +30,7 @@ Future<UpdateInfo?> checkForUpdate(String currentVersion) async {
       )
       .timeout(const Duration(seconds: 15));
   if (resp.statusCode != 200) {
-    throw Exception('GitHub 返回 ${resp.statusCode}');
+    throw Exception(l10nNoContext.updaterGithubError(resp.statusCode));
   }
   final json = jsonDecode(resp.body) as Map<String, dynamic>;
   final tag = (json['tag_name'] as String?)?.trim() ?? '';
@@ -64,7 +65,7 @@ Future<void> downloadAndApplyUpdate(
   void Function(double progress)? onProgress,
 }) async {
   if (!Platform.isWindows) {
-    throw UnsupportedError('自动更新目前仅支持 Windows。');
+    throw UnsupportedError(l10nNoContext.updaterWindowsOnly);
   }
 
   final dir = await Directory.systemTemp.createTemp('mica_update_');
@@ -74,7 +75,7 @@ Future<void> downloadAndApplyUpdate(
   try {
     final resp = await client.send(http.Request('GET', Uri.parse(info.downloadUrl)));
     if (resp.statusCode != 200) {
-      throw Exception('下载失败：HTTP ${resp.statusCode}');
+      throw Exception(l10nNoContext.updaterDownloadFailed(resp.statusCode));
     }
     final total = resp.contentLength ?? 0;
     var received = 0;

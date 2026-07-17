@@ -637,5 +637,26 @@
       }
     }
   },
-  "imageExternalBadge": "External"
+  "imageExternalBadge": "External",
+  "identityLocalName": "Local workspace",
+  "identityLocalDevice": "This device",
+  "identityNotSignedIn": "Not signed in",
+  "versionUntitled": "Untitled version",
+  "updaterGithubError": "GitHub returned {code}",
+  "@updaterGithubError": {
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
+  },
+  "updaterWindowsOnly": "Auto-update currently supports Windows only.",
+  "updaterDownloadFailed": "Download failed: HTTP {code}",
+  "@updaterDownloadFailed": {
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
+  }
 }

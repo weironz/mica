@@ -6,6 +6,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../l10n/locale_controller.dart';
 import '../local/local_offline.dart' show CloudPageTreeCache;
 
 enum AuthMode { login, register }
@@ -162,10 +163,20 @@ class AuthSession {
   if (local) {
     // No sign-out (you are not signed in HERE) and no sign-in (there is no
     // server in this world to sign in to — that is a choice made in Settings).
-    return (name: '本地工作区', email: '这台设备', canSignOut: false, canSignIn: false);
+    return (
+      name: l10nNoContext.identityLocalName,
+      email: l10nNoContext.identityLocalDevice,
+      canSignOut: false,
+      canSignIn: false,
+    );
   }
   if (user == null) {
-    return (name: '未登录', email: null, canSignOut: false, canSignIn: true);
+    return (
+      name: l10nNoContext.identityNotSignedIn,
+      email: null,
+      canSignOut: false,
+      canSignIn: true,
+    );
   }
   final name = user.displayName.isNotEmpty ? user.displayName : user.email;
   return (name: name, email: user.email, canSignOut: true, canSignIn: false);
@@ -328,7 +339,7 @@ class DocVersion {
   factory DocVersion.fromJson(Map<String, dynamic> json) {
     return DocVersion(
       id: json['id'] as String,
-      name: json['name'] as String? ?? '未命名版本',
+      name: json['name'] as String? ?? l10nNoContext.versionUntitled,
       versionSeq: (json['version_seq'] as num?)?.toInt() ?? 0,
       createdAt: json['created_at'] as String? ?? '',
     );

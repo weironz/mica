@@ -385,5 +385,12 @@
   "imageRehostOff": "自动转存已关闭:将直接保留原链接",
   "imageReplaceButton": "替换",
   "imageBrokenCaption": "无法加载 · {host}",
-  "imageExternalBadge": "外链"
+  "imageExternalBadge": "外链",
+  "identityLocalName": "本地工作区",
+  "identityLocalDevice": "这台设备",
+  "identityNotSignedIn": "未登录",
+  "versionUntitled": "未命名版本",
+  "updaterGithubError": "GitHub 返回 {code}",
+  "updaterWindowsOnly": "自动更新目前仅支持 Windows。",
+  "updaterDownloadFailed": "下载失败：HTTP {code}"
 }
