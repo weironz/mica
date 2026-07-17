@@ -145,25 +145,50 @@ pub fn run(cli: &Cli, cfg: &Config, args: &InstallArgs) -> Result<()> {
     .into_owned();
   let pat = resolve_pat(cli, cfg, args)?;
 
+  // Only mirror Claude Desktop → Claude Code when the latter isn't already an
+  // explicit target, so `--all` doesn't write ~/.claude.json twice.
+  let claude_code_is_target = targets
+    .iter()
+    .any(|(k, _)| *k == ClientKind::ClaudeCode);
+  let claude_code_path = ClientKind::ClaudeCode.config_path();
+
   for (kind, path) in &targets {
     if args.dry_run {
       println!("would configure {} → {}", kind.label(), path.display());
-      continue;
+    } else {
+      kind
+        .install(path, &exe, &server, pat.as_deref())
+        .with_context(|| format!("configuring {} at {}", kind.label(), path.display()))?;
+      println!("configured {} → {}", kind.label(), path.display());
     }
-    kind
-      .install(path, &exe, &server, pat.as_deref())
-      .with_context(|| format!("configuring {} at {}", kind.label(), path.display()))?;
-    println!("configured {} → {}", kind.label(), path.display());
-    if *kind == ClientKind::ClaudeDesktop {
-      // claude_desktop_config.json is NOT durable under wrapper runtimes: Claude
-      // Code Desktop (and similar) regenerate it on launch and wipe any entry we
-      // add, so the server silently never connects. Point at the reliable path.
-      println!(
-        "  note: some runtimes (e.g. Claude Code Desktop) rewrite this file on \
-         launch and will drop the Mica entry. If it doesn't connect, use the \
-         durable path instead:\n         mica-cli mcp install --client claude-code \
-         (writes ~/.claude.json, survives restarts)."
-      );
+
+    // Belt-and-suspenders for wrapper runtimes. claude_desktop_config.json is
+    // NOT durable under Claude Code Desktop (and similar): they regenerate it
+    // on launch and wipe the entry we just wrote, so the server silently never
+    // connects. When a Claude Code config (~/.claude.json) already exists — the
+    // tell-tale that such a runtime is installed — mirror the entry there too,
+    // where it survives restarts. Gated on the file already existing so a plain
+    // Claude Desktop user (who never reads ~/.claude.json) gets nothing extra.
+    if should_mirror_to_claude_code(*kind, claude_code_path.as_deref(), claude_code_is_target) {
+      let cc = claude_code_path.as_deref().expect("gated on Some path");
+      if args.dry_run {
+        println!(
+          "  would also mirror to {} → {} (durable under wrapper runtimes)",
+          ClientKind::ClaudeCode.label(),
+          cc.display()
+        );
+      } else {
+        ClientKind::ClaudeCode
+          .install(cc, &exe, &server, pat.as_deref())
+          .with_context(|| format!("mirroring to Claude Code at {}", cc.display()))?;
+        println!(
+          "  also mirrored to {} → {}\n  \
+           (claude_desktop_config.json isn't durable under wrapper runtimes like \
+           Claude Code Desktop; this copy survives restarts)",
+          ClientKind::ClaudeCode.label(),
+          cc.display()
+        );
+      }
     }
   }
 
@@ -193,6 +218,22 @@ fn resolve_pat(cli: &Cli, cfg: &Config, args: &InstallArgs) -> Result<Option<Str
     .create_token("mica-mcp", &["read".to_string(), "write".to_string()], None)
     .context("creating a PAT for the MCP client (run `mica-cli auth login` first, or pass --pat / --no-token)")?;
   Ok(Some(created.token))
+}
+
+/// Should configuring Claude Desktop also mirror the entry into the Claude Code
+/// config? Only when (a) we're configuring Claude Desktop, (b) Claude Code isn't
+/// already an explicit target (else `--all` writes it twice), and (c) a Claude
+/// Code config file already exists — the tell-tale of a wrapper runtime that
+/// wipes claude_desktop_config.json. We never conjure ~/.claude.json for a user
+/// who doesn't have it (a plain Claude Desktop install never reads it).
+fn should_mirror_to_claude_code(
+  kind: ClientKind,
+  claude_code_path: Option<&Path>,
+  claude_code_is_target: bool,
+) -> bool {
+  kind == ClientKind::ClaudeDesktop
+    && !claude_code_is_target
+    && claude_code_path.is_some_and(Path::exists)
 }
 
 /// The stdio-server entry shared by every JSON `mcpServers` client.
@@ -388,6 +429,41 @@ mod tests {
     let path = dir.join("cfg.json");
     std::fs::write(&path, b"[1,2,3]").unwrap();
     assert!(install_json(&path, "mcpServers", json!({})).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn mirror_only_when_claude_code_config_exists() {
+    let dir = std::env::temp_dir().join(format!("mica-mcpmirror-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let existing = dir.join(".claude.json");
+    std::fs::write(&existing, b"{}").unwrap();
+    let missing = dir.join("nope.json");
+
+    // Claude Desktop + an existing ~/.claude.json (wrapper tell-tale) → mirror.
+    assert!(should_mirror_to_claude_code(
+      ClientKind::ClaudeDesktop,
+      Some(&existing),
+      false
+    ));
+    // No Claude Code config → don't conjure one for a plain Desktop user.
+    assert!(!should_mirror_to_claude_code(
+      ClientKind::ClaudeDesktop,
+      Some(&missing),
+      false
+    ));
+    // Claude Code already an explicit target (e.g. --all) → don't write twice.
+    assert!(!should_mirror_to_claude_code(
+      ClientKind::ClaudeDesktop,
+      Some(&existing),
+      true
+    ));
+    // Configuring some other client → never mirror.
+    assert!(!should_mirror_to_claude_code(
+      ClientKind::Cursor,
+      Some(&existing),
+      false
+    ));
     std::fs::remove_dir_all(&dir).ok();
   }
 
