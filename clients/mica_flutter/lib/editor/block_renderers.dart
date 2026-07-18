@@ -235,18 +235,27 @@ class ImageRenderer extends AtomicBlockRenderer {
         Rect.fromLTWH(barLeft + pad + k * btn, barTop + pad, btn, btn),
     ];
 
-    return _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+    // Optional caption (data.caption): a centered line under the picture, same
+    // as a code block's title (reuses titleRect/codeTitle).
+    final caption = (node.data['caption'] as String?)?.trim() ?? '';
+    final captionH = caption.isEmpty ? 0.0 : RenderDocument._codeTitleH;
+    final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
       ..kind = 'image'
       ..nodeId = node.id
       ..contentLeft = left
       ..boxTop = y
       ..textTop = y
       ..textHeight = h
-      ..boxHeight = h + RenderDocument._imageGap
+      ..boxHeight = h + RenderDocument._imageGap + captionH
       ..imageDst = Rect.fromLTWH(left, y, w, h)
       ..imageBar = Rect.fromLTWH(barLeft, barTop, barW, barH)
       ..imageButtons = buttons
       ..imageResize = Rect.fromLTWH(left + w - 5, y + h / 2 - 18, 10, 36);
+    if (captionH > 0) {
+      layout.codeTitle = caption;
+      layout.titleRect = Rect.fromLTWH(left, y + h + 2, w, captionH);
+    }
+    return layout;
   }
 
   @override
@@ -402,6 +411,7 @@ class ImageRenderer extends AtomicBlockRenderer {
       'left': Icons.format_align_left,
       'center': Icons.format_align_center,
       'right': Icons.format_align_right,
+      'caption': Icons.title,
       'delete': Icons.delete_outline,
     };
     for (var k = 0; k < l.imageButtons.length; k++) {

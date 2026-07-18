@@ -2184,7 +2184,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final titleNode = r.codeTitleAt(local);
     if (titleNode != null) {
-      _promptCodeTitle(titleNode);
+      // titleRect is shared by code-block titles and image captions.
+      if (_controller.nodes[titleNode].kind == 'image') {
+        _promptImageCaption(titleNode);
+      } else {
+        _promptCodeTitle(titleNode);
+      }
       return;
     }
     final collapseNode = r.codeCollapseAt(local);
@@ -4895,9 +4900,26 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       case 'center':
       case 'right':
         _controller.setImageAlign(node, action);
+      case 'caption':
+        _promptImageCaption(node);
       case 'delete':
         _controller.deleteNode(node);
         _syncImeFromSelection(force: true);
+    }
+  }
+
+  /// Prompt for an image's caption (pre-filled with the current one) and store
+  /// it. Reuses the code-title dialog (owns its controller).
+  Future<void> _promptImageCaption(int nodeIndex) async {
+    if (nodeIndex < 0 || nodeIndex >= _controller.nodes.length) return;
+    final current =
+        (_controller.nodes[nodeIndex].data['caption'] as String?) ?? '';
+    final caption = await showDialog<String>(
+      context: context,
+      builder: (_) => _CodeTitleDialog(initial: current),
+    );
+    if (caption != null && mounted) {
+      _controller.setImageCaption(nodeIndex, caption);
     }
   }
 

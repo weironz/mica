@@ -317,6 +317,7 @@ const List<String> _imageActions = [
   'left',
   'center',
   'right',
+  'caption',
   'delete',
 ];
 
@@ -2002,6 +2003,8 @@ class RenderDocument extends RenderBox {
     final renderer = l.renderedBy;
     if (renderer != null) {
       renderer.paint(this, canvas, offset, l, i);
+      // A caption (image, …) rides in titleRect, centered below the block.
+      if (l.titleRect != null) _paintCodeTitle(canvas, offset, l);
       return;
     }
     final origin = offset + Offset(l.contentLeft, l.textTop);

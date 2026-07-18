@@ -1864,6 +1864,26 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set (or clear, with an empty string) an image's caption (data.caption) —
+  /// a centered line below the picture. Display-only, like a code title.
+  void setImageCaption(int index, String caption) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'image') return;
+    final data = {...node.data};
+    final trimmed = caption.trim();
+    if (trimmed.isEmpty) {
+      data.remove('caption');
+    } else {
+      data['caption'] = trimmed;
+    }
+    node.data = data;
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Fold / unfold a long code block. `data.collapsed` is tri-state: absent =
   /// auto (folded when the block exceeds the threshold), true = user-folded,
   /// false = user-expanded. Toggling stores the negation of the current
