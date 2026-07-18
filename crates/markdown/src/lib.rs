@@ -160,7 +160,7 @@ pub fn export_html_document(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
      <title>{safe_title}</title>\n<style>\n\
-     body{{max-width:720px;margin:2.5rem auto;padding:0 1.25rem;\
+     body{{max-width:900px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
      'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
      img{{max-width:100%;height:auto;border-radius:6px;}}\n\
@@ -169,7 +169,8 @@ pub fn export_html_document(
      font-family:'Cascadia Code','Consolas','Courier New',monospace;}}\n\
      pre code{{background:none;padding:0;}}\n\
      blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
-     table{{border-collapse:collapse;}}\ntd,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
+     table{{border-collapse:collapse;display:block;overflow-x:auto;}}\n\
+     td,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
      hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
      h1{{margin-bottom:1.5rem;}}\n\
      .todo input{{margin-right:.4em;}}\n</style>\n</head>\n<body>\n\
