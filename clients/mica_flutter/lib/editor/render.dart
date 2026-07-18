@@ -1446,13 +1446,17 @@ class RenderDocument extends RenderBox {
       _renderersByKind[l.kind]?.paintBackground(this, canvas, offset, l, i);
       if (l.kind == 'code_block') {
         final bgLeft = l.boxLeft + 16.0 * l.quoteDepth;
+        // The title caption sits OUTSIDE the panel (centered below it), so the
+        // background stops short of the title row.
+        final bgHeight =
+            l.boxHeight - (l.titleRect != null ? _codeTitleH : 0.0);
         canvas.drawRRect(
           RRect.fromRectAndRadius(
             Rect.fromLTWH(
               offset.dx + bgLeft,
               offset.dy + l.boxTop,
               size.width - bgLeft,
-              l.boxHeight,
+              bgHeight,
             ),
             const Radius.circular(6),
           ),
@@ -1560,23 +1564,26 @@ class RenderDocument extends RenderBox {
     }
   }
 
-  /// The code block's bottom caption (its [_NodeLayout.titleRect]).
+  /// The code block's caption — centered in the strip just BELOW the panel
+  /// (AFFiNE-style), muted.
   void _paintCodeTitle(Canvas canvas, Offset offset, _NodeLayout l) {
     final r = l.titleRect!.shift(offset);
     final tp = TextPainter(
       text: TextSpan(
         text: l.codeTitle,
-        style: const TextStyle(
-          fontSize: 12,
-          color: EditorTheme.muted,
-          fontStyle: FontStyle.italic,
-        ),
+        style: const TextStyle(fontSize: 12, color: EditorTheme.muted),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
     )..layout(maxWidth: r.width);
-    tp.paint(canvas, Offset(r.left, r.top + (r.height - tp.height) / 2));
+    tp.paint(
+      canvas,
+      Offset(
+        r.left + (r.width - tp.width) / 2, // centered horizontally
+        r.top + (r.height - tp.height) / 2,
+      ),
+    );
     tp.dispose();
   }
 
