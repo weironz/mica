@@ -86,6 +86,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LocalVersion dco_decode_box_autoadd_local_version(dynamic raw);
+
+  @protected
   LocalView dco_decode_box_autoadd_local_view(dynamic raw);
 
   @protected
@@ -110,6 +113,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<LocalVersion> dco_decode_list_local_version(dynamic raw);
+
+  @protected
   List<LocalView> dco_decode_list_local_view(dynamic raw);
 
   @protected
@@ -126,6 +132,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<(String, String)> dco_decode_list_record_string_string(dynamic raw);
+
+  @protected
+  LocalVersion dco_decode_local_version(dynamic raw);
 
   @protected
   LocalView dco_decode_local_view(dynamic raw);
@@ -147,6 +156,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     dynamic raw,
   );
+
+  @protected
+  LocalVersion? dco_decode_opt_box_autoadd_local_version(dynamic raw);
 
   @protected
   (PlatformInt64, PlatformInt64) dco_decode_record_i_64_i_64(dynamic raw);
@@ -232,6 +244,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LocalVersion sse_decode_box_autoadd_local_version(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   LocalView sse_decode_box_autoadd_local_view(SseDeserializer deserializer);
 
   @protected
@@ -260,6 +277,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<LocalVersion> sse_decode_list_local_version(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<LocalView> sse_decode_list_local_view(SseDeserializer deserializer);
 
   @protected
@@ -282,6 +304,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LocalVersion sse_decode_local_version(SseDeserializer deserializer);
+
+  @protected
   LocalView sse_decode_local_view(SseDeserializer deserializer);
 
   @protected
@@ -299,6 +324,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MicaStore?
   sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  LocalVersion? sse_decode_opt_box_autoadd_local_version(
     SseDeserializer deserializer,
   );
 
@@ -402,6 +432,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_local_version(
+    LocalVersion self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_local_view(
     LocalView self,
     SseSerializer serializer,
@@ -441,6 +477,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_local_version(
+    List<LocalVersion> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_local_view(
     List<LocalView> self,
     SseSerializer serializer,
@@ -474,6 +516,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_local_version(LocalVersion self, SseSerializer serializer);
+
+  @protected
   void sse_encode_local_view(LocalView self, SseSerializer serializer);
 
   @protected
@@ -496,6 +541,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     MicaStore? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_local_version(
+    LocalVersion? self,
     SseSerializer serializer,
   );
 

@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
@@ -46,6 +46,13 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// The stable yrs client id new/loaded documents should use.
   BigInt clientId();
 
+  /// Pin the current saved state as a NAMED version (never auto-pruned). Null
+  /// if the document has no saved snapshot yet.
+  LocalVersion? createLocalVersion({
+    required String docId,
+    required String label,
+  });
+
   void deleteDoc({required String docId});
 
   /// Delete one `origin`'s workspace and all its view rows (delete documents
@@ -57,6 +64,10 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
+
+  /// The document's version timeline, newest first — auto snapshots (captured
+  /// on a cadence by `save_doc`) and named checkpoints interleaved.
+  List<LocalVersion> listLocalVersions({required String docId});
 
   /// All views (including trashed) for `origin` ("local" or a server URL),
   /// ordered by position. The client builds the tree from `parent_id` and
@@ -82,6 +93,14 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// [`Self::delete_doc`]). Origin-scoped — can never reach across the
   /// local/cloud namespaces (v4 composite PK).
   void purgeView({required String origin, required String id});
+
+  /// Restore the document to a version, returning the recovered doc (null if
+  /// the version isn't found). The pre-restore state is kept as an auto version
+  /// so the restore is itself undoable.
+  MicaDocument? restoreLocalVersion({
+    required String docId,
+    required String versionId,
+  });
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).
@@ -141,6 +160,29 @@ class DocUpdate {
           runtimeType == other.runtimeType &&
           clock == other.clock &&
           payload == other.payload;
+}
+
+/// One entry in a local page's version timeline, mirrored to Dart. `label` is
+/// null for an auto snapshot, set for a named checkpoint; `created_at` is unix
+/// millis.
+class LocalVersion {
+  final String id;
+  final String? label;
+  final PlatformInt64 createdAt;
+
+  const LocalVersion({required this.id, this.label, required this.createdAt});
+
+  @override
+  int get hashCode => id.hashCode ^ label.hashCode ^ createdAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalVersion &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          label == other.label &&
+          createdAt == other.createdAt;
 }
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's

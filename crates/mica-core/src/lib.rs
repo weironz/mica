@@ -18,7 +18,9 @@ pub use block::Block;
 pub use doc::{DocError, MicaDoc};
 pub use marks::{marks_from_data, Mark};
 #[cfg(feature = "store")]
-pub use store::{Identity, LocalStore, LocalView, LocalWorkspace, StoreError, SyncCursor};
+pub use store::{
+  Identity, LocalStore, LocalVersion, LocalView, LocalWorkspace, StoreError, SyncCursor,
+};
 
 /// The core crate version, so the desktop client can confirm which native build
 /// it is actually bound to (catches stale-dylib mistakes early).

@@ -2411,6 +2411,46 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _localSelectView(view);
   }
 
+  /// Version history for a LOCAL page — same dialog as the cloud path, but
+  /// backed by the on-device `doc_version` timeline (FFI). Restore reloads the
+  /// editor via the epoch bump, exactly like the checkpoint rollback above.
+  Future<void> _openLocalVersionHistory() async {
+    final view = _localSelectedView;
+    if (view == null) return;
+    final docId = view.objectId;
+    // A local page persists on a debounce; force a save so "current" is captured
+    // before the user browses/creates a version.
+    _flushForExit();
+    DocVersion toDocVersion(({String id, String? label, int createdAt}) v) =>
+        DocVersion(
+          id: v.id,
+          label: v.label,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(v.createdAt)
+              .toUtc()
+              .toIso8601String(),
+        );
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _VersionHistoryDialog(
+        onList: () async =>
+            _local.listDocVersions(docId).map(toDocVersion).toList(),
+        onCreate: (name) async {
+          if (_local.createDocVersion(docId, name) == null) {
+            throw Exception(context.l10n.versionEmpty);
+          }
+        },
+        onRestore: (versionId) async {
+          if (!_local.restoreDocVersion(docId, versionId)) {
+            throw Exception('version not found');
+          }
+          if (!mounted) return;
+          _localEditorEpoch++;
+          await _localSelectView(view);
+        },
+      ),
+    );
+  }
+
   // ── §6 本地→云迁移 ──────────────────────────────────────────────────────────
   //
   // In-place mount: a local-offline workspace is *copied* up to a new cloud
@@ -3967,7 +4007,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onRemoveMember: local ? (_) async {} : _removeWorkspaceMember,
       onRestoreCheckpoint: local ? _localRollbackDoc : null,
       // Cloud-only: version history lives server-side (local has no history).
-      onVersionHistory: local ? null : _openVersionHistory,
+      // Both worlds now have real version history — local via the on-device
+      // doc_version timeline (FFI), cloud via the yrs endpoints.
+      onVersionHistory: local ? _openLocalVersionHistory : _openVersionHistory,
       onShare: local ? null : _openShare,
       // Cross-workspace move/copy — cloud-only (the destination is another
       // cloud workspace; local worlds don't participate). Null hides both

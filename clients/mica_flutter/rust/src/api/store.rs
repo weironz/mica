@@ -9,8 +9,8 @@ use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
 use mica_core::{
-    LocalStore, LocalView as CoreView, LocalWorkspace as CoreWorkspace,
-    SyncCursor as CoreSyncCursor,
+    LocalStore, LocalVersion as CoreVersion, LocalView as CoreView,
+    LocalWorkspace as CoreWorkspace, SyncCursor as CoreSyncCursor,
 };
 
 use crate::api::document::MicaDocument;
@@ -42,6 +42,25 @@ impl From<SyncCursor> for CoreSyncCursor {
 pub struct DocUpdate {
     pub clock: i64,
     pub payload: Vec<u8>,
+}
+
+/// One entry in a local page's version timeline, mirrored to Dart. `label` is
+/// null for an auto snapshot, set for a named checkpoint; `created_at` is unix
+/// millis.
+pub struct LocalVersion {
+    pub id: String,
+    pub label: Option<String>,
+    pub created_at: i64,
+}
+
+impl From<CoreVersion> for LocalVersion {
+    fn from(v: CoreVersion) -> Self {
+        LocalVersion {
+            id: v.id,
+            label: v.label,
+            created_at: v.created_at,
+        }
+    }
 }
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
@@ -200,6 +219,54 @@ impl MicaStore {
     pub fn save_doc(&self, doc_id: String, doc: &MicaDocument) {
         let doc_guard = doc.inner.lock().unwrap();
         let _ = self.inner.lock().unwrap().save_doc(&doc_id, &doc_guard);
+    }
+
+    // ── local page version history (docs/version-history-plan.md §6) ──────────
+
+    /// The document's version timeline, newest first — auto snapshots (captured
+    /// on a cadence by `save_doc`) and named checkpoints interleaved.
+    #[frb(sync)]
+    pub fn list_local_versions(&self, doc_id: String) -> Vec<LocalVersion> {
+        self.inner
+            .lock()
+            .unwrap()
+            .list_local_versions(&doc_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(LocalVersion::from)
+            .collect()
+    }
+
+    /// Pin the current saved state as a NAMED version (never auto-pruned). Null
+    /// if the document has no saved snapshot yet.
+    #[frb(sync)]
+    pub fn create_local_version(&self, doc_id: String, label: String) -> Option<LocalVersion> {
+        self.inner
+            .lock()
+            .unwrap()
+            .create_local_version(&doc_id, &label)
+            .ok()?
+            .map(LocalVersion::from)
+    }
+
+    /// Restore the document to a version, returning the recovered doc (null if
+    /// the version isn't found). The pre-restore state is kept as an auto version
+    /// so the restore is itself undoable.
+    #[frb(sync)]
+    pub fn restore_local_version(
+        &self,
+        doc_id: String,
+        version_id: String,
+    ) -> Option<MicaDocument> {
+        let loaded = self
+            .inner
+            .lock()
+            .unwrap()
+            .restore_local_version(&doc_id, &version_id, self.client_id)
+            .ok()??;
+        Some(MicaDocument {
+            inner: Mutex::new(loaded),
+        })
     }
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────

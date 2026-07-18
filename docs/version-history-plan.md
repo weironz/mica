@@ -1,11 +1,29 @@
 # Page Version History — Design & Implementation Plan
 
-**Status:** Planning only, not started. Decisions locked: **yrs-first** storage
-(Option B below), snapshots taken **automatically on a cadence + on explicit
-"name this version"**, **cloud documents first** (local/offline deferred to a
-later phase).
+**Status: IMPLEMENTED (2026-07-18).** Built as designed (Option B, yrs-native),
+**cloud AND local** in one pass. Auto snapshots on a 10-min cadence + named
+checkpoints; restore is a forward update (never a log rewrite). Research
+(AFFiNE/AppFlowy/Outline/Notion/SiYuan) confirmed the design and set the
+defaults: **10-min min-interval, 30-day auto retention, named versions kept
+forever** — see [[export-html-pdf-word]]-style memory notes and the commits.
 
-This is a design doc, not a task — nothing here is implemented yet.
+What shipped vs. this doc:
+- **Cloud (Phases 0–2):** migration `0009_document_yrs_versions`; auto-capture +
+  retention in `sync::push_update`; `store::{list,fetch_state,create_named}_yrs_version`
+  + `yrs_state_to_payload`; **restore via `MicaDoc::set_blocks`** (the doc's
+  "apply-as-update can't revert a CRDT" is exactly why); `history.rs` repointed
+  entirely to yrs (op-model writers no longer called); client dialog shows
+  auto+named interleaved.
+- **Local (Phase 4):** `doc_version` table (additive, no SCHEMA_VERSION bump);
+  auto-capture in `save_doc`; FFI `list/create/restore_local_version`; restore =
+  hard reset (single-device, the `rollback_doc` shape) with the pre-restore state
+  preserved as an auto version. Wired to the same dialog for local pages.
+- **Deferred:** rich read-only preview in the editor (the `GET /versions/{id}`
+  endpoint returns blocks and is ready; the client shows the timeline + restore,
+  restore being non-destructive/undoable). Retire the dead op-model history
+  store fns (`create_named_version`/`restore_snapshot`) — left in place, unused.
+
+The original plan follows for reference.
 
 ---
 

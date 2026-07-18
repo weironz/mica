@@ -59,6 +59,16 @@ class LocalOffline {
 
   String? exportDocHtml(String docId, String title) => null;
 
+  List<({String id, String? label, int createdAt})> listDocVersions(String docId) =>
+      const [];
+
+  ({String id, String? label, int createdAt})? createDocVersion(
+    String docId,
+    String label,
+  ) => null;
+
+  bool restoreDocVersion(String docId, String versionId) => false;
+
   List<WorkspaceData> listWorkspaces({String origin = 'local'}) => const [];
 
   void saveWorkspace(WorkspaceData w, {String origin = 'local'}) {}

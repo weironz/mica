@@ -27,6 +27,21 @@ pub enum StoreError {
 /// the table layout changes and add the migration in [`LocalStore::open`].
 const SCHEMA_VERSION: i64 = 6;
 
+/// Auto version cadence — collapse a burst of saves to one version per 10 min
+/// (AFFiNE's min-interval). Retention — auto versions live 30 days; named ones
+/// forever.
+const VERSION_AUTO_INTERVAL_MS: i64 = 10 * 60 * 1000;
+const VERSION_AUTO_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// One entry in a local page's version timeline. `label` is None for an auto
+/// snapshot, Some for a named checkpoint. `created_at` is unix millis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalVersion {
+    pub id: String,
+    pub label: Option<String>,
+    pub created_at: i64,
+}
+
 /// Stable on-device identity. `client_id` is the yrs actor id used for every doc
 /// on this device — minted once and reused forever, never random per launch (§6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +161,21 @@ impl LocalStore {
                  doc_id     TEXT PRIMARY KEY,
                  state      BLOB NOT NULL,
                  updated_at INTEGER NOT NULL
-             );",
+             );
+             -- Local page version history (docs/version-history-plan.md §6). One
+             -- row = one full yrs state. `label` NULL = an auto snapshot (captured
+             -- on a cadence by save_doc, pruned after retention); set = a named
+             -- checkpoint, kept forever. Purely additive → no SCHEMA_VERSION bump
+             -- (an older app just ignores this table).
+             CREATE TABLE IF NOT EXISTS doc_version(
+                 id         TEXT PRIMARY KEY,
+                 doc_id     TEXT NOT NULL,
+                 label      TEXT,
+                 created_at INTEGER NOT NULL,
+                 state      BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS doc_version_doc_created_idx
+                 ON doc_version(doc_id, created_at DESC);",
         )?;
         // Schema version gate (§10) — checked BEFORE any migration below, so a
         // store written by a newer app is refused while still untouched. The
@@ -397,7 +426,135 @@ impl LocalStore {
              ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
             params![doc_id, state, now_millis()],
         )?;
+        // Version history: archive this folded state as an AUTO snapshot, but only
+        // if none was captured in the last VERSION_AUTO_INTERVAL — so a burst of
+        // debounced saves converges to one version per window (AFFiNE min-interval).
+        self.capture_auto_version(doc_id, &state)?;
         Ok(())
+    }
+
+    /// Capture `state` as an auto version if the cadence allows, then prune auto
+    /// versions past retention. Named versions (label set) are never touched.
+    fn capture_auto_version(&self, doc_id: &str, state: &[u8]) -> Result<(), StoreError> {
+        let now = now_millis();
+        let last: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM doc_version
+                 WHERE doc_id=?1 AND label IS NULL ORDER BY created_at DESC LIMIT 1",
+                params![doc_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if last.is_some_and(|t| now - t < VERSION_AUTO_INTERVAL_MS) {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES(?1,?2,NULL,?3,?4)",
+            params![uuid::Uuid::new_v4().to_string(), doc_id, now, state],
+        )?;
+        self.conn.execute(
+            "DELETE FROM doc_version
+             WHERE doc_id=?1 AND label IS NULL AND created_at < ?2",
+            params![doc_id, now - VERSION_AUTO_RETENTION_MS],
+        )?;
+        Ok(())
+    }
+
+    /// Pin the current saved state as a NAMED version (a manual checkpoint, never
+    /// auto-pruned). Returns None if the document has no saved snapshot yet.
+    pub fn create_local_version(
+        &self,
+        doc_id: &str,
+        label: &str,
+    ) -> Result<Option<LocalVersion>, StoreError> {
+        let state: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT state FROM doc_snapshot WHERE doc_id=?1",
+                params![doc_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(bytes) = state else {
+            return Ok(None);
+        };
+        let now = now_millis();
+        let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES(?1,?2,?3,?4,?5)",
+            params![id, doc_id, label, now, bytes],
+        )?;
+        Ok(Some(LocalVersion {
+            id,
+            label: Some(label.to_string()),
+            created_at: now,
+        }))
+    }
+
+    /// The document's version timeline, newest first (metadata only, no blobs).
+    pub fn list_local_versions(&self, doc_id: &str) -> Result<Vec<LocalVersion>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, label, created_at FROM doc_version
+             WHERE doc_id=?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![doc_id], |r| {
+                Ok(LocalVersion {
+                    id: r.get(0)?,
+                    label: r.get(1)?,
+                    created_at: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Restore a document to a stored version, making it the live base and
+    /// dropping the incremental log (a local page is single-device, so this is a
+    /// clean reset — the same shape as [`Self::rollback_doc`]). The pre-restore
+    /// state is force-captured as an auto version first, so a restore is itself
+    /// undoable. Returns the restored doc, or None if the version isn't found.
+    pub fn restore_local_version(
+        &self,
+        doc_id: &str,
+        version_id: &str,
+        client_id: u64,
+    ) -> Result<Option<MicaDoc>, StoreError> {
+        let target: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT state FROM doc_version WHERE id=?1 AND doc_id=?2",
+                params![version_id, doc_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(bytes) = target else {
+            return Ok(None);
+        };
+        // Preserve the current state so the restore can be undone.
+        if let Some(cur) = self
+            .conn
+            .query_row(
+                "SELECT state FROM doc_snapshot WHERE doc_id=?1",
+                params![doc_id],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+        {
+            self.conn.execute(
+                "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES(?1,?2,NULL,?3,?4)",
+                params![uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur],
+            )?;
+        }
+        self.conn.execute(
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
+             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+            params![doc_id, &bytes, now_millis()],
+        )?;
+        self.conn
+            .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        Ok(Some(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?))
     }
 
     /// Load a document by id, decoding it with `client_id` (the device's actor)
@@ -1060,6 +1217,45 @@ mod tests {
         assert!(!has_edit(&restored));
         assert!(!has_edit(&store.load_doc("d", cid).unwrap().unwrap()));
         assert!(store.rollback_doc("missing", cid).unwrap().is_none());
+    }
+
+    #[test]
+    fn local_version_history_captures_names_and_restores() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+
+        // Several saves in a burst → one auto version (10-min convergence).
+        let mut d = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
+        for i in 0..4 {
+            d.text_insert("a", 5, &format!("{i}"));
+            store.save_doc("d", &d).unwrap();
+        }
+        let autos = store.list_local_versions("d").unwrap();
+        assert_eq!(autos.len(), 1, "burst converges to one auto version");
+        assert!(autos[0].label.is_none());
+
+        // Pin a NAMED checkpoint at the current state.
+        let named = store.create_local_version("d", "milestone").unwrap().unwrap();
+        assert_eq!(named.label.as_deref(), Some("milestone"));
+        assert_eq!(store.list_local_versions("d").unwrap().len(), 2);
+
+        // Edit past the checkpoint, then restore to it.
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        working.text_insert("a", 5, "LATER");
+        store.save_doc("d", &working).unwrap();
+        let restored = store
+            .restore_local_version("d", &named.id, cid)
+            .unwrap()
+            .unwrap();
+        let has_later = |x: &MicaDoc| x.to_blocks().iter().any(|b| b.text.contains("LATER"));
+        assert!(!has_later(&restored), "restore dropped the later edit");
+        assert!(!has_later(&store.load_doc("d", cid).unwrap().unwrap()));
+
+        // A missing version id is a clean None, not an error.
+        assert!(store.restore_local_version("d", "nope", cid).unwrap().is_none());
+        // No snapshot yet → naming returns None rather than an empty version.
+        assert!(store.create_local_version("ghost", "x").unwrap().is_none());
     }
 
     #[test]

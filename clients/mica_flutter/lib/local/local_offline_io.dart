@@ -664,6 +664,37 @@ class LocalOffline {
     return file.existsSync() ? file.uri.toString() : null;
   }
 
+  /// A local page's version timeline (newest first): auto snapshots + named
+  /// checkpoints. `createdAt` is unix millis. Empty if the store isn't open.
+  List<({String id, String? label, int createdAt})> listDocVersions(String docId) {
+    final store = _store;
+    if (store == null) return const [];
+    return store
+        .listLocalVersions(docId: docId)
+        .map((v) => (id: v.id, label: v.label, createdAt: v.createdAt))
+        .toList();
+  }
+
+  /// Pin the page's current state as a NAMED version. Null if there's no saved
+  /// snapshot yet (or the store is closed).
+  ({String id, String? label, int createdAt})? createDocVersion(
+    String docId,
+    String label,
+  ) {
+    final store = _store;
+    if (store == null) return null;
+    final v = store.createLocalVersion(docId: docId, label: label);
+    return v == null ? null : (id: v.id, label: v.label, createdAt: v.createdAt);
+  }
+
+  /// Restore a local page to a version (persists it + drops the pending log).
+  /// Returns whether the version existed; the caller reloads the editor.
+  bool restoreDocVersion(String docId, String versionId) {
+    final store = _store;
+    if (store == null) return false;
+    return store.restoreLocalVersion(docId: docId, versionId: versionId) != null;
+  }
+
   /// Export a LOCAL page as a self-contained HTML document, through the same
   /// Rust engine the server uses (so a local export matches a cloud one). Images
   /// are read from the on-device blob CAS and inlined as `data:` URIs; a missing
