@@ -138,6 +138,16 @@ flutter pub get
 flutter run -d chrome --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8080
 ```
 
+Quick launcher (uses the [`just`](https://github.com/casey/just) task runner):
+
+```sh
+just app          # desktop (windows)
+just app chrome   # web
+```
+
+`just --list` shows every recipe. (Pass `--dart-define` as above only when
+pointing the client at a non-default backend.)
+
 The client opens a WebSocket document room per page: it edits over REST, and
 the server's broadcast advances every other open client to the latest snapshot
 and renders collaborator presence in the document header. With no
