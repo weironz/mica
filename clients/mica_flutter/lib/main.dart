@@ -63,7 +63,7 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.7.0';
+const String kAppVersion = '0.8.0';
 
 /// One-time migration (P3c-2) of the legacy world-switch prefs
 /// (`serverMode`/`serverUrl`, the pre-P3 ServerMode model) into the dissolved
