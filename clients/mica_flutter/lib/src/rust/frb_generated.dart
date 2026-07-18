@@ -104,6 +104,7 @@ abstract class RustLibApi extends BaseApi {
     required MicaDocument that,
     required String title,
     required Map<String, String> imageSrcs,
+    required int contentWidth,
   });
 
   MicaDocument crateApiDocumentMicaDocumentFromBlocksJson({
@@ -518,6 +519,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required MicaDocument that,
     required String title,
     required Map<String, String> imageSrcs,
+    required int contentWidth,
   }) {
     return handler.executeSync(
       SyncTask(
@@ -529,6 +531,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(title, serializer);
           sse_encode_Map_String_String_None(imageSrcs, serializer);
+          sse_encode_u_32(contentWidth, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
         },
         codec: SseCodec(
@@ -536,7 +539,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiDocumentMicaDocumentExportHtmlConstMeta,
-        argValues: [that, title, imageSrcs],
+        argValues: [that, title, imageSrcs, contentWidth],
         apiImpl: this,
       ),
     );
@@ -545,7 +548,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiDocumentMicaDocumentExportHtmlConstMeta =>
       const TaskConstMeta(
         debugName: "MicaDocument_export_html",
-        argNames: ["that", "title", "imageSrcs"],
+        argNames: ["that", "title", "imageSrcs", "contentWidth"],
       );
 
   @override
@@ -3464,10 +3467,12 @@ class MicaDocumentImpl extends RustOpaque implements MicaDocument {
   String exportHtml({
     required String title,
     required Map<String, String> imageSrcs,
+    required int contentWidth,
   }) => RustLib.instance.api.crateApiDocumentMicaDocumentExportHtml(
     that: this,
     title: title,
     imageSrcs: imageSrcs,
+    contentWidth: contentWidth,
   );
 
   void insertBlockJson({

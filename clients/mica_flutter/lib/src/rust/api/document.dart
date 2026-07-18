@@ -30,6 +30,7 @@ abstract class MicaDocument implements RustOpaqueInterface {
   String exportHtml({
     required String title,
     required Map<String, String> imageSrcs,
+    required int contentWidth,
   });
 
   /// Build a document from a root id and a JSON array of blocks.

@@ -10,7 +10,7 @@ use mica_markdown::{export_html_document, import_markdown, set_image_srcs};
 #[test]
 fn wraps_fragment_in_standalone_document() {
   let snapshot = import_markdown("# Hello\n\nA paragraph with **bold**.", "root");
-  let html = export_html_document(&snapshot, "My Page").expect("export");
+  let html = export_html_document(&snapshot, "My Page", 1160).expect("export");
 
   // A real, self-contained HTML5 file: doctype, charset, embedded style, no
   // external stylesheet/script requests.
@@ -29,7 +29,7 @@ fn wraps_fragment_in_standalone_document() {
 #[test]
 fn escapes_title() {
   let snapshot = import_markdown("body", "root");
-  let html = export_html_document(&snapshot, "a <b> & \"c\"").expect("export");
+  let html = export_html_document(&snapshot, "a <b> & \"c\"", 1160).expect("export");
   assert!(html.contains("<title>a &lt;b&gt; &amp; "), "title escaped: {html}");
   assert!(!html.contains("<title>a <b>"), "no raw angle brackets in title");
 }
@@ -54,7 +54,7 @@ fn set_image_srcs_rewrites_matching_file_id() {
   srcs.insert("unused".to_string(), "data:image/png;base64,YmFy".to_string());
   set_image_srcs(&mut snapshot, &srcs);
 
-  let html = export_html_document(&snapshot, "T").expect("export");
+  let html = export_html_document(&snapshot, "T", 900).expect("export");
   assert!(
     html.contains("src=\"data:image/png;base64,Zm9v\""),
     "image src rewritten to the embedded data URI: {html}"

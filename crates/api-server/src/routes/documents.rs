@@ -1919,10 +1919,18 @@ fn collect_view_order<'a>(
 /// offline and survives the source page being deleted. This is why it embeds
 /// bytes rather than reusing the share page's public blob URLs — a downloaded
 /// file must not depend on the server still being up.
+#[derive(Debug, Deserialize)]
+pub struct HtmlExportQuery {
+  /// The author's editor page width in px, so the export is as wide as the doc
+  /// was written (WYSIWYG). Absent → a sensible default.
+  width: Option<u32>,
+}
+
 pub async fn export_document_html(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+  Query(q): Query<HtmlExportQuery>,
 ) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
@@ -1942,7 +1950,7 @@ pub async fn export_document_html(
   let data_uris = collect_asset_data_uris(&state, workspace_id, &payload.blocks).await?;
   set_image_srcs(&mut payload, &data_uris);
 
-  let html = export_html_document(&payload, &title)
+  let html = export_html_document(&payload, &title, q.width.unwrap_or(1160))
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
   let filename = format!("{}.html", safe_segment(&title));
@@ -2161,7 +2169,7 @@ fn render_share_shell(title: &str, body_html: &str, allow_indexing: bool) -> Str
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
      {robots}\n<title>{safe_title}</title>\n<style>\n\
-     body{{max-width:900px;margin:2.5rem auto;padding:0 1.5rem;\
+     body{{max-width:1160px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
      'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
      img{{max-width:100%;height:auto;border-radius:6px;}}\n\
@@ -2169,7 +2177,7 @@ fn render_share_shell(title: &str, body_html: &str, allow_indexing: bool) -> Str
      code{{background:#f6f8fa;padding:.15em .35em;border-radius:4px;}}\n\
      pre code{{background:none;padding:0;}}\n\
      blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
-     table{{border-collapse:collapse;display:block;overflow-x:auto;}}\n\
+     table{{width:100%;border-collapse:collapse;}}\n\
      td,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
      hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
      h1{{margin-bottom:1.5rem;}}\n\

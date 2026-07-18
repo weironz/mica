@@ -263,6 +263,7 @@ fn wire__crate__api__document__MicaDocument_export_html_impl(
       let api_title = <String>::sse_decode(&mut deserializer);
       let api_image_srcs =
         <std::collections::HashMap<String, String>>::sse_decode(&mut deserializer);
+      let api_content_width = <u32>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
         let mut api_that_guard = None;
@@ -281,6 +282,7 @@ fn wire__crate__api__document__MicaDocument_export_html_impl(
           &*api_that_guard,
           api_title,
           api_image_srcs,
+          api_content_width,
         ))?;
         Ok(output_ok)
       })())

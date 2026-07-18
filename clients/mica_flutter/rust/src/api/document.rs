@@ -84,7 +84,12 @@ impl MicaDocument {
     /// keep their url. Local export otherwise had no path (the ZIP/Markdown
     /// exports are server endpoints), so this also closes that gap.
     #[frb(sync)]
-    pub fn export_html(&self, title: String, image_srcs: std::collections::HashMap<String, String>) -> String {
+    pub fn export_html(
+        &self,
+        title: String,
+        image_srcs: std::collections::HashMap<String, String>,
+        content_width: u32,
+    ) -> String {
         let doc = self.inner.lock().unwrap();
         let root_block_id = doc.root_block_id();
         // mica_core::Block and mica_markdown::Block mirror each other field-for-
@@ -107,7 +112,7 @@ impl MicaDocument {
         };
         let srcs: std::collections::BTreeMap<String, String> = image_srcs.into_iter().collect();
         mica_markdown::set_image_srcs(&mut payload, &srcs);
-        mica_markdown::export_html_document(&payload, &title).unwrap_or_default()
+        mica_markdown::export_html_document(&payload, &title, content_width).unwrap_or_default()
     }
 
     /// Encode the full document state (the base snapshot to persist locally).

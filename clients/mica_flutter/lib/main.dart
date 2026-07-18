@@ -1458,6 +1458,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       session.accessToken,
       workspace.id,
       bootstrap.document.id,
+      // WYSIWYG: export as wide as the editor page the user reads.
+      width: _pageWidth.round(),
     );
   }
 
@@ -1471,7 +1473,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       throw ApiException(context.l10n.pageOpenFirst);
     }
     final name = title.trim().isEmpty ? kUntitledPage : title.trim();
-    final html = _local.exportDocHtml(bootstrap.document.id, name);
+    final html = _local.exportDocHtml(
+      bootstrap.document.id,
+      name,
+      contentWidth: _pageWidth.round(),
+    );
     if (html == null || html.isEmpty) {
       throw ApiException(context.l10n.exportEmptyContent);
     }

@@ -703,11 +703,13 @@ class ApiClient {
   Future<String> exportDocumentHtml(
     String token,
     String workspaceId,
-    String documentId,
-  ) async {
+    String documentId, {
+    int? width,
+  }) async {
     final response = await http.get(
       baseUri.replace(
         path: '/api/workspaces/$workspaceId/documents/$documentId/export/html',
+        queryParameters: width == null ? null : {'width': '$width'},
       ),
       headers: {'authorization': 'Bearer $token'},
     );

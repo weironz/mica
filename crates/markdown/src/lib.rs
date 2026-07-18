@@ -150,17 +150,23 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
 pub fn export_html_document(
   snapshot: &DocumentSnapshotPayload,
   title: &str,
+  content_width_px: u32,
 ) -> DocumentOperationResult<String> {
   let body = export_html(snapshot)?;
   let safe_title = escape_html(title.trim());
+  // The content column matches the AUTHOR's editor page width (WYSIWYG): a doc
+  // exports as wide as it was written, not a hardcoded guess. Clamped to a sane
+  // range so a stray value can't produce a 1px or 5000px page.
+  let width = content_width_px.clamp(640, 2400);
   // Kept deliberately small and dependency-free: a single embedded stylesheet,
   // system fonts (with CJK fallbacks), no JS. Mirrors the share page's look so
-  // an exported file and a shared link read the same.
+  // an exported file and a shared link read the same. Tables fill the column
+  // (width:100%) like the editor, rather than shrinking to content.
   Ok(format!(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
      <title>{safe_title}</title>\n<style>\n\
-     body{{max-width:900px;margin:2.5rem auto;padding:0 1.5rem;\
+     body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
      'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
      img{{max-width:100%;height:auto;border-radius:6px;}}\n\
@@ -169,7 +175,7 @@ pub fn export_html_document(
      font-family:'Cascadia Code','Consolas','Courier New',monospace;}}\n\
      pre code{{background:none;padding:0;}}\n\
      blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
-     table{{border-collapse:collapse;display:block;overflow-x:auto;}}\n\
+     table{{width:100%;border-collapse:collapse;}}\n\
      td,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
      hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
      h1{{margin-bottom:1.5rem;}}\n\

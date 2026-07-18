@@ -717,7 +717,7 @@ class LocalOffline {
   /// are read from the on-device blob CAS and inlined as `data:` URIs; a missing
   /// blob just degrades to a broken `<img>`, never a failed export. Returns null
   /// if the doc isn't in the store.
-  String? exportDocHtml(String docId, String title) {
+  String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) {
     final store = _store;
     if (store == null) return null;
     final doc = store.loadDoc(docId: docId);
@@ -734,7 +734,11 @@ class LocalOffline {
       if (bytes == null) continue;
       srcs[fileId] = 'data:${_sniffImageMime(bytes)};base64,${base64Encode(bytes)}';
     }
-    return doc.exportHtml(title: title, imageSrcs: srcs);
+    return doc.exportHtml(
+      title: title,
+      imageSrcs: srcs,
+      contentWidth: contentWidth,
+    );
   }
 }
 

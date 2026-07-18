@@ -57,7 +57,8 @@ class LocalOffline {
   bool hasBlob(String fileId) => false;
   String? blobFileUri(String fileId) => null;
 
-  String? exportDocHtml(String docId, String title) => null;
+  String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) =>
+      null;
 
   List<({String id, String? label, int createdAt})> listDocVersions(String docId) =>
       const [];
