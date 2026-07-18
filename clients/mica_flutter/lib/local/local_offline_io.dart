@@ -13,6 +13,7 @@ import 'dart:typed_data';
 import '../cloud/cloud_doc_store.dart';
 import '../cloud/store_cloud_doc_store.dart';
 import '../src/rust/api/document.dart';
+import '../src/rust/api/pdf.dart';
 import '../src/rust/api/store.dart';
 import '../src/rust/frb_generated.dart';
 import '../upload/sha256.dart';
@@ -720,6 +721,11 @@ class LocalOffline {
   String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) {
     final store = _store;
     if (store == null) return null;
+    // The open editor doc lives in `_active` with a 400ms debounced save. If
+    // we're exporting the doc that's currently open, force its pending edits to
+    // disk first — otherwise `loadDoc` returns a stale snapshot and the export
+    // is a different (older) document than what's on screen.
+    if (_active?.docId == docId) _active!.flush();
     final doc = store.loadDoc(docId: docId);
     if (doc == null) return null;
     final blocks =
@@ -740,6 +746,14 @@ class LocalOffline {
       contentWidth: contentWidth,
     );
   }
+
+  /// Render a self-contained HTML document to a real PDF (vector, selectable
+  /// text, embedded CJK) via the OS-preinstalled WebView2 runtime's headless
+  /// print-to-PDF. This isn't page/store specific — it's the one platform-glue
+  /// step that turns exported HTML (cloud OR local) into PDF bytes, so it lives
+  /// on the native boundary the web build already stubs out. Returns null on
+  /// non-Windows platforms / if the runtime is unavailable / print failed.
+  Future<Uint8List?> htmlToPdf(String html) => exportPdf(html: html);
 }
 
 /// Sniff an image's MIME from its magic bytes — the local blob CAS keys by

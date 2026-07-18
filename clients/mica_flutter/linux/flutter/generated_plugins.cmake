@@ -3,7 +3,6 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  merman
   pasteboard
   screen_retriever_linux
   tray_manager

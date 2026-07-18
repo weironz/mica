@@ -60,6 +60,10 @@ class LocalOffline {
   String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) =>
       null;
 
+  /// No native WebView2 on web — PDF export is a desktop capability. (The web
+  /// build routes PDF through the browser's own print, not this path.)
+  Future<Uint8List?> htmlToPdf(String html) async => null;
+
   List<({String id, String? label, int createdAt})> listDocVersions(String docId) =>
       const [];
 

@@ -1,12 +1,16 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:merman/merman.dart';
 
+import '../src/rust/api/render.dart';
 import 'mermaid_svg_inline.dart';
 
 /// Non-web (desktop/mobile) mermaid rendering through the headless pure-Rust
-/// `merman` engine (FFI, no browser/JS) → SVG → rasterized [ui.Image].
+/// `merman` engine — reached via OUR FFI (`api::render`, feature `render`) →
+/// resvg-safe SVG → rasterized [ui.Image]. This is the SAME engine the HTML/PDF
+/// export uses (`crates/markdown`), so a diagram looks identical on screen and
+/// in an exported file, and the desktop ships mermaid exactly once (no separate
+/// Dart merman package).
 ///
 /// Mirrors the web path's contract (mermaid_preview_web.dart): identical
 /// signature, the same "fill targetWidth at 2x device pixels, crisply" raster,
@@ -16,43 +20,18 @@ import 'mermaid_svg_inline.dart';
 /// locally, no network, no backend.
 const bool mermaidAvailable = true;
 
-/// Process-wide engine, opened lazily on first render. Opening loads the
-/// bundled native library once; a null result (load failed on this platform)
-/// makes [renderMermaid] degrade rather than throw.
-Merman? _engine;
-bool _engineTried = false;
-
-Merman? _openEngine() {
-  if (_engineTried) return _engine;
-  _engineTried = true;
-  try {
-    _engine = Merman.open();
-  } catch (_) {
-    _engine = null;
-  }
-  return _engine;
-}
-
-/// Render mermaid [source] to a rasterized image. merman emits a `resvg-safe`
+/// Render mermaid [source] to a rasterized image. The FFI returns a `resvg-safe`
 /// SVG (no `<foreignObject>` — plain shapes/text that flutter_svg decodes
 /// faithfully), which becomes a [ui.Picture]; we scale it to fill [targetWidth]
 /// at 2x device pixels (matching the web path so a diagram stays crisp when the
-/// layout stretches it to the content width) and rasterize. Any failure (engine
-/// load, mermaid syntax via [MermanException], SVG decode) resolves to null.
+/// layout stretches it to the content width) and rasterize. Any failure (render
+/// error / empty SVG / decode) resolves to null.
 Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
-  final engine = _openEngine();
-  if (engine == null) return null;
-
-  // Yield before the synchronous, CPU-bound merman render so it never runs
-  // inside the build/layout pass that requested this preview.
-  await Future<void>.delayed(Duration.zero);
-
   try {
-    final raw = engine.renderSvg(
-      source,
-      optionsJson: '{"svg":{"pipeline":"resvg-safe"}}',
-    );
-    if (raw.trim().isEmpty) return null;
+    // FFI merman render is async (runs on the bridge's worker thread, off the
+    // build/layout pass that requested this preview), so no manual yield.
+    final raw = await renderMermaidSvg(source: source);
+    if (raw == null || raw.trim().isEmpty) return null;
     // flutter_svg ignores merman's <style> CSS; flatten it to inline styles
     // first so the diagram keeps its theme fills/strokes instead of going black.
     final svg = inlineMermaidCss(raw);

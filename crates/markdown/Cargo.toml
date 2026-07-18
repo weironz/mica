@@ -5,8 +5,36 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Rich HTML export: render inline/block math (LaTeX→MathML) and Mermaid
+# diagrams (→ self-contained inline SVG) into the exported HTML instead of
+# emitting raw source. OFF by default so pure-parse consumers (MCP/CLI) stay
+# light; the api-server and desktop FFI turn it on. Pulls two "complex domain
+# renderers" (CLAUDE.md #1 exemption class): `merman` (headless Rust Mermaid
+# engine — the SAME engine the editor now uses, so export == on-screen) and a
+# LaTeX→MathML converter (browsers render MathML natively — no JS, no fonts).
+render = [
+  "dep:merman",
+  "dep:ratex-parser",
+  "dep:ratex-layout",
+  "dep:ratex-svg",
+  "dep:ratex-types",
+]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+# Only compiled when `render` is enabled (optional). merman needs Rust ≥1.95 /
+# edition 2024; pin to the 0.7 line that the client already shipped so diagrams
+# render identically on screen and in export.
+merman = { version = "0.7", features = ["render"], optional = true }
+# Math → self-contained SVG via RaTeX (>99.5% KaTeX coverage, pure Rust — same
+# family flutter_math renders, so export == editor). Replaces latex2mathml,
+# whose LaTeX coverage was too thin (`\le`, `\text{…}` etc. errored). `embed-fonts`
+# bakes the KaTeX glyph outlines into the binary → no external fonts, no JS.
+ratex-parser = { version = "0.1", optional = true }
+ratex-layout = { version = "0.1", optional = true }
+ratex-types = { version = "0.1", optional = true }
+ratex-svg = { version = "0.1", features = ["embed-fonts"], optional = true }

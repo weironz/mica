@@ -2,7 +2,7 @@ name: mica_flutter
 description: Flutter client skeleton for Mica.
 publish_to: none
 
-version: 0.8.0
+version: 0.9.0
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -45,13 +45,11 @@ dependencies:
   # Pure-Dart HTML parser — converts pasted clipboard HTML to Markdown on desktop
   # (web uses dart:html for the same). Not platform glue; a parsing lib.
   html: ^0.15.0
-  # Headless pure-Rust Mermaid engine (FFI, no browser/JS) — desktop/mobile render
-  # mermaid OFFLINE via the non-web (_stub) variant of mermaid_preview. Web keeps
-  # its mermaid.min.js path. In-house exemption #5: a complex domain renderer (same
-  # class as flutter_math_fork), self-authoring a mermaid impl is unrealistic.
-  # Pinned: 0.x alpha, API still churning. Bundles prebuilt native libs per platform.
-  merman: 0.7.0-alpha.1
-  # SVG rasterizer — turns merman's SVG into a ui.Image on desktop/mobile.
+  # NOTE: the Dart `merman` package was dropped — mermaid now renders through the
+  # merman Rust engine compiled into OUR FFI (crates/markdown feature `render`,
+  # reached via api::render.renderMermaidSvg), the SAME engine the HTML/PDF export
+  # uses. One engine on desktop, export == on-screen. Web still uses mermaid.min.js.
+  # SVG rasterizer — turns the FFI's merman SVG into a ui.Image on desktop/mobile.
   # In-house exemption #6 (standard rendering capability; self-rolling an SVG
   # renderer is absurd). Used only by the non-web mermaid path. flutter_svg honors
   # geometry + presentation attributes but NOT CSS <style>, so merman's themed SVG

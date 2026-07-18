@@ -14,11 +14,28 @@ mica-core = { path = "../../../crates/mica-core", features = ["store"] }
 # The authoritative Markdown engine (CommonMark 100% + GFM), reused for local
 # vault import so parsing stays Rust-first + round-trip-stable with export. Its
 # `Block` mirrors `mica-core::Block` exactly, so no schema translation is needed.
-mica-markdown = { path = "../../../crates/markdown" }
+# `render` feature ON: pulls the merman Mermaid engine + LaTeX→MathML so the
+# editor's live diagram preview AND the HTML/PDF export share ONE Rust engine
+# (the Dart `merman` package is dropped — this crate is the only mermaid engine
+# on desktop now).
+mica-markdown = { path = "../../../crates/markdown", features = ["render"] }
 # Blocks cross the FFI boundary as JSON strings (Dart already speaks that shape).
 serde_json = "1"
 # Fresh root-block ids for imported documents.
 uuid = { version = "1", features = ["v4"] }
+
+# Windows-only PDF export (Path α): drive the OS-preinstalled WebView2 runtime's
+# headless print-to-PDF. `webview2-com` is the same battle-tested binding Tauri's
+# `wry` uses on Windows; `windows` version is pinned to match it (0.62).
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

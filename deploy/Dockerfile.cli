@@ -7,7 +7,7 @@
 # ── mica-cli (thin API client) ───────────────────────────────────────────────
 # bookworm builder to match the bookworm-slim runtime's glibc; mica-cli is pure
 # Rust + rustls (no OpenSSL), so this is only about a consistent libc floor.
-FROM rust:1.96-slim-bookworm AS build
+FROM rust:1.97-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates

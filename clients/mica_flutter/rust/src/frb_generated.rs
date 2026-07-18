@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
   default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 29879583;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 619377549;
 
 // Section: executor
 
@@ -2445,6 +2445,38 @@ fn wire__crate__api__simple__core_version_impl(
     },
   )
 }
+fn wire__crate__api__pdf__export_pdf_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "export_pdf",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_html = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Result::<_, ()>::Ok(crate::api::pdf::export_pdf(api_html))?;
+          Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
 fn wire__crate__api__simple__greet_impl(
   ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
   rust_vec_len_: i32,
@@ -2501,6 +2533,38 @@ fn wire__crate__api__simple__init_app_impl(
           let output_ok = Result::<_, ()>::Ok({
             crate::api::simple::init_app();
           })?;
+          Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__render__render_mermaid_svg_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "render_mermaid_svg",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Result::<_, ()>::Ok(crate::api::render::render_mermaid_svg(api_source))?;
           Ok(output_ok)
         })())
       }
@@ -2813,6 +2877,17 @@ impl SseDecode for Option<crate::api::store::LocalVersion> {
   }
 }
 
+impl SseDecode for Option<Vec<u8>> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    if (<bool>::sse_decode(deserializer)) {
+      return Some(<Vec<u8>>::sse_decode(deserializer));
+    } else {
+      return None;
+    }
+  }
+}
+
 impl SseDecode for (i64, i64) {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2892,7 +2967,9 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
   // Codec=Pde (Serialization + dispatch), see doc to use other codecs
   match func_id {
-    54 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+    53 => wire__crate__api__pdf__export_pdf_impl(port, ptr, rust_vec_len, data_len),
+    55 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+    56 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -2975,7 +3052,7 @@ fn pde_ffi_dispatcher_sync_impl(
     50 => wire__crate__api__store__MicaStore_updates_after_impl(ptr, rust_vec_len, data_len),
     51 => wire__crate__api__simple__add_impl(ptr, rust_vec_len, data_len),
     52 => wire__crate__api__simple__core_version_impl(ptr, rust_vec_len, data_len),
-    53 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+    54 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -3354,6 +3431,16 @@ impl SseEncode for Option<crate::api::store::LocalVersion> {
     <bool>::sse_encode(self.is_some(), serializer);
     if let Some(value) = self {
       <crate::api::store::LocalVersion>::sse_encode(value, serializer);
+    }
+  }
+}
+
+impl SseEncode for Option<Vec<u8>> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.is_some(), serializer);
+    if let Some(value) = self {
+      <Vec<u8>>::sse_encode(value, serializer);
     }
   }
 }

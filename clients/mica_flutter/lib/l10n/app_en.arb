@@ -62,6 +62,8 @@
   "rowCollapseChildren": "Collapse children",
   "rowExportZipImages": "Export (ZIP, with images)",
   "rowExportHtml": "Export as HTML",
+  "rowExportPdf": "Export as PDF",
+  "exportPdfUnsupported": "PDF export needs the WebView2 runtime (Windows desktop only for now).",
   "rowExpand": "Expand",
   "rowCollapse": "Collapse",
   "rowMoreActions": "Delete, rename, and more",

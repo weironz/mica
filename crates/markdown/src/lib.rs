@@ -168,7 +168,8 @@ pub fn export_html_document(
      <title>{safe_title}</title>\n<style>\n\
      body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
-     'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
+     'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;\
+     -webkit-print-color-adjust:exact;print-color-adjust:exact;}}\n\
      img{{max-width:100%;height:auto;border-radius:6px;}}\n\
      pre{{background:#f6f8fa;padding:1rem;border-radius:6px;overflow:auto;}}\n\
      code{{background:#f6f8fa;padding:.15em .35em;border-radius:4px;\
@@ -179,7 +180,11 @@ pub fn export_html_document(
      td,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
      hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
      h1{{margin-bottom:1.5rem;}}\n\
-     .todo input{{margin-right:.4em;}}\n</style>\n</head>\n<body>\n\
+     .todo input{{margin-right:.4em;}}\n\
+     .mermaid{{text-align:center;margin:1rem 0;}}\n\
+     .mermaid svg{{max-width:100%;height:auto;}}\n\
+     div.math{{margin:1rem 0;text-align:center;}}\n\
+     .math-block{{max-width:100%;}}\n</style>\n</head>\n<body>\n\
      <h1>{safe_title}</h1>\n{body}\n</body>\n</html>\n"
   ))
 }
@@ -202,6 +207,118 @@ pub fn set_image_srcs(snapshot: &mut DocumentSnapshotPayload, srcs: &BTreeMap<St
       }
     }
   }
+}
+
+// ── rich-export renderers (feature `render`): math → MathML, mermaid → SVG ──
+//
+// Both degrade to `None` when the feature is off, so `export_html` falls back to
+// the raw source form and pure-parse consumers (MCP/CLI) pull no extra deps.
+
+/// LaTeX → a self-contained inline `<svg>` via RaTeX (>99.5% KaTeX coverage —
+/// the same family the editor's flutter_math renders, so export == on screen).
+/// Glyphs are embedded outlines (no external fonts / JS). `None` on a parse
+/// error → caller keeps the raw LaTeX. `display` picks Display vs Text style.
+#[cfg(feature = "render")]
+fn render_math(latex: &str, display: bool) -> Option<String> {
+  use ratex_layout::{layout, to_display_list, LayoutOptions};
+  use ratex_svg::{render_to_svg, SvgOptions};
+  use ratex_types::math_style::MathStyle;
+
+  let nodes = ratex_parser::parse(latex).ok()?;
+  let opts = LayoutOptions {
+    style: if display {
+      MathStyle::Display
+    } else {
+      MathStyle::Text
+    },
+    ..Default::default()
+  };
+  let list = to_display_list(&layout(&nodes, &opts));
+  // padding:0 so an inline formula adds no stray whitespace around itself.
+  let svg = render_to_svg(
+    &list,
+    &SvgOptions {
+      embed_glyphs: true,
+      padding: 0.0,
+      ..Default::default()
+    },
+  );
+  // Size the SVG in `em` so math scales with the surrounding font, and (inline)
+  // drop it by its `depth` so its baseline sits on the text baseline.
+  let height_em = list.height + list.depth;
+  let style = if display {
+    format!("height:{height_em:.4}em")
+  } else {
+    format!("height:{height_em:.4}em;vertical-align:-{:.4}em", list.depth)
+  };
+  Some(restyle_math_svg(&svg, &style, display))
+}
+
+/// Rewrite RaTeX's `<svg>` opening tag: drop its fixed `pt` width/height (so the
+/// `em` CSS height drives sizing and the viewBox keeps the aspect ratio) and add
+/// our `style` + a class. Body/glyphs are untouched.
+#[cfg(feature = "render")]
+fn restyle_math_svg(svg: &str, style: &str, display: bool) -> String {
+  let class = if display { "math-block" } else { "math-inline" };
+  let view_box = svg
+    .find("viewBox=\"")
+    .and_then(|i| {
+      let rest = &svg[i + 9..];
+      rest.find('"').map(|j| &rest[..j])
+    })
+    .unwrap_or("0 0 1 1");
+  let body_start = svg.find('>').map(|i| i + 1).unwrap_or(0);
+  let body_end = svg.rfind("</svg>").unwrap_or(svg.len());
+  let body = &svg[body_start..body_end];
+  format!(
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{view_box}\" \
+     class=\"{class}\" style=\"{style}\" role=\"math\">{body}</svg>"
+  )
+}
+#[cfg(not(feature = "render"))]
+fn render_math(_latex: &str, _display: bool) -> Option<String> {
+  None
+}
+
+/// A Mermaid diagram → a self-contained inline `<svg>` via the headless merman
+/// engine (the SAME engine the editor renders with). `id` scopes the SVG's
+/// `<style>` so multiple diagrams on one page don't cross-style each other.
+/// `None` on a syntax/render error (or feature off) → caller keeps the code.
+#[cfg(feature = "render")]
+pub fn render_mermaid_svg_with_id(source: &str, id: &str) -> Option<String> {
+  use merman::render::{HeadlessRenderer, SvgPipeline};
+  // `resvg-safe`: plain shapes/text, no `<foreignObject>`. The editor's raster
+  // preview (flutter_svg) can't decode foreignObject, so it already renders
+  // this pipeline — using it here too means export == on-screen, and browsers
+  // render the safe subset fine.
+  let pipeline = SvgPipeline::resvg_safe();
+  HeadlessRenderer::new()
+    .with_strict_parsing()
+    .with_diagram_id(id)
+    .render_svg_with_pipeline_sync(source, &pipeline)
+    .ok()
+    .flatten()
+}
+#[cfg(not(feature = "render"))]
+pub fn render_mermaid_svg_with_id(_source: &str, _id: &str) -> Option<String> {
+  None
+}
+
+/// Single-diagram convenience (the editor's live FFI preview): a stable id.
+pub fn render_mermaid_svg(source: &str) -> Option<String> {
+  render_mermaid_svg_with_id(source, "mica-mermaid")
+}
+
+/// A merman diagram id from a block id: only `[A-Za-z0-9_-]`, always leading
+/// with a letter (a valid, collision-free CSS/SVG id per diagram).
+fn mermaid_id(block_id: &str) -> String {
+  let mut s = String::from("m");
+  for c in block_id.chars() {
+    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+      s.push(c);
+    }
+  }
+  s
 }
 
 /// GFM footnotes are collected to a single trailing section: an ordered list,
@@ -3019,10 +3136,11 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       continue;
     }
     if m.kind == "math" {
-      out.push_str(&format!(
-        "<span class=\"math\">{}</span>",
-        escape_html(&String::from_utf16_lossy(&units[s..e]))
-      ));
+      let latex = String::from_utf16_lossy(&units[s..e]);
+      match render_math(&latex, false) {
+        Some(mathml) => out.push_str(&mathml),
+        None => out.push_str(&format!("<span class=\"math\">{}</span>", escape_html(&latex))),
+      }
       pos = e;
       continue;
     }
@@ -3129,6 +3247,18 @@ fn append_html_block(
         return Ok(());
       }
       let lang = block_data_str(block, "language").unwrap_or("");
+      // Mermaid renders to a self-contained inline SVG (feature `render`); a
+      // syntax/render failure or the feature being off falls through to the
+      // plain code block below, so the source is never lost.
+      if lang == "mermaid" {
+        if let Some(svg) = render_mermaid_svg_with_id(&block.text, &mermaid_id(&block.id)) {
+          out.push_str("<div class=\"mermaid\">");
+          out.push_str(&svg);
+          out.push_str("</div>\n");
+          append_html_children(snapshot, &block.id, out)?;
+          return Ok(());
+        }
+      }
       let class = if lang.is_empty() {
         String::new()
       } else {
@@ -3199,7 +3329,12 @@ fn append_html_block(
       out.push_str("</table>\n");
     }
     "math_block" => {
-      out.push_str(&format!("<div class=\"math\">{}</div>\n", escape_html(&block.text)));
+      match render_math(&block.text, true) {
+        Some(mathml) => out.push_str(&format!("<div class=\"math\">{mathml}</div>\n")),
+        None => {
+          out.push_str(&format!("<div class=\"math\">{}</div>\n", escape_html(&block.text)))
+        }
+      }
     }
     "footnote_def" => {
       // Definitions are not rendered in document order — they are gathered

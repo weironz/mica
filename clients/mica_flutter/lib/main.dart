@@ -63,7 +63,7 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.8.0';
+const String kAppVersion = '0.9.0';
 
 /// Editor page (content column) width, as 11 discrete steps like AppFlowy —
 /// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
@@ -1476,7 +1476,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// throw `exportLocalUnsupported` locally — HTML works offline, so this closes
   /// that gap for local workspaces.
   Future<String> _localExportPageHtml(String title) async {
-    final bootstrap = _selectedBootstrap;
+    // The LOCAL world tracks its open page in `_localBootstrap`, NOT the
+    // cloud/shared `_selectedBootstrap` (the editor renders `_localBootstrap`
+    // too — see the `local ? _localBootstrap : _selectedBootstrap` build site).
+    // Reading `_selectedBootstrap` here exported a stale, unrelated doc.
+    final bootstrap = _localBootstrap;
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
@@ -4020,6 +4024,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // HTML export works in BOTH worlds — local goes through the FFI engine
       // (see _localExportPageHtml), so unlike the ZIP it isn't gated off local.
       onExportPageHtml: local ? _localExportPageHtml : _exportPageHtml,
+      // PDF is world-agnostic: both worlds produce HTML, then the same
+      // WebView2 headless print turns it into PDF bytes (desktop only; web
+      // stub returns null and the menu item is hidden there).
+      onExportPagePdf: _local.htmlToPdf,
       onImportMarkdown: local ? (_, _) async {} : _importMarkdownAsPage,
       onExportWorkspaceZip: local
           ? (_) async => Uint8List(0)
@@ -4424,6 +4432,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onOpenSearchResult,
     required this.onExportPageZip,
     required this.onExportPageHtml,
+    required this.onExportPagePdf,
     required this.onImportMarkdown,
     required this.onExportWorkspaceZip,
     required this.onImportWorkspaceZip,
@@ -4604,6 +4613,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String viewId) onOpenSearchResult;
   final Future<Uint8List> Function() onExportPageZip;
   final Future<String> Function(String title) onExportPageHtml;
+  final Future<Uint8List?> Function(String html) onExportPagePdf;
   final Future<void> Function(String fileName, String markdown)
   onImportMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
@@ -6401,6 +6411,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text(context.l10n.rowExportHtml),
                             ),
                           ),
+                          // PDF export drives the OS WebView2 runtime's headless
+                          // print — a desktop-only path (web uses the browser's
+                          // own print), so only surface it off the web.
+                          if (!kIsWeb)
+                            PopupMenuItem(
+                              value: 'export-pdf',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(
+                                  Icons.picture_as_pdf_outlined,
+                                ),
+                                title: Text(context.l10n.rowExportPdf),
+                              ),
+                            ),
                           const PopupMenuDivider(),
                           PopupMenuItem(
                             value: 'import-md',
@@ -7091,6 +7116,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         await _exportPageFile();
       case 'export-html':
         await _exportPageHtmlFile();
+      case 'export-pdf':
+        await _exportPagePdfFile();
       case 'import-md':
         await _importMarkdownFile();
       case 'share':
@@ -7184,6 +7211,31 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         '$base.html',
         'text/html',
       );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
+      }
+    }
+  }
+
+  /// Export the open page as a real (vector, selectable) `.pdf`. Reuses the same
+  /// self-contained HTML the HTML export produces, then hands it to the OS
+  /// WebView2 runtime's headless print (desktop only). A null result means the
+  /// runtime is unavailable / the platform isn't supported yet.
+  Future<void> _exportPagePdfFile() async {
+    final l10n = context.l10n;
+    try {
+      final title = _pageTitle.text.trim();
+      final html = await widget.onExportPageHtml(title);
+      if (html.isEmpty) throw ApiException(l10n.exportEmptyContent);
+      final bytes = await widget.onExportPagePdf(html);
+      if (bytes == null || bytes.isEmpty) {
+        throw ApiException(l10n.exportPdfUnsupported);
+      }
+      final base = title.isEmpty ? 'page' : title;
+      downloadImage(bytes, '$base.pdf', 'application/pdf');
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(

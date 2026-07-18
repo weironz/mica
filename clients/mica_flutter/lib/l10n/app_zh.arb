@@ -56,6 +56,8 @@
   "rowCollapseChildren": "收起子项",
   "rowExportZipImages": "导出(ZIP,含图片)",
   "rowExportHtml": "导出为 HTML",
+  "rowExportPdf": "导出为 PDF",
+  "exportPdfUnsupported": "PDF 导出需要 WebView2 运行时(目前仅 Windows 桌面支持)",
   "rowExpand": "展开",
   "rowCollapse": "收起",
   "rowMoreActions": "删除、重命名等",

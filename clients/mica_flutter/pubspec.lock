@@ -292,14 +292,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.1.1"
-  merman:
-    dependency: "direct main"
-    description:
-      name: merman
-      sha256: "6313478f13044386de935eb8ade494231b7b0352d4cd7f59c261d9433bfcffb7"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.7.0-alpha.1"
   meta:
     dependency: transitive
     description:
