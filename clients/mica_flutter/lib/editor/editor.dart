@@ -2135,6 +2135,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _copyCode(copyNode);
       return;
     }
+    final aiNode = r.codeAskAiAt(local);
+    if (aiNode != null) {
+      _openCodeAiMenu(aiNode, d.globalPosition);
+      return;
+    }
     // Image hover toolbar (expand / align / delete).
     final imageAction = r.imageActionAt(local);
     if (imageAction != null) {
@@ -3453,6 +3458,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final clickable =
         r.codeLanguageAt(local) != null ||
         r.codeCopyAt(local) != null ||
+        r.codeAskAiAt(local) != null ||
         r.codeMoreAt(local) != null ||
         r.codeTitleAt(local) != null ||
         r.codeCollapseAt(local) != null ||
@@ -4994,6 +5000,99 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _syncImeFromSelection(force: true);
   }
 
+  /// Code-block "Ask AI": a small menu of preset actions over this block's code
+  /// (AppFlowy-style). Each preset streams its result via the shared AI dialog
+  /// and inserts the Markdown right after the code block.
+  Future<void> _openCodeAiMenu(int nodeIndex, Offset globalPosition) async {
+    if (widget.onAiStream == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.codeAiNotConfigured)),
+        );
+      }
+      return;
+    }
+    if (nodeIndex < 0 || nodeIndex >= _controller.nodes.length) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final l10n = context.l10n;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        overlay.size.width - globalPosition.dx,
+        0,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'explain',
+          child: _codeMenuRow(Icons.lightbulb_outline, l10n.codeAiExplain),
+        ),
+        PopupMenuItem(
+          value: 'improve',
+          child: _codeMenuRow(Icons.auto_fix_high, l10n.codeAiImprove),
+        ),
+        PopupMenuItem(
+          value: 'fix',
+          child: _codeMenuRow(Icons.bug_report_outlined, l10n.codeAiFix),
+        ),
+        PopupMenuItem(
+          value: 'custom',
+          child: _codeMenuRow(Icons.chat_bubble_outline, l10n.codeAiCustom),
+        ),
+      ],
+    );
+    if (!mounted || selected == null) return;
+    switch (selected) {
+      case 'explain':
+        _runCodeAi(nodeIndex, (c) => '简要解释这段代码的功能:\n\n```\n$c\n```');
+      case 'improve':
+        _runCodeAi(
+          nodeIndex,
+          (c) => '优化改进这段代码,只返回改进后的代码(放在代码块里):\n\n```\n$c\n```',
+        );
+      case 'fix':
+        _runCodeAi(nodeIndex, (c) => '找出这段代码里的 bug 或问题并简要说明:\n\n```\n$c\n```');
+      case 'custom':
+        // Prefill the code as context; the user types their question above it.
+        _runCodeAi(
+          nodeIndex,
+          (c) => '\n\n参考代码:\n```\n$c\n```',
+          autoStart: false,
+        );
+    }
+  }
+
+  Future<void> _runCodeAi(
+    int nodeIndex,
+    String Function(String code) buildPrompt, {
+    bool autoStart = true,
+  }) async {
+    final stream = widget.onAiStream;
+    if (stream == null || nodeIndex < 0 || nodeIndex >= _controller.nodes.length) {
+      return;
+    }
+    final code = _controller.nodes[nodeIndex].text;
+    final markdown = await showDialog<String>(
+      context: context,
+      builder: (_) => _InlineAiDialog(
+        onStream: stream,
+        initialPrompt: buildPrompt(code),
+        autoStart: autoStart,
+      ),
+    );
+    if (markdown == null || markdown.trim().isEmpty || !mounted) return;
+    // Insert the AI output right after the code block.
+    _controller.collapseTo(
+      DocPosition(nodeIndex, _controller.nodes[nodeIndex].text.length),
+    );
+    _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
+    _rehostExternalImages();
+    _syncImeFromSelection(force: true);
+  }
+
   Widget _buildSlashOverlay(BuildContext context) {
     final r = _render;
     final sel = _controller.selection;
@@ -5139,22 +5238,40 @@ const _SlashOption _aiSlashOption = _SlashOption(
 /// In-editor "Ask AI": streams the response live, then returns the accumulated
 /// Markdown (via Navigator.pop) for the editor to insert as blocks.
 class _InlineAiDialog extends StatefulWidget {
-  const _InlineAiDialog({required this.onStream});
+  const _InlineAiDialog({
+    required this.onStream,
+    this.initialPrompt,
+    this.autoStart = false,
+  });
 
   final Stream<String> Function(String prompt, {String? system}) onStream;
+
+  /// Prefill the prompt field (e.g. a code-block preset). Null = empty.
+  final String? initialPrompt;
+
+  /// Start streaming immediately on open (for one-click presets).
+  final bool autoStart;
 
   @override
   State<_InlineAiDialog> createState() => _InlineAiDialogState();
 }
 
 class _InlineAiDialogState extends State<_InlineAiDialog> {
-  final _prompt = TextEditingController();
+  late final _prompt = TextEditingController(text: widget.initialPrompt ?? '');
   final _scroll = ScrollController();
   final StringBuffer _buffer = StringBuffer();
   StreamSubscription<String>? _sub;
   bool _streaming = false;
   bool _done = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoStart && _prompt.text.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _generate());
+    }
+  }
 
   @override
   void dispose() {

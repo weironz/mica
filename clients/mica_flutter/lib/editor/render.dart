@@ -250,6 +250,7 @@ class _NodeLayout {
   int indentLevel = 0; // list nesting depth (bullet glyph variants)
   Rect? checkbox; // todo checkbox rect (local), if any
   Rect? langLabel; // code-block language selector rect (local), if any
+  Rect? askAiButton; // code-block Ask-AI button rect (local), if any
   Rect? copyButton; // code-block copy button rect (local), if any
   Rect? moreButton; // code-block ⋯ overflow-menu rect (local), if any
   Rect? viewCodeTab; // mermaid view switch: source tab (local), if any
@@ -371,7 +372,7 @@ class _TableHover {
 }
 
 /// Which code-block toolbar icon the pointer is hovering.
-enum _CodeIcon { none, lang, copy, more, viewCode, viewPreview }
+enum _CodeIcon { none, lang, askAi, copy, more, viewCode, viewPreview }
 
 /// The single editing surface: one leaf render object that lays out and paints
 /// every node, the caret, and the selection, and maps screen points to document
@@ -670,7 +671,9 @@ class RenderDocument extends RenderBox {
         if (l.kind != 'code_block' && l.kind != 'table') continue;
         if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) {
           node = i;
-          if (l.copyButton?.contains(local) ?? false) {
+          if (l.askAiButton?.contains(local) ?? false) {
+            icon = _CodeIcon.askAi;
+          } else if (l.copyButton?.contains(local) ?? false) {
             icon = _CodeIcon.copy;
           } else if (l.moreButton?.contains(local) ?? false) {
             icon = _CodeIcon.more;
@@ -1191,8 +1194,16 @@ class RenderDocument extends RenderBox {
           iconBox,
           iconBox,
         );
+        // Ask AI stays on the toolbar (a primary action, per the design), left
+        // of copy. The editor no-ops the tap when AI isn't configured.
+        layout.askAiButton = Rect.fromLTWH(
+          maxWidth - 3 * iconBox - 16,
+          iconY,
+          iconBox,
+          iconBox,
+        );
         layout.langLabel = Rect.fromLTWH(
-          maxWidth - 2 * iconBox - 12 - labelW - 6,
+          maxWidth - 3 * iconBox - 16 - labelW - 6,
           iconY + (iconBox - labelH) / 2,
           labelW,
           labelH,
@@ -1666,6 +1677,18 @@ class RenderDocument extends RenderBox {
       marker.dispose();
     }
 
+    final askAi = l.askAiButton;
+    if (askAi != null) {
+      _paintIconButton(
+        canvas,
+        askAi.shift(offset),
+        Icons.auto_awesome,
+        hovered: _hoverIcon == _CodeIcon.askAi,
+        active: false,
+        tooltip: 'Ask AI',
+      );
+    }
+
     final copy = l.copyButton;
     if (copy != null) {
       _paintIconButton(
@@ -1816,6 +1839,14 @@ class RenderDocument extends RenderBox {
   int? codeCopyAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       if (_layouts[i].copyButton?.contains(local) ?? false) return i;
+    }
+    return null;
+  }
+
+  /// Node index whose code Ask-AI button contains [local], or null.
+  int? codeAskAiAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      if (_layouts[i].askAiButton?.contains(local) ?? false) return i;
     }
     return null;
   }
