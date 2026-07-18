@@ -1826,6 +1826,44 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Toggle the line-number gutter for a code block (data.lineNumbers).
+  void toggleLineNumbers(int index) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'code_block') return;
+    final data = {...node.data};
+    if (node.data['lineNumbers'] == true) {
+      data.remove('lineNumbers');
+    } else {
+      data['lineNumbers'] = true;
+    }
+    node.data = data;
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
+  /// Set (or clear, with an empty string) a code block's bottom caption
+  /// (data.title). A display-only prop; it does not round-trip to Markdown.
+  void setCodeTitle(int index, String title) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'code_block') return;
+    final data = {...node.data};
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) {
+      data.remove('title');
+    } else {
+      data['title'] = trimmed;
+    }
+    node.data = data;
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Switch a diagram code block (```mermaid) between its rendered preview
   /// and source editing. Stored as data.view ('code'); absent = preview, the
   /// default — readers want the picture, not the source.

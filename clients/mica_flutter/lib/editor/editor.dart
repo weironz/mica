@@ -2177,6 +2177,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _openCodeMenu(moreNode, d.globalPosition);
       return;
     }
+    final titleNode = r.codeTitleAt(local);
+    if (titleNode != null) {
+      _promptCodeTitle(titleNode);
+      return;
+    }
     final bar = r.scrollbarAt(local);
     if (bar != null) {
       r.setCodeScrollByTrackX(bar, local.dx);
@@ -3444,6 +3449,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         r.codeLanguageAt(local) != null ||
         r.codeCopyAt(local) != null ||
         r.codeMoreAt(local) != null ||
+        r.codeTitleAt(local) != null ||
         r.scrollbarAt(local) != null ||
         r.tableHandleAt(local) != null ||
         r.tableDeleteAt(local) != null ||
@@ -3511,6 +3517,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (overlay == null) return;
     final l10n = context.l10n;
     final wrapped = node.data['wrap'] == true;
+    final hasLineNums = node.data['lineNumbers'] == true;
+    final hasTitle = ((node.data['title'] as String?) ?? '').trim().isNotEmpty;
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -3528,6 +3536,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           ),
         ),
         PopupMenuItem(
+          value: 'lineNumbers',
+          child: _codeMenuRow(
+            Icons.format_list_numbered,
+            hasLineNums
+                ? l10n.codeMenuHideLineNumbers
+                : l10n.codeMenuLineNumbers,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'title',
+          child: _codeMenuRow(
+            Icons.title,
+            hasTitle ? l10n.codeMenuRemoveTitle : l10n.codeMenuAddTitle,
+          ),
+        ),
+        PopupMenuItem(
           value: 'delete',
           child: _codeMenuRow(
             Icons.delete_outline,
@@ -3541,8 +3565,33 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     switch (selected) {
       case 'wrap':
         _controller.toggleCodeWrap(nodeIndex);
+      case 'lineNumbers':
+        _controller.toggleLineNumbers(nodeIndex);
+      case 'title':
+        if (hasTitle) {
+          _controller.setCodeTitle(nodeIndex, '');
+        } else {
+          await _promptCodeTitle(nodeIndex);
+        }
       case 'delete':
         _controller.deleteNode(nodeIndex);
+    }
+  }
+
+  /// Prompt for a code block's caption (pre-filled with the current one, if any)
+  /// and store it. Empty clears it. The dialog OWNS its controller (see
+  /// [_CodeTitleDialog]) — disposing it right after showDialog returns throws
+  /// (`_dependents.isEmpty`) when the exit transition rebuilds the field.
+  Future<void> _promptCodeTitle(int nodeIndex) async {
+    if (nodeIndex < 0 || nodeIndex >= _controller.nodes.length) return;
+    final current =
+        (_controller.nodes[nodeIndex].data['title'] as String?) ?? '';
+    final title = await showDialog<String>(
+      context: context,
+      builder: (_) => _CodeTitleDialog(initial: current),
+    );
+    if (title != null && mounted) {
+      _controller.setCodeTitle(nodeIndex, title);
     }
   }
 
@@ -5275,6 +5324,59 @@ const List<_SlashOption> _slashOptions = [
   _SlashOption('Divider', Icons.horizontal_rule, 'divider'),
   _SlashOption('Image', Icons.image_outlined, 'image'),
 ];
+
+/// The code-block title dialog, owning its controller. Disposing a controller
+/// right after showDialog returns throws in debug (`_dependents.isEmpty`): the
+/// pop only starts the exit transition, which rebuilds the field and re-adds a
+/// listener to the just-freed controller. State.dispose runs after the route is
+/// gone, so it's the safe hook.
+class _CodeTitleDialog extends StatefulWidget {
+  const _CodeTitleDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_CodeTitleDialog> createState() => _CodeTitleDialogState();
+}
+
+class _CodeTitleDialogState extends State<_CodeTitleDialog> {
+  late final TextEditingController _ctrl = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return AlertDialog(
+      title: Text(l10n.codeMenuAddTitle),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        decoration: InputDecoration(
+          hintText: l10n.codeTitleHint,
+          border: const OutlineInputBorder(),
+        ),
+        onSubmitted: (v) => Navigator.of(context).pop(v),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.commonCancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_ctrl.text),
+          child: Text(l10n.commonSave),
+        ),
+      ],
+    );
+  }
+}
 
 /// Code-block language picker: a small anchored panel with a search box —
 /// the language list is long, so filtering beats scrolling. ↑/↓ move the

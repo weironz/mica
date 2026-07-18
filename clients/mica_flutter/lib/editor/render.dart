@@ -271,6 +271,10 @@ class _NodeLayout {
   double codeWidth = 0; // natural (unwrapped) text width, for code blocks
   double codeVisible = 0; // visible width of the code area
   Rect? scrollTrack; // horizontal scrollbar track (local), if code overflows
+  bool showLineNums = false; // code block: draw a left line-number gutter
+  double lineNumGutter = 0; // width reserved (inside contentLeft) for line #s
+  String codeTitle = ''; // code block: bottom caption, '' = none
+  Rect? titleRect; // code-block title caption rect (local), if any
   String kind = 'paragraph';
   bool todoChecked = false;
   int quoteDepth = 0; // blockquote nesting (bars on the left)
@@ -877,13 +881,22 @@ class RenderDocument extends RenderBox {
             0.0,
             double.infinity,
           );
+      final isCode = node.isCode;
+      // A line-number gutter widens contentLeft (code shifts right; numbers are
+      // painted in the reserved strip). Width scales with the digit count so a
+      // 1000-line block still lines up. SiYuan-style per-block toggle.
+      final showLineNums = isCode && node.data['lineNumbers'] == true;
+      final lineNumGutter = showLineNums
+          ? (node.text.split('\n').length.toString().length.clamp(1, 9) * 7.5 +
+                12.0)
+          : 0.0;
       final contentLeft =
           EditorTheme.gutter +
           EditorTheme.leadingInset(node.kind) +
           (node.isListKind ? 24.0 * node.indent : 0.0) +
           liInset +
-          quoteExtra;
-      final isCode = node.isCode;
+          quoteExtra +
+          lineNumGutter;
       final textWidth =
           (maxWidth - contentLeft - (isCode ? EditorTheme.codePadH : 0)).clamp(
             0.0,
@@ -1007,10 +1020,14 @@ class RenderDocument extends RenderBox {
             ? (node.data['label'] as String? ?? '')
             : ''
         ..codeWrap = codeWrap
-        ..codeWidth = isCode ? painter.width : 0;
+        ..codeWidth = isCode ? painter.width : 0
+        ..showLineNums = showLineNums
+        ..lineNumGutter = lineNumGutter
+        ..codeTitle = isCode ? (node.data['title'] as String? ?? '') : '';
 
-      // Code blocks pad symmetrically; their controls float at the bottom-right
-      // on hover (no reserved top toolbar row).
+      // Code blocks pad symmetrically; their controls float at the top-right on
+      // hover (no reserved top toolbar row). The optional title caption is added
+      // AFTER the scrollbar below (so it sits under the code + scrollbar).
       final innerTop = isCode ? EditorTheme.codePadV : 0.0;
       layout.boxTop = y;
       layout.textTop = y + innerTop;
@@ -1100,6 +1117,21 @@ class RenderDocument extends RenderBox {
           );
         }
 
+        // Bottom caption row, below the code (and the scrollbar, if any).
+        if (layout.codeTitle.isNotEmpty) {
+          final titleLeft = contentLeft - lineNumGutter;
+          layout.titleRect = Rect.fromLTWH(
+            titleLeft,
+            layout.boxTop + layout.boxHeight,
+            (maxWidth - titleLeft - EditorTheme.codePadH).clamp(
+              0.0,
+              double.infinity,
+            ),
+            _codeTitleH,
+          );
+          layout.boxHeight += _codeTitleH;
+        }
+
         // Controls float at the TOP-right on hover (GitHub/VSCode/Notion-style),
         // right-aligned: [language chip] [copy] [⋯ more]. Trimmed to the common
         // actions — wrap / line-numbers / title / collapse / delete live behind
@@ -1176,6 +1208,9 @@ class RenderDocument extends RenderBox {
 
   // Vertical box reserved for a divider (horizontal rule centered within it).
   static const double _dividerHeight = 26;
+
+  // Height of a code block's optional bottom caption row.
+  static const double _codeTitleH = 24;
 
   // Image placeholder size (before the real image decodes) and vertical gap.
   static const double _imagePlaceholderH = 180;
@@ -1484,6 +1519,67 @@ class RenderDocument extends RenderBox {
     }
   }
 
+  /// Line numbers in the reserved strip left of the code (contentLeft already
+  /// includes [_NodeLayout.lineNumGutter]). Fixed horizontally — they don't
+  /// scroll with the code. Only a logical line's FIRST visual row gets a number;
+  /// a soft-wrapped line's continuation rows stay blank (SiYuan-style).
+  void _paintLineNumbers(Canvas canvas, Offset origin, _NodeLayout l) {
+    final metrics = l.painter.computeLineMetrics();
+    if (metrics.isEmpty) return;
+    final text = l.painter.text?.toPlainText() ?? '';
+    final gutterRight = origin.dx - 4; // right-align 4px before the code text
+    var lineNo = 0;
+    for (final m in metrics) {
+      final rowTopLocal = m.baseline - m.ascent;
+      final pos = l.painter.getPositionForOffset(Offset(0, rowTopLocal + 1));
+      final off = pos.offset;
+      final isLogicalStart =
+          off == 0 || (off > 0 && off <= text.length && text[off - 1] == '\n');
+      if (!isLogicalStart) continue;
+      lineNo++;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '$lineNo',
+          style: const TextStyle(
+            fontSize: 11,
+            height: 1.0,
+            color: Color(0xFF94A3B8),
+            fontFamily: kMonoFont,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(
+          gutterRight - tp.width,
+          origin.dy + rowTopLocal + (m.height - tp.height) / 2,
+        ),
+      );
+      tp.dispose();
+    }
+  }
+
+  /// The code block's bottom caption (its [_NodeLayout.titleRect]).
+  void _paintCodeTitle(Canvas canvas, Offset offset, _NodeLayout l) {
+    final r = l.titleRect!.shift(offset);
+    final tp = TextPainter(
+      text: TextSpan(
+        text: l.codeTitle,
+        style: const TextStyle(
+          fontSize: 12,
+          color: EditorTheme.muted,
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      ellipsis: '…',
+    )..layout(maxWidth: r.width);
+    tp.paint(canvas, Offset(r.left, r.top + (r.height - tp.height) / 2));
+    tp.dispose();
+  }
+
   void _paintCodeToolbar(Canvas canvas, Offset offset, _NodeLayout l) {
     final label = l.langLabel;
     if (label != null) {
@@ -1656,6 +1752,14 @@ class RenderDocument extends RenderBox {
   int? codeCopyAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       if (_layouts[i].copyButton?.contains(local) ?? false) return i;
+    }
+    return null;
+  }
+
+  /// Node index whose code-block title caption contains [local], or null.
+  int? codeTitleAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      if (_layouts[i].titleRect?.contains(local) ?? false) return i;
     }
     return null;
   }
@@ -1873,6 +1977,12 @@ class RenderDocument extends RenderBox {
       );
       l.painter.paint(canvas, origin - Offset(scroll, 0));
       canvas.restore();
+      if (l.showLineNums) {
+        _paintLineNumbers(canvas, origin, l);
+      }
+      if (l.titleRect != null) {
+        _paintCodeTitle(canvas, offset, l);
+      }
     } else {
       l.painter.paint(canvas, origin);
       // Inline atoms: the painter reserved each placeholder's box; draw the
