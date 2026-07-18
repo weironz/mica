@@ -249,6 +249,20 @@ impl MicaStore {
             .map(LocalVersion::from)
     }
 
+    /// Decode a version into a THROWAWAY document for read-only preview (never
+    /// the live doc). Null if the version isn't found. The caller renders it with
+    /// `to_blocks_json()` / `root_block_id()` in a read-only editor.
+    #[frb(sync)]
+    pub fn local_version_doc(&self, doc_id: String, version_id: String) -> Option<MicaDocument> {
+        let bytes = self
+            .inner
+            .lock()
+            .unwrap()
+            .local_version_state(&doc_id, &version_id)
+            .ok()??;
+        crate::api::document::MicaDocument::from_state_with_client_id(bytes, self.client_id)
+    }
+
     /// Restore the document to a version, returning the recovered doc (null if
     /// the version isn't found). The pre-restore state is kept as an auto version
     /// so the restore is itself undoable.

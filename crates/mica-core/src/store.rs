@@ -510,6 +510,23 @@ impl LocalStore {
         Ok(rows)
     }
 
+    /// A version's stored yrs state blob (for a read-only preview — decode it
+    /// into a throwaway MicaDoc, never the live one). None if not found.
+    pub fn local_version_state(
+        &self,
+        doc_id: &str,
+        version_id: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT state FROM doc_version WHERE id=?1 AND doc_id=?2",
+                params![version_id, doc_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     /// Restore a document to a stored version, making it the live base and
     /// dropping the incremental log (a local page is single-device, so this is a
     /// clean reset — the same shape as [`Self::rollback_doc`]). The pre-restore

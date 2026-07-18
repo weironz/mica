@@ -69,6 +69,11 @@ class LocalOffline {
 
   bool restoreDocVersion(String docId, String versionId) => false;
 
+  ({String rootBlockId, List<Map<String, dynamic>> blocks})? docVersionContent(
+    String docId,
+    String versionId,
+  ) => null;
+
   List<WorkspaceData> listWorkspaces({String origin = 'local'}) => const [];
 
   void saveWorkspace(WorkspaceData w, {String origin = 'local'}) {}

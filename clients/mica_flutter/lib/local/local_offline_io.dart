@@ -687,6 +687,23 @@ class LocalOffline {
     return v == null ? null : (id: v.id, label: v.label, createdAt: v.createdAt);
   }
 
+  /// A version's content (blocks in tree order + root id) for a READ-ONLY
+  /// preview — decoded into a throwaway doc, never the live one. Null if the
+  /// store is closed or the version is gone.
+  ({String rootBlockId, List<Map<String, dynamic>> blocks})? docVersionContent(
+    String docId,
+    String versionId,
+  ) {
+    final store = _store;
+    if (store == null) return null;
+    final doc = store.localVersionDoc(docId: docId, versionId: versionId);
+    if (doc == null) return null;
+    final blocks = (jsonDecode(doc.toBlocksJson()) as List)
+        .map((b) => Map<String, dynamic>.from(b as Map))
+        .toList();
+    return (rootBlockId: doc.rootBlockId(), blocks: blocks);
+  }
+
   /// Restore a local page to a version (persists it + drops the pending log).
   /// Returns whether the version existed; the caller reloads the editor.
   bool restoreDocVersion(String docId, String versionId) {

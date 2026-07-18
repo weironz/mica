@@ -2105,8 +2105,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Any click clears a table row/column block-selection; the row/column
     // handle branches below re-set it when that's what was clicked.
     r.tableBlockSelection = null;
+    // Read-only (version preview / future share): every branch that opens an
+    // EDIT surface (math/code/image dialogs, menus, title edit) is gated on
+    // canEdit, so a click just selects/scrolls. Copy, the image viewer, and
+    // selection stay live — they're safe to use while viewing.
+    final ro = !widget.canEdit;
     final mathIdx = r.blockAt(local);
-    if (mathIdx != null &&
+    if (!ro &&
+        mathIdx != null &&
         mathIdx < _controller.nodes.length &&
         _controller.nodes[mathIdx].kind == 'math_block') {
       _editMathBlock(_controller.nodes[mathIdx]);
@@ -2114,7 +2120,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     // A typeset inline formula is an atom: clicking it opens the source editor
     // rather than placing a caret inside (AppFlowy/AFFiNE/Notion all do this).
-    final inlineMath = r.inlineMathAt(local);
+    final inlineMath = ro ? null : r.inlineMathAt(local);
     if (inlineMath != null) {
       _focus.requestFocus();
       _editInlineMath(
@@ -2125,7 +2131,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
       return;
     }
-    final langNode = r.codeLanguageAt(local);
+    final langNode = ro ? null : r.codeLanguageAt(local);
     if (langNode != null) {
       _openLanguageMenu(langNode, d.globalPosition);
       return;
@@ -2135,13 +2141,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _copyCode(copyNode);
       return;
     }
-    final aiNode = r.codeAskAiAt(local);
+    final aiNode = ro ? null : r.codeAskAiAt(local);
     if (aiNode != null) {
       _openCodeAiMenu(aiNode, d.globalPosition);
       return;
     }
     // Image hover toolbar (expand / align / delete).
-    final imageAction = r.imageActionAt(local);
+    final imageAction = ro ? null : r.imageActionAt(local);
     if (imageAction != null) {
       _onImageAction(imageAction.node, imageAction.action);
       return;
@@ -2172,17 +2178,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // A click anywhere outside the diagram blocks restores their natural
     // zoom/pan (the explicit reset gesture — hover-leave was too eager).
     r.resetPreviewViewsOutside(local);
-    final viewTab = r.viewTabAt(local);
+    final viewTab = ro ? null : r.viewTabAt(local);
     if (viewTab != null) {
       _controller.setCodeView(viewTab.node, viewTab.view);
       return;
     }
-    final moreNode = r.codeMoreAt(local);
+    final moreNode = ro ? null : r.codeMoreAt(local);
     if (moreNode != null) {
       _openCodeMenu(moreNode, d.globalPosition);
       return;
     }
-    final titleNode = r.codeTitleAt(local);
+    final titleNode = ro ? null : r.codeTitleAt(local);
     if (titleNode != null) {
       // titleRect is shared by code-block titles and image captions.
       if (_controller.nodes[titleNode].kind == 'image') {
@@ -2192,7 +2198,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
       return;
     }
-    final collapseNode = r.codeCollapseAt(local);
+    final collapseNode = ro ? null : r.codeCollapseAt(local);
     if (collapseNode != null) {
       _controller.toggleCollapsed(collapseNode);
       return;
@@ -3212,6 +3218,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _onHover(PointerHoverEvent event) {
     final r = _render;
     if (r == null) return;
+    // Read-only (version preview): no hover affordances at all — the code/image
+    // toolbars, drag handles and edit cursors are meaningless on a frozen page,
+    // so we never set a hover target. Keeps the preview looking like content.
+    if (!widget.canEdit) {
+      r.setHover(null);
+      return;
+    }
     final local = r.globalToLocal(event.position);
     r.setHover(local);
     final cursor = _cursorFor(r, local);

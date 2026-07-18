@@ -322,6 +322,29 @@ class ApiClient {
         .toList();
   }
 
+  /// One version's content — its blocks in tree order + root id — for a
+  /// read-only preview. The server decodes the stored yrs state to a payload.
+  Future<({String rootBlockId, List<Map<String, dynamic>> blocks})>
+  getVersionContent(
+    String token,
+    String workspaceId,
+    String documentId,
+    String versionId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/documents/$documentId/versions/$versionId',
+      token,
+    );
+    final payload = (response['payload'] as Map<String, dynamic>?) ?? const {};
+    final blocks = ((payload['blocks'] as List<dynamic>?) ?? const [])
+        .map((b) => Map<String, dynamic>.from(b as Map))
+        .toList();
+    return (
+      rootBlockId: payload['root_block_id'] as String? ?? '',
+      blocks: blocks,
+    );
+  }
+
   /// Pin the document's CURRENT state as a named, restorable version.
   Future<DocVersion> createVersion(
     String token,

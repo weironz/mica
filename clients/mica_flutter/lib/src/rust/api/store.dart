@@ -81,6 +81,14 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// null if there's no such document.
   MicaDocument? loadDoc({required String docId});
 
+  /// Decode a version into a THROWAWAY document for read-only preview (never
+  /// the live doc). Null if the version isn't found. The caller renders it with
+  /// `to_blocks_json()` / `root_block_id()` in a read-only editor.
+  MicaDocument? localVersionDoc({
+    required String docId,
+    required String versionId,
+  });
+
   /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
   (PlatformInt64, PlatformInt64) logSizes({required String docId});
 
