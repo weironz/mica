@@ -115,6 +115,12 @@ gh secret set DOCKERHUB_TOKEN
 - **Windows 上 PATH 里的 `bash` 是 WSL 的**(`C:\WINDOWS\system32\bash.exe`)。justfile 用
   `set windows-shell` 钉死 Git Bash;走 WSL 的话那边没有 Windows 的 docker/flutter/cargo,
   路径还变 `/mnt/d/...` → 全挂。
+- **`just deploy-prod` 从 PowerShell 跑报 `could not find cygpath ... shebang interpreter`**:
+  `deploy-prod` 是 shebang recipe(`#!/usr/bin/env bash`),`just` 对 shebang recipe **不走**
+  `set windows-shell`,而是直接执行解释器,并用 `cygpath` 把临时脚本路径翻成 Unix 风格。
+  `cygpath.exe` 在 `C:\Program Files\Git\usr\bin\`,但 PowerShell 的 PATH 通常只有 `Git\bin`
+  → 找不到。修法二选一:(A) **从 Git Bash 里跑**(那里 cygpath 在 `/usr/bin`);(B) PowerShell 里
+  临时挂 PATH:`$env:PATH = "C:\Program Files\Git\usr\bin;$env:PATH"` 再 `just deploy-prod X.Y.Z`。
 - **Windows 没有 `rsync`**,暂存 bundle 用 `rm -rf` + `cp -r`。
 - **`docker build` 必须带 `--provenance=false --sbom=false`**(CI 里是 build-push-action 的
   `provenance: false` / `sbom: false`)。buildx 默认挂 OCI attestation,镜像变成多 manifest
