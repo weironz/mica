@@ -1760,9 +1760,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// backend) and let the server import it.
   Future<void> _importTreeIntoWorkspace(
     Workspace workspace,
-    List<ArchiveFile> entries,
-  ) {
-    return _runServerImport(buildStoreZip(entries), workspaceId: workspace.id);
+    List<ArchiveFile> entries, {
+    String? sourceName,
+  }) {
+    // [sourceName] (the picked folder's name) names the container the server
+    // wraps the import under — see ImportMode::IntoContainer. Absent (loose
+    // multi-file selection) → the server falls back to "Imported".
+    return _runServerImport(
+      buildStoreZip(entries),
+      name: sourceName,
+      workspaceId: workspace.id,
+    );
   }
 
   /// Upload the archive, poll the import job, then refresh and open the
@@ -2444,11 +2452,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// menu; the picker + walk are shared with the cloud path.
   Future<void> _localImportVaultTree(
     Workspace workspace,
-    List<ArchiveFile> entries,
-  ) async {
+    List<ArchiveFile> entries, {
+    String? sourceName,
+  }) async {
     final l10n = context.l10n;
+    // Parity with the cloud IntoContainer wrap: a picked folder's name becomes
+    // a container folder here too, by prefixing every entry path with it.
+    final trimmed = sourceName?.trim() ?? '';
+    final prefix = trimmed.isEmpty ? '' : '$trimmed/';
     final files = <({String path, List<int> bytes})>[
-      for (final f in entries) (path: f.name, bytes: f.bytes),
+      for (final f in entries) (path: '$prefix${f.name}', bytes: f.bytes),
     ];
     final result = await _local.importVaultTree(files, workspace.id);
     if (!mounted) return;
@@ -3854,10 +3867,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _importTreeIntoEntry(
     WorkspaceEntry e,
-    List<ArchiveFile> entries,
-  ) => e.isLocal
-      ? _localImportVaultTree(e.workspace, entries)
-      : _importTreeIntoWorkspace(e.workspace, entries);
+    List<ArchiveFile> entries, {
+    String? sourceName,
+  }) => e.isLocal
+      ? _localImportVaultTree(e.workspace, entries, sourceName: sourceName)
+      : _importTreeIntoWorkspace(
+          e.workspace,
+          entries,
+          sourceName: sourceName,
+        );
 
   /// Create a workspace of the chosen kind (P3c unified create dialog), then
   /// make its world active — each impl already selects the new workspace inside
@@ -4549,7 +4567,11 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(WorkspaceEntry entry, String name) onRenameEntry;
   final Future<void> Function(WorkspaceEntry entry) onDeleteEntry;
   final Future<Uint8List> Function(WorkspaceEntry entry) onExportEntryZip;
-  final Future<void> Function(WorkspaceEntry entry, List<ArchiveFile> entries)
+  final Future<void> Function(
+    WorkspaceEntry entry,
+    List<ArchiveFile> entries, {
+    String? sourceName,
+  })
   onImportTreeIntoEntry;
 
   /// Create a workspace of the chosen kind (`local: true` = on-device).
@@ -7471,10 +7493,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final picked = await pickImportFolder();
     if (picked.isEmpty || !mounted) return;
     final entries = <ArchiveFile>[];
+    String? folderName;
     for (final f in picked) {
       // The picker includes the chosen folder itself as the first segment —
-      // drop it so the folder's contents land at the workspace root.
+      // drop it so the folder's contents land under the container, and reuse
+      // that segment as the container name (see ImportMode::IntoContainer).
       final parts = f.path.split('/');
+      if (folderName == null && parts.length > 1 && parts.first.isNotEmpty) {
+        folderName = parts.first;
+      }
       entries.add(
         ArchiveFile(
           parts.length > 1 ? parts.sublist(1).join('/') : f.path,
@@ -7482,7 +7509,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
       );
     }
-    await widget.onImportTreeIntoEntry(entry, entries);
+    await widget.onImportTreeIntoEntry(entry, entries, sourceName: folderName);
   }
 
   void _openAiDialog() {
