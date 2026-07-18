@@ -19,7 +19,7 @@ use mica_app_core::{
   store::{self, DocumentRecord},
 };
 use mica_infra::{ApiError, ApiResult};
-use mica_interchange::{ImportPlan, plan_import, read_zip, resolve_ref};
+use mica_interchange::{ImportMode, ImportPlan, plan_import, read_zip, resolve_ref};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
@@ -127,8 +127,25 @@ async fn run_import(
 ) -> ApiResult<()> {
   // Unzip + plan are CPU-bound — keep them off the async workers.
   let notion = params.notion;
+  // Destination decides the "container vs flatten" shape (see import-convention
+  // research): into an existing workspace/folder → wrap everything under ONE
+  // container named after the source; as a NEW workspace → the workspace IS the
+  // container, so collapse a redundant single wrapper. The container fallback
+  // name is the client-supplied source name (zip/folder), else "Imported".
+  let mode = if params.workspace_id.is_some() {
+    let fallback = params
+      .name
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .unwrap_or("Imported")
+      .to_string();
+    ImportMode::IntoContainer(fallback)
+  } else {
+    ImportMode::NewWorkspace
+  };
   let plan: ImportPlan =
-    tokio::task::spawn_blocking(move || plan_import(read_zip(&body), notion))
+    tokio::task::spawn_blocking(move || plan_import(read_zip(&body), notion, mode))
       .await
       .map_err(|e| ApiError::Internal(e.to_string()))?;
   if plan.pages.is_empty() {
@@ -140,8 +157,15 @@ async fn run_import(
   let workspace_id = match params.workspace_id {
     Some(id) => id,
     None => {
-      let name = params.name.as_deref().unwrap_or("Imported").trim();
-      let name = if name.is_empty() { "Imported" } else { name };
+      // Client name (zip/folder) wins; else the collapsed wrapper's name
+      // (Logseq: the stripped folder names the new workspace); else "Imported".
+      let name = params
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(plan.wrapper_name.as_deref())
+        .unwrap_or("Imported");
       create_workspace(state, user_id, name).await?
     }
   };
@@ -255,14 +279,16 @@ async fn create_workspace(state: &AppState, user_id: Uuid, name: &str) -> ApiRes
   .bind(user_id)
   .fetch_one(&mut *tx)
   .await?;
+  let next_pos = crate::routes::workspaces::next_member_position(&state.db, user_id).await?;
   sqlx::query(
     r#"
-      INSERT INTO workspace_members (workspace_id, user_id, role)
-      VALUES ($1, $2, 'owner')
+      INSERT INTO workspace_members (workspace_id, user_id, role, position)
+      VALUES ($1, $2, 'owner', $3)
     "#,
   )
   .bind(workspace_id)
   .bind(user_id)
+  .bind(next_pos)
   .execute(&mut *tx)
   .await?;
   tx.commit().await?;

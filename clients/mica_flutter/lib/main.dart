@@ -63,7 +63,7 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.9.0';
+const String kAppVersion = '0.10.0';
 
 /// Editor page (content column) width, as 11 discrete steps like AppFlowy —
 /// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
@@ -1450,6 +1450,55 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       workspace.id,
       bootstrap.document.id,
     );
+  }
+
+  /// Export the open CLOUD page, choosing the shape by content: a page with no
+  /// bundled assets exports as a single clean `.md`; one that references local
+  /// images exports as a `.zip` (md + `assets/`) — a lone `.md` would dangle
+  /// those `![](assets/…)` links. `title` names the file.
+  Future<({Uint8List bytes, String name, String mime})> _exportPage(
+    String title,
+  ) async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    final bootstrap = _selectedBootstrap;
+    if (bootstrap == null) {
+      throw ApiException(context.l10n.pageOpenFirst);
+    }
+    final base = title.trim().isEmpty ? 'page' : title.trim();
+    final markdown = await _api.exportMarkdown(
+      session.accessToken,
+      workspace.id,
+      bootstrap.document.id,
+    );
+    if (_markdownReferencesLocalAssets(markdown)) {
+      final bytes = await _api.exportDocumentZip(
+        session.accessToken,
+        workspace.id,
+        bootstrap.document.id,
+      );
+      return (bytes: bytes, name: '$base.zip', mime: 'application/zip');
+    }
+    return (
+      bytes: Uint8List.fromList(utf8.encode(markdown)),
+      name: '$base.md',
+      mime: 'text/markdown',
+    );
+  }
+
+  /// True if the markdown has any image whose target is a LOCAL asset (not an
+  /// external `http(s)`/`data:` URL) — those need the `.zip` to travel with
+  /// their files.
+  bool _markdownReferencesLocalAssets(String markdown) {
+    for (final m in RegExp(r'!\[[^\]]*\]\(\s*([^)\s]+)').allMatches(markdown)) {
+      final url = m.group(1) ?? '';
+      if (!url.startsWith('http://') &&
+          !url.startsWith('https://') &&
+          !url.startsWith('data:')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Export the open CLOUD page as a self-contained HTML file. `title` (the live
@@ -4021,6 +4070,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onExportPageZip: local
           ? () async => throw ApiException(context.l10n.exportLocalUnsupported)
           : _exportPageZip,
+      // Page export chooses `.md` (no assets) vs `.zip` (bundled images) by
+      // content. Local pages have no server to bundle a zip yet — unsupported.
+      onExportPage: local
+          ? (_) async => throw ApiException(context.l10n.exportLocalUnsupported)
+          : _exportPage,
       // HTML export works in BOTH worlds — local goes through the FFI engine
       // (see _localExportPageHtml), so unlike the ZIP it isn't gated off local.
       onExportPageHtml: local ? _localExportPageHtml : _exportPageHtml,
@@ -4431,6 +4485,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onSearch,
     required this.onOpenSearchResult,
     required this.onExportPageZip,
+    required this.onExportPage,
     required this.onExportPageHtml,
     required this.onExportPagePdf,
     required this.onImportMarkdown,
@@ -4612,6 +4667,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<List<SearchResult>> Function(String query) onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
   final Future<Uint8List> Function() onExportPageZip;
+  final Future<({Uint8List bytes, String name, String mime})> Function(
+    String title,
+  )
+  onExportPage;
   final Future<String> Function(String title) onExportPageHtml;
   final Future<Uint8List?> Function(String html) onExportPagePdf;
   final Future<void> Function(String fileName, String markdown)
@@ -7253,11 +7312,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _exportPageFile() async {
     final l10n = context.l10n;
     try {
-      final bytes = await widget.onExportPageZip();
-      // Never write an empty archive and call it success — that's how the
-      // local-workspace stub used to produce a 0-byte page.zip silently.
-      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
-      downloadImage(bytes, 'page.zip', 'application/zip');
+      // Content-aware: a page with no bundled images downloads as a clean
+      // `.md`; one with images downloads as a `.zip` (md + assets).
+      final out = await widget.onExportPage(_pageTitle.text.trim());
+      if (out.bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
+      downloadImage(out.bytes, out.name, out.mime);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(

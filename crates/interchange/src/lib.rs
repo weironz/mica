@@ -9,6 +9,6 @@ pub mod notion;
 pub mod order;
 pub mod zip;
 
-pub use import::{ImportPlan, PagePlan, plan_import, resolve_ref};
+pub use import::{ImportMode, ImportPlan, PagePlan, plan_import, resolve_ref};
 pub use normalize::{expand_nested_zips, normalize_entries};
 pub use zip::{ZipEntry, ZipFileEntry, build_zip, read_zip};

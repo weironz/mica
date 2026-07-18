@@ -70,6 +70,7 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces",
       get(workspaces::list).post(workspaces::create),
     )
+    .route("/workspaces/reorder", post(workspaces::reorder))
     .route(
       "/workspaces/{workspace_id}",
       get(workspaces::get)

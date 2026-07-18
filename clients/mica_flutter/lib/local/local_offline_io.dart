@@ -144,6 +144,22 @@ class LocalOffline {
     );
   }
 
+  /// Renumber workspace positions to match [ids] order (drag-reorder). Positions
+  /// are zero-padded `n*10` so lexical order == intended order (same scheme the
+  /// server uses). Unknown ids are skipped.
+  void reorderWorkspaces(List<String> ids, {String origin = 'local'}) {
+    final byId = {for (final w in listWorkspaces(origin: origin)) w.id: w};
+    for (var i = 0; i < ids.length; i++) {
+      final w = byId[ids[i]];
+      if (w == null) continue;
+      final pos = ((i + 1) * 10).toString().padLeft(10, '0');
+      saveWorkspace(
+        (id: w.id, name: w.name, position: pos, role: w.role),
+        origin: origin,
+      );
+    }
+  }
+
   /// Delete a local workspace, its view rows, and all its documents. Local-only:
   /// a cloud mirror is a read cache, never user-deleted through this path.
   void deleteWorkspace(String id) {

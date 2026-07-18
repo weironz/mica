@@ -44,6 +44,49 @@ pub fn normalize_entries(entries: Vec<ZipFileEntry>) -> Vec<ZipFileEntry> {
   out
 }
 
+/// The innermost single top-level wrapper directory that [normalize_entries]
+/// peels away, or `None` when there is no single wrapper (multiple top-level
+/// items — e.g. a Mica export). Used to NAME a new workspace / import container
+/// after the folder/zip the user handed us, since the peel itself discards the
+/// name. Mirrors the peel loop but reports the LAST (innermost, closest to
+/// content) segment: `Export-id/MyProject/…` → `MyProject`.
+pub fn stripped_wrapper_name(entries: &[ZipFileEntry]) -> Option<String> {
+  let mut names: Vec<String> = entries
+    .iter()
+    .filter(|e| !is_junk(&e.name))
+    .map(|e| e.name.clone())
+    .collect();
+  let mut last: Option<String> = None;
+  loop {
+    let mut top: Option<&str> = None;
+    let mut single = true;
+    for n in &names {
+      match n.split_once('/') {
+        None => {
+          single = false;
+          break;
+        }
+        Some((seg, _)) => match top {
+          None => top = Some(seg),
+          Some(t) if t != seg => {
+            single = false;
+            break;
+          }
+          _ => {}
+        },
+      }
+    }
+    let Some(top) = top else { break };
+    if !single {
+      break;
+    }
+    last = Some(top.to_string());
+    let cut = top.len() + 1;
+    names = names.into_iter().map(|n| n[cut..].to_string()).collect();
+  }
+  last
+}
+
 /// Any dot-segment hides the whole subtree: `.obsidian/`, `.git/`, `.trash/`,
 /// `.DS_Store`, AppleDouble `._*` files…
 fn is_junk(path: &str) -> bool {

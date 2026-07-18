@@ -124,6 +124,16 @@ class ApiClient {
     await _delete('/api/workspaces/$workspaceId', token);
   }
 
+  /// Persist the user's drag-reordered workspace list (per-user order).
+  Future<void> reorderWorkspaces(
+    String token,
+    List<String> workspaceIds,
+  ) async {
+    await _post('/api/workspaces/reorder', {
+      'workspace_ids': workspaceIds,
+    }, token: token);
+  }
+
   Future<List<WorkspaceMember>> listWorkspaceMembers(
     String token,
     String workspaceId,

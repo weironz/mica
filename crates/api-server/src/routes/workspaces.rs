@@ -72,6 +72,54 @@ pub struct WorkspaceMember {
   joined_at: DateTime<Utc>,
 }
 
+/// Zero-padded numeric position: lexical order == numeric order.
+pub(crate) fn pad_position(n: i64) -> String {
+  format!("{n:010}")
+}
+
+/// The next member `position` for `user_id` — one step past their current max,
+/// so a newly-added workspace lands at the END of that user's switcher. Reads
+/// committed memberships (the caller's own new row isn't inserted yet), so the
+/// pool is fine even mid-transaction.
+pub(crate) async fn next_member_position(db: &PgPool, user_id: Uuid) -> ApiResult<String> {
+  let max: Option<i64> = sqlx::query_scalar(
+    "SELECT max(nullif(position, '')::bigint) FROM workspace_members WHERE user_id = $1",
+  )
+  .bind(user_id)
+  .fetch_one(db)
+  .await?;
+  Ok(pad_position(max.unwrap_or(0) + 10))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReorderWorkspacesRequest {
+  workspace_ids: Vec<Uuid>,
+}
+
+/// Persist the user's drag-reordered workspace list: renumber their membership
+/// positions to match `workspace_ids` order. Per-user — only rows where the
+/// caller is a member are touched; unknown ids no-op.
+pub async fn reorder(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Json(payload): Json<ReorderWorkspacesRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  let mut tx = state.db.begin().await?;
+  for (i, wid) in payload.workspace_ids.iter().enumerate() {
+    sqlx::query(
+      "UPDATE workspace_members SET position = $1 WHERE workspace_id = $2 AND user_id = $3",
+    )
+    .bind(pad_position((i as i64 + 1) * 10))
+    .bind(wid)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+  }
+  tx.commit().await?;
+  Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 pub async fn list(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -90,7 +138,7 @@ pub async fn list(
       FROM workspaces w
       INNER JOIN workspace_members wm ON wm.workspace_id = w.id
       WHERE wm.user_id = $1
-      ORDER BY w.created_at ASC
+      ORDER BY wm.position ASC, w.created_at ASC
     "#,
   )
   .bind(user_id)
@@ -122,14 +170,19 @@ pub async fn create(
   .fetch_one(&mut *tx)
   .await?;
 
+  // New workspace goes to the END of this user's switcher (next position after
+  // their current max). Positions are zero-padded numeric text (lexical order ==
+  // numeric order).
+  let next_pos = next_member_position(&state.db, user_id).await?;
   sqlx::query(
     r#"
-      INSERT INTO workspace_members (workspace_id, user_id, role)
-      VALUES ($1, $2, 'owner')
+      INSERT INTO workspace_members (workspace_id, user_id, role, position)
+      VALUES ($1, $2, 'owner', $3)
     "#,
   )
   .bind(workspace_id)
   .bind(user_id)
+  .bind(next_pos)
   .execute(&mut *tx)
   .await?;
 
@@ -245,10 +298,13 @@ pub async fn add_member(
     .await?
     .ok_or(ApiError::NotFound)?;
 
+  // New member: the workspace lands at the END of THEIR switcher. An existing
+  // member (re-invite / role change) keeps their position — only role updates.
+  let member_pos = next_member_position(&state.db, member_user_id).await?;
   sqlx::query(
     r#"
-      INSERT INTO workspace_members (workspace_id, user_id, role)
-      VALUES ($1, $2, $3::workspace_role)
+      INSERT INTO workspace_members (workspace_id, user_id, role, position)
+      VALUES ($1, $2, $3::workspace_role, $4)
       ON CONFLICT (workspace_id, user_id) DO UPDATE
       SET role = EXCLUDED.role
     "#,
@@ -256,6 +312,7 @@ pub async fn add_member(
   .bind(workspace_id)
   .bind(member_user_id)
   .bind(role)
+  .bind(member_pos)
   .execute(&state.db)
   .await?;
 

@@ -76,7 +76,7 @@ fn normalize_peels_wrappers_and_drops_junk() {
 
 #[test]
 fn nested_part_zip_expands_through_plan() {
-  let plan = plan_import(read_zip(&fixture("nested.zip")), false);
+  let plan = plan_import(read_zip(&fixture("nested.zip")), false, mica_interchange::ImportMode::AsIs);
   assert!(plan.notion); // names carry 32-hex ids → auto-detected
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   assert_eq!(titles, ["Guide", "Sub"]);
@@ -176,7 +176,7 @@ fn resolve_ref_rules() {
 
 #[test]
 fn plan_full_archive_with_manifest_links_and_assets() {
-  let plan = plan_import(read_zip(&fixture("plan.zip")), false);
+  let plan = plan_import(read_zip(&fixture("plan.zip")), false, mica_interchange::ImportMode::AsIs);
   assert!(!plan.notion);
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   assert_eq!(titles, ["Zeta", "Sub", "Alpha"]); // manifest order, not alphabetical

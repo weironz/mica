@@ -39,9 +39,34 @@ pub struct ImportPlan {
   /// Page index by archive path (for link → page resolution).
   pub page_by_path: HashMap<String, usize>,
   pub notion: bool,
+  /// The single top-level wrapper directory that was collapsed away (if any).
+  /// The caller uses it to name a new workspace after the folder/zip.
+  pub wrapper_name: Option<String>,
 }
 
-pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
+/// How the archive's top level maps onto the destination — the "container vs
+/// flatten" decision (see docs / the import-convention research).
+#[derive(Debug, Clone)]
+pub enum ImportMode {
+  /// Mirror the archive as-is (no collapse, no wrap). Round-trip / test path.
+  AsIs,
+  /// Import as a NEW workspace: the workspace IS the container, so a single
+  /// redundant top-level wrapper folder is collapsed (its name → workspace
+  /// name via [`ImportPlan::wrapper_name`]). Mica exports have no single
+  /// wrapper, so this is identity for them (round-trip preserved).
+  NewWorkspace,
+  /// Import INTO an existing workspace/folder: everything goes under ONE new
+  /// container folder. Its name is the collapsed wrapper's name if the archive
+  /// had one (avoids `zipname > samedir` double-nesting — the SiYuan bug /
+  /// Anytype fix), else the given fallback (the zip filename / picked folder).
+  IntoContainer(String),
+}
+
+pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) -> ImportPlan {
+  // `normalize_entries` already peels a single top-level wrapper folder
+  // (Anytype-style collapse); capture its name FIRST so we can name a new
+  // workspace / import container after it (the peel itself discards the name).
+  let wrapper_name = crate::normalize::stripped_wrapper_name(&raw);
   let entries = expand_nested_zips(normalize_entries(raw));
 
   let manifest = entries
@@ -193,12 +218,53 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool) -> ImportPlan {
     page_by_path.insert(path.clone(), pages.len() - 1);
   }
 
-  ImportPlan {
+  let mut plan = ImportPlan {
     pages,
     files,
     md_paths: mds.into_keys().collect(),
     page_by_path,
     notion,
+    wrapper_name: None,
+  };
+  match mode {
+    // Mirror the archive as-is (the peel above still ran, but no container).
+    ImportMode::AsIs => {}
+    // New workspace = the workspace is the container; the peel already
+    // flattened, we just report the peeled name for naming it.
+    ImportMode::NewWorkspace => {
+      plan.wrapper_name = wrapper_name;
+    }
+    // Into an existing location: everything under ONE container named after the
+    // peeled wrapper (if any — no `fallback > wrapper` double-nest) else the
+    // fallback (zip/folder name).
+    ImportMode::IntoContainer(fallback) => {
+      let name = wrapper_name.clone().unwrap_or(fallback);
+      plan.wrapper_name = wrapper_name;
+      wrap_in_container(&mut plan, name);
+    }
+  }
+  plan
+}
+
+/// Prepend ONE container folder named `name` and reparent every top-level page
+/// under it (Joplin/SiYuan "wrap on import-into-existing"). The wrapper takes
+/// index 0; all existing indices shift by 1.
+fn wrap_in_container(plan: &mut ImportPlan, name: String) {
+  let mut new_pages: Vec<PagePlan> = Vec::with_capacity(plan.pages.len() + 1);
+  new_pages.push(PagePlan {
+    archive_path: None,
+    title: name,
+    parent: None,
+    markdown: String::new(),
+    is_folder: true,
+  });
+  for p in plan.pages.drain(..) {
+    let parent = Some(p.parent.map(|i| i + 1).unwrap_or(0));
+    new_pages.push(PagePlan { parent, ..p });
+  }
+  plan.pages = new_pages;
+  for idx in plan.page_by_path.values_mut() {
+    *idx += 1;
   }
 }
 
@@ -427,7 +493,7 @@ mod tests {
       ])),
       e("Chapter/Intro.md", "# Intro\n\nhello"),
     ];
-    let plan = plan_import(raw, false);
+    let plan = plan_import(raw, false, ImportMode::AsIs);
     let chapter = find(&plan, "Chapter");
     assert!(chapter.is_folder, "Chapter is a folder");
     assert!(chapter.archive_path.is_none() && chapter.markdown.is_empty());
@@ -448,10 +514,78 @@ hello");
     let raw = vec![
       e("manifest.json", &manifest(&[("Empty", "Empty", "folder")])),
     ];
-    let plan = plan_import(raw, false);
+    let plan = plan_import(raw, false, ImportMode::AsIs);
     assert_eq!(plan.pages.len(), 1);
     let empty = find(&plan, "Empty");
     assert!(empty.is_folder && empty.parent.is_none());
+  }
+
+  // ── ImportMode: container vs flatten (P1) ──────────────────────────────
+
+  // New-workspace import strips a single top-level wrapper (the workspace IS the
+  // container) and reports its name for naming the workspace.
+  #[test]
+  fn new_workspace_collapses_single_wrapper() {
+    let raw = vec![e("MyProject/a.md", "# a\n\nhi"), e("MyProject/sub/b.md", "# b\n\nyo")];
+    let plan = plan_import(raw, false, ImportMode::NewWorkspace);
+    assert_eq!(plan.wrapper_name.as_deref(), Some("MyProject"));
+    assert!(plan.pages.iter().all(|p| p.title != "MyProject"), "wrapper removed");
+    assert_eq!(parent_title(&plan, "a"), None);
+    assert_eq!(parent_title(&plan, "sub"), None);
+    assert_eq!(parent_title(&plan, "b"), Some("sub"));
+  }
+
+  // Multiple top-level items (a Mica export: loose pages + folders at root) are
+  // NOT collapsed → round-trip identity for our own archives.
+  #[test]
+  fn new_workspace_keeps_multi_top_level() {
+    let raw = vec![e("a.md", "# a\n\nhi"), e("F/b.md", "# b\n\nyo")];
+    let plan = plan_import(raw, false, ImportMode::NewWorkspace);
+    assert_eq!(plan.wrapper_name, None);
+    assert_eq!(parent_title(&plan, "a"), None);
+    assert_eq!(parent_title(&plan, "F"), None);
+    assert_eq!(parent_title(&plan, "b"), Some("F"));
+  }
+
+  // A lone top-level DOCUMENT is never collapsed (it IS the content).
+  #[test]
+  fn new_workspace_single_document_not_collapsed() {
+    let plan = plan_import(vec![e("solo.md", "# solo\n\nhi")], false, ImportMode::NewWorkspace);
+    assert_eq!(plan.wrapper_name, None);
+    assert_eq!(parent_title(&plan, "solo"), None);
+  }
+
+  // Into-existing import of loose files wraps them in ONE container named after
+  // the source (the given fallback).
+  #[test]
+  fn into_container_wraps_loose_files() {
+    let plan = plan_import(
+      vec![e("a.md", "# a"), e("b.md", "# b")],
+      false,
+      ImportMode::IntoContainer("notes".into()),
+    );
+    let notes = find(&plan, "notes");
+    assert!(notes.is_folder && notes.parent.is_none());
+    assert_eq!(parent_title(&plan, "a"), Some("notes"));
+    assert_eq!(parent_title(&plan, "b"), Some("notes"));
+  }
+
+  // Into-existing import of an archive with a single wrapper uses the WRAPPER's
+  // name for the container (no `fallback > wrapper` double-nesting — SiYuan bug).
+  #[test]
+  fn into_container_collapses_then_wraps_no_double_nest() {
+    let plan = plan_import(
+      vec![e("MyProject/a.md", "# a"), e("MyProject/sub/b.md", "# b")],
+      false,
+      ImportMode::IntoContainer("backup".into()),
+    );
+    let tops: Vec<&str> =
+      plan.pages.iter().filter(|p| p.parent.is_none()).map(|p| p.title.as_str()).collect();
+    assert_eq!(tops, vec!["MyProject"], "single container = wrapper name, not fallback");
+    assert!(plan.pages.iter().all(|p| p.title != "backup"));
+    assert_eq!(parent_title(&plan, "a"), Some("MyProject"));
+    assert_eq!(parent_title(&plan, "sub"), Some("MyProject"));
+    assert_eq!(parent_title(&plan, "b"), Some("sub"));
   }
 
   // A document that HAS children (Doc.md + Doc/Child.md, both type=document) stays
@@ -466,7 +600,7 @@ hello");
       e("Doc.md", "# Doc\n\nparent body"),
       e("Doc/Child.md", "# Child\n\nchild body"),
     ];
-    let plan = plan_import(raw, false);
+    let plan = plan_import(raw, false, ImportMode::AsIs);
     let doc = find(&plan, "Doc");
     assert!(!doc.is_folder, "Doc keeps document identity");
     assert_eq!(doc.markdown.trim(), "# Doc
@@ -487,7 +621,7 @@ parent body");
       ])),
       e("My_Folder/Note.md", "# Note\n\nbody"),
     ];
-    let plan = plan_import(raw, false);
+    let plan = plan_import(raw, false, ImportMode::AsIs);
     let folder = find(&plan, "My Folder");
     assert!(folder.is_folder, "folder keeps its real name from the manifest");
     assert_eq!(parent_title(&plan, "Note"), Some("My Folder"));
@@ -507,7 +641,7 @@ parent body");
       e("Section/Note.md", "# Note\n\nbody"),
       e("Appendix/Refs.md", "# Refs\n\nlinks"),
     ];
-    let plan = plan_import(raw, false);
+    let plan = plan_import(raw, false, ImportMode::AsIs);
     let section = find(&plan, "Section");
     assert!(section.is_folder, "a bare directory imports as a folder");
     assert!(section.archive_path.is_none() && section.markdown.is_empty());

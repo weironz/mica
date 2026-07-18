@@ -83,6 +83,10 @@ class LocalOffline {
 
   void saveWorkspace(WorkspaceData w, {String origin = 'local'}) {}
 
+  /// Web has no local store — cloud workspace order is persisted via the API
+  /// (`reorderWorkspaces`), not here.
+  void reorderWorkspaces(List<String> ids, {String origin = 'local'}) {}
+
   void deleteWorkspace(String id) {}
 
   /// No-op: web has no local store (the mirror lives in IndexedDB, cleared with
