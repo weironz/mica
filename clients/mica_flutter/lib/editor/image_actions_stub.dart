@@ -28,6 +28,11 @@ Future<void> _save(Uint8List bytes, String filename) async {
   } catch (_) {}
 }
 
+/// Web-only (the browser print dialog is the web PDF path). Desktop/mobile
+/// export PDF through the native WebView2 FFI instead, so this is never called
+/// here — a no-op keeps the cross-platform surface identical.
+Future<void> printHtml(String html) async {}
+
 /// Copy a raster image to the system clipboard via pasteboard.
 Future<bool> copyImageToClipboard(Uint8List bytes, String mime) async {
   try {

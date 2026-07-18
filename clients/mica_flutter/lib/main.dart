@@ -6411,21 +6411,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text(context.l10n.rowExportHtml),
                             ),
                           ),
-                          // PDF export drives the OS WebView2 runtime's headless
-                          // print — a desktop-only path (web uses the browser's
-                          // own print), so only surface it off the web.
-                          if (!kIsWeb)
-                            PopupMenuItem(
-                              value: 'export-pdf',
-                              child: ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(
-                                  Icons.picture_as_pdf_outlined,
-                                ),
-                                title: Text(context.l10n.rowExportPdf),
-                              ),
+                          // PDF export: desktop drives the OS WebView2 runtime's
+                          // headless print (native bytes → download); web hands
+                          // the same self-contained HTML to the browser's own
+                          // print dialog ("Save as PDF"). Available on both.
+                          PopupMenuItem(
+                            value: 'export-pdf',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.picture_as_pdf_outlined),
+                              title: Text(context.l10n.rowExportPdf),
                             ),
+                          ),
                           const PopupMenuDivider(),
                           PopupMenuItem(
                             value: 'import-md',
@@ -7230,6 +7228,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       final title = _pageTitle.text.trim();
       final html = await widget.onExportPageHtml(title);
       if (html.isEmpty) throw ApiException(l10n.exportEmptyContent);
+      if (kIsWeb) {
+        // Web: hand the self-contained HTML to the browser's print dialog
+        // (the user picks "Save as PDF"). No native WebView2 here; the browser
+        // renders the same HTML (math/mermaid SVG inline), so it matches.
+        await printHtml(html);
+        return;
+      }
       final bytes = await widget.onExportPagePdf(html);
       if (bytes == null || bytes.isEmpty) {
         throw ApiException(l10n.exportPdfUnsupported);

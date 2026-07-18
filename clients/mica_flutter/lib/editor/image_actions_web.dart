@@ -19,6 +19,33 @@ void downloadImage(Uint8List bytes, String filename, String mime) {
   html.Url.revokeObjectUrl(url);
 }
 
+/// Print [htmlContent] (a complete, self-contained HTML document) via the
+/// browser's print dialog — the web PDF-export path (the user picks "Save as
+/// PDF"). Renders into a hidden, same-origin iframe so only the document prints,
+/// not the app shell. Kept alive briefly while the dialog is open, then removed.
+Future<void> printHtml(String htmlContent) async {
+  final iframe = html.IFrameElement()
+    ..style.position = 'fixed'
+    ..style.right = '0'
+    ..style.bottom = '0'
+    ..style.width = '0'
+    ..style.height = '0'
+    ..style.border = '0'
+    ..setAttribute('aria-hidden', 'true');
+  html.document.body?.append(iframe);
+  // `srcdoc` renders the self-contained doc in an isolated, same-origin frame.
+  iframe.srcdoc = htmlContent;
+  await iframe.onLoad.first;
+  // `contentWindow` is a `WindowBase` (no typed `print`/`focus`); at runtime it
+  // IS the JS window, so dispatch dynamically via js_util.
+  final win = iframe.contentWindow;
+  if (win != null) {
+    js_util.callMethod<void>(win, 'focus', <dynamic>[]);
+    js_util.callMethod<void>(win, 'print', <dynamic>[]);
+  }
+  Future<void>.delayed(const Duration(minutes: 1), iframe.remove);
+}
+
 /// Copy [bytes] to the system clipboard as an image. Tries the modern async
 /// Clipboard API (secure contexts), then falls back to the legacy
 /// execCommand('copy') on a selected <img>, which works on plain http too.
