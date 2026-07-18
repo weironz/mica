@@ -571,7 +571,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
           code_lines.push(deindent_columns(l, cc + 4));
           index += 1;
         }
-        let mut data = json!({ "li": level });
+        let data = json!({ "li": level });
         if pending_loose {
           if let Some((prev_idx, _, _)) = last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
@@ -608,7 +608,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       }
       // Divider child.
       if is_divider(content) {
-        let mut data = json!({ "li": level });
+        let data = json!({ "li": level });
         if pending_loose {
           if let Some((prev_idx, _, _)) = last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
@@ -627,7 +627,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         && classify_markdown_line(content).0 == "paragraph"
         && open_item.is_none()
       {
-        let mut data = json!({ "li": level });
+        let data = json!({ "li": level });
         if pending_loose {
           if let Some((prev_idx, _, _)) = last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
@@ -1241,7 +1241,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     } else {
       (kind, text, data)
     };
-    let mut data = data;
+    let data = data;
 
     // Continuation (CommonMark): a paragraph line joins the open block with
     // a soft break (lazy lines included); after a blank, a line indented to
@@ -1369,7 +1369,6 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         }
         push_block(&mut blocks, &mut root_children, kind, String::new(), idata);
         last_list = Some((blocks.len() - 1, level, marker_char_of(kind, &content_owned)));
-        item_children = false;
         content_owned = text[extra..].to_string();
         col = ccol;
         let (k3, t3, d3) = classify_markdown_line(&content_owned);
@@ -4280,18 +4279,6 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
     let mut j = from;
     while j + needle.len() <= chars.len() {
       if chars[j..j + needle.len()] == *needle {
-        return Some(j);
-      }
-      j += 1;
-    }
-    None
-  };
-
-  // Find the next unescaped occurrence of `needle` starting at `from`.
-  let find_unescaped = |from: usize, needle: &[char]| -> Option<usize> {
-    let mut j = from;
-    while j + needle.len() <= chars.len() {
-      if chars[j..j + needle.len()] == *needle && (j == 0 || chars[j - 1] != '\\') {
         return Some(j);
       }
       j += 1;
