@@ -3865,6 +3865,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ? Future.value(Uint8List(0)) // parity with the old local-shell stub
       : _exportWorkspaceZip(e.workspace.id);
 
+  /// Persist a new workspace order for ONE world (the switcher only reorders
+  /// within the connected world; cloud and local are separate position
+  /// spaces). [ordered] is that world's full list in the intended order.
+  Future<void> _reorderWorkspaceEntries(List<WorkspaceEntry> ordered) async {
+    if (ordered.length < 2) return;
+    final ids = [for (final e in ordered) e.workspace.id];
+    if (ordered.first.isLocal) {
+      _local.reorderWorkspaces(ids);
+      if (mounted) setState(_reloadLocalWorkspaces);
+    } else {
+      await _run(() async {
+        final session = _requireSession();
+        await _api.reorderWorkspaces(session.accessToken, ids);
+        final workspaces = await _api.listWorkspaces(session.accessToken);
+        if (mounted) setState(() => _workspaces = workspaces);
+      });
+    }
+  }
+
   Future<void> _importTreeIntoEntry(
     WorkspaceEntry e,
     List<ArchiveFile> entries, {
@@ -3960,6 +3979,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onDeleteEntry: _deleteEntry,
       onExportEntryZip: _exportEntryZip,
       onImportTreeIntoEntry: _importTreeIntoEntry,
+      onReorderWorkspaces: _reorderWorkspaceEntries,
       onCreateWorkspaceTyped: _createWorkspaceTyped,
       cloudOriginLabel: _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
           ? 'Mica Cloud'
@@ -4448,6 +4468,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteEntry,
     required this.onExportEntryZip,
     required this.onImportTreeIntoEntry,
+    required this.onReorderWorkspaces,
     required this.onCreateWorkspaceTyped,
     required this.cloudOriginLabel,
     required this.onSignIn,
@@ -4573,6 +4594,11 @@ class WorkspaceView extends StatefulWidget {
     String? sourceName,
   })
   onImportTreeIntoEntry;
+
+  /// Persist a new order for the connected world's workspaces (full list in
+  /// the intended order) — see the switcher's move up/down.
+  final Future<void> Function(List<WorkspaceEntry> ordered)
+  onReorderWorkspaces;
 
   /// Create a workspace of the chosen kind (`local: true` = on-device).
   final Future<void> Function(String name, {required bool local})
@@ -5297,6 +5323,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onImportFolderInto: _importFolderIntoWorkspace,
                       onMigrate: widget.onMigrateEntry,
                       onDetach: widget.onDetachEntry,
+                      onReorder: widget.onReorderWorkspaces,
                     ),
                   ),
                   const SizedBox(width: 4),

@@ -34,6 +34,7 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.onImportFolderInto,
     required this.onMigrate,
     required this.onDetach,
+    required this.onReorder,
   });
 
   /// Every workspace of both worlds; the menu shows the connected one's.
@@ -61,6 +62,11 @@ class _WorkspaceSelector extends StatefulWidget {
   /// a local copy. Null hides the item.
   final void Function(WorkspaceEntry entry)? onMigrate;
   final void Function(WorkspaceEntry entry)? onDetach;
+
+  /// Persist a new order for the connected world's workspaces (the whole list
+  /// in the intended order). Reordering only ever happens within one world —
+  /// cloud and local hold separate position spaces.
+  final void Function(List<WorkspaceEntry> ordered) onReorder;
 
   @override
   State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
@@ -105,7 +111,10 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             widget.onSignIn != null)
           _signInRow()
         else
-          for (final e in (widget.activeIsLocal ? locals : cloud)) _row(e),
+          for (
+            final (i, e) in (widget.activeIsLocal ? locals : cloud).indexed
+          )
+            _row(e, widget.activeIsLocal ? locals : cloud, i),
         const Divider(height: 8),
         _createRow(),
         SizedBox(
@@ -213,7 +222,18 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  Widget _row(WorkspaceEntry entry) {
+  /// Move [entry] one slot within its world's list [world] (delta -1 up / +1
+  /// down) and persist the whole new order.
+  void _move(List<WorkspaceEntry> world, int index, int delta) {
+    final target = index + delta;
+    if (target < 0 || target >= world.length) return;
+    final next = [...world];
+    final moved = next.removeAt(index);
+    next.insert(target, moved);
+    widget.onReorder(next);
+  }
+
+  Widget _row(WorkspaceEntry entry, List<WorkspaceEntry> world, int index) {
     final workspace = entry.workspace;
     final selected = entry.ref == widget.selectedRef;
     return SizedBox(
@@ -264,6 +284,18 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           ),
           MenuAnchor(
             menuChildren: [
+              if (index > 0)
+                _wsAction(
+                  Icons.arrow_upward,
+                  context.l10n.workspaceRowMoveUp,
+                  () => _move(world, index, -1),
+                ),
+              if (index < world.length - 1)
+                _wsAction(
+                  Icons.arrow_downward,
+                  context.l10n.workspaceRowMoveDown,
+                  () => _move(world, index, 1),
+                ),
               _wsAction(
                 Icons.edit_outlined,
                 context.l10n.commonRename,

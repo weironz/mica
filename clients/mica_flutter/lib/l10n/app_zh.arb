@@ -44,6 +44,8 @@
   "workspaceRowMigrate": "上云…",
   "workspaceRowDetach": "转为本地副本…",
   "workspaceRowMenu": "工作区菜单",
+  "workspaceRowMoveUp": "上移",
+  "workspaceRowMoveDown": "下移",
   "workspaceRowNewWorkspace": "新建工作区",
   "widgetRoleLabel": "角色",
   "widgetEmptyBlock": "(空)",

@@ -50,6 +50,8 @@
   "workspaceRowMigrate": "Upload to cloud…",
   "workspaceRowDetach": "Convert to local copy…",
   "workspaceRowMenu": "Workspace menu",
+  "workspaceRowMoveUp": "Move up",
+  "workspaceRowMoveDown": "Move down",
   "workspaceRowNewWorkspace": "New workspace",
   "widgetRoleLabel": "Role",
   "widgetEmptyBlock": "(empty)",
