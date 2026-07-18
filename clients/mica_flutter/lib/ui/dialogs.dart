@@ -2046,6 +2046,9 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
   bool _previewLoading = false;
   String? _previewError;
   ({String rootBlockId, List<Map<String, dynamic>> blocks})? _content;
+  // The previous (older) version's content, for the diff. Null = no predecessor
+  // (oldest version) → the preview shows no diff tint.
+  ({String rootBlockId, List<Map<String, dynamic>> blocks})? _prevContent;
 
   @override
   void initState() {
@@ -2078,19 +2081,35 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     }
   }
 
-  /// Load a version's content into the read-only preview pane.
+  /// Load a version's content (and its predecessor's, for the diff) into the
+  /// read-only preview pane. The predecessor is the next-OLDER entry in the
+  /// timeline (versions are newest-first).
   Future<void> _select(DocVersion v) async {
     setState(() {
       _selectedId = v.id;
       _previewLoading = true;
       _previewError = null;
       _content = null;
+      _prevContent = null;
     });
+    final idx = _versions.indexWhere((x) => x.id == v.id);
+    final prev = (idx >= 0 && idx + 1 < _versions.length)
+        ? _versions[idx + 1]
+        : null;
     try {
       final content = await widget.onLoadContent(v.id);
+      // Predecessor is best-effort: a failure just drops the diff, not the
+      // preview.
+      ({String rootBlockId, List<Map<String, dynamic>> blocks})? prevContent;
+      if (prev != null) {
+        try {
+          prevContent = await widget.onLoadContent(prev.id);
+        } catch (_) {}
+      }
       if (!mounted || _selectedId != v.id) return;
       setState(() {
         _content = content;
+        _prevContent = prevContent;
         _previewLoading = false;
       });
     } catch (error) {
@@ -2102,27 +2121,81 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     }
   }
 
-  /// Build read-only editor nodes from a version's flat block list (root's
-  /// children in order — the same shape the live editor mounts).
-  List<EditorNode> _previewNodes(
+  /// A block equals its predecessor if kind + text + data all match (a cheap
+  /// structural compare; data is order-insensitive via jsonEncode of a sorted
+  /// view is overkill here — the block data is small and written consistently).
+  bool _blockEqual(Map<String, dynamic> a, Map<String, dynamic> b) {
+    return a['type'] == b['type'] &&
+        (a['text'] ?? '') == (b['text'] ?? '') &&
+        jsonEncode(a['data']) == jsonEncode(b['data']);
+  }
+
+  /// The top-level blocks of a version, in tree order (root's children — the
+  /// flat shape the editor mounts).
+  List<Map<String, dynamic>> _topBlocks(
     ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
   ) {
     final byId = {for (final b in content.blocks) (b['id'] as String): b};
     final childIds =
         ((byId[content.rootBlockId]?['children'] as List?) ?? const [])
             .cast<String>();
-    return [
-      for (final id in childIds)
-        if (byId[id] != null)
-          EditorNode(
-            id: id,
-            kind: byId[id]!['type'] as String? ?? 'paragraph',
-            text: byId[id]!['text'] as String? ?? '',
-            data: Map<String, dynamic>.from(
-              (byId[id]!['data'] as Map?) ?? const {},
-            ),
-          ),
-    ];
+    return [for (final id in childIds) if (byId[id] != null) byId[id]!];
+  }
+
+  EditorNode _toNode(Map<String, dynamic> b, String? diff) => EditorNode(
+    id: b['id'] as String,
+    kind: b['type'] as String? ?? 'paragraph',
+    text: b['text'] as String? ?? '',
+    data: Map<String, dynamic>.from((b['data'] as Map?) ?? const {}),
+    diffStatus: diff,
+  );
+
+  /// Build read-only editor nodes for the selected version, tagged with a
+  /// block-level diff vs the predecessor: added (in this version, not before),
+  /// changed (same id, different content), deleted (in the predecessor, gone
+  /// now — spliced back in at its old position as a struck-through ghost). No
+  /// predecessor → plain nodes, no tint.
+  List<EditorNode> _previewNodes(
+    ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
+  ) {
+    final current = _topBlocks(content);
+    final prev = _prevContent;
+    if (prev == null) {
+      return [for (final b in current) _toNode(b, null)];
+    }
+    final prevBlocks = _topBlocks(prev);
+    final prevById = {for (final b in prevBlocks) (b['id'] as String): b};
+    final currentIds = {for (final b in current) b['id'] as String};
+
+    // Group deleted blocks (in prev, not in current) by the surviving block they
+    // follow, so they render at roughly their old position ('' = before all).
+    final deletedAfter = <String, List<Map<String, dynamic>>>{};
+    var lastSurviving = '';
+    for (final p in prevBlocks) {
+      final pid = p['id'] as String;
+      if (currentIds.contains(pid)) {
+        lastSurviving = pid;
+      } else {
+        (deletedAfter[lastSurviving] ??= []).add(p);
+      }
+    }
+
+    final nodes = <EditorNode>[];
+    for (final d in deletedAfter[''] ?? const []) {
+      nodes.add(_toNode(d, 'deleted'));
+    }
+    for (final b in current) {
+      final id = b['id'] as String;
+      final before = prevById[id];
+      final status = before == null
+          ? 'added'
+          : (_blockEqual(b, before) ? null : 'changed');
+      nodes.add(_toNode(b, status));
+      for (final d in deletedAfter[id] ?? const []) {
+        nodes.add(_toNode(d, 'deleted'));
+      }
+    }
+    return nodes;
   }
 
   Future<void> _createCheckpoint() async {
@@ -2254,6 +2327,46 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     // The SAME editor in canEdit:false — reused, not re-rendered (P-A hardening
     // hides caret/IME/toolbars). Isolated: it renders the version's own blocks,
     // never the live document, so it can't affect the open page.
+    return Column(
+      children: [
+        // Diff legend — shown only when there's a predecessor to compare against.
+        if (_prevContent != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 6),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.4),
+            child: Row(
+              children: [
+                _legendDot(const Color(0xFF22C55E), l10n.versionDiffAdded),
+                const SizedBox(width: 14),
+                _legendDot(const Color(0xFFF59E0B), l10n.versionDiffChanged),
+                const SizedBox(width: 14),
+                _legendDot(const Color(0xFFEF4444), l10n.versionDiffRemoved),
+              ],
+            ),
+          ),
+        Expanded(child: _buildPreviewBody(content)),
+      ],
+    );
+  }
+
+  Widget _legendDot(Color color, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
+      ),
+      const SizedBox(width: 5),
+      Text(label, style: const TextStyle(fontSize: 12)),
+    ],
+  );
+
+  Widget _buildPreviewBody(
+    ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
+  ) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
       child: Center(

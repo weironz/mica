@@ -1992,6 +1992,40 @@ class RenderDocument extends RenderBox {
 
   void _paintNode(Canvas canvas, Offset offset, int i) {
     final l = _layouts[i];
+    // Version-preview diff band (P-D): tint + left accent bar behind the whole
+    // block, drawn BEFORE its content so it reads as a background. A single
+    // mechanism keyed on the node's diffStatus — no per-kind branching (red
+    // line #3). null in the live editor, so this is a no-op there.
+    final diff = i < _nodes.length ? _nodes[i].diffStatus : null;
+    if (diff != null) {
+      final (Color? bg, Color? bar) = switch (diff) {
+        'added' => (const Color(0x1A22C55E), const Color(0xFF22C55E)),
+        'changed' => (const Color(0x1AF59E0B), const Color(0xFFF59E0B)),
+        'deleted' => (const Color(0x1AEF4444), const Color(0xFFEF4444)),
+        _ => (null, null),
+      };
+      if (bg != null) {
+        final top = offset.dy + l.boxTop;
+        canvas.drawRect(
+          Rect.fromLTWH(offset.dx, top, size.width, l.boxHeight),
+          Paint()..color = bg,
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(offset.dx + 2, top, 3, l.boxHeight),
+          Paint()..color = bar!,
+        );
+        if (diff == 'deleted') {
+          final y = top + l.boxHeight / 2;
+          canvas.drawLine(
+            Offset(offset.dx + l.contentLeft, y),
+            Offset(offset.dx + size.width - 12, y),
+            Paint()
+              ..color = bar
+              ..strokeWidth = 1.2,
+          );
+        }
+      }
+    }
     // Layouts produced by an atomic renderer paint through it; everything
     // else (including a math block that fell through while its raster is
     // pending) is text-pipeline output.

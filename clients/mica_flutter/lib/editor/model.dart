@@ -26,12 +26,18 @@ class EditorNode {
     required this.kind,
     required this.text,
     Map<String, dynamic>? data,
+    this.diffStatus,
   }) : data = data ?? <String, dynamic>{};
 
   final String id;
   String kind;
   String text;
   Map<String, dynamic> data;
+
+  /// Version-preview diff tint (null in the live editor): 'added' | 'changed' |
+  /// 'deleted'. The renderer paints a background band; 'deleted' also strikes
+  /// through (a ghost of a block the version removed). See version-history diff.
+  final String? diffStatus;
 
   bool get isCode => kind == 'code_block';
 

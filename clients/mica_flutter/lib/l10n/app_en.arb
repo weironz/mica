@@ -301,6 +301,9 @@
     }
   },
   "versionSaveCheckpoint": "Save checkpoint",
+  "versionDiffAdded": "Added",
+  "versionDiffChanged": "Changed",
+  "versionDiffRemoved": "Removed",
   "versionAutoSnapshot": "Auto-save",
   "versionNameHint": "Give this version a name, e.g. \"Before revision\"",
   "versionHistoryTitle": "Version history",
