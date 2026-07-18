@@ -567,6 +567,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (mounted && _session == null) {
       await _authenticate(AuthMode.register, form);
     }
+    // Dev auto-login is a best-effort convenience for a running local backend.
+    // When none is up (`just app` with no `just dev-api`), both attempts fail
+    // with a raw ClientException that _run parks in the banner — a scary red
+    // toast for what is a no-op. No backend just means "stay signed out in the
+    // local world", so clear it. (Nothing else runs before this on startup, so
+    // the only message that can be here is the one these two attempts set.)
+    if (mounted && _session == null && _message != null) {
+      setState(() => _message = null);
+    }
   }
 
   /// Persist the access token + user so a restart (desktop) or browser refresh

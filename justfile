@@ -47,12 +47,14 @@ dev-web:
     chmod -R a+rX clients/mica_flutter/build/web
 
 # Hot reload: press r; quit: q. Desktop opens the offline local world —
-# create folders/pages with no backend.
+# create folders/pages with no backend. MICA_DEV_AUTOLOGIN=false because this
+# recipe runs no backend: leaving it on makes startup try (and fail) to sign in
+# a demo account against 127.0.0.1:8080, dumping a raw connection error banner.
 #   just app          # desktop (windows)
 #   just app chrome   # web
 [doc("Launch the app to eyeball a change (target: windows | chrome)")]
 app target="windows":
-    cd clients/mica_flutter && {{flutter}} run -d {{target}}
+    cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 
 # Catches container-only bugs (e.g. loopback binds) that host dev can't.
 # Stops dev infra first (port clash); needs a root .env.prod.
