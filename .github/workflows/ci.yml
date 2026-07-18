@@ -23,7 +23,7 @@ jobs:
     name: Rust (build + pure-crate tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       # rust-cache, NOT a hand-rolled actions/cache of `target`: caching the
       # whole target dir stored ~2.5GB PER ENTRY (and entries are scoped per
@@ -54,12 +54,12 @@ jobs:
     name: MCP (official inspector against mica-cli mcp)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: workspace
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Build mica-cli
@@ -96,7 +96,7 @@ jobs:
       run:
         working-directory: clients/mica_flutter
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
