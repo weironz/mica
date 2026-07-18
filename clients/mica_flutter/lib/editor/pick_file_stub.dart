@@ -64,6 +64,18 @@ Future<List<({String path, Uint8List bytes})>> pickImportFolder() async {
   final dir = await FilePicker.platform.getDirectoryPath();
   if (dir == null) return const [];
   final root = Directory(dir);
+  // Match the web picker's contract: every path includes the selected folder
+  // itself as the first segment. Consumers (_importFolderIntoWorkspace) rely
+  // on this to name the import container and to preserve subfolder depth —
+  // without it, native paths are relative to `dir` and the first real
+  // subfolder level would be stripped (and the container mis-named).
+  final rootName = root.path
+      .replaceAll('\\', '/')
+      .split('/')
+      .where((s) => s.isNotEmpty)
+      .lastOrNull
+      ?.trim();
+  final prefix = (rootName == null || rootName.isEmpty) ? '' : '$rootName/';
   final out = <({String path, Uint8List bytes})>[];
   try {
     await for (final e in root.list(recursive: true, followLinks: false)) {
@@ -72,7 +84,7 @@ Future<List<({String path, Uint8List bytes})>> pickImportFolder() async {
         final bytes = await e.readAsBytes();
         var rel = e.path.substring(root.path.length).replaceAll('\\', '/');
         if (rel.startsWith('/')) rel = rel.substring(1);
-        out.add((path: rel, bytes: bytes));
+        out.add((path: '$prefix$rel', bytes: bytes));
       } catch (_) {}
     }
   } catch (_) {}

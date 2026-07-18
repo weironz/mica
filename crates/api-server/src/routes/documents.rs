@@ -1324,7 +1324,9 @@ pub async fn export_all_workspaces_zip(
     let base = zip_safe_name(ws_name, "workspace");
     let mut dir = base.clone();
     let mut n = 2;
-    while !used_dirs.insert(dir.clone()) {
+    // Dedup case-insensitively so "Test" and "test" don't both unzip into the
+    // same folder on a case-insensitive filesystem (Windows / default macOS).
+    while !used_dirs.insert(dir.to_lowercase()) {
       dir = format!("{base} ({n})");
       n += 1;
     }
