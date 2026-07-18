@@ -89,6 +89,17 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 - **`--no-deps`**:只重建 api + web,postgres / rustfs / backup 不动。
 - **验证不能只看 200**:`just verify-prod X.Y.Z` 会断言 `/api/health` 报的 version 就是
   你要的那个 —— 这是唯一能抓到"镜像没真正更新 / 拉到旧层"的手段。
+- **健康版本对了 ≠ 功能对了**:`verify-prod` 只查 version。这一版**真正改了什么**要单独冒烟——
+  过一遍本次发版触及的端点/功能。例:v0.11.0 加了 `GET /api/workspaces/export.zip`
+  (设置→数据→导出全部工作区),部署后实际点一次、确认下回来的是个含各 workspace 子目录 +
+  `workspaces.json` 的 zip;客户端侧改动(工作区上移/下移、文件夹导入容器名)靠桌面 CI 出的
+  新安装包,和 prod 部署无关。
+- **迁移随 api 镜像自动上**:`crates/infra/src/db.rs` 的 `sqlx::migrate!("../../migrations")`
+  在**编译期**把 `migrations/*.sql` 内嵌进 api 二进制,启动时 `run_migrations` 顺序跑。所以
+  部署新 api 镜像 = 自动应用新迁移,**不用手动 psql**。两个注意:① 只新增迁移文件、infra 没别的
+  改动时,增量编译**可能不重跑** `migrate!` 宏 → `touch crates/infra/src/db.rs` 逼它重编再 build;
+  ② 部署前想知道这版带不带迁移,`git diff <上个 tag>..HEAD -- migrations/` 看有没有新文件
+  (本次 v0.11.0 **无新迁移**,排序用的 0010 已随 v0.10.0 上线)。
 
 ## CI 需要的 secret
 
