@@ -1459,19 +1459,14 @@ class RenderDocument extends RenderBox {
       }
       return;
     }
-    // A selected image: AFFiNE-style — a soft drop shadow lifts it + a thick
-    // blue border, NOT a translucent tint over the picture (which muddied it).
-    // A tint stays only when the image is part of a multi-block range select.
+    // A selected image gets JUST a thick blue border — no tint or shadow over
+    // the picture (a shadow with a transparent occluder bled grey across the
+    // whole image). A light tint stays only when the image is part of a
+    // multi-block range select, to read as "included".
     if (l.kind == 'image' && l.imageDst != null) {
       final box = l.imageDst!.shift(offset);
       final rr = RRect.fromRectAndRadius(box, const Radius.circular(6));
       if (border) {
-        canvas.drawShadow(
-          Path()..addRRect(rr.inflate(1)),
-          const Color(0xFF1E293B),
-          6,
-          true,
-        );
         canvas.drawRRect(
           rr,
           Paint()
