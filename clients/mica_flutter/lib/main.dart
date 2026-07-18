@@ -2447,6 +2447,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           _localEditorEpoch++;
           await _localSelectView(view);
         },
+        onLoadContent: (versionId) async {
+          final content = _local.docVersionContent(docId, versionId);
+          if (content == null) throw Exception('version not found');
+          return content;
+        },
+        onLoadImageBytes: _localLoadImageBytes,
+        onResolveImageUrls: _localResolveImageUrls,
       ),
     );
   }
@@ -3342,6 +3349,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           docId,
           versionId,
         ),
+        onLoadContent: (versionId) => _api.getVersionContent(
+          _requireSession().accessToken,
+          wsId,
+          docId,
+          versionId,
+        ),
+        onLoadImageBytes: _loadEditorImageBytes,
+        onResolveImageUrls: _resolveEditorImageUrls,
       ),
     );
   }

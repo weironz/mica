@@ -2003,16 +2003,33 @@ class _TransferNotice extends StatelessWidget {
 /// the current state as a new one, or roll back to an old one. Restore reflects
 /// live in the editor via the normal sync path (the server broadcasts it as an
 /// update), so there is no manual reload here.
+/// Version history as a two-pane modal (AFFiNE/Notion shape): a read-only
+/// preview of the selected version on the left, the timeline on the right, a
+/// restore action at the bottom. The preview reuses the SAME editor in
+/// `canEdit: false` — no separate renderer, no HTML (see version-history-plan).
 class _VersionHistoryDialog extends StatefulWidget {
   const _VersionHistoryDialog({
     required this.onList,
     required this.onCreate,
     required this.onRestore,
+    required this.onLoadContent,
+    this.onLoadImageBytes,
+    this.onResolveImageUrls,
   });
 
   final Future<List<DocVersion>> Function() onList;
   final Future<void> Function(String name) onCreate;
   final Future<void> Function(String versionId) onRestore;
+
+  /// A version's blocks (tree order) + root id, for the read-only preview.
+  final Future<({String rootBlockId, List<Map<String, dynamic>> blocks})>
+  Function(String versionId)
+  onLoadContent;
+
+  /// Image handlers passed straight to the preview editor so pictures render.
+  final Future<Uint8List?> Function(String fileId)? onLoadImageBytes;
+  final Future<Map<String, String>> Function(List<String> fileIds)?
+  onResolveImageUrls;
 
   @override
   State<_VersionHistoryDialog> createState() => _VersionHistoryDialogState();
@@ -2023,6 +2040,12 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
   bool _busy = false; // a create/restore is in flight
   String? _error;
   List<DocVersion> _versions = const [];
+
+  // Preview pane state, keyed to the selected version.
+  String? _selectedId;
+  bool _previewLoading = false;
+  String? _previewError;
+  ({String rootBlockId, List<Map<String, dynamic>> blocks})? _content;
 
   @override
   void initState() {
@@ -2042,6 +2065,10 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
         _versions = vs;
         _loading = false;
       });
+      // Auto-open the newest version so the pane is never blank.
+      if (_selectedId == null && vs.isNotEmpty) {
+        _select(vs.first);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -2049,6 +2076,53 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
         _loading = false;
       });
     }
+  }
+
+  /// Load a version's content into the read-only preview pane.
+  Future<void> _select(DocVersion v) async {
+    setState(() {
+      _selectedId = v.id;
+      _previewLoading = true;
+      _previewError = null;
+      _content = null;
+    });
+    try {
+      final content = await widget.onLoadContent(v.id);
+      if (!mounted || _selectedId != v.id) return;
+      setState(() {
+        _content = content;
+        _previewLoading = false;
+      });
+    } catch (error) {
+      if (!mounted || _selectedId != v.id) return;
+      setState(() {
+        _previewError = error.toString();
+        _previewLoading = false;
+      });
+    }
+  }
+
+  /// Build read-only editor nodes from a version's flat block list (root's
+  /// children in order — the same shape the live editor mounts).
+  List<EditorNode> _previewNodes(
+    ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
+  ) {
+    final byId = {for (final b in content.blocks) (b['id'] as String): b};
+    final childIds =
+        ((byId[content.rootBlockId]?['children'] as List?) ?? const [])
+            .cast<String>();
+    return [
+      for (final id in childIds)
+        if (byId[id] != null)
+          EditorNode(
+            id: id,
+            kind: byId[id]!['type'] as String? ?? 'paragraph',
+            text: byId[id]!['text'] as String? ?? '',
+            data: Map<String, dynamic>.from(
+              (byId[id]!['data'] as Map?) ?? const {},
+            ),
+          ),
+    ];
   }
 
   Future<void> _createCheckpoint() async {
@@ -2139,68 +2213,147 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  DocVersion? get _selected =>
+      _versions.where((v) => v.id == _selectedId).firstOrNull;
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Row(
-        children: [
-          Text(context.l10n.versionHistoryTitle),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: _busy ? null : _createCheckpoint,
-            icon: const Icon(Icons.bookmark_add_outlined, size: 18),
-            label: Text(context.l10n.versionSaveCheckpoint),
+    final l10n = context.l10n;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        width: 980,
+        height: 640,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: _buildPreview(l10n)),
+            const VerticalDivider(width: 1),
+            SizedBox(width: 300, child: _buildTimeline(l10n)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreview(AppLocalizations l10n) {
+    if (_selectedId == null) {
+      return Center(
+        child: Text(l10n.versionEmpty, textAlign: TextAlign.center),
+      );
+    }
+    if (_previewLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_previewError != null) {
+      return Center(child: Text(l10n.versionLoadFailed(_previewError!)));
+    }
+    final content = _content;
+    if (content == null) return const SizedBox.shrink();
+    // The SAME editor in canEdit:false — reused, not re-rendered (P-A hardening
+    // hides caret/IME/toolbars). Isolated: it renders the version's own blocks,
+    // never the live document, so it can't affect the open page.
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: MicaEditor(
+            key: ValueKey('version-preview-$_selectedId'),
+            rootBlockId: content.rootBlockId,
+            nodes: _previewNodes(content),
+            version: 0,
+            canEdit: false,
+            onApplyOperations: (_) async {},
+            onLoadImageBytes: widget.onLoadImageBytes,
+            onResolveImageUrls: widget.onResolveImageUrls,
           ),
-        ],
+        ),
       ),
-      content: SizedBox(
-        width: 440,
-        height: 360,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-            ? Center(child: Text(context.l10n.versionLoadFailed(_error!)))
-            : _versions.isEmpty
-            ? Center(
-                child: Text(
-                  context.l10n.versionEmpty,
-                  textAlign: TextAlign.center,
-                ),
-              )
-            : ListView.separated(
-                itemCount: _versions.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, i) {
-                  final v = _versions[i];
-                  // Named checkpoints get a bookmark + bold label; auto
-                  // snapshots get a clock and read by their time (AFFiNE style).
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(
-                      v.isAuto ? Icons.schedule : Icons.bookmark_outline,
-                      size: 20,
-                    ),
-                    title: Text(
-                      v.isAuto ? _formatTime(v.createdAt) : _displayName(v),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: v.isAuto
-                          ? null
-                          : const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: v.isAuto ? null : Text(_formatTime(v.createdAt)),
-                    trailing: TextButton(
-                      onPressed: _busy ? null : () => _restore(v),
-                      child: Text(context.l10n.versionRestore),
-                    ),
-                  );
-                },
+    );
+  }
+
+  Widget _buildTimeline(AppLocalizations l10n) {
+    return Column(
+      children: [
+        // Header: title + save-checkpoint + close.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+          child: Row(
+            children: [
+              Text(
+                l10n.versionHistoryTitle,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(context.l10n.commonClose),
+              const Spacer(),
+              IconButton(
+                tooltip: l10n.versionSaveCheckpoint,
+                onPressed: _busy ? null : _createCheckpoint,
+                icon: const Icon(Icons.bookmark_add_outlined, size: 20),
+              ),
+              IconButton(
+                tooltip: l10n.commonClose,
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, size: 20),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+              ? Center(child: Text(l10n.versionLoadFailed(_error!)))
+              : _versions.isEmpty
+              ? Center(
+                  child: Text(l10n.versionEmpty, textAlign: TextAlign.center),
+                )
+              : ListView.builder(
+                  itemCount: _versions.length,
+                  itemBuilder: (context, i) {
+                    final v = _versions[i];
+                    final selected = v.id == _selectedId;
+                    return ListTile(
+                      dense: true,
+                      selected: selected,
+                      leading: Icon(
+                        v.isAuto ? Icons.schedule : Icons.bookmark,
+                        size: 18,
+                      ),
+                      title: Text(
+                        v.isAuto ? _formatTime(v.createdAt) : _displayName(v),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: v.isAuto
+                            ? null
+                            : const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: v.isAuto
+                          ? null
+                          : Text(_formatTime(v.createdAt)),
+                      onTap: _busy ? null : () => _select(v),
+                    );
+                  },
+                ),
+        ),
+        const Divider(height: 1),
+        // Restore bar — acts on the previewed version (bottom-right, AFFiNE/
+        // Notion shape).
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              FilledButton(
+                onPressed: (_busy || _selected == null)
+                    ? null
+                    : () => _restore(_selected!),
+                child: Text(l10n.versionRestore),
+              ),
+            ],
+          ),
         ),
       ],
     );
