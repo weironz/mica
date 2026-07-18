@@ -178,6 +178,7 @@
   },
   "tokenRevoke": "Revoke",
   "settingsAppearance": "Appearance",
+  "settingsResetPageWidth": "Reset to default width",
   "settingsPageWidth": "Page width",
   "settingsFontSize": "Font size",
   "settingsFont": "Font",

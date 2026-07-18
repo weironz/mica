@@ -213,7 +213,6 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
-    required this.maxPageWidth,
   });
 
   final String userName;
@@ -262,9 +261,6 @@ class _SettingsDialog extends StatefulWidget {
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
 
-  /// The realizable full-bleed column width, measured at the editor — the page-
-  /// width slider's max, so its travel maps to widths the window can actually show.
-  final double maxPageWidth;
 
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
@@ -338,6 +334,51 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     widget.onAppearanceChanged(
       EditorAppearance(fontScale: _fontScale, fontFamily: _fontFamily),
       _pageWidth,
+    );
+  }
+
+  /// Page width as 11 discrete stops (AppFlowy-style), plus a reset to the
+  /// readable default. Fixed range (not window-relative) so the stops are stable
+  /// "levels"; the editor caps the render at the window, so a wide stop on a
+  /// small window just fills it. Reset → [kPageWidthDefault], NOT full width.
+  Widget _pageWidthRow(BuildContext context) {
+    final w = _pageWidth.clamp(kPageWidthMin, kPageWidthMax);
+    final atDefault = w.round() == kPageWidthDefault.round();
+    return Row(
+      children: [
+        SizedBox(width: 90, child: Text(context.l10n.settingsPageWidth)),
+        Expanded(
+          child: Slider(
+            value: w,
+            min: kPageWidthMin,
+            max: kPageWidthMax,
+            divisions: kPageWidthDivisions,
+            onChanged: (value) {
+              setState(() => _pageWidth = value);
+              _applyAppearance();
+            },
+          ),
+        ),
+        SizedBox(
+          width: 52,
+          child: Text(
+            '${w.round()} px',
+            textAlign: TextAlign.right,
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+          ),
+        ),
+        IconButton(
+          tooltip: context.l10n.settingsResetPageWidth,
+          visualDensity: VisualDensity.compact,
+          onPressed: atDefault
+              ? null
+              : () {
+                  setState(() => _pageWidth = kPageWidthDefault);
+                  _applyAppearance();
+                },
+          icon: const Icon(Icons.restart_alt, size: 18),
+        ),
+      ],
     );
   }
 
@@ -840,21 +881,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ],
     ),
     const SizedBox(height: 8),
-    _sliderRow(
-      label: context.l10n.settingsPageWidth,
-      // Max = the realizable full-bleed width (measured at the editor), so the
-      // slider's whole travel changes the layout instead of the upper half being
-      // a no-op once the column already fills the window. The thumb is clamped
-      // into range without rewriting the stored preference unless the user drags.
-      value: _pageWidth.clamp(640.0, widget.maxPageWidth),
-      min: 640,
-      max: widget.maxPageWidth,
-      display: '${_pageWidth.clamp(640.0, widget.maxPageWidth).round()} px',
-      onChanged: (value) {
-        setState(() => _pageWidth = value);
-        _applyAppearance();
-      },
-    ),
+    _pageWidthRow(context),
     _sliderRow(
       label: context.l10n.settingsFontSize,
       value: _fontScale,

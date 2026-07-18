@@ -65,6 +65,16 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
 const String kAppVersion = '0.8.0';
 
+/// Editor page (content column) width, as 11 discrete steps like AppFlowy —
+/// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
+/// the Settings "reset" both go to [kPageWidthDefault] = 800px, the readable
+/// column width the note-app field converges on (Obsidian 700, Notion ~708,
+/// AFFiNE ~720-800) — NOT AppFlowy's reset-to-full-width. See research 2026-07.
+const double kPageWidthMin = 680;
+const double kPageWidthMax = 1880;
+const double kPageWidthDefault = 800;
+const int kPageWidthDivisions = 10;
+
 /// One-time migration (P3c-2) of the legacy world-switch prefs
 /// (`serverMode`/`serverUrl`, the pre-P3 ServerMode model) into the dissolved
 /// model: which cloud server is configured ([cloudOrigin]) and which world
@@ -255,7 +265,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   // Editor appearance (in-memory; applied live to the editor).
   EditorAppearance _appearance = const EditorAppearance();
-  double _pageWidth = 1160;
+  double _pageWidth = kPageWidthDefault;
   // When on, pasted external image URLs are re-hosted into Mica storage.
   bool _reHostImages = true;
   // Formatting toolbar above the page (global setting; off by default).
@@ -527,13 +537,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? null
           : fontFamily,
     );
-    // Ceiling matches the Settings slider's max (the editor measures the real
-    // realizable width and clamps the thumb; this just keeps a wide saved value
-    // from being trimmed on reload).
-    _pageWidth = (double.tryParse(loadPref('pageWidth') ?? '') ?? 1160).clamp(
-      640,
-      2400,
-    );
+    // Clamp a stored value into the discrete-step range; absent → the readable
+    // default. The editor still caps the *render* at the window width, so a wide
+    // saved value on a small window simply fills it.
+    _pageWidth = (double.tryParse(loadPref('pageWidth') ?? '') ?? kPageWidthDefault)
+        .clamp(kPageWidthMin, kPageWidthMax);
     _reHostImages = loadPref('reHostImages') != 'false';
     _showFormatBar = loadPref('showFormatBar') == 'true';
     _showPageTitle = loadPref('showPageTitle') != 'false';
@@ -4723,10 +4731,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// it the sidebar simply is not a pane, which is a pure function of width.
   static const double kNarrowShellWidth = 768;
   final EditorScrollHook _scrollHook = EditorScrollHook();
-  // The realizable page-column width (editor pane minus the scroll padding),
-  // measured live so the Settings "Page width" slider maxes at full-bleed
-  // instead of offering px values the window can't show.
-  double _editorAvailWidth = 1160;
   final GlobalKey _editorSurfaceKey = GlobalKey();
   final EditorCommandHook _commandHook = EditorCommandHook();
   // Live document outline (TOC). The editor republishes headings on every edit;
@@ -6099,23 +6103,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               listenable: _activeBlockHook,
               builder: (context, _) => _formatBar(context),
             ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Track the realizable column width (pane minus the 28px scroll
-                // padding on each side) so the page-width slider's full travel
-                // maps to achievable widths. Plain assignment — no setState, so
-                // no rebuild loop; read lazily when Settings opens.
-                if (constraints.maxWidth.isFinite) {
-                  _editorAvailWidth = (constraints.maxWidth - 56).clamp(
-                    768.0,
-                    2400.0,
-                  );
-                }
-                return _editorScroll(context, canEdit, bootstrap);
-              },
-            ),
-          ),
+          // The editor column is capped at widget.pageWidth (a fixed page-width
+          // step) inside _editorScroll, and the window caps it below that on a
+          // narrow pane — so no measured max is needed here.
+          Expanded(child: _editorScroll(context, canEdit, bootstrap)),
         ],
       ),
     );
@@ -7254,7 +7245,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onChangePassword: widget.onChangePassword,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
-        maxPageWidth: _editorAvailWidth,
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
         showFormatBar: widget.showFormatBar,
