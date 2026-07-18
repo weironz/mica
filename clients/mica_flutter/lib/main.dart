@@ -1556,6 +1556,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.exportWorkspaceZip(session.accessToken, workspaceId);
   }
 
+  /// Settings → "Export all workspaces": one zip with every workspace this
+  /// account belongs to, each under its own `<name>/` subdir (switcher order)
+  /// plus a top-level `workspaces.json` manifest. Cloud-only.
+  Future<void> _exportAllWorkspaces() async {
+    final session = _requireSession();
+    final l10n = context.l10n;
+    try {
+      final bytes = await _api.exportAllWorkspacesZip(session.accessToken);
+      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
+      downloadImage(bytes, 'mica-workspaces.zip', 'application/zip');
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
+      }
+    }
+  }
+
   Future<List<SearchResult>> _searchWorkspace(String query) async {
     final session = _session;
     final workspace = _selectedWorkspace;
@@ -4086,6 +4105,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onExportWorkspaceZip: local
           ? (_) async => Uint8List(0)
           : _exportWorkspaceZip,
+      onExportAllWorkspaces: local ? null : _exportAllWorkspaces,
       onImportWorkspaceZip: local
           ? (_, _, {bool notion = false}) async {}
           : _importWorkspaceZip,
@@ -4490,6 +4510,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportPagePdf,
     required this.onImportMarkdown,
     required this.onExportWorkspaceZip,
+    this.onExportAllWorkspaces,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
     required this.onExportMarkdown,
@@ -4676,6 +4697,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String fileName, String markdown)
   onImportMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
+
+  /// Null in 本地模式 — cloud-only "export every workspace this account owns"
+  /// (`GET /api/workspaces/export.zip`). Null hides the Settings button.
+  final Future<void> Function()? onExportAllWorkspaces;
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
@@ -7371,6 +7396,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
+        onExportAllWorkspaces: widget.onExportAllWorkspaces == null
+            ? null
+            : () async {
+                Navigator.of(context).pop(); // close settings first
+                await widget.onExportAllWorkspaces!();
+              },
       ),
     );
   }

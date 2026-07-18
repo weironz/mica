@@ -214,6 +214,7 @@
   "aiKeyHelp": "Local models (Ollama, LM Studio) usually need no key. The key is stored on the server and never returned.",
   "dataImportDescription": "Import a workspace from a ZIP — a Mica export or a Notion \"Markdown & CSV\" export. The page tree, ordering and images are rebuilt.",
   "dataImportButton": "Import workspace (ZIP)",
+  "dataExportAllButton": "Export all workspaces (ZIP)",
   "dataExportTip": "Tip: export a single page or a whole workspace from the page menu (▾) or a workspace's ⋯ menu.",
   "shortcutsGroupApp": "App",
   "shortcutsNewPage": "New page",

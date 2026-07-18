@@ -760,6 +760,20 @@ class ApiClient {
     return response.bodyBytes;
   }
 
+  /// Every workspace this user belongs to, as one zip: each under its own
+  /// `<name>/` subdir plus a top-level `workspaces.json` manifest, in switcher
+  /// (position) order. See `export_all_workspaces_zip` on the server.
+  Future<Uint8List> exportAllWorkspacesZip(String token) async {
+    final response = await http.get(
+      baseUri.replace(path: '/api/workspaces/export.zip'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('export failed (HTTP ${response.statusCode})');
+    }
+    return response.bodyBytes;
+  }
+
   /// Re-host a remote image by URL (server-side fetch + store), avoiding dead
   /// links. Returns the new file id + name.
   Future<UploadedFile> importImageUrl(

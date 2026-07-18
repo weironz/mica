@@ -1294,6 +1294,61 @@ pub async fn export_workspace_zip(
   Ok(zip_response(build_zip(&entries), "workspace.zip"))
 }
 
+/// `GET /api/workspaces/export.zip` — EVERY workspace the user belongs to, in
+/// switcher (position) order, each under its own `<name>/` subdir, plus a
+/// top-level `workspaces.json` manifest. Each subdir is byte-identical to that
+/// workspace's own `export.zip`, so re-importing a subdir round-trips.
+pub async fn export_all_workspaces_zip(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> ApiResult<Response> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  let workspaces: Vec<(Uuid, String)> = sqlx::query_as(
+    r#"
+      SELECT w.id, w.name
+      FROM workspaces w
+      INNER JOIN workspace_members wm ON wm.workspace_id = w.id
+      WHERE wm.user_id = $1
+      ORDER BY wm.position ASC, w.created_at ASC
+    "#,
+  )
+  .bind(user_id)
+  .fetch_all(&state.db)
+  .await?;
+
+  let mut entries: Vec<ZipEntry> = Vec::new();
+  let mut manifest_ws: Vec<serde_json::Value> = Vec::new();
+  let mut used_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+  for (ws_id, ws_name) in &workspaces {
+    // Unique subdir per workspace (two "test" workspaces must not collide).
+    let base = zip_safe_name(ws_name, "workspace");
+    let mut dir = base.clone();
+    let mut n = 2;
+    while !used_dirs.insert(dir.clone()) {
+      dir = format!("{base} ({n})");
+      n += 1;
+    }
+    for e in build_tree_zip(&state, *ws_id, None).await? {
+      entries.push(ZipEntry {
+        name: format!("{dir}/{}", e.name),
+        data: e.data,
+      });
+    }
+    manifest_ws.push(serde_json::json!({ "name": ws_name, "dir": dir }));
+  }
+  let manifest = serde_json::json!({
+    "version": 1,
+    "generator": "mica",
+    "kind": "workspaces",
+    "workspaces": manifest_ws,
+  });
+  entries.push(ZipEntry {
+    name: "workspaces.json".to_string(),
+    data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+  });
+  Ok(zip_response(build_zip(&entries), "mica-workspaces.zip"))
+}
+
 /// `GET /api/workspaces/{workspace_id}/views/{view_id}/export.zip`
 ///
 /// One folder's subtree as an archive — same shape as the workspace export

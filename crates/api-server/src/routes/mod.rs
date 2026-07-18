@@ -54,6 +54,10 @@ pub fn api_router() -> Router<AppState> {
       get(documents::export_folder_zip),
     )
     .route(
+      "/workspaces/export.zip",
+      get(documents::export_all_workspaces_zip),
+    )
+    .route(
       "/workspaces/{workspace_id}/export.zip",
       get(documents::export_workspace_zip),
     )

@@ -213,6 +213,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
+    this.onExportAllWorkspaces,
   });
 
   final String userName;
@@ -260,6 +261,11 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
   final Future<void> Function() onImportWorkspace;
+
+  /// Null in 本地模式 — "export all workspaces" is a cloud endpoint
+  /// (`GET /api/workspaces/export.zip`, every workspace this account belongs
+  /// to). Null hides the button rather than offering a dead control.
+  final Future<void> Function()? onExportAllWorkspaces;
 
 
   @override
@@ -1166,10 +1172,22 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     Align(
       alignment: Alignment.centerLeft,
-      child: OutlinedButton.icon(
-        onPressed: () => widget.onImportWorkspace(),
-        icon: const Icon(Icons.upload_file_outlined, size: 18),
-        label: Text(context.l10n.dataImportButton),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          OutlinedButton.icon(
+            onPressed: () => widget.onImportWorkspace(),
+            icon: const Icon(Icons.upload_file_outlined, size: 18),
+            label: Text(context.l10n.dataImportButton),
+          ),
+          if (widget.onExportAllWorkspaces != null)
+            OutlinedButton.icon(
+              onPressed: () => widget.onExportAllWorkspaces!(),
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: Text(context.l10n.dataExportAllButton),
+            ),
+        ],
       ),
     ),
     const SizedBox(height: 16),

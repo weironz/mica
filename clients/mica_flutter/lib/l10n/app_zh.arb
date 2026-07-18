@@ -143,6 +143,7 @@
   "aiKeyHelp": "本地模型(Ollama、LM Studio)通常无需密钥。密钥保存在服务器上,不会被返回。",
   "dataImportDescription": "从 ZIP 导入工作区 —— Mica 导出或 Notion「Markdown & CSV」导出。页面树、排序和图片都会被重建。",
   "dataImportButton": "导入工作区(ZIP)",
+  "dataExportAllButton": "导出全部工作区(ZIP)",
   "dataExportTip": "提示:可从页面菜单(▾)导出单个页面,或从工作区的 ⋯ 菜单导出整个工作区。",
   "shortcutsGroupApp": "应用",
   "shortcutsNewPage": "新建页面",
