@@ -301,6 +301,7 @@
     }
   },
   "versionSaveCheckpoint": "Save checkpoint",
+  "versionAutoSnapshot": "Auto-save",
   "versionNameHint": "Give this version a name, e.g. \"Before revision\"",
   "versionHistoryTitle": "Version history",
   "versionLoadFailed": "Load failed: {error}",

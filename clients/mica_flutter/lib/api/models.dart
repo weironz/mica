@@ -328,27 +328,29 @@ class SearchResult {
 }
 
 /// A named, restorable checkpoint of a document (the server's version history).
+/// One entry in a document's yrs-native version timeline. `label` is null for an
+/// AUTO snapshot (captured on a cadence); set for a named user checkpoint.
 class DocVersion {
   const DocVersion({
     required this.id,
-    required this.name,
-    required this.versionSeq,
+    required this.label,
     required this.createdAt,
   });
 
   factory DocVersion.fromJson(Map<String, dynamic> json) {
     return DocVersion(
       id: json['id'] as String,
-      name: json['name'] as String? ?? l10nNoContext.versionUntitled,
-      versionSeq: (json['version_seq'] as num?)?.toInt() ?? 0,
+      label: json['label'] as String?,
       createdAt: json['created_at'] as String? ?? '',
     );
   }
 
   final String id;
-  final String name;
-  final int versionSeq;
+  final String? label;
   final String createdAt;
+
+  /// An auto snapshot has no user-given name (shown by timestamp instead).
+  bool get isAuto => label == null || label!.trim().isEmpty;
 }
 
 /// Result of moving/copying a view's subtree into another workspace (the

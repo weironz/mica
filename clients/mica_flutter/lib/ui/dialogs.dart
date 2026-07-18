@@ -2067,13 +2067,18 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     }
   }
 
+  /// A version's display name: named checkpoints show their label; auto
+  /// snapshots (label null) read as "Auto-save" and lean on the timestamp.
+  String _displayName(DocVersion v) =>
+      v.isAuto ? context.l10n.versionAutoSnapshot : v.label!.trim();
+
   Future<void> _restore(DocVersion version) async {
     final l10n = context.l10n;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(context.l10n.versionRestoreConfirmTitle),
-        content: Text(context.l10n.versionRestoreConfirmBody(version.name)),
+        content: Text(context.l10n.versionRestoreConfirmBody(_displayName(version))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2091,7 +2096,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     try {
       await widget.onRestore(version.id);
       if (!mounted) return;
-      _snack(l10n.versionRestored(version.name));
+      _snack(l10n.versionRestored(_displayName(version)));
       Navigator.of(context).pop();
     } catch (error) {
       _snack(l10n.versionRestoreFailed(error.toString()));
@@ -2167,15 +2172,23 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
                 separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (context, i) {
                   final v = _versions[i];
+                  // Named checkpoints get a bookmark + bold label; auto
+                  // snapshots get a clock and read by their time (AFFiNE style).
                   return ListTile(
                     dense: true,
-                    leading: const Icon(Icons.history, size: 20),
+                    leading: Icon(
+                      v.isAuto ? Icons.schedule : Icons.bookmark_outline,
+                      size: 20,
+                    ),
                     title: Text(
-                      v.name,
+                      v.isAuto ? _formatTime(v.createdAt) : _displayName(v),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: v.isAuto
+                          ? null
+                          : const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    subtitle: Text(_formatTime(v.createdAt)),
+                    subtitle: v.isAuto ? null : Text(_formatTime(v.createdAt)),
                     trailing: TextButton(
                       onPressed: _busy ? null : () => _restore(v),
                       child: Text(context.l10n.versionRestore),
