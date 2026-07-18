@@ -512,6 +512,28 @@ fn set_text_and_marks(txn: &mut TransactionMut, bm: &MapRef, text: &str, block_m
 // ── editor-intent operations (each one yrs transaction) ──────────────────────
 
 impl MicaDoc {
+    /// Replace the document's ENTIRE block set with `blocks` (rooted at
+    /// `root_id`), as forward operations on THIS doc. Used by version restore:
+    /// re-applying an old *state* as an update can't revert a CRDT (merge is a
+    /// union — deletions don't un-happen, later content isn't removed), so a
+    /// restore re-derives the target content as new ops. The diff since a state
+    /// vector captured before this call IS the restore update. Every existing
+    /// block entry is cleared first, so blocks absent from `blocks` truly
+    /// disappear. Coarse by design (rewrites all blocks) — restore is rare.
+    pub fn set_blocks(&mut self, root_id: &str, blocks: &[Block]) {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let meta = self.doc.get_or_insert_map(META);
+        let mut txn = self.doc.transact_mut();
+        let existing: Vec<String> = blocks_map.keys(&txn).map(|k| k.to_string()).collect();
+        for k in existing {
+            blocks_map.remove(&mut txn, &k);
+        }
+        meta.insert(&mut txn, ROOT_KEY, root_id.to_string());
+        for b in blocks {
+            write_block(&mut txn, &blocks_map, b);
+        }
+    }
+
     /// Insert `block` as a child of `parent_id` at `index` (clamped to the end).
     pub fn insert_block(&mut self, parent_id: &str, index: usize, block: &Block) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);

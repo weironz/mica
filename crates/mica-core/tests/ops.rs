@@ -237,3 +237,31 @@ fn set_block_marks_clears_then_reapplies() {
         json!({"marks": [{"start": 5, "end": 10, "type": "italic"}]})
     );
 }
+
+#[test]
+fn set_blocks_reverts_content_as_forward_ops() {
+    // v1: page[a, b] with a="one", b="two".
+    let mut d = doc(vec![page(&["a", "b"]), para("a", "one"), para("b", "two")]);
+    let v1_blocks = d.to_blocks();
+
+    // Edit to v2: change a, delete b, add c → page[a, c].
+    d.set_block_text("a", "one edited", &[]);
+    d.delete_block("b", false);
+    d.insert_block("r", 1, &para("c", "three"));
+    // A second client sitting at v2 (shares d's history up to here).
+    let replica_v2 = MicaDoc::from_update(&d.encode_state()).expect("v2 decode");
+
+    // Restore d to v1 as FORWARD ops, capturing the update it produces.
+    let sv = d.state_vector();
+    d.set_blocks("r", &v1_blocks);
+    let restore_update = d.encode_diff(&sv).expect("restore diff");
+
+    // The restored doc equals v1 exactly (b came back, c gone, a reverted).
+    assert_eq!(d.to_blocks(), v1_blocks, "doc reverted to v1");
+
+    // Crucially, the restore is a normal update, not a reset: a replica at v2
+    // that merely applies it ALSO converges to v1 (CRDT-safe under concurrency).
+    let mut replica = replica_v2;
+    replica.apply_update(&restore_update).expect("apply restore");
+    assert_eq!(replica.to_blocks(), v1_blocks, "replica converges to v1");
+}

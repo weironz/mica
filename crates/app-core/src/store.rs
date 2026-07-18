@@ -55,6 +55,20 @@ pub struct VersionRecord {
   pub created_at: DateTime<Utc>,
 }
 
+/// A yrs-native version-history row (see docs/version-history-plan.md). Metadata
+/// only — the `state` blob is fetched separately so timeline listings stay cheap.
+/// `label` NULL = an auto snapshot; set = a named user checkpoint. `expires_at`
+/// NULL = kept forever (named rows); set = an auto row pruned after retention.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct YrsVersionMeta {
+  pub id: Uuid,
+  pub document_id: Uuid,
+  pub rid: Option<i64>,
+  pub label: Option<String>,
+  pub created_by: Option<Uuid>,
+  pub created_at: DateTime<Utc>,
+}
+
 /// A lightweight entry in the append-only change log. Excludes the operation
 /// payload so history listings stay cheap.
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -278,6 +292,19 @@ pub async fn current_payload(
       .collect();
   }
   Ok(Some(payload))
+}
+
+/// Decode a stored yrs version blob (from `document_yrs_versions.state`) into a
+/// renderable payload — blocks in tree order — for a read-only preview of that
+/// version. Same yrs→blocks path as [`current_payload`], on an arbitrary blob.
+pub fn yrs_state_to_payload(state: &[u8]) -> ApiResult<DocumentSnapshotPayload> {
+  let doc = mica_core::MicaDoc::from_update(state)
+    .map_err(|error| ApiError::BadRequest(format!("corrupt version state: {error}")))?;
+  Ok(DocumentSnapshotPayload {
+    schema_version: 1,
+    root_block_id: doc.root_block_id(),
+    blocks: doc.to_blocks().into_iter().map(md_block_from_core).collect(),
+  })
 }
 
 /// Insert the empty starting snapshot (`version_seq = 0`) for a new document.
@@ -534,6 +561,73 @@ pub async fn fetch_snapshot(
   .fetch_optional(db)
   .await
   .map_err(ApiError::from)
+}
+
+// ── yrs-native version history (docs/version-history-plan.md) ────────────────
+// The op-model history below froze with P4①b; real history routes through these.
+
+/// The document's version timeline, newest first. Metadata only (no `state`
+/// blobs) so the panel loads cheaply. Auto rows and named rows are interleaved
+/// by `created_at`.
+pub async fn list_yrs_versions(
+  db: &PgPool,
+  document_id: Uuid,
+) -> ApiResult<Vec<YrsVersionMeta>> {
+  sqlx::query_as::<_, YrsVersionMeta>(
+    r#"
+      SELECT id, document_id, rid, label, created_by, created_at
+      FROM document_yrs_versions
+      WHERE document_id = $1
+      ORDER BY created_at DESC
+    "#,
+  )
+  .bind(document_id)
+  .fetch_all(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// One version's full yrs state blob (for read-only preview or restore). None if
+/// the id doesn't belong to this document.
+pub async fn fetch_yrs_version_state(
+  db: &PgPool,
+  document_id: Uuid,
+  version_id: Uuid,
+) -> ApiResult<Option<Vec<u8>>> {
+  sqlx::query_scalar::<_, Vec<u8>>(
+    "SELECT state FROM document_yrs_versions WHERE id = $1 AND document_id = $2",
+  )
+  .bind(version_id)
+  .bind(document_id)
+  .fetch_optional(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// Pin the document's current folded state as a NAMED version (a manual
+/// checkpoint). Named rows have `expires_at` NULL, so retention never prunes
+/// them. Errors if the document has no yrs base yet (never edited).
+pub async fn create_named_yrs_version(
+  db: &PgPool,
+  document_id: Uuid,
+  label: &str,
+  created_by: Uuid,
+) -> ApiResult<YrsVersionMeta> {
+  sqlx::query_as::<_, YrsVersionMeta>(
+    r#"
+      INSERT INTO document_yrs_versions (document_id, rid, label, created_by, state)
+      SELECT $1, base_rid, $2, $3, state
+      FROM document_yrs_base
+      WHERE document_id = $1
+      RETURNING id, document_id, rid, label, created_by, created_at
+    "#,
+  )
+  .bind(document_id)
+  .bind(label)
+  .bind(created_by)
+  .fetch_optional(db)
+  .await?
+  .ok_or(ApiError::NotFound)
 }
 
 pub async fn fetch_snapshot_by_version_seq(

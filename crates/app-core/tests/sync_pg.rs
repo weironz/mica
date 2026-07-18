@@ -4,7 +4,7 @@
 //!   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
 //!   cargo test -p mica-app-core --test sync_pg
 
-use mica_app_core::sync;
+use mica_app_core::{store, sync};
 use mica_core::MicaDoc;
 use serde_json::json;
 use sqlx::PgPool;
@@ -163,6 +163,170 @@ async fn stream_prunes_and_stale_cursor_rebootstraps() {
         sync::CatchUp::Updates(u) => assert_eq!(u.len(), 1),
         sync::CatchUp::Rebootstrap(_) => panic!("a recent cursor should pull incrementally"),
     }
+
+    cleanup(&db, ws, user).await;
+}
+
+#[tokio::test]
+async fn version_history_converges_and_names() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping version_history_converges_and_names: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+
+    // A burst of edits inside the 10-min window converges to exactly ONE auto
+    // version (AFFiNE's min-interval), not one per push.
+    for _ in 0..5 {
+        let sv = editing.state_vector();
+        editing.text_insert("a", 5, "x");
+        let update = editing.encode_diff(&sv).unwrap();
+        sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+    }
+    let autos = store::list_yrs_versions(&db, doc).await.unwrap();
+    assert_eq!(autos.len(), 1, "burst converges to one auto version");
+    assert!(autos[0].label.is_none(), "auto snapshot has no label");
+
+    // The captured blob decodes back to a real document state.
+    let state = store::fetch_yrs_version_state(&db, doc, autos[0].id)
+        .await
+        .unwrap()
+        .expect("version state present");
+    let snap = MicaDoc::from_update(&state).unwrap();
+    assert!(
+        snap.to_blocks().iter().any(|b| b.text.contains("Hello")),
+        "snapshot holds the document content"
+    );
+
+    // A manual named version lands immediately and is distinct from autos.
+    let named = store::create_named_yrs_version(&db, doc, "milestone", user)
+        .await
+        .unwrap();
+    assert_eq!(named.label.as_deref(), Some("milestone"));
+    assert_eq!(
+        store::list_yrs_versions(&db, doc).await.unwrap().len(),
+        2,
+        "named version adds a second row"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
+#[tokio::test]
+async fn version_retention_prunes_expired_autos_keeps_named() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping version_retention_prunes_expired_autos_keeps_named: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+
+    // An already-expired auto row (retention should drop it) + a named row with
+    // no expiry (retention must keep it forever).
+    sqlx::query(
+        "INSERT INTO document_yrs_versions(document_id, label, expires_at, state)
+         VALUES ($1, NULL, now() - interval '1 day', $2),
+                ($1, 'keep-me', NULL, $2)",
+    )
+    .bind(doc)
+    .bind(&base.state)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // Push until a retention pass runs (it piggybacks the rid % 32 prune).
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    loop {
+        let sv = editing.state_vector();
+        editing.text_insert("a", 5, "y");
+        let update = editing.encode_diff(&sv).unwrap();
+        let rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+        if rid % 32 == 0 {
+            break;
+        }
+    }
+
+    let expired: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM document_yrs_versions
+         WHERE document_id = $1 AND expires_at IS NOT NULL AND expires_at < now()",
+    )
+    .bind(doc)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(expired, 0, "expired auto versions pruned");
+
+    let named: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM document_yrs_versions WHERE document_id = $1 AND label = 'keep-me'",
+    )
+    .bind(doc)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(named, 1, "named version survives retention");
+
+    cleanup(&db, ws, user).await;
+}
+
+#[tokio::test]
+async fn restore_reverts_document_and_converges_replicas() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping restore_reverts_document_and_converges_replicas: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+
+    // Edit "Hello" → "Hello there", pin a named version there.
+    let sv = editing.state_vector();
+    editing.text_insert("a", 5, " there");
+    let up = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &up).await.unwrap();
+    let version = store::create_named_yrs_version(&db, doc, "v-there", user)
+        .await
+        .unwrap();
+
+    // Edit further → "Hello there, world".
+    let sv2 = editing.state_vector();
+    editing.text_insert("a", 11, ", world");
+    let up2 = editing.encode_diff(&sv2).unwrap();
+    sync::push_update(&db, ws, doc, user, &up2).await.unwrap();
+    let head = MicaDoc::from_update(&sync::bootstrap_base(&db, doc).await.unwrap().state).unwrap();
+    assert_eq!(
+        head.to_blocks().iter().find(|x| x.id == "a").unwrap().text,
+        "Hello there, world"
+    );
+
+    // Restore to the named version.
+    let vstate = store::fetch_yrs_version_state(&db, doc, version.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let (rid, update) = sync::restore_yrs_version(&db, ws, doc, user, &vstate)
+        .await
+        .unwrap();
+    assert!(rid > 0 && !update.is_empty(), "restore is a real forward update");
+
+    // The server base reverted to the version's content...
+    let reverted =
+        MicaDoc::from_update(&sync::bootstrap_base(&db, doc).await.unwrap().state).unwrap();
+    assert_eq!(
+        reverted.to_blocks().iter().find(|x| x.id == "a").unwrap().text,
+        "Hello there",
+        "base reverted to the restored version"
+    );
+
+    // ...and a client still holding the post-version replica converges when it
+    // applies the broadcast restore update — a new revision, not a hard reset.
+    editing.apply_update(&update).unwrap();
+    assert_eq!(
+        editing.to_blocks().iter().find(|x| x.id == "a").unwrap().text,
+        "Hello there",
+        "replica converges to the restored content"
+    );
 
     cleanup(&db, ws, user).await;
 }

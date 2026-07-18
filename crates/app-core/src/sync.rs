@@ -198,6 +198,28 @@ pub async fn push_update(
     .execute(&mut *tx)
     .await?;
 
+    // Version history (docs/version-history-plan.md): archive the just-folded
+    // full state as an AUTO snapshot — but only if none was taken in the last
+    // VERSION_AUTO_INTERVAL, so a burst of edits converges to one version per
+    // window (AFFiNE's min-interval, 10 min). `state` is already in hand, so
+    // this is one indexed insert-or-nothing per push. Auto rows carry an
+    // expires_at (VERSION_AUTO_RETENTION, 30 days); named rows are inserted
+    // elsewhere with expires_at NULL and never expire.
+    sqlx::query(
+        "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
+         SELECT $1, $2, $3, now() + interval '30 days'
+         WHERE NOT EXISTS (
+             SELECT 1 FROM document_yrs_versions
+             WHERE document_id = $1 AND label IS NULL
+               AND created_at > now() - interval '10 minutes'
+         )",
+    )
+    .bind(document_id)
+    .bind(rid)
+    .bind(&state)
+    .execute(&mut *tx)
+    .await?;
+
     // Periodically prune updates already folded into the base (keep a margin for
     // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
     if rid % STREAM_PRUNE_EVERY == 0 {
@@ -206,10 +228,50 @@ pub async fn push_update(
             .bind(rid - STREAM_KEEP_MARGIN)
             .execute(&mut *tx)
             .await?;
+        // Same cadence, retention pass: drop expired auto versions. Named
+        // versions (expires_at IS NULL) are kept forever.
+        sqlx::query(
+            "DELETE FROM document_yrs_versions
+             WHERE document_id = $1 AND expires_at IS NOT NULL AND expires_at < now()",
+        )
+        .bind(document_id)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
     Ok(rid)
+}
+
+/// Restore a document to a stored version's content, CRDT-safely. Re-applying
+/// the old *state* as an update can't revert a CRDT (merge is a union), so this
+/// re-derives the version's blocks as a NEW forward update on the current base
+/// (via [`MicaDoc::set_blocks`]), then pushes it like any edit. Returns the
+/// assigned `rid` and the update bytes to broadcast so open editors converge —
+/// or `(current_rid, empty)` when the target already matches the live state.
+pub async fn restore_yrs_version(
+    db: &PgPool,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    actor_id: Uuid,
+    version_state: &[u8],
+) -> ApiResult<(i64, Vec<u8>)> {
+    let base = bootstrap_base(db, document_id).await?;
+    let mut doc = MicaDoc::from_update(&base.state)
+        .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
+    let target = MicaDoc::from_update(version_state)
+        .map_err(|e| ApiError::BadRequest(format!("corrupt version state: {e}")))?;
+
+    let sv = doc.state_vector();
+    doc.set_blocks(&target.root_block_id(), &target.to_blocks());
+    let update = doc
+        .encode_diff(&sv)
+        .map_err(|e| ApiError::Internal(format!("restore diff: {e}")))?;
+    if update.is_empty() {
+        return Ok((base.base_rid, Vec::new()));
+    }
+    let rid = push_update(db, workspace_id, document_id, actor_id, &update).await?;
+    Ok((rid, update))
 }
 
 /// Catch a client up from `since_rid`: the incremental updates, or — when the
