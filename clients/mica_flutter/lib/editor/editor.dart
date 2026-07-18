@@ -2172,9 +2172,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _controller.setCodeView(viewTab.node, viewTab.view);
       return;
     }
-    final wrapNode = r.codeWrapAt(local);
-    if (wrapNode != null) {
-      _controller.toggleCodeWrap(wrapNode);
+    final moreNode = r.codeMoreAt(local);
+    if (moreNode != null) {
+      _openCodeMenu(moreNode, d.globalPosition);
       return;
     }
     final bar = r.scrollbarAt(local);
@@ -3443,7 +3443,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final clickable =
         r.codeLanguageAt(local) != null ||
         r.codeCopyAt(local) != null ||
-        r.codeWrapAt(local) != null ||
+        r.codeMoreAt(local) != null ||
         r.scrollbarAt(local) != null ||
         r.tableHandleAt(local) != null ||
         r.tableDeleteAt(local) != null ||
@@ -3498,6 +3498,64 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (selected != null) {
       _controller.setCodeLanguage(nodeIndex, selected);
     }
+  }
+
+  /// The code block's ⋯ overflow menu: the actions trimmed off the toolbar —
+  /// wrap (and, in later stages, line numbers / title / collapse) — plus delete.
+  Future<void> _openCodeMenu(int nodeIndex, Offset globalPosition) async {
+    if (nodeIndex < 0 || nodeIndex >= _controller.nodes.length) return;
+    final node = _controller.nodes[nodeIndex];
+    if (node.kind != 'code_block') return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final l10n = context.l10n;
+    final wrapped = node.data['wrap'] == true;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        overlay.size.width - globalPosition.dx,
+        0,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'wrap',
+          child: _codeMenuRow(
+            Icons.wrap_text,
+            wrapped ? l10n.codeMenuNoWrap : l10n.codeMenuWrap,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: _codeMenuRow(
+            Icons.delete_outline,
+            l10n.codeMenuDelete,
+            danger: true,
+          ),
+        ),
+      ],
+    );
+    if (!mounted) return;
+    switch (selected) {
+      case 'wrap':
+        _controller.toggleCodeWrap(nodeIndex);
+      case 'delete':
+        _controller.deleteNode(nodeIndex);
+    }
+  }
+
+  Widget _codeMenuRow(IconData icon, String label, {bool danger = false}) {
+    final color = danger ? const Color(0xFFDC2626) : null;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 10),
+        Text(label, style: TextStyle(fontSize: 13, color: color)),
+      ],
+    );
   }
 
   /// Copy the selected cell area to the clipboard in two flavors: plain TSV

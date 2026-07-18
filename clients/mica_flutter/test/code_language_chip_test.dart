@@ -34,18 +34,18 @@ void main() {
         .debugLangChipAt(0);
   }
 
-  testWidgets('an auto block says so, and names what it detected',
+  testWidgets('an auto block shows the detected language, no auto prefix',
       (tester) async {
-    expect(await chipOf(tester, {}), 'auto · yaml');
+    // The chip face is just the resolved name now — the auto-vs-pinned
+    // distinction moved off the chip (into the ⋯ menu / language picker).
+    expect(await chipOf(tester, {}), 'yaml');
   });
 
   testWidgets('`auto` written out explicitly reads the same', (tester) async {
-    expect(await chipOf(tester, {'language': 'auto'}), 'auto · yaml');
+    expect(await chipOf(tester, {'language': 'auto'}), 'yaml');
   });
 
   testWidgets('a pinned block shows the bare language', (tester) async {
-    // No "auto ·": this block will not follow the content, and the chip must
-    // not suggest otherwise.
     expect(await chipOf(tester, {'language': 'python'}), 'python');
   });
 

@@ -251,18 +251,20 @@ class _NodeLayout {
   Rect? checkbox; // todo checkbox rect (local), if any
   Rect? langLabel; // code-block language selector rect (local), if any
   Rect? copyButton; // code-block copy button rect (local), if any
-  Rect? wrapButton; // code-block wrap toggle rect (local), if any
+  Rect? moreButton; // code-block ⋯ overflow-menu rect (local), if any
   Rect? viewCodeTab; // mermaid view switch: source tab (local), if any
   Rect? viewPreviewTab; // mermaid view switch: preview tab (local), if any
   String langText = ''; // resolved code language
   bool langAuto = false; // resolved by detection, not pinned by the author
 
-  /// The language chip's text. An auto block is *live* — it re-detects as the
-  /// content changes — while a pinned one never moves, and the two were
-  /// indistinguishable because the chip only ever showed the resolved name. So
-  /// you could not tell whether pasting YAML into a block would relabel it, nor
-  /// that switching to `auto` was the way to make it.
-  String get langChipText => langAuto ? 'auto · $langText' : langText;
+  /// The language chip's text — just the resolved language name (e.g. `yaml`),
+  /// no `auto ·` prefix. An auto block still re-detects live as content changes;
+  /// the prefix was dropped for a cleaner chip (whether a block is pinned vs
+  /// auto now lives in the ⋯ menu / language picker, not the chip face).
+  String get langChipText {
+    final t = langText.isEmpty ? 'text' : langText;
+    return t;
+  }
   String footnoteLabel = ''; // `[label]` gutter marker (kind == 'footnote_def')
   String nodeId = '';
   bool codeWrap = false; // whether this code block wraps
@@ -361,7 +363,7 @@ class _TableHover {
 }
 
 /// Which code-block toolbar icon the pointer is hovering.
-enum _CodeIcon { none, lang, copy, wrap, viewCode, viewPreview }
+enum _CodeIcon { none, lang, copy, more, viewCode, viewPreview }
 
 /// The single editing surface: one leaf render object that lays out and paints
 /// every node, the caret, and the selection, and maps screen points to document
@@ -662,8 +664,8 @@ class RenderDocument extends RenderBox {
           node = i;
           if (l.copyButton?.contains(local) ?? false) {
             icon = _CodeIcon.copy;
-          } else if (l.wrapButton?.contains(local) ?? false) {
-            icon = _CodeIcon.wrap;
+          } else if (l.moreButton?.contains(local) ?? false) {
+            icon = _CodeIcon.more;
           } else if (l.langLabel?.contains(local) ?? false) {
             icon = _CodeIcon.lang;
           } else if (l.viewCodeTab?.contains(local) ?? false) {
@@ -1098,12 +1100,12 @@ class RenderDocument extends RenderBox {
           );
         }
 
-        // Controls float at the TOP-right on hover (GitHub/VSCode/Notion-style):
-        // language selector + wrap + copy, right-aligned. Overlaid, not a
-        // reserved row — a resting block shows no empty toolbar strip, which is
-        // why the old always-there top row was dropped (04834a1). The overlay
-        // sits over the first line's right edge (nearly always slack), the
-        // mirror image of how the bottom-right variant sat over the last line.
+        // Controls float at the TOP-right on hover (GitHub/VSCode/Notion-style),
+        // right-aligned: [language chip] [copy] [⋯ more]. Trimmed to the common
+        // actions — wrap / line-numbers / title / collapse / delete live behind
+        // the ⋯ menu. Overlaid, not a reserved row, so a resting block shows no
+        // empty toolbar strip (04834a1); the overlay sits over the first line's
+        // right edge (nearly always slack).
         const iconBox = 22.0;
         final marker = TextPainter(
           text: TextSpan(
@@ -1116,13 +1118,13 @@ class RenderDocument extends RenderBox {
         final labelH = marker.height + 6;
         marker.dispose();
         final iconY = layout.boxTop + 4;
-        layout.copyButton = Rect.fromLTWH(
+        layout.moreButton = Rect.fromLTWH(
           maxWidth - iconBox - 8,
           iconY,
           iconBox,
           iconBox,
         );
-        layout.wrapButton = Rect.fromLTWH(
+        layout.copyButton = Rect.fromLTWH(
           maxWidth - 2 * iconBox - 12,
           iconY,
           iconBox,
@@ -1504,18 +1506,6 @@ class RenderDocument extends RenderBox {
       marker.dispose();
     }
 
-    final wrap = l.wrapButton;
-    if (wrap != null) {
-      _paintIconButton(
-        canvas,
-        wrap.shift(offset),
-        Icons.wrap_text,
-        hovered: _hoverIcon == _CodeIcon.wrap,
-        active: l.codeWrap,
-        tooltip: l.codeWrap ? 'No wrap' : 'Wrap',
-      );
-    }
-
     final copy = l.copyButton;
     if (copy != null) {
       _paintIconButton(
@@ -1525,6 +1515,18 @@ class RenderDocument extends RenderBox {
         hovered: _hoverIcon == _CodeIcon.copy,
         active: false,
         tooltip: 'Copy',
+      );
+    }
+
+    final more = l.moreButton;
+    if (more != null) {
+      _paintIconButton(
+        canvas,
+        more.shift(offset),
+        Icons.more_horiz,
+        hovered: _hoverIcon == _CodeIcon.more,
+        active: false,
+        tooltip: 'More',
       );
     }
 
@@ -1658,10 +1660,10 @@ class RenderDocument extends RenderBox {
     return null;
   }
 
-  /// Node index whose code wrap toggle contains [local], or null.
-  int? codeWrapAt(Offset local) {
+  /// Node index whose code ⋯ overflow-menu button contains [local], or null.
+  int? codeMoreAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
-      if (_layouts[i].wrapButton?.contains(local) ?? false) return i;
+      if (_layouts[i].moreButton?.contains(local) ?? false) return i;
     }
     return null;
   }
