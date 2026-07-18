@@ -132,8 +132,12 @@ docker-push tag:
 # ---------------------------------------------------------------- deploy
 
 # Prod pulls the CI-built images from ACR and restarts. --no-deps keeps
-# postgres / rustfs untouched. MICA_VERSION is rewritten in the node's .env so
-# a restart (or a reboot) comes back on the SAME version, not the old one.
+# postgres / rustfs untouched. api, web AND the backup sidecar (mica-cli) all
+# roll to <version> — CI publishes the three keyed to the same MICA_VERSION, so
+# a deploy must move all three or backup silently drifts (it sat on the old
+# willdockerhub/mica-cli:v0.3 for many releases because deploy skipped it).
+# MICA_VERSION is rewritten in the node's .env so a restart (or a reboot) comes
+# back on the SAME version, not the old one.
 [doc("Roll prod to an already-published version, e.g. `just deploy-prod 0.5.1`")]
 deploy-prod version:
     #!/usr/bin/env bash
@@ -156,6 +160,18 @@ deploy-prod version:
       && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
     echo "==> pulling + recreating api + web"
     ssh {{node}} "cd {{node_dir}} && docker compose pull api web && docker compose up -d --no-deps api web"
+    # The backup sidecar (mica-cli: exports the workspace + external rustic
+    # snapshots it) is keyed to the SAME MICA_VERSION, so a version roll must
+    # move it too or it drifts. It lives behind the `backup` compose profile;
+    # only refresh it where it is ALREADY present (ps -aq returns a container),
+    # so a deploy never switches backup ON on a node that runs without it.
+    echo "==> refreshing backup sidecar (only if this node runs it)"
+    ssh {{node}} "cd {{node_dir}} \
+      && if [ -n \"\$(docker compose --profile backup ps -aq backup 2>/dev/null)\" ]; then \
+           docker compose --profile backup pull backup \
+           && docker compose --profile backup up -d --no-deps backup \
+           && echo 'backup refreshed'; \
+         else echo 'backup profile not active on this node — skipped'; fi"
     # Go-template braces vs just: four open-braces escape a literal two, but a
     # closing pair is ALREADY literal outside an interpolation — writing four
     # closers emitted two extra, so the format returned "healthy}}" and the

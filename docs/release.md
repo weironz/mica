@@ -86,7 +86,12 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
   - `MICA_VERSION=vX.Y.Z`(由 `just deploy-prod` 改写)
 - **节点必须能 pull ACR**:仓库设为公开,或在节点上 `docker login registry.cn-shenzhen.aliyuncs.com`
   一次(凭据只存在节点本地)。
-- **`--no-deps`**:只重建 api + web,postgres / rustfs / backup 不动。
+- **`--no-deps`**:只重建 api + web + backup,postgres / rustfs 不动。
+- **backup 跟着一起滚**:backup sidecar(mica-cli)和 api/web keyed 同一个 `MICA_VERSION`
+  (CI 三个镜像同 tag 一起推 ACR),`deploy-prod` 会在它已运行的节点上一并 `--profile backup pull
+  + up -d`,避免像早先那样停在旧 `willdockerhub/mica-cli:v0.3` 漂移。**只刷已在跑 backup 的
+  节点**(`ps -aq backup` 探测),不会把没开备份的节点意外打开。首次接这条改动时,对 backup
+  还停在旧镜像的节点**重跑一次 `just deploy-prod <当前版本>`** 即可让它追上(api/web 幂等无副作用)。
 - **验证不能只看 200**:`just verify-prod X.Y.Z` 会断言 `/api/health` 报的 version 就是
   你要的那个 —— 这是唯一能抓到"镜像没真正更新 / 拉到旧层"的手段。
 - **健康版本对了 ≠ 功能对了**:`verify-prod` 只查 version。这一版**真正改了什么**要单独冒烟——
