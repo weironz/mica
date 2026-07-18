@@ -1864,6 +1864,24 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Fold / unfold a long code block. `data.collapsed` is tri-state: absent =
+  /// auto (folded when the block exceeds the threshold), true = user-folded,
+  /// false = user-expanded. Toggling stores the negation of the current
+  /// effective state. Keep the 20-line threshold in sync with render.dart.
+  void toggleCollapsed(int index) {
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'code_block') return;
+    final lineCount = node.text.split('\n').length;
+    final effective = (node.data['collapsed'] as bool?) ?? (lineCount > 20);
+    final data = {...node.data}..['collapsed'] = !effective;
+    node.data = data;
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Switch a diagram code block (```mermaid) between its rendered preview
   /// and source editing. Stored as data.view ('code'); absent = preview, the
   /// default — readers want the picture, not the source.

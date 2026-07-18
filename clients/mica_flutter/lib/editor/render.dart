@@ -275,6 +275,10 @@ class _NodeLayout {
   double lineNumGutter = 0; // width reserved (inside contentLeft) for line #s
   String codeTitle = ''; // code block: bottom caption, '' = none
   Rect? titleRect; // code-block title caption rect (local), if any
+  bool codeCollapsed = false; // code block: currently folded (only shows head)
+  bool codeCanCollapse = false; // long enough to offer folding at all
+  double codeClipH = 0; // painter height to clip to when folded
+  Rect? collapseButton; // fold/unfold hit target (local), if any
   String kind = 'paragraph';
   bool todoChecked = false;
   int quoteDepth = 0; // blockquote nesting (bars on the left)
@@ -1028,12 +1032,24 @@ class RenderDocument extends RenderBox {
       // Code blocks pad symmetrically; their controls float at the top-right on
       // hover (no reserved top toolbar row). The optional title caption is added
       // AFTER the scrollbar below (so it sits under the code + scrollbar).
+      // A block past the threshold auto-folds (data.collapsed absent) to its
+      // first few lines; data.collapsed false/true is the user's override.
+      final codeLineCount = isCode ? node.text.split('\n').length : 0;
+      final canCollapse = isCode && codeLineCount > _codeCollapseThreshold;
+      final collapsed =
+          canCollapse && ((node.data['collapsed'] as bool?) ?? true);
+      final clipH = collapsed
+          ? _codeCollapsedLines * painter.preferredLineHeight
+          : painter.height;
+      layout.codeCanCollapse = canCollapse;
+      layout.codeCollapsed = collapsed;
+      layout.codeClipH = clipH;
+
       final innerTop = isCode ? EditorTheme.codePadV : 0.0;
       layout.boxTop = y;
       layout.textTop = y + innerTop;
-      layout.textHeight = painter.height;
-      layout.boxHeight =
-          painter.height + (isCode ? 2 * EditorTheme.codePadV : 0);
+      layout.textHeight = clipH;
+      layout.boxHeight = clipH + (isCode ? 2 * EditorTheme.codePadV : 0);
 
       if (node.isListKind) {
         final level = node.indent;
@@ -1104,7 +1120,8 @@ class RenderDocument extends RenderBox {
         _codeScroll[node.id] = scroll.clamp(0.0, maxScroll);
 
         layout.codeVisible = visible;
-        if (maxScroll > 0) {
+        // A folded block clips to its head — no horizontal scrollbar there.
+        if (!collapsed && maxScroll > 0) {
           // Reserve space for a horizontal scrollbar at the bottom of the block.
           const barH = 8.0;
           const barGap = 5.0;
@@ -1115,6 +1132,18 @@ class RenderDocument extends RenderBox {
             visible,
             barH,
           );
+        }
+
+        // Fold/expand affordance strip (below the code + scrollbar) for any
+        // block long enough to fold.
+        if (canCollapse) {
+          layout.collapseButton = Rect.fromLTWH(
+            layout.boxLeft,
+            layout.boxTop + layout.boxHeight,
+            maxWidth - layout.boxLeft,
+            _codeFoldBarH,
+          );
+          layout.boxHeight += _codeFoldBarH;
         }
 
         // Bottom caption row, below the code (and the scrollbar, if any).
@@ -1211,6 +1240,12 @@ class RenderDocument extends RenderBox {
 
   // Height of a code block's optional bottom caption row.
   static const double _codeTitleH = 24;
+
+  // Auto-fold a code block past this many lines (AFFiNE-style); when folded it
+  // shows the first _codeCollapsedLines with a fade + expand affordance.
+  static const int _codeCollapseThreshold = 20;
+  static const int _codeCollapsedLines = 10;
+  static const double _codeFoldBarH = 26; // fold/expand affordance strip
 
   // Image placeholder size (before the real image decodes) and vertical gap.
   static const double _imagePlaceholderH = 180;
@@ -1564,6 +1599,28 @@ class RenderDocument extends RenderBox {
     }
   }
 
+  /// The fold/expand affordance strip (centered) for a foldable code block.
+  void _paintFoldBar(Canvas canvas, Offset offset, _NodeLayout l) {
+    final r = l.collapseButton!.shift(offset);
+    final label = l.codeCollapsed ? '⌄  Expand' : '⌃  Collapse';
+    final tp = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: const TextStyle(
+          fontSize: 12,
+          color: EditorTheme.muted,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(
+      canvas,
+      Offset(r.center.dx - tp.width / 2, r.center.dy - tp.height / 2),
+    );
+    tp.dispose();
+  }
+
   /// The code block's caption — centered in the strip just BELOW the panel
   /// (AFFiNE-style), muted.
   void _paintCodeTitle(Canvas canvas, Offset offset, _NodeLayout l) {
@@ -1767,6 +1824,14 @@ class RenderDocument extends RenderBox {
   int? codeTitleAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       if (_layouts[i].titleRect?.contains(local) ?? false) return i;
+    }
+    return null;
+  }
+
+  /// Node index whose code-block fold/expand strip contains [local], or null.
+  int? codeCollapseAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      if (_layouts[i].collapseButton?.contains(local) ?? false) return i;
     }
     return null;
   }
@@ -1986,6 +2051,29 @@ class RenderDocument extends RenderBox {
       canvas.restore();
       if (l.showLineNums) {
         _paintLineNumbers(canvas, origin, l);
+      }
+      if (l.codeCollapsed) {
+        // Fade the last strip of the shown code into the background — hints
+        // there's more (AFFiNE-style).
+        const fadeH = 36.0;
+        final fadeTop = origin.dy + l.textHeight - fadeH;
+        canvas.drawRect(
+          Rect.fromLTWH(
+            offset.dx + l.boxLeft,
+            fadeTop,
+            size.width - l.boxLeft,
+            fadeH,
+          ),
+          Paint()
+            ..shader = ui.Gradient.linear(
+              Offset(0, fadeTop),
+              Offset(0, fadeTop + fadeH),
+              [EditorTheme.codeBg.withAlpha(0), EditorTheme.codeBg],
+            ),
+        );
+      }
+      if (l.collapseButton != null) {
+        _paintFoldBar(canvas, offset, l);
       }
       if (l.titleRect != null) {
         _paintCodeTitle(canvas, offset, l);
