@@ -140,6 +140,63 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
   Ok(html.trim_end().to_string())
 }
 
+/// Wrap the [export_html] fragment in a standalone, self-contained HTML5
+/// document: UTF-8, a `<title>`/`<h1>` from `title`, and an embedded stylesheet
+/// giving readable typography for headings/code/tables/quotes/images. No
+/// external requests — images render from whatever `src` the snapshot's image
+/// blocks carry, so a caller wanting a portable file [set_image_srcs] to `data:`
+/// URIs first (server/FFI both do). Shared by the download endpoint and the FFI
+/// local export so both platforms emit byte-identical files.
+pub fn export_html_document(
+  snapshot: &DocumentSnapshotPayload,
+  title: &str,
+) -> DocumentOperationResult<String> {
+  let body = export_html(snapshot)?;
+  let safe_title = escape_html(title.trim());
+  // Kept deliberately small and dependency-free: a single embedded stylesheet,
+  // system fonts (with CJK fallbacks), no JS. Mirrors the share page's look so
+  // an exported file and a shared link read the same.
+  Ok(format!(
+    "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
+     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+     <title>{safe_title}</title>\n<style>\n\
+     body{{max-width:720px;margin:2.5rem auto;padding:0 1.25rem;\
+     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
+     'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
+     img{{max-width:100%;height:auto;border-radius:6px;}}\n\
+     pre{{background:#f6f8fa;padding:1rem;border-radius:6px;overflow:auto;}}\n\
+     code{{background:#f6f8fa;padding:.15em .35em;border-radius:4px;\
+     font-family:'Cascadia Code','Consolas','Courier New',monospace;}}\n\
+     pre code{{background:none;padding:0;}}\n\
+     blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
+     table{{border-collapse:collapse;}}\ntd,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
+     hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
+     h1{{margin-bottom:1.5rem;}}\n\
+     .todo input{{margin-right:.4em;}}\n</style>\n</head>\n<body>\n\
+     <h1>{safe_title}</h1>\n{body}\n</body>\n</html>\n"
+  ))
+}
+
+/// Point each image block's `url` at the matching entry in `srcs` (keyed by the
+/// block's `file_id`). Used before [export_html_document] to swap content-
+/// addressed `file_id`s for `data:` URIs (self-contained export) or absolute
+/// URLs. Blocks with no matching `file_id` keep their existing `url`.
+pub fn set_image_srcs(snapshot: &mut DocumentSnapshotPayload, srcs: &BTreeMap<String, String>) {
+  for block in &mut snapshot.blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let Some(file_id) = block.data.get("file_id").and_then(Value::as_str) else {
+      continue;
+    };
+    if let Some(src) = srcs.get(file_id) {
+      if let Value::Object(map) = &mut block.data {
+        map.insert("url".to_string(), Value::String(src.clone()));
+      }
+    }
+  }
+}
+
 /// GFM footnotes are collected to a single trailing section: an ordered list,
 /// one item per `footnote_def` (in document order), each item ending with a
 /// backlink (`↩`) to its reference. Emits nothing when the document has none.

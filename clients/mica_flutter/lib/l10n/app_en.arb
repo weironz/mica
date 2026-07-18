@@ -61,6 +61,7 @@
   "rowExpandChildren": "Expand children",
   "rowCollapseChildren": "Collapse children",
   "rowExportZipImages": "Export (ZIP, with images)",
+  "rowExportHtml": "Export as HTML",
   "rowExpand": "Expand",
   "rowCollapse": "Collapse",
   "rowMoreActions": "Delete, rename, and more",

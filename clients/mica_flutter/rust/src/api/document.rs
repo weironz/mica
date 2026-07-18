@@ -77,6 +77,39 @@ impl MicaDocument {
             .unwrap_or_else(|_| "[]".into())
     }
 
+    /// Export this page as a self-contained HTML document, through the same Rust
+    /// engine the server uses — so a LOCAL page's export matches a cloud page's
+    /// byte-for-byte. `image_srcs` maps image `file_id`s to `data:` URIs the Dart
+    /// side has already read from the on-device blob CAS; images with no entry
+    /// keep their url. Local export otherwise had no path (the ZIP/Markdown
+    /// exports are server endpoints), so this also closes that gap.
+    #[frb(sync)]
+    pub fn export_html(&self, title: String, image_srcs: std::collections::HashMap<String, String>) -> String {
+        let doc = self.inner.lock().unwrap();
+        let root_block_id = doc.root_block_id();
+        // mica_core::Block and mica_markdown::Block mirror each other field-for-
+        // field (see from_markdown); translate to the engine's type.
+        let blocks = doc
+            .to_blocks()
+            .into_iter()
+            .map(|b| mica_markdown::Block {
+                id: b.id,
+                kind: b.kind,
+                text: b.text,
+                data: b.data,
+                children: b.children,
+            })
+            .collect();
+        let mut payload = mica_markdown::DocumentSnapshotPayload {
+            schema_version: 1,
+            root_block_id,
+            blocks,
+        };
+        let srcs: std::collections::BTreeMap<String, String> = image_srcs.into_iter().collect();
+        mica_markdown::set_image_srcs(&mut payload, &srcs);
+        mica_markdown::export_html_document(&payload, &title).unwrap_or_default()
+    }
+
     /// Encode the full document state (the base snapshot to persist locally).
     #[frb(sync)]
     pub fn encode_state(&self) -> Vec<u8> {

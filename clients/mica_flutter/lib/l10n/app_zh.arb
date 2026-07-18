@@ -55,6 +55,7 @@
   "rowExpandChildren": "展开子项",
   "rowCollapseChildren": "收起子项",
   "rowExportZipImages": "导出(ZIP,含图片)",
+  "rowExportHtml": "导出为 HTML",
   "rowExpand": "展开",
   "rowCollapse": "收起",
   "rowMoreActions": "删除、重命名等",

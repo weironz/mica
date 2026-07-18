@@ -57,6 +57,8 @@ class LocalOffline {
   bool hasBlob(String fileId) => false;
   String? blobFileUri(String fileId) => null;
 
+  String? exportDocHtml(String docId, String title) => null;
+
   List<WorkspaceData> listWorkspaces({String origin = 'local'}) => const [];
 
   void saveWorkspace(WorkspaceData w, {String origin = 'local'}) {}

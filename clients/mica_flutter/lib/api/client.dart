@@ -673,6 +673,27 @@ class ApiClient {
     return response.bodyBytes;
   }
 
+  /// Download one page as a self-contained HTML file — a full document with an
+  /// embedded stylesheet and images inlined as `data:` URIs (see the server's
+  /// `export_document_html`). Returned as a string so the caller writes it under
+  /// the page's own name; the endpoint also sets a `filename` for browsers.
+  Future<String> exportDocumentHtml(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    final response = await http.get(
+      baseUri.replace(
+        path: '/api/workspaces/$workspaceId/documents/$documentId/export/html',
+      ),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('export failed (HTTP ${response.statusCode})');
+    }
+    return utf8.decode(response.bodyBytes);
+  }
+
   /// Download one folder's subtree as a Markdown ZIP (same shape as the
   /// workspace export: relative paths + shared `assets/` + manifest).
   Future<Uint8List> exportFolderZip(

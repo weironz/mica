@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentOperation, DocumentSnapshotPayload, export_html, export_markdown_with_assets,
-    import_markdown,
+    DocumentOperation, DocumentSnapshotPayload, export_html, export_html_document,
+    export_markdown_with_assets, import_markdown, set_image_srcs,
   },
   store::{self, DocumentRecord, SnapshotRecord, UpdateRecord},
 };
@@ -73,11 +73,6 @@ pub struct ImportMarkdownRequest {
   name: String,
   parent_view_id: Option<Uuid>,
   markdown: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct HtmlExportResponse {
-  html: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1917,22 +1912,105 @@ fn collect_view_order<'a>(
   }
 }
 
+/// `GET /api/workspaces/{workspace_id}/documents/{document_id}/export/html`
+///
+/// One page as a **self-contained** `.html` file: a full HTML5 document with an
+/// embedded stylesheet and every image inlined as a `data:` URI, so it opens
+/// offline and survives the source page being deleted. This is why it embeds
+/// bytes rather than reusing the share page's public blob URLs — a downloaded
+/// file must not depend on the server still being up.
 pub async fn export_document_html(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
-) -> ApiResult<Json<HtmlExportResponse>> {
+) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
-
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+
   let mut payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  inline_blob_hrefs(&mut payload.blocks, workspace_id);
-  let html = export_html(&payload).map_err(|error| ApiError::BadRequest(error.to_string()))?;
+  let title = fetch_document_view(&state.db, workspace_id, document_id)
+    .await?
+    .map(|view| view.name)
+    .unwrap_or_else(|| "document".to_string());
 
-  Ok(Json(HtmlExportResponse { html }))
+  // Bytes → data: URIs. An image whose bytes can't be fetched simply keeps its
+  // existing url (set_image_srcs skips it), so a missing asset degrades to a
+  // broken <img>, never a failed export.
+  let data_uris = collect_asset_data_uris(&state, workspace_id, &payload.blocks).await?;
+  set_image_srcs(&mut payload, &data_uris);
+
+  let html = export_html_document(&payload, &title)
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+
+  let filename = format!("{}.html", safe_segment(&title));
+  Ok(
+    (
+      [
+        (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+        (
+          header::CONTENT_DISPOSITION,
+          format!("attachment; filename=\"{filename}\""),
+        ),
+      ],
+      html,
+    )
+      .into_response(),
+  )
+}
+
+/// Like [collect_assets] but for a single self-contained file: fetch each Mica
+/// image's bytes and return a `file_id → data:<mime>;base64,…` map instead of
+/// writing files. External (url) images are left for [set_image_srcs] to skip.
+async fn collect_asset_data_uris(
+  state: &AppState,
+  workspace_id: Uuid,
+  blocks: &[mica_app_core::documents::Block],
+) -> ApiResult<BTreeMap<String, String>> {
+  let mut wanted: Vec<String> = Vec::new();
+  for block in blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    if let Some(id) = block.data.get("file_id").and_then(|v| v.as_str()) {
+      if !wanted.iter().any(|w| w == id) {
+        wanted.push(id.to_string());
+      }
+    }
+  }
+  if wanted.is_empty() {
+    return Ok(BTreeMap::new());
+  }
+
+  let storage = state
+    .storage
+    .clone()
+    .ok_or_else(|| ApiError::Unavailable("file storage is not configured".to_string()))?;
+  let ids: Vec<Uuid> = wanted.iter().filter_map(|id| Uuid::parse_str(id).ok()).collect();
+  let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
+  let by_id: std::collections::HashMap<String, &store::FileRecord> =
+    records.iter().map(|r| (r.id.to_string(), r)).collect();
+
+  let client = reqwest::Client::new();
+  let mut map = BTreeMap::new();
+  for file_id in wanted {
+    let Some(record) = by_id.get(&file_id) else {
+      continue;
+    };
+    let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+      Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(_) => continue,
+      },
+      _ => continue,
+    };
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    map.insert(file_id, format!("data:{};base64,{}", record.mime_type, b64));
+  }
+  Ok(map)
 }
 
 /// Point each uploaded-image block's `url` at its public blob path so a renderer

@@ -1444,6 +1444,40 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
+  /// Export the open CLOUD page as a self-contained HTML file. `title` (the live
+  /// title-bar text) is ignored here — the server names the `<h1>`/`<title>`
+  /// from the stored view name; it matters only for the local path below.
+  Future<String> _exportPageHtml(String title) async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    final bootstrap = _selectedBootstrap;
+    if (bootstrap == null) {
+      throw ApiException(context.l10n.pageOpenFirst);
+    }
+    return _api.exportDocumentHtml(
+      session.accessToken,
+      workspace.id,
+      bootstrap.document.id,
+    );
+  }
+
+  /// Export the open LOCAL page as HTML through the FFI engine (same output as
+  /// the cloud path). Unlike the ZIP/Markdown exports — which are server-only and
+  /// throw `exportLocalUnsupported` locally — HTML works offline, so this closes
+  /// that gap for local workspaces.
+  Future<String> _localExportPageHtml(String title) async {
+    final bootstrap = _selectedBootstrap;
+    if (bootstrap == null) {
+      throw ApiException(context.l10n.pageOpenFirst);
+    }
+    final name = title.trim().isEmpty ? kUntitledPage : title.trim();
+    final html = _local.exportDocHtml(bootstrap.document.id, name);
+    if (html == null || html.isEmpty) {
+      throw ApiException(context.l10n.exportEmptyContent);
+    }
+    return html;
+  }
+
   Future<Uint8List> _exportFolderZip(DocumentView folder) async {
     final session = _requireSession();
     final workspace = _requireWorkspace();
@@ -3914,6 +3948,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onExportPageZip: local
           ? () async => throw ApiException(context.l10n.exportLocalUnsupported)
           : _exportPageZip,
+      // HTML export works in BOTH worlds — local goes through the FFI engine
+      // (see _localExportPageHtml), so unlike the ZIP it isn't gated off local.
+      onExportPageHtml: local ? _localExportPageHtml : _exportPageHtml,
       onImportMarkdown: local ? (_, _) async {} : _importMarkdownAsPage,
       onExportWorkspaceZip: local
           ? (_) async => Uint8List(0)
@@ -4315,6 +4352,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onSearch,
     required this.onOpenSearchResult,
     required this.onExportPageZip,
+    required this.onExportPageHtml,
     required this.onImportMarkdown,
     required this.onExportWorkspaceZip,
     required this.onImportWorkspaceZip,
@@ -4494,6 +4532,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<List<SearchResult>> Function(String query) onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
   final Future<Uint8List> Function() onExportPageZip;
+  final Future<String> Function(String title) onExportPageHtml;
   final Future<void> Function(String fileName, String markdown)
   onImportMarkdown;
   final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
@@ -6299,6 +6338,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               title: Text(context.l10n.rowExportZipImages),
                             ),
                           ),
+                          PopupMenuItem(
+                            value: 'export-html',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.html_outlined),
+                              title: Text(context.l10n.rowExportHtml),
+                            ),
+                          ),
                           const PopupMenuDivider(),
                           PopupMenuItem(
                             value: 'import-md',
@@ -6987,6 +7035,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     switch (value) {
       case 'export-zip':
         await _exportPageFile();
+      case 'export-html':
+        await _exportPageHtmlFile();
       case 'import-md':
         await _importMarkdownFile();
       case 'share':
@@ -7066,6 +7116,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Export the open page as a ZIP (markdown + its images under `assets/`).
   /// There is no markdown-only export any more: a lone .md silently dropped
   /// every image, emitting `![](photo.png)` for a file it never handed over.
+  /// Export the open page as a self-contained `.html` file, named after the
+  /// page. Works in both worlds (the local path runs through the FFI engine).
+  Future<void> _exportPageHtmlFile() async {
+    final l10n = context.l10n;
+    try {
+      final title = _pageTitle.text.trim();
+      final html = await widget.onExportPageHtml(title);
+      if (html.isEmpty) throw ApiException(l10n.exportEmptyContent);
+      final base = title.isEmpty ? 'page' : title;
+      downloadImage(
+        Uint8List.fromList(utf8.encode(html)),
+        '$base.html',
+        'text/html',
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
+      }
+    }
+  }
+
   Future<void> _exportPageFile() async {
     final l10n = context.l10n;
     try {

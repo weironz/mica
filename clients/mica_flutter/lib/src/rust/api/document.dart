@@ -21,6 +21,17 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// Encode the full document state (the base snapshot to persist locally).
   Uint8List encodeState();
 
+  /// Export this page as a self-contained HTML document, through the same Rust
+  /// engine the server uses — so a LOCAL page's export matches a cloud page's
+  /// byte-for-byte. `image_srcs` maps image `file_id`s to `data:` URIs the Dart
+  /// side has already read from the on-device blob CAS; images with no entry
+  /// keep their url. Local export otherwise had no path (the ZIP/Markdown
+  /// exports are server endpoints), so this also closes that gap.
+  String exportHtml({
+    required String title,
+    required Map<String, String> imageSrcs,
+  });
+
   /// Build a document from a root id and a JSON array of blocks.
   static MicaDocument fromBlocksJson({
     required String rootId,
