@@ -1458,16 +1458,39 @@ class RenderDocument extends RenderBox {
       }
       return;
     }
+    // A selected image: AFFiNE-style — a soft drop shadow lifts it + a thick
+    // blue border, NOT a translucent tint over the picture (which muddied it).
+    // A tint stays only when the image is part of a multi-block range select.
+    if (l.kind == 'image' && l.imageDst != null) {
+      final box = l.imageDst!.shift(offset);
+      final rr = RRect.fromRectAndRadius(box, const Radius.circular(6));
+      if (border) {
+        canvas.drawShadow(
+          Path()..addRRect(rr.inflate(1)),
+          const Color(0xFF1E293B),
+          6,
+          true,
+        );
+        canvas.drawRRect(
+          rr,
+          Paint()
+            ..color = EditorTheme.caret
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3,
+        );
+      } else {
+        canvas.drawRRect(rr, Paint()..color = EditorTheme.selection);
+      }
+      return;
+    }
     // Start at the block's own left edge — drawing from x=0 spilled the
     // tint into the drag-handle gutter, left of the page's text column.
-    final box = (l.kind == 'image' && l.imageDst != null)
-        ? l.imageDst!.shift(offset)
-        : Rect.fromLTWH(
-            offset.dx + l.boxLeft,
-            offset.dy + l.boxTop,
-            size.width - l.boxLeft,
-            l.boxHeight,
-          );
+    final box = Rect.fromLTWH(
+      offset.dx + l.boxLeft,
+      offset.dy + l.boxTop,
+      size.width - l.boxLeft,
+      l.boxHeight,
+    );
     final rr = RRect.fromRectAndRadius(
       box.inflate(border ? 2 : 0),
       const Radius.circular(6),
