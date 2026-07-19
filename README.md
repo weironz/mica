@@ -26,77 +26,84 @@
 
 ---
 
-**Looking to use Mica?** Grab the [installer](#-install) — you don't need anything
-else on this page.
+Mica is a Markdown workspace. Notes are stored as Markdown — in a folder on your
+own disk, or on a Mica server you run — and the app is built around keeping that
+format faithful in both directions.
 
-**Looking to self-host, hack on it, or see how it works?** Read on.
-
-> **Project status.** Actively developed and used daily by its author. Migrations
-> always run forward and the export format round-trips, so real notes are safe.
-> But this is pre-1.0: there is no compatibility promise across minor versions,
-> and Linux/macOS desktop builds are not published yet.
-
-## ✨ What Mica does
+## ✨ Highlights
 
 **Two worlds, one app.** A *local* workspace is a folder of Markdown on your own
-disk — no account, no network, no sync. A *cloud* workspace lives on a Mica
+disk: no account, no network, no sync. A *cloud* workspace lives on a Mica
 server, syncs in real time, and can be shared. You switch between them
-explicitly, and the app only ever shows one at a time, so there is never a
-question of where a page lives.
+explicitly, and the app shows one at a time, so where a page lives is always
+unambiguous.
 
 **The editor is drawn, not composed.** It's a single Flutter `RenderBox` that
-paints text, carets, selections and blocks itself, over a marks-over-plain-text
-model. Not a widget tree, not a `WebView`, not a wrapped third-party editor.
+paints text, carets, selections and blocks itself, over a
+marks-over-plain-text model — not a widget tree, not a `WebView`, not a wrapped
+third-party editor. Caret and selection behave identically on every platform,
+IME composition (Chinese, Japanese, Korean) works natively, and long documents
+stay responsive because painting is clipped to the viewport.
 
-- **Local-first workspaces** — plain Markdown on disk, no account required.
-- **Real-time collaboration** — CRDT sync via `yrs`, with collaborator presence.
-- **Offline-tolerant** — edits queue and reconcile; images upload when you reconnect.
-- **Folders and pages** — drag to reorder or reparent, per-user workspace ordering.
-- **Rich blocks** — tables, code with highlighting, LaTeX math, Mermaid diagrams, footnotes.
-- **Version history** — automatic snapshots plus named checkpoints, with diff preview.
-- **Import** — Markdown, folders, ZIP archives, and Notion exports.
-- **Export** — Markdown, HTML, PDF, and ZIP; exports re-import losslessly.
+**One CRDT engine everywhere.** Sync runs on `yrs`, the Rust port of Yjs. The Web
+client uses Yjs itself, and the two are byte-compatible at the update,
+state-vector and lib0 encoding layers — so every platform speaks one authoritative
+format rather than a translation of one.
+
+**A Rust data plane.** Everything that parses files, walks archives, hashes bytes
+or talks to storage runs in Rust. Dart owns painting, caret and selection,
+hit-testing, and the editor's latency-critical paths.
+
+### Editing
+
+- **Blocks** — headings, lists, tables, quotes, task lists, footnotes.
+- **Code** — fenced blocks with syntax highlighting.
+- **Math** — LaTeX, inline and block. Inline formulas typeset on the baseline and scale with font size.
+- **Diagrams** — Mermaid, rendered offline by a pure-Rust engine (no browser, no Node).
+- **Images** — paste or drag to upload, content-addressed and deduplicated by SHA-256.
+- **Keyboard-first** — live input rules as you type, paste-to-blocks, copy-as-Markdown.
+
+### Workspace
+
+- **Folders and pages** — drag to reorder or reparent; workspace order is per user.
+- **Real-time collaboration** — collaborator presence, live cursors.
+- **Offline-tolerant** — edits queue and reconcile on reconnect; images inserted offline upload when the network returns.
+- **Version history** — automatic snapshots plus named checkpoints, with a read-only preview and block-level diff.
 - **Public links** — share a document read-only.
-- **MCP server** — let Claude read, search and edit your notes.
-- **Optional AI** — hidden entirely when no API key is configured.
+- **Full-text search** across a workspace.
 
-### Markdown is the format, not a feature
+### Data in and out
+
+- **Import** — Markdown files, folders, ZIP archives, and Notion exports (IDs stripped, duplicated H1 titles removed, nested `Part-N.zip` expanded).
+- **Export** — Markdown, HTML, PDF, and ZIP archives of a page, a folder, a workspace, or every workspace at once.
+- **Lossless round-trip** — exporting and re-importing restores the tree, the names, the assets and the links.
+- **MCP server** — let Claude or any MCP client read, search, create and edit pages.
+- **Optional AI** — an `/` command and a global composer, backed by the Anthropic Messages API. Hidden entirely when no key is configured.
+
+### Markdown fidelity
 
 CommonMark 0.31.2 is the base — **641/641 spec examples pass on the read side** —
-with GFM on top (24/24), plus a small dialect for what GFM cannot express:
+with GFM on top (**24/24**), plus a small dialect for what GFM cannot express:
 footnotes, front matter, Pandoc-style math. The writer emits a normalized subset,
-and **round-trip stability is an enforced invariant**, pinned by a regression
-floor in CI. See the [scoreboard](docs/commonmark-scoreboard.md).
+and **round-trip stability is an enforced invariant** with a regression floor in
+CI. See the [scoreboard](docs/commonmark-scoreboard.md).
 
-## 🤔 Why another one of these
-
-There are a lot of good notes apps. Mica exists because of a specific combination
-that none of them quite had:
-
-- **[Obsidian](https://obsidian.md)** got local-first files right, but isn't open source and has no real-time server story.
-- **[Notion](https://notion.so)** got the editor right, but your data lives in their database.
-- **[AFFiNE](https://github.com/toeverything/AFFiNE)** and **[AppFlowy](https://github.com/AppFlowy-IO/AppFlowy)** are both excellent and both open source — they are Mica's reference points, and their source has settled more than one architecture argument here. AFFiNE is web-first; AppFlowy runs a Rust core under Flutter.
-- **[SiYuan](https://github.com/siyuan-note/siyuan)** and **[Logseq](https://github.com/logseq/logseq)** are closer to the block-model end than the document end.
-
-Mica's bet is a **hand-written editor over a Rust data plane**, where the same
-document model serves a local folder and a synced server, and where Markdown is
-the storage format rather than an export target.
-
-**What Mica is not:** it has no plugin ecosystem, no mobile apps, no whiteboard
-or database views, and a fraction of the polish of any project listed above. If
-you need those today, use one of those instead — they're genuinely good.
+Where a feature has no GFM representation, the rule is: serialize to valid GFM
+that renders acceptably in any foreign viewer — never invent syntax others would
+misrender — and carry the lossless form out-of-band, so re-importing our own
+export restores what GFM dropped.
 
 ## 📦 Install
 
-| Platform | Download |
-| --- | --- |
-| **Windows** | [`Mica-Setup-*.exe`](https://github.com/weironz/mica/releases/latest) — the app self-updates from the same feed |
-| **Linux / macOS desktop** | Not published yet. The Flutter project targets Linux and the code is platform-agnostic, but neither is built in CI or tested — treat as unsupported. |
-| **Web** | Self-hosted only, see below |
+**Desktop** — download `Mica-Setup-*.exe` from
+[Releases](https://github.com/weironz/mica/releases/latest). The app updates
+itself from the same feed.
 
 **CLI** — `mica-cli` binaries for Windows, Linux and macOS are attached to every
-[release](https://github.com/weironz/mica/releases/latest). It drives the same
-API and hosts the MCP server (`mica-cli mcp`). See [docs/cli.md](docs/cli.md).
+release. It drives the same API and hosts the MCP server (`mica-cli mcp`). See
+[docs/cli.md](docs/cli.md).
+
+**Web** — self-hosted, see below.
 
 ## 🏗 Self-hosting
 
@@ -133,17 +140,11 @@ a release. See [Deployment](docs/deploy.md#behind-traefik-the-canonical-producti
 </details>
 
 **Migrations are embedded in the API binary and run at startup** — there is no
-separate migration step, and rolling forward is the only supported direction.
+separate migration step.
 
 Full notes: [Deployment](docs/deploy.md) · [Backup](docs/backup.md) · [Release process](docs/release.md)
 
-## 🧩 How it's built
-
-**Rust** for anything that parses, walks archives, hashes, or talks to storage.
-**Dart/Flutter** for painting, caret/selection, hit-testing, and the editor's
-latency-critical paths. `yrs` (the Rust port of Yjs) for CRDT sync — the Web
-client speaks the same wire format via Yjs itself, so one engine serves every
-platform.
+## 🧩 Repository layout
 
 ```
 crates/
@@ -185,9 +186,9 @@ With `S3_*` unset the file endpoints return `503` and everything else works. Sam
 for `ANTHROPIC_API_KEY` and the AI endpoints.
 
 **Before changing anything structural, read [`CLAUDE.md`](CLAUDE.md)** — project
-principles, the invariants that have been broken before, and the release process
-— and [`docs/lessons.md`](docs/lessons.md), which records what those invariants
-cost when they were broken.
+principles, invariants, and the release process — and
+[`docs/lessons.md`](docs/lessons.md), which records what those invariants cost
+when they were broken.
 
 Three rules that will otherwise bite you:
 
@@ -215,9 +216,8 @@ Three rules that will otherwise bite you:
 | [Shortcuts](docs/shortcuts.md) | Authoritative keyboard shortcut list |
 | [Roadmap](docs/roadmap.md) | What's next |
 
-Some design documents predate later decisions — notably `architecture.md`, which
-was written when the project was cloud-only. `CLAUDE.md` and the documents it
-points at are the current word.
+`CLAUDE.md` and the documents it points at are the current word where design
+documents disagree.
 
 ## 🤝 Contributing
 
