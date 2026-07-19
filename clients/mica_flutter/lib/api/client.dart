@@ -817,6 +817,7 @@ class ApiClient {
     String? name,
     bool notion = false,
     String? workspaceId,
+    String? parentViewId,
   }) async {
     final response = await http.post(
       baseUri.replace(
@@ -825,6 +826,9 @@ class ApiClient {
           if (name != null && name.isNotEmpty) 'name': name,
           if (notion) 'notion': 'true',
           'workspace_id': ?workspaceId,
+          // Import UNDER this folder (server validates it's a folder in the
+          // workspace) instead of at the workspace root.
+          'parent_view_id': ?parentViewId,
         },
       ),
       headers: {

@@ -796,6 +796,8 @@ class DocumentListItem extends StatefulWidget {
     required this.onCreateChild,
     required this.onCreateChildFolder,
     this.onExportFolder,
+    this.onImportFilesIntoFolder,
+    this.onImportFolderIntoFolder,
     this.onTransferMove,
     this.onTransferCopy,
     required this.onClone,
@@ -827,6 +829,11 @@ class DocumentListItem extends StatefulWidget {
   /// Export this folder's subtree as a ZIP. Null hides the entry — local
   /// workspaces have no server to build the archive.
   final VoidCallback? onExportFolder;
+
+  /// Import loose files / a picked folder UNDER this folder (md/zip/images →
+  /// pages beneath it). Works in both worlds; null hides the entries.
+  final VoidCallback? onImportFilesIntoFolder;
+  final VoidCallback? onImportFolderIntoFolder;
 
   /// Move / copy this row's subtree into another cloud workspace. Both null in
   /// a local workspace (no cross-workspace transfer there) — the pair hides
@@ -1015,6 +1022,23 @@ class _DocumentListItemState extends State<DocumentListItem> {
               label: context.l10n.rowExportZipImages,
             ),
           ),
+        // Import md / images / a nested folder UNDER this folder (both worlds).
+        if (widget._isFolder && widget.onImportFilesIntoFolder != null)
+          PopupMenuItem(
+            value: 'importFiles',
+            child: _MenuRow(
+              icon: Icons.upload_file_outlined,
+              label: context.l10n.workspaceRowImportFiles,
+            ),
+          ),
+        if (widget._isFolder && widget.onImportFolderIntoFolder != null)
+          PopupMenuItem(
+            value: 'importFolder',
+            child: _MenuRow(
+              icon: Icons.drive_folder_upload_outlined,
+              label: context.l10n.workspaceRowImportFolder,
+            ),
+          ),
         // Cross-workspace move/copy — cloud-only, so both hide in a local
         // workspace. Works for pages AND folders (the folder carries its
         // subtree), matching the server endpoint's semantics.
@@ -1059,6 +1083,10 @@ class _DocumentListItemState extends State<DocumentListItem> {
         widget.onToggle();
       case 'export':
         widget.onExportFolder?.call();
+      case 'importFiles':
+        widget.onImportFilesIntoFolder?.call();
+      case 'importFolder':
+        widget.onImportFolderIntoFolder?.call();
       case 'transferMove':
         widget.onTransferMove?.call();
       case 'transferCopy':

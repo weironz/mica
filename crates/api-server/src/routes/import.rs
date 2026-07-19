@@ -39,6 +39,11 @@ pub struct ImportParams {
   /// Tolerates a bare/empty query value (treated as absent).
   #[serde(default, deserialize_with = "empty_as_none")]
   pub workspace_id: Option<Uuid>,
+  /// Import UNDER this folder (a view in [workspace_id]) instead of at the
+  /// workspace root — top-level nodes become its children. Requires
+  /// [workspace_id]; must reference a folder view. Empty value = absent.
+  #[serde(default, deserialize_with = "empty_as_none")]
+  pub parent_view_id: Option<Uuid>,
 }
 
 fn empty_as_none<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
@@ -70,6 +75,27 @@ pub async fn start_import(
   }
   if let Some(ws) = params.workspace_id {
     ensure_workspace_editor(&state.db, ws, user_id).await?;
+  }
+  // Importing under a folder: it must be a folder view in the (required)
+  // target workspace — pages can't be parented under a document.
+  if let Some(parent) = params.parent_view_id {
+    let Some(ws) = params.workspace_id else {
+      return Err(ApiError::BadRequest(
+        "parent_view_id requires workspace_id".to_string(),
+      ));
+    };
+    let object_type = sqlx::query_scalar::<_, String>(
+      "SELECT object_type FROM views WHERE id = $1 AND workspace_id = $2",
+    )
+    .bind(parent)
+    .bind(ws)
+    .fetch_optional(&state.db)
+    .await?;
+    if object_type.as_deref() != Some("folder") {
+      return Err(ApiError::BadRequest(
+        "parent_view_id must be a folder in the workspace".to_string(),
+      ));
+    }
   }
 
   let job_id = Uuid::new_v4();
@@ -177,6 +203,9 @@ async fn run_import(
     }
   }
 
+  // Top-level nodes (no parent in the plan) hang off the import target: the
+  // given folder, or the workspace root when none.
+  let root_parent = params.parent_view_id;
   // Pre-generate every page's view id so links can target pages that come
   // later in the plan (forward references included).
   let view_ids: Vec<Uuid> = plan.pages.iter().map(|_| Uuid::new_v4()).collect();
@@ -194,7 +223,7 @@ async fn run_import(
         workspace_id,
         user_id,
         view_ids[idx],
-        page.parent.map(|p| view_ids[p]),
+        page.parent.map(|p| view_ids[p]).or(root_parent),
         &page.title,
       )
       .await?;
@@ -251,7 +280,7 @@ async fn run_import(
       workspace_id,
       user_id,
       view_ids[idx],
-      page.parent.map(|p| view_ids[p]),
+      page.parent.map(|p| view_ids[p]).or(root_parent),
       &page.title,
       &root_block_id,
       &payload,

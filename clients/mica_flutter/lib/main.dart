@@ -1781,14 +1781,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     Workspace workspace,
     List<ArchiveFile> entries, {
     String? sourceName,
+    String? parentViewId,
   }) {
     // [sourceName] (the picked folder's name) names the container the server
     // wraps the import under — see ImportMode::IntoContainer. Absent (loose
     // multi-file selection) → the server falls back to "Imported".
+    // [parentViewId] imports UNDER a folder instead of the workspace root.
     return _runServerImport(
       buildStoreZip(entries),
       name: sourceName,
       workspaceId: workspace.id,
+      parentViewId: parentViewId,
     );
   }
 
@@ -1799,6 +1802,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? name,
     bool notion = false,
     String? workspaceId,
+    String? parentViewId,
   }) {
     final l10n = context.l10n;
     return _run(() async {
@@ -1809,6 +1813,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         name: name,
         notion: notion,
         workspaceId: workspaceId,
+        parentViewId: parentViewId,
       );
       ImportJobStatus job;
       while (true) {
@@ -2473,6 +2478,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     Workspace workspace,
     List<ArchiveFile> entries, {
     String? sourceName,
+    String? parentViewId,
   }) async {
     final l10n = context.l10n;
     // Parity with the cloud IntoContainer wrap: a picked folder's name becomes
@@ -2482,7 +2488,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final files = <({String path, List<int> bytes})>[
       for (final f in entries) (path: '$prefix${f.name}', bytes: f.bytes),
     ];
-    final result = await _local.importVaultTree(files, workspace.id);
+    // [parentViewId] imports UNDER a folder instead of the workspace root.
+    final result = await _local.importVaultTree(
+      files,
+      workspace.id,
+      parentViewId: parentViewId,
+    );
     if (!mounted) return;
     setState(_reloadLocalViews);
     final parts = <String>[
@@ -3903,6 +3914,37 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Import loose files / a picked folder UNDER [folder] (parent_view_id) in the
+  /// active world — the folder-menu counterpart of [_importTreeIntoEntry].
+  /// [sourceName] (a picked folder's name) names the wrap container.
+  Future<void> _importIntoFolder(
+    DocumentView folder,
+    List<ArchiveFile> entries, {
+    String? sourceName,
+  }) async {
+    // The tree only ever shows the ACTIVE workspace, so the folder lives in it.
+    if (_activeIsLocal) {
+      final wsId = _workspaceIdOfView(folder.id);
+      final ws = _localWorkspaces.where((w) => w.id == wsId).firstOrNull;
+      if (ws == null) return;
+      await _localImportVaultTree(
+        ws,
+        entries,
+        sourceName: sourceName,
+        parentViewId: folder.id,
+      );
+    } else {
+      final ws = _selectedWorkspace;
+      if (ws == null) return;
+      await _importTreeIntoWorkspace(
+        ws,
+        entries,
+        sourceName: sourceName,
+        parentViewId: folder.id,
+      );
+    }
+  }
+
   Future<void> _importTreeIntoEntry(
     WorkspaceEntry e,
     List<ArchiveFile> entries, {
@@ -3998,6 +4040,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onDeleteEntry: _deleteEntry,
       onExportEntryZip: _exportEntryZip,
       onImportTreeIntoEntry: _importTreeIntoEntry,
+      onImportTreeIntoFolder: _importIntoFolder,
       onReorderWorkspaces: _reorderWorkspaceEntries,
       onCreateWorkspaceTyped: _createWorkspaceTyped,
       cloudOriginLabel: _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
@@ -4486,6 +4529,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteEntry,
     required this.onExportEntryZip,
     required this.onImportTreeIntoEntry,
+    required this.onImportTreeIntoFolder,
     required this.onReorderWorkspaces,
     required this.onCreateWorkspaceTyped,
     required this.cloudOriginLabel,
@@ -4612,6 +4656,14 @@ class WorkspaceView extends StatefulWidget {
     String? sourceName,
   })
   onImportTreeIntoEntry;
+
+  /// Import loose files / a picked folder UNDER a folder view (parent_view_id).
+  final Future<void> Function(
+    DocumentView folder,
+    List<ArchiveFile> entries, {
+    String? sourceName,
+  })
+  onImportTreeIntoFolder;
 
   /// Persist a new order for the connected world's workspaces (full list in
   /// the intended order) — see the switcher's move up/down.
@@ -5855,6 +5907,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onExportFolder: widget.onExportFolderZip == null
               ? null
               : () => _exportFolderFile(item.view),
+          // Import md / images / a nested folder UNDER this folder — both worlds
+          // (server validates parent_view_id; local prefixes the tree).
+          onImportFilesIntoFolder: item.view.objectType == 'folder'
+              ? () => _importFilesIntoFolder(item.view)
+              : null,
+          onImportFolderIntoFolder: item.view.objectType == 'folder'
+              ? () => _importFolderIntoFolder(item.view)
+              : null,
           // Cross-workspace move/copy — cloud-only (onTransfer is null in a
           // local workspace, which hides both entries). Works for pages and
           // folders alike; the folder carries its subtree server-side.
@@ -7555,6 +7615,42 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
     }
     await widget.onImportTreeIntoEntry(entry, entries, sourceName: folderName);
+  }
+
+  /// Multi-select import UNDER a folder: .md files (+ referenced images) become
+  /// pages beneath it; ZIPs ride along as-is (server expands nested archives).
+  Future<void> _importFilesIntoFolder(DocumentView folder) async {
+    final picked = await pickImportFiles();
+    if (picked.isEmpty || !mounted) return;
+    await widget.onImportTreeIntoFolder(folder, [
+      for (final f in picked) ArchiveFile(f.name, f.bytes),
+    ]);
+  }
+
+  /// Folder import (recursive) UNDER a folder: the picked folder's name becomes
+  /// a container under [folder]; its contents/subfolders rebuild the page tree.
+  Future<void> _importFolderIntoFolder(DocumentView folder) async {
+    final picked = await pickImportFolder();
+    if (picked.isEmpty || !mounted) return;
+    final entries = <ArchiveFile>[];
+    String? folderName;
+    for (final f in picked) {
+      final parts = f.path.split('/');
+      if (folderName == null && parts.length > 1 && parts.first.isNotEmpty) {
+        folderName = parts.first;
+      }
+      entries.add(
+        ArchiveFile(
+          parts.length > 1 ? parts.sublist(1).join('/') : f.path,
+          f.bytes,
+        ),
+      );
+    }
+    await widget.onImportTreeIntoFolder(
+      folder,
+      entries,
+      sourceName: folderName,
+    );
   }
 
   void _openAiDialog() {

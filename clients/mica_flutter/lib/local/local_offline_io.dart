@@ -495,8 +495,9 @@ class LocalOffline {
   /// engine (`MicaDocument.fromMarkdown`, round-trip-stable with export).
   Future<VaultImportResult> importVaultTree(
     List<({String path, List<int> bytes})> entries,
-    String workspaceId,
-  ) async {
+    String workspaceId, {
+    String? parentViewId,
+  }) async {
     final store = _store;
     if (store == null) {
       return (docs: 0, folders: 0, errors: const ['local store not open']);
@@ -523,7 +524,9 @@ class LocalOffline {
 
     var folders = 0;
     String? ensureFolder(String relDir) {
-      if (relDir.isEmpty) return null;
+      // Top-level nodes hang off the import target (a folder) when given, else
+      // the workspace root — the local mirror of the server's `root_parent`.
+      if (relDir.isEmpty) return parentViewId;
       final existing = folderView[relDir];
       if (existing != null) return existing;
       final slash = relDir.lastIndexOf('/');
