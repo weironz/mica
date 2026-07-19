@@ -1478,6 +1478,10 @@ class RenderDocument extends RenderBox {
       i <= sel.end.node && i < _layouts.length;
       i++
     ) {
+      // Viewport culling — same guard as _paintSelection: a select-all on a
+      // huge doc must not scan/record for thousands of off-screen atomics on
+      // every caret blink (the review caught this twin missing the guard).
+      if (!_nodeVisible(_layouts[i])) continue;
       if (_isAtomicNode(i) && (i != sel.start.node || i != sel.end.node)) {
         _drawAtomicHighlight(canvas, offset, i, border: false);
       }

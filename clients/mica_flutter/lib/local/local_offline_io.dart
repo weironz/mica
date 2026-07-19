@@ -732,12 +732,16 @@ class LocalOffline implements LocalOfflineApi {
   /// main.cpp, which rebuilds this exact path natively. Keep the two in sync.
   bool? get gpuLowPower {
     if (!Platform.isWindows) return null;
-    return File(_gpuFlagPath()).existsSync();
+    final path = _gpuFlagPath();
+    if (path == null) return null; // runner gives up too — hide the switch
+    return File(path).existsSync();
   }
 
   void setGpuLowPower(bool value) {
     if (!Platform.isWindows) return;
-    final flag = File(_gpuFlagPath());
+    final path = _gpuFlagPath();
+    if (path == null) return;
+    final flag = File(path);
     try {
       if (value) {
         flag.parent.createSync(recursive: true);
@@ -754,9 +758,15 @@ class LocalOffline implements LocalOfflineApi {
   /// Beside (not inside) the local store dir: %APPDATA%/mica/gpu_low_power.
   /// Deliberately ignores [_rootOverride] — this is a machine-level launch
   /// flag for the real runner, meaningless under a test root.
-  String _gpuFlagPath() {
+  ///
+  /// null when %APPDATA% is unavailable: the runner skips the flag check in
+  /// that case (main.cpp gives up on len==0), so a CWD fallback here would
+  /// show an "enabled" switch that silently does nothing — the review's
+  /// split-brain finding. No path ⇒ no knob.
+  String? _gpuFlagPath() {
     final appData = Platform.environment['APPDATA'];
-    return '${(appData == null || appData.isEmpty) ? '.' : appData}/mica/gpu_low_power';
+    if (appData == null || appData.isEmpty) return null;
+    return '$appData/mica/gpu_low_power';
   }
 
   String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) {

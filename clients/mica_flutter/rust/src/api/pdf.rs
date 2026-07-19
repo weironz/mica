@@ -99,7 +99,13 @@ mod win {
         let Ok(tid) = tid_rx.recv() else {
             return None; // the thread died before it even reported its id
         };
-        let outcome = res_rx.recv_timeout(EXPORT_DEADLINE).or_else(|_| {
+        let outcome = res_rx.recv_timeout(EXPORT_DEADLINE).or_else(|e| {
+            // Disconnected = the worker DIED (panicked) rather than hung:
+            // nothing to wake — and its thread id may already be recycled to
+            // an unrelated thread, so posting WM_QUIT at it would be wrong.
+            if matches!(e, mpsc::RecvTimeoutError::Disconnected) {
+                return Err(e);
+            }
             unsafe {
                 let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
             }
@@ -116,7 +122,12 @@ mod win {
                     }
                 }
             }
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                eprintln!("[export_pdf] worker thread died (panic?)");
+                let _ = handle.join(); // already dead — reap, don't hang
+                None
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
                 eprintln!(
                     "[export_pdf] timed out after {EXPORT_DEADLINE:?}; \
                      abandoning the WebView2 thread (wedged runtime/GPU)"
