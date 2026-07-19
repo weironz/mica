@@ -1570,6 +1570,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.exportFolderZip(session.accessToken, workspace.id, folder.id);
   }
 
+  /// Export a LOCAL folder's subtree as a ZIP via the shared Rust builder — the
+  /// local mirror of [_exportFolderZip], closing the last local-export gap.
+  Future<Uint8List> _localExportFolderZip(DocumentView folder) async {
+    final wsId = _workspaceIdOfView(folder.id);
+    final bytes = _local.exportFolderZip(wsId, folder.id);
+    if (bytes == null || bytes.isEmpty) {
+      throw ApiException(context.l10n.exportEmptyContent);
+    }
+    return bytes;
+  }
+
   Future<Uint8List> _exportWorkspaceZip(String workspaceId) async {
     final session = _requireSession();
     return _api.exportWorkspaceZip(session.accessToken, workspaceId);
@@ -4094,7 +4105,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           : _createChildFolder,
       // Null in a local workspace: the archive is built server-side, and the
       // menu entry hides itself rather than failing after the click.
-      onExportFolderZip: local ? null : _exportFolderZip,
+      onExportFolderZip: local ? _localExportFolderZip : _exportFolderZip,
       onReorderViews: local ? _localReorderViews : _reorderViews,
       onLoadTrash: local ? _localLoadTrash : _loadTrash,
       onRestoreView: local ? _localRestoreView : _restoreView,

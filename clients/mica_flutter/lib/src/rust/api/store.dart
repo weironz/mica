@@ -62,6 +62,19 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// The persisted device id.
   String deviceId();
 
+  /// Export a folder's subtree (`folder_id = Some`) — or the whole workspace
+  /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
+  /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
+  /// byte-identical to a cloud one and the export→import round-trip holds. The
+  /// store supplies views + document payloads; [`images`] supplies the blob
+  /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
+  /// folder-export gap (was cloud-only).
+  Uint8List exportFolderZip({
+    required String workspaceId,
+    String? folderId,
+    required List<FolderExportImage> images,
+  });
+
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
 
@@ -168,6 +181,34 @@ class DocUpdate {
           runtimeType == other.runtimeType &&
           clock == other.clock &&
           payload == other.payload;
+}
+
+/// One on-device image blob for a folder-tree ZIP export: the referencing
+/// block's `file_id`, its display name, and the bytes Dart read from the local
+/// blob CAS. The store reads views + document payloads itself; only blob bytes
+/// (Dart-managed files) must be handed in.
+class FolderExportImage {
+  final String fileId;
+  final String name;
+  final Uint8List bytes;
+
+  const FolderExportImage({
+    required this.fileId,
+    required this.name,
+    required this.bytes,
+  });
+
+  @override
+  int get hashCode => fileId.hashCode ^ name.hashCode ^ bytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FolderExportImage &&
+          runtimeType == other.runtimeType &&
+          fileId == other.fileId &&
+          name == other.name &&
+          bytes == other.bytes;
 }
 
 /// One entry in a local page's version timeline, mirrored to Dart. `label` is

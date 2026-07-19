@@ -826,8 +826,8 @@ class DocumentListItem extends StatefulWidget {
   final VoidCallback onCreateChild;
   final VoidCallback onCreateChildFolder;
 
-  /// Export this folder's subtree as a ZIP. Null hides the entry — local
-  /// workspaces have no server to build the archive.
+  /// Export this folder's subtree as a ZIP. Works in BOTH worlds now (local
+  /// goes through the shared Rust builder); null only if wiring omits it.
   final VoidCallback? onExportFolder;
 
   /// Import loose files / a picked folder UNDER this folder (md/zip/images →

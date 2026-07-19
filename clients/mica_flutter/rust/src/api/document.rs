@@ -158,9 +158,10 @@ impl MicaDocument {
         mica_markdown::export_html_document(&payload, &title, content_width).unwrap_or_default()
     }
 
-    /// The doc as the engine's snapshot payload — shared by the markdown exports.
+    /// The doc as the engine's snapshot payload — shared by the markdown exports
+    /// and the local folder-tree export (`api::store`).
     /// mica_core::Block and mica_markdown::Block mirror each other field-for-field.
-    fn snapshot(&self) -> mica_markdown::DocumentSnapshotPayload {
+    pub(crate) fn snapshot(&self) -> mica_markdown::DocumentSnapshotPayload {
         let doc = self.inner.lock().unwrap();
         let root_block_id = doc.root_block_id();
         let blocks = doc

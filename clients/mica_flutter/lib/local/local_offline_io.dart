@@ -820,6 +820,58 @@ class LocalOffline {
     return (bytes: zip, name: '$base.zip', mime: 'application/zip');
   }
 
+  /// Export a LOCAL folder's subtree as a Markdown ZIP, through the SAME shared
+  /// Rust builder + ZIP writer the cloud uses (so it's byte-identical and
+  /// round-trips). The store reads views + document payloads itself; here we
+  /// gather the on-device image blob bytes for the subtree's pages and hand
+  /// them in. Returns null if the store isn't open.
+  Uint8List? exportFolderZip(String workspaceId, String folderId) {
+    final store = _store;
+    if (store == null) return null;
+    final views = store
+        .listViews(origin: 'local')
+        .where((v) => v.workspaceId == workspaceId && !v.trashed)
+        .toList();
+    // Document object_ids in the folder's subtree (pre-order walk).
+    final docObjectIds = <String>[];
+    final queue = <String>[folderId];
+    while (queue.isNotEmpty) {
+      final parent = queue.removeLast();
+      for (final v in views.where((v) => v.parentId == parent)) {
+        if (v.objectType == 'document') docObjectIds.add(v.objectId);
+        queue.add(v.id);
+      }
+    }
+    // Gather each referenced image's bytes once (dedup by file_id — the local
+    // CAS is content-addressed, so file_id is the dedup key on the Rust side).
+    final images = <FolderExportImage>[];
+    final seen = <String>{};
+    for (final objId in docObjectIds) {
+      if (_active?.docId == objId) _active!.flush(); // freshest content
+      final doc = store.loadDoc(docId: objId);
+      if (doc == null) continue;
+      final blocks = (jsonDecode(doc.toBlocksJson()) as List)
+          .cast<Map<String, dynamic>>();
+      for (final block in blocks) {
+        if (block['type'] != 'image') continue;
+        final data = block['data'];
+        final fileId = data is Map ? data['file_id'] as String? : null;
+        if (fileId == null || !seen.add(fileId)) continue;
+        final name = data is Map ? data['name'] as String? : null;
+        final bytes = loadBlob(fileId);
+        if (bytes == null) continue;
+        images.add(
+          FolderExportImage(fileId: fileId, name: name ?? 'image', bytes: bytes),
+        );
+      }
+    }
+    return store.exportFolderZip(
+      workspaceId: workspaceId,
+      folderId: folderId,
+      images: images,
+    );
+  }
+
   /// Render a self-contained HTML document to a real PDF (vector, selectable
   /// text, embedded CJK) via the OS-preinstalled WebView2 runtime's headless
   /// print-to-PDF. This isn't page/store specific — it's the one platform-glue

@@ -103,6 +103,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DocUpdate dco_decode_doc_update(dynamic raw);
 
   @protected
+  FolderExportImage dco_decode_folder_export_image(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
@@ -110,6 +113,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<DocUpdate> dco_decode_list_doc_update(dynamic raw);
+
+  @protected
+  List<FolderExportImage> dco_decode_list_folder_export_image(dynamic raw);
 
   @protected
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
@@ -274,6 +280,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DocUpdate sse_decode_doc_update(SseDeserializer deserializer);
 
   @protected
+  FolderExportImage sse_decode_folder_export_image(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
@@ -281,6 +292,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<DocUpdate> sse_decode_list_doc_update(SseDeserializer deserializer);
+
+  @protected
+  List<FolderExportImage> sse_decode_list_folder_export_image(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
@@ -479,6 +495,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_doc_update(DocUpdate self, SseSerializer serializer);
 
   @protected
+  void sse_encode_folder_export_image(
+    FolderExportImage self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
@@ -487,6 +509,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_doc_update(
     List<DocUpdate> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_folder_export_image(
+    List<FolderExportImage> self,
     SseSerializer serializer,
   );
 

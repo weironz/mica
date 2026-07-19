@@ -80,6 +80,16 @@ pub struct LocalView {
     pub object_type: String,
 }
 
+/// One on-device image blob for a folder-tree ZIP export: the referencing
+/// block's `file_id`, its display name, and the bytes Dart read from the local
+/// blob CAS. The store reads views + document payloads itself; only blob bytes
+/// (Dart-managed files) must be handed in.
+pub struct FolderExportImage {
+    pub file_id: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
 impl From<CoreView> for LocalView {
     fn from(v: CoreView) -> Self {
         LocalView {
@@ -353,6 +363,66 @@ impl MicaStore {
         Some(MicaDocument {
             inner: Mutex::new(loaded),
         })
+    }
+
+    /// Export a folder's subtree (`folder_id = Some`) — or the whole workspace
+    /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
+    /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
+    /// byte-identical to a cloud one and the export→import round-trip holds. The
+    /// store supplies views + document payloads; [`images`] supplies the blob
+    /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
+    /// folder-export gap (was cloud-only).
+    #[frb(sync)]
+    pub fn export_folder_zip(
+        &self,
+        workspace_id: String,
+        folder_id: Option<String>,
+        images: Vec<FolderExportImage>,
+    ) -> Vec<u8> {
+        let views = self.list_views("local".to_string());
+        let nodes: Vec<mica_interchange::TreeNode> = views
+            .iter()
+            .filter(|v| v.workspace_id == workspace_id && !v.trashed)
+            .map(|v| mica_interchange::TreeNode {
+                id: v.id.clone(),
+                parent_id: v.parent_id.clone(),
+                position: v.position.clone(),
+                name: v.name.clone(),
+                object_type: v.object_type.clone(),
+                object_id: v.object_id.clone(),
+            })
+            .collect();
+        let mut payloads = std::collections::HashMap::new();
+        for v in &views {
+            if v.workspace_id != workspace_id || v.trashed || v.object_type != "document" {
+                continue;
+            }
+            if let Some(doc) = self.load_doc(v.object_id.clone()) {
+                payloads.insert(v.object_id.clone(), doc.snapshot());
+            }
+        }
+        let images_map: std::collections::HashMap<String, mica_interchange::ImageAsset> = images
+            .into_iter()
+            .map(|i| {
+                (
+                    i.file_id.clone(),
+                    mica_interchange::ImageAsset {
+                        name: i.name,
+                        bytes: i.bytes,
+                        // Local CAS is content-addressed by file_id, so it IS the
+                        // dedup key (same file_id ⇒ same blob).
+                        dedup_key: i.file_id,
+                    },
+                )
+            })
+            .collect();
+        let entries = mica_interchange::build_markdown_tree_zip(
+            &nodes,
+            folder_id.as_deref(),
+            &payloads,
+            &images_map,
+        );
+        mica_interchange::build_zip(&entries)
     }
 
     // ── base + append-log + sync cursor (P2 local-first) ─────────────────────
