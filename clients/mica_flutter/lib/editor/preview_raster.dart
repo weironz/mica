@@ -67,6 +67,61 @@ class RasterPreviewPipeline {
   /// the source string, which naturally retries.
   final Map<String, Set<String>> _failed = {};
 
+  /// Insertion-order cap per previewer. Without it, every distinct source
+  /// string ever previewed kept its full-res texture for the life of the
+  /// editor State — sources edited away included (freeze-audit CONFIRMED
+  /// leak). Evicted images are disposed POST-frame, never mid-frame:
+  /// `request()` runs during layout, and the current frame's paint must not
+  /// draw a disposed image — dropping the map entry keeps it out of the NEXT
+  /// paint, the deferred dispose keeps the current rasterizer safe.
+  static const int _maxPerPreviewer = 48;
+  final List<ui.Image> _evictedPendingDispose = [];
+
+  void _capAfterInsert(String id) {
+    final map = imagesOf(id);
+    while (map.length > _maxPerPreviewer) {
+      final oldest = map.keys.first;
+      final img = map.remove(oldest);
+      _baselines[id]?.remove(oldest);
+      if (img != null) _evictedPendingDispose.add(img);
+    }
+    // The negative cache holds only strings, but a broken block being typed
+    // in mints one per keystroke — trim it too.
+    final failed = _failed[id];
+    while (failed != null && failed.length > 256) {
+      failed.remove(failed.first);
+    }
+    if (_evictedPendingDispose.isNotEmpty) {
+      final batch = List<ui.Image>.of(_evictedPendingDispose);
+      _evictedPendingDispose.clear();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final img in batch) {
+          img.dispose();
+        }
+      });
+    }
+  }
+
+  /// Dispose every cached preview texture. The owning editor State disposed
+  /// its own image cache but never this pipeline — preview textures were
+  /// reclaimed only by GC finalizers, non-deterministically (freeze audit).
+  /// Same timing contract as the editor's `_imageCache` disposal: called from
+  /// `State.dispose`, after the last frame that painted them.
+  void dispose() {
+    for (final map in _cache.values) {
+      for (final img in map.values) {
+        img.dispose();
+      }
+    }
+    _cache.clear();
+    _baselines.clear();
+    _pending.clear();
+    _keys.clear();
+    _tries.clear();
+    _failed.clear();
+    _evictedPendingDispose.clear();
+  }
+
   RasterPreviewer? _byId(String id) =>
       previewers.where((p) => p.id == id).firstOrNull;
 
@@ -104,6 +159,7 @@ class RasterPreviewPipeline {
           } else {
             (_failed[id] ??= {}).add(source);
           }
+          _capAfterInsert(id);
         });
       });
       return;
@@ -184,6 +240,7 @@ class RasterPreviewPipeline {
           _keys[p.id]?.remove(s);
           _tries[p.id]?.remove(s);
         }
+        _capAfterInsert(p.id);
       }
       if (pending.isNotEmpty) left = true;
     }

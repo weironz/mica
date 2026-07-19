@@ -77,9 +77,16 @@ Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
       // page doesn't allocate an absurd canvas.
       final natW = (img.naturalWidth == 0 ? 600 : img.naturalWidth).toDouble();
       final natH = (img.naturalHeight == 0 ? 400 : img.naturalHeight).toDouble();
-      final scale = ((targetWidth * 2) / natW).clamp(0.5, 8.0);
-      final w = (natW * scale).round();
-      final h = (natH * scale).round();
+      // Clamp ABSOLUTE output dimensions, not just the scale — height was
+      // unbounded and the 0.5 scale floor forced w >= natW/2, so a tall/wide
+      // diagram could allocate a giant canvas/texture (same fix as the
+      // desktop stub; see mermaid_preview_stub.dart for the full story).
+      const maxDim = 4096.0;
+      var scale = ((targetWidth * 2) / natW).clamp(0.05, 8.0);
+      if (natW * scale > maxDim) scale = maxDim / natW;
+      if (natH * scale > maxDim) scale = maxDim / natH;
+      final w = (natW * scale).round().clamp(1, 4096);
+      final h = (natH * scale).round().clamp(1, 4096);
       final canvas = html.CanvasElement(width: w, height: h);
       canvas.context2D.drawImageScaled(img, 0, 0, w, h);
       final png = await canvas.toBlob('image/png');

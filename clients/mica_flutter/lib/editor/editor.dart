@@ -801,6 +801,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       img.dispose();
     }
     _imageCache.clear();
+    // The preview pipeline's textures were the one cache NOT disposed here —
+    // every math/mermaid raster (old edited-away sources included) lingered
+    // until GC finalizers got around to it (freeze-audit CONFIRMED leak).
+    _previews.dispose();
     _imageFrameTick.dispose();
     setRichPasteHandler(null);
     setRichImagePasteHandler(null);

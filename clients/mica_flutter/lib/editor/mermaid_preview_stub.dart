@@ -42,11 +42,21 @@ Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
       // is trustworthy; fall back to a sane box if a renderer ever omits it.
       final natW = info.size.width <= 0 ? 600.0 : info.size.width;
       final natH = info.size.height <= 0 ? 400.0 : info.size.height;
-      // Scale to fill the display width at 2x; cap so a tiny diagram on a huge
-      // page doesn't allocate an absurd canvas (same clamp as the web path).
-      final scale = ((targetWidth * 2) / natW).clamp(0.5, 8.0);
-      final w = (natW * scale).round();
-      final h = (natH * scale).round();
+      // Scale to fill the display width at 2x — then clamp the ABSOLUTE
+      // output dimensions. The old clamp bounded only the SCALE (0.5–8.0):
+      // height was unbounded outright, and the 0.5 floor forced w >= natW/2,
+      // so a tall/wide diagram (sequence charts easily reach natural heights
+      // in the tens of thousands) allocated a hundreds-of-MB texture — or
+      // exceeded the GPU max texture size (~16384) — in one Picture.toImage.
+      // That was the single largest GPU allocation in the app (freeze-audit
+      // CONFIRMED, double-verified). 4096px covers any real screen at 2x;
+      // paint only stretches beyond it.
+      const maxDim = 4096.0;
+      var scale = ((targetWidth * 2) / natW).clamp(0.05, 8.0);
+      if (natW * scale > maxDim) scale = maxDim / natW;
+      if (natH * scale > maxDim) scale = maxDim / natH;
+      final w = (natW * scale).round().clamp(1, 4096);
+      final h = (natH * scale).round().clamp(1, 4096);
 
       final recorder = ui.PictureRecorder();
       ui.Canvas(recorder)
