@@ -226,6 +226,12 @@ struct CreateDocArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateWorkspaceArgs {
+  /// The new workspace's name.
+  name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct UpdateDocArgs {
   workspace_id: String,
   /// The document's object id (a page's `object_id` from mica_list_pages) —
@@ -648,6 +654,24 @@ impl MicaMcp {
         Ok(value) => write_ack(value),
         Err(error) => Ok(tool_error(error)),
       }
+    }
+  }
+
+  #[tool(
+    description = "Create a new Mica workspace. Returns the new workspace (id, name, role); \
+                       use the id with the page tools.",
+    annotations(read_only_hint = false)
+  )]
+  async fn mica_create_workspace(
+    &self,
+    Parameters(CreateWorkspaceArgs { name }): Parameters<CreateWorkspaceArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    match self.post("/api/workspaces", json!({ "name": name })).await {
+      Ok(value) => write_ack(value),
+      Err(error) => Ok(tool_error(error)),
     }
   }
 
