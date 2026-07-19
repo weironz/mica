@@ -108,6 +108,13 @@ abstract interface class LocalOfflineApi {
   );
   bool restoreDocVersion(String docId, String versionId);
 
+  /// Whether the desktop app renders on the LOW-POWER (integrated) GPU instead
+  /// of the discrete one — the graceful-degrade knob for machines whose dGPU
+  /// link is flaky (the WATCHDOG-freeze investigation). null = unsupported
+  /// here (web / non-Windows); takes effect on next launch.
+  bool? get gpuLowPower;
+  void setGpuLowPower(bool value);
+
   String? exportDocHtml(String docId, String title, {int contentWidth});
   ({Uint8List bytes, String name, String mime})? exportDocMarkdown(
     String docId,

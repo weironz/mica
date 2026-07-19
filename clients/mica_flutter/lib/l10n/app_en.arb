@@ -217,6 +217,8 @@
   "dataImportDescription": "Import a workspace from a ZIP — a Mica export or a Notion \"Markdown & CSV\" export. The page tree, ordering and images are rebuilt.",
   "dataImportButton": "Import workspace (ZIP)",
   "dataExportAllButton": "Export all workspaces (ZIP)",
+  "settingsGpuLowPower": "Render on the power-saving GPU",
+  "settingsGpuLowPowerSub": "Use the integrated GPU instead of the discrete one (takes effect after restart) — for machines with an unstable discrete GPU.",
   "dataExportTip": "Tip: export a single page or a whole workspace from the page menu (▾) or a workspace's ⋯ menu.",
   "shortcutsGroupApp": "App",
   "shortcutsNewPage": "New page",

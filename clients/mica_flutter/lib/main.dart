@@ -4202,6 +4202,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? (_) async => Uint8List(0)
           : _exportWorkspaceZip,
       onExportAllWorkspaces: local ? null : _exportAllWorkspaces,
+      // 核显渲染 launch flag — machine-level, not per-world: pass in BOTH
+      // worlds (null on web/non-Windows hides the switch).
+      gpuLowPower: _local.gpuLowPower,
+      onGpuLowPowerChanged: _local.setGpuLowPower,
       onImportWorkspaceZip: local
           ? (_, _, {bool notion = false}) async {}
           : _importWorkspaceZip,
@@ -4528,6 +4532,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onImportTreeIntoEntry,
     required this.onImportTreeIntoFolder,
     required this.onReorderWorkspaces,
+    this.gpuLowPower,
+    this.onGpuLowPowerChanged,
     required this.cloudOriginLabel,
     required this.onSignIn,
     required this.localAvailable,
@@ -4811,6 +4817,11 @@ class WorkspaceView extends StatefulWidget {
   /// Null in 本地模式 — cloud-only "export every workspace this account owns"
   /// (`GET /api/workspaces/export.zip`). Null hides the Settings button.
   final Future<void> Function()? onExportAllWorkspaces;
+
+  /// 核显渲染 (low-power GPU) launch flag — Windows desktop only; null hides
+  /// the settings switch (web / non-Windows).
+  final bool? gpuLowPower;
+  final void Function(bool value)? onGpuLowPowerChanged;
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
@@ -7469,6 +7480,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
+        gpuLowPower: widget.gpuLowPower,
+        onGpuLowPowerChanged: widget.onGpuLowPowerChanged,
         onExportAllWorkspaces: widget.onExportAllWorkspaces == null
             ? null
             : () async {

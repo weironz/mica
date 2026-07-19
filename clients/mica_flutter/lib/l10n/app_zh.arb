@@ -146,6 +146,8 @@
   "dataImportDescription": "从 ZIP 导入工作区 —— Mica 导出或 Notion「Markdown & CSV」导出。页面树、排序和图片都会被重建。",
   "dataImportButton": "导入工作区(ZIP)",
   "dataExportAllButton": "导出全部工作区(ZIP)",
+  "settingsGpuLowPower": "核显渲染(低功耗 GPU)",
+  "settingsGpuLowPowerSub": "改用集成显卡渲染,绕开独立显卡(重启后生效)——适合独显不稳定的机器。",
   "dataExportTip": "提示:可从页面菜单(▾)导出单个页面,或从工作区的 ⋯ 菜单导出整个工作区。",
   "shortcutsGroupApp": "应用",
   "shortcutsNewPage": "新建页面",

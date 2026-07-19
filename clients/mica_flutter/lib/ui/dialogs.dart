@@ -214,6 +214,8 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
     this.onExportAllWorkspaces,
+    this.gpuLowPower,
+    this.onGpuLowPowerChanged,
   });
 
   final String userName;
@@ -266,6 +268,12 @@ class _SettingsDialog extends StatefulWidget {
   /// (`GET /api/workspaces/export.zip`, every workspace this account belongs
   /// to). Null hides the button rather than offering a dead control.
   final Future<void> Function()? onExportAllWorkspaces;
+
+  /// 核显渲染 (low-power GPU) launch flag — Windows desktop only; null hides
+  /// the switch. Current value read at dialog open; toggling writes the flag
+  /// file the runner checks on next launch.
+  final bool? gpuLowPower;
+  final void Function(bool value)? onGpuLowPowerChanged;
 
 
   @override
@@ -323,6 +331,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late String? _fontFamily = widget.appearance.fontFamily;
   late double _pageWidth = widget.pageWidth;
   late bool _reHostImages = widget.reHostImages;
+  late bool _gpuLowPower = widget.gpuLowPower ?? false;
   late bool _showFormatBar = widget.showFormatBar;
   // Read straight from prefs rather than threaded through widget params: the
   // window layer owns this one, and Settings is its only editor.
@@ -952,6 +961,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // Desktop only — a browser tab's close button belongs to the browser, and
     // no app code can intercept it.
     if (!kIsWeb) ...[
+      // 核显渲染: Windows-only (null elsewhere hides the row). A launch flag the
+      // runner reads before the engine starts, hence "takes effect on restart".
+      if (widget.gpuLowPower != null)
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: _gpuLowPower,
+          title: Text(context.l10n.settingsGpuLowPower),
+          subtitle: Text(context.l10n.settingsGpuLowPowerSub),
+          onChanged: (value) {
+            setState(() => _gpuLowPower = value);
+            widget.onGpuLowPowerChanged?.call(value);
+          },
+        ),
       const SizedBox(height: 8),
       Text(
         context.l10n.closeWindowHeader,

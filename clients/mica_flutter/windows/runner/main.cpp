@@ -2,6 +2,8 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <string>
+
 #include "flutter_window.h"
 #include "utils.h"
 
@@ -18,6 +20,26 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   flutter::DartProject project(L"data");
+
+  // Low-power GPU mode (Settings -> Appearance): when the flag file exists,
+  // ask the engine to pick the low-power (integrated) GPU adapter -- plumbed
+  // to DXGI EnumAdapterByGpuPreference, falling back to the discrete GPU when
+  // no iGPU exists, so the flag is always safe to set. A FILE (not a Dart
+  // pref) because this runs BEFORE the engine starts, long before any Dart
+  // code. Written by LocalOffline.setGpuLowPower -- keep the path in sync
+  // with its _gpuFlagPath (%APPDATA%\mica\gpu_low_power). ASCII-only here:
+  // the runner compiles with warnings-as-errors and C4819 fires on non-ASCII
+  // under a CJK system code page.
+  {
+    wchar_t appdata[MAX_PATH];
+    DWORD len = ::GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+      std::wstring flag = std::wstring(appdata) + L"\\mica\\gpu_low_power";
+      if (::GetFileAttributesW(flag.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        project.set_gpu_preference(flutter::GpuPreference::LowPowerPreference);
+      }
+    }
+  }
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
