@@ -334,7 +334,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   TextEditingValue _lastSentIme = TextEditingValue.empty;
 
   Timer? _blink;
-  bool _caretOn = true;
+  /// Caret blink phase, ridden STRAIGHT into the render object (see
+  /// RenderDocument.caretBlink) — a blink used to setState-rebuild the whole
+  /// editor, and updateRenderObject's unconditional `nodes=` then relayouted
+  /// the entire document twice a second while idle-focused.
+  final ValueNotifier<bool> _caretBlink = ValueNotifier(true);
   DocPosition? _dragAnchor;
   int? _scrollbarDrag; // code-block index whose scrollbar is being dragged
   int? _blockDrag; // block index being moved via its gutter drag handle
@@ -810,6 +814,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     setRichImagePasteHandler(null);
     _stopAutoScroll();
     _blink?.cancel();
+    // After the render object detached (it removes its listener there).
+    _caretBlink.dispose();
     _conn?.close();
     _focus.removeListener(_onFocusChange);
     // Only dispose a focus node we created; an external one is owned by the host.
@@ -1329,11 +1335,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _restartBlink() {
     _blink?.cancel();
-    _caretOn = true;
+    _caretBlink.value = true;
     if (_focus.hasFocus && widget.canEdit) {
       _blink = Timer.periodic(const Duration(milliseconds: 530), (_) {
         if (!mounted) return;
-        setState(() => _caretOn = !_caretOn);
+        // Paint-only: the render object listens; no setState, no rebuild,
+        // no relayout (the old form's hidden cost — see _caretBlink).
+        _caretBlink.value = !_caretBlink.value;
       });
     }
   }
@@ -2611,7 +2619,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // yet, would ask the host to FETCH the very image we just uploaded. That
     // second decode then overwrote this one's ui.Image without disposing it.
     _imageLoading.add(key);
-    final codec = await ui.instantiateImageCodec(bytes);
+    // Decode capped at what THIS machine can ever display (audit: a 4K
+    // screenshot became a ~33MB full-res texture drawn ~800px wide, and every
+    // image in an open doc stays resident). Cap = the screen's physical width
+    // (fullscreen viewer included, nothing visibly degrades), floored at 2048
+    // so multi-monitor moves to a sharper screen stay decent, ceilinged at
+    // 4096. targetWidth is only passed when the native width EXCEEDS the cap
+    // — never upscale. Codec-level, so animated GIF/WebP frames decode at the
+    // capped size too. Export/copy paths use the original bytes, not this
+    // texture.
+    final capPx = mounted
+        ? View.of(context).physicalSize.width.round().clamp(2048, 4096)
+        : 2048;
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    final codec = await descriptor.instantiateCodec(
+      targetWidth: descriptor.width > capPx ? capPx : null,
+    );
+    descriptor.dispose();
+    buffer.dispose();
     if (!mounted) {
       codec.dispose();
       return;
@@ -5227,7 +5253,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   nodes: _controller.nodes,
                   selection: _controller.selection,
                   showCaret: _focus.hasFocus && widget.canEdit,
-                  caretOn: _caretOn,
+                  caretBlink: _caretBlink,
                   appearance: widget.appearance,
                   images: _imageCache,
                   imageErrors: _imageErrors,

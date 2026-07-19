@@ -22,7 +22,7 @@ void main() {
             ],
             selection: null,
             showCaret: false,
-            caretOn: false,
+            caretBlink: ValueNotifier(false),
             appearance: const EditorAppearance(),
           ),
         ),

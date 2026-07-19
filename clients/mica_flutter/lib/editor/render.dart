@@ -384,12 +384,13 @@ class RenderDocument extends RenderBox {
     required List<EditorNode> nodes,
     required DocSelection? selection,
     required bool showCaret,
-    required bool caretOn,
+    required ValueNotifier<bool> caretBlink,
     required EditorAppearance appearance,
   }) : _nodes = nodes,
        _selection = selection,
        _showCaret = showCaret,
-       _caretOn = caretOn,
+       _caretBlink = caretBlink,
+       _caretOn = caretBlink.value,
        _appearance = appearance;
 
   List<EditorNode> _nodes;
@@ -428,12 +429,30 @@ class RenderDocument extends RenderBox {
     markNeedsPaint();
   }
 
-  bool _caretOn;
-  set caretOn(bool value) {
-    if (_caretOn == value) return;
-    _caretOn = value;
+  /// Caret blink rides a notifier STRAIGHT into this render object — same
+  /// idiom as [replaceImage] — so a blink never rebuilds the editor widget.
+  /// It used to be a `setState` bool: every 530ms tick rebuilt the surface,
+  /// and `updateRenderObject`'s unconditional `nodes=` then relayouted the
+  /// WHOLE document — a focused, idle editor burned a full relayout+repaint
+  /// at ~2Hz (freeze-audit CONFIRMED). Now a blink is a paint-only tick, and
+  /// with viewport culling that repaint records just the exposed band.
+  ValueNotifier<bool> _caretBlink;
+  set caretBlink(ValueNotifier<bool> value) {
+    if (identical(_caretBlink, value)) return;
+    if (attached) _caretBlink.removeListener(_onCaretBlink);
+    _caretBlink = value;
+    if (attached) value.addListener(_onCaretBlink);
+    _onCaretBlink();
+  }
+
+  void _onCaretBlink() {
+    final v = _caretBlink.value;
+    if (_caretOn == v) return;
+    _caretOn = v;
     markNeedsPaint();
   }
+
+  bool _caretOn;
 
   EditorAppearance _appearance;
   set appearance(EditorAppearance value) {
@@ -816,11 +835,14 @@ class RenderDocument extends RenderBox {
     // Re-layout when web fonts finish loading; otherwise glyphs that weren't
     // ready at first paint stay as ".notdef" boxes until an interaction.
     PaintingBinding.instance.systemFonts.addListener(_onSystemFontsChanged);
+    _caretBlink.addListener(_onCaretBlink);
+    _onCaretBlink(); // resync a blink that fired while detached
   }
 
   @override
   void detach() {
     PaintingBinding.instance.systemFonts.removeListener(_onSystemFontsChanged);
+    _caretBlink.removeListener(_onCaretBlink);
     super.detach();
   }
 
@@ -2787,7 +2809,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     required this.nodes,
     required this.selection,
     required this.showCaret,
-    required this.caretOn,
+    required this.caretBlink,
     required this.appearance,
     this.images = const {},
     this.imageErrors = const {},
@@ -2803,7 +2825,10 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final List<EditorNode> nodes;
   final DocSelection? selection;
   final bool showCaret;
-  final bool caretOn;
+
+  /// Blink phase, listened to by the render object directly (paint-only) —
+  /// see RenderDocument.caretBlink for why this is not a rebuild-carried bool.
+  final ValueNotifier<bool> caretBlink;
   final EditorAppearance appearance;
   final Map<String, ui.Image> images;
   final Set<String> imageErrors;
@@ -2828,7 +2853,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
           nodes: nodes,
           selection: selection,
           showCaret: showCaret,
-          caretOn: caretOn,
+          caretBlink: caretBlink,
           appearance: appearance,
         )
         ..onRequestImage = onRequestImage
@@ -2846,7 +2871,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..nodes = nodes
       ..selection = selection
       ..showCaret = showCaret
-      ..caretOn = caretOn
+      ..caretBlink = caretBlink
       ..appearance = appearance
       ..onRequestImage = onRequestImage
       ..onImagePainted = onImagePainted
