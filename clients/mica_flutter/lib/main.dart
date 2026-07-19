@@ -3968,19 +3968,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           sourceName: sourceName,
         );
 
-  /// Create a workspace of the chosen kind (P3c unified create dialog), then
-  /// make its world active — each impl already selects the new workspace inside
-  /// its own world, so without the flip a user creating into the OTHER world
-  /// would see nothing happen.
-  Future<void> _createWorkspaceTyped(String name, {required bool local}) async {
-    await (local ? _localCreateWorkspace(name) : _createWorkspace(name));
-    final origin = local ? 'local' : _api.baseUri.toString();
-    if (_activeOrigin != origin && mounted) {
-      setState(() => _activeOrigin = origin);
-      savePref('activeOrigin', origin);
-    }
-  }
-
   /// Sign in to the configured cloud server from the switcher / account UI
   /// (desktop: the login gate is gone — auth is a dialog, P3c §1.3).
   Future<void> _promptSignIn() async {
@@ -4053,7 +4040,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onImportTreeIntoEntry: _importTreeIntoEntry,
       onImportTreeIntoFolder: _importIntoFolder,
       onReorderWorkspaces: _reorderWorkspaceEntries,
-      onCreateWorkspaceTyped: _createWorkspaceTyped,
       cloudOriginLabel: _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
           ? 'Mica Cloud'
           : _api.baseUri.host,
@@ -4542,7 +4528,6 @@ class WorkspaceView extends StatefulWidget {
     required this.onImportTreeIntoEntry,
     required this.onImportTreeIntoFolder,
     required this.onReorderWorkspaces,
-    required this.onCreateWorkspaceTyped,
     required this.cloudOriginLabel,
     required this.onSignIn,
     required this.localAvailable,
@@ -4680,10 +4665,6 @@ class WorkspaceView extends StatefulWidget {
   /// the intended order) — see the switcher's move up/down.
   final Future<void> Function(List<WorkspaceEntry> ordered)
   onReorderWorkspaces;
-
-  /// Create a workspace of the chosen kind (`local: true` = on-device).
-  final Future<void> Function(String name, {required bool local})
-  onCreateWorkspaceTyped;
 
   /// Display label for the cloud section header ("Mica Cloud" or the host).
   final String cloudOriginLabel;
@@ -7061,86 +7042,40 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   Future<void> _promptCreateWorkspace() async {
     final controller = TextEditingController();
-    // P3c unified create: pick the kind here. Signed-in defaults to cloud
-    // (signing in expresses the collaboration intent); otherwise local. Web
-    // has no local world, so the choice collapses to cloud.
-    final canCloud = widget.session != null;
-    final canLocal = widget.localAvailable;
-    var makeLocal = canLocal && !canCloud;
-    if (!canLocal) makeLocal = false;
+    // Create in the CURRENT world — no local/cloud picker. `onCreateWorkspace`
+    // is already routed to the active origin by the host, so a workspace made
+    // while you're in local mode is local, and cloud while you're in cloud.
     final l10n = context.l10n;
-    final result = await showDialog<({String name, bool local})>(
+    final name = await showDialog<String>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(l10n.workspaceRowNewWorkspace),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    labelText: l10n.workspaceNameLabel,
-                    border: const OutlineInputBorder(),
-                  ),
-                  onSubmitted: (value) => Navigator.of(
-                    context,
-                  ).pop((name: value, local: makeLocal)),
-                ),
-                if (canLocal) ...[
-                  const SizedBox(height: 14),
-                  SegmentedButton<bool>(
-                    segments: [
-                      ButtonSegment(
-                        value: true,
-                        icon: const Icon(Icons.computer_outlined),
-                        label: Text(l10n.workspaceKindLocal),
-                      ),
-                      ButtonSegment(
-                        value: false,
-                        icon: const Icon(Icons.cloud_outlined),
-                        label: Text(l10n.workspaceKindCloud),
-                        enabled: canCloud,
-                      ),
-                    ],
-                    selected: {makeLocal},
-                    onSelectionChanged: (sel) =>
-                        setDialogState(() => makeLocal = sel.first),
-                  ),
-                  if (!canCloud) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      l10n.workspaceCloudNeedsSignIn,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
-                    ),
-                  ],
-                ],
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text(l10n.commonCancel),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(
-                  context,
-                ).pop((name: controller.text, local: makeLocal)),
-                child: Text(l10n.workspaceCreate),
-              ),
-            ],
+      builder: (context) => AlertDialog(
+        title: Text(l10n.workspaceRowNewWorkspace),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: l10n.workspaceNameLabel,
+            border: const OutlineInputBorder(),
           ),
-        );
-      },
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: Text(l10n.workspaceCreate),
+          ),
+        ],
+      ),
     );
     controller.dispose();
 
-    final trimmed = result?.name.trim() ?? '';
-    if (trimmed.isNotEmpty && result != null) {
-      await widget.onCreateWorkspaceTyped(trimmed, local: result.local);
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      await widget.onCreateWorkspace(trimmed);
     }
   }
 
