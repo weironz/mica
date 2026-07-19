@@ -763,6 +763,47 @@ class LocalOffline {
     );
   }
 
+  /// Export a LOCAL page as Markdown, choosing the shape by content (matches the
+  /// cloud `_exportPage`): no bundled images → a clean `.md`; any local image →
+  /// a `.zip` (`<base>.md` + `assets/`), built by the SAME Rust engine + ZIP
+  /// writer the cloud uses, so the two are byte-compatible. Returns null if the
+  /// doc isn't in the store. [base] names the `.md`/`.zip` (the page title).
+  ({Uint8List bytes, String name, String mime})? exportDocMarkdown(
+    String docId,
+    String base,
+  ) {
+    final store = _store;
+    if (store == null) return null;
+    if (_active?.docId == docId) _active!.flush(); // flush pending edits first
+    final doc = store.loadDoc(docId: docId);
+    if (doc == null) return null;
+    final blocks = (jsonDecode(doc.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
+    // Gather on-device image bytes per file_id (first occurrence wins); the FFI
+    // names/dedups them under assets/ exactly as the server does.
+    final assets = <ZipAsset>[];
+    final seen = <String>{};
+    for (final block in blocks) {
+      if (block['type'] != 'image') continue;
+      final data = block['data'];
+      final fileId = data is Map ? data['file_id'] as String? : null;
+      if (fileId == null || !seen.add(fileId)) continue;
+      final bytes = loadBlob(fileId);
+      if (bytes == null) continue;
+      assets.add(ZipAsset(fileId: fileId, bytes: bytes));
+    }
+    if (assets.isEmpty) {
+      final md = doc.exportMarkdown();
+      return (
+        bytes: Uint8List.fromList(utf8.encode(md)),
+        name: '$base.md',
+        mime: 'text/markdown',
+      );
+    }
+    final zip = doc.exportMarkdownZip(base: base, assets: assets);
+    return (bytes: zip, name: '$base.zip', mime: 'application/zip');
+  }
+
   /// Render a self-contained HTML document to a real PDF (vector, selectable
   /// text, embedded CJK) via the OS-preinstalled WebView2 runtime's headless
   /// print-to-PDF. This isn't page/store specific — it's the one platform-glue

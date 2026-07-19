@@ -1545,6 +1545,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return html;
   }
 
+  /// Export the open LOCAL page, choosing `.md` (no assets) vs `.zip` (bundled
+  /// images) by content — the local mirror of [_exportPage], via the FFI engine
+  /// + the same ZIP writer the cloud uses (byte-compatible). Closes the last
+  /// local page-export gap (md/zip were server-only, HTML/PDF already worked).
+  Future<({Uint8List bytes, String name, String mime})> _localExportPage(
+    String title,
+  ) async {
+    final bootstrap = _localBootstrap;
+    if (bootstrap == null) {
+      throw ApiException(context.l10n.pageOpenFirst);
+    }
+    final base = title.trim().isEmpty ? kUntitledPage : title.trim();
+    final result = _local.exportDocMarkdown(bootstrap.document.id, base);
+    if (result == null) {
+      throw ApiException(context.l10n.exportEmptyContent);
+    }
+    return result;
+  }
+
   Future<Uint8List> _exportFolderZip(DocumentView folder) async {
     final session = _requireSession();
     final workspace = _requireWorkspace();
@@ -4128,10 +4147,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? () async => throw ApiException(context.l10n.exportLocalUnsupported)
           : _exportPageZip,
       // Page export chooses `.md` (no assets) vs `.zip` (bundled images) by
-      // content. Local pages have no server to bundle a zip yet — unsupported.
-      onExportPage: local
-          ? (_) async => throw ApiException(context.l10n.exportLocalUnsupported)
-          : _exportPage,
+      // content — now in BOTH worlds: local goes through the FFI engine +
+      // in-house ZIP writer (see _localExportPage), matching the cloud output.
+      onExportPage: local ? _localExportPage : _exportPage,
       // HTML export works in BOTH worlds — local goes through the FFI engine
       // (see _localExportPageHtml), so unlike the ZIP it isn't gated off local.
       onExportPageHtml: local ? _localExportPageHtml : _exportPageHtml,
