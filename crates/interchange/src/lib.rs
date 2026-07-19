@@ -3,12 +3,14 @@
 //! plans and archive entries out; the api-server executes the side effects
 //! (database writes, object storage). See docs/export-import.md.
 
+pub mod export_tree;
 pub mod import;
 pub mod normalize;
 pub mod notion;
 pub mod order;
 pub mod zip;
 
+pub use export_tree::{ImageAsset, TreeNode, build_markdown_tree_zip};
 pub use import::{ImportMode, ImportPlan, PagePlan, plan_import, resolve_ref};
 pub use normalize::{expand_nested_zips, normalize_entries};
 pub use zip::{ZipEntry, ZipFileEntry, build_zip, read_zip};

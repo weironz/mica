@@ -7,3 +7,10 @@ rust-version.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+# The authoritative Markdown engine — the export tree-zip builder emits each
+# page via `export_markdown_with_assets`. interchange already owns the IMPORT
+# side (plan_import) + the ZIP writer; the export tree-walk is its counterpart,
+# so both worlds (cloud Postgres / local SQLite) produce byte-identical archives
+# by sharing this one pure builder. markdown does NOT depend on interchange, so
+# no cycle. Default features (no render) keep it lean.
+mica-markdown = { path = "../markdown" }

@@ -2171,6 +2171,7 @@ dependencies = [
 name = "mica-interchange"
 version = "0.1.0"
 dependencies = [
+ "mica-markdown",
  "serde_json",
 ]
 
