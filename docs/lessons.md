@@ -201,3 +201,64 @@ CI 加 `flutter build web --release` 关卡。
 一个反复被忘记的事实:**服务端改动随 api 部署即生效;但 MCP 代理层的改动在
 `mica-cli` 二进制里**——用户不把 MCP 指向新版 mica-cli 并重连,就还是旧行为。
 排查"我明明改了怎么没生效"时先分清这一层。
+
+---
+
+## 10. 工具链与依赖的坑(重新发现要花几小时那种)
+
+这些不涉及架构,纯粹是踩过一次就该记下来的。
+
+### yrs
+
+- **事务不可重入。** 持有 `transact()` 读事务时再调 `get_or_insert_map`,
+  或者再开第二个 `transact()`,会**死锁**(不是报错,是卡住)。
+  root 类型的句柄必须在事务**之前**取好;root id 在同一事务内内联读,
+  别去调一个自己会另开事务的 helper。
+- **`Attrs` 在 `yrs::types::Attrs`、`GetString` 在 `yrs::types::GetString`**,
+  都不在 crate root。
+- **`key: Null` 表示"这个格式已被清除"**,不是"没有这个键"。
+  `marks_from_runs` 必须跳过 Null 值属性,否则 clear 之后 `to_blocks` 仍然带 bold。
+  另外空 data 的表示是 JSON `null` 而不是 `{}`。
+
+### flutter_rust_bridge / FFI
+
+- ⚠️ **`frb integrate` 不加 `--no-write-lib` 会把真实的 `main.dart` 注释掉换成 demo**
+  (留一行 `// temporarily commented out`)。接 frb 时务必带上这个 flag,
+  出事了用 `git checkout` 恢复。
+- FFI crate **自带 `[workspace]`**,防止被后端 workspace 收编。
+- **rusqlite 钉 0.37**(libsqlite3-sys 0.35,落在后端 sqlx-sqlite 要求的 <0.38 内,
+  共用同一个 native sqlite3,否则 link 冲突)。FFI crate 独立的 Cargo.lock 里
+  dart-sys 锁死旧 `cc`,和 libsqlite3-sys 要的 `cc ^1.1.6` 冲突 →
+  在 `clients/mica_flutter/rust` 跑 `cargo update -p cc` 同时满足两边。
+- Windows 上 SQLite 打开的 db 文件被句柄占着,测试末尾 `deleteSync` 删不掉 →
+  清理写成 best-effort try/catch(测的是持久化,不是清理)。
+
+### SQL
+
+- **`update` 是保留字**,列名用 `payload`。建表前先想一遍列名会不会撞。
+
+### SVG / mermaid 渲染
+
+- 纯 Dart 的 SVG 渲染器(flutter_svg、jovial_svg 都试过)**不解析 CSS 后代选择器**,
+  所以 merman 的主题会全黑 → 自研 CSS 内联器把样式拍平进属性。
+  merman 文档明确把 inline-styling 列为 host 边界,这不是 hack。
+- flutter_svg 对 `font-weight: bolder/lighter` **直接抛错**(class 图会用到)。
+- ⚠️ **内联器里 `rules.isEmpty` 不能提前 return。** class 图的 `<style>` 是空的、
+  样式全部内联,但仍然需要走 font-weight 归一化。
+  这个提前 return 卡了很久——**输出恒等,像极了 stale build**。
+
+### 测试与 CI
+
+- **多个后台 `cargo test` 会抢 build lock 卡住。** 一次跑一个。
+- PowerShell 的 `Select-Object -Last` 会**缓冲到进程退出才输出**,
+  看起来像卡死 → 一律 `cargo ... 2>&1 | Out-File log` 再 tail。
+- **tag 触发的 workflow 用的是标签所在 commit 的版本。** 打 tag 的那个 commit
+  必须已经含有该 workflow 文件;`workflow_dispatch` 也要等它进默认分支才在 UI 出现。
+
+### 用 computer-use 测桌面版
+
+- `open_application "Mica"` 会解析到**已安装版**(`%LOCALAPPDATA%\Programs\mica`),
+  不是 `flutter run` 出来的 debug exe——debug 路径不在授权列表里,截图会被打码。
+  解法:`flutter build windows --release` 覆盖装到 installed 目录再测。
+- PowerShell 的 `Set-Content -Encoding UTF8` 会给 `prefs.json` 加 **BOM**,
+  Dart 的 `jsonDecode` 直接失败 → 设置静默落回默认值。用 `printf` 之类写无 BOM 的。

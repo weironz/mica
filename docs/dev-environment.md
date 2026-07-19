@@ -77,3 +77,31 @@ claude mcp add --transport http --scope user github https://api.githubcopilot.co
 1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK + **开发者模式**(见上「Windows 桌面构建前置」)。
 2. 本文的 MCP(项目级 `.mcp.json` = playwright;用户级 codebase-memory-mcp 等)、首次 `index_repository` 建图、skills。
 3. 起后端:`docker compose up -d --build postgres api`(详见 `docs/desktop-plan.md` M1 状态)。
+
+## 跑集成测试(尤其是云同步)
+
+`integration_test/` 分两类,前置条件完全不同:
+
+**不需要后端** —— `cloud_sync_integrity_test.dart` 自带一个**进程内假 WS 服务端**
+(`_FakeSyncServer`),纯客户端就能跑同步逻辑:
+
+```sh
+cd clients/mica_flutter
+flutter test integration_test/cloud_sync_integrity_test.dart -d windows
+```
+
+改同步代码时优先复用这个骨架——比起全栈 e2e,它快且不依赖 docker。
+
+**需要真后端** —— `migration_sync` / `cloud_sync` / `page_switch_fidelity` /
+`offline_image_reconcile` 要整个栈起着:
+
+```sh
+docker compose up -d postgres rustfs api    # 账号 demo@mica.dev / password123
+```
+
+⚠️ **两个测试文件不要一起跑**:会撞 debug-connection race。分开跑,或者中间
+`kill mica_flutter` 再 sleep 一下。
+
+⚠️ **两个引擎变体必须同步改**:`cloud_sync_io.dart`(桌面走 FFI)和
+`cloud_sync_web.dart`(web 走 yjs)是同一套协议的两个实现——"一个权威引擎全平台跑"
+靠的是这两份保持一致,只改一边等于埋雷。
