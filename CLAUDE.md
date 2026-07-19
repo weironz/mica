@@ -67,6 +67,7 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 ## 架构速记
 
 - 编辑器:单 RenderBox 自绘画布(`render.dart`),marks-over-plain-text 模型,IME 走 TextInputClient;硬换行存储约定 = 文本里的 `\`+换行。
+- **页树不变量:folder 是唯一容器,page 是叶子**。以前这条只活在 Dart 客户端(`models.dart: canNestUnder`),服务端随便造——Notion 导入就造出了 137 个"页面下挂页面"。现在服务端任何写 `parent_view_id` 的路径**必须**过 `documents::ensure_parent_accepts_children`(400 + 可读原因),DB 侧 `views_parent_must_be_folder` 触发器兜底(migration 0011,同时修复了存量)。
 - 块级嵌套是扁平模型:`data.indent`(列表层级)、`data.quote`/`qbreak`(引用深度/分组)、`data.li`(item 容器子块),HTML 导出端重建嵌套。
 - 代码字体:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。
 - 发版/构建见 **`docs/release.md`**(权威):Actions 只出安装包 + CLI(推 `v*` tag 触发);web/api 全靠本地 `just deploy-prod`(节点连不上 Docker Hub,走 save/scp/load)。`just --list` 看全部 recipe。

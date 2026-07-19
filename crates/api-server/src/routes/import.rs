@@ -84,18 +84,7 @@ pub async fn start_import(
         "parent_view_id requires workspace_id".to_string(),
       ));
     };
-    let object_type = sqlx::query_scalar::<_, String>(
-      "SELECT object_type FROM views WHERE id = $1 AND workspace_id = $2",
-    )
-    .bind(parent)
-    .bind(ws)
-    .fetch_optional(&state.db)
-    .await?;
-    if object_type.as_deref() != Some("folder") {
-      return Err(ApiError::BadRequest(
-        "parent_view_id must be a folder in the workspace".to_string(),
-      ));
-    }
+    super::documents::ensure_parent_accepts_children(&state.db, ws, parent).await?;
   }
 
   let job_id = Uuid::new_v4();

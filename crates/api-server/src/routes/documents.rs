@@ -258,7 +258,7 @@ pub async fn create_document(
   let name = normalize_view_name(&payload.name)?;
 
   if let Some(parent_view_id) = payload.parent_view_id {
-    ensure_view_in_workspace(&state.db, workspace_id, parent_view_id).await?;
+    ensure_parent_accepts_children(&state.db, workspace_id, parent_view_id).await?;
   }
 
   let mut tx = state.db.begin().await?;
@@ -340,7 +340,7 @@ pub async fn create_folder(
   let name = normalize_view_name(&payload.name)?;
 
   if let Some(parent_view_id) = payload.parent_view_id {
-    ensure_view_in_workspace(&state.db, workspace_id, parent_view_id).await?;
+    ensure_parent_accepts_children(&state.db, workspace_id, parent_view_id).await?;
   }
 
   // No document / snapshot — a folder has no content. `object_id` is a fresh
@@ -402,7 +402,7 @@ pub async fn import_document_markdown(
   let name = normalize_view_name(&payload.name)?;
 
   if let Some(parent_view_id) = payload.parent_view_id {
-    ensure_view_in_workspace(&state.db, workspace_id, parent_view_id).await?;
+    ensure_parent_accepts_children(&state.db, workspace_id, parent_view_id).await?;
   }
 
   let mut tx = state.db.begin().await?;
@@ -2259,6 +2259,38 @@ async fn ensure_view_in_workspace(db: &PgPool, workspace_id: Uuid, view_id: Uuid
   Ok(())
 }
 
+/// A parent must be a live FOLDER in this workspace. Pages are leaves — only
+/// folders contain (see `migrations/0011_pages_are_leaves.sql`, which repairs
+/// the trees that predate this and enforces the same rule at the DB as a
+/// backstop). Every path that sets `parent_view_id` goes through here so the
+/// caller gets a 400 with a reason instead of tripping the trigger's 500.
+pub(crate) async fn ensure_parent_accepts_children(
+  db: &PgPool,
+  workspace_id: Uuid,
+  parent_view_id: Uuid,
+) -> ApiResult<()> {
+  let object_type = sqlx::query_scalar::<_, String>(
+    r#"
+      SELECT object_type::text
+      FROM views
+      WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+    "#,
+  )
+  .bind(parent_view_id)
+  .bind(workspace_id)
+  .fetch_optional(db)
+  .await?
+  .ok_or(ApiError::NotFound)?;
+
+  if object_type != "folder" {
+    return Err(ApiError::BadRequest(
+      "parent_view_id must be a folder — pages cannot contain pages".to_string(),
+    ));
+  }
+
+  Ok(())
+}
+
 async fn ensure_valid_parent_view(
   db: &PgPool,
   workspace_id: Uuid,
@@ -2271,7 +2303,7 @@ async fn ensure_valid_parent_view(
     ));
   }
 
-  ensure_view_in_workspace(db, workspace_id, parent_view_id).await?;
+  ensure_parent_accepts_children(db, workspace_id, parent_view_id).await?;
 
   let would_cycle = sqlx::query_scalar::<_, bool>(
     r#"
@@ -2405,19 +2437,7 @@ pub async fn transfer_view(
 
   // A destination parent, if given, must be a live folder in the destination.
   if let Some(parent) = request.parent_view_id {
-    let ok = sqlx::query_scalar::<_, bool>(
-      "SELECT EXISTS (SELECT 1 FROM views WHERE id = $1 AND workspace_id = $2 \
-       AND object_type = 'folder' AND is_deleted = false)",
-    )
-    .bind(parent)
-    .bind(dest_workspace_id)
-    .fetch_one(&state.db)
-    .await?;
-    if !ok {
-      return Err(ApiError::BadRequest(
-        "destination parent must be a folder in the destination workspace".to_string(),
-      ));
-    }
+    ensure_parent_accepts_children(&state.db, dest_workspace_id, parent).await?;
   }
 
   // 1. Enumerate the subtree (live rows only).
@@ -2728,19 +2748,7 @@ pub async fn clone_view(
   //    source's own parent (beside the original).
   let target_parent = match request.parent_view_id {
     Some(parent) => {
-      let ok = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM views WHERE id = $1 AND workspace_id = $2 \
-         AND object_type = 'folder' AND is_deleted = false)",
-      )
-      .bind(parent)
-      .bind(workspace_id)
-      .fetch_one(&state.db)
-      .await?;
-      if !ok {
-        return Err(ApiError::BadRequest(
-          "parent_view_id must be a folder in this workspace".to_string(),
-        ));
-      }
+      ensure_parent_accepts_children(&state.db, workspace_id, parent).await?;
       Some(parent)
     }
     None => root.parent_view_id,
