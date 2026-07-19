@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use mica_interchange::notion::{folder_page_index, looks_like_notion_export, strip_notion_id};
+use mica_interchange::notion::{looks_like_notion_export, strip_notion_id};
 use mica_interchange::order::{natural_compare, order_page_paths};
 use mica_interchange::zip::ZipFileEntry;
 use mica_interchange::{build_zip, normalize_entries, plan_import, read_zip, resolve_ref};
@@ -79,9 +79,13 @@ fn nested_part_zip_expands_through_plan() {
   let plan = plan_import(read_zip(&fixture("nested.zip")), false, mica_interchange::ImportMode::AsIs);
   assert!(plan.notion); // names carry 32-hex ids → auto-detected
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
-  assert_eq!(titles, ["Guide", "Sub"]);
+  // `Guide.md` has a `Guide/` of children → folder "Guide" + leaf "Guide" holding
+  // the body (Mica pages are leaves; see `page_with_subpages_splits_into_folder_plus_leaf`).
+  assert_eq!(titles, ["Guide", "Guide", "Sub"]);
+  assert!(plan.pages[0].is_folder && !plan.pages[1].is_folder);
   assert_eq!(plan.pages[1].parent, Some(0));
-  assert_eq!(plan.pages[0].markdown.trim(), "inner");
+  assert_eq!(plan.pages[1].markdown.trim(), "inner");
+  assert_eq!(plan.pages[2].parent, Some(0)); // Sub hangs off the FOLDER
 }
 
 #[test]
@@ -100,27 +104,31 @@ fn notion_helpers() {
   assert!(!looks_like_notion_export(
     ["Guide.md", "Notes.md", "x 0123456789abcdef0123456789abcdef.md"].into_iter()
   ));
+}
 
-  let idx = folder_page_index(
-    [
-      "apple 31f57556969b56ade626c2502854fc6d.md",
-      "apple/iphone 31f57556969b81b5973cf30d40c5b6f1.md",
-      "Guide.md",
-      "Guide/Setup.md",
-    ]
-    .into_iter(),
+/// The Notion shape end to end: a folder and its page carry DIFFERENT id
+/// suffixes for the same logical page. They must still pair up into one
+/// folder-plus-leaf, not import as two unrelated nodes.
+#[test]
+fn notion_folder_and_page_pair_up_across_differing_ids() {
+  let e = |name: &str, body: &str| ZipFileEntry {
+    name: name.into(),
+    bytes: body.as_bytes().to_vec(),
+  };
+  let plan = plan_import(
+    vec![
+      e("apple 31f57556969b56ade626c2502854fc6d.md", "# apple\n\nfruit"),
+      e("apple 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f/iphone 31f57556969b81b5973cf30d40c5b6f1.md",
+        "# iphone\n\nphone"),
+    ],
     true,
+    mica_interchange::ImportMode::AsIs,
   );
-  assert_eq!(idx["apple"], "apple 31f57556969b56ade626c2502854fc6d.md");
-  assert_eq!(idx["Guide"], "Guide.md");
-
-  // Standard mode is exact — hash-like names stay intact.
-  let idx = folder_page_index(
-    ["build 0123456789abcdef0123456789abcdef.md"].into_iter(),
-    false,
-  );
-  assert!(idx.contains_key("build 0123456789abcdef0123456789abcdef"));
-  assert!(!idx.contains_key("build"));
+  let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
+  assert_eq!(titles, ["apple", "apple", "iphone"]);
+  assert!(plan.pages[0].is_folder && !plan.pages[1].is_folder);
+  assert_eq!(plan.pages[1].parent, Some(0));
+  assert_eq!(plan.pages[2].parent, Some(0));
 }
 
 #[test]
@@ -179,15 +187,17 @@ fn plan_full_archive_with_manifest_links_and_assets() {
   let plan = plan_import(read_zip(&fixture("plan.zip")), false, mica_interchange::ImportMode::AsIs);
   assert!(!plan.notion);
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
-  assert_eq!(titles, ["Zeta", "Sub", "Alpha"]); // manifest order, not alphabetical
-  assert_eq!(plan.pages[1].parent, Some(0)); // Zeta/Sub.md under Zeta.md
-  assert_eq!(plan.pages[2].parent, None);
+  // Manifest order, not alphabetical. `Zeta.md` owns `Zeta/` → folder + leaf.
+  assert_eq!(titles, ["Zeta", "Zeta", "Sub", "Alpha"]);
+  assert!(plan.pages[0].is_folder && !plan.pages[1].is_folder);
+  assert_eq!(plan.pages[2].parent, Some(0)); // Zeta/Sub.md under the Zeta FOLDER
+  assert_eq!(plan.pages[3].parent, None);
   // Body verbatim: our own archives never weld the name into the text, so there
   // is nothing to strip and a leading heading is the author's, not ours to eat.
   // (Notion archives DO repeat the title as an H1 — that one case is stripped at
   // import; see `strip_leading_h1`'s call site.)
-  assert!(plan.pages[0].markdown.contains("see [Sub](Zeta/Sub.md)"));
-  assert!(plan.pages[0].markdown.contains("# Zeta"));
+  assert!(plan.pages[1].markdown.contains("see [Sub](Zeta/Sub.md)"));
+  assert!(plan.pages[1].markdown.contains("# Zeta"));
   // Asset present and resolvable from the page that references it.
   assert!(plan.files.contains_key("assets/p.png"));
   let file_paths: HashSet<String> = plan.files.keys().cloned().collect();
@@ -197,5 +207,5 @@ fn plan_full_archive_with_manifest_links_and_assets() {
   );
   // Link target resolves to the planned page.
   let target = resolve_ref("Zeta/Sub.md", "../Zeta.md", &plan.md_paths).unwrap();
-  assert_eq!(plan.page_by_path[&target], 0);
+  assert_eq!(plan.page_by_path[&target], 1); // the leaf that carries Zeta's body
 }

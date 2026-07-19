@@ -88,11 +88,19 @@ and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
    UUIDv7, so creation order *is* sibling order), then unknown files
    parents-first + natural-sorted (`2 < 10`, digit runs compared
    numerically).
-2. **Walks each page's folder chain.** A folder maps to the page exported as
-   `<folder>.md` (via `folder_page_index`); a folder with no matching page
-   becomes an **empty directory page**, so hand-organized trees keep their
-   hierarchy. Every page's view id is pre-generated, so links can target
-   pages created later (forward references).
+2. **Walks each page's folder chain.** Every directory becomes a **folder**
+   page, so hand-organized trees keep their hierarchy. Every page's view id is
+   pre-generated, so links can target pages created later (forward references).
+
+   A directory that also has a same-named `<folder>.md` next to it is a
+   **page with subpages** — Notion's native shape, and one Mica has no node
+   for (folders contain, pages are leaves). It **splits**: the folder keeps the
+   name and the children, and the `.md`'s body moves into a same-named leaf
+   page inside that folder. A parent with no body of its own stays a bare
+   folder — no empty page is left behind — and links pointing at it resolve to
+   whichever node survived. Nothing is lost; the body just sits one level
+   deeper. (This used to map the folder onto the `.md` page itself, which
+   produced page-under-page trees the rest of Mica cannot represent.)
 3. **Resolves image references** per page with `resolve_ref`: relative to
    the md's own folder first, then the archive root; `./`, `../` chains and
    percent-encoded names all work. Matching files are uploaded **once each**
@@ -158,10 +166,10 @@ What the mode changes:
 
 - `strip_notion_id` removes the trailing 32-hex or dashed-UUID ID from page
   titles, directory-page names and the workspace name.
-- `folder_page_index(notion: true)` matches folders to pages **modulo IDs**:
-  Notion names folders plainly (`apple/`) but pages with the suffix
-  (`apple 31f5<…>.md`). Without this every folder imported twice (an empty
-  directory page plus a duplicate root page).
+- Folder↔page pairing happens on **ID-stripped** paths, so a `Doc <id-a>/`
+  and its `Doc <id-b>.md` are recognized as one page-with-subpages and split
+  once (step 2). Without this every such folder imported twice — an empty
+  directory page plus a duplicate root page.
 
 Not adapted (by design, for now): database CSVs are ignored; inter-page
 links inside md bodies stay as exported.

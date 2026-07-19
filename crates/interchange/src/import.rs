@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::normalize::{expand_nested_zips, normalize_entries};
-use crate::notion::{folder_page_index, looks_like_notion_export, strip_notion_id};
+use crate::notion::{looks_like_notion_export, strip_notion_id};
 use crate::order::order_page_paths;
 use crate::zip::ZipFileEntry;
 
@@ -88,8 +88,6 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   let clean = |s: &str| -> String {
     if notion { strip_notion_id(s).to_string() } else { s.to_string() }
   };
-  let md_for_folder = folder_page_index(mds.keys().map(String::as_str), notion);
-
   // Planning order: manifest entries first (they carry pre-order + explicit
   // `type`, so folders — even empty ones with no `.md` — round-trip), then any
   // `.md` the manifest didn't mention (partial/foreign archives), as documents.
@@ -124,8 +122,27 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     }
   }
 
+  // Every normalized directory path that has something under it. A `.md` whose
+  // own path is in here is a page-WITH-subpages, which Mica's model has no room
+  // for (folders are pure containers, pages are leaves) — see the split below.
+  let mut dirs_with_children: HashSet<String> = HashSet::new();
+  for (path, is_folder) in &ordered {
+    let parts: Vec<&str> = path.split('/').collect();
+    let chain = if *is_folder { parts.len() } else { parts.len().saturating_sub(1) };
+    let mut acc = String::new();
+    for seg in parts.iter().take(chain) {
+      if !acc.is_empty() {
+        acc.push('/');
+      }
+      acc.push_str(&clean(seg));
+      dirs_with_children.insert(acc.clone());
+    }
+  }
+
   let mut pages: Vec<PagePlan> = Vec::new();
   let mut page_by_path: HashMap<String, usize> = HashMap::new();
+  // Keyed by NORMALIZED path so a Notion `Doc <id-a>/` and its `Doc <id-b>.md`
+  // land on the same container even when the two carry different ID suffixes.
   let mut folder_page: HashMap<String, usize> = HashMap::new();
 
   for (path, is_folder) in &ordered {
@@ -148,16 +165,11 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
       }
       norm_folder.push_str(&seg);
 
-      // Prefer a `.md`-backed container (old convention / an existing
-      // document-with-children: `Doc.md` + `Doc/…`) — that folder maps to the
-      // DOCUMENT page, keeping its body. Else reuse a synthetic folder, else
-      // create one (a pure container → object_type='folder').
-      let existing = md_for_folder
-        .get(&norm_folder)
-        .and_then(|mdp| page_by_path.get(mdp))
-        .copied()
-        .or_else(|| folder_page.get(&folder_path).copied());
-      let idx = match existing {
+      // A directory is ALWAYS a folder page. It used to map onto the `.md` that
+      // shares its name (`Doc.md` + `Doc/…` → one document that also had
+      // children), which produced trees Mica cannot represent: a page is a leaf.
+      // The matching `.md` now becomes a leaf page INSIDE this folder instead.
+      let idx = match folder_page.get(&norm_folder).copied() {
         Some(idx) => idx,
         None => {
           // Prefer the manifest's real name; fall back to the (cleaned) path
@@ -174,7 +186,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
             is_folder: true,
           });
           let idx = pages.len() - 1;
-          folder_page.insert(folder_path.clone(), idx);
+          folder_page.insert(norm_folder.clone(), idx);
           idx
         }
       };
@@ -208,6 +220,41 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     } else {
       markdown.clone()
     };
+
+    // A page that has subpages (Notion's native shape: `Doc.md` next to a
+    // `Doc/` holding its children). Mica has no such node — folders hold, pages
+    // are leaves — so split it: the folder keeps the name and the children, and
+    // the body moves into a same-named leaf page inside it. A parent with no
+    // body of its own is just a folder; don't leave an empty page behind.
+    let own_norm = if norm_folder.is_empty() {
+      title.clone()
+    } else {
+      format!("{norm_folder}/{title}")
+    };
+    if dirs_with_children.contains(&own_norm) {
+      let folder_idx = match folder_page.get(&own_norm).copied() {
+        Some(idx) => idx,
+        None => {
+          pages.push(PagePlan {
+            archive_path: None,
+            title: title.clone(),
+            parent,
+            markdown: String::new(),
+            is_folder: true,
+          });
+          let idx = pages.len() - 1;
+          folder_page.insert(own_norm.clone(), idx);
+          idx
+        }
+      };
+      if body.trim().is_empty() {
+        // Links pointing at the parent page resolve to the folder that replaced it.
+        page_by_path.insert(path.clone(), folder_idx);
+        continue;
+      }
+      parent = Some(folder_idx);
+    }
+
     pages.push(PagePlan {
       archive_path: Some(path.clone()),
       title,
@@ -588,10 +635,12 @@ hello");
     assert_eq!(parent_title(&plan, "b"), Some("sub"));
   }
 
-  // A document that HAS children (Doc.md + Doc/Child.md, both type=document) stays
-  // a DOCUMENT (keeps its body) — it must NOT be turned into a folder.
+  // A page that HAS subpages (Doc.md + Doc/Child.md) cannot exist in Mica —
+  // folders hold, pages are leaves. It splits into a folder that keeps the name
+  // and the children, plus a same-named leaf page holding the body. Nothing is
+  // lost: the parent's text and the child both survive, one level deeper.
   #[test]
-  fn document_with_children_stays_a_document() {
+  fn page_with_subpages_splits_into_folder_plus_leaf() {
     let raw = vec![
       e("manifest.json", &manifest(&[
         ("Doc.md", "Doc", "document"),
@@ -601,12 +650,50 @@ hello");
       e("Doc/Child.md", "# Child\n\nchild body"),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
-    let doc = find(&plan, "Doc");
-    assert!(!doc.is_folder, "Doc keeps document identity");
-    assert_eq!(doc.markdown.trim(), "# Doc
+    let folder = plan.pages.iter().find(|p| p.title == "Doc" && p.is_folder).expect("folder");
+    assert!(folder.parent.is_none() && folder.markdown.is_empty());
+    let leaf = plan.pages.iter().find(|p| p.title == "Doc" && !p.is_folder).expect("leaf");
+    assert_eq!(leaf.markdown.trim(), "# Doc
 
 parent body");
+    assert_eq!(leaf.parent.map(|i| &plan.pages[i]).map(|p| p.title.as_str()), Some("Doc"));
     assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
+    // The child hangs off the FOLDER, not off the leaf page.
+    let child_parent = find(&plan, "Child").parent.expect("has parent");
+    assert!(plan.pages[child_parent].is_folder, "child nests under the folder");
+    // Invariant: no page ever has a page as its parent.
+    assert_no_page_under_page(&plan);
+  }
+
+  // A parent page with subpages but NO body of its own is just a folder — don't
+  // leave a stray empty page behind (Notion's "index" pages are usually empty).
+  #[test]
+  fn empty_page_with_subpages_becomes_only_a_folder() {
+    let raw = vec![
+      e("Doc 1234567890abcdef1234567890abcdef.md", "# Doc\n"),
+      e("Doc 1234567890abcdef1234567890abcdef/Child 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f.md",
+        "# Child\n\nchild body"),
+    ];
+    let plan = plan_import(raw, true, ImportMode::AsIs);
+    let docs: Vec<&PagePlan> = plan.pages.iter().filter(|p| p.title == "Doc").collect();
+    assert_eq!(docs.len(), 1, "one node named Doc, not a folder + empty page");
+    assert!(docs[0].is_folder);
+    assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
+    assert_no_page_under_page(&plan);
+  }
+
+  /// The model invariant this whole split exists to uphold.
+  fn assert_no_page_under_page(plan: &ImportPlan) {
+    for p in &plan.pages {
+      if let Some(parent) = p.parent {
+        assert!(
+          plan.pages[parent].is_folder,
+          "'{}' nests under the page '{}' — pages are leaves",
+          p.title,
+          plan.pages[parent].title,
+        );
+      }
+    }
   }
 
   // Folder names round-trip through the manifest `title`, NOT the sanitized dir

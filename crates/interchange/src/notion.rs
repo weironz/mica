@@ -2,8 +2,6 @@
 //! here; the planner consults it only when Notion mode is on (forced by the
 //! UI or auto-detected via [looks_like_notion_export]).
 
-use std::collections::HashMap;
-
 /// Strip the ID Notion appends to exported file/folder names — a trailing
 /// 32-hex run or a dashed UUID, separated by space/`-`/`_`. No-op for
 /// ordinary names.
@@ -82,29 +80,3 @@ fn base_no_ext(path: &str) -> &str {
   base.strip_suffix(".md").or_else(|| base.strip_suffix(".MD")).unwrap_or(base)
 }
 
-/// Map each folder path to the md page that represents it. With [notion]
-/// mode on, matching tolerates ID suffixes per segment — folder `apple/`
-/// matches the page exported as `apple 31f5<…32 hex>.md`; off, it is exact.
-pub fn folder_page_index<'a>(
-  md_paths: impl Iterator<Item = &'a str>,
-  notion: bool,
-) -> HashMap<String, String> {
-  let seg = |s: &'a str| if notion { strip_notion_id(s) } else { s };
-  let mut out = HashMap::new();
-  for p in md_paths {
-    let (dir, base) = match p.rsplit_once('/') {
-      Some((d, b)) => (Some(d), b),
-      None => (None, p),
-    };
-    let base = base.strip_suffix(".md").or_else(|| base.strip_suffix(".MD")).unwrap_or(base);
-    let key = match dir {
-      None => seg(base).to_string(),
-      Some(d) => {
-        let nd: Vec<&str> = d.split('/').map(seg).collect();
-        format!("{}/{}", nd.join("/"), seg(base))
-      }
-    };
-    out.entry(key).or_insert_with(|| p.to_string());
-  }
-  out
-}
