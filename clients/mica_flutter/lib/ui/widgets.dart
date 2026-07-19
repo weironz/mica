@@ -75,6 +75,10 @@ class _WorkspaceSelector extends StatefulWidget {
 class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
   final MenuController _menu = MenuController();
 
+  /// True while a workspace row is being dragged — gates the before/after drop
+  /// slots so they never intercept taps when not reordering.
+  bool _dragging = false;
+
   WorkspaceEntry? get _selectedEntry {
     final ref = widget.selectedRef;
     if (ref == null) return null;
@@ -111,10 +115,8 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             widget.onSignIn != null)
           _signInRow()
         else
-          for (
-            final (i, e) in (widget.activeIsLocal ? locals : cloud).indexed
-          )
-            _row(e, widget.activeIsLocal ? locals : cloud, i),
+          for (final e in (widget.activeIsLocal ? locals : cloud))
+            _row(e, widget.activeIsLocal ? locals : cloud),
         const Divider(height: 8),
         _createRow(),
         SizedBox(
@@ -222,23 +224,121 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
     );
   }
 
-  /// Move [entry] one slot within its world's list [world] (delta -1 up / +1
-  /// down) and persist the whole new order.
-  void _move(List<WorkspaceEntry> world, int index, int delta) {
-    final target = index + delta;
-    if (target < 0 || target >= world.length) return;
-    final next = [...world];
-    final moved = next.removeAt(index);
-    next.insert(target, moved);
+  /// Drop [dragged] just before/after [target] within its world's list [world]
+  /// and persist the whole new order. Same drag-to-reorder model as the
+  /// document tree — only within the connected world (the menu lists one world).
+  void _reorderWs(
+    WorkspaceEntry dragged,
+    WorkspaceEntry target,
+    List<WorkspaceEntry> world, {
+    required bool before,
+  }) {
+    if (dragged.ref == target.ref) return;
+    final next = [
+      for (final e in world)
+        if (e.ref != dragged.ref) e,
+    ];
+    final ti = next.indexWhere((e) => e.ref == target.ref);
+    if (ti < 0) return;
+    next.insert(before ? ti : ti + 1, dragged);
+    setState(() => _dragging = false);
     widget.onReorder(next);
   }
 
-  Widget _row(WorkspaceEntry entry, List<WorkspaceEntry> world, int index) {
+  /// Wrap a workspace row so it drags to reorder (mirrors the doc tree's
+  /// `_draggableTreeRow`): press-and-move to drag; a motionless tap still
+  /// selects. Top half = drop-before slot, bottom half = drop-after.
+  Widget _wsDraggableRow(
+    WorkspaceEntry entry,
+    List<WorkspaceEntry> world,
+    Widget row,
+  ) {
+    return Draggable<WorkspaceEntry>(
+      data: entry,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      onDragStarted: () => setState(() => _dragging = true),
+      onDragEnd: (_) => setState(() => _dragging = false),
+      onDraggableCanceled: (_, _) => setState(() => _dragging = false),
+      onDragCompleted: () => setState(() => _dragging = false),
+      feedback: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          constraints: const BoxConstraints(maxWidth: 260),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                entry.isLocal ? Icons.computer_outlined : Icons.cloud_outlined,
+                size: 18,
+                color: const Color(0xFF2563EB),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  entry.workspace.name,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.4, child: row),
+      child: Stack(
+        children: [
+          row,
+          if (_dragging)
+            Positioned.fill(
+              child: Column(
+                children: [
+                  Expanded(child: _wsDropSlot(entry, world, before: true)),
+                  Expanded(child: _wsDropSlot(entry, world, before: false)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _wsDropSlot(
+    WorkspaceEntry target,
+    List<WorkspaceEntry> world, {
+    required bool before,
+  }) {
+    return DragTarget<WorkspaceEntry>(
+      hitTestBehavior: HitTestBehavior.opaque,
+      onWillAcceptWithDetails: (d) => d.data.ref != target.ref,
+      onAcceptWithDetails: (d) =>
+          _reorderWs(d.data, target, world, before: before),
+      builder: (context, candidate, rejected) {
+        final active = candidate.isNotEmpty;
+        return Align(
+          alignment: before ? Alignment.topCenter : Alignment.bottomCenter,
+          child: Container(
+            height: 2,
+            color: active ? const Color(0xFF2563EB) : Colors.transparent,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _row(WorkspaceEntry entry, List<WorkspaceEntry> world) {
     final workspace = entry.workspace;
     final selected = entry.ref == widget.selectedRef;
-    return SizedBox(
-      width: 320,
-      child: Row(
+    return _wsDraggableRow(
+      entry,
+      world,
+      SizedBox(
+        width: 320,
+        child: Row(
         children: [
           Expanded(
             child: InkWell(
@@ -284,18 +384,6 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           ),
           MenuAnchor(
             menuChildren: [
-              if (index > 0)
-                _wsAction(
-                  Icons.arrow_upward,
-                  context.l10n.workspaceRowMoveUp,
-                  () => _move(world, index, -1),
-                ),
-              if (index < world.length - 1)
-                _wsAction(
-                  Icons.arrow_downward,
-                  context.l10n.workspaceRowMoveDown,
-                  () => _move(world, index, 1),
-                ),
               _wsAction(
                 Icons.edit_outlined,
                 context.l10n.commonRename,
@@ -356,6 +444,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           ),
           const SizedBox(width: 4),
         ],
+      ),
       ),
     );
   }
