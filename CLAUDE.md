@@ -70,5 +70,5 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 - 块级嵌套是扁平模型:`data.indent`(列表层级)、`data.quote`/`qbreak`(引用深度/分组)、`data.li`(item 容器子块),HTML 导出端重建嵌套。
 - 代码字体:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。
 - 发版/构建见 **`docs/release.md`**(权威):Actions 只出安装包 + CLI(推 `v*` tag 触发);web/api 全靠本地 `just deploy-prod`(节点连不上 Docker Hub,走 save/scp/load)。`just --list` 看全部 recipe。
-- **发版节奏(用户定,长期有效)**:改动做完后**推送 github `main` 由你自动完成**(不用问)。但**发版——版本号 bump + 打 `v*` tag + 触发 release CI + 部署——一律由用户决策**:一次发版太耗时,别自作主张发版,等用户说「发版」再发。真要发时:补丁位递增(如 0.12.1→0.12.2,新功能也走补丁),minor 也由用户拍板。
+- **发版节奏(用户定,长期有效)**:改动做完后**推送 github `main` 由你自动完成**(不用问)。**是否发版由用户决策**(等用户说「发版」)——但用户一旦说发版,后面**一条龙由你做完:版本号 bump + 打 `v*` tag + 触发 release CI + 部署 + 验证**,不用再等「部署」二次指令。补丁位递增(如 0.12.1→0.12.2,新功能也走补丁),minor 由用户拍板。**部署**:等 release CI 把 ACR 镜像推好后跑 `just deploy-prod X.Y.Z`(Bash 工具即 Git Bash,cygpath 在;SSH key 认证到 `root@mica.cloudcele.com` 免密),跑完验证 `/api/health` 报对版本 + 冒烟测本次改动。
 - 键盘快捷键清单见 **`docs/shortcuts.md`**(权威)。加/改快捷键三处同步:`editor.dart` key handler(编辑器)+ `main.dart` `_appShortcuts`(应用级)+ `dialogs.dart` `_shortcutsSection`(设置面板)+ 该文档。
