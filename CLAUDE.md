@@ -72,4 +72,50 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 - 代码字体:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。
 - 发版/构建见 **`docs/release.md`**(权威):Actions 只出安装包 + CLI(推 `v*` tag 触发);web/api 全靠本地 `just deploy-prod`(节点连不上 Docker Hub,走 save/scp/load)。`just --list` 看全部 recipe。
 - **发版节奏(用户定,长期有效)**:改动做完后**推送 github `main` 由你自动完成**(不用问)。**是否发版由用户决策**(等用户说「发版」)——但用户一旦说发版,后面**一条龙由你做完:版本号 bump + 打 `v*` tag + 触发 release CI + 部署 + 验证**,不用再等「部署」二次指令。补丁位递增(如 0.12.1→0.12.2,新功能也走补丁),minor 由用户拍板。**部署**:等 release CI 把 ACR 镜像推好后跑 `just deploy-prod X.Y.Z`(Bash 工具即 Git Bash,cygpath 在;SSH key 认证到 `root@mica.cloudcele.com` 免密),跑完验证 `/api/health` 报对版本 + 冒烟测本次改动。
+- **踩过的坑见 `docs/lessons.md`(和本文件一起读)**:双表示红线、"不变量只写在客户端等于没写"、测试真空通过、web 通过≠桌面通过、图片解码 dispose 时序、round-trip 红线等。CLAUDE.md 写规则,那份写规则的来历——规则很容易被当成"大概是这个意思"绕过去。
 - 键盘快捷键清单见 **`docs/shortcuts.md`**(权威)。加/改快捷键三处同步:`editor.dart` key handler(编辑器)+ `main.dart` `_appShortcuts`(应用级)+ `dialogs.dart` `_shortcutsSection`(设置面板)+ 该文档。
+
+## 开发机与工具链(Windows 主力机)
+
+- Flutter stable 装在 `C:\flutter`(已进用户级 PATH);Visual Studio **Build Tools** + Windows SDK
+  已装,`flutter build windows` 可用——不需要 VS Community。Rust 工具链、Git 齐。
+  Flutter app 在 `clients/mica_flutter/`,仓库根是 Rust workspace。
+- **`just` 的 shebang recipe 绕过 `set windows-shell`**,里面用到 `cygpath`。跑
+  `just deploy-prod` 前 `export PATH="/c/Program Files/Git/usr/bin:$PATH"`,或直接在 Git Bash 里跑。
+- **强制重启/断电后 `.dart_tool/flutter_build` 缓存可能被截断** → frontend_server 报
+  `RangeError`(离谱 offset)。`rm -rf clients/mica_flutter/.dart_tool/flutter_build` 即愈。
+- **本机重活限流**:这台机器有过 GPU/整机硬卡死,且两次发生在重型构建窗口内(重编译功耗尖峰
+  是合理扳机)。所以:`CARGO_BUILD_JOBS=8`;能交 CI 就交 CI;只需验 runner 改动时单编
+  `build/windows/x64/runner/mica_flutter.vcxproj -p:BuildProjectReferences=false`,别全量
+  `flutter build windows`;非必要不启 Docker Desktop(WSL2 冷启动本身要 100s+,且 `docker info`
+  在启动中会**阻塞**而非快速失败——别用十秒超时去判"卡死",踩过一次白等 15 分钟)。
+- **runner C++(`windows/runner/*.cpp`)是 warning-as-error**:注释必须纯 ASCII(CJK 代码页撞
+  C4819)、`_wgetenv` 已弃用要换 `GetEnvironmentVariableW`。
+
+## 生产运维要点
+
+节点是阿里云 `mica.cloudcele.com`,key 认证免密(主机名/registry 本来就在 `justfile` 里)。
+容器名 **`mica-postgres-1`**(不是 `mica-postgres`)。详见 `docs/deploy.md` / `docs/release.md`。
+
+- ⚠️ **`deploy-prod` 不做迁移前的数据库备份。** 它的顺序是 sync compose → pull/up api+web
+  (**api 一起来就跑迁移**)→ 刷 backup sidecar → 健康检查;那个 sidecar 是**周期性导出器,
+  且在 api 起来之后才刷**,当不了回滚点。**带数据改动的迁移必须自己先落还原点**:
+  `docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-<x>-<ts>.sql.gz`,
+  再 `gzip -t` 验完整性 + `zcat | grep -c "^COPY public.<表>"` 确认目标表在内(库 22MB,几秒钟)。
+- ⚠️ **SSH 连太密会被上游掐**:一个会话里连十几次之后开始清一色
+  `Connection closed by <ip> port 22`。**不是节点干的**(fail2ban 没装,iptables 里也没规则),
+  是云上游限流。**别猛敲重试,那只会续期**,等 ~7 分钟自然恢复。同期 443 也会偶发
+  `schannel: failed to receive handshake`,重试即通。**验证脚本一次 ssh 里用 heredoc 跑完所有
+  psql,别一条命令一个 ssh。**
+- **分层生效**:服务端改动随 api 部署即生效;**MCP 代理层的改动在 `mica-cli` 二进制里**,
+  用户不把 MCP 指向新版 mica-cli 并重连就还是旧行为。排查"我明明改了怎么没生效"先分清这层。
+- **迁移是 `sqlx::migrate!` 编译期嵌入的**,新增迁移文件不触发 `mica-infra` 重编 →
+  加迁移后 `touch crates/infra/src/db.rs` 强制重编,否则 `run_migrations` 还带旧集合。
+
+## 协作约定(用户定,长期有效)
+
+- **对话与项目文档用中文**(README 面向公众用英文)。
+- **计划批准后连续执行到完成**,中途决策按推荐项走,不逐步请示;诚实报告做不到的部分。
+- **能用子代理/workflow 提效就主动用**(用户显式允许)。但**"边改文件边攒清单"这类批量活
+  必须单 agent 顺序跑完、不打断**:子代理的文件编辑是真实落盘,被打断时清单随之丢失,
+  留下一堆悬空引用而重建信息已经没了(i18n 那次并行派三个、拒了两个,136 个 key 的翻译全丢)。

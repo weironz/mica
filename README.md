@@ -1,82 +1,154 @@
-# Mica
+<h1 align="center">Mica</h1>
 
-A Markdown workspace with a hand-written editor, a Rust data plane, and two
-places to keep your notes: a local folder on your disk, or a synced cloud
-workspace. Desktop (Windows) and Web, from one codebase.
+<p align="center">
+  <em>Your notes are Markdown files. On your disk, or on your server. Never on ours.</em>
+</p>
 
-> Status: actively developed, used daily by its author. The API and storage
-> formats are stable enough to trust with real notes (every release runs
-> migrations forward and the export format round-trips), but this is not a
-> 1.0 product and there is no compatibility promise across major versions yet.
+<p align="center">
+  <a href="https://github.com/weironz/mica/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/weironz/mica?label=download&color=2f7d6f"></a>
+  <a href="https://github.com/weironz/mica/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/weironz/mica/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="#-license"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-2f7d6f"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Web-2f7d6f">
+</p>
 
-## What it is
+<p align="center">
+  <a href="#-install">Download</a> ·
+  <a href="#-self-hosting">Self-host</a> ·
+  <a href="docs/">Documentation</a> ·
+  <a href="docs/roadmap.md">Roadmap</a>
+</p>
 
-**Two worlds, one app.** A *local* workspace is a folder of Markdown on your
-own disk — no account, no network, the files stay yours. A *cloud* workspace
-lives on a Mica server you or someone else runs, syncs in real time, and can be
-shared with other people. You switch between them explicitly; the app only ever
-shows one world at a time, so there is never a question of where a page lives.
+<p align="center">
+  <b>English</b> | <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-**The editor is drawn, not composed.** It is a single Flutter `RenderBox` that
+<!-- SCREENSHOT: a wide shot of the editor goes here, before anything else. -->
+
+---
+
+**Looking to use Mica?** Grab the [installer](#-install) — you don't need anything
+else on this page.
+
+**Looking to self-host, hack on it, or see how it works?** Read on.
+
+> **Project status.** Actively developed and used daily by its author. Migrations
+> always run forward and the export format round-trips, so real notes are safe.
+> But this is pre-1.0: there is no compatibility promise across minor versions,
+> and Linux/macOS desktop builds are not published yet.
+
+## ✨ What Mica does
+
+**Two worlds, one app.** A *local* workspace is a folder of Markdown on your own
+disk — no account, no network, no sync. A *cloud* workspace lives on a Mica
+server, syncs in real time, and can be shared. You switch between them
+explicitly, and the app only ever shows one at a time, so there is never a
+question of where a page lives.
+
+**The editor is drawn, not composed.** It's a single Flutter `RenderBox` that
 paints text, carets, selections and blocks itself, over a marks-over-plain-text
-model — not a tree of widgets, not a `WebView`, not a wrapped third-party
-editor. That is why the caret behaves the same on every platform, why IME
-(Chinese/Japanese/Korean) composition works, and why large documents stay
-responsive.
+model. Not a widget tree, not a `WebView`, not a wrapped third-party editor.
 
-**Markdown is the format, not a feature.** CommonMark 0.31.2 is the base
-(641/641 spec examples on the read side), GFM on top (24/24), plus a small
-dialect for what GFM cannot express — footnotes, front matter, Pandoc-style
-math. The writer emits a normalized subset, and round-trip stability is an
-enforced invariant, not an aspiration. See
-[the scoreboard](docs/commonmark-scoreboard.md).
+- **Local-first workspaces** — plain Markdown on disk, no account required.
+- **Real-time collaboration** — CRDT sync via `yrs`, with collaborator presence.
+- **Offline-tolerant** — edits queue and reconcile; images upload when you reconnect.
+- **Folders and pages** — drag to reorder or reparent, per-user workspace ordering.
+- **Rich blocks** — tables, code with highlighting, LaTeX math, Mermaid diagrams, footnotes.
+- **Version history** — automatic snapshots plus named checkpoints, with diff preview.
+- **Import** — Markdown, folders, ZIP archives, and Notion exports.
+- **Export** — Markdown, HTML, PDF, and ZIP; exports re-import losslessly.
+- **Public links** — share a document read-only.
+- **MCP server** — let Claude read, search and edit your notes.
+- **Optional AI** — hidden entirely when no API key is configured.
 
-### Features
+### Markdown is the format, not a feature
 
-- **Editing** — headings, lists, tables, code blocks with syntax highlighting,
-  quotes, footnotes, task lists, LaTeX math (inline and block),
-  Mermaid diagrams, images with paste/drag-drop upload.
-- **Page tree** — folders and pages, drag to reorder or reparent, per-user
-  workspace ordering. Folders contain; pages are leaves.
-- **Real-time sync** (cloud) — CRDT-based (`yrs`, the Rust port of Yjs) with
-  collaborator presence. The Web client speaks the same wire format via Yjs.
-- **Offline-first** (cloud) — edits queue locally and reconcile on reconnect;
-  images inserted offline upload when the network returns.
-- **History** — automatic snapshots plus manual checkpoints, with restore.
-- **Import** — Markdown files, folders, and ZIP archives, including Notion
-  exports (IDs stripped, duplicate H1 titles removed, nested `Part-N.zip`
-  expanded). See [Export / Import](docs/export-import.md).
-- **Export** — Markdown, HTML, PDF, and ZIP archives of a page, a folder, a
-  workspace, or everything at once. Exports re-import losslessly.
-- **Sharing** (cloud) — public read-only links per document.
-- **AI** (optional) — `/`-menu and global "Ask AI" backed by the Anthropic
-  Messages API. Disabled and hidden when no key is configured.
-- **MCP server** — expose your workspace to Claude or any MCP client so it can
-  read, search, create and edit pages. See [MCP](docs/mcp-connect.md).
+CommonMark 0.31.2 is the base — **641/641 spec examples pass on the read side** —
+with GFM on top (24/24), plus a small dialect for what GFM cannot express:
+footnotes, front matter, Pandoc-style math. The writer emits a normalized subset,
+and **round-trip stability is an enforced invariant**, pinned by a regression
+floor in CI. See the [scoreboard](docs/commonmark-scoreboard.md).
 
-## Install
+## 🤔 Why another one of these
 
-**Desktop (Windows)** — download `Mica-Setup-<version>.exe` from
-[Releases](https://github.com/weironz/mica/releases/latest). The app updates
-itself from the same feed.
+There are a lot of good notes apps. Mica exists because of a specific combination
+that none of them quite had:
 
-**CLI** — `mica-cli` binaries for Windows / Linux / macOS are attached to every
-release. It drives the same API and hosts the MCP server (`mica-cli mcp`). See
-[CLI](docs/cli.md).
+- **[Obsidian](https://obsidian.md)** got local-first files right, but isn't open source and has no real-time server story.
+- **[Notion](https://notion.so)** got the editor right, but your data lives in their database.
+- **[AFFiNE](https://github.com/toeverything/AFFiNE)** and **[AppFlowy](https://github.com/AppFlowy-IO/AppFlowy)** are both excellent and both open source — they are Mica's reference points, and their source has settled more than one architecture argument here. AFFiNE is web-first; AppFlowy runs a Rust core under Flutter.
+- **[SiYuan](https://github.com/siyuan-note/siyuan)** and **[Logseq](https://github.com/logseq/logseq)** are closer to the block-model end than the document end.
 
-**Server** — the API and Web bundle publish as container images per release.
-See [Deployment](docs/deploy.md) and [Release process](docs/release.md).
+Mica's bet is a **hand-written editor over a Rust data plane**, where the same
+document model serves a local folder and a synced server, and where Markdown is
+the storage format rather than an export target.
 
-Linux and macOS desktop builds are not published yet. The Flutter project
-targets Linux and the code is platform-agnostic, but neither is built in CI or
-tested, so treat them as unsupported.
+**What Mica is not:** it has no plugin ecosystem, no mobile apps, no whiteboard
+or database views, and a fraction of the polish of any project listed above. If
+you need those today, use one of those instead — they're genuinely good.
 
-## Repository layout
+## 📦 Install
+
+| Platform | Download |
+| --- | --- |
+| **Windows** | [`Mica-Setup-*.exe`](https://github.com/weironz/mica/releases/latest) — the app self-updates from the same feed |
+| **Linux / macOS desktop** | Not published yet. The Flutter project targets Linux and the code is platform-agnostic, but neither is built in CI or tested — treat as unsupported. |
+| **Web** | Self-hosted only, see below |
+
+**CLI** — `mica-cli` binaries for Windows, Linux and macOS are attached to every
+[release](https://github.com/weironz/mica/releases/latest). It drives the same
+API and hosts the MCP server (`mica-cli mcp`). See [docs/cli.md](docs/cli.md).
+
+## 🏗 Self-hosting
+
+Two compose files ship in `deploy/`. The single-server one is **self-contained** —
+PostgreSQL and RustFS (S3-compatible storage) run alongside the app, so you don't
+need to bring your own.
+
+<details>
+<summary><b>Single server — nginx on port 80, no Traefik</b></summary>
+
+```sh
+cp deploy/.env.prod.example .env.prod
+vi .env.prod          # SERVER_IP, plus a strong JWT_SECRET and passwords
+                      #   openssl rand -hex 32
+./deploy/deploy.sh    # builds the Flutter bundle + API image, starts everything
+```
+
+Then open `http://<SERVER_IP>/`. Public ports are **80** (app) and **9000**
+(RustFS, because the browser presigns straight against it — so `S3_ENDPOINT`
+must be browser-reachable). Postgres stays inside the compose network.
+
+`./deploy/deploy.sh --web-only` rebuilds just the Flutter bundle; nginx serves it
+live, no restart needed.
+
+</details>
+
+<details>
+<summary><b>Behind an existing Traefik — HTTPS, no host ports</b></summary>
+
+`deploy/docker-compose.yml` is the canonical stack: label routing plus Let's
+Encrypt, pulling published images rather than building. Set `MICA_VERSION` to pin
+a release. See [Deployment](docs/deploy.md#behind-traefik-the-canonical-production-stack).
+
+</details>
+
+**Migrations are embedded in the API binary and run at startup** — there is no
+separate migration step, and rolling forward is the only supported direction.
+
+Full notes: [Deployment](docs/deploy.md) · [Backup](docs/backup.md) · [Release process](docs/release.md)
+
+## 🧩 How it's built
+
+**Rust** for anything that parses, walks archives, hashes, or talks to storage.
+**Dart/Flutter** for painting, caret/selection, hit-testing, and the editor's
+latency-critical paths. `yrs` (the Rust port of Yjs) for CRDT sync — the Web
+client speaks the same wire format via Yjs itself, so one engine serves every
+platform.
 
 ```
 crates/
-  api-server     Axum HTTP + WebSocket server; migrations; the only thing
-                 that talks to Postgres and S3
+  api-server     Axum HTTP + WebSocket; migrations; the only thing that
+                 talks to Postgres and S3
   app-core       document operations, sync, snapshot/yrs bridging
   mica-core      the CRDT document (yrs) — from_blocks / to_blocks
   markdown       the Markdown engine: block model, parser, renderer
@@ -89,68 +161,70 @@ clients/mica_flutter/
   lib/editor     the hand-written editor (render.dart is the canvas)
   lib/local      the local-vault store (Rust via flutter_rust_bridge)
   rust           the client-side Rust core (FFI)
-docs/            design documents — see the index below
+docs/            design documents
 migrations/      Postgres schema, applied automatically at API startup
 ```
 
-## Development
+## 🛠 Development
 
-Requires Rust (stable, see `rust-toolchain.toml`), Flutter, and Docker for
-Postgres. [`just`](https://github.com/casey/just) drives everything;
-`just --list` shows all recipes.
+Requires Rust (stable, see `rust-toolchain.toml`), Flutter, and Docker.
+[`just`](https://github.com/casey/just) drives everything — `just --list` shows
+every recipe.
 
 ```sh
 cp .env.example .env
-just dev-up          # Postgres (+ MinIO) in Docker
-just dev-api         # cargo run -p mica-api-server (runs migrations on start)
+just dev-up          # Postgres + MinIO in Docker
+just dev-api         # cargo run -p mica-api-server (migrations run on start)
 just app             # Flutter desktop client
 just app chrome      # Flutter web client
 just test            # cargo test + flutter test
 just check           # fmt + clippy + analyze
 ```
 
-The API serves `http://127.0.0.1:8080`; check it with
-`curl http://127.0.0.1:8080/api/health`.
+With `S3_*` unset the file endpoints return `503` and everything else works. Same
+for `ANTHROPIC_API_KEY` and the AI endpoints.
 
-File uploads need S3-compatible storage (`just dev-up` starts MinIO). With the
-`S3_*` variables unset, the file endpoints return `503` and the rest of the app
-works. Same for `ANTHROPIC_API_KEY` and the AI endpoints.
+**Before changing anything structural, read [`CLAUDE.md`](CLAUDE.md)** — project
+principles, the invariants that have been broken before, and the release process
+— and [`docs/lessons.md`](docs/lessons.md), which records what those invariants
+cost when they were broken.
 
-### Working on this codebase
+Three rules that will otherwise bite you:
 
-- **`CLAUDE.md` is the operating manual** — project principles, invariants that
-  have been broken before, and the release process. Read it before changing
-  anything structural.
-- **The data plane is Rust.** Anything that parses, walks archives, hashes, or
-  talks to storage belongs in a crate, not in Dart. Dart owns painting,
-  caret/selection, hit-testing, and the editor's latency-critical paths.
-- **The Markdown grammar is duplicated on purpose** (Rust engine + Dart mirror,
-  because input rules cannot take a network round trip per keystroke). The two
-  are pinned together by shared conformance fixtures — change one, run both
-  test suites.
-- **Every bug fix ships with a regression test.** Commit messages state the
-  root cause, not a changelog.
+1. **The Markdown grammar is duplicated on purpose** (Rust engine + Dart mirror,
+   because input rules can't take a network round trip per keystroke). Shared
+   conformance fixtures pin the two together — change one, run both suites.
+2. **Every bug fix ships with a regression test**, and the commit message states
+   the root cause rather than a changelog.
+3. **New render capabilities get a mechanism**, not an `if` branch in
+   `render.dart`. See [render architecture](docs/render-architecture.md).
 
-## Documentation
+## 📚 Documentation
 
 | | |
 | --- | --- |
 | [Architecture](docs/architecture.md) | System shape and the decisions behind it |
-| [Editor design](docs/editor.md) · [Editor engine](docs/editor-engine.md) | The editor's principles and internals |
-| [Render architecture](docs/render-architecture.md) | How new block types are added (registry, not `if`-branches) |
+| [Lessons](docs/lessons.md) | Bugs that cost the most, and why |
+| [Editor design](docs/editor.md) · [engine](docs/editor-engine.md) · [render](docs/render-architecture.md) | The editor's principles and internals |
 | [Sync and API](docs/sync-and-api.md) | REST surface and the WebSocket envelope |
 | [Export / Import](docs/export-import.md) | Archive format, Notion adaptation, round-trip rules |
 | [CommonMark scoreboard](docs/commonmark-scoreboard.md) | Spec conformance, tracked per release |
-| [Local-first plan](docs/local-first-plan.md) · [Vault mode](docs/vault-mode.md) | The local world |
+| [Local-first](docs/local-first-plan.md) · [Vault mode](docs/vault-mode.md) | The local world |
 | [MCP server](docs/mcp-server.md) · [Connecting a client](docs/mcp-connect.md) | AI tool access |
 | [Deployment](docs/deploy.md) · [Release](docs/release.md) · [Backup](docs/backup.md) | Running it |
-| [Keyboard shortcuts](docs/shortcuts.md) | Authoritative shortcut list |
+| [Shortcuts](docs/shortcuts.md) | Authoritative keyboard shortcut list |
 | [Roadmap](docs/roadmap.md) | What's next |
 
-Some design documents predate later decisions (notably `architecture.md`, which
-was written when the project was cloud-only). `CLAUDE.md` and the docs it points
-at are the current word.
+Some design documents predate later decisions — notably `architecture.md`, which
+was written when the project was cloud-only. `CLAUDE.md` and the documents it
+points at are the current word.
 
-## License
+## 🤝 Contributing
 
-AGPL-3.0-or-later.
+Issues and pull requests are welcome. For anything beyond a small fix, please
+open an issue first — a fair amount of this codebase is load-bearing in
+non-obvious ways, and `docs/lessons.md` exists because of it.
+
+## 📄 License
+
+[AGPL-3.0-or-later](LICENSE).
