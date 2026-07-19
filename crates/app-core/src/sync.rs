@@ -53,7 +53,7 @@ pub struct YrsBase {
     pub base_rid: i64,
 }
 
-fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
+pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
     CoreBlock {
         id: b.id,
         kind: b.kind,

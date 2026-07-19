@@ -345,3 +345,92 @@ async fn rejects_garbage_update() {
     assert_eq!(sync::document_head(&db, doc).await.unwrap(), 0, "nothing persisted");
     cleanup(&db, ws, user).await;
 }
+
+/// Regression (2026-07-19, found in prod): an op-model write on a document that
+/// HAS a yrs base must land in the yrs base too — otherwise the write is
+/// invisible forever.
+///
+/// The bug: `apply_derived_operations` derived from the op-model snapshot and
+/// wrote only the op-model snapshot, while `store::current_payload` (every read,
+/// export and MCP fetch) returns the YRS blocks whenever a base exists. So an
+/// MCP append on any document ever opened in the editor returned ok, advanced
+/// `current_seq`, grew `document_snapshots` — and could never be read back. Data
+/// was acknowledged and stored where nothing looks.
+///
+/// Pins all three halves: the read sees it, the yrs base carries it, and the
+/// change is on the stream so a live editor converges instead of rebootstrapping.
+#[tokio::test]
+async fn op_write_lands_in_the_yrs_base_a_reader_actually_sees() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping op_write_lands_in_the_yrs_base_a_reader_actually_sees: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // Give the document a yrs base and diverge it from the op snapshot exactly
+    // the way opening it in the editor does: a real yrs edit.
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    editing.text_insert("a", 5, " world");
+    let edit = editing.encode_diff(&sv).unwrap();
+    let head_before = sync::push_update(&db, ws, doc, user, &edit).await.unwrap();
+
+    // An op-model write (the MCP/REST markdown path) appends a block.
+    let applied = store::apply_document_operations(
+        &db,
+        ws,
+        doc,
+        user,
+        &[mica_app_core::documents::DocumentOperation::InsertBlock {
+            block: serde_json::from_value(json!({"id":"b","type":"paragraph","text":"appended"}))
+                .unwrap(),
+            parent_id: "r".to_string(),
+            index: None,
+        }],
+    )
+    .await
+    .unwrap();
+
+    // 1. The READ path sees it — this is what silently failed in prod.
+    let read = store::current_payload(&db, doc).await.unwrap().unwrap();
+    let appended = read
+        .blocks
+        .iter()
+        .find(|b| b.id == "b")
+        .expect("appended block must be visible to readers");
+    assert_eq!(appended.text, "appended");
+    // ...and the op write derived from the YRS truth, so the concurrent yrs edit
+    // survives instead of being computed away from a stale baseline.
+    assert_eq!(
+        read.blocks.iter().find(|b| b.id == "a").unwrap().text,
+        "Hello world",
+        "op write must build on the yrs state, not the stale op snapshot"
+    );
+
+    // 2. The yrs base itself carries it (a fresh client bootstrap gets it).
+    let base2 = sync::bootstrap_base(&db, doc).await.unwrap();
+    let fresh = MicaDoc::from_update(&base2.state).unwrap();
+    assert!(
+        fresh.to_blocks().iter().any(|b| b.id == "b"),
+        "a client bootstrapping now must receive the appended block"
+    );
+
+    // 3. It rode the stream as a yrs update, so an already-open editor converges
+    //    by applying it — no rebootstrap.
+    let yrs = applied.yrs.expect("op write must produce a yrs update to broadcast");
+    assert!(yrs.rid > head_before, "the write takes a new stream rid");
+    let ups = sync::pull_document_updates(&db, doc, head_before, 100).await.unwrap();
+    assert!(ups.iter().any(|u| u.rid == yrs.rid), "update is on the stream");
+    let mut live = MicaDoc::from_update(&base.state).unwrap();
+    live.apply_update(&edit).unwrap();
+    for u in &ups {
+        live.apply_update(&u.payload).unwrap();
+    }
+    assert!(
+        live.to_blocks().iter().any(|b| b.id == "b"),
+        "a live editor applying the stream sees the appended block"
+    );
+
+    cleanup(&db, ws, user).await;
+}

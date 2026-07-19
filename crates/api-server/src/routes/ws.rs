@@ -457,6 +457,20 @@ pub fn broadcast_applied_update(
 ) {
   let text: Arc<str> = Arc::from(accepted_event(applied, ack_id).to_string());
   hub.broadcast_if_active(applied.document.id, origin, text);
+  // The same change on the yrs channel: an editor open on this document speaks
+  // yrs, not the op-model event above, so without this a REST/MCP write stayed
+  // invisible in an open window until it rebootstrapped. Identical shape to a
+  // peer's `sync.push` fan-out, so clients need no new handling.
+  if let Some(yrs) = &applied.yrs {
+    let event = json!({
+      "type": "sync.update",
+      "document_id": applied.document.id,
+      "rid": yrs.rid,
+      "actor_id": applied.update.actor_id,
+      "update": STANDARD.encode(&yrs.update),
+    });
+    hub.broadcast_if_active(applied.document.id, origin, Arc::from(event.to_string()));
+  }
 }
 
 fn accepted_event(applied: &AppliedUpdate, ack_id: Option<&str>) -> Value {
@@ -573,6 +587,9 @@ mod tests {
         payload: json!({ "operations": [] }),
         created_at: now,
       },
+      // These tests cover the op-model `accepted_event` shape only; the yrs
+      // half is exercised against a real database in app-core's sync_pg.
+      yrs: None,
     }
   }
 

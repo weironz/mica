@@ -99,6 +99,18 @@ pub struct AppliedUpdate {
   pub document: DocumentRecord,
   pub snapshot: SnapshotRecord,
   pub update: UpdateRecord,
+  /// The SAME change expressed as a yrs update, folded into the document's
+  /// base and appended to the workspace stream (see [`apply_derived_operations`]).
+  /// Callers broadcast it so live editors converge without a rebootstrap.
+  pub yrs: Option<AppliedYrs>,
+}
+
+/// The yrs half of an accepted op-model write: the stream `rid` it was assigned
+/// and the encoded update that carries it.
+#[derive(Debug, Clone)]
+pub struct AppliedYrs {
+  pub rid: i64,
+  pub update: Vec<u8>,
 }
 
 /// Apply structural operations against the latest snapshot under a row lock,
@@ -143,15 +155,78 @@ where
   let current_snapshot = latest_snapshot_tx(&mut tx, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-
-  let current_payload = payload_from_value(current_snapshot.payload)
+  let snapshot_payload = payload_from_value(current_snapshot.payload)
     .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
+
+  // Derive from the YRS base, not the op-model snapshot: once a document has a
+  // yrs base (any document ever opened in the editor), [`current_payload`] —
+  // i.e. every read, export and MCP fetch — returns the yrs blocks and ignores
+  // the snapshot. Deriving from the snapshot meant ops were computed against a
+  // baseline nobody reads, then written somewhere nobody reads: writes returned
+  // ok, `current_seq` advanced, `document_snapshots` grew — and the content was
+  // invisible forever. `ensure_base_tx` folds the snapshot into a base on first
+  // touch, so documents that never had one keep working unchanged.
+  let base = crate::sync::ensure_base_tx(&mut tx, document_id).await?;
+  let mut doc = mica_core::MicaDoc::from_update(&base.state)
+    .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
+  let state_vector_before = doc.state_vector();
+  let current_payload = DocumentSnapshotPayload {
+    schema_version: snapshot_payload.schema_version,
+    root_block_id: doc.root_block_id(),
+    blocks: doc.to_blocks().into_iter().map(md_block_from_core).collect(),
+  };
+
   let operations = derive(&current_payload).map_err(ApiError::BadRequest)?;
   if operations.is_empty() {
     return Err(ApiError::BadRequest("no operations to apply".to_string()));
   }
   let next_payload = apply_operations(current_payload, &operations)
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+
+  // Write the result THROUGH to yrs as forward operations, so the base every
+  // read consults actually changes. `set_blocks` re-derives the whole block set
+  // — the same coarse-but-exact primitive version restore uses. Deliberately
+  // not a per-op yrs mapping: a second implementation of the op semantics is
+  // precisely how the two stores drifted apart in the first place, whereas this
+  // makes the yrs state equal `next_payload` by construction. The cost is a
+  // full-document update per REST/MCP write (these are batch writes, not
+  // keystrokes) and last-writer-wins against a concurrent editor.
+  let next_blocks: Vec<mica_core::Block> = next_payload
+    .blocks
+    .iter()
+    .cloned()
+    .map(crate::sync::to_core_block)
+    .collect();
+  doc.set_blocks(&next_payload.root_block_id, &next_blocks);
+  let yrs_update = doc
+    .encode_diff(&state_vector_before)
+    .map_err(|error| ApiError::Internal(format!("yrs diff failed: {error}")))?;
+  let yrs_rid: i64 = sqlx::query_scalar(
+    "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
+     VALUES ($1, $2, $3, $4) RETURNING rid",
+  )
+  .bind(workspace_id)
+  .bind(document_id)
+  .bind(actor_id)
+  .bind(&yrs_update)
+  .fetch_one(&mut *tx)
+  .await?;
+  let yrs_state = doc.encode_state();
+  let yrs_state_vector = doc.state_vector();
+  sqlx::query(
+    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (document_id) DO UPDATE SET
+         state = excluded.state, state_vector = excluded.state_vector,
+         base_rid = excluded.base_rid, updated_at = now()",
+  )
+  .bind(document_id)
+  .bind(&yrs_state)
+  .bind(&yrs_state_vector)
+  .bind(yrs_rid)
+  .execute(&mut *tx)
+  .await?;
+
   let next_payload_value =
     serde_json::to_value(next_payload).map_err(|error| ApiError::Internal(error.to_string()))?;
   let operations_value =
@@ -205,6 +280,10 @@ where
     document,
     snapshot,
     update,
+    yrs: Some(AppliedYrs {
+      rid: yrs_rid,
+      update: yrs_update,
+    }),
   })
 }
 
@@ -751,6 +830,7 @@ pub async fn restore_snapshot(
   .bind(restored_value)
   .fetch_one(&mut *tx)
   .await?;
+  // (legacy path — see the `yrs: None` note at the end of this function)
 
   let document = sqlx::query_as::<_, DocumentRecord>(
     r#"
@@ -772,6 +852,9 @@ pub async fn restore_snapshot(
     document,
     snapshot,
     update,
+    // Legacy op-model restore, superseded by `sync::restore_yrs_version` (the
+    // yrs-native path history.rs actually calls). No yrs half to broadcast.
+    yrs: None,
   })
 }
 
