@@ -550,12 +550,12 @@ class RenderDocument extends RenderBox {
   }
 
   /// Called during paint for each image actually drawn. The host uses it to
-  /// stop animating pictures nothing draws any more — the block was deleted, or
-  /// its source replaced. See `_MicaEditorState._onImageFrame`.
-  ///
-  /// NOT an on-screen test: this render object paints the whole document, with
-  /// no viewport culling, so a picture scrolled out of view still reports here
-  /// and its animation keeps running. Hiding the window does stall it, but by a
+  /// stop animating pictures nothing draws any more — the block was deleted,
+  /// its source replaced, or (since viewport culling landed in [paint]) it
+  /// scrolled out of the exposed band: a culled image stops reporting, the
+  /// host pauses its animator, and scrolling it back in repaints → reports →
+  /// restarts it, through the same `_MicaEditorState._onImageFrame` /
+  /// `_onImagePainted` pair. Hiding the window stalls animations by a
   /// different route — the engine simply stops asking for frames.
   void Function(String key)? onImagePainted;
 
@@ -1277,18 +1277,45 @@ class RenderDocument extends RenderBox {
   // Painting
   // ---------------------------------------------------------------------------
 
+  /// Visible Y-window (LOCAL coords) for viewport culling, set per paint from
+  /// the canvas clip. This render object is content-height inside a scroll
+  /// view, and painting used to record the WHOLE document every repaint — a
+  /// sustained-GPU-load finding of the freeze audit. The scroll viewport's
+  /// clip tells us the exposed band; anything fully outside (plus slack)
+  /// skips paint. Scrolling re-invokes paint with a fresh clip (no repaint
+  /// boundary between us and the viewport), so the band tracks the scroll.
+  /// Slack absorbs out-of-box decorations (hover rings, quote-bar bridges)
+  /// and gives animations headroom to resume before entry. With no clip
+  /// (e.g. a full-document toImage capture) the bounds are infinite and
+  /// everything paints, as before.
+  double _visTop = double.negativeInfinity;
+  double _visBottom = double.infinity;
+  static const double _cullSlack = 600;
+
+  bool _nodeVisible(_NodeLayout l) =>
+      l.boxTop + l.boxHeight >= _visTop && l.boxTop <= _visBottom;
+
   @override
   void paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
+    final clip = canvas.getLocalClipBounds();
+    _visTop = clip.top - offset.dy - _cullSlack;
+    _visBottom = clip.bottom - offset.dy + _cullSlack;
     // Block backgrounds first, so the selection highlight (next) is not hidden
     // behind a code block's fill.
     _paintBlockBackgrounds(canvas, offset);
     _paintInlineCode(canvas, offset);
     _paintSelection(canvas, offset);
     for (var i = 0; i < _layouts.length; i++) {
+      if (!_nodeVisible(_layouts[i])) continue;
       _paintNode(canvas, offset, i);
     }
     for (var i = 0; i < _layouts.length; i++) {
+      // Culled overlays too: an off-screen GIF/animation stops reporting
+      // onImagePainted and stalls (the audit's "one looping GIF anywhere =
+      // full-canvas repaint forever"); scrolling it back in repaints it,
+      // which restarts the animator through the same path as window-restore.
+      if (!_nodeVisible(_layouts[i])) continue;
       _layouts[i].renderedBy?.paintOverlay(
         this,
         canvas,
@@ -1506,6 +1533,10 @@ class RenderDocument extends RenderBox {
   void _paintBlockBackgrounds(Canvas canvas, Offset offset) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      // Viewport culling (see paint). Quote-bar gap-bridging reads only the
+      // PREVIOUS node, and a skipped prev means the bridge itself is above
+      // the slack band — invisible either way.
+      if (!_nodeVisible(l)) continue;
       // Atomic-block backdrops dispatch by kind: a block's identity tint
       // (math's lavender) shows on its fallen-through source form too.
       _renderersByKind[l.kind]?.paintBackground(this, canvas, offset, l, i);
@@ -1971,6 +2002,7 @@ class RenderDocument extends RenderBox {
 
   void _paintScrollbars(Canvas canvas, Offset offset) {
     for (final l in _layouts) {
+      if (!_nodeVisible(l)) continue; // viewport culling (see paint)
       final track = l.scrollTrack;
       if (track == null) continue;
       final r = track.shift(offset);
@@ -2192,6 +2224,7 @@ class RenderDocument extends RenderBox {
     final paint = Paint()..color = EditorTheme.inlineCodeBg;
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      if (!_nodeVisible(l)) continue; // viewport culling (see paint)
       if (EditorNode.isAtomicKind(l.kind) ||
           l.kind == 'code_block' ||
           l.renderedBy != null) {
@@ -2239,6 +2272,9 @@ class RenderDocument extends RenderBox {
     final end = sel.end;
     final paint = Paint()..color = EditorTheme.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
+      // Viewport culling (see paint): a select-all on a huge doc must not
+      // record highlight rects for thousands of off-screen nodes.
+      if (!_nodeVisible(_layouts[i])) continue;
       final l = _layouts[i];
       // Atomic nodes (image/table/divider) and renderer-claimed layouts
       // (rendered mermaid) are opaque and painted after the selection layer,
