@@ -8,35 +8,25 @@
 // fallback needs at cold start). Cloud DOC replicas live in IndexedDB via
 // `WebIdbDocStore` (see doc_store_platform_web.dart); only the nav skeleton is
 // mirrored through this class.
+// The interface makes every member an override; blanket `@override` noise
+// would drown the real signal in a stub file, so the lint is off here.
+// ignore_for_file: annotate_overrides
 import 'dart:convert';
 import 'dart:typed_data';
 
 import '../cloud/cloud_doc_store.dart';
 import '../prefs.dart';
+import 'local_offline_api.dart';
 
-typedef ViewData = ({
-  String id,
-  String workspaceId,
-  String? parentId,
-  String objectId,
-  String name,
-  String position,
-  bool trashed,
-  String objectType,
-});
+// The shared plain-data types (ViewData & co.) live in the contract file; keep
+// re-exporting them so `import 'local_offline.dart'` users see them as before.
+export 'local_offline_api.dart';
 
-typedef WorkspaceData = ({String id, String name, String position, String role});
-
-typedef CloudPageTreeCache = ({
-  List<WorkspaceData> workspaces,
-  List<ViewData> views,
-});
-
-typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
-
-typedef VaultImportResult = ({int docs, int folders, List<String> errors});
-
-class LocalOffline {
+/// The compiler-enforced twin of the IO variant: `implements LocalOfflineApi`
+/// means a member added to the contract but not stubbed here fails `flutter
+/// analyze` immediately — the drift that silently broke the v0.12.0–0.12.3 web
+/// images can no longer compile.
+class LocalOffline implements LocalOfflineApi {
   LocalOffline({String? rootDirOverride});
 
   bool get available => false;

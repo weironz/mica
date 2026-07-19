@@ -10,6 +10,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+// The interface makes every member an override; 35 `@override` annotations
+// would drown the real signal in enforcement noise, so the lint is off here.
+// ignore_for_file: annotate_overrides
 import '../cloud/cloud_doc_store.dart';
 import '../cloud/store_cloud_doc_store.dart';
 import '../src/rust/api/document.dart';
@@ -18,39 +21,13 @@ import '../src/rust/api/store.dart';
 import '../src/rust/frb_generated.dart';
 import '../upload/sha256.dart';
 import 'local_doc.dart';
+import 'local_offline_api.dart';
 
-/// One page-tree node, as plain data for the UI layer to map onto its own model.
-typedef ViewData = ({
-  String id,
-  String workspaceId,
-  String? parentId,
-  String objectId,
-  String name,
-  String position,
-  bool trashed,
-  String objectType,
-});
+// The shared plain-data types (ViewData & co.) live in the contract file; keep
+// re-exporting them so `import 'local_offline.dart'` users see them as before.
+export 'local_offline_api.dart';
 
-/// One local workspace, as plain data. [role] is the user's membership role,
-/// mirrored from the server so an offline start knows whether editing is allowed
-/// (P2d); local workspaces are the user's own (owner).
-typedef WorkspaceData = ({String id, String name, String position, String role});
-
-/// A mirrored page tree read back from the store for one `origin` (a server
-/// URL) — workspaces + views, for offline navigation (P2 option C, P1c).
-typedef CloudPageTreeCache = ({
-  List<WorkspaceData> workspaces,
-  List<ViewData> views,
-});
-
-/// A loaded document: its root block id and full block list (snapshot payload).
-typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
-
-/// Outcome of a vault import (S-tier read-only scan): documents + folder-pages
-/// created, and any per-file errors (unreadable files, etc.).
-typedef VaultImportResult = ({int docs, int folders, List<String> errors});
-
-class LocalOffline {
+class LocalOffline implements LocalOfflineApi {
   /// [rootDirOverride] redirects the data dir (store + blob CAS) — for tests
   /// only; production uses the per-user app data dir.
   LocalOffline({String? rootDirOverride}) : _rootOverride = rootDirOverride;
