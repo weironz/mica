@@ -515,11 +515,24 @@ class LocalOffline {
     // Lazily create folder-pages (only ancestors of a real `.md`, so asset-only
     // dirs don't clutter the tree).
     final folderView = <String, String>{}; // relative dir -> view id
-    final posByParent = <String?, int>{};
+    // Seed each parent's counter from its EXISTING children's max position, so
+    // an import into a NON-EMPTY folder/root (the common case for the folder ⋯
+    // "import into folder" menu) doesn't reuse positions already taken —
+    // local_view has no (parent, position) unique constraint or tiebreak, so a
+    // collision would leave sibling order undefined. Work in position-integer
+    // space (10-spaced), matching _nextLocalPosition on the host.
+    final lastPosByParent = <String?, int>{};
+    for (final v in store.listViews(origin: 'local')) {
+      if (v.workspaceId != workspaceId) continue;
+      final n = int.tryParse(v.position) ?? 0;
+      if (n > (lastPosByParent[v.parentId] ?? 0)) {
+        lastPosByParent[v.parentId] = n;
+      }
+    }
     String nextPos(String? parent) {
-      final n = (posByParent[parent] ?? 0) + 1;
-      posByParent[parent] = n;
-      return (n * 10).toString().padLeft(10, '0');
+      final n = (lastPosByParent[parent] ?? 0) + 10;
+      lastPosByParent[parent] = n;
+      return n.toString().padLeft(10, '0');
     }
 
     var folders = 0;
