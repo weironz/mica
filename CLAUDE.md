@@ -70,4 +70,5 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 - 块级嵌套是扁平模型:`data.indent`(列表层级)、`data.quote`/`qbreak`(引用深度/分组)、`data.li`(item 容器子块),HTML 导出端重建嵌套。
 - 代码字体:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。
 - 发版/构建见 **`docs/release.md`**(权威):Actions 只出安装包 + CLI(推 `v*` tag 触发);web/api 全靠本地 `just deploy-prod`(节点连不上 Docker Hub,走 save/scp/load)。`just --list` 看全部 recipe。
+- **版本号节奏(用户定,长期有效)**:日常发版一律**补丁位递增**(如 0.12.0→0.12.1),不管改动大小(新功能也走补丁)。**小版本(minor,如 0.12.x→0.13.0)是否要发由用户决策**,别自作主张跳 minor;不确定就默认补丁 + 问用户要不要抬 minor。
 - 键盘快捷键清单见 **`docs/shortcuts.md`**(权威)。加/改快捷键三处同步:`editor.dart` key handler(编辑器)+ `main.dart` `_appShortcuts`(应用级)+ `dialogs.dart` `_shortcutsSection`(设置面板)+ 该文档。
