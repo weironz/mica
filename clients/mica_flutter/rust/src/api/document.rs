@@ -16,6 +16,49 @@ pub struct MicaDocument {
     pub(crate) inner: Mutex<MicaDoc>,
 }
 
+/// One on-device image blob to bundle into a page ZIP export: the block's
+/// `file_id` plus the bytes Dart read from the local blob CAS.
+pub struct ZipAsset {
+    pub file_id: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Make a unique `assets/` filename, appending `-1`, `-2`… on collision —
+/// mirrors the server's `unique_asset_name` so local ZIPs match cloud ones.
+fn unique_asset_name(name: &str, used: &mut std::collections::HashSet<String>) -> String {
+    if used.insert(name.to_string()) {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.to_string(), String::new()),
+    };
+    let mut n = 1;
+    loop {
+        let candidate = format!("{stem}-{n}{ext}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Sanitize a page title into a ZIP-safe `.md` base name (drop path separators
+/// and reserved chars); empty → "document", matching the cloud export.
+fn safe_base(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| if "/\\:*?\"<>|\r\n\t".contains(c) { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.').trim().to_string();
+    if cleaned.is_empty() {
+        "document".to_string()
+    } else {
+        cleaned
+    }
+}
+
 impl MicaDocument {
     /// Build a document from a root id and a JSON array of blocks.
     #[frb(sync)]
@@ -113,6 +156,91 @@ impl MicaDocument {
         let srcs: std::collections::BTreeMap<String, String> = image_srcs.into_iter().collect();
         mica_markdown::set_image_srcs(&mut payload, &srcs);
         mica_markdown::export_html_document(&payload, &title, content_width).unwrap_or_default()
+    }
+
+    /// The doc as the engine's snapshot payload — shared by the markdown exports.
+    /// mica_core::Block and mica_markdown::Block mirror each other field-for-field.
+    fn snapshot(&self) -> mica_markdown::DocumentSnapshotPayload {
+        let doc = self.inner.lock().unwrap();
+        let root_block_id = doc.root_block_id();
+        let blocks = doc
+            .to_blocks()
+            .into_iter()
+            .map(|b| mica_markdown::Block {
+                id: b.id,
+                kind: b.kind,
+                text: b.text,
+                data: b.data,
+                children: b.children,
+            })
+            .collect();
+        mica_markdown::DocumentSnapshotPayload {
+            schema_version: 1,
+            root_block_id,
+            blocks,
+        }
+    }
+
+    /// Export this page's body as Markdown through the SAME engine the cloud uses
+    /// (`mica_markdown::export_markdown`), so a local page's `.md` matches a cloud
+    /// page's byte-for-byte. Image blocks keep their stored ref — use
+    /// [`MicaDocument::export_markdown_zip`] when bundling image bytes. Closes the
+    /// local-page md-export gap (previously only HTML/PDF existed locally).
+    #[frb(sync)]
+    pub fn export_markdown(&self) -> String {
+        mica_markdown::export_markdown(&self.snapshot()).unwrap_or_default()
+    }
+
+    /// Export this page as a portable ZIP (`<base>.md` + `assets/<name>` image
+    /// bytes), byte-compatible with the cloud page ZIP export: same naming +
+    /// dedup + Markdown rewrite via `export_markdown_with_assets`. [`assets`]
+    /// supplies the on-device blob bytes per `file_id` (Dart reads the local
+    /// CAS); external-URL images are left untouched.
+    #[frb(sync)]
+    pub fn export_markdown_zip(&self, base: String, assets: Vec<ZipAsset>) -> Vec<u8> {
+        let payload = self.snapshot();
+        let bytes_by_id: std::collections::HashMap<String, Vec<u8>> =
+            assets.into_iter().map(|a| (a.file_id, a.bytes)).collect();
+        // Mirror the server's collect_assets: image blocks in document order,
+        // name from data.name (default "image"), first occurrence wins.
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        for block in &payload.blocks {
+            if block.kind != "image" {
+                continue;
+            }
+            if let Some(id) = block.data.get("file_id").and_then(|v| v.as_str()) {
+                if bytes_by_id.contains_key(id) && !wanted.iter().any(|(w, _)| w == id) {
+                    let name = block
+                        .data
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image")
+                        .to_string();
+                    wanted.push((id.to_string(), name));
+                }
+            }
+        }
+        let mut entries: Vec<mica_interchange::ZipEntry> = Vec::new();
+        let mut used = std::collections::HashSet::new();
+        let mut map = std::collections::BTreeMap::new();
+        for (file_id, name) in wanted {
+            let asset = unique_asset_name(&name, &mut used);
+            entries.push(mica_interchange::ZipEntry {
+                name: format!("assets/{asset}"),
+                data: bytes_by_id.get(&file_id).cloned().unwrap_or_default(),
+            });
+            map.insert(file_id, format!("assets/{asset}"));
+        }
+        let markdown =
+            mica_markdown::export_markdown_with_assets(&payload, &map).unwrap_or_default();
+        entries.insert(
+            0,
+            mica_interchange::ZipEntry {
+                name: format!("{}.md", safe_base(&base)),
+                data: markdown.into_bytes(),
+            },
+        );
+        mica_interchange::build_zip(&entries)
     }
 
     /// Encode the full document state (the base snapshot to persist locally).

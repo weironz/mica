@@ -21,6 +21,10 @@ mica-core = { path = "../../../crates/mica-core", features = ["store"] }
 mica-markdown = { path = "../../../crates/markdown", features = ["render"] }
 # Blocks cross the FFI boundary as JSON strings (Dart already speaks that shape).
 serde_json = "1"
+# Same in-house store-ZIP writer the server uses (only serde_json underneath), so
+# a LOCAL page/folder ZIP export is byte-identical to the cloud one — the export
+# round-trip stays a single invariant across worlds.
+mica-interchange = { path = "../../../crates/interchange" }
 # Fresh root-block ids for imported documents.
 uuid = { version = "1", features = ["v4"] }
 

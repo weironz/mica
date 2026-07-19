@@ -6,6 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `safe_base`, `snapshot`, `unique_asset_name`
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>
 abstract class MicaDocument implements RustOpaqueInterface {
   /// Merge a remote yrs update into this doc (CRDT merge). Returns false if the
@@ -31,6 +33,23 @@ abstract class MicaDocument implements RustOpaqueInterface {
     required String title,
     required Map<String, String> imageSrcs,
     required int contentWidth,
+  });
+
+  /// Export this page's body as Markdown through the SAME engine the cloud uses
+  /// (`mica_markdown::export_markdown`), so a local page's `.md` matches a cloud
+  /// page's byte-for-byte. Image blocks keep their stored ref — use
+  /// [`MicaDocument::export_markdown_zip`] when bundling image bytes. Closes the
+  /// local-page md-export gap (previously only HTML/PDF existed locally).
+  String exportMarkdown();
+
+  /// Export this page as a portable ZIP (`<base>.md` + `assets/<name>` image
+  /// bytes), byte-compatible with the cloud page ZIP export: same naming +
+  /// dedup + Markdown rewrite via `export_markdown_with_assets`. [`assets`]
+  /// supplies the on-device blob bytes per `file_id` (Dart reads the local
+  /// CAS); external-URL images are left untouched.
+  Uint8List exportMarkdownZip({
+    required String base,
+    required List<ZipAsset> assets,
   });
 
   /// Build a document from a root id and a JSON array of blocks.
@@ -127,4 +146,24 @@ abstract class MicaDocument implements RustOpaqueInterface {
   });
 
   void updateBlockKind({required String id, required String kind});
+}
+
+/// One on-device image blob to bundle into a page ZIP export: the block's
+/// `file_id` plus the bytes Dart read from the local blob CAS.
+class ZipAsset {
+  final String fileId;
+  final Uint8List bytes;
+
+  const ZipAsset({required this.fileId, required this.bytes});
+
+  @override
+  int get hashCode => fileId.hashCode ^ bytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ZipAsset &&
+          runtimeType == other.runtimeType &&
+          fileId == other.fileId &&
+          bytes == other.bytes;
 }

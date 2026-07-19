@@ -1677,6 +1677,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-interchange"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "mica-markdown"
 version = "0.1.0"
 dependencies = [
@@ -2466,6 +2473,7 @@ version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
  "mica-core",
+ "mica-interchange",
  "mica-markdown",
  "serde_json",
  "uuid",

@@ -138,6 +138,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<(String, String)> dco_decode_list_record_string_string(dynamic raw);
 
   @protected
+  List<ZipAsset> dco_decode_list_zip_asset(dynamic raw);
+
+  @protected
   LocalVersion dco_decode_local_version(dynamic raw);
 
   @protected
@@ -190,6 +193,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  ZipAsset dco_decode_zip_asset(dynamic raw);
 
   @protected
   MicaDocument
@@ -311,6 +317,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<ZipAsset> sse_decode_list_zip_asset(SseDeserializer deserializer);
+
+  @protected
   LocalVersion sse_decode_local_version(SseDeserializer deserializer);
 
   @protected
@@ -369,6 +378,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  ZipAsset sse_decode_zip_asset(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -526,6 +538,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_zip_asset(List<ZipAsset> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_local_version(LocalVersion self, SseSerializer serializer);
 
   @protected
@@ -595,6 +610,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_zip_asset(ZipAsset self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
