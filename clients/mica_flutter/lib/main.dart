@@ -63,7 +63,7 @@ const String kMicaCloudUrl = 'https://mica.cloudcele.com';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.12.1';
+const String kAppVersion = '0.12.2';
 
 /// Editor page (content column) width, as 11 discrete steps like AppFlowy —
 /// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
