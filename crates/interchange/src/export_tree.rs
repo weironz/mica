@@ -1,8 +1,12 @@
 //! Shared, IO-free Markdown-tree ZIP builder — the export counterpart of
 //! [`crate::plan_import`]. Both the cloud (Postgres) and local (SQLite) stores
 //! gather their own views + document payloads + image bytes, then call
-//! [`build_markdown_tree_zip`] to produce a byte-identical archive, so the
-//! export→import round-trip stays ONE invariant across worlds (CLAUDE.md #4).
+//! [`build_markdown_tree_zip`] to produce an identically-STRUCTURED archive
+//! (same paths / manifest / relative refs), so the export→import round-trip
+//! stays ONE invariant across worlds (CLAUDE.md #4). (The two worlds hold
+//! different data, so "identical layout", not literally identical bytes — one
+//! rare tiebreak, the `assets/` filename when two docs reference the same blob
+//! under different names, can differ; it's cosmetic and round-trip-neutral.)
 //!
 //! The walk was lifted verbatim from the server's `build_tree_zip` (paths,
 //! sibling-name dedup, relative `../` asset/link rewriting, manifest); only the
@@ -276,18 +280,18 @@ fn rewrite_page_links(
   }
 }
 
-/// De-dup a `.md` path: append ` (2)`, ` (3)`… before the extension on collision.
+/// De-dup a `.md` path: append `-2`, `-3`… before the `.md` on collision.
 fn unique_zip_path(candidate: String, used: &mut HashSet<String>) -> String {
   if used.insert(candidate.clone()) {
     return candidate;
   }
-  let (stem, ext) = match candidate.rsplit_once('.') {
-    Some((s, e)) => (s.to_string(), format!(".{e}")),
-    None => (candidate.clone(), String::new()),
+  let (stem, ext) = match candidate.strip_suffix(".md") {
+    Some(s) => (s.to_string(), ".md"),
+    None => (candidate.clone(), ""),
   };
   let mut n = 2;
   loop {
-    let next = format!("{stem} ({n}){ext}");
+    let next = format!("{stem}-{n}{ext}");
     if used.insert(next.clone()) {
       return next;
     }
@@ -359,8 +363,28 @@ mod tests {
   fn payload(text: &str) -> DocumentSnapshotPayload {
     mica_markdown::import_markdown(text, "block_root")
   }
+  /// A payload whose body has one image block referencing [file_id] (import
+  /// resolves URLs to `file_id` form; we mint it directly to hit the asset path).
+  fn payload_with_image(text: &str, file_id: &str) -> DocumentSnapshotPayload {
+    let mut p = mica_markdown::import_markdown(text, "block_root");
+    let img_id = format!("block_img_{file_id}");
+    p.blocks.push(mica_markdown::Block {
+      id: img_id.clone(),
+      kind: "image".to_string(),
+      text: String::new(),
+      data: serde_json::json!({ "file_id": file_id, "name": format!("{file_id}.png") }),
+      children: vec![],
+    });
+    if let Some(root) = p.blocks.iter_mut().find(|b| b.id == "block_root") {
+      root.children.push(img_id);
+    }
+    p
+  }
   fn names(entries: &[ZipEntry]) -> Vec<String> {
     entries.iter().map(|e| e.name.clone()).collect()
+  }
+  fn body(entries: &[ZipEntry], name: &str) -> String {
+    String::from_utf8(entries.iter().find(|e| e.name == name).unwrap().data.clone()).unwrap()
   }
 
   #[test]
@@ -408,5 +432,47 @@ mod tests {
     let md_count = got.iter().filter(|n| n.ends_with(".md") && *n != "README.md").count();
     // Exactly one `.md` file (the document); the folder emits none. No collision.
     assert_eq!(md_count, 1, "{got:?}");
+  }
+
+  #[test]
+  fn shared_image_dedups_to_one_asset_with_relative_depth() {
+    // Two pages reference the SAME image (same dedup_key): one `assets/` entry,
+    // each page linking it at the right `../` depth (the cloud/local shared
+    // asset path — cloud keys the dedup by object_key, local by file_id/sha).
+    let nodes = vec![
+      doc("a", None, "0000000010", "Alpha"),
+      folder("f", None, "0000000020", "Notes"),
+      doc("b", Some("f"), "0000000010", "Beta"),
+    ];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), payload_with_image("alpha", "shared"));
+    payloads.insert("obj_b".to_string(), payload_with_image("beta", "shared"));
+    let mut images = HashMap::new();
+    images.insert(
+      "shared".to_string(),
+      ImageAsset {
+        name: "pic.png".to_string(),
+        bytes: vec![1, 2, 3],
+        dedup_key: "K".to_string(),
+      },
+    );
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &images);
+    let assets: Vec<&str> = entries
+      .iter()
+      .map(|e| e.name.as_str())
+      .filter(|n| n.starts_with("assets/"))
+      .collect();
+    assert_eq!(assets, vec!["assets/pic.png"], "{:?}", names(&entries));
+    // Root page → `assets/…`; the page under Notes/ → `../assets/…`.
+    assert!(
+      body(&entries, "Alpha.md").contains("(assets/pic.png)"),
+      "{}",
+      body(&entries, "Alpha.md")
+    );
+    assert!(
+      body(&entries, "Notes/Beta.md").contains("(../assets/pic.png)"),
+      "{}",
+      body(&entries, "Notes/Beta.md")
+    );
   }
 }

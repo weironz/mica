@@ -1414,7 +1414,8 @@ async fn build_tree_zip(
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
   // Store-neutral tree for the shared builder (mica_interchange::export_tree) —
   // the SAME walk the local (SQLite) export feeds, so cloud + local produce
-  // byte-identical archives and export→import stays one round-trip invariant.
+  // identically-structured archives and export→import stays one round-trip
+  // invariant (see export_tree.rs on the cosmetic asset-name tiebreak).
   let nodes: Vec<mica_interchange::TreeNode> = views
     .iter()
     .map(|v| mica_interchange::TreeNode {

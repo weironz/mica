@@ -368,7 +368,7 @@ impl MicaStore {
     /// Export a folder's subtree (`folder_id = Some`) — or the whole workspace
     /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
     /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
-    /// byte-identical to a cloud one and the export→import round-trip holds. The
+    /// the same format as a cloud one and the export→import round-trip holds. The
     /// store supplies views + document payloads; [`images`] supplies the blob
     /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
     /// folder-export gap (was cloud-only).

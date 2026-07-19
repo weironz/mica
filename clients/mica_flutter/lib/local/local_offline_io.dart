@@ -821,7 +821,7 @@ class LocalOffline {
   }
 
   /// Export a LOCAL folder's subtree as a Markdown ZIP, through the SAME shared
-  /// Rust builder + ZIP writer the cloud uses (so it's byte-identical and
+  /// Rust builder + ZIP writer the cloud uses (so it's the same format and
   /// round-trips). The store reads views + document payloads itself; here we
   /// gather the on-device image blob bytes for the subtree's pages and hand
   /// them in. Returns null if the store isn't open.
