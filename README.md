@@ -1,161 +1,156 @@
 # Mica
 
-Cloud-first collaborative Markdown workspace.
+A Markdown workspace with a hand-written editor, a Rust data plane, and two
+places to keep your notes: a local folder on your disk, or a synced cloud
+workspace. Desktop (Windows) and Web, from one codebase.
 
-## Current Scope
+> Status: actively developed, used daily by its author. The API and storage
+> formats are stable enough to trust with real notes (every release runs
+> migrations forward and the export format round-trips), but this is not a
+> 1.0 product and there is no compatibility promise across major versions yet.
 
-This repository is bootstrapping the backend-first MVP:
+## What it is
 
-- Rust backend with Axum.
-- PostgreSQL as the source of truth.
-- REST API for auth, workspaces, page tree, and documents.
-- WebSocket document rooms for real-time multi-client sync and presence.
-- Append-only document history with named versions and restore.
-- Markdown import, Markdown/HTML export, and S3/MinIO file uploads.
-- Optional AI text generation (Anthropic) for in-editor and global content creation.
-- Flutter Web client with live document sync and collaborator presence.
+**Two worlds, one app.** A *local* workspace is a folder of Markdown on your
+own disk — no account, no network, the files stay yours. A *cloud* workspace
+lives on a Mica server you or someone else runs, syncs in real time, and can be
+shared with other people. You switch between them explicitly; the app only ever
+shows one world at a time, so there is never a question of where a page lives.
 
-See:
+**The editor is drawn, not composed.** It is a single Flutter `RenderBox` that
+paints text, carets, selections and blocks itself, over a marks-over-plain-text
+model — not a tree of widgets, not a `WebView`, not a wrapped third-party
+editor. That is why the caret behaves the same on every platform, why IME
+(Chinese/Japanese/Korean) composition works, and why large documents stay
+responsive.
 
-- [Architecture](docs/architecture.md)
-- [Editor Design Principles](docs/editor.md)
-- [Editor Engine Design](docs/editor-engine.md)
-- [Sync and API Draft](docs/sync-and-api.md)
-- [Export / Import Design](docs/export-import.md)
-- [MVP Plan](docs/mvp-plan.md)
+**Markdown is the format, not a feature.** CommonMark 0.31.2 is the base
+(641/641 spec examples on the read side), GFM on top (24/24), plus a small
+dialect for what GFM cannot express — footnotes, front matter, Pandoc-style
+math. The writer emits a normalized subset, and round-trip stability is an
+enforced invariant, not an aspiration. See
+[the scoreboard](docs/commonmark-scoreboard.md).
+
+### Features
+
+- **Editing** — headings, lists, tables, code blocks with syntax highlighting,
+  quotes, footnotes, task lists, LaTeX math (inline and block),
+  Mermaid diagrams, images with paste/drag-drop upload.
+- **Page tree** — folders and pages, drag to reorder or reparent, per-user
+  workspace ordering. Folders contain; pages are leaves.
+- **Real-time sync** (cloud) — CRDT-based (`yrs`, the Rust port of Yjs) with
+  collaborator presence. The Web client speaks the same wire format via Yjs.
+- **Offline-first** (cloud) — edits queue locally and reconcile on reconnect;
+  images inserted offline upload when the network returns.
+- **History** — automatic snapshots plus manual checkpoints, with restore.
+- **Import** — Markdown files, folders, and ZIP archives, including Notion
+  exports (IDs stripped, duplicate H1 titles removed, nested `Part-N.zip`
+  expanded). See [Export / Import](docs/export-import.md).
+- **Export** — Markdown, HTML, PDF, and ZIP archives of a page, a folder, a
+  workspace, or everything at once. Exports re-import losslessly.
+- **Sharing** (cloud) — public read-only links per document.
+- **AI** (optional) — `/`-menu and global "Ask AI" backed by the Anthropic
+  Messages API. Disabled and hidden when no key is configured.
+- **MCP server** — expose your workspace to Claude or any MCP client so it can
+  read, search, create and edit pages. See [MCP](docs/mcp-connect.md).
+
+## Install
+
+**Desktop (Windows)** — download `Mica-Setup-<version>.exe` from
+[Releases](https://github.com/weironz/mica/releases/latest). The app updates
+itself from the same feed.
+
+**CLI** — `mica-cli` binaries for Windows / Linux / macOS are attached to every
+release. It drives the same API and hosts the MCP server (`mica-cli mcp`). See
+[CLI](docs/cli.md).
+
+**Server** — the API and Web bundle publish as container images per release.
+See [Deployment](docs/deploy.md) and [Release process](docs/release.md).
+
+Linux and macOS desktop builds are not published yet. The Flutter project
+targets Linux and the code is platform-agnostic, but neither is built in CI or
+tested, so treat them as unsupported.
+
+## Repository layout
+
+```
+crates/
+  api-server     Axum HTTP + WebSocket server; migrations; the only thing
+                 that talks to Postgres and S3
+  app-core       document operations, sync, snapshot/yrs bridging
+  mica-core      the CRDT document (yrs) — from_blocks / to_blocks
+  markdown       the Markdown engine: block model, parser, renderer
+                 (authoritative; the Dart side mirrors it)
+  interchange    archive-level import/export planning — pure, no I/O
+  mcp-server     MCP tool surface over the REST API
+  cli            mica-cli
+  infra          shared plumbing
+clients/mica_flutter/
+  lib/editor     the hand-written editor (render.dart is the canvas)
+  lib/local      the local-vault store (Rust via flutter_rust_bridge)
+  rust           the client-side Rust core (FFI)
+docs/            design documents — see the index below
+migrations/      Postgres schema, applied automatically at API startup
+```
 
 ## Development
 
-Copy environment defaults:
+Requires Rust (stable, see `rust-toolchain.toml`), Flutter, and Docker for
+Postgres. [`just`](https://github.com/casey/just) drives everything;
+`just --list` shows all recipes.
 
 ```sh
 cp .env.example .env
+just dev-up          # Postgres (+ MinIO) in Docker
+just dev-api         # cargo run -p mica-api-server (runs migrations on start)
+just app             # Flutter desktop client
+just app chrome      # Flutter web client
+just test            # cargo test + flutter test
+just check           # fmt + clippy + analyze
 ```
 
-Start PostgreSQL with Docker Compose:
+The API serves `http://127.0.0.1:8080`; check it with
+`curl http://127.0.0.1:8080/api/health`.
 
-```sh
-docker compose up -d postgres
-```
+File uploads need S3-compatible storage (`just dev-up` starts MinIO). With the
+`S3_*` variables unset, the file endpoints return `503` and the rest of the app
+works. Same for `ANTHROPIC_API_KEY` and the AI endpoints.
 
-Run the API server locally:
+### Working on this codebase
 
-```sh
-cargo run -p mica-api-server
-```
+- **`CLAUDE.md` is the operating manual** — project principles, invariants that
+  have been broken before, and the release process. Read it before changing
+  anything structural.
+- **The data plane is Rust.** Anything that parses, walks archives, hashes, or
+  talks to storage belongs in a crate, not in Dart. Dart owns painting,
+  caret/selection, hit-testing, and the editor's latency-critical paths.
+- **The Markdown grammar is duplicated on purpose** (Rust engine + Dart mirror,
+  because input rules cannot take a network round trip per keystroke). The two
+  are pinned together by shared conformance fixtures — change one, run both
+  test suites.
+- **Every bug fix ships with a regression test.** Commit messages state the
+  root cause, not a changelog.
 
-The API runs migrations automatically on startup.
+## Documentation
 
-The full stack can also be started through Compose when a containerized API is needed:
+| | |
+| --- | --- |
+| [Architecture](docs/architecture.md) | System shape and the decisions behind it |
+| [Editor design](docs/editor.md) · [Editor engine](docs/editor-engine.md) | The editor's principles and internals |
+| [Render architecture](docs/render-architecture.md) | How new block types are added (registry, not `if`-branches) |
+| [Sync and API](docs/sync-and-api.md) | REST surface and the WebSocket envelope |
+| [Export / Import](docs/export-import.md) | Archive format, Notion adaptation, round-trip rules |
+| [CommonMark scoreboard](docs/commonmark-scoreboard.md) | Spec conformance, tracked per release |
+| [Local-first plan](docs/local-first-plan.md) · [Vault mode](docs/vault-mode.md) | The local world |
+| [MCP server](docs/mcp-server.md) · [Connecting a client](docs/mcp-connect.md) | AI tool access |
+| [Deployment](docs/deploy.md) · [Release](docs/release.md) · [Backup](docs/backup.md) | Running it |
+| [Keyboard shortcuts](docs/shortcuts.md) | Authoritative shortcut list |
+| [Roadmap](docs/roadmap.md) | What's next |
 
-```sh
-docker compose up --build
-```
+Some design documents predate later decisions (notably `architecture.md`, which
+was written when the project was cloud-only). `CLAUDE.md` and the docs it points
+at are the current word.
 
-Health checks:
+## License
 
-```sh
-curl http://127.0.0.1:8080/api/health
-curl http://127.0.0.1:8080/api/ready
-```
-
-Connect to a document room over WebSocket to receive and send live updates.
-Authenticate with the JWT access token via the `Authorization` header or, for
-browser clients, the `token` query parameter:
-
-```text
-GET /ws/workspaces/{workspace_id}/documents/{document_id}?token=<access_token>
-```
-
-On connect the server sends `document.bootstrap` (latest snapshot, current
-`server_seq`, and permissions) followed by `presence.state`. Clients send
-`document.update`, `presence.update`, and `ping`; the server broadcasts
-`document.update.accepted`, presence changes, and `pong`. See
-[Sync and API Draft](docs/sync-and-api.md) for the full message envelope.
-
-Document history is append-only. The change log and named versions are listed
-together, and a restore is recorded as a new update (broadcast to connected
-clients) rather than rewriting the past:
-
-```text
-GET  /api/workspaces/{workspace_id}/documents/{document_id}/history
-POST /api/workspaces/{workspace_id}/documents/{document_id}/versions
-GET  /api/workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}
-POST /api/workspaces/{workspace_id}/documents/{document_id}/restore
-```
-
-`POST /versions` pins the current state under a name; `POST /restore` accepts
-either a `version_id` or a raw `version_seq`.
-
-Documents import from and export to Markdown, and export to HTML:
-
-```text
-POST /api/workspaces/{workspace_id}/documents/import/markdown
-GET  /api/workspaces/{workspace_id}/documents/{document_id}/export/markdown
-GET  /api/workspaces/{workspace_id}/documents/{document_id}/export/html
-```
-
-File uploads use a presigned, direct-to-storage flow against any S3-compatible
-backend (configure the `S3_*` variables; see `.env.example`). The client
-presigns, `PUT`s the bytes straight to storage, then records metadata:
-
-```text
-POST   /api/workspaces/{workspace_id}/files/presign
-POST   /api/workspaces/{workspace_id}/files/complete
-GET    /api/workspaces/{workspace_id}/files/{file_id}
-DELETE /api/workspaces/{workspace_id}/files/{file_id}
-```
-
-AI text generation (optional) calls the Anthropic Messages API. Set
-`ANTHROPIC_API_KEY` (and optionally `AI_MODEL`, `AI_MAX_TOKENS`); when unset the
-endpoint returns `503` and the in-app AI features stay hidden/disabled:
-
-```text
-POST /api/ai/complete   { "prompt": "...", "system": "(optional)" }  -> { "text": "<markdown>" }
-```
-
-In the client this powers: the editor's `/` → **Ask AI** command (generates
-Markdown and inserts it as blocks at the caret), and a global **Ask AI** button
-that can create a new page, write into the current page, or spin up a new
-workspace from a prompt. New pages/workspaces reuse the Markdown import path.
-
-When the `S3_*` variables are unset these endpoints return `503`. For local
-development, run MinIO and create the bucket:
-
-```sh
-docker run -d --name mica-minio -p 9000:9000 -p 9001:9001 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio server /data --console-address ":9001"
-docker run --rm --network host --entrypoint sh minio/mc -c \
-  "mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc mb -p local/mica"
-```
-
-Run the Flutter Web client when Flutter is installed:
-
-```sh
-cd clients/mica_flutter
-flutter pub get
-flutter run -d chrome --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8080
-```
-
-Quick launcher (uses the [`just`](https://github.com/casey/just) task runner):
-
-```sh
-just app          # desktop (windows)
-just app chrome   # web
-```
-
-`just --list` shows every recipe. (Pass `--dart-define` as above only when
-pointing the client at a non-default backend.)
-
-The client opens a WebSocket document room per page: it edits over REST, and
-the server's broadcast advances every other open client to the latest snapshot
-and renders collaborator presence in the document header. With no
-`--dart-define`, the client targets `http://<page-host>:8080`, so a release
-build can be served as static files:
-
-```sh
-flutter build web
-# serve build/web with any static file server, e.g.:
-python3 -m http.server 8090 --directory build/web
-```
+AGPL-3.0-or-later.
