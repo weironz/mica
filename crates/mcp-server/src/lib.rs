@@ -1741,7 +1741,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 24, "every tool must be listed");
+    assert_eq!(tools.len(), 25, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),
