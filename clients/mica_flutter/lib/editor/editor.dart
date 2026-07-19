@@ -14,6 +14,7 @@ import 'marks.dart';
 import 'clipboard_copy.dart';
 import 'image_actions.dart';
 import 'image_animator.dart';
+import 'image_decode.dart';
 import 'mermaid_preview.dart';
 import 'model.dart';
 import 'preview_raster.dart';
@@ -2619,25 +2620,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // yet, would ask the host to FETCH the very image we just uploaded. That
     // second decode then overwrote this one's ui.Image without disposing it.
     _imageLoading.add(key);
-    // Decode capped at what THIS machine can ever display (audit: a 4K
-    // screenshot became a ~33MB full-res texture drawn ~800px wide, and every
-    // image in an open doc stays resident). Cap = the screen's physical width
-    // (fullscreen viewer included, nothing visibly degrades), floored at 2048
-    // so multi-monitor moves to a sharper screen stay decent, ceilinged at
-    // 4096. targetWidth is only passed when the native width EXCEEDS the cap
-    // — never upscale. Codec-level, so animated GIF/WebP frames decode at the
-    // capped size too. Export/copy paths use the original bytes, not this
-    // texture.
+    // Cap the decode at what this machine can display — see [decodeCapped],
+    // which also documents the dispose order this depends on. Floor 2048 keeps
+    // a later move to a sharper monitor decent; ceiling 4096 bounds the
+    // texture. Export/copy paths use the original bytes, not this texture.
     final capPx = mounted
         ? View.of(context).physicalSize.width.round().clamp(2048, 4096)
         : 2048;
-    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-    final descriptor = await ui.ImageDescriptor.encoded(buffer);
-    final codec = await descriptor.instantiateCodec(
-      targetWidth: descriptor.width > capPx ? capPx : null,
-    );
-    descriptor.dispose();
-    buffer.dispose();
+    final codec = await decodeCapped(bytes, capPx);
     if (!mounted) {
       codec.dispose();
       return;
