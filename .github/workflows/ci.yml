@@ -107,3 +107,11 @@ jobs:
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - name: Dart unit tests
         run: flutter test test
+      # dart2js resolves the WEB variant of every conditional import; analyze
+      # and `flutter test` resolve the IO one. So an IO/web stub drift (a member
+      # added to local_offline_io.dart but not mirrored in local_offline_web.dart)
+      # compiles clean everywhere EXCEPT the release web image — exactly what
+      # silently broke the v0.12.0–v0.12.3 web images at tag time. Compile the
+      # web bundle on every push so that class of drift fails pre-merge.
+      - name: Web compiles (dart2js resolves the web stubs)
+        run: flutter build web --release

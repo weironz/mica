@@ -60,6 +60,16 @@ class LocalOffline {
   String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) =>
       null;
 
+  /// Web has no local pages, so nothing to export (the caller only reaches
+  /// this in 本地模式, which doesn't exist on web).
+  ({Uint8List bytes, String name, String mime})? exportDocMarkdown(
+    String docId,
+    String base,
+  ) => null;
+
+  /// Web has no local folders — folder ZIP export is cloud-side there.
+  Uint8List? exportFolderZip(String workspaceId, String folderId) => null;
+
   /// No native WebView2 on web — PDF export is a desktop capability. (The web
   /// build routes PDF through the browser's own print, not this path.)
   Future<Uint8List?> htmlToPdf(String html) async => null;
@@ -194,8 +204,9 @@ class LocalOffline {
 
   Future<VaultImportResult> importVaultTree(
     List<({String path, List<int> bytes})> entries,
-    String workspaceId,
-  ) async =>
+    String workspaceId, {
+    String? parentViewId,
+  }) async =>
       (docs: 0, folders: 0, errors: const ['local offline is not available on web']);
 
   void flush() {}
