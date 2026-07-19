@@ -1412,279 +1412,105 @@ async fn build_tree_zip(
   root: Option<Uuid>,
 ) -> ApiResult<Vec<ZipEntry>> {
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
-  let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
+  // Store-neutral tree for the shared builder (mica_interchange::export_tree) —
+  // the SAME walk the local (SQLite) export feeds, so cloud + local produce
+  // byte-identical archives and export→import stays one round-trip invariant.
+  let nodes: Vec<mica_interchange::TreeNode> = views
+    .iter()
+    .map(|v| mica_interchange::TreeNode {
+      id: v.id.to_string(),
+      parent_id: v.parent_view_id.map(|p| p.to_string()),
+      position: v.position.clone(),
+      name: v.name.clone(),
+      object_type: v.object_type.clone(),
+      object_id: v.object_id.to_string(),
+    })
+    .collect();
+
+  // Each document's current payload, keyed by object_id.
+  let mut payloads: std::collections::HashMap<String, DocumentSnapshotPayload> =
     std::collections::HashMap::new();
   for v in &views {
-    by_parent.entry(v.parent_view_id).or_default().push(v);
-  }
-  for list in by_parent.values_mut() {
-    list.sort_by(|a, b| a.position.cmp(&b.position));
-  }
-  let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
-  // Rooting the walk at a folder gives that subtree with paths relative to it —
-  // the same builder serves the whole workspace (`root: None`) and one folder.
-  collect_page_paths(&by_parent, root, &Vec::new(), &mut pages);
-
-  let storage = state.storage.clone();
-  let client = reqwest::Client::new();
-  let mut entries: Vec<ZipEntry> = Vec::new();
-  let mut asset_by_object: std::collections::HashMap<String, String> =
-    std::collections::HashMap::new();
-  let mut used_assets: std::collections::HashSet<String> = std::collections::HashSet::new();
-  let mut used_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
-  // Page order for the import side: paths in pre-order tree order.
-  let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
-
-  // Final zip path per view, decided up front so page links can target pages
-  // that come later in the tree.
-  let mut path_by_view: std::collections::HashMap<String, String> =
-    std::collections::HashMap::new();
-  for (view, folder, base) in &pages {
-    if view.object_type != "document" {
+    if v.object_type != "document" {
       continue;
     }
-    let mut path = String::new();
-    for seg in folder {
-      path.push_str(seg);
-      path.push('/');
+    if let Some(p) = store::current_payload(&state.db, v.object_id).await? {
+      payloads.insert(v.object_id.to_string(), p);
     }
-    path.push_str(base);
-    path.push_str(".md");
-    path = unique_zip_path(path, &mut used_paths);
-    path_by_view.insert(view.id.to_string(), path);
   }
 
-  for (view, folder, base) in pages {
-    if view.object_type == "folder" {
-      // A folder is a pure container: emit NO `.md` (that was the wart), just a
-      // manifest entry so the directory — even an empty one — round-trips. Its
-      // `path` is the directory its children nest under (folder segments + own
-      // deduped name), matching the segments collect_page_paths gave the kids.
-      let mut dir = String::new();
-      for seg in &folder {
-        dir.push_str(seg);
-        dir.push('/');
-      }
-      dir.push_str(&base);
-      manifest_pages.push(serde_json::json!({
-        "path": dir,
-        "title": view.name,
-        "type": "folder",
-      }));
+  // Referenced image blobs: file_id -> (first-seen block name), then fetch the
+  // records and download the bytes. Dedup key = the storage object key, so two
+  // file_ids of the same blob share one `assets/` entry (as the old walk did).
+  let mut file_name: BTreeMap<String, String> = BTreeMap::new();
+  for v in &views {
+    if v.object_type != "document" {
       continue;
     }
-    if view.object_type != "document" {
-      continue;
-    }
-    let Some(mut payload) = store::current_payload(&state.db, view.object_id).await? else {
+    let Some(payload) = payloads.get(&v.object_id.to_string()) else {
       continue;
     };
-    // Internal page links (`mica://page/<viewId>`) become standard relative
-    // markdown links to the target's .md inside the archive.
-    rewrite_page_links(&mut payload, folder.len(), &path_by_view);
-
-    // Image assets used by this page (de-duplicated globally by object key).
-    let rel = "../".repeat(folder.len());
-    let mut images: BTreeMap<String, String> = BTreeMap::new();
-    if let Some(storage) = &storage {
-      let mut wanted: Vec<(String, String)> = Vec::new();
-      for b in &payload.blocks {
-        if b.kind != "image" {
+    for b in &payload.blocks {
+      if b.kind != "image" {
+        continue;
+      }
+      if let Some(id) = b.data.get("file_id").and_then(|x| x.as_str()) {
+        file_name.entry(id.to_string()).or_insert_with(|| {
+          b.data
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("image")
+            .to_string()
+        });
+      }
+    }
+  }
+  let mut images: std::collections::HashMap<String, mica_interchange::ImageAsset> =
+    std::collections::HashMap::new();
+  if let Some(storage) = state.storage.clone() {
+    if !file_name.is_empty() {
+      let ids: Vec<Uuid> = file_name
+        .keys()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect();
+      let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
+      let by_id: std::collections::HashMap<String, &store::FileRecord> =
+        records.iter().map(|r| (r.id.to_string(), r)).collect();
+      let client = reqwest::Client::new();
+      for (file_id, name) in &file_name {
+        let Some(record) = by_id.get(file_id) else {
           continue;
-        }
-        if let Some(id) = b.data.get("file_id").and_then(|v| v.as_str()) {
-          if !wanted.iter().any(|(w, _)| w == id) {
-            let name = b
-              .data
-              .get("name")
-              .and_then(|v| v.as_str())
-              .unwrap_or("image")
-              .to_string();
-            wanted.push((id.to_string(), name));
-          }
-        }
-      }
-      if !wanted.is_empty() {
-        let ids: Vec<Uuid> = wanted
-          .iter()
-          .filter_map(|(id, _)| Uuid::parse_str(id).ok())
-          .collect();
-        let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
-        let by_id: std::collections::HashMap<String, &store::FileRecord> =
-          records.iter().map(|r| (r.id.to_string(), r)).collect();
-        for (file_id, name) in &wanted {
-          let Some(record) = by_id.get(file_id) else {
-            continue;
-          };
-          let asset = if let Some(existing) = asset_by_object.get(&record.object_key) {
-            existing.clone()
-          } else {
-            let bytes = match client
-              .get(storage.download_url(&record.object_key))
-              .send()
-              .await
-            {
-              Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                Ok(b) => b.to_vec(),
-                Err(_) => continue,
-              },
-              _ => continue,
-            };
-            let a = unique_asset_name(name, &mut used_assets);
-            entries.push(ZipEntry {
-              name: format!("assets/{a}"),
-              data: bytes,
-            });
-            asset_by_object.insert(record.object_key.clone(), a.clone());
-            a
-          };
-          images.insert(file_id.clone(), format!("{rel}assets/{asset}"));
-        }
+        };
+        let bytes = match client
+          .get(storage.download_url(&record.object_key))
+          .send()
+          .await
+        {
+          Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(_) => continue,
+          },
+          _ => continue,
+        };
+        images.insert(
+          file_id.clone(),
+          mica_interchange::ImageAsset {
+            name: name.clone(),
+            bytes,
+            dedup_key: record.object_key.clone(),
+          },
+        );
       }
     }
-
-    let body = export_markdown_with_assets(&payload, &images)
-      .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let Some(path) = path_by_view.get(&view.id.to_string()).cloned() else {
-      continue;
-    };
-    manifest_pages.push(serde_json::json!({
-      "path": path,
-      "title": view.name,
-      "type": "document",
-    }));
-    // The body, verbatim. The page NAME is carried by the file name (and the
-    // manifest `title`), not by a heading welded onto the text: a page is its
-    // content, and its name is a property of the page, not a line inside it.
-    // Prepending `# {name}` here is what produced two stacked titles — the
-    // editor already renders the name as the page title, so a doc that also
-    // opened with its own heading showed it twice, and every export re-added it.
-    entries.push(ZipEntry {
-      name: path,
-      data: body.into_bytes(),
-    });
   }
 
-  if !manifest_pages.is_empty() {
-    let manifest = serde_json::json!({
-      "version": 1,
-      "generator": "mica",
-      "pages": manifest_pages,
-    });
-    entries.insert(
-      0,
-      ZipEntry {
-        name: "manifest.json".to_string(),
-        data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
-      },
-    );
-  }
-
-  if entries.is_empty() {
-    entries.push(ZipEntry {
-      name: "README.md".to_string(),
-      data: b"(empty)".to_vec(),
-    });
-  }
-  Ok(entries)
-}
-
-/// Rewrite internal page links (`mica://page/<viewId>`) in link marks to
-/// relative paths of the target page's `.md` inside the archive, so the
-/// exported markdown is fully standard. Links to pages outside the archive
-/// keep their `mica://` href.
-fn rewrite_page_links(
-  payload: &mut DocumentSnapshotPayload,
-  folder_depth: usize,
-  path_by_view: &std::collections::HashMap<String, String>,
-) {
-  const SCHEME: &str = "mica://page/";
-  for block in &mut payload.blocks {
-    let Some(marks) = block
-      .data
-      .get_mut("marks")
-      .and_then(serde_json::Value::as_array_mut)
-    else {
-      continue;
-    };
-    for mark in marks {
-      let Some(obj) = mark.as_object_mut() else {
-        continue;
-      };
-      let Some(target) = obj
-        .get("href")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|href| href.strip_prefix(SCHEME))
-        .and_then(|id| path_by_view.get(id))
-      else {
-        continue;
-      };
-      let rel = format!("{}{target}", "../".repeat(folder_depth));
-      obj.insert("href".into(), serde_json::json!(rel));
-    }
-  }
-}
-
-/// Flatten the page tree into `(view, ancestor-folder segments, unique base)`,
-/// in tree order, giving each page a name unique among its siblings.
-fn collect_page_paths<'a>(
-  by_parent: &std::collections::HashMap<Option<Uuid>, Vec<&'a View>>,
-  parent: Option<Uuid>,
-  folder: &[String],
-  out: &mut Vec<(&'a View, Vec<String>, String)>,
-) {
-  let Some(children) = by_parent.get(&parent) else {
-    return;
-  };
-  let mut used = std::collections::HashSet::new();
-  for child in children {
-    let base = unique_sibling_base(child, &mut used);
-    out.push((child, folder.to_vec(), base.clone()));
-    let mut sub = folder.to_vec();
-    sub.push(base);
-    collect_page_paths(by_parent, Some(child.id), &sub, out);
-  }
-}
-
-/// Pick a per-sibling base name whose emitted archive paths cannot collide. A
-/// document occupies `<base>.md` (its file) and, if it has children, `<base>/`
-/// (their directory); a folder occupies `<base>/` (its manifest dir). Reserving
-/// BOTH forms in one `used` set is what stops a document `notes` and a sibling
-/// folder `notes.md` from both emitting the byte-identical path `notes.md` — the
-/// folder's dir vs the document's file — which the importer would then dedup by
-/// path string, silently dropping one node. On collision the later sibling is
-/// bumped (`-2`, `-3`…), and that bumped base also becomes its children's nesting
-/// prefix, so export/manifest/children stay consistent.
-fn unique_sibling_base(view: &View, used: &mut std::collections::HashSet<String>) -> String {
-  let seg = safe_segment(&view.name);
-  let is_doc = view.object_type == "document";
-  // Names a given base would occupy in the sibling directory namespace.
-  let occupied = |base: &str| -> Vec<String> {
-    if is_doc {
-      vec![base.to_string(), format!("{base}.md")]
-    } else {
-      vec![base.to_string()]
-    }
-  };
-  let free = |base: &str, used: &std::collections::HashSet<String>| {
-    occupied(base).iter().all(|n| !used.contains(n))
-  };
-  let base = if free(&seg, used) {
-    seg
-  } else {
-    let mut n = 2;
-    loop {
-      let candidate = format!("{seg}-{n}");
-      if free(&candidate, used) {
-        break candidate;
-      }
-      n += 1;
-    }
-  };
-  for name in occupied(&base) {
-    used.insert(name);
-  }
-  base
+  let root_str = root.map(|r| r.to_string());
+  Ok(mica_interchange::build_markdown_tree_zip(
+    &nodes,
+    root_str.as_deref(),
+    &payloads,
+    &images,
+  ))
 }
 
 /// The canonical, workspace-scoped path that serves one blob's bytes.
@@ -1822,26 +1648,6 @@ fn safe_segment(name: &str) -> String {
     "untitled".to_string()
   } else {
     tidy
-  }
-}
-
-/// Make [candidate] unique within [used], appending `-2`, `-3`… before any
-/// `.md` extension on collision. Inserts the result into [used].
-fn unique_zip_path(candidate: String, used: &mut std::collections::HashSet<String>) -> String {
-  if used.insert(candidate.clone()) {
-    return candidate;
-  }
-  let (stem, ext) = match candidate.strip_suffix(".md") {
-    Some(s) => (s.to_string(), ".md"),
-    None => (candidate.clone(), ""),
-  };
-  let mut n = 2;
-  loop {
-    let next = format!("{stem}-{n}{ext}");
-    if used.insert(next.clone()) {
-      return next;
-    }
-    n += 1;
   }
 }
 
@@ -3302,108 +3108,6 @@ mod tests {
       created_at: now,
       updated_at: now,
     }
-  }
-
-  /// The export path builder treats folders like any other tree node: a folder
-  /// contributes its (deduped) name as a directory segment to its children, and
-  /// every node — folder or document — appears in pre-order. This is what lets
-  /// the export loop render a folder as a directory path (no `.md`) whose
-  /// children nest under it (F1).
-  #[test]
-  fn collect_page_paths_nests_children_under_a_folder() {
-    let chapter = view(10, None, "Chapter", "folder");
-    let intro = view(11, Some(10), "Intro", "document");
-    let sub = view(12, Some(10), "Sub", "folder"); // empty child folder
-    let deep = view(13, Some(12), "Deep", "document");
-    let all = [&chapter, &intro, &sub, &deep];
-
-    let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
-      std::collections::HashMap::new();
-    for v in all {
-      by_parent.entry(v.parent_view_id).or_default().push(v);
-    }
-    for list in by_parent.values_mut() {
-      list.sort_by(|a, b| a.position.cmp(&b.position));
-    }
-
-    let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
-    collect_page_paths(&by_parent, None, &Vec::new(), &mut pages);
-
-    // Pre-order, every node present (folders included).
-    let names: Vec<&str> = pages.iter().map(|(v, _, _)| v.name.as_str()).collect();
-    assert_eq!(names, ["Chapter", "Intro", "Sub", "Deep"]);
-
-    // The folder "Chapter" contributes its segment to its children; the empty
-    // folder "Sub" nests under "Chapter" and passes both segments to "Deep".
-    let seg = |n: &str| {
-      let (_, folder, base) = pages.iter().find(|(v, _, _)| v.name == n).unwrap();
-      (folder.clone(), base.clone())
-    };
-    assert_eq!(seg("Chapter"), (vec![], "Chapter".to_string()));
-    assert_eq!(
-      seg("Intro"),
-      (vec!["Chapter".to_string()], "Intro".to_string())
-    );
-    assert_eq!(seg("Sub"), (vec!["Chapter".to_string()], "Sub".to_string()));
-    assert_eq!(
-      seg("Deep"),
-      (
-        vec!["Chapter".to_string(), "Sub".to_string()],
-        "Deep".to_string()
-      )
-    );
-    // => the export loop writes the empty folder "Sub" as directory path
-    //    "Chapter/Sub" (manifest type:'folder', no `.md`), and "Deep" as
-    //    "Chapter/Sub/Deep.md" — no stray container `.md` anywhere.
-  }
-
-  /// Regression (F5): a folder whose sanitized name ends in `.md` must not
-  /// collide with a sibling document's `.md` file. The document occupies
-  /// `<name>.md` (its file) and the folder's dir is byte-identical — without
-  /// unifying the sibling namespace both emit the same manifest path and the
-  /// importer silently drops one node (data loss on the round-trip red line).
-  #[test]
-  fn folder_named_like_a_md_file_does_not_collide_with_sibling_document() {
-    // Sibling document "notes" (→ file "notes.md") and folder "notes.md".
-    let doc = view(20, None, "notes", "document");
-    let folder = view(21, None, "notes.md", "folder");
-
-    let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&View>> =
-      std::collections::HashMap::new();
-    for v in [&doc, &folder] {
-      by_parent.entry(v.parent_view_id).or_default().push(v);
-    }
-    for list in by_parent.values_mut() {
-      list.sort_by(|a, b| a.position.cmp(&b.position));
-    }
-
-    let mut pages: Vec<(&View, Vec<String>, String)> = Vec::new();
-    collect_page_paths(&by_parent, None, &Vec::new(), &mut pages);
-
-    // Reconstruct the paths the export loop emits: a document → `<base>.md`
-    // (a file), a folder → `<base>` (a directory / its manifest path).
-    let emit = |name: &str| -> String {
-      let (v, folder, base) = pages.iter().find(|(v, _, _)| v.name == name).unwrap();
-      let mut p = folder.join("/");
-      if !p.is_empty() {
-        p.push('/');
-      }
-      p.push_str(base);
-      if v.object_type == "document" {
-        p.push_str(".md");
-      }
-      p
-    };
-    let doc_path = emit("notes");
-    let folder_path = emit("notes.md");
-    assert_eq!(
-      doc_path, "notes.md",
-      "the document keeps its natural file path"
-    );
-    assert_ne!(
-      doc_path, folder_path,
-      "folder dir and document file must not share a manifest path",
-    );
   }
 
   #[test]
