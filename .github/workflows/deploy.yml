@@ -1,0 +1,81 @@
+name: Deploy
+
+# Manual only. There is no `on: push` here on purpose — "which version is live"
+# stays a decision somebody makes, not a side effect of merging.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version WITHOUT the leading v, e.g. 0.12.8'
+        required: true
+
+# Two deploys at once would race on the node's .env (both rewrite MICA_VERSION).
+# Queue instead of cancelling: a half-applied deploy is worse than a slow one.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # The approval gate. `production` carries a required-reviewer rule, and
+    # GitHub withholds the environment's secrets from the job until the review
+    # passes — so "shipping is something you press" survives the move off your
+    # laptop; the button just lives here now.
+    environment:
+      name: production
+      url: https://mica.cloudcele.com
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need the tag's tree to fingerprint the compose it was released with.
+          ref: v${{ inputs.version }}
+
+      - name: Reject anything that is not X.Y.Z
+        run: |
+          [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "version must be X.Y.Z"; exit 1; }
+
+      - name: Deploy
+        env:
+          # This key is NOT a root key. `~mica-deploy/.ssh/authorized_keys` pins
+          # it to /usr/local/sbin/mica-deploy via `restrict,command=`, which sshd
+          # evaluates before accepting the key. Leaked, it can move prod between
+          # published versions and nothing else: no shell, no .env, no database.
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinned, not ssh-keyscan'd at runtime: scanning now would trust
+          # whatever answers, which is not verification.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          # The compose fingerprint AT THE TAG. The node refuses if its own
+          # compose differs, so a version can never be deployed against a compose
+          # it was not released with. Sending the file instead would hand this
+          # key the power to mount the host root into a container — a hash can
+          # only refuse, never inject.
+          sha=$(sha256sum deploy/docker-compose.yml | cut -d' ' -f1)
+
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes \
+            mica-deploy@mica.cloudcele.com \
+            "deploy ${{ inputs.version }} $sha" | tee /tmp/deploy.log
+
+          # The node reports which build of the deploy policy it ran. If that
+          # drifted from this tag, say so — CI may read the fence that limits it
+          # but must never be able to install it.
+          want=$(sha256sum deploy/mica-deploy.sh | cut -c1-16)
+          got=$(grep -oP 'script_sha=\K\S+' /tmp/deploy.log || true)
+          if [ -n "$got" ] && [ "$got" != "$want" ]; then
+            echo "::warning::node runs deploy policy $got, tag has $want — run 'just sync-deploy-script ${{ inputs.version }}'"
+          fi
+
+      - name: Verify prod actually serves this version
+        run: |
+          got=$(curl -fsS https://mica.cloudcele.com/api/health); echo "$got"
+          echo "$got" | grep -q '"version":"${{ inputs.version }}"' \
+            || { echo "VERSION MISMATCH — health does not report ${{ inputs.version }}"; exit 1; }
