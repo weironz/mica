@@ -26,11 +26,18 @@ hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 
 # Infra only (postgres + rustfs in compose); app processes run on the host
 # for fast incremental builds.
+#
+# The services are named on purpose. A bare `docker compose up -d` starts
+# EVERY service — including `api`, which is `build: deploy/Dockerfile.api` and
+# therefore compiles the whole Rust workspace inside a container. That is the
+# exact heavy build this split exists to avoid, and it fired on a recipe whose
+# own doc line promises "infra only". Add `web` yourself when you want the
+# nginx bundle server (or use `just dev-web` to rebuild what it serves).
 [doc("Start dev infra (postgres + rustfs) in compose")]
 dev-up:
-    docker compose up -d
+    docker compose up -d postgres rustfs
 
-[doc("Stop dev infra")]
+[doc("Stop dev infra (add -v to also wipe the database volume)")]
 dev-down:
     docker compose down
 
