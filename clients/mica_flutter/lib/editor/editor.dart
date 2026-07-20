@@ -4874,7 +4874,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// delete on this answer.
   Future<bool> _copyImage(int node) async {
     final data = await _imageData(node);
-    if (data == null || !mounted) {
+    // Unmounted during the await → no UI to toast to; must not touch `context`
+    // across the async gap (P1-5: use_build_context_synchronously).
+    if (!mounted) return false;
+    if (data == null) {
       _toast(context.l10n.imageReadFailed);
       return false;
     }
@@ -4886,7 +4889,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   Future<void> _downloadImage(int node) async {
     final data = await _imageData(node);
-    if (data == null || !mounted) {
+    if (!mounted) return;
+    if (data == null) {
       _toast(context.l10n.imageLoadFailed);
       return;
     }
