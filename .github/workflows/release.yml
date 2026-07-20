@@ -59,6 +59,25 @@ jobs:
 
       - run: flutter config --enable-windows-desktop
 
+      # `flutter build windows` compiles the Rust FFI crate too — cargokit builds
+      # `rust_lib_mica_flutter` (see windows/flutter/generated_plugins.cmake) —
+      # and that was entirely uncached: yrs, mica-core, mica-markdown and merman
+      # recompiled in RELEASE mode on every single run.
+      #
+      # Measured on v0.12.8: `flutter build windows --release` took 522 s — 78%
+      # of this job and 58% of the whole run's critical path. For contrast, the
+      # `cli` job does a full Rust build of the same dependency tree in 3.7 min
+      # WITH this cache.
+      #
+      # `workspaces:` points at the FFI crate because it declares its own
+      # `[workspace]` (it sits inside the backend tree but is not a member).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/mica_flutter/rust
+          # Distinct from the cli job's `mica-cli` key: different crate, different
+          # profile. One shared key would just thrash both.
+          key: mica-flutter-ffi
+
       - run: flutter pub get
 
       - run: flutter build windows --release
