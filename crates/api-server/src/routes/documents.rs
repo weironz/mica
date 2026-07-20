@@ -195,14 +195,26 @@ pub async fn search_workspace(
     let title_match = view.name.to_lowercase().contains(needle);
     let mut snippet = String::new();
     // A single corrupt/unreadable document drops out of the results rather than
-    // 500-ing the whole search — discovery is best-effort by nature.
-    if let Ok(Some(payload)) = store::current_payload(db, view.object_id).await {
-      for block in &payload.blocks {
-        if let Some(found) = snippet_for(&block.text, needle) {
-          snippet = found;
-          break;
+    // 500-ing the whole search — discovery is best-effort by nature. But it must
+    // not do so SILENTLY: a corrupt payload vanishing from search was the only
+    // early signal of the kind of corruption the 2026-07-19 incident produced
+    // (P1-3; blob_gc.rs logs the same class of error).
+    match store::current_payload(db, view.object_id).await {
+      Ok(Some(payload)) => {
+        for block in &payload.blocks {
+          if let Some(found) = snippet_for(&block.text, needle) {
+            snippet = found;
+            break;
+          }
         }
       }
+      Ok(None) => {}
+      Err(error) => tracing::warn!(
+        view_id = %view.id,
+        object_id = %view.object_id,
+        %error,
+        "search: skipping unreadable document"
+      ),
     }
     (title_match || !snippet.is_empty()).then_some(SearchResult {
       view_id: view.id,
@@ -738,7 +750,7 @@ pub async fn reorder_views(
   let mut tx = state.db.begin().await?;
   for (i, id) in payload.ordered_view_ids.iter().enumerate() {
     let position = format!("{:010}", (i + 1) * 10);
-    sqlx::query(
+    let affected = sqlx::query(
       r#"
         UPDATE views
         SET parent_view_id = $1, position = $2, updated_at = now()
@@ -750,7 +762,19 @@ pub async fn reorder_views(
     .bind(id)
     .bind(workspace_id)
     .execute(&mut *tx)
-    .await?;
+    .await?
+    .rows_affected();
+    // Validation ran before the tx, so a 0-row UPDATE means this view was
+    // deleted concurrently in the window. Reporting `reordered: len()` regardless
+    // (the old behavior) is the `ssh | tee` shape — a partial reorder claimed as
+    // full success, leaving one node stuck at its old parent/position (P1-3).
+    // Return the anomaly instead; the `?`/return drops `tx`, rolling everything
+    // back so the client can refetch and retry against fresh state.
+    if affected == 0 {
+      return Err(ApiError::Conflict(format!(
+        "view {id} was modified concurrently during reorder; refetch and retry"
+      )));
+    }
   }
   tx.commit().await?;
 
@@ -1746,15 +1770,18 @@ async fn workspace_markdown(
     out.push_str("\n\n");
 
     if let Some(payload) = store::current_payload(db, view.object_id).await? {
-      {
-        let assets = blob_asset_map(&payload.blocks, workspace_id);
-        if let Ok(markdown) = export_markdown_with_assets(&payload, &assets) {
-          let body = markdown.trim();
-          if !body.is_empty() {
-            out.push_str(body);
-            out.push_str("\n\n");
-          }
-        }
+      let assets = blob_asset_map(&payload.blocks, workspace_id);
+      // Propagate a page's export failure instead of swallowing it (the old
+      // `if let Ok(..)` with no else). This export is a backup/migration; a page
+      // that silently reduces to its heading with the body gone is a backup that
+      // LOOKS complete and isn't — the incident B shape. Matches the single-doc
+      // export path (`export_markdown`) which already `?`s this. (P1-3.)
+      let markdown = export_markdown_with_assets(&payload, &assets)
+        .map_err(|error| ApiError::BadRequest(format!("export failed for page {}: {error}", view.name)))?;
+      let body = markdown.trim();
+      if !body.is_empty() {
+        out.push_str(body);
+        out.push_str("\n\n");
       }
     }
   }
@@ -2588,13 +2615,22 @@ pub async fn transfer_view(
       row.parent_view_id.and_then(|p| view_map.get(&p).copied())
     };
     if row.object_type == "document" {
-      let mut payload = payloads
-        .remove(&row.object_id)
-        .unwrap_or_else(|| DocumentSnapshotPayload {
+      let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
+        // Substituting an empty payload is CORRECT for a genuinely-empty doc
+        // (current_payload returns None only when no snapshot row exists). It is
+        // NOT silent anymore: the one way this loses content — a doc with a yrs
+        // base but no snapshot row — would land here, and a move then deletes the
+        // source. Logging makes that edge diagnosable instead of invisible (P0-4).
+        tracing::warn!(
+          object_id = %row.object_id,
+          "transfer/clone: no snapshot for document — substituting empty payload"
+        );
+        DocumentSnapshotPayload {
           schema_version: 1,
           root_block_id: "root".to_string(),
           blocks: Vec::new(),
-        });
+        }
+      });
       rewrite_transferred_payload(&mut payload, &file_map, &view_map);
       let document = sqlx::query_as::<_, DocumentRecord>(
         r#"
@@ -2824,13 +2860,22 @@ pub async fn clone_view(
     };
 
     if row.object_type == "document" {
-      let mut payload = payloads
-        .remove(&row.object_id)
-        .unwrap_or_else(|| DocumentSnapshotPayload {
+      let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
+        // Substituting an empty payload is CORRECT for a genuinely-empty doc
+        // (current_payload returns None only when no snapshot row exists). It is
+        // NOT silent anymore: the one way this loses content — a doc with a yrs
+        // base but no snapshot row — would land here, and a move then deletes the
+        // source. Logging makes that edge diagnosable instead of invisible (P0-4).
+        tracing::warn!(
+          object_id = %row.object_id,
+          "transfer/clone: no snapshot for document — substituting empty payload"
+        );
+        DocumentSnapshotPayload {
           schema_version: 1,
           root_block_id: "root".to_string(),
           blocks: Vec::new(),
-        });
+        }
+      });
       rewrite_transferred_payload(&mut payload, &empty_files, &view_map);
       let document = sqlx::query_as::<_, DocumentRecord>(
         r#"
