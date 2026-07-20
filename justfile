@@ -207,14 +207,15 @@ docker-push tag:
 # `scp` straight from a dirty checkout — exactly the drift `deploy-prod` was
 # just fixed to avoid. Writes to `.new`, syntax-checks, then moves into place,
 # so a truncated transfer can never leave a half-written policy behind.
-[doc("Install deploy/mica-deploy.sh on the node from a tag (root, manual)")]
-sync-deploy-script version:
+# Defaults to `main`, not to a release tag: the deploy policy and the application
+# version are independent timelines. Pinning it to a tag also breaks for every
+# tag older than the script itself — v0.12.8 has no deploy/mica-deploy.sh at all.
+[doc("Install deploy/mica-deploy.sh on the node from a ref (root, manual)")]
+sync-deploy-script ref="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
-    tag="v{{version}}"
-    if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-      git fetch -q origin "refs/tags/$tag:refs/tags/$tag"
-    fi
+    tag="{{ref}}"
+    git fetch -q origin main
     git show "$tag:deploy/mica-deploy.sh" \
       | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
           && chown root:root /usr/local/sbin/mica-deploy.new \

@@ -68,13 +68,23 @@ jobs:
             mica-deploy@mica.cloudcele.com \
             "deploy ${{ inputs.version }} $sha" | tee /tmp/deploy.log
 
-          # The node reports which build of the deploy policy it ran. If that
-          # drifted from this tag, say so — CI may read the fence that limits it
-          # but must never be able to install it.
-          want=$(sha256sum deploy/mica-deploy.sh | cut -c1-16)
+          # The node reports which build of the deploy policy it ran. CI may READ
+          # the fence that limits it, never install it.
+          #
+          # Compared against the DEFAULT BRANCH, not the tag being deployed. The
+          # deploy policy and the application version are independent timelines:
+          # the first run of this check compared against v0.12.8, which predates
+          # the script entirely, so `sha256sum` came back empty and it reported
+          # drift against nothing ("tag has " with a blank hash) while the node
+          # actually matched main exactly. A false alarm teaches people to ignore
+          # the alarm.
+          git fetch -q --depth 1 origin main 2>/dev/null || true
+          want=$(git show FETCH_HEAD:deploy/mica-deploy.sh 2>/dev/null | sha256sum | cut -c1-16)
           got=$(grep -oP 'script_sha=\K\S+' /tmp/deploy.log || true)
-          if [ -n "$got" ] && [ "$got" != "$want" ]; then
-            echo "::warning::node runs deploy policy $got, tag has $want — run 'just sync-deploy-script ${{ inputs.version }}'"
+          if [ -z "$want" ]; then
+            echo "::warning::could not read deploy/mica-deploy.sh from the default branch — drift check skipped"
+          elif [ -n "$got" ] && [ "$got" != "$want" ]; then
+            echo "::warning::node runs deploy policy $got, default branch has $want — run 'just sync-deploy-script'"
           fi
 
       - name: Verify prod actually serves this version
