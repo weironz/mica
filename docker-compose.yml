@@ -45,7 +45,17 @@ services:
     volumes:
       - mica-rustfs-data:/data
 
+  # Builds the prod image from source. Behind a profile so it stays OUT of a
+  # bare `docker compose up -d`: it is `build:`, so starting it compiles the
+  # whole workspace in --release inside the container — minutes, and again after
+  # every edit. Nothing routine uses it (`just parity-check` runs the REAL
+  # images via deploy/docker-compose.single.yml, and `just docker-build` calls
+  # `docker build` directly), so its only effect on the default `up` was that
+  # surprise build. Develop against `api-dev` below.
+  #
+  #   docker compose --profile prod-image up -d api    # if you really want it
   api:
+    profiles: ["prod-image"]
     build:
       context: .
       # Single source of truth for the API image — same Dockerfile the prod

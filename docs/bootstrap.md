@@ -223,8 +223,13 @@ just dev-down   # 全停
 > `mica-cargo-registry` 两个具名卷里,`down` 不会清掉,只有 `down -v` 才会。
 >
 > 后端用的是 compose 的 `api-dev` 服务(官方 Rust 镜像 + 挂载源码),**不是** `api`。
-> `api` 走 `deploy/Dockerfile.api`,把源码烤进镜像层、`--release` 全量编译,是给
-> `just parity-check` 跑真镜像用的 —— 拿它做开发迭代等于每改一行等十分钟。
+> `api` 走 `deploy/Dockerfile.api`,把源码烤进镜像层、`--release` 全量编译,拿它做
+> 开发迭代等于每改一行等十分钟。它已被放进 `prod-image` profile,**默认不启动** ——
+> 所以 `docker compose up -d` 裸跑也是安全的,`just dev` 就是它加上等健康和灌种子。
+> 真要单独构建那个镜像:`docker compose --profile prod-image up -d api`。
+>
+> (`just parity-check` 不走这个服务 —— 它用 `deploy/docker-compose.single.yml` 跑
+> 预先构建好的真镜像。)
 >
 > 想回到「后端跑主机」的老方式也行:`just dev-up` + `just dev-api`,但那样
 > `dev-down` 停不掉后端,得自己 Ctrl+C。

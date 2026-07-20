@@ -24,16 +24,10 @@ hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 
 # ---------------------------------------------------------------- dev loop
 
-# Infra only (postgres + rustfs in compose); app processes run on the host
-# for fast incremental builds.
-#
-# The services are named on purpose. A bare `docker compose up -d` starts
-# EVERY service — including `api`, which is `build: deploy/Dockerfile.api` and
-# therefore compiles the whole Rust workspace inside a container. That is the
-# exact heavy build this split exists to avoid, and it fired on a recipe whose
-# own doc line promises "infra only". Add `web` yourself when you want the
-# nginx bundle server (or use `just dev-web` to rebuild what it serves).
-[doc("Start dev infra (postgres + rustfs) in compose")]
+# Infra only — for when you'd rather run the API on the host (`just dev-api`).
+# Named services here because this IS a deliberate subset; the full stack is
+# `just dev`.
+[doc("Start dev infra only (postgres + rustfs)")]
 dev-up:
     docker compose up -d postgres rustfs
 
@@ -46,7 +40,7 @@ dev-up:
 # one-line change rebuilds and restarts in ~5 s.
 [doc("Start the whole dev stack (infra + API + web) and seed it")]
 dev:
-    docker compose up -d postgres rustfs api-dev web
+    docker compose up -d
     @echo "waiting for the API (first run compiles the workspace — minutes)"
     @for i in $(seq 1 200); do \
         curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1 && break; \
