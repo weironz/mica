@@ -354,6 +354,20 @@ jobs:
         run: |
           gh release edit "${{ needs.draft.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+          # `isLatest` is NOT a field `gh release view --json` accepts, and asking
+          # for it exits 1. On v0.12.9 the edit above had already published the
+          # release correctly — 4 assets, /releases/latest pointing at it — and
+          # only this line failed, turning a good release into a red run. Worse
+          # than cosmetic: a publish job that goes red while actually succeeding
+          # trains you to shrug at the one that genuinely fails.
+          #
+          # Read "is this the latest" from the endpoint the in-app updater itself
+          # reads, instead of from a field that does not exist.
           gh release view "${{ needs.draft.outputs.tag }}" \
-            --repo "$GITHUB_REPOSITORY" --json isDraft,isLatest,assets \
-            --jq '"draft=\(.isDraft) latest=\(.isLatest) assets=\(.assets | length)"'
+            --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+            --jq '"draft=\(.isDraft) assets=\(.assets | length)"'
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "releases/latest -> $latest"
+          [ "$latest" = "${{ needs.draft.outputs.tag }}" ] \
+            || { echo "::error::/releases/latest is $latest, expected ${{ needs.draft.outputs.tag }} — the in-app updater will not see this release"; exit 1; }
