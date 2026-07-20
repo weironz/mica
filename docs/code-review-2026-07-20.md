@@ -60,7 +60,9 @@ Dart 栈：`crateApiStoreMicaStoreLoadDoc` → `StoreCloudDocStore.load` → `Cl
 - **本地校验和**（✅ 已落地 `9b117c0`）：5 张 blob 表各加 sidecar CRC32 列，读时先验再喂 yrs——这是**唯一能在本地挡住上游 UB 的手段**（在字节到达 yrs 之前拦下）。只覆盖本地存储；服务端远程路径不适用（攻击者同时控制字节与校验和）。同时补上了此前**完全无防护**的两条 recovery 解码路径（`restore_local_version`、`rollback_doc`）。**只保护本 feature 上线后写入的数据**——老 NULL 行仍保留今天的暴露（诚实边界，不做 read-time backfill）。
 - **服务端 panic 兜底**（✅ 已落地 `0723857`）：`sync.rs` 5 处 yrs 调用包进 `contain_yrs_panic` → unwinding-panic 类从「掉连接」变成干净 400。**故意没做进程隔离**：对这个认证后、panic 类已被 tokio 隔离的窄暴露面严重不成比例，还会拖垮同步热路径。**不覆盖 UB 类**（接不住）。
 
-**仍未解决**：① 本地快照**当初为何损坏**未查清——修复只让它可生还，未让它不发生；② **服务端远程 UB 类**的根治在上游，本地无解——**建议方向：给 yrs 提规范 issue + 附最小复现**（`yrs_corrupt_input_is_unsound` 已是现成 fuzz harness），**不建议进程隔离**（理由同上）。只在威胁模型变宽（接受非认证/低信任来源的 update）时才重新考虑隔离。
+**仍未解决**：① 本地快照**当初为何损坏**未查清——修复只让它可生还，未让它不发生；② **服务端远程 UB 类**的根治在上游，本地无解——**不建议进程隔离**（对认证后、panic 类已被 tokio 隔离的窄暴露面不成比例）。只在威胁模型变宽（接受非认证/低信任来源的 update）时才重新考虑隔离。
+
+**上游已报（2026-07-21）**：搜索后发现不该新开 issue（会与既有重复）——yrs 的 [#415 "use errors instead of panic"](https://github.com/y-crdt/y-crdt/issues/415)（panic 类，维护者两年前就求一个可复现场景、含 AppFlowy 在内的报告者都给不出）和 [#373 "Memory safety issues (segfaults)"](https://github.com/y-crdt/y-crdt/issues/373)（UB 类）已覆盖。故把**最小复现**（52 字节合法 v1 update，翻 byte 9 → panic `block.rs:92`；翻 byte 50 → 非展开 abort / release UB，`core::str` 无效 UTF-8）作为**评论**贴到 #415：[issuecomment-5025461308](https://github.com/y-crdt/y-crdt/issues/415#issuecomment-5025461308)。复现只用 yrs 公开 API（`Update::decode_v1` + `apply_update`），发帖前已实测编译+触发。
 
 ### P0-1 空 block id 可写入 CRDT，是 7 月 19 日事故的块级同款 【实测】
 
