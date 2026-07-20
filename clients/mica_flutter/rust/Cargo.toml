@@ -48,7 +48,7 @@ windows = { version = "0.62", features = [
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 
 # This FFI crate physically lives inside the backend cargo workspace tree
-# (D:/codes/mica), so declare its own workspace root — otherwise cargo walks up,
+# (the repo root), so declare its own workspace root — otherwise cargo walks up,
 # finds the backend workspace, and refuses to build a non-member. It still
 # path-depends on crates/mica-core across the boundary.
 [workspace]

@@ -2,7 +2,7 @@
 
 ## MCP Tools: codebase-memory-mcp
 
-**IMPORTANT: This project has a knowledge graph (project `D-codes-mica`).
+**IMPORTANT: This project has a knowledge graph (project `C-data-codes-mica-will-laptop`).
 ALWAYS use the codebase-memory-mcp tools BEFORE Grep/Glob/Read to explore
 the codebase.** The graph is faster, cheaper (fewer tokens), and gives you
 structural context (callers, callees, data flow, tests) that file scanning
@@ -39,8 +39,10 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 1. **The graph is NOT auto-updated** (no file-change hook — that was code-review-graph's).
    After a substantial change, or if `search_graph` misses a just-added symbol, re-run
-   `index_repository(repo_path="D:/codes/mica", mode="full")`. Modes: `full` (incl.
+   `index_repository(repo_path="C:/data/codes/mica-will-laptop", mode="full")`. Modes: `full` (incl.
    similarity/semantic edges, slow) / `moderate` / `fast`. Check freshness with `index_status`.
+   查询要带 `project="C-data-codes-mica-will-laptop"`(项目名由路径推导)。`full` 模式偶发
+   worker 崩溃(崩溃日志是空文件),原样重试一次即可。
 2. Use `search_graph` / `search_code` / `get_code_snippet` for exploration.
 3. Use `trace_path` / `query_graph` for callers/callees/impact and test coverage.
 4. Use `detect_changes` for code review.
@@ -77,15 +79,23 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 ## 开发机与工具链(Windows 主力机)
 
+- **当前主力机(2026-07-20 起)**:仓库在 `C:\data\codes\mica-will-laptop`。上一台主力机
+  (仓库在 `D:\codes\mica`)硬件故障报废,已整体迁到本机;文档里再看到 `D:/codes/mica`
+  一律按本路径理解。
 - Flutter stable 装在 `C:\flutter`(已进用户级 PATH);Visual Studio **Build Tools** + Windows SDK
   已装,`flutter build windows` 可用——不需要 VS Community。Rust 工具链、Git 齐。
   Flutter app 在 `clients/mica_flutter/`,仓库根是 Rust workspace。
+- **国内网络必须走镜像**:Flutter SDK 从 `storage.googleapis.com` 下是几分钟 60MB 的量级
+  (1.8GB 要跑几小时),换官方中国镜像 `storage.flutter-io.cn` 后实测 122 秒 / 14.86 MB/s。
+  已设用户级环境变量 `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` +
+  `PUB_HOSTED_URL=https://pub.flutter-io.cn`,否则 `flutter pub get` 会卡在同一个问题上。
 - **`just` 的 shebang recipe 绕过 `set windows-shell`**,里面用到 `cygpath`。跑
   `just deploy-prod` 前 `export PATH="/c/Program Files/Git/usr/bin:$PATH"`,或直接在 Git Bash 里跑。
 - **强制重启/断电后 `.dart_tool/flutter_build` 缓存可能被截断** → frontend_server 报
   `RangeError`(离谱 offset)。`rm -rf clients/mica_flutter/.dart_tool/flutter_build` 即愈。
-- **本机重活限流**:这台机器有过 GPU/整机硬卡死,且两次发生在重型构建窗口内(重编译功耗尖峰
-  是合理扳机)。所以:`CARGO_BUILD_JOBS=8`;能交 CI 就交 CI;只需验 runner 改动时单编
+- **重活限流(沿用,来历是上一台机器)**:**上一台**主力机有过 GPU/整机硬卡死,两次都发生在
+  重型构建窗口内(重编译功耗尖峰是合理扳机),那台机器后来确实报废了。本机尚未复现该现象,
+  但在有反证之前继续按保守档走。所以:`CARGO_BUILD_JOBS=8`;能交 CI 就交 CI;只需验 runner 改动时单编
   `build/windows/x64/runner/mica_flutter.vcxproj -p:BuildProjectReferences=false`,别全量
   `flutter build windows`;非必要不启 Docker Desktop(WSL2 冷启动本身要 100s+,且 `docker info`
   在启动中会**阻塞**而非快速失败——别用十秒超时去判"卡死",踩过一次白等 15 分钟)。
