@@ -21,6 +21,44 @@ pub enum StoreError {
     /// than silently corrupt or drop data on a downgrade.
     #[error("store schema v{found} is newer than supported v{supported}; upgrade the app")]
     SchemaTooNew { found: i64, supported: i64 },
+    /// A stored CRDT blob made yrs panic while integrating it — see
+    /// [`contain_yrs_panic`]. Recoverable: the local store is a cache.
+    #[error("corrupt local CRDT state for {doc_id} (yrs panicked while integrating it)")]
+    CorruptDoc { doc_id: String },
+}
+
+/// Run yrs decode/integrate work, turning a panic into [`StoreError::CorruptDoc`].
+///
+/// yrs integrates an update by INDEXING into its block store, and on malformed
+/// bytes it panics instead of returning `Err`. Seen in the wild as:
+///
+/// ```text
+/// panicked at yrs-0.27.0/src/block_store.rs:60:46:
+/// index out of bounds: the len is 732 but the index is 715827364
+/// ```
+///
+/// Note `Update::decode_v1` had already SUCCEEDED there — the blow-up is during
+/// integration — so the `?` on these calls never had a chance to contain it.
+///
+/// Containing it matters far beyond one bad load. Callers hold a mutex across
+/// this (the desktop FFI's `Mutex<LocalStore>`), so the panic poisoned the lock
+/// and every later `list_views` failed too: the page tree went blank and STAYED
+/// blank until the app restarted, on every launch, because cloud seeding calls
+/// `load_doc` at startup. A corrupt local blob is recoverable — this store is a
+/// cache and the cloud holds the document — so it must degrade to an error the
+/// caller can re-seed from, not take the process down.
+fn contain_yrs_panic<T>(
+    doc_id: &str,
+    work: impl FnOnce() -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    // The default hook still prints the panic, which is what makes the
+    // underlying corruption diagnosable instead of silently swallowed.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(result) => result,
+        Err(_) => Err(StoreError::CorruptDoc {
+            doc_id: doc_id.to_string(),
+        }),
+    }
 }
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
@@ -590,16 +628,26 @@ impl LocalStore {
             Some(b) => b,
             None => return Ok(None),
         };
-        let mut doc = MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?;
-        // Replay both logs (P4-1): the remote stream tail first, then the local
-        // outbox. yrs updates commute and are idempotent, so relative order and
-        // overlap with the base are both safe.
-        for (_rid, update) in self.doc_remote_updates(doc_id)? {
-            doc.apply_update(&update)?;
-        }
-        for (_clock, update) in self.doc_updates(doc_id)? {
-            doc.apply_update(&update)?;
-        }
+        // Read both logs BEFORE entering the panic guard: these are SQLite
+        // errors, which are not corruption and must keep their own message.
+        let remote = self.doc_remote_updates(doc_id)?;
+        let local = self.doc_updates(doc_id)?;
+
+        // Everything that hands bytes to yrs lives inside the guard. Any of the
+        // three can panic on a corrupt blob — the base snapshot or either log.
+        let doc = contain_yrs_panic(doc_id, || {
+            let mut doc = MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?;
+            // Replay both logs (P4-1): the remote stream tail first, then the
+            // local outbox. yrs updates commute and are idempotent, so relative
+            // order and overlap with the base are both safe.
+            for (_rid, update) in remote {
+                doc.apply_update(&update)?;
+            }
+            for (_clock, update) in local {
+                doc.apply_update(&update)?;
+            }
+            Ok(doc)
+        })?;
         Ok(Some(doc))
     }
 
@@ -1890,6 +1938,132 @@ mod tests {
             after.len(),
             store.list_workspaces("local").unwrap().iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
         );
+    }
+
+    /// A corrupt local snapshot must come back as an error, never as a panic.
+    ///
+    /// Reported from a real install: `yrs-0.27.0/src/block_store.rs:60 index out
+    /// of bounds: the len is 732 but the index is 715827364`, raised from
+    /// `load_doc` on the cloud-seed path. The desktop FFI holds
+    /// `Mutex<LocalStore>` across this call, so the panic poisoned that lock and
+    /// every later `list_views` failed: the page tree rendered blank and stayed
+    /// blank on every launch.
+    ///
+    /// Mutating a valid snapshot rather than using fixed garbage bytes, because
+    /// most random input dies in `decode_v1` (which already returns `Err`) —
+    /// the dangerous class is bytes that DECODE and then blow up while being
+    /// integrated. The final assertion exists so this cannot pass vacuously: if
+    /// no mutation reaches the panicking path, the test has proved nothing and
+    /// says so.
+    #[test]
+    fn a_corrupt_snapshot_is_an_error_not_a_panic() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let doc = MicaDoc::from_blocks(
+            "r",
+            &[
+                crate::Block::new("r", "page").with_children(vec!["a".into()]),
+                crate::Block::new("a", "paragraph").with_text("hello world".to_string()),
+            ],
+        );
+        store.save_doc("d", &doc).unwrap();
+        let good: Vec<u8> = store
+            .conn
+            .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+
+        // Truncation, not random byte flips. It is the realistic corruption (a
+        // half-written blob) AND it stays inside the class yrs unwinds on.
+        // Arbitrary byte mutation also reaches an UPSTREAM SOUNDNESS BUG that no
+        // guard can contain — see `yrs_corrupt_input_is_unsound` below.
+        // One fixed mutation, not a sweep. Byte 9 flipped survives `decode_v1`
+        // and blows up later, during integration (`yrs .../block.rs:92 assertion
+        // failed: value & Self::MASK == 0`) — which is the class `?` never saw
+        // and `catch_unwind` does. Truncations are NOT usable here: `decode_v1`
+        // rejects every one of them, so a truncation-based test passes with the
+        // guard removed and proves nothing.
+        let mut bad = good.clone();
+        bad[9] ^= 0xff;
+        store
+            .conn
+            .execute(
+                "UPDATE doc_snapshot SET state=?1 WHERE doc_id='d'",
+                params![bad],
+            )
+            .unwrap();
+
+        // Returning at all is the point: without the guard this line unwinds
+        // out of `load_doc` and poisons the caller's mutex.
+        match store.load_doc("d", 1) {
+            Err(StoreError::CorruptDoc { doc_id }) => assert_eq!(doc_id, "d"),
+            Ok(_) => panic!(
+                "expected CorruptDoc but the load SUCCEEDED — yrs changed and the \
+                 mutation no longer reaches the panicking path, so this test has \
+                 stopped covering anything"
+            ),
+            Err(e) => panic!("expected CorruptDoc, got a different error: {e}"),
+        }
+    }
+
+    /// UPSTREAM SOUNDNESS BUG, still present in yrs 0.27.3 (checked 2026-07-21).
+    ///
+    /// Feeding mutated bytes to `load_doc` reaches, in a debug build:
+    ///
+    /// ```text
+    /// core/src/str/validations.rs:48: unsafe precondition(s) violated:
+    ///   hint::unreachable_unchecked must never be reached
+    /// thread caused non-unwinding panic. aborting.
+    /// ```
+    ///
+    /// yrs reads unvalidated bytes as UTF-8. This is NOT containable:
+    /// `catch_unwind` cannot catch a non-unwinding abort, and in a RELEASE build
+    /// the check is compiled out, so the same input is plain undefined behavior.
+    ///
+    /// It matters well beyond the local cache: `mica-app-core`'s sync path
+    /// applies client-supplied updates server-side (`sync.rs`, `apply_update`),
+    /// so a crafted update is reachable remotely.
+    ///
+    /// `#[ignore]` because it ABORTS the test process — it cannot share a run
+    /// with other tests. Run it deliberately to check whether upstream has
+    /// fixed this:
+    ///
+    /// ```text
+    /// cargo test -p mica-core --features store -- --ignored yrs_corrupt_input_is_unsound
+    /// ```
+    #[test]
+    #[ignore = "aborts the process: upstream yrs UB on malformed input, not containable"]
+    fn yrs_corrupt_input_is_unsound() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let doc = MicaDoc::from_blocks(
+            "r",
+            &[
+                crate::Block::new("r", "page").with_children(vec!["a".into()]),
+                crate::Block::new("a", "paragraph").with_text("hello world".to_string()),
+            ],
+        );
+        store.save_doc("d", &doc).unwrap();
+        let good: Vec<u8> = store
+            .conn
+            .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+
+        for i in 0..good.len() {
+            for xor in [0xff_u8, 0x7f, 0x01] {
+                let mut bad = good.clone();
+                bad[i] ^= xor;
+                store
+                    .conn
+                    .execute(
+                        "UPDATE doc_snapshot SET state=?1 WHERE doc_id='d'",
+                        params![bad],
+                    )
+                    .unwrap();
+                let _ = store.load_doc("d", 1);
+            }
+        }
     }
 
     #[test]
