@@ -361,4 +361,19 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 | `9b117c0` | **P0-0 第 4 层** | 本地 blob CRC32（5 张表 sidecar 列，字节进 yrs 前验），补上 `restore_local_version`/`rollback_doc` 两条无防护路径。11 个新测试，均实测「移除 verify 即 FAILED」。设计经 workflow 对抗性评审——抓到一个几乎会发的 P0（UPSERT 的 SET 子句漏 crc → 每次编辑误判 CorruptDoc）。 |
 | `0723857` | **P0-0 服务端** | `sync.rs` 5 处 yrs 调用包 `contain_yrs_panic` → 客户端 update 的 panic 类收成干净 400（原 `.map_err` 映射不变）。核实后**否掉进程隔离**（暴露面窄且认证后，tokio 已隔离 panic 类）。测试实测「移除 guard 即 FAILED」。UB 类留待上游。 |
 
-尚未动：P0-1/2/3（块级空 id + 环检查）、P1 全部、P3 全部。执行顺序仍按上方「建议的执行顺序」，但 **P0-0 因线上复现被提到了最前**。
+### 无人值守批量修复（2026-07-21 夜，用户授权自主执行）
+
+每条均配回归测试、实测「移除 fix 即 FAILED」（除注明外），本地起 dev postgres 实跑 pg-gated 测试。
+
+| commit | 覆盖 | 说明 |
+| --- | --- | --- |
+| `96ad977` | **P0-1/2/3** | 块级不变量：`validate_block` 拒空 id；`insert_block` 拒非空 children（两个合法客户端都发 `[]`，一刀关掉成环+双父）；`delete_block` 加 visited 集防死循环。纯内存函数，3 个单测全红绿验证。 |
+| `c3627aa` | **P1-1** | `escapeBlockLeader` 忠实镜像 Rust——补 setext（`===`/`--`）+ 带空格分隔线，堵住"正文 `===` 再导入把上段吃成标题"的 round-trip 丢内容。 |
+| `4a46077` | **P1-5** | 图片复制/下载不在已卸载 widget 上用 `context`；消除 2 条 `use_build_context_synchronously` warning。 |
+| `3141de8` | **P1-3 / P0-4** | 服务端静默失败改可见：导出丢正文→`?` 传播；`reorder_views` 查 `rows_affected`→并发删除返回 409；搜索吞错→`tracing::warn`。P0-4 核实为基本非 bug（`current_payload` 的 `None` 即空文档、读错误在破坏性事务前已传播），加 warn 让残留边界可诊断。 |
+| `24ff9bd` | **P1-4** | 导出 list `indent` `.min(8)` 镜像 Dart 编辑器的 `clamp(0,8)`——非编辑器客户端写 `indent>8` 时两端渲染不再分叉。 |
+| `6491ff2` | **P1-2** | 扩 conformance fixture（3 例，锁定 parity）+ 修引用标签 `ß→ss` case-fold 漂移（confirmed #9，一行镜像 Rust）。**确认为真、但故意保守未改**（Dart 核心 parser，无人值守有回归风险，留待带全神修）：**#3 nested-link**（`label_contains_link` 缺失）、**#4 link-title 转义**（Dart 吞任意反斜杠、Rust 只吞标点）。 |
+
+**这轮全量验证**：Rust 全 workspace 36 个测试二进制 + `clippy -D warnings` 绿；Flutter 610 测试全过、0 个 error/warning 级 analyze。未发版（等用户指令）。
+
+**仍未动**：P1-1 剩余 9 处漂移里的 nested-link/link-title（上表 #3/#4，已确认）+ 其余 7 处未复核；P3 全部（架构债，判断重、风险高，计划本就建议缓做）。P1-2 的机制已就位，后续补 fixture 即可继续暴露。
