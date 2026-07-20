@@ -64,6 +64,8 @@ Dart 栈：`crateApiStoreMicaStoreLoadDoc` → `StoreCloudDocStore.load` → `Cl
 
 **上游已报（2026-07-21）**：搜索后发现不该新开 issue（会与既有重复）——yrs 的 [#415 "use errors instead of panic"](https://github.com/y-crdt/y-crdt/issues/415)（panic 类，维护者两年前就求一个可复现场景、含 AppFlowy 在内的报告者都给不出）和 [#373 "Memory safety issues (segfaults)"](https://github.com/y-crdt/y-crdt/issues/373)（UB 类）已覆盖。故把**最小复现**（52 字节合法 v1 update，翻 byte 9 → panic `block.rs:92`；翻 byte 50 → 非展开 abort / release UB，`core::str` 无效 UTF-8）作为**评论**贴到 #415：[issuecomment-5025461308](https://github.com/y-crdt/y-crdt/issues/415#issuecomment-5025461308)。复现只用 yrs 公开 API（`Update::decode_v1` + `apply_update`），发帖前已实测编译+触发。
 
+读 yrs 源码后追发**跟进评论**：[issuecomment-5025540330](https://github.com/y-crdt/y-crdt/issues/415#issuecomment-5025540330)。① 自我纠正——`block.rs:92` 其实是 `debug_assert!`（release 编译掉），真正 release 相关的是解码路径的边界检查 panic + case (2) 的 UB；② 给出 UB 的**具体修复**：`src/encoding/read.rs:137` 与 `src/updates/decoder.rs:486` 两处 `from_utf8_unchecked` → 校验版 `from_utf8` + `Err`（两处都已返回 `Result`，代价可忽略）；`src/lib.rs:777` 的第三处是对 HEX 表、sound，不动。
+
 ### P0-1 空 block id 可写入 CRDT，是 7 月 19 日事故的块级同款 【实测】
 
 `crates/app-core/src/documents.rs:200`
