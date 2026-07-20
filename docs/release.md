@@ -48,6 +48,17 @@
 4. 提交 → `git push origin main` → `git tag vX.Y.Z && git push origin vX.Y.Z`
    → **CI 自动产出全部 7 个产物**(约 10–15 分钟)。
 5. `gh run watch` 等 CI 绿;`gh release view vX.Y.Z` 确认 4 个 asset 都在。
+
+   > **CI 先建草稿 release,最后才发布。** 各 job 并行往草稿上挂产物,末尾的
+   > `publish` job 把它翻成正式版并设 `--latest`。这样 `/releases/latest` 要么是
+   > 上一版、要么是这一版的完整体,不存在「新版本已发布但安装包还没挂上」的窗口
+   > —— 应用内更新器正是读这个端点。
+   >
+   > ⚠️ **`publish` job 挂了的话,release 会停在草稿状态**:产物都在、没有任何东西
+   > 被破坏,但用户看不到更新。恢复是一条命令:
+   > ```bash
+   > gh release edit vX.Y.Z --draft=false --latest
+   > ```
 6. **带数据改动就先落还原点**(`deploy-prod` 自己不做备份,理由见「生产运维要点」):
    ```bash
    ssh root@mica.cloudcele.com \
