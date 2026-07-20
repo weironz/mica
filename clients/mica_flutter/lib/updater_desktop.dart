@@ -93,21 +93,35 @@ Future<void> downloadAndApplyUpdate(
     client.close();
   }
 
-  // Silent install; /CLOSEAPPLICATIONS force-closes any lingering Mica so the
-  // running exe can be replaced. The installer's [Run] step relaunches Mica.
+  // Start Setup only AFTER this process is gone.
+  //
+  // The old code launched Setup immediately and quit 900 ms later, betting the
+  // app would die before Setup enumerated its files. Losing that race was silent
+  // and total: RestartManager found `mica_flutter` still holding the files,
+  // spent 30 s failing to close it, and then — because /SUPPRESSMSGBOXES turns
+  // the Abort/Retry/Ignore prompt into Abort — rolled the whole install back.
+  // The user saw a download, a restart, and the same old version, with nothing
+  // to explain it. (Observed: exit code 5, "Some applications could not be shut
+  // down".)
+  //
+  // `ping` is the delay: `timeout /t` wants a console this detached process has
+  // no claim on. /CLOSEAPPLICATIONS stays as a backstop for a slow exit, and
+  // /SUPPRESSMSGBOXES is deliberately gone — if Setup still cannot proceed, a
+  // visible prompt beats a silent rollback. The log gives us something to read
+  // when someone reports "it didn't update".
+  final logPath = '${dir.path}\\inno-install.log';
   await Process.start(
-    setup.path,
-    const [
-      '/VERYSILENT',
-      '/SUPPRESSMSGBOXES',
-      '/NOCANCEL',
-      '/CLOSEAPPLICATIONS',
-      '/NORESTART',
+    'cmd',
+    [
+      '/c',
+      'ping 127.0.0.1 -n 4 >nul & '
+          '"${setup.path}" /VERYSILENT /NOCANCEL /CLOSEAPPLICATIONS '
+          '/NORESTART "/LOG=$logPath"',
     ],
     mode: ProcessStartMode.detached,
   );
 
-  // Give the installer a moment to start, then quit so it can overwrite files.
-  await Future<void>.delayed(const Duration(milliseconds: 900));
+  // Quit immediately: every millisecond spent here is one Setup may have to
+  // spend prying the files loose.
   exit(0);
 }
