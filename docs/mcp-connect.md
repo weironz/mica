@@ -72,34 +72,25 @@ MCP 用另一个身份连,不必先登出。
 
 换来的便利并不值这个价:`claude mcp add --scope user` 同样一行搞定,还少一层抽象。
 
-## Claude Code(手动)
+## ⚠️ `--scope user` 不能省 —— 尤其在 Windows 上
 
-```bash
-claude mcp add mica --scope user \
-  -e MICA_API_BASE_URL=https://your-server.example.com \
-  -e MICA_PAT=mica_pat_… -- /path/to/mica-cli mcp
-```
+省掉它就是默认的 `local`(项目级),而 Windows 上 `claude mcp add` 把 project key
+写成**正斜杠**(`C:/Users/you/proj`),应用自己建的 project key 却是**反斜杠**
+(`C:\Users\you\proj`)。两个 key 对不上,配置就永远加载不到。
 
-> **`--scope user` 不能省 —— 尤其在 Windows 上。** 省掉它就是默认的 `local`
-> (项目级),而 Windows 上 `claude mcp add` 把 project key 写成**正斜杠**
-> (`C:/Users/you/proj`),应用自己建的 project key 却是**反斜杠**
-> (`C:\Users\you\proj`)。两个 key 对不上,配置就永远加载不到。
->
-> 实测(2026-07,任意 shell 都复现):CLI 打印 `[project: C:\Users\willz\probe]`,
-> 写进 `~/.claude.json` 的却是 `'C:/Users/willz/probe'`。
->
-> **症状极具迷惑性**:`claude mcp list` 报 `mica: ✓ Connected`(它读的是自己写的
-> 那个正斜杠 key,当然找得到、也真能把 server 拉起来),但**重启后会话里一个
-> mica 工具都没有** —— 两边都没说谎,只是在看不同的配置。别信 `✓ Connected`,
-> 以「重启后会话里有没有 `mica_*` 工具」为准。
->
-> `--scope user` 写的是 `~/.claude.json` **顶层**的 `mcpServers`,不挂 project
-> key,从根上绕开这个坑;代价是所有项目都能看到 mica(对笔记工具而言通常正是
-> 你要的)。**PAT 也别写进项目里的 `.mcp.json`** —— 那是会被 git 跟踪的文件,
-> 仓库一旦公开,token 就跟着提交上去了。
+实测(2026-07,任意 shell 都复现):CLI 打印 `[project: C:\Users\willz\probe]`,
+写进 `~/.claude.json` 的却是 `'C:/Users/willz/probe'`。同一台机器上两个 key
+并存是常态,`~/.claude.json` 的 `projects` 里能直接看到。
 
-或手写进 `~/.claude.json`(顶层 `mcpServers`)/ 项目 `.mcp.json`(**不要放
-token**):
+**症状极具迷惑性**:`claude mcp list` 报 `mica: ✓ Connected`(它读的是自己写的
+那个正斜杠 key,当然找得到、也真能把 server 拉起来),但**重启后会话里一个
+mica 工具都没有** —— 两边都没说谎,只是在看不同的配置。别信 `✓ Connected`,
+以「重启后会话里有没有 `mica_*` 工具」为准。
+
+`--scope user` 写的是 `~/.claude.json` **顶层**的 `mcpServers`,不挂 project key,
+从根上绕开这个坑;代价是所有项目都能看到 mica —— 对笔记工具而言通常正是你要的。
+
+## 手写配置文件(客户端没有 `mcp add` 命令时)
 
 ```json
 {
@@ -116,12 +107,12 @@ token**):
 }
 ```
 
-Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。
+Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。已登录的机器上
+可以**整个省掉 `env`**(凭证解析链见上),配置文件里就不存令牌。
 
-**凭证解析链**(先到先得):`MICA_API_BASE_URL` / `MICA_PAT` →
-`--server` / `MICA_SERVER` / `MICA_TOKEN` → `mica-cli auth login` 存下的配置。
-所以在已登录的机器上,`"command": "mica-cli", "args": ["mcp"]` 且**不带 env**
-也能直接用(walks the same chain as every other subcommand)。
+> **PAT 绝不能写进项目里的 `.mcp.json`** —— 那是会被 git 跟踪的文件,仓库一旦公开,
+> 令牌就跟着提交历史永久留下,删掉后续提交也没用。要放进项目级的只能是无凭证的
+> MCP(比如 playwright)。
 
 只读接入(例如给一个只查资料的 agent):`args: ["mcp", "--read-only"]`,
 或 `MICA_MCP_READ_ONLY=1` —— 写工具在调用时拒绝,读工具照常。
