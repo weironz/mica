@@ -51,4 +51,18 @@ void main() {
     expect(escapeBlockLeader('---'), r'\---');
     expect(escapeBlockLeader('plain'), 'plain');
   });
+
+  // P1-1: setext underlines + spaced dividers used to slip through the Dart
+  // mirror and, on re-import, promoted the PREVIOUS paragraph to a heading.
+  // These must match crates/markdown/src/lib.rs escape_block_leader.
+  test('setext underlines and spaced dividers escape too', () {
+    expect(escapeBlockLeader('==='), r'\===');
+    expect(escapeBlockLeader('=='), r'\==');
+    expect(escapeBlockLeader('--'), r'\--'); // setext H2 underline
+    expect(escapeBlockLeader('-- -'), r'\-- -'); // thematic break (spaces stripped)
+    expect(escapeBlockLeader('####### x'), r'\####### x'); // any # count, like Rust
+    // Non-underline lines with `=` stay untouched.
+    expect(escapeBlockLeader('a = b'), 'a = b');
+    expect(escapeBlockLeader('=x='), '=x=');
+  });
 }

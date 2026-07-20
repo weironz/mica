@@ -1482,15 +1482,34 @@ String _processEmphasis(String text, List<Mark> marks, List<_Delim> delims) {
 }
 
 /// A paragraph whose text LOOKS like a block marker (`- x`, `> x`, `# x`,
-/// `1. x`, `---`) must escape its leader or it changes kind on re-parse.
-/// Mirrors the Rust engine.
+/// `1. x`, `---`, `===`) must escape its leader or it changes kind on re-parse.
+///
+/// Faithfully mirrors the Rust engine (crates/markdown/src/lib.rs
+/// `escape_block_leader`). It previously did NOT — its doc-comment claimed to
+/// mirror Rust while (a) not stripping spaces before the divider check and
+/// (b) omitting setext underlines entirely. Result: a paragraph line `===` (or
+/// `--`, `-- -`) exported unescaped and, on re-import, turned the PRECEDING
+/// paragraph into a setext heading — silent round-trip data loss.
+/// (docs/code-review-2026-07-20.md P1-1.)
 String escapeBlockLeader(String line) {
-  final dividerLike = line.length >= 3 && line.split('').every((c) => c == '-');
+  // Divider: strip spaces first (`-- -` is a thematic break), then >=3 dashes.
+  final compact = line.replaceAll(' ', '');
+  final dividerLike =
+      compact.length >= 3 && compact.split('').every((c) => c == '-');
+  // Setext underline: a whole line of `=` or of `-` underlines the paragraph
+  // above it as a heading on re-parse.
+  final setextLike = line.isNotEmpty &&
+      (line.split('').every((c) => c == '=') ||
+          line.split('').every((c) => c == '-'));
+  // ATX: `#`+ then a space (any count, matching Rust — not just 1–6).
+  final atxLike =
+      line.startsWith('#') && line.replaceFirst(RegExp(r'^#+'), '').startsWith(' ');
   if (line.startsWith('- ') ||
       line.startsWith('+ ') ||
       line.startsWith('> ') ||
       dividerLike ||
-      RegExp(r'^#{1,6} ').hasMatch(line)) {
+      setextLike ||
+      atxLike) {
     return '\\$line';
   }
   final numbered = RegExp(r'^(\d+)\. ').firstMatch(line);
