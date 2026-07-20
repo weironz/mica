@@ -11,7 +11,7 @@
 //! is touched through this path its base is built lazily from the latest op-model
 //! snapshot, so existing data flows in without a separate migration pass.
 
-use mica_core::{Block as CoreBlock, MicaDoc};
+use mica_core::{Block as CoreBlock, DocError, MicaDoc};
 use mica_infra::{ApiError, ApiResult};
 use mica_markdown::DocumentSnapshotPayload;
 use serde::Serialize;
@@ -19,6 +19,35 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::store::latest_snapshot_tx;
+
+/// `MicaDoc::from_update`, but a yrs PANIC on malformed bytes becomes a
+/// `DocError` instead of unwinding out of the request handler.
+///
+/// yrs 0.27.x panics (index out of bounds while integrating a crafted update)
+/// rather than returning `Err` — and on the server the bytes are client-supplied
+/// (`push_update`) or caller-supplied (`restore_yrs_version`). Without this the
+/// panic unwinds; tokio catches it at the task boundary so the PROCESS survives,
+/// but that one connection dies with a scary stack trace instead of a clean 400.
+/// Wrapping the call turns it into the same `DocError` the `.map_err` at each
+/// site already handles, so the request is rejected, not dropped.
+///
+/// This does NOT catch yrs's upstream NON-unwinding UB (the `unreachable_unchecked`
+/// path — see mica-core `store.rs` P0-0 / `yrs_corrupt_input_is_unsound`):
+/// `catch_unwind` structurally cannot, and in release it is plain UB. That needs
+/// an upstream fix; this only closes the recoverable unwinding-panic class. The
+/// server's panic strategy is `unwind` (no `panic = "abort"`), so this works.
+fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MicaDoc::from_update(bytes)))
+        .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while decoding an update".into())))
+}
+
+/// [`MicaDoc::apply_update`] with the same panic containment as
+/// [`guarded_from_update`] — the client-update apply in `push_update` is the
+/// primary remotely-reachable path.
+fn guarded_apply(doc: &mut MicaDoc, update: &[u8]) -> Result<(), DocError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| doc.apply_update(update)))
+        .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while applying an update".into())))
+}
 
 /// Keep at least this many already-folded updates on the stream so a briefly
 /// offline client can catch up incrementally; older ones are pruned (they live
@@ -147,7 +176,7 @@ pub async fn bootstrap_base(db: &PgPool, document_id: Uuid) -> ApiResult<YrsBase
 /// full base (both are yrs updates), which keeps the protocol change purely
 /// additive: old clients never send an sv and old servers ignore it.
 pub fn diff_from_base(base: &YrsBase, client_sv: &[u8]) -> Option<Vec<u8>> {
-    let doc = MicaDoc::from_update(&base.state).ok()?;
+    let doc = guarded_from_update(&base.state).ok()?;
     doc.encode_diff(client_sv).ok()
 }
 
@@ -166,9 +195,9 @@ pub async fn push_update(
     let base = ensure_base_tx(&mut tx, document_id).await?;
 
     // Validate + fold: reconstruct the base, merge the update.
-    let mut doc = MicaDoc::from_update(&base.state)
+    let mut doc = guarded_from_update(&base.state)
         .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
-    doc.apply_update(update)
+    guarded_apply(&mut doc, update)
         .map_err(|_| ApiError::BadRequest("invalid yrs update".into()))?;
 
     let rid: i64 = sqlx::query_scalar(
@@ -257,9 +286,9 @@ pub async fn restore_yrs_version(
     version_state: &[u8],
 ) -> ApiResult<(i64, Vec<u8>)> {
     let base = bootstrap_base(db, document_id).await?;
-    let mut doc = MicaDoc::from_update(&base.state)
+    let mut doc = guarded_from_update(&base.state)
         .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
-    let target = MicaDoc::from_update(version_state)
+    let target = guarded_from_update(version_state)
         .map_err(|e| ApiError::BadRequest(format!("corrupt version state: {e}")))?;
 
     let sv = doc.state_vector();
@@ -383,6 +412,39 @@ pub async fn workspace_head(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A malformed update that makes yrs PANIC must come back as a `DocError`,
+    /// not unwind out of the server handler. Byte 9 flipped survives `decode_v1`
+    /// and blows up during integration (the same class the desktop store hit in
+    /// P0-0). With the guard removed, `guarded_from_update` panics and this test
+    /// fails — the mutation-kills-test guarantee.
+    #[test]
+    fn a_panicking_update_becomes_an_error_not_a_panic() {
+        let good = MicaDoc::from_blocks(
+            "r",
+            &[
+                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+                CoreBlock::new("a", "paragraph").with_text("hello world"),
+            ],
+        )
+        .encode_state();
+        // Sanity: the healthy blob decodes fine through the guard.
+        assert!(guarded_from_update(&good).is_ok());
+
+        let mut bad = good.clone();
+        bad[9] ^= 0xff;
+        assert!(
+            matches!(guarded_from_update(&bad), Err(DocError::Decode(_))),
+            "a panicking blob must be contained as DocError, not unwind"
+        );
+
+        // apply_update path: the same corrupt bytes panic on apply too.
+        let mut doc = MicaDoc::from_blocks("r", &[CoreBlock::new("r", "page")]);
+        assert!(
+            matches!(guarded_apply(&mut doc, &bad), Err(DocError::Decode(_))),
+            "guarded_apply must contain the panic as well"
+        );
+    }
 
     // The lazy-migration bridge: an op-model snapshot payload must reconstruct
     // into a yrs doc whose blocks/marks survive an encode→decode round trip (the
