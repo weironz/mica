@@ -1,22 +1,66 @@
 # 发版与构建(Release & build)
 
-**一句话**:**CI 构建一切,`just` 决定何时上线。**
+**一句话**:**CI 构建一切,上线仍然要人按一下 —— 但那个按钮现在在 Actions 页面。**
 
-推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后你跑 `just deploy-prod X.Y.Z`
-把生产滚到那个版本。两步,没有第三步。
+推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow 并
+批准,生产滚到那个版本。两步,没有第三步。
+
+`just deploy-prod X.Y.Z` **保留**为兜底(GitHub 挂了、或要同步 compose 时用),走的是
+同一个节点入口。
 
 | 产物 | 谁构建 | 去哪 |
 |---|---|---|
 | `Mica-Setup-X.Y.Z.exe` | **CI** job `windows` | GitHub Release(驱动应用内自动更新) |
 | `mica-cli` ×3(win/linux/macos) | **CI** job `cli` | GitHub Release |
 | `mica-api` / `mica-web` / `mica-cli` 镜像 | **CI** job `images` | **阿里云 ACR**(生产拉这里)+ Docker Hub(异地副本) |
-| 生产上线 | **你**:`just deploy-prod X.Y.Z` | node72 从 ACR pull |
+| 生产上线 | **你批准** `Deploy` workflow(兜底:`just deploy-prod X.Y.Z`) | node72 从 ACR pull |
 
-## 为什么 CI 不做部署
+## CI 部署用的不是 root key
 
-让 CI 能部署,就得把**生产 root SSH key 放进 GitHub secrets** —— 仓库或 Actions 一旦
-被攻破,等于生产被攻破。现在 CI 只持有**推镜像的凭据**(权限小、可单独吊销),上线是
-你主动按的一下。这个边界是安全上的实质区别,不是流程洁癖。
+这一节以前写的是「**为什么 CI 不做部署**」,论证如下:
+
+> 让 CI 能部署,就得把生产 root SSH key 放进 GitHub secrets —— 仓库或 Actions 一旦被
+> 攻破,等于生产被攻破。
+
+**第一个箭头是错的**,后半截成立。SSH 密钥的权限不是二元的:`authorized_keys` 的
+`command=` 选项在密钥被**接受之前**求值,强制它只能执行一个固定命令,客户端请求落进
+`SSH_ORIGINAL_COMMAND` 由服务端脚本自行校验。「能部署 ⇒ 需要 root key」是个没验证过
+的前提 —— 正是 CLAUDE.md 原则 #6 说的那类「必须 X 才能 Y」,它值得被别人的实现证伪,
+而且确实被证伪了。
+
+现在的实际配置:
+
+- 节点上有个受限账号 `mica-deploy`,**不在 docker 组**(docker 组成员可 `-v /:/host`
+  挂根目录,等价 root),`sudo -l` 只有一条白名单:`/usr/local/sbin/mica-deploy`。
+- 它的 `authorized_keys` 是
+  `restrict,command="/usr/bin/sudo /usr/local/sbin/mica-deploy"` —— `restrict` 关掉
+  端口转发/PTY/agent 转发,`command=` 钉死入口。
+- 那个脚本([`deploy/mica-deploy.sh`](../deploy/mica-deploy.sh))只接受
+  `deploy X.Y.Z [compose-sha256]`,版本号必须是不可变的三段式。
+
+**所以这把密钥泄露了能做什么?** 把生产滚到一个**已经发布到 registry 的版本**。仅此
+而已 —— 开不了 shell、读不了 `.env`(JWT_SECRET / 库密码 / OSS AK)、`pg_dump` 不了、
+改不了 compose、装不了后门。实测拒绝路径:
+
+```
+bash / id / sudo -i / cat /data/mica/.env   -> REFUSED: only 'deploy' is permitted
+docker run -v /:/host alpine ls /host       -> REFUSED: unexpected extra arguments
+deploy 0.12.8; cat /data/mica/.env          -> REFUSED: unexpected extra arguments
+deploy latest                               -> REFUSED: version must be X.Y.Z
+```
+
+**上线仍然是你按的一下**:`deploy.yml` 挂在 `environment: production` 上,该 environment
+配了 required reviewer,GitHub 在审批通过前**不把 secret 暴露给 job**。按钮只是从你的
+终端挪到了 Actions 页面。
+
+顺带一个反直觉的事实:CI 本来就持有 `ACR_PASSWORD`,也就是说「往生产镜像里推任意内容」
+这个能力**今天已经在 GitHub 上了**(见下面「镜像与 tag」)。真正的边界差异从来不是
+「CI 能不能部署」,而是「泄露之后拿不拿得到 shell 和明文密钥」—— 受限密钥保住的是这条线。
+
+> ⚠️ **`/usr/local/sbin/mica-deploy` 必须由 root 带外安装**(`just sync-deploy-script`),
+> **绝不能让 CI 装**。它是限制 CI 的那道闸 —— 能改写闸的人不受闸约束,把它改成
+> `exec bash` 就拿到了 root shell。`authorized_keys` 和 `sudoers` 同理。CI 只能**读**
+> 部署输出里的 `script_sha=` 来发现漂移。
 
 ## 镜像与 tag:两条硬规矩
 
@@ -65,9 +109,28 @@
      'docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-X.Y.Z-$(date +%Y%m%d-%H%M%S).sql.gz'
    # 验完整性:gzip -t <file>,再 zcat <file> | grep -c "^COPY public.documents " 确认目标表在内
    ```
-7. `just deploy-prod X.Y.Z` → 节点改 `.env` 的 `MICA_VERSION` → 从 ACR pull → 重建
-   api+web → 等健康 → `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**。
-8. **冒烟测这一版真正改了什么。** `verify-prod` 只断言版本号,证明不了功能。挑一个
+7. **部署**。两条路,都走节点上同一个受限入口 `/usr/local/sbin/mica-deploy`:
+
+   ```bash
+   # 常规:触发后去 Actions 页面批准(environment: production 卡着,批准前
+   # secret 对 job 不可见)
+   gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
+
+   # 兜底 / 需要同步 compose 时(它会先把 tag 处的 compose 推给节点)
+   just deploy-prod X.Y.Z
+   ```
+
+   节点改 `.env` 的 `MICA_VERSION` → 从 ACR pull → 重建 api+web → 等健康。
+   **失败会自动复原 `.env` 并把上一版拉起来**(trap,覆盖所有非零退出路径),
+   所以不会留下"容器还在跑旧版、但 `.env` 指着一个不存在的 tag"这种重启即挂的状态。
+
+   > CI 只传版本号和 **compose 的 sha256 指纹**,不传 compose 文件本身 —— 节点不一致
+   > 就拒绝,并提示你用 `just deploy-prod` 同步。哈希只能拒绝、无法注入;传文件则等于
+   > 把 `-v /:/host` 的能力交出去。**compose 改了之后的第一次部署必须走 `deploy-prod`。**
+
+8. `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**(workflow 里已内置
+   这一步)。
+9. **冒烟测这一版真正改了什么。** `verify-prod` 只断言版本号,证明不了功能。挑一个
    改动前后行为可区分的操作实测 —— 例如 v0.12.7 修的是「文档读取 400」,判据就是
    同一个 `mica_read_document` 调用:部署前报 `bad request: block not found:`,
    部署后返回正文。有这种硬判据就用它,没有就手工点一遍受影响的入口。
