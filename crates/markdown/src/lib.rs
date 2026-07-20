@@ -2901,7 +2901,13 @@ fn render_quote_group(
 }
 
 fn list_indent(block: &Block) -> usize {
-  block.data.get("indent").and_then(Value::as_u64).unwrap_or(0) as usize
+  // Cap at 8 to mirror the Dart editor's read (model.dart `indent` getter,
+  // `.clamp(0, 8)`). Without this cap the two engines DISAGREE on a block whose
+  // `data.indent` was written past 8 by a non-editor client (MCP/REST/API-token,
+  // or an import): Rust rendered N levels, Dart rendered 8 — same data, two
+  // outputs, violating the round-trip/parity invariant. (P1-4.) Non-destructive,
+  // like Dart's: the stored value is untouched, only the rendered depth is bound.
+  (block.data.get("indent").and_then(Value::as_u64).unwrap_or(0) as usize).min(8)
 }
 
 /// Is this block a container child of a list item, and at which level?
@@ -3604,12 +3610,9 @@ fn append_markdown_block_content(
 ) {
   // List/todo nesting from `data.indent` (4 spaces per level — valid
   // CommonMark continuation for both `- ` and `1. ` parents); other kinds
-  // keep the children-tree depth indent.
-  let level = block
-    .data
-    .get("indent")
-    .and_then(Value::as_u64)
-    .unwrap_or(0) as usize;
+  // keep the children-tree depth indent. `list_indent` applies the same 0..=8
+  // cap the Dart editor uses, so both engines indent identically (P1-4).
+  let level = list_indent(block);
   let indent = if matches!(block.kind.as_str(), "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo") {
     "    ".repeat(level)
   } else {
