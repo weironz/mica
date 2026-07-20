@@ -52,14 +52,15 @@ Dart 栈：`crateApiStoreMicaStoreLoadDoc` → `StoreCloudDocStore.load` → `Cl
    ```
 
    yrs 把**未校验的字节当合法 UTF-8 读**——这是上游 soundness bug，**升级到 0.27.3 仍在**（2026-07-21 实测）。它**不可拦截**：`catch_unwind` 接不住 non-unwinding abort，release 构建里该检查被编掉，同样输入就是纯 UB。
-   **影响面不止本地缓存**：`crates/app-core/src/sync.rs:171` 的 `apply_update` 会应用**客户端推来的 update**——即**远程可达**。构造过的 update 推给服务端，轻则打挂 API 进程（所有连接掉线），重则 release 下 UB。触发者需已登录且有编辑权限（非匿名），严重性因此降低，但恶意协作者或有 bug 的客户端仍可达。**该 UB 除崩溃外是否可被利用，未做分析。**
+   **影响面不止本地缓存**：`crates/app-core/src/sync.rs:171` 的 `apply_update` 会应用**客户端推来的 update**——即**远程可达**。**但核实后的真实暴露面比初判小得多**（我最初说「打挂 API 进程、所有连接掉线」是错的）：① 绝大多数畸形输入走 yrs 的 `Err` 分支 → 干净 400；② 触发 unwinding panic 的输入 → 无 `panic=abort`，服务端 unwind，axum handler 跑在每连接一个的 tokio task 里，**tokio 兜住 task panic → 只崩该连接，进程存活**；③ 只有 **UTF-8 UB 类**（release 检查被编掉）是真危险，可能段错误崩进程或静默读错。三类**全都需要已登录 + 有编辑权**（非匿名）。所以 panic 类现已用服务端 `contain_yrs_panic` 收成 400（见修复进度 `0723857`），**唯一剩下的 residual 是 UB 类**——`catch_unwind` 结构上接不住，只能上游修。**该 UB 除崩溃外是否可被利用，未做分析。**
 
 **已做的防线**（见文末修复进度）：
 - `contain_yrs_panic` 把 `load_doc` 的三处 yrs 调用（base + 两条 update 日志）包进 `catch_unwind` → 收敛成 `StoreError::CorruptDoc`，本地库是缓存、云端有正本，损坏降级为可重新播种。
 - FFI 45 处 `.lock().unwrap()` 改成毒化恢复式取锁——即使别处再 panic，文档也不再永久不可读。
 - **本地校验和**（✅ 已落地 `9b117c0`）：5 张 blob 表各加 sidecar CRC32 列，读时先验再喂 yrs——这是**唯一能在本地挡住上游 UB 的手段**（在字节到达 yrs 之前拦下）。只覆盖本地存储；服务端远程路径不适用（攻击者同时控制字节与校验和）。同时补上了此前**完全无防护**的两条 recovery 解码路径（`restore_local_version`、`rollback_doc`）。**只保护本 feature 上线后写入的数据**——老 NULL 行仍保留今天的暴露（诚实边界，不做 read-time backfill）。
+- **服务端 panic 兜底**（✅ 已落地 `0723857`）：`sync.rs` 5 处 yrs 调用包进 `contain_yrs_panic` → unwinding-panic 类从「掉连接」变成干净 400。**故意没做进程隔离**：对这个认证后、panic 类已被 tokio 隔离的窄暴露面严重不成比例，还会拖垮同步热路径。**不覆盖 UB 类**（接不住）。
 
-**仍未解决**：① 本地快照**当初为何损坏**未查清——修复只让它可生还，未让它不发生；② 服务端远程 UB 路径的根治在上游，本地无解，可选项为给 yrs 提 issue 或把解码放进隔离进程。
+**仍未解决**：① 本地快照**当初为何损坏**未查清——修复只让它可生还，未让它不发生；② **服务端远程 UB 类**的根治在上游，本地无解——**建议方向：给 yrs 提规范 issue + 附最小复现**（`yrs_corrupt_input_is_unsound` 已是现成 fuzz harness），**不建议进程隔离**（理由同上）。只在威胁模型变宽（接受非认证/低信任来源的 update）时才重新考虑隔离。
 
 ### P0-1 空 block id 可写入 CRDT，是 7 月 19 日事故的块级同款 【实测】
 
@@ -354,5 +355,6 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 | `a02feb3` | 覆盖补强 | 钉住 LLM 输出形态的粘贴内容（嵌套围栏 / CJK / marks 边界）——排查 panic 的副产物，未复现但补上了此前缺失的覆盖。 |
 | `278e2b9` | **P0-0 根因** | `contain_yrs_panic` 把 `load_doc` 的 yrs 调用包进 `catch_unwind` → `CorruptDoc`；yrs 0.27.0→0.27.3；记录上游 UB（`yrs_corrupt_input_is_unsound`，`#[ignore]`）。 |
 | `9b117c0` | **P0-0 第 4 层** | 本地 blob CRC32（5 张表 sidecar 列，字节进 yrs 前验），补上 `restore_local_version`/`rollback_doc` 两条无防护路径。11 个新测试，均实测「移除 verify 即 FAILED」。设计经 workflow 对抗性评审——抓到一个几乎会发的 P0（UPSERT 的 SET 子句漏 crc → 每次编辑误判 CorruptDoc）。 |
+| `0723857` | **P0-0 服务端** | `sync.rs` 5 处 yrs 调用包 `contain_yrs_panic` → 客户端 update 的 panic 类收成干净 400（原 `.map_err` 映射不变）。核实后**否掉进程隔离**（暴露面窄且认证后，tokio 已隔离 panic 类）。测试实测「移除 guard 即 FAILED」。UB 类留待上游。 |
 
 尚未动：P0-1/2/3（块级空 id + 环检查）、P1 全部、P3 全部。执行顺序仍按上方「建议的执行顺序」，但 **P0-0 因线上复现被提到了最前**。
