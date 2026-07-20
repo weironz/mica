@@ -28,7 +28,7 @@ fail() { printf 'mica-deploy REFUSED: %s\n' "$*" >&2; exit 1; }
 raw="${SSH_ORIGINAL_COMMAND:-$*}"
 [[ "$raw" != *$'\n'* ]] || fail 'command must be a single line'
 
-read -r action version extra <<<"$raw"
+read -r action version compose_sha extra <<<"$raw"
 [ -z "${extra:-}" ] || fail "unexpected extra arguments: $extra"
 [ "${action:-}" = deploy ] || fail "only 'deploy' is permitted (got '${action:-}')"
 
@@ -40,6 +40,32 @@ read -r action version extra <<<"$raw"
 tag="v$version"
 
 cd "$NODE_DIR" || fail "$NODE_DIR missing"
+
+# Announce which build of THIS script is running. CI compares it against
+# `git show <tag>:deploy/mica-deploy.sh | sha256sum` and fails the deploy on a
+# mismatch — which turns "the node quietly runs an older policy than the repo
+# describes" into a loud refusal.
+#
+# CI can only READ this. It must never be able to install the script: this file
+# is the fence that limits the CI key, and anything that can rewrite the fence
+# is not limited by it. Installing stays a root-side, out-of-band act
+# (`just sync-deploy-script`).
+echo "script_sha=$(sha256sum "$0" | cut -c1-16)"
+
+# Optional compose fingerprint. CI passes the sha256 of deploy/docker-compose.yml
+# AT THE TAG; if the node's file differs, refuse rather than deploy a version
+# against a compose it was never released with.
+#
+# A hash grants NO authority — the worst an attacker can do with it is pass the
+# right one (an ordinary deploy) or a wrong one (a refused deploy). That is why
+# the fingerprint is checked here instead of letting the caller supply the file:
+# supplying compose would mean supplying `-v /:/host`, i.e. host root.
+if [ -n "${compose_sha:-}" ]; then
+  [[ "$compose_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'compose sha must be 64 hex chars'
+  actual=$(sha256sum docker-compose.yaml | cut -d' ' -f1)
+  [ "$actual" = "$compose_sha" ] || fail \
+    "compose on this node does not match $tag (node=${actual:0:16}… want=${compose_sha:0:16}…) — run 'just deploy-prod $version' from a machine that can reach GitHub to sync it"
+fi
 
 # --- this script does NOT touch docker-compose.yaml ------------------------
 # It moves a version, nothing else. Two reasons, and the second is why the first
@@ -63,6 +89,32 @@ cd "$NODE_DIR" || fail "$NODE_DIR missing"
 # working tree. Compose changes rarely; versions change every release.
 prev=$(sed -nE 's|^MICA_VERSION=(.*)$|\1|p' .env)
 [ -n "$prev" ] || fail '.env has no MICA_VERSION to roll back to'
+
+# Restore MICA_VERSION on ANY non-zero exit, not just a failed health check.
+#
+# Without this trap, `set -e` aborted the moment `docker compose pull` failed —
+# after .env had already been rewritten — and the rollback at the bottom never
+# ran. Deploying a version that does not exist in the registry left .env
+# pointing at it: the running containers were untouched (so nothing looked
+# wrong), but the persisted desired state was broken and the next restart or
+# reboot would have tried to start a tag that isn't there. Observed exactly that
+# with `deploy 9.9.9`.
+rollback() {
+  local rc=$?
+  [ $rc -eq 0 ] && return 0
+  local now
+  now=$(sed -nE 's|^MICA_VERSION=(.*)$|\1|p' .env)
+  if [ "$now" != "$prev" ]; then
+    echo "==> failed (rc=$rc); restoring MICA_VERSION=$prev" >&2
+    sed -i -E "s|^MICA_VERSION=.*|MICA_VERSION=$prev|" .env
+    # Best-effort: bring the previous version back up. Its images are already
+    # local, so this is fast and needs no registry.
+    docker compose up -d --no-deps api web >&2 || true
+  fi
+  return $rc
+}
+trap rollback EXIT
+
 sed -i -E "s|^MICA_VERSION=.*|MICA_VERSION=$tag|" .env
 
 echo "==> $prev -> $tag"
@@ -87,14 +139,11 @@ for _ in $(seq 1 60); do
   sleep 4
 done
 
-# Health never came up. Put prod back rather than leaving it half-dead — the
-# images for $prev are still on the node, so this is fast and local.
+# Health never came up. The EXIT trap does the actual restoring — this just
+# reports why.
 #
-# NOTE: this rolls back the VERSION ONLY. `sqlx::migrate!` is forward-only, so
+# NOTE: rollback covers the VERSION ONLY. `sqlx::migrate!` is forward-only, so
 # if the failed version ran a migration the schema stays migrated and the old
 # api meets a newer schema. That is exactly why release.md requires a pg_dump
 # restore point before any data-affecting release — this cannot replace it.
-echo "api NOT healthy after 4 min; rolling back to $prev" >&2
-sed -i -E "s|^MICA_VERSION=.*|MICA_VERSION=$prev|" .env
-docker compose up -d --no-deps api web || true
-fail "health check failed; rolled back to $prev (schema NOT rolled back)"
+fail "api not healthy after 4 min (schema NOT rolled back — see release.md)"

@@ -196,6 +196,34 @@ docker-push tag:
 # willdockerhub/mica-cli:v0.3 for many releases because deploy skipped it).
 # MICA_VERSION is rewritten in the node's .env so a restart (or a reboot) comes
 # back on the SAME version, not the old one.
+# Install the node-side deploy policy. ROOT-SIDE AND MANUAL ON PURPOSE.
+#
+# `/usr/local/sbin/mica-deploy` is the fence that limits what the CI key can do,
+# so CI must never be able to write it — anything that can rewrite the fence is
+# not constrained by it. Same reason `authorized_keys` and `sudoers` are hand-
+# installed. Run this yourself, with your own root key, when the script changes.
+#
+# From the TAG, not the working tree: the first installs of this script were
+# `scp` straight from a dirty checkout — exactly the drift `deploy-prod` was
+# just fixed to avoid. Writes to `.new`, syntax-checks, then moves into place,
+# so a truncated transfer can never leave a half-written policy behind.
+[doc("Install deploy/mica-deploy.sh on the node from a tag (root, manual)")]
+sync-deploy-script version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="v{{version}}"
+    if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+      git fetch -q origin "refs/tags/$tag:refs/tags/$tag"
+    fi
+    git show "$tag:deploy/mica-deploy.sh" \
+      | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
+          && chown root:root /usr/local/sbin/mica-deploy.new \
+          && chmod 0755 /usr/local/sbin/mica-deploy.new \
+          && bash -n /usr/local/sbin/mica-deploy.new \
+          && mv /usr/local/sbin/mica-deploy.new /usr/local/sbin/mica-deploy \
+          && sha256sum /usr/local/sbin/mica-deploy"
+    echo "want: $(git show "$tag:deploy/mica-deploy.sh" | sha256sum)"
+
 [doc("Roll prod to an already-published version, e.g. `just deploy-prod 0.5.1`")]
 deploy-prod version:
     #!/usr/bin/env bash
