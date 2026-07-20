@@ -37,7 +37,31 @@ hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 dev-up:
     docker compose up -d postgres rustfs
 
-[doc("Stop dev infra (add -v to also wipe the database volume)")]
+# One command in, one command out. The API runs as `api-dev` (bind-mounted
+# source, cargo cache in volumes) rather than on the host, so `dev-down` really
+# does stop everything — the old split left a host cargo process running that no
+# amount of `docker compose down` would touch.
+#
+# First run compiles the workspace into the volume (~5.5 min here); after that a
+# one-line change rebuilds and restarts in ~5 s.
+[doc("Start the whole dev stack (infra + API + web) and seed it")]
+dev:
+    docker compose up -d postgres rustfs api-dev web
+    @echo "waiting for the API (first run compiles the workspace — minutes)"
+    @for i in $(seq 1 200); do \
+        curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1 && break; \
+        sleep 3; \
+    done
+    @curl -fsS http://127.0.0.1:8080/api/health || (echo "API never came up — docker compose logs api-dev" && exit 1)
+    @echo ""
+    just seed-dev
+    @echo "api http://127.0.0.1:8080  web http://127.0.0.1:8090  (demo@mica.dev / password123)"
+
+[doc("Tail the dev API log (it runs in a container now, not your terminal)")]
+dev-logs:
+    docker compose logs -f api-dev
+
+[doc("Stop the whole dev stack (add -v to also wipe the database volume)")]
 dev-down:
     docker compose down
 

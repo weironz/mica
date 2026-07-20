@@ -199,20 +199,35 @@ just app                    # Flutter 桌面客户端;just app chrome 跑 web
 
 ### 启停速查
 
+**日常就两条命令**:
+
+```powershell
+just dev        # 起全套(基础设施 + 后端 + web)并自动灌种子
+just dev-down   # 全停
+```
+
 | 想干什么 | 怎么做 |
 |---|---|
-| 起数据库等基础设施 | `just dev-up`(postgres + rustfs 容器) |
-| 起后端 | `just dev-api` —— **前台进程**,占着这个终端 |
-| 停后端 | 在那个终端按 **Ctrl+C**;窗口关了就 `taskkill /IM mica-api-server.exe /F` |
-| 起 web 静态服务 | `docker compose up -d web`(nginx,`:8090`,服务的是 `build/web`) |
-| 停全部容器 | `just dev-down` |
-| **连数据一起清掉** | `docker compose down -v` —— 会删库,之后要重跑 `dev-api` 建表 + `seed-dev` |
-| 看谁还在跑 | `docker compose ps` / `netstat -ano \| findstr "8080 8090 5432"` |
+| 起全套 | `just dev` |
+| 全停 | `just dev-down` |
+| 看后端日志 | `just dev-logs`(它跑在容器里,不占你的终端) |
+| 改完代码生效 | `docker compose restart api-dev` —— 增量重编,约 5 秒 |
+| **连数据一起清掉** | `docker compose down -v` —— 删库,之后 `just dev` 会重建并重新灌种子 |
+| 看谁还在跑 | `docker compose ps` |
+| 只要基础设施(想在主机上 `just dev-api`)| `just dev-up` |
 
-占用的端口:**8080** 后端、**8090** web、**5432** postgres。
+占用的端口:**8080** 后端、**8090** web、**5432** postgres、**9000/9001** rustfs。
 
-> `dev-api` 是前台进程,不是服务 —— 关掉终端它就没了,但如果是被后台启动的,就得按上表
-> 手动杀。这三样都只跑在本机,和线上无关。
+> **首次 `just dev` 要等几分钟**:后端在容器里把整个 workspace 编进卷(本机实测 5 分 32 秒)。
+> 之后改一行代码重编 + 重启约 **5 秒** —— 依赖都在 `mica-cargo-target` /
+> `mica-cargo-registry` 两个具名卷里,`down` 不会清掉,只有 `down -v` 才会。
+>
+> 后端用的是 compose 的 `api-dev` 服务(官方 Rust 镜像 + 挂载源码),**不是** `api`。
+> `api` 走 `deploy/Dockerfile.api`,把源码烤进镜像层、`--release` 全量编译,是给
+> `just parity-check` 跑真镜像用的 —— 拿它做开发迭代等于每改一行等十分钟。
+>
+> 想回到「后端跑主机」的老方式也行:`just dev-up` + `just dev-api`,但那样
+> `dev-down` 停不掉后端,得自己 Ctrl+C。
 
 `just seed-dev` 灌的是 [`seeds/dev_seed.sql`](../seeds/dev_seed.sql):**demo@mica.dev / password123**
 外加一个名为 `demo` 的工作区。幂等,`docker compose down -v` 之后重跑即可。**顺序不能反**——

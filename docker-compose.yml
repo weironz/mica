@@ -78,6 +78,52 @@ services:
     ports:
       - "8080:8080"
 
+  # The API for the DEV loop — same toolchain image as the prod builder, but it
+  # never builds an image. `api` above bakes the source into a layer, so every
+  # edit invalidates it and recompiles the whole dependency tree in --release:
+  # correct for a reproducible prod artifact, useless for iterating. Here the
+  # source is bind-mounted and `target/` + the cargo registry live in named
+  # volumes, so a rebuild is an ordinary incremental cargo build that survives
+  # restarts.
+  #
+  # Use this one to develop (`just dev`); keep `api` for `just parity-check`,
+  # which exists precisely to run the REAL image.
+  api-dev:
+    image: rust:1.97-slim-bookworm
+    container_name: mica-api-dev
+    working_dir: /src
+    command: cargo run -p mica-api-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      HTTP_ADDR: 0.0.0.0:8080
+      DATABASE_URL: postgres://mica:mica@postgres:5432/mica
+      DATABASE_MAX_CONNECTIONS: 10
+      JWT_SECRET: change-me-in-development
+      ACCESS_TOKEN_TTL_SECONDS: 86400
+      RUST_LOG: mica_api_server=debug,mica_app_core=debug,mica_infra=debug
+      CARGO_TERM_COLOR: never
+      # The backend only SIGNS presigned URLs, so this must be the host the
+      # BROWSER can reach — not the compose service name.
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: mica
+      S3_ACCESS_KEY: rustfsadmin
+      S3_SECRET_KEY: rustfsadmin
+      S3_FORCE_PATH_STYLE: "true"
+      S3_PRESIGN_TTL_SECONDS: 604800
+      S3_MAX_UPLOAD_BYTES: 52428800
+    volumes:
+      - .:/src
+      # Linux build artifacts stay in volumes: sharing ./target with the host
+      # would make the two toolchains fight over the same directory.
+      - mica-cargo-target:/src/target
+      - mica-cargo-registry:/usr/local/cargo/registry
+    ports:
+      - "8080:8080"
+
   # Dev web server: serves the live Flutter bundle (bind mount — rebuild and
   # refresh, no restart) with production-identical routing on :8090 (host
   # port 80 is taken on this VM).
@@ -94,5 +140,7 @@ services:
       - ./clients/mica_flutter/build/web:/usr/share/nginx/html:ro
 
 volumes:
+  mica-cargo-target:
+  mica-cargo-registry:
   mica-postgres-data:
   mica-rustfs-data:
