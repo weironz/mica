@@ -171,36 +171,36 @@ for the full tool list.
 mica-cli mcp [--read-only]        # serve over stdio (what the client launches)
 ```
 
-#### `mcp install` — configure a client for you
+#### Registering it with a client
 
-Instead of hand-editing each client's config file and pasting a token:
+Use the client's own command — there is deliberately no `mica-cli mcp install`
+(see [`mcp-connect.md`](mcp-connect.md) for why it was removed). For Claude Code:
 
 ```bash
 mica-cli auth login --server https://your-server.example.com --email you@example.com
-mica-cli mcp install --client claude-desktop      # one client
-mica-cli mcp install --all                        # every client present on this machine
+claude mcp add --scope user mica -- /path/to/mica-cli mcp
 ```
 
-It **merges** a `mica` server entry into the client's config (pointing at this
-binary), preserving everything else, and by default mints a fresh PAT and embeds
-it. Clients: `claude-desktop`, `claude-code`, `cursor`, `codex`, `gemini`,
-`windsurf`. Restart the client afterward.
+Passing no `-e` is the cleanest form: the server walks the same credential chain
+as every other subcommand, so **no token lands in the client config or in your
+shell history**. The trade is that it rides your saved login, which can expire —
+re-run `auth login` if the MCP server starts reporting `no token`.
 
-| Flag | Effect |
-| --- | --- |
-| `--client <name>` | Configure one client. |
-| `--all` | Configure every client whose config is present. |
-| `--no-token` | Don't embed a token — rely on this machine's saved login instead. |
-| `--pat <mica_pat_…>` | Embed an existing PAT rather than creating one. |
-| `--dry-run` | Print what would change; write nothing. |
+To pin a token instead (copying the config to another machine, or not wanting to
+depend on a saved login):
 
-> The default mints a PAT (`read`+`write`) and writes it into the client config
-> in plaintext — the same trust model every MCP setup uses. Revoke with
-> `mica-cli auth token revoke <id>`. `--no-token` avoids the secret-on-disk but
-> then the MCP server rides your saved login, which can expire. Config paths are
-> the standard per-client locations (e.g. Claude Desktop's
-> `%APPDATA%\Claude\claude_desktop_config.json`); Claude Desktop is macOS/Windows
-> only. VS Code / Copilot isn't wired yet — configure it manually for now.
+```bash
+claude mcp add --scope user mica \
+  -e MICA_API_BASE_URL=https://your-server.example.com \
+  -e MICA_PAT=mica_pat_… \
+  -- /path/to/mica-cli mcp
+```
+
+> `--scope user` matters on Windows: the default `local` scope keys the entry by
+> the current directory, and the CLI writes that key with forward slashes while
+> the app uses backslashes — so the two never see each other's config. Symptom:
+> `claude mcp list` says `✓ Connected` while the app's session has no `mica_*`
+> tools at all. See [`mcp-connect.md`](mcp-connect.md).
 
 ## Backup
 

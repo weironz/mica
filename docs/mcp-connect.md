@@ -28,22 +28,27 @@ mica-cli auth token create --name claude-code --scope read --scope write
 手里已经有 `mica_pat_…`(别的机器建的、同事给的、或上次记下来的),**不需要再登录一次**
 —— `auth login` 的唯一作用就是拿到凭证,凭证已经有了就直接用。缺的只是服务器地址。
 
-```bash
-# 一条命令写好客户端配置,token 直接嵌进去
-mica-cli mcp install --client claude-code \
-  --server https://your-server.example.com \
-  --pat mica_pat_…
-```
+**把 `your-server.example.com` 换成你自己的服务器地址** —— 下面每段示例都一样。原样
+粘贴只会配出一个连不上的 MCP。
 
-`--pat` 会**跳过**建 token 那一步(它在需要联网鉴权之前就短路了),所以这台机器从没
-`auth login` 过也能配好。`--server` 不能省 —— 除非本机已有登录配置或设了 `MICA_SERVER`,
-否则会报 `no server`。
-
-不想写任何配置文件的话,MCP server 本身只认两个环境变量,直接给就行:
+最干净的写法是**不传任何 `-e`**:mica-cli 自己会走凭证解析链,配置文件里因此不存令牌。
 
 ```bash
-MICA_API_BASE_URL=https://your-server.example.com MICA_PAT=mica_pat_… mica-cli mcp
+mica-cli auth login --server https://your-server.example.com --email you@example.com
+claude mcp add --scope user mica -- /path/to/mica-cli mcp
 ```
+
+要把令牌写死进配置(换机复制、或不想依赖本机登录状态)就显式给:
+
+```bash
+claude mcp add --scope user mica \
+  -e MICA_API_BASE_URL=https://your-server.example.com \
+  -e MICA_PAT=mica_pat_… \
+  -- /path/to/mica-cli mcp
+```
+
+⚠️ 这样令牌会进 **shell 历史**和终端回滚缓冲,粘贴时也极易连同令牌一起发进聊天/工单。
+能用上面那种不带 `-e` 的写法就用它。
 
 **优先级**(先到先得):`MICA_API_BASE_URL` / `MICA_PAT` → `--server` / `MICA_SERVER` /
 `MICA_TOKEN` → `auth login` 存下的配置。所以环境变量总能盖过本机已登录的账号 —— 想让
@@ -51,37 +56,21 @@ MCP 用另一个身份连,不必先登出。
 
 > **token 只在创建时显示一次**,`auth token list` 只看得到名字和元数据,看不到明文。
 > 弄丢了就 `auth token create` 建个新的(旧的可以撤销)。
-
-已经配过一次、只想换 token:重跑上面的 `mcp install` 即可,它是**合并**写入,
-只覆盖 `mica` 这一条,保留其它 MCP server。
-
-## 最快:让 mica-cli 自己配
-
-装好 `mica-cli`(见 [`cli.md`](cli.md#install))后,一条命令写好客户端配置 + 生成并嵌入
-token,免去手改 JSON/TOML:
-
-```bash
-mica-cli auth login --server https://your-server.example.com --email you@example.com
-mica-cli mcp install --client claude-code      # 或 cursor / codex / gemini / windsurf / claude-desktop
-mica-cli mcp install --all                     # 本机装了的客户端一次全配
-```
-
-> **Claude Code 是最可靠的接法**:它写进 `~/.claude.json` 顶层 `mcpServers.mica`
-> (内嵌永不过期的 PAT),持久、跨重启不丢。`claude-desktop` 写的
-> `claude_desktop_config.json` 则会被某些 wrapper 运行时(如 Claude Code
-> Desktop)**启动时重写抹掉**,那条 mica 一直连不上。
 >
-> 为此 `--client claude-desktop` 有**双写兜底**:配 Claude Desktop 时,若本机
-> 已存在 `~/.claude.json`(即装了会抹文件的运行时),就**自动也镜像一份**到那里
-> ——两边都覆盖,不用你手动再跑一次。只在该文件已存在时才镜像(纯 Claude Desktop
-> 用户不会凭空多一个用不上的文件);若 Claude Code 本就是 `--all` 的目标之一,则
-> 不重复写。
+> **不慎泄露就立刻轮换**:`auth token list` 找到它 → `auth token revoke <id>` → 建新的
+> 重新配。贴进聊天记录、截图、工单的令牌都算泄露。
 
-它把 `mica` 这个 MCP server **合并**进目标客户端配置(保留其它条目)、指向当前 mica-cli
-二进制、默认建一个 PAT 写进去。配好重启客户端即可。细节(`--no-token`/`--pat`/`--dry-run`、
-各客户端配置路径)见 [`cli.md`](cli.md#mcp--model-context-protocol-server-for-ai-clients)。
+已经配过一次、只想换令牌:重跑上面的 `claude mcp add` 即可 —— 同名条目会被覆盖,
+其它 MCP server 不受影响。
 
-下面是**手动**配法(想自己控制,或客户端尚未被 `mcp install` 支持时)。
+## 为什么没有 `mica-cli mcp install`
+
+以前有过,已删除。它能一条命令配好客户端、自动建 PAT、`--all` 一次配完六种客户端 ——
+但代价是**同一件事有了两条路**:自带一套 `--client/--pat/--no-token/--dry-run` 旗标,
+外加一张硬编码的「六个客户端的配置文件在哪」的表(那些路径会漂移),而且人们会习惯性
+用它,而不是 `claude mcp add` —— 后者才是跨工具通用、大家本来就会的命令。
+
+换来的便利并不值这个价:`claude mcp add --scope user` 同样一行搞定,还少一层抽象。
 
 ## Claude Code(手动)
 

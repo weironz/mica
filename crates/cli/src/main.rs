@@ -13,7 +13,6 @@
 
 mod client;
 mod config;
-mod mcp_install;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -50,26 +49,28 @@ enum Command {
   Export(ExportArgs),
   /// Serve the Mica MCP server over stdio (for Claude Code / Desktop and any
   /// MCP client): list, read, create and write documents through the REST API.
-  /// With no subcommand it serves; `mica-cli mcp install` writes the config.
+  ///
+  /// Register it with the client's own command — there is deliberately no
+  /// `install` subcommand. A second way to write the same config file was only
+  /// ever a convenience, and it cost more than it saved: it carried its own
+  /// flags plus a hardcoded map of six clients' config paths, and people reached
+  /// for it instead of `claude mcp add`, the portable command they already know.
+  ///
+  ///   claude mcp add --scope user mica -- <path-to-mica-cli> mcp
+  ///
+  /// Passing no `-e` is the cleanest form: the server walks the same credential
+  /// chain as every other subcommand (MICA_API_BASE_URL/MICA_PAT →
+  /// MICA_SERVER/MICA_TOKEN → whatever `auth login` saved), so no token has to
+  /// touch the command line or sit in a client config file.
   Mcp(McpArgs),
 }
 
 #[derive(Args)]
 struct McpArgs {
-  /// `install` configures a client; omit to serve the MCP server over stdio.
-  #[command(subcommand)]
-  action: Option<McpAction>,
-  /// (serve) Refuse every write tool at call time; read tools stay available.
+  /// Refuse every write tool at call time; read tools stay available.
   /// Also honored from the environment: MICA_MCP_READ_ONLY=1.
   #[arg(long)]
   read_only: bool,
-}
-
-#[derive(Subcommand)]
-enum McpAction {
-  /// Write the Mica MCP server entry into an MCP client's config file, so you
-  /// don't have to hand-edit JSON/TOML or paste a token.
-  Install(mcp_install::InstallArgs),
 }
 
 #[derive(Subcommand)]
@@ -161,10 +162,7 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
-    Command::Mcp(args) => match &args.action {
-      Some(McpAction::Install(install)) => mcp_install::run(&cli, &cfg, install),
-      None => cmd_mcp(&cli, &cfg, args),
-    },
+    Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
   }
 }
 

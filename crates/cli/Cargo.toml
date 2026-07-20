@@ -23,11 +23,6 @@ mica-mcp-server = { path = "../mcp-server" }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 serde.workspace = true
 serde_json.workspace = true
-# `mcp install --client codex` must MERGE into Codex's `~/.codex/config.toml`
-# (preserving the user's other tables/comments), which needs a real TOML
-# parse+serialize — the standard-format sibling of serde_json, not a thing to
-# hand-roll. Every other client is JSON and needs no new dep.
-toml = "0.8"
 uuid.workspace = true
 # Only the `mcp` subcommand is async (rmcp stdio server); the rest of the CLI
 # stays blocking. One runtime is built on demand in that arm.
