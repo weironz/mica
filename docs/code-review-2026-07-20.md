@@ -57,7 +57,7 @@ Dart 栈：`crateApiStoreMicaStoreLoadDoc` → `StoreCloudDocStore.load` → `Cl
 **已做的防线**（见文末修复进度）：
 - `contain_yrs_panic` 把 `load_doc` 的三处 yrs 调用（base + 两条 update 日志）包进 `catch_unwind` → 收敛成 `StoreError::CorruptDoc`，本地库是缓存、云端有正本，损坏降级为可重新播种。
 - FFI 45 处 `.lock().unwrap()` 改成毒化恢复式取锁——即使别处再 panic，文档也不再永久不可读。
-- **本地校验和**（进行中）：给存进 SQLite 的 blob 附 CRC32，读时先验再喂 yrs——这是**唯一能在本地挡住上游 UB 的手段**（在字节到达 yrs 之前拦下）。只覆盖本地存储；服务端远程路径不适用（攻击者同时控制字节与校验和）。
+- **本地校验和**（✅ 已落地 `9b117c0`）：5 张 blob 表各加 sidecar CRC32 列，读时先验再喂 yrs——这是**唯一能在本地挡住上游 UB 的手段**（在字节到达 yrs 之前拦下）。只覆盖本地存储；服务端远程路径不适用（攻击者同时控制字节与校验和）。同时补上了此前**完全无防护**的两条 recovery 解码路径（`restore_local_version`、`rollback_doc`）。**只保护本 feature 上线后写入的数据**——老 NULL 行仍保留今天的暴露（诚实边界，不做 read-time backfill）。
 
 **仍未解决**：① 本地快照**当初为何损坏**未查清——修复只让它可生还，未让它不发生；② 服务端远程 UB 路径的根治在上游，本地无解，可选项为给 yrs 提 issue 或把解码放进隔离进程。
 
@@ -353,7 +353,6 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 | `4170414` | **P0-0 收窄** | HTML 导出不再持文档锁跑整个渲染引擎（merman/数学，318 个 panic 点），移出锁作用域。 |
 | `a02feb3` | 覆盖补强 | 钉住 LLM 输出形态的粘贴内容（嵌套围栏 / CJK / marks 边界）——排查 panic 的副产物，未复现但补上了此前缺失的覆盖。 |
 | `278e2b9` | **P0-0 根因** | `contain_yrs_panic` 把 `load_doc` 的 yrs 调用包进 `catch_unwind` → `CorruptDoc`；yrs 0.27.0→0.27.3；记录上游 UB（`yrs_corrupt_input_is_unsound`，`#[ignore]`）。 |
-
-进行中：**本地校验和**（P0-0 的第 4 层防线，见上）。
+| `9b117c0` | **P0-0 第 4 层** | 本地 blob CRC32（5 张表 sidecar 列，字节进 yrs 前验），补上 `restore_local_version`/`rollback_doc` 两条无防护路径。11 个新测试，均实测「移除 verify 即 FAILED」。设计经 workflow 对抗性评审——抓到一个几乎会发的 P0（UPSERT 的 SET 子句漏 crc → 每次编辑误判 CorruptDoc）。 |
 
 尚未动：P0-1/2/3（块级空 id + 环检查）、P1 全部、P3 全部。执行顺序仍按上方「建议的执行顺序」，但 **P0-0 因线上复现被提到了最前**。
