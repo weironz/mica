@@ -70,6 +70,70 @@ async fn cleanup(db: &PgPool, ws: Uuid, user: Uuid) {
     sqlx::query("DELETE FROM users WHERE id=$1").bind(user).execute(db).await.ok();
 }
 
+fn para(id: &str, text: &str) -> mica_core::Block {
+    mica_core::Block {
+        id: id.to_string(),
+        kind: "paragraph".to_string(),
+        text: text.to_string(),
+        data: serde_json::Value::Null,
+        children: Vec::new(),
+    }
+}
+
+/// Regression for the "document is suddenly unreadable" incident: a yrs base
+/// whose `meta.root` was wiped must still read.
+///
+/// A client that seeded from a rootless local copy pushed `meta.root = ""`.
+/// Because a yrs map insert is last-writer-wins that erased the root for every
+/// replica, and the root block went with it — leaving all content parentless.
+/// Every read then aborted with `block not found: ` (an EMPTY id in the message
+/// is this bug's signature), so a fully intact document looked like data loss.
+#[tokio::test]
+async fn a_base_that_lost_its_root_still_reads() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping a_base_that_lost_its_root_still_reads: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // Materialise the exact production damage: rootless base, content intact
+    // but parentless, and the root block absent from the block set.
+    let damaged = MicaDoc::from_blocks("", &[para("x", "First"), para("y", "Second")]);
+    assert_eq!(damaged.root_block_id(), "", "fixture really is rootless");
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,updated_at)
+         VALUES($1,$2,$3,1,now())
+         ON CONFLICT (document_id) DO UPDATE SET
+             state=excluded.state, state_vector=excluded.state_vector,
+             base_rid=excluded.base_rid, updated_at=now()",
+    )
+    .bind(doc)
+    .bind(damaged.encode_state())
+    .bind(damaged.state_vector())
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let payload = store::current_payload(&db, doc)
+        .await
+        .expect("read must not error on a damaged base")
+        .expect("payload");
+
+    // The op-model snapshot still knows the real root — don't adopt the empty one.
+    assert_eq!(payload.root_block_id, "r");
+    // ...and the vanished root block is rebuilt over the orphans, in order, so
+    // the document renders instead of erroring.
+    let root = payload
+        .blocks
+        .iter()
+        .find(|b| b.id == "r")
+        .expect("root block rebuilt");
+    assert_eq!(root.children, vec!["x", "y"]);
+    assert_eq!(payload.blocks.iter().find(|b| b.id == "x").unwrap().text, "First");
+
+    cleanup(&db, ws, user).await;
+}
+
 #[tokio::test]
 async fn push_pull_bootstrap_round_trip() {
     let Some(db) = pool().await else {
