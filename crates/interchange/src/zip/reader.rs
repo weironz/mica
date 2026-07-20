@@ -50,15 +50,13 @@ pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
   let mut total = u64::from(u16le(data, eocd + 10));
   let mut off = u64::from(u32le(data, eocd + 16));
   // ZIP64: marker values defer to the zip64 EOCD record (via its locator).
-  if total == 0xffff || off == 0xffff_ffff {
-    if eocd >= 20 {
-      let loc = eocd - 20;
-      if u32le(data, loc) == 0x0706_4b50 {
-        let z64 = u64le(data, loc + 8) as usize;
-        if z64 + 56 <= data.len() && u32le(data, z64) == 0x0606_4b50 {
-          total = u64le(data, z64 + 32);
-          off = u64le(data, z64 + 48);
-        }
+  if (total == 0xffff || off == 0xffff_ffff) && eocd >= 20 {
+    let loc = eocd - 20;
+    if u32le(data, loc) == 0x0706_4b50 {
+      let z64 = u64le(data, loc + 8) as usize;
+      if z64 + 56 <= data.len() && u32le(data, z64) == 0x0606_4b50 {
+        total = u64le(data, z64 + 32);
+        off = u64le(data, z64 + 48);
       }
     }
   }

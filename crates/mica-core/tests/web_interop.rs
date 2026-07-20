@@ -11,12 +11,22 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use mica_core::MicaDoc;
 
+// `#[ignore]`, not an early return. Without it this reported `ok` on every CI
+// run while executing zero assertions — the one test in the repo that was
+// actively lying (docs/code-review-2026-07-20.md, P2-3). yrs could have changed
+// its mark encoding wholesale, dropped every link href, or panicked on any
+// yjs-written state, and this still went green. That matters more than usual
+// here: yrs↔yjs byte-compat is the premise CLAUDE.md exemption #7 rests on.
+//
+// It is NOT wired to fail in CI, because the capture comes from the browser W2
+// self-test and no CI job produces it; failing would only teach people to
+// ignore a red build. `ignored` is the honest state: a real gap, visible in
+// every test summary, until someone pipes the web bundle's state in.
 #[test]
+#[ignore = "needs MICA_WEB_STATE_B64 captured from the browser W2 self-test"]
 fn rust_reads_yjs_written_marks() {
-    let Ok(b64) = std::env::var("MICA_WEB_STATE_B64") else {
-        eprintln!("skipping rust_reads_yjs_written_marks: no MICA_WEB_STATE_B64");
-        return;
-    };
+    let b64 = std::env::var("MICA_WEB_STATE_B64")
+        .expect("run with MICA_WEB_STATE_B64 set (cargo test -- --ignored)");
     let bytes = STANDARD.decode(b64.trim()).expect("valid base64");
     let doc = MicaDoc::from_update(&bytes).expect("yjs-written state decodes in yrs");
     let blocks = doc.to_blocks();

@@ -120,7 +120,7 @@ impl Client {
     if resp.status().as_u16() == 401 {
       bail!("invalid email or password");
     }
-    Ok(Self::ok(resp)?.json().context("decoding login response")?)
+    Self::ok(resp)?.json().context("decoding login response")
   }
 
   pub fn me(&self) -> Result<User> {
@@ -155,7 +155,7 @@ impl Client {
       body["expires_in_days"] = serde_json::json!(days);
     }
     let resp = self.authed(self.http.post(self.url("/auth/tokens"))).json(&body).send()?;
-    Ok(Self::ok(resp)?.json().context("decoding created token")?)
+    Self::ok(resp)?.json().context("decoding created token")
   }
 
   pub fn list_tokens(&self) -> Result<Vec<TokenInfo>> {

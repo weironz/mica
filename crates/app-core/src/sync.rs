@@ -474,7 +474,7 @@ mod tests {
             &[
                 CoreBlock::new("r", "page").with_children(vec!["a".into()]),
                 CoreBlock::new("a", "paragraph")
-                    .with_text(&"lorem ipsum dolor sit amet ".repeat(50)),
+                    .with_text("lorem ipsum dolor sit amet ".repeat(50)),
             ],
         );
         // Client seeded from this state (its on-device mirror).

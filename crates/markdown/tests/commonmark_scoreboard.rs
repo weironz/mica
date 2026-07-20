@@ -23,6 +23,7 @@ const BASELINE_PASS: usize = 641; // 100% of 641 — GFM dialect, 2026-06-06
 ///   wants plain text);
 /// - 170–175: the tagfilter escapes `<script>`/`<style>`/`<textarea>`
 ///   blocks that CommonMark passes through raw (security wins).
+///
 /// Plus our YAML front matter extension (Jekyll/GFM-frontmatter dialect),
 /// which claims a leading `---…---` fence the bare spec reads as thematic
 /// breaks / setext headings:

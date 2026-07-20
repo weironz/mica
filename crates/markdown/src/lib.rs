@@ -509,7 +509,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       // Fenced code child.
       if let Some((fence_char, fence_len, info)) = fence_open(content) {
         let language =
-          unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
+          unescape_md(info.split_whitespace().next().unwrap_or_default());
         let mut code_lines = Vec::new();
         index += 1;
         while index < raw_lines.len() {
@@ -661,7 +661,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       pending_loose = false;
       // Only the first word of the info string is the language.
       let language =
-        unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
+        unescape_md(info.split_whitespace().next().unwrap_or_default());
       let mut code_lines = Vec::new();
       index += 1;
       while index < raw_lines.len() {
@@ -1457,7 +1457,7 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         open_item = None;
         if let Some((fence_char, fence_len, info)) = starts_fence {
           let language =
-            unescape_md(info.trim().split_whitespace().next().unwrap_or_default());
+            unescape_md(info.split_whitespace().next().unwrap_or_default());
           let mut code_lines = Vec::new();
           let mut closed = false;
           index += 1;
@@ -1947,6 +1947,13 @@ fn numbered_list_marker(content: &str) -> Option<(u64, &str)> {
 
 /// Curated named-entity table (the spec set plus common real-world names);
 /// unknown entities stay literal, which is exactly the spec behavior.
+///
+/// `invisible_characters` is DENY-by-default and fires on `&shy;` (U+00AD, a
+/// soft hyphen). Mapping an entity name to its character is this table's whole
+/// job, so the "invisible" literal is the correct value, not a typo. The lint
+/// aborted `cargo clippy` on the FIRST crate of the workspace, which is why the
+/// other eight had never been linted at all — see docs/code-review-2026-07-20.md.
+#[allow(clippy::invisible_characters)]
 fn named_entity(name: &str) -> Option<&'static str> {
   match name {
     "AElig" => Some("Æ"),
@@ -2660,10 +2667,12 @@ fn expand_marker_tabs(line: &str) -> String {
       col += 1;
     }
     // marker: `>` (chainable) or a single list marker
-    let marker_len = if b.get(i) == Some(&b'>') {
-      1
-    } else if matches!(b.get(i), Some(b'-' | b'*' | b'+'))
-      && matches!(b.get(i + 1), Some(b'\t' | b' ')) {
+    // `>` and a single bullet marker are different constructs that happen to be
+    // the same width; one arm, not two identical ones.
+    let marker_len = if b.get(i) == Some(&b'>')
+      || (matches!(b.get(i), Some(b'-' | b'*' | b'+'))
+        && matches!(b.get(i + 1), Some(b'\t' | b' ')))
+    {
       1
     } else if b.get(i).is_some_and(u8::is_ascii_digit) {
       let mut j = i;

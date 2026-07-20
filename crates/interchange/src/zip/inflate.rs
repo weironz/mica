@@ -128,7 +128,7 @@ impl Inflater<'_> {
           lens[i] = sym as u8;
           i += 1;
         }
-        16 | 17 | 18 => {
+        16..=18 => {
           let (value, repeat) = match sym {
             16 => {
               if i == 0 {

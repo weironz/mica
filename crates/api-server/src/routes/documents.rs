@@ -204,7 +204,7 @@ pub async fn search_workspace(
         }
       }
     }
-    (title_match || !snippet.is_empty()).then(|| SearchResult {
+    (title_match || !snippet.is_empty()).then_some(SearchResult {
       view_id: view.id,
       object_id: view.object_id,
       name: view.name,
@@ -3100,24 +3100,6 @@ mod tests {
   }
 
   use super::*;
-
-  fn view(id: u128, parent: Option<u128>, name: &str, otype: &str) -> View {
-    let now = Utc::now();
-    View {
-      id: Uuid::from_u128(id),
-      workspace_id: Uuid::from_u128(1),
-      parent_view_id: parent.map(Uuid::from_u128),
-      object_id: Uuid::from_u128(1000 + id),
-      object_type: otype.to_string(),
-      name: name.to_string(),
-      icon: None,
-      position: format!("{id:020}"),
-      is_deleted: false,
-      created_by: Uuid::from_u128(2),
-      created_at: now,
-      updated_at: now,
-    }
-  }
 
   #[test]
   fn outline_lists_headings_and_block_ids_in_document_order() {

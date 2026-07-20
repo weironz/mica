@@ -10,9 +10,29 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Skipping without a database is a local convenience; skipping WITH one is a
+/// lie. This used to be `PgPool::connect(&url).await.ok()?`, which turned a
+/// failed connection into a skip: you could export DATABASE_URL, watch
+/// `8 passed`, and never have touched Postgres. docs/lessons.md:84 recorded
+/// exactly that ("测试真空通过") after it hid a red test — and the code stayed.
+///
+/// Now a set-but-unusable DATABASE_URL panics, and in CI a MISSING one panics
+/// too, because there the database is always provisioned: its absence means the
+/// workflow regressed, not that these assertions may quietly stop running.
 async fn pool() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    PgPool::connect(&url).await.ok()
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var("CI").is_err(),
+            "DATABASE_URL is unset in CI — the postgres service block regressed; \
+             these tests must not silently pass"
+        );
+        return None;
+    };
+    Some(
+        PgPool::connect(&url)
+            .await
+            .expect("DATABASE_URL is set but the connection failed"),
+    )
 }
 
 /// Seed the FK chain (user → workspace → document → op snapshot) the sync layer

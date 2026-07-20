@@ -7,10 +7,20 @@ name: CI
 #
 # Deliberately NOT covered yet (need infra a headless runner can't trivially
 # provide — left for a reviewer to enable + validate against a real run):
-#   - Postgres-backed tests (crates/app-core/tests/sync_pg.rs, mica-core sync,
-#     api-server) — add a `services: postgres` block + run the migrations.
+#   - api-server's 59 tests (14 need Postgres) — the `services: postgres` block
+#     below already provisions a database, so this is now just a `-p` away.
 #   - The Windows integration_test suite (yrs sync e2e, page-switch fidelity) —
 #     needs a desktop runner + the native FFI (flutter_rust_bridge) build.
+#
+# 2026-07-21 audit (docs/code-review-2026-07-20.md) found 167 tests that never
+# ran here. Three causes, all fixed below:
+#   - app-core / infra were simply absent from `-p`, which alone silenced SEVEN
+#     pure-Rust, zero-dependency tests — including every bit of coverage for the
+#     root-erasure read path (the 2026-07-19 incident).
+#   - mica-core's `store` module is behind a non-default feature, so its 24
+#     SQLite migration tests were never even COMPILED.
+#   - sync_pg.rs skipped itself without a database. It now fails instead, so
+#     this job must actually provision one.
 
 on:
   push:
@@ -20,8 +30,26 @@ on:
 
 jobs:
   rust:
-    name: Rust (build + pure-crate tests)
+    name: Rust (build + lint + tests)
     runs-on: ubuntu-latest
+
+    # sync_pg.rs asserts against real SQL (a conditional UPDATE IS the
+    # concurrency guard); a mock would test nothing. Cheap here — one container.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mica
+          POSTGRES_PASSWORD: mica
+          POSTGRES_DB: mica
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U mica"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
+
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -40,8 +68,34 @@ jobs:
       # workspace builds without a live database.
       - name: Build workspace
         run: cargo build --workspace
-      - name: Test pure crates (no database needed)
-        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server
+
+      # `invisible_characters` is deny-by-default and fired on the `&shy;` entity
+      # in crates/markdown, which ABORTED clippy on the first crate — so the
+      # other eight had never been linted at all. With that one false positive
+      # allowed at its source, the whole workspace is clean, which is why this
+      # can start life at -D warnings instead of as an advisory.
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Plain SQL, applied in order. sqlx-cli would have to be compiled first
+      # (minutes); psql ships on the runner. The tests do not read the
+      # _sqlx_migrations bookkeeping table, only the schema.
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          for f in migrations/*.sql; do
+            echo "==> $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - name: Test (incl. app-core + infra, Postgres-backed)
+        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra
+
+      # Separate invocation: `store` is a non-default feature, and features do
+      # not apply across a multi-package `-p` list. Without this the 24 local
+      # SQLite migration tests are not compiled, let alone run.
+      - name: Test mica-core's gated SQLite store
+        run: cargo test -p mica-core --features store
 
   mcp-conformance:
     # Drive `mica-cli mcp` with the OFFICIAL MCP client and fail on anything
