@@ -176,7 +176,7 @@ mica-cli mcp [--read-only]        # serve over stdio (what the client launches)
 Instead of hand-editing each client's config file and pasting a token:
 
 ```bash
-mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
+mica-cli auth login --server https://your-server.example.com --email you@example.com
 mica-cli mcp install --client claude-desktop      # one client
 mica-cli mcp install --all                        # every client present on this machine
 ```

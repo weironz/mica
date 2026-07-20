@@ -20,11 +20,26 @@ void main() {
   );
 
   group('resolveLegacyCloudSetup — fresh-install default', () {
-    test('a truly fresh desktop install starts in the local world', () {
+    test('a truly fresh desktop install starts local with NO server', () {
       final r = resolve(); // no mode, no token, no url, desktop
       expect(r.activeOrigin, 'local');
-      expect(r.cloudOrigin, kMicaCloudUrl,
-          reason: 'a cloud server is still configured (sign-in is one click)');
+      expect(
+        r.cloudOrigin,
+        kDefaultCloudUrl,
+        reason: "a shipped build must not preconfigure anybody's server",
+      );
+    });
+
+    // The point of the change: a public build carries no address at all, so a
+    // fresh install cannot silently point at (or sign up against) someone's
+    // private deployment.
+    test('the public build ships no default server address', () {
+      expect(
+        kDefaultCloudUrl,
+        isEmpty,
+        reason: 'set one only via --dart-define=MICA_CLOUD_URL for a hosted flavour',
+      );
+      expect(resolve().cloudOrigin, isEmpty);
     });
 
     test('a returning signed-in user (auth token) starts CLOUD-active', () {
@@ -47,16 +62,25 @@ void main() {
   });
 
   group('resolveLegacyCloudSetup — explicit + legacy modes', () {
-    test('local starts local; the default cloud server stays configured', () {
+    test('local starts local; no server is invented for it', () {
       final r = resolve(mode: 'local');
       expect(r.activeOrigin, 'local');
-      expect(r.cloudOrigin, kMicaCloudUrl);
+      expect(r.cloudOrigin, kDefaultCloudUrl);
     });
 
-    test('legacy "cloud" migrates to Mica Cloud, cloud-active', () {
+    // The legacy "cloud" preset carried no URL of its own — it meant "the
+    // built-in host", which no longer exists in a public build. Such an install
+    // lands in local mode and re-adds its server once; the alternative was
+    // shipping that host to everyone, which is the bug this replaced.
+    test('legacy "cloud" with no URL falls back to local, no server', () {
       final r = resolve(mode: 'cloud');
-      expect(r.cloudOrigin, kMicaCloudUrl);
-      expect(r.activeOrigin, kMicaCloudUrl);
+      expect(r.activeOrigin, 'local');
+      expect(r.cloudOrigin, isEmpty);
+    });
+
+    test('legacy "cloud" that HAD a URL keeps it', () {
+      final r = resolve(mode: 'cloud', url: 'https://home.lan:8080');
+      expect(r.cloudOrigin, 'https://home.lan:8080');
     });
 
     test('legacy "self" keeps its URL, cloud-active', () {

@@ -57,5 +57,5 @@ esac
 "$dest" --version || true
 echo ""
 echo "Installed. Next:"
-echo "  mica-cli auth login --server https://mica.cloudcele.com --email you@example.com"
+echo "  mica-cli auth login --server https://your-server.example.com --email you@example.com"
 echo "Re-run this line any time to update."

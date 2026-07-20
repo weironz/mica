@@ -15,7 +15,7 @@
 
 ```bash
 # 登录并创建一个长期 token(写权限;--expires-days 可选)
-mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
+mica-cli auth login --server https://your-server.example.com --email you@example.com
 mica-cli auth token create --name claude-code --scope read --scope write
 # 记下输出里的 "token": "mica_pat_…" —— 只显示这一次
 ```
@@ -26,7 +26,7 @@ mica-cli auth token create --name claude-code --scope read --scope write
 token,免去手改 JSON/TOML:
 
 ```bash
-mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
+mica-cli auth login --server https://your-server.example.com --email you@example.com
 mica-cli mcp install --client claude-code      # 或 cursor / codex / gemini / windsurf / claude-desktop
 mica-cli mcp install --all                     # 本机装了的客户端一次全配
 ```
@@ -52,7 +52,7 @@ mica-cli mcp install --all                     # 本机装了的客户端一次�
 
 ```bash
 claude mcp add mica --scope user \
-  -e MICA_API_BASE_URL=https://mica.cloudcele.com \
+  -e MICA_API_BASE_URL=https://your-server.example.com \
   -e MICA_PAT=mica_pat_… -- /path/to/mica-cli mcp
 ```
 
@@ -84,7 +84,7 @@ token**):
       "command": "/path/to/mica-cli",
       "args": ["mcp"],
       "env": {
-        "MICA_API_BASE_URL": "https://mica.cloudcele.com",
+        "MICA_API_BASE_URL": "https://your-server.example.com",
         "MICA_PAT": "mica_pat_…"
       }
     }

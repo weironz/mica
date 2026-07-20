@@ -1,6 +1,6 @@
 # 页面分享(Publish-to-web)
 
-把一篇云端文档发布成**公开只读链接** `https://mica.cloudcele.com/s/{token}`,
+把一篇云端文档发布成**公开只读链接** `https://your-server.example.com/s/{token}`,
 任何人无需登录、无需装 Mica 即可在浏览器里读到。v0.5.6 起。
 
 **只云端有**:分享依赖服务端渲染 + 集中式 token 表,本地/离线工作区没有这个入口

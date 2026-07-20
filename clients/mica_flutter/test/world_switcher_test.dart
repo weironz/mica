@@ -13,7 +13,7 @@ import 'package:mica_flutter/l10n/locale_controller.dart';
 // it. The connection decides which world is on screen; the entry decides how a
 // row behaves.
 
-const _cloud = 'https://mica.cloudcele.com';
+const _cloud = 'https://cloud.example.com';
 
 WorkspaceEntry entry(String origin, String id, String name) => WorkspaceEntry(
       origin: origin,

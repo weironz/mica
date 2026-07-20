@@ -58,8 +58,17 @@ const String kDevPassword = String.fromEnvironment(
   defaultValue: 'password123',
 );
 
-/// The official hosted Mica instance (see docs/deploy.md).
-const String kMicaCloudUrl = 'https://mica.cloudcele.com';
+/// The cloud server a fresh install starts with — EMPTY on purpose.
+///
+/// A shipped binary must not carry anyone's server address: baking one in means
+/// every downloaded client points at that host on first launch and can sign up
+/// against it, which is somebody's private deployment, not a default. So a new
+/// install starts in local mode with no server configured, and the user adds
+/// one through "添加服务器…".
+///
+/// Anyone running a hosted flavour can bake their own in at build time with
+/// `--dart-define=MICA_CLOUD_URL=https://…`; the public release sets nothing.
+const String kDefaultCloudUrl = String.fromEnvironment('MICA_CLOUD_URL');
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
@@ -105,11 +114,18 @@ const int kPageWidthDivisions = 10;
       // any stale token files under the RIGHT origin — hardcoding Mica Cloud
       // here would send a self-hosted token to the wrong server on restore.
       return (
-        cloudOrigin: savedUrl.isEmpty ? kMicaCloudUrl : onlineUrl,
+        cloudOrigin: savedUrl.isEmpty ? kDefaultCloudUrl : onlineUrl,
         activeOrigin: 'local',
       );
-    case 'cloud': // legacy: the fixed Mica Cloud preset is now just a URL
-      return (cloudOrigin: kMicaCloudUrl, activeOrigin: kMicaCloudUrl);
+    case 'cloud':
+      // Legacy: a fixed "Mica Cloud" preset that carried no URL of its own.
+      // There is no built-in host to resolve it to any more, so fall back to
+      // whatever URL the install had (empty on a build with no
+      // MICA_CLOUD_URL) and start local. Such a user re-adds their server once
+      // — better than shipping someone's address to everyone to avoid it.
+      return kDefaultCloudUrl.isEmpty
+          ? (cloudOrigin: savedUrl.isEmpty ? '' : onlineUrl, activeOrigin: 'local')
+          : (cloudOrigin: kDefaultCloudUrl, activeOrigin: kDefaultCloudUrl);
     case 'online':
     case 'self': // legacy self-hosted → same thing, keep its URL
       return (cloudOrigin: onlineUrl, activeOrigin: onlineUrl);
@@ -117,7 +133,8 @@ const int kPageWidthDivisions = 10;
       final usedOnlineBefore = authToken.isNotEmpty || savedUrl.isNotEmpty;
       return (isWeb || usedOnlineBefore)
           ? (cloudOrigin: onlineUrl, activeOrigin: onlineUrl)
-          : (cloudOrigin: kMicaCloudUrl, activeOrigin: 'local');
+          // Fresh desktop install: local-first, and NO server preconfigured.
+          : (cloudOrigin: kDefaultCloudUrl, activeOrigin: 'local');
   }
 }
 
@@ -458,16 +475,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     savePref('authUser:$origin', '');
     savePref('refreshToken:$origin', '');
     _local.forgetOrigin(origin);
-    // The app must always point at a server that exists.
+    // The app must always point at a server that exists. Removing the LAST one
+    // leaves none configured — fall back to the build default (empty in public
+    // builds), and never invent a server to replace the one just deleted.
     if (_cloudOrigin == origin) {
-      final next = _servers.firstOrNull ?? kMicaCloudUrl;
-      if (!_servers.contains(next)) {
+      final next = _servers.firstOrNull ?? kDefaultCloudUrl;
+      if (next.isNotEmpty && !_servers.contains(next)) {
         setState(() => _servers = [next]);
         _saveServers();
       }
       setState(() => _cloudOrigin = next);
       savePref('cloudOrigin', next);
-      final base = Uri.tryParse(next);
+      final base = next.isEmpty ? null : Uri.tryParse(next);
       if (base != null) _api.baseUri = base;
     }
   }
@@ -4048,7 +4067,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onImportTreeIntoEntry: _importTreeIntoEntry,
       onImportTreeIntoFolder: _importIntoFolder,
       onReorderWorkspaces: _reorderWorkspaceEntries,
-      cloudOriginLabel: _api.baseUri.host == Uri.parse(kMicaCloudUrl).host
+      // Only call a server "Mica Cloud" when this build actually ships one and
+      // we are on it; otherwise just name the host we're talking to.
+      cloudOriginLabel:
+          kDefaultCloudUrl.isNotEmpty &&
+              _api.baseUri.host == Uri.parse(kDefaultCloudUrl).host
           ? 'Mica Cloud'
           : _api.baseUri.host,
       onSignIn: session == null ? _promptSignIn : null,

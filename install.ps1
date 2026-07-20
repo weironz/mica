@@ -48,5 +48,5 @@ if (($env:Path -split ';') -notcontains $installDir) { $env:Path = "$env:Path;$i
 & $exe --version
 Write-Host ""
 Write-Host "Installed. Next:"
-Write-Host "  mica-cli auth login --server https://mica.cloudcele.com --email you@example.com"
+Write-Host "  mica-cli auth login --server https://your-server.example.com --email you@example.com"
 Write-Host "Re-run this line any time to update."

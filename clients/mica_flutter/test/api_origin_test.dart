@@ -6,10 +6,10 @@ import 'package:mica_flutter/api/client.dart';
 // building the origin from it verbatim shipped `https://host:443/…`.
 void main() {
   test('https on the default port drops it', () {
-    expect(apiOrigin(Uri.parse('https://mica.cloudcele.com')),
-        'https://mica.cloudcele.com');
-    expect(apiOrigin(Uri.parse('https://mica.cloudcele.com:443/api/x')),
-        'https://mica.cloudcele.com');
+    expect(apiOrigin(Uri.parse('https://cloud.example.com')),
+        'https://cloud.example.com');
+    expect(apiOrigin(Uri.parse('https://cloud.example.com:443/api/x')),
+        'https://cloud.example.com');
   });
 
   test('http on the default port drops it', () {
