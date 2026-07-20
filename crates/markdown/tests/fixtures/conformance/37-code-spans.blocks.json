@@ -1,0 +1,20 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 11,
+          "start": 10,
+          "type": "code"
+        },
+        {
+          "end": 17,
+          "start": 16,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "text with a and b spans"
+  }
+]

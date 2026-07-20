@@ -312,9 +312,13 @@ const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
   return (label: label, dest: suffix.dest, title: suffix.title);
 }
 
-/// Case-fold and collapse internal whitespace (spec label matching).
+/// Case-fold and collapse internal whitespace (spec label matching). Reference
+/// labels match under Unicode CASE FOLDING, not mere lowercase: ẞ/ß and SS all
+/// collapse to "ss". Mirrors Rust `normalize_label` (crates/markdown/src/lib.rs)
+/// — the missing `ß`→`ss` fold made `[ß]` fail to resolve against `[ss]: /url`
+/// on the Dart side only (P1-2, confirmed drift).
 String normalizeLabel(String label) =>
-    label.trim().split(RegExp(r'\s+')).join(' ').toLowerCase();
+    label.trim().split(RegExp(r'\s+')).join(' ').toLowerCase().replaceAll('ß', 'ss');
 
 /// The `]` matching the `[` at [open], honoring nesting and escapes; -1 if
 /// none.
