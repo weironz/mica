@@ -528,7 +528,17 @@ impl MicaDoc {
         for k in existing {
             blocks_map.remove(&mut txn, &k);
         }
-        meta.insert(&mut txn, ROOT_KEY, root_id.to_string());
+        // An empty `root_id` means "the caller does not know the root", NOT
+        // "clear it". Writing it through is a last-writer-wins map insert that
+        // erases the root for EVERY replica: a client that seeded from a
+        // rootless local copy pushes `meta.root = ""`, and from then on the
+        // whole document fails to render with `block not found: ` (note the
+        // empty id). It self-perpetuates, because every later write reads the
+        // root back from here and writes the same empty value out again.
+        // Keeping the existing root is always the safer merge.
+        if !root_id.is_empty() {
+            meta.insert(&mut txn, ROOT_KEY, root_id.to_string());
+        }
         for b in blocks {
             write_block(&mut txn, &blocks_map, b);
         }

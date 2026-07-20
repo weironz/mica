@@ -36,9 +36,13 @@ Future<void> printHtml(String htmlContent) async {
   // `srcdoc` renders the self-contained doc in an isolated, same-origin frame.
   iframe.srcdoc = htmlContent;
   await iframe.onLoad.first;
-  // `contentWindow` is a `WindowBase` (no typed `print`/`focus`); at runtime it
-  // IS the JS window, so dispatch dynamically via js_util.
-  final win = iframe.contentWindow;
+  // Reach the frame's window through js_util, NOT the typed `contentWindow`
+  // getter: that returns a dart:html `WindowBase` *wrapper*, and dispatching
+  // through the wrapper fails at runtime with
+  // `NoSuchMethodError: method not found: 'focus'`. Reading the property off
+  // the raw element hands us the underlying JS window, which does have
+  // `focus`/`print`.
+  final win = js_util.getProperty<Object?>(iframe, 'contentWindow');
   if (win != null) {
     js_util.callMethod<void>(win, 'focus', <dynamic>[]);
     js_util.callMethod<void>(win, 'print', <dynamic>[]);

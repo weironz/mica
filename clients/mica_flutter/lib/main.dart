@@ -3719,6 +3719,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // would 404 on its unbacked object_id).
     final viewToOpen = selectedView ?? firstOpenableView(views);
     DocumentBootstrap? bootstrap;
+    String? bootstrapError;
     if (viewToOpen != null && viewToOpen.objectType != 'folder') {
       try {
         bootstrap = await _api.bootstrapDocument(
@@ -3726,13 +3727,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           workspace.id,
           viewToOpen.objectId,
         );
-      } on ApiException {
+      } on ApiException catch (error) {
         // The auto-open target answered with an error (404/403 — deleted
         // server-side, access revoked, or an unbacked folder object_id from an
         // older client that didn't guard). listViews already succeeded, so we
         // are demonstrably ONLINE: show the tree with nothing opened rather than
         // letting one bad view cascade into a full offline downgrade at startup.
+        //
+        // But SAY SO. Swallowing this silently rendered an open page as empty —
+        // indistinguishable from "this page has no content", so a server-side
+        // fault (e.g. a document whose root block was lost) looked exactly like
+        // data loss: pressing refresh appeared to erase the page.
         bootstrap = null;
+        bootstrapError = '$error';
       }
     }
 
@@ -3741,6 +3748,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _selectedView = viewToOpen;
       _selectedBootstrap = bootstrap;
       _selectedMarkdown = null;
+      if (bootstrapError != null) _message = bootstrapError;
     });
     _cacheCloudPageTree();
   }

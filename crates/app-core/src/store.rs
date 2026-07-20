@@ -170,11 +170,27 @@ where
   let mut doc = mica_core::MicaDoc::from_update(&base.state)
     .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
   let state_vector_before = doc.state_vector();
-  let current_payload = DocumentSnapshotPayload {
+  // A yrs base whose `meta.root` was wiped (see `MicaDoc::set_blocks`) reports an
+  // empty root. Propagating that turns every read and write into
+  // `block not found: ` with an empty id, and writes the empty value straight
+  // back out. The op-model snapshot still carries the document's real root, so
+  // prefer it over an empty one rather than failing the whole batch.
+  let yrs_root = doc.root_block_id();
+  let root_block_id = if yrs_root.is_empty() {
+    snapshot_payload.root_block_id.clone()
+  } else {
+    yrs_root
+  };
+  let mut current_payload = DocumentSnapshotPayload {
     schema_version: snapshot_payload.schema_version,
-    root_block_id: doc.root_block_id(),
+    root_block_id,
     blocks: doc.to_blocks().into_iter().map(md_block_from_core).collect(),
   };
+  // Heal a lost root before deriving ops against it, otherwise every write to a
+  // damaged document fails the whole batch on `block not found`. Unlike the read
+  // path, the repair here IS persisted — `set_blocks` below writes the restored
+  // root and children back to the base.
+  ensure_root_block(&mut current_payload);
 
   let operations = derive(&current_payload).map_err(ApiError::BadRequest)?;
   if operations.is_empty() {
@@ -334,6 +350,44 @@ fn md_block_from_core(b: mica_core::Block) -> crate::documents::Block {
   }
 }
 
+/// Rebuild a root block that the yrs base lost, so a damaged document still
+/// reads instead of erroring.
+///
+/// When `meta.root` gets wiped (see [`mica_core::MicaDoc::set_blocks`]) the root
+/// block itself goes with it, leaving every remaining block parentless. Renders
+/// then abort with `block not found: <root>` — the document is unreadable even
+/// though all of its content is intact. Re-adopt the orphans (blocks nobody
+/// lists as a child) under a fresh root, in the order the CRDT yields them,
+/// which is the order they were created.
+///
+/// Read-path only: nothing is persisted here. This makes damaged documents
+/// legible again without a migration, and is a no-op for healthy ones.
+fn ensure_root_block(payload: &mut DocumentSnapshotPayload) {
+  if payload.root_block_id.is_empty()
+    || payload.blocks.iter().any(|b| b.id == payload.root_block_id)
+  {
+    return;
+  }
+  let claimed: std::collections::HashSet<&str> = payload
+    .blocks
+    .iter()
+    .flat_map(|b| b.children.iter().map(String::as_str))
+    .collect();
+  let orphans: Vec<String> = payload
+    .blocks
+    .iter()
+    .filter(|b| !claimed.contains(b.id.as_str()))
+    .map(|b| b.id.clone())
+    .collect();
+  payload.blocks.push(crate::documents::Block {
+    id: payload.root_block_id.clone(),
+    kind: "page".to_string(),
+    text: String::new(),
+    data: serde_json::Value::Null,
+    children: orphans,
+  });
+}
+
 /// The document's CURRENT block payload for *reads* — bootstrap, export, outline,
 /// search. Once a document is edited through the yrs sync path its live content
 /// lives in `document_yrs_base`, while the op-model `document_snapshots` stays
@@ -363,12 +417,20 @@ pub async fn current_payload(
     let doc = mica_core::MicaDoc::from_update(&base.state).map_err(|error| {
       ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}"))
     })?;
-    payload.root_block_id = doc.root_block_id();
+    // Only adopt the yrs root when it actually has one. A base whose `meta.root`
+    // was wiped (see `MicaDoc::set_blocks`) reports an empty id, and clobbering
+    // the snapshot's still-correct root with it makes every read fail with
+    // `block not found: ` — an empty id in the message is this exact case.
+    let yrs_root = doc.root_block_id();
+    if !yrs_root.is_empty() {
+      payload.root_block_id = yrs_root;
+    }
     payload.blocks = doc
       .to_blocks()
       .into_iter()
       .map(md_block_from_core)
       .collect();
+    ensure_root_block(&mut payload);
   }
   Ok(Some(payload))
 }
@@ -980,4 +1042,78 @@ fn map_insert_file_error(error: sqlx::Error) -> ApiError {
   }
 
   ApiError::Database(error)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::documents::Block;
+
+  fn block(id: &str, children: &[&str]) -> Block {
+    Block {
+      id: id.to_string(),
+      kind: "paragraph".to_string(),
+      text: String::new(),
+      data: serde_json::Value::Null,
+      children: children.iter().map(|s| s.to_string()).collect(),
+    }
+  }
+
+  fn payload(root: &str, blocks: Vec<Block>) -> DocumentSnapshotPayload {
+    DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: root.to_string(),
+      blocks,
+    }
+  }
+
+  /// The damaged-document shape seen in production: content intact, but the root
+  /// block gone and every block parentless. Reads used to abort with
+  /// `block not found: <root>`; now the orphans are re-adopted in order.
+  #[test]
+  fn rebuilds_a_missing_root_and_adopts_orphans_in_order() {
+    let mut p = payload(
+      "root_1",
+      vec![block("a", &[]), block("b", &[]), block("c", &[])],
+    );
+    ensure_root_block(&mut p);
+
+    let root = p
+      .blocks
+      .iter()
+      .find(|b| b.id == "root_1")
+      .expect("root rebuilt");
+    assert_eq!(root.children, vec!["a", "b", "c"]);
+    assert_eq!(root.kind, "page");
+  }
+
+  /// Blocks that already have a parent must not be re-parented onto the root,
+  /// or a nested document would be flattened by the repair.
+  #[test]
+  fn only_unclaimed_blocks_become_root_children() {
+    let mut p = payload(
+      "root_1",
+      vec![block("a", &["a1"]), block("a1", &[]), block("b", &[])],
+    );
+    ensure_root_block(&mut p);
+
+    let root = p.blocks.iter().find(|b| b.id == "root_1").unwrap();
+    assert_eq!(root.children, vec!["a", "b"], "a1 already belongs to a");
+  }
+
+  #[test]
+  fn healthy_documents_are_untouched() {
+    let mut p = payload("root_1", vec![block("root_1", &["a"]), block("a", &[])]);
+    let before = p.blocks.len();
+    ensure_root_block(&mut p);
+    assert_eq!(p.blocks.len(), before);
+  }
+
+  /// Without a known root there is nothing to rebuild — don't invent one.
+  #[test]
+  fn an_empty_root_id_is_left_alone() {
+    let mut p = payload("", vec![block("a", &[])]);
+    ensure_root_block(&mut p);
+    assert_eq!(p.blocks.len(), 1);
+  }
 }
