@@ -49,9 +49,12 @@ deploy 0.12.8; cat /data/mica/.env          -> REFUSED: unexpected extra argumen
 deploy latest                               -> REFUSED: version must be X.Y.Z
 ```
 
-**上线仍然是你按的一下**:`deploy.yml` 挂在 `environment: production` 上,该 environment
-配了 required reviewer,GitHub 在审批通过前**不把 secret 暴露给 job**。按钮只是从你的
-终端挪到了 Actions 页面。
+**上线仍然是你按的一下**:`deploy.yml` 只有 `workflow_dispatch`,没有 `on: push` ——
+触发本身就是那个决定,只是按钮从你的终端挪到了 Actions 页面。
+
+`environment: production` 保留着,但**故意不配 required reviewer**:触发已经是人工动作,
+再加一道审批就是对同一个决定确认两次,对单人项目是摩擦不是安全。哪天不再是单人,
+在 Settings → Environments 里加审批人即可,workflow 不用改。
 
 顺带一个反直觉的事实:CI 本来就持有 `ACR_PASSWORD`,也就是说「往生产镜像里推任意内容」
 这个能力**今天已经在 GitHub 上了**(见下面「镜像与 tag」)。真正的边界差异从来不是
@@ -112,8 +115,7 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 7. **部署**。两条路,都走节点上同一个受限入口 `/usr/local/sbin/mica-deploy`:
 
    ```bash
-   # 常规:触发后去 Actions 页面批准(environment: production 卡着,批准前
-   # secret 对 job 不可见)
+   # 常规:触发即部署(没有审批门 —— 触发本身就是那个决定)
    gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 
    # 兜底 / 需要同步 compose 时(它会先把 tag 处的 compose 推给节点)

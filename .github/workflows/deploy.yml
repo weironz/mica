@@ -19,10 +19,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    # The approval gate. `production` carries a required-reviewer rule, and
-    # GitHub withholds the environment's secrets from the job until the review
-    # passes — so "shipping is something you press" survives the move off your
-    # laptop; the button just lives here now.
+    # Kept for the deployment history / audit trail on the repo, NOT as a gate:
+    # this environment deliberately carries no required reviewer.
+    #
+    # `workflow_dispatch` with no `on: push` already means a person decides to
+    # ship — an approval step on top would be a second confirmation of the same
+    # decision, which for one maintainer is friction rather than safety. Add
+    # reviewers here if that ever stops being true (Settings → Environments).
     environment:
       name: production
       url: https://mica.cloudcele.com
