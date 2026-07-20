@@ -21,9 +21,11 @@ pub enum StoreError {
     /// than silently corrupt or drop data on a downgrade.
     #[error("store schema v{found} is newer than supported v{supported}; upgrade the app")]
     SchemaTooNew { found: i64, supported: i64 },
-    /// A stored CRDT blob made yrs panic while integrating it — see
-    /// [`contain_yrs_panic`]. Recoverable: the local store is a cache.
-    #[error("corrupt local CRDT state for {doc_id} (yrs panicked while integrating it)")]
+    /// A stored CRDT blob is unusable: it failed its recorded checksum
+    /// ([`verify_blob_crc`]) or made yrs panic while integrating it
+    /// ([`contain_yrs_panic`]). Recoverable — the local store is a cache and the
+    /// cloud holds the authoritative copy, so the caller drops it and re-seeds.
+    #[error("corrupt local CRDT state for {doc_id} (checksum or yrs integration failed)")]
     CorruptDoc { doc_id: String },
 }
 
@@ -59,6 +61,70 @@ fn contain_yrs_panic<T>(
             doc_id: doc_id.to_string(),
         }),
     }
+}
+
+/// CRC-32 (IEEE 802.3 / zlib: reflected, poly 0xEDB88320, init & xorout
+/// 0xFFFFFFFF) lookup table, built at COMPILE time — no runtime init, no
+/// `OnceLock`, no dependency. Principle #1: ~20 lines of textbook algorithm
+/// beats pulling `crc32fast` for a border-layer need.
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut crc = i as u32;
+        let mut j = 0;
+        while j < 8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            j += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
+
+/// CRC-32 (IEEE) of `bytes`. An ACCIDENTAL-corruption detector (bit-rot, torn
+/// writes) — deliberately NOT a security primitive. The threat model for a
+/// local on-device cache is a damaged disk, not an attacker, so a cryptographic
+/// hash would be over-reach; CRC-32 catches every single-bit / short-burst /
+/// truncation error a storage fault produces.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in bytes {
+        crc = (crc >> 8) ^ CRC32_TABLE[((crc ^ b as u32) & 0xFF) as usize];
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
+/// The checksum to persist beside a freshly-authored blob (SQLite stores it as
+/// a signed `INTEGER`; a `u32` widens losslessly and stays non-negative).
+fn blob_crc(bytes: &[u8]) -> i64 {
+    crc32(bytes) as i64
+}
+
+/// Verify a stored blob against its recorded checksum BEFORE it reaches yrs.
+///
+/// This is the one thing `contain_yrs_panic` cannot do. yrs 0.27.x can reach
+/// `hint::unreachable_unchecked` on malformed bytes — a NON-unwinding abort that
+/// `catch_unwind` cannot contain, and plain UB in a release build (see the
+/// `yrs_corrupt_input_is_unsound` test). Rejecting a bad blob here stops those
+/// bytes before `from_update_with_client_id` / `apply_update` ever see them.
+///
+/// `stored_crc == None` ⇒ a legacy row written before checksums existed (or by
+/// an older app): nothing to check, so PASS and let the bytes fall through to
+/// the existing `contain_yrs_panic` guard — i.e. exactly today's behavior. Such
+/// rows keep today's exposure to the upstream UB until they are next rewritten;
+/// this feature protects data authored from here on, it does not retroactively
+/// bless the existing corpus.
+fn verify_blob_crc(doc_id: &str, bytes: &[u8], stored_crc: Option<i64>) -> Result<(), StoreError> {
+    if let Some(expected) = stored_crc {
+        if blob_crc(bytes) != expected {
+            return Err(StoreError::CorruptDoc {
+                doc_id: doc_id.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
@@ -152,7 +218,8 @@ impl LocalStore {
              CREATE TABLE IF NOT EXISTS doc_snapshot(
                  doc_id     TEXT PRIMARY KEY,
                  state      BLOB NOT NULL,
-                 updated_at INTEGER NOT NULL
+                 updated_at INTEGER NOT NULL,
+                 state_crc  INTEGER
              );
              CREATE TABLE IF NOT EXISTS local_meta(
                  key   TEXT PRIMARY KEY,
@@ -179,15 +246,17 @@ impl LocalStore {
                  PRIMARY KEY(origin, id)
              );
              CREATE TABLE IF NOT EXISTS doc_update(
-                 doc_id  TEXT NOT NULL,
-                 clock   INTEGER NOT NULL,
-                 payload BLOB NOT NULL,
+                 doc_id      TEXT NOT NULL,
+                 clock       INTEGER NOT NULL,
+                 payload     BLOB NOT NULL,
+                 payload_crc INTEGER,
                  PRIMARY KEY(doc_id, clock)
              );
              CREATE TABLE IF NOT EXISTS doc_remote_update(
-                 doc_id  TEXT NOT NULL,
-                 rid     INTEGER NOT NULL,
-                 payload BLOB NOT NULL,
+                 doc_id      TEXT NOT NULL,
+                 rid         INTEGER NOT NULL,
+                 payload     BLOB NOT NULL,
+                 payload_crc INTEGER,
                  PRIMARY KEY(doc_id, rid)
              );
              CREATE TABLE IF NOT EXISTS sync_cursor(
@@ -198,7 +267,8 @@ impl LocalStore {
              CREATE TABLE IF NOT EXISTS doc_snapshot_backup(
                  doc_id     TEXT PRIMARY KEY,
                  state      BLOB NOT NULL,
-                 updated_at INTEGER NOT NULL
+                 updated_at INTEGER NOT NULL,
+                 state_crc  INTEGER
              );
              -- Local page version history (docs/version-history-plan.md §6). One
              -- row = one full yrs state. `label` NULL = an auto snapshot (captured
@@ -210,7 +280,8 @@ impl LocalStore {
                  doc_id     TEXT NOT NULL,
                  label      TEXT,
                  created_at INTEGER NOT NULL,
-                 state      BLOB NOT NULL
+                 state      BLOB NOT NULL,
+                 state_crc  INTEGER
              );
              CREATE INDEX IF NOT EXISTS doc_version_doc_created_idx
                  ON doc_version(doc_id, created_at DESC);",
@@ -391,6 +462,43 @@ impl LocalStore {
             )?;
         }
 
+        // Per-blob checksum columns (docs/code-review-2026-07-20.md P0-0). ADDITIVE
+        // and NULLABLE, so — like the doc_version table before it — no SCHEMA_VERSION
+        // bump: every read/write uses an explicit column list (never SELECT * / bare
+        // INSERT), so an older app silently ignores the column and a NULL means "no
+        // checksum recorded" (verify_blob_crc passes it through). Bumping would trip
+        // the too-new gate and lock every v6 app out of its own cache — grossly
+        // disproportionate to an optional integrity column. These blob tables have no
+        // destructive rebuild path (unlike local_view/local_workspace), so the column
+        // survives untouched. Probe-driven + idempotent, same shape as the ALTERs above.
+        //
+        // Downgrade caveat (deliberately not defended with a trigger): an OLD app that
+        // rewrites doc_snapshot.state leaves state_crc STALE (it can't update a column
+        // it doesn't know). A later new app then reads new-bytes-vs-old-crc and returns
+        // CorruptDoc — which for load_doc is a harmless re-seed from the authoritative
+        // cloud (the store is a cache), and for restore/rollback a spurious, retryable
+        // error. Harmless enough, and the rollout direction is UPGRADE into this fix,
+        // not downgrade, so a hidden reset-trigger on the hot save path isn't worth it.
+        for (table, col) in [
+            ("doc_snapshot", "state_crc"),
+            ("doc_version", "state_crc"),
+            ("doc_snapshot_backup", "state_crc"),
+            ("doc_update", "payload_crc"),
+            ("doc_remote_update", "payload_crc"),
+        ] {
+            let has: bool = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{col}'"),
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            if !has {
+                conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} INTEGER"), [])?;
+            }
+        }
+
         // Every migration succeeded — stamp the version this app writes. (The
         // too-new gate ran up top, before anything could mutate the store.)
         conn.execute(
@@ -459,21 +567,28 @@ impl LocalStore {
     /// Persist a document as its full snapshot (upsert).
     pub fn save_doc(&self, doc_id: &str, doc: &MicaDoc) -> Result<(), StoreError> {
         let state = doc.encode_state();
+        // Fresh checksum over the freshly-encoded bytes. `state_crc=excluded.state_crc`
+        // in the SET clause is load-bearing: without it the FIRST save records a crc
+        // and every LATER save (this is an UPSERT — every debounced edit) updates
+        // `state` but leaves the crc stale → a false CorruptDoc on a healthy doc.
+        let crc = blob_crc(&state);
         self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
-             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-            params![doc_id, state, now_millis()],
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
+            params![doc_id, state, now_millis(), crc],
         )?;
         // Version history: archive this folded state as an AUTO snapshot, but only
         // if none was captured in the last VERSION_AUTO_INTERVAL — so a burst of
         // debounced saves converges to one version per window (AFFiNE min-interval).
-        self.capture_auto_version(doc_id, &state)?;
+        self.capture_auto_version(doc_id, &state, crc)?;
         Ok(())
     }
 
-    /// Capture `state` as an auto version if the cadence allows, then prune auto
-    /// versions past retention. Named versions (label set) are never touched.
-    fn capture_auto_version(&self, doc_id: &str, state: &[u8]) -> Result<(), StoreError> {
+    /// Capture `state` (with its already-computed checksum) as an auto version if
+    /// the cadence allows, then prune auto versions past retention. Named versions
+    /// (label set) are never touched.
+    fn capture_auto_version(&self, doc_id: &str, state: &[u8], crc: i64) -> Result<(), StoreError> {
         let now = now_millis();
         let last: Option<i64> = self
             .conn
@@ -488,8 +603,8 @@ impl LocalStore {
             return Ok(());
         }
         self.conn.execute(
-            "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES(?1,?2,NULL,?3,?4)",
-            params![uuid::Uuid::new_v4().to_string(), doc_id, now, state],
+            "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,NULL,?3,?4,?5)",
+            params![uuid::Uuid::new_v4().to_string(), doc_id, now, state, crc],
         )?;
         self.conn.execute(
             "DELETE FROM doc_version
@@ -506,22 +621,25 @@ impl LocalStore {
         doc_id: &str,
         label: &str,
     ) -> Result<Option<LocalVersion>, StoreError> {
-        let state: Option<Vec<u8>> = self
+        // Carry the source row's checksum forward rather than recompute it, so the
+        // crc keeps validating against the ORIGINAL author's bytes end-to-end. A
+        // recompute-on-copy would launder in-place rot into a fresh "valid" crc.
+        let row: Option<(Vec<u8>, Option<i64>)> = self
             .conn
             .query_row(
-                "SELECT state FROM doc_snapshot WHERE doc_id=?1",
+                "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
                 params![doc_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let Some(bytes) = state else {
+        let Some((bytes, crc)) = row else {
             return Ok(None);
         };
         let now = now_millis();
         let id = uuid::Uuid::new_v4().to_string();
         self.conn.execute(
-            "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES(?1,?2,?3,?4,?5)",
-            params![id, doc_id, label, now, bytes],
+            "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![id, doc_id, label, now, bytes, crc],
         )?;
         Ok(Some(LocalVersion {
             id,
@@ -555,14 +673,21 @@ impl LocalStore {
         doc_id: &str,
         version_id: &str,
     ) -> Result<Option<Vec<u8>>, StoreError> {
-        Ok(self
+        let row: Option<(Vec<u8>, Option<i64>)> = self
             .conn
             .query_row(
-                "SELECT state FROM doc_version WHERE id=?1 AND doc_id=?2",
+                "SELECT state, state_crc FROM doc_version WHERE id=?1 AND doc_id=?2",
                 params![version_id, doc_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()?)
+            .optional()?;
+        let Some((bytes, crc)) = row else {
+            return Ok(None);
+        };
+        // The caller decodes this into a throwaway MicaDoc OUTSIDE store.rs, so no
+        // contain_yrs_panic covers it — verifying here is the only local defense.
+        verify_blob_crc(doc_id, &bytes, crc)?;
+        Ok(Some(bytes))
     }
 
     /// Restore a document to a stored version, making it the live base and
@@ -576,60 +701,77 @@ impl LocalStore {
         version_id: &str,
         client_id: u64,
     ) -> Result<Option<MicaDoc>, StoreError> {
-        let target: Option<Vec<u8>> = self
+        let target: Option<(Vec<u8>, Option<i64>)> = self
             .conn
             .query_row(
-                "SELECT state FROM doc_version WHERE id=?1 AND doc_id=?2",
+                "SELECT state, state_crc FROM doc_version WHERE id=?1 AND doc_id=?2",
                 params![version_id, doc_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let Some(bytes) = target else {
+        let Some((bytes, crc)) = target else {
             return Ok(None);
         };
-        // Preserve the current state so the restore can be undone.
-        if let Some(cur) = self
+        // Verify the version blob BEFORE it becomes the live base or reaches yrs —
+        // this was one of two recovery paths that previously decoded straight into
+        // yrs with no guard at all (docs/code-review-2026-07-20.md P0-0).
+        verify_blob_crc(doc_id, &bytes, crc)?;
+        // Preserve the current state so the restore can be undone. Carry its crc
+        // forward (copy path).
+        if let Some((cur, cur_crc)) = self
             .conn
             .query_row(
-                "SELECT state FROM doc_snapshot WHERE doc_id=?1",
+                "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
                 params![doc_id],
-                |r| r.get::<_, Vec<u8>>(0),
+                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Option<i64>>(1)?)),
             )
             .optional()?
         {
             self.conn.execute(
-                "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES(?1,?2,NULL,?3,?4)",
-                params![uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur],
+                "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,NULL,?3,?4,?5)",
+                params![uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur, cur_crc],
             )?;
         }
         self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
-             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-            params![doc_id, &bytes, now_millis()],
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
+            params![doc_id, &bytes, now_millis(), crc],
         )?;
         self.conn
             .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
-        Ok(Some(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?))
+        // Unwind guard too, not just the crc: a legacy version blob (crc NULL) still
+        // reaches yrs here, so match load_doc's containment.
+        let doc = contain_yrs_panic(doc_id, || {
+            Ok(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?)
+        })?;
+        Ok(Some(doc))
     }
 
     /// Load a document by id, decoding it with `client_id` (the device's actor)
     /// and replaying any incremental updates on top of the base snapshot (P2-M4).
     /// Returns `None` if there's no such document.
     pub fn load_doc(&self, doc_id: &str, client_id: u64) -> Result<Option<MicaDoc>, StoreError> {
-        let state: Option<Vec<u8>> = self
+        let row: Option<(Vec<u8>, Option<i64>)> = self
             .conn
             .query_row(
-                "SELECT state FROM doc_snapshot WHERE doc_id=?1",
+                "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
                 params![doc_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let bytes = match state {
-            Some(b) => b,
+        let (bytes, crc) = match row {
+            Some(pair) => pair,
             None => return Ok(None),
         };
+        // Verify the base checksum BEFORE the guard and before yrs. This is THE
+        // line that defends the non-unwinding UB path: a rotted base is rejected
+        // here, so its bytes never reach from_update_with_client_id.
+        verify_blob_crc(doc_id, &bytes, crc)?;
         // Read both logs BEFORE entering the panic guard: these are SQLite
-        // errors, which are not corruption and must keep their own message.
+        // errors, which are not corruption and must keep their own message. The
+        // helpers verify each row's checksum, so a rotted log row surfaces as
+        // CorruptDoc here (via `?`) and never reaches apply_update.
         let remote = self.doc_remote_updates(doc_id)?;
         let local = self.doc_updates(doc_id)?;
 
@@ -672,8 +814,8 @@ impl LocalStore {
         // rows cover the un-pushed tail.
         let next = max_log.max(self.sync_cursor(doc_id)?.pushed_clock) + 1;
         self.conn.execute(
-            "INSERT INTO doc_update(doc_id,clock,payload) VALUES(?1,?2,?3)",
-            params![doc_id, next, update],
+            "INSERT INTO doc_update(doc_id,clock,payload,payload_crc) VALUES(?1,?2,?3,?4)",
+            params![doc_id, next, update, blob_crc(update)],
         )?;
         Ok(next)
     }
@@ -693,8 +835,8 @@ impl LocalStore {
         self.conn.execute_batch("BEGIN;")?;
         let result: Result<(), StoreError> = (|| {
             self.conn.execute(
-                "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload) VALUES(?1,?2,?3)",
-                params![doc_id, rid, update],
+                "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4)",
+                params![doc_id, rid, update, blob_crc(update)],
             )?;
             self.conn.execute(
                 "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
@@ -733,8 +875,8 @@ impl LocalStore {
             let mut max_rid = i64::MIN;
             for (rid, update) in items {
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload) VALUES(?1,?2,?3)",
-                    params![doc_id, rid, update],
+                    "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4)",
+                    params![doc_id, rid, update, blob_crc(update)],
                 )?;
                 if *rid > max_rid {
                     max_rid = *rid;
@@ -760,15 +902,28 @@ impl LocalStore {
         }
     }
 
-    /// A document's persisted remote-stream tail, ordered by `rid`.
+    /// A document's persisted remote-stream tail, ordered by `rid`. Each row's
+    /// checksum is verified before it is returned, so a rotted remote update
+    /// surfaces as `CorruptDoc` instead of being replayed into yrs.
     pub fn doc_remote_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT rid,payload FROM doc_remote_update WHERE doc_id=?1 ORDER BY rid",
+            "SELECT rid,payload,payload_crc FROM doc_remote_update WHERE doc_id=?1 ORDER BY rid",
         )?;
         let rows = stmt
-            .query_map(params![doc_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map(params![doc_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        let mut out = Vec::with_capacity(rows.len());
+        for (rid, payload, crc) in rows {
+            verify_blob_crc(doc_id, &payload, crc)?;
+            out.push((rid, payload));
+        }
+        Ok(out)
     }
 
     /// (local outbox rows, remote log rows) — the compaction trigger reads this
@@ -787,15 +942,28 @@ impl LocalStore {
         Ok((local, remote))
     }
 
-    /// All of a document's incremental updates, ordered by `clock`.
+    /// All of a document's incremental updates, ordered by `clock`. Each row's
+    /// checksum is verified before it is returned (same rationale as
+    /// [`Self::doc_remote_updates`]).
     pub fn doc_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT clock,payload FROM doc_update WHERE doc_id=?1 ORDER BY clock")?;
+            .prepare("SELECT clock,payload,payload_crc FROM doc_update WHERE doc_id=?1 ORDER BY clock")?;
         let rows = stmt
-            .query_map(params![doc_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map(params![doc_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        let mut out = Vec::with_capacity(rows.len());
+        for (clock, payload, crc) in rows {
+            verify_blob_crc(doc_id, &payload, crc)?;
+            out.push((clock, payload));
+        }
+        Ok(out)
     }
 
     /// Updates with `clock > after` — the queue still to push to the cloud.
@@ -849,6 +1017,7 @@ impl LocalStore {
             None => return Ok(()),
         };
         let state = doc.encode_state();
+        let crc = blob_crc(&state);
         let pushed = self.sync_cursor(doc_id)?.pushed_clock;
         // One transaction: fold + trim + clear commit together (crash mid-way
         // was already safe via replay idempotency, but structural atomicity is
@@ -856,9 +1025,10 @@ impl LocalStore {
         self.conn.execute_batch("BEGIN;")?;
         let result: Result<(), StoreError> = (|| {
             self.conn.execute(
-                "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
-                 ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-                params![doc_id, state, now_millis()],
+                "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
+                 ON CONFLICT(doc_id) DO UPDATE SET
+                     state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
+                params![doc_id, state, now_millis(), crc],
             )?;
             self.conn.execute(
                 "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
@@ -945,10 +1115,13 @@ impl LocalStore {
     /// at safe points (doc close, app pause) so a later corruption can be rolled
     /// back. No-op if the document has no base yet.
     pub fn checkpoint_doc(&self, doc_id: &str) -> Result<(), StoreError> {
+        // SQL-only copy — the checksum rides along in the same statement, so the
+        // backup keeps validating against the base's original bytes.
         self.conn.execute(
-            "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at)
-             SELECT doc_id, state, ?2 FROM doc_snapshot WHERE doc_id=?1
-             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+            "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at,state_crc)
+             SELECT doc_id, state, ?2, state_crc FROM doc_snapshot WHERE doc_id=?1
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
             params![doc_id, now_millis()],
         )?;
         Ok(())
@@ -962,26 +1135,33 @@ impl LocalStore {
         doc_id: &str,
         client_id: u64,
     ) -> Result<Option<MicaDoc>, StoreError> {
-        let state: Option<Vec<u8>> = self
+        let row: Option<(Vec<u8>, Option<i64>)> = self
             .conn
             .query_row(
-                "SELECT state FROM doc_snapshot_backup WHERE doc_id=?1",
+                "SELECT state, state_crc FROM doc_snapshot_backup WHERE doc_id=?1",
                 params![doc_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let bytes = match state {
-            Some(b) => b,
+        let (bytes, crc) = match row {
+            Some(pair) => pair,
             None => return Ok(None),
         };
+        // The other previously-unguarded decode path (P0-0): verify the backup
+        // before it becomes the live base or reaches yrs.
+        verify_blob_crc(doc_id, &bytes, crc)?;
         self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,?3)
-             ON CONFLICT(doc_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-            params![doc_id, &bytes, now_millis()],
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
+            params![doc_id, &bytes, now_millis(), crc],
         )?;
         self.conn
             .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
-        Ok(Some(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?))
+        let doc = contain_yrs_panic(doc_id, || {
+            Ok(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?)
+        })?;
+        Ok(Some(doc))
     }
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
@@ -1940,21 +2120,22 @@ mod tests {
         );
     }
 
-    /// A corrupt local snapshot must come back as an error, never as a panic.
+    /// The `contain_yrs_panic` guard, in ISOLATION from the checksum.
     ///
     /// Reported from a real install: `yrs-0.27.0/src/block_store.rs:60 index out
     /// of bounds: the len is 732 but the index is 715827364`, raised from
     /// `load_doc` on the cloud-seed path. The desktop FFI holds
     /// `Mutex<LocalStore>` across this call, so the panic poisoned that lock and
-    /// every later `list_views` failed: the page tree rendered blank and stayed
-    /// blank on every launch.
+    /// every later `list_views` failed: the page tree rendered blank on every
+    /// launch.
     ///
-    /// Mutating a valid snapshot rather than using fixed garbage bytes, because
-    /// most random input dies in `decode_v1` (which already returns `Err`) —
-    /// the dangerous class is bytes that DECODE and then blow up while being
-    /// integrated. The final assertion exists so this cannot pass vacuously: if
-    /// no mutation reaches the panicking path, the test has proved nothing and
-    /// says so.
+    /// Byte 9 flipped survives `decode_v1` and blows up later during INTEGRATION
+    /// (the class `?` never saw and `catch_unwind` does) — a truncation would be
+    /// rejected by `decode_v1` and prove nothing. Crucially, `state_crc` is set
+    /// to NULL first: this is a LEGACY row with no checksum, so `verify_blob_crc`
+    /// passes it through and the bytes actually reach yrs. Without that, the new
+    /// checksum would catch the flip before the guard and this test would no
+    /// longer exercise `contain_yrs_panic` at all.
     #[test]
     fn a_corrupt_snapshot_is_an_error_not_a_panic() {
         let store = LocalStore::open_in_memory().unwrap();
@@ -1973,22 +2154,14 @@ mod tests {
             })
             .unwrap();
 
-        // Truncation, not random byte flips. It is the realistic corruption (a
-        // half-written blob) AND it stays inside the class yrs unwinds on.
-        // Arbitrary byte mutation also reaches an UPSTREAM SOUNDNESS BUG that no
-        // guard can contain — see `yrs_corrupt_input_is_unsound` below.
-        // One fixed mutation, not a sweep. Byte 9 flipped survives `decode_v1`
-        // and blows up later, during integration (`yrs .../block.rs:92 assertion
-        // failed: value & Self::MASK == 0`) — which is the class `?` never saw
-        // and `catch_unwind` does. Truncations are NOT usable here: `decode_v1`
-        // rejects every one of them, so a truncation-based test passes with the
-        // guard removed and proves nothing.
         let mut bad = good.clone();
         bad[9] ^= 0xff;
+        // Corrupt the bytes AND null the checksum → the crc can't mask the flip,
+        // so the corruption reaches yrs and only the guard can save us.
         store
             .conn
             .execute(
-                "UPDATE doc_snapshot SET state=?1 WHERE doc_id='d'",
+                "UPDATE doc_snapshot SET state=?1, state_crc=NULL WHERE doc_id='d'",
                 params![bad],
             )
             .unwrap();
@@ -2063,6 +2236,238 @@ mod tests {
                     .unwrap();
                 let _ = store.load_doc("d", 1);
             }
+        }
+    }
+
+    // ── local blob checksum (docs/code-review-2026-07-20.md P0-0) ────────────
+
+    /// Locks the polynomial/params so a silent CRC drift can't slip through.
+    /// Values are the standard CRC-32/ISO-HDLC check vectors.
+    #[test]
+    fn crc32_known_vectors() {
+        assert_eq!(crc32(b""), 0x0000_0000);
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
+    }
+
+    fn stored_doc() -> (LocalStore, Vec<u8>) {
+        let store = LocalStore::open_in_memory().unwrap();
+        let (root, blocks) = sample();
+        let doc = MicaDoc::from_blocks(&root, &blocks);
+        store.save_doc("d", &doc).unwrap();
+        let state: Vec<u8> = store
+            .conn
+            .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| r.get(0))
+            .unwrap();
+        (store, state)
+    }
+
+    /// The write path stamps a correct checksum, and — critically — re-stamps it
+    /// on the SECOND save (the UPSERT). A missing `state_crc=excluded.state_crc`
+    /// in the SET clause would leave the crc stale here and false-flag the doc.
+    #[test]
+    fn save_records_and_updates_crc() {
+        let (store, state) = stored_doc();
+        let crc: Option<i64> = store
+            .conn
+            .query_row("SELECT state_crc FROM doc_snapshot WHERE doc_id='d'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(crc, Some(blob_crc(&state)), "first save records the crc");
+
+        // Second save with changed content must advance the crc, not leave it stale.
+        let (root, mut blocks) = sample();
+        blocks.push(Block::new("b", "paragraph").with_text("more"));
+        blocks[0] = Block::new("r", "page").with_children(vec!["a".into(), "b".into()]);
+        store.save_doc("d", &MicaDoc::from_blocks(&root, &blocks)).unwrap();
+        let (state2, crc2): (Vec<u8>, Option<i64>) = store
+            .conn
+            .query_row("SELECT state, state_crc FROM doc_snapshot WHERE doc_id='d'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(crc2, Some(blob_crc(&state2)), "second save re-stamps the crc");
+        assert!(store.load_doc("d", 1).unwrap().is_some(), "still loads after re-save");
+    }
+
+    /// Primary mutation test, isolated from yrs: corrupt ONLY the checksum, leave
+    /// `state` a VALID yrs update. yrs would decode it without panicking, so the
+    /// ONLY thing that can produce an error is `verify_blob_crc`. Remove that call
+    /// and `load_doc` returns `Ok(Some(_))` → this test fails. That is the
+    /// mutation-kills-test guarantee, independent of how yrs reacts to garbage.
+    #[test]
+    fn corrupt_state_crc_is_caught_before_yrs() {
+        let (store, _state) = stored_doc();
+        store
+            .conn
+            .execute("UPDATE doc_snapshot SET state_crc = state_crc + 1 WHERE doc_id='d'", [])
+            .unwrap();
+        assert!(
+            matches!(store.load_doc("d", 1), Err(StoreError::CorruptDoc { .. })),
+            "a stale checksum over valid bytes must be caught by the crc alone"
+        );
+    }
+
+    /// Real bit-rot: flip a byte of `state`, keep the (now-mismatched) crc → the
+    /// crc catches it BEFORE the bytes reach yrs (the only defense against the
+    /// non-unwinding UB path).
+    #[test]
+    fn bit_flip_in_state_is_caught_by_crc() {
+        let (store, mut state) = stored_doc();
+        state[5] ^= 0x01;
+        store
+            .conn
+            .execute("UPDATE doc_snapshot SET state=?1 WHERE doc_id='d'", params![state])
+            .unwrap();
+        assert!(matches!(store.load_doc("d", 1), Err(StoreError::CorruptDoc { .. })));
+    }
+
+    /// The two previously-UNPROTECTED recovery decodes now verify their blob.
+    #[test]
+    fn restore_and_rollback_verify_crc() {
+        // restore_local_version: corrupt a version's crc → CorruptDoc, no panic.
+        let (store, _s) = stored_doc();
+        let v = store.create_local_version("d", "v1").unwrap().unwrap();
+        store
+            .conn
+            .execute("UPDATE doc_version SET state_crc = state_crc + 1 WHERE id=?1", params![v.id])
+            .unwrap();
+        assert!(matches!(
+            store.restore_local_version("d", &v.id, 1),
+            Err(StoreError::CorruptDoc { .. })
+        ));
+
+        // rollback_doc: checkpoint, corrupt the backup's crc → CorruptDoc.
+        let (store2, _s2) = stored_doc();
+        store2.checkpoint_doc("d").unwrap();
+        store2
+            .conn
+            .execute("UPDATE doc_snapshot_backup SET state_crc = state_crc + 1 WHERE doc_id='d'", [])
+            .unwrap();
+        assert!(matches!(store2.rollback_doc("d", 1), Err(StoreError::CorruptDoc { .. })));
+    }
+
+    /// A rotted local update log row is caught (via the log helpers) and never
+    /// replayed into yrs.
+    #[test]
+    fn corrupt_update_log_crc_is_caught() {
+        let (store, _s) = stored_doc();
+        store.append_update("d", b"\x00\x01\x02").unwrap();
+        store
+            .conn
+            .execute("UPDATE doc_update SET payload_crc = payload_crc + 1 WHERE doc_id='d'", [])
+            .unwrap();
+        assert!(matches!(store.load_doc("d", 1), Err(StoreError::CorruptDoc { .. })));
+    }
+
+    /// `local_version_state` verifies the preview blob it hands out (its decode
+    /// happens outside store.rs).
+    #[test]
+    fn local_version_state_verifies_crc() {
+        let (store, _s) = stored_doc();
+        let v = store.create_local_version("d", "v1").unwrap().unwrap();
+        assert!(store.local_version_state("d", &v.id).unwrap().is_some(), "healthy preview loads");
+        store
+            .conn
+            .execute("UPDATE doc_version SET state_crc = state_crc + 1 WHERE id=?1", params![v.id])
+            .unwrap();
+        assert!(matches!(
+            store.local_version_state("d", &v.id),
+            Err(StoreError::CorruptDoc { .. })
+        ));
+    }
+
+    /// A legacy row (crc NULL) must NOT error on load — the None branch passes
+    /// through to exactly today's behavior. And with the crc NULL, integration-
+    /// phase corruption still degrades via the guard (not the crc), proving the
+    /// fall-through is intact. (Companion to `a_corrupt_snapshot_is_an_error_not_a_panic`.)
+    #[test]
+    fn legacy_null_crc_still_loads() {
+        let (store, _state) = stored_doc();
+        store
+            .conn
+            .execute("UPDATE doc_snapshot SET state_crc=NULL WHERE doc_id='d'", [])
+            .unwrap();
+        assert!(
+            store.load_doc("d", 1).unwrap().is_some(),
+            "NULL crc = no checksum recorded → must load, not error"
+        );
+    }
+
+    /// A pre-checksum v6 store (built with a RAW connection using the OLD DDL, so
+    /// the probe-ALTER — not the base DDL — is what adds the column) upgrades
+    /// without data loss: column added, existing row's crc NULL, blob byte-
+    /// identical, loads fine, version unchanged.
+    #[test]
+    fn v6_store_without_crc_column_migrates() {
+        let path = temp_path();
+        let p = path.to_str().unwrap();
+        let (root, blocks) = sample();
+        let state = MicaDoc::from_blocks(&root, &blocks).encode_state();
+        {
+            // OLD shape: no state_crc column.
+            let conn = Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE doc_snapshot(doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+                 CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES('d',?1,0)",
+                params![state],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO local_meta(key,value) VALUES('schema_version','6')", [])
+                .unwrap();
+        }
+        let store = LocalStore::open(p).unwrap();
+        let has: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('doc_snapshot') WHERE name='state_crc'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has, 1, "probe-ALTER added state_crc");
+        let (blob, crc): (Vec<u8>, Option<i64>) = store
+            .conn
+            .query_row("SELECT state, state_crc FROM doc_snapshot WHERE doc_id='d'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(blob, state, "existing blob byte-identical (no data loss)");
+        assert!(crc.is_none(), "legacy row's crc stays NULL (not fabricated)");
+        assert!(store.load_doc("d", 1).unwrap().is_some(), "legacy row still loads");
+        let v: String = store
+            .conn
+            .query_row("SELECT value FROM local_meta WHERE key='schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION.to_string(), "no version bump");
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// Guards against an accidental SCHEMA_VERSION bump and confirms a fresh
+    /// store carries all five crc columns.
+    #[test]
+    fn schema_unchanged_and_crc_columns_present() {
+        assert_eq!(SCHEMA_VERSION, 6, "adding crc columns must NOT bump the version");
+        let store = LocalStore::open_in_memory().unwrap();
+        for (table, col) in [
+            ("doc_snapshot", "state_crc"),
+            ("doc_version", "state_crc"),
+            ("doc_snapshot_backup", "state_crc"),
+            ("doc_update", "payload_crc"),
+            ("doc_remote_update", "payload_crc"),
+        ] {
+            let has: i64 = store
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{col}'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(has, 1, "{table}.{col} present in a fresh store");
         }
     }
 

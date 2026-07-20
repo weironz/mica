@@ -1241,7 +1241,6 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     } else {
       (kind, text, data)
     };
-    let data = data;
 
     // Continuation (CommonMark): a paragraph line joins the open block with
     // a soft break (lazy lines included); after a blank, a line indented to
