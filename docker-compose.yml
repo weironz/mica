@@ -45,62 +45,24 @@ services:
     volumes:
       - mica-rustfs-data:/data
 
-  # Builds the prod image from source. Behind a profile so it stays OUT of a
-  # bare `docker compose up -d`: it is `build:`, so starting it compiles the
-  # whole workspace in --release inside the container — minutes, and again after
-  # every edit. Nothing routine uses it (`just parity-check` runs the REAL
-  # images via deploy/docker-compose.single.yml, and `just docker-build` calls
-  # `docker build` directly), so its only effect on the default `up` was that
-  # surprise build. Develop against `api-dev` below.
+  # The API. Runs from source with the official Rust toolchain image — this file
+  # never builds an image.
   #
-  #   docker compose --profile prod-image up -d api    # if you really want it
-  api:
-    profiles: ["prod-image"]
-    build:
-      context: .
-      # Single source of truth for the API image — same Dockerfile the prod
-      # images are built from (deploy/Dockerfile.api), so dev and prod can't drift.
-      dockerfile: deploy/Dockerfile.api
-    container_name: mica-api
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      APP_ENV: development
-      HTTP_ADDR: 0.0.0.0:8080
-      DATABASE_URL: postgres://mica:mica@postgres:5432/mica
-      DATABASE_MAX_CONNECTIONS: 10
-      JWT_SECRET: change-me-in-development
-      ACCESS_TOKEN_TTL_SECONDS: 86400
-      RUST_LOG: mica_api_server=debug,mica_app_core=debug,mica_infra=debug,tower_http=debug
-      # The backend only SIGNS presigned URLs (no network calls to S3); sign
-      # against the browser-reachable host. The bucket is private, so leave
-      # S3_PUBLIC_BASE_URL unset → download_url returns a presigned (signed) GET.
-      S3_ENDPOINT: http://192.168.73.6:9000
-      S3_REGION: us-east-1
-      S3_BUCKET: mica
-      S3_ACCESS_KEY: rustfsadmin
-      S3_SECRET_KEY: rustfsadmin
-      S3_FORCE_PATH_STYLE: "true"
-      S3_PRESIGN_TTL_SECONDS: 604800
-      S3_MAX_UPLOAD_BYTES: 52428800
-    ports:
-      - "8080:8080"
-
-  # The API for the DEV loop — same toolchain image as the prod builder, but it
-  # never builds an image. `api` above bakes the source into a layer, so every
-  # edit invalidates it and recompiles the whole dependency tree in --release:
-  # correct for a reproducible prod artifact, useless for iterating. Here the
-  # source is bind-mounted and `target/` + the cargo registry live in named
+  # There used to be a second service here that built deploy/Dockerfile.api.
+  # Nothing used it: prod is deploy/docker-compose.yml (shipped by
+  # `just deploy-prod`), parity is deploy/docker-compose.single.yml running the
+  # REAL images, and `just docker-build` calls `docker build` directly. Its only
+  # live effect was that a bare `docker compose up -d` compiled the whole
+  # workspace in --release inside a container — and its S3_ENDPOINT still
+  # pointed at a LAN address from a machine that no longer exists, which is how
+  # long nobody had run it. Deleted; prod config belongs in deploy/.
+  #
+  # Source is bind-mounted and `target/` + the cargo registry live in named
   # volumes, so a rebuild is an ordinary incremental cargo build that survives
-  # restarts.
-  #
-  # Use this one to develop (`just dev`); keep `api` for `just parity-check`,
-  # which exists precisely to run the REAL image.
-  api-dev:
+  # restarts: ~5 s for a one-line change, vs minutes for an image rebuild.
+  api:
     image: rust:1.97-slim-bookworm
-    container_name: mica-api-dev
+    container_name: mica-api
     working_dir: /src
     command: cargo run -p mica-api-server
     depends_on:

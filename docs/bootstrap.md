@@ -211,7 +211,7 @@ just dev-down   # 全停
 | 起全套 | `just dev` |
 | 全停 | `just dev-down` |
 | 看后端日志 | `just dev-logs`(它跑在容器里,不占你的终端) |
-| 改完代码生效 | `docker compose restart api-dev` —— 增量重编,约 5 秒 |
+| 改完代码生效 | `docker compose restart api` —— 增量重编,约 5 秒 |
 | **连数据一起清掉** | `docker compose down -v` —— 删库,之后 `just dev` 会重建并重新灌种子 |
 | 看谁还在跑 | `docker compose ps` |
 | 只要基础设施(想在主机上 `just dev-api`)| `just dev-up` |
@@ -222,7 +222,7 @@ just dev-down   # 全停
 > 之后改一行代码重编 + 重启约 **5 秒** —— 依赖都在 `mica-cargo-target` /
 > `mica-cargo-registry` 两个具名卷里,`down` 不会清掉,只有 `down -v` 才会。
 >
-> 后端用的是 compose 的 `api-dev` 服务(官方 Rust 镜像 + 挂载源码),**不是** `api`。
+> 后端用的是 compose 的 `api` 服务(官方 Rust 镜像 + 挂载源码),**不是** `api`。
 > `api` 走 `deploy/Dockerfile.api`,把源码烤进镜像层、`--release` 全量编译,拿它做
 > 开发迭代等于每改一行等十分钟。它已被放进 `prod-image` profile,**默认不启动** ——
 > 所以 `docker compose up -d` 裸跑也是安全的,`just dev` 就是它加上等健康和灌种子。

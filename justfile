@@ -31,7 +31,7 @@ hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 dev-up:
     docker compose up -d postgres rustfs
 
-# One command in, one command out. The API runs as `api-dev` (bind-mounted
+# One command in, one command out. The API runs as `api` (bind-mounted
 # source, cargo cache in volumes) rather than on the host, so `dev-down` really
 # does stop everything — the old split left a host cargo process running that no
 # amount of `docker compose down` would touch.
@@ -46,14 +46,14 @@ dev:
         curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1 && break; \
         sleep 3; \
     done
-    @curl -fsS http://127.0.0.1:8080/api/health || (echo "API never came up — docker compose logs api-dev" && exit 1)
+    @curl -fsS http://127.0.0.1:8080/api/health || (echo "API never came up — docker compose logs api" && exit 1)
     @echo ""
     just seed-dev
     @echo "api http://127.0.0.1:8080  web http://127.0.0.1:8090  (demo@mica.dev / password123)"
 
 [doc("Tail the dev API log (it runs in a container now, not your terminal)")]
 dev-logs:
-    docker compose logs -f api-dev
+    docker compose logs -f api
 
 [doc("Stop the whole dev stack (add -v to also wipe the database volume)")]
 dev-down:
