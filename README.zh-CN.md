@@ -158,10 +158,10 @@ migrations/      Postgres schema,API 启动时自动应用
 
 ```sh
 cp .env.example .env
-just dev-up          # Docker 里的 Postgres + MinIO
-just dev-api         # cargo run -p mica-api-server(启动即跑迁移)
+just dev             # 整套后端进 Docker 并灌好种子(首次要编译)
 just app             # Flutter 桌面客户端
-just app chrome      # Flutter web 客户端
+just app chrome      # Flutter web 客户端 —— 自动连 :8080 的后端
+just dev-down        # 全停
 just test            # cargo test + flutter test
 just check           # fmt + clippy + analyze
 ```

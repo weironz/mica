@@ -55,7 +55,7 @@
 
 **Docker Desktop 仍然必需**(它不是只为发版而装):
 
-- `just dev-up` —— 本地开发的 postgres + rustfs
+- `just dev` —— 本地开发全栈(postgres + rustfs + api + web)
 - `just parity-check` —— 发版前跑**真镜像**,抓容器专属 bug(如 loopback 绑定)
 - `just docker-build` / `docker-push` —— **CI 挂掉时的兜底**,正常发版用不到
 

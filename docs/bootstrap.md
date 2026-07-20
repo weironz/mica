@@ -188,21 +188,12 @@ cargo test                  # 可选但推荐
 `flutter doctor` 里 **Android toolchain 报 ✗ 是正常的** —— 本项目只覆盖 Windows 和 Web,
 不需要 Android SDK。其余项必须绿,尤其 `Visual Studio - develop Windows apps`。
 
-起本地后端:
-
-```powershell
-just dev-up                 # Docker 里的 postgres + rustfs
-just dev-api                # cargo run -p mica-api-server(启动即跑迁移)
-just seed-dev               # 建 demo 账号 + 工作区(必须在 dev-api 起过一次之后)
-just app                    # Flutter 桌面客户端;just app chrome 跑 web
-```
-
 ### 启停速查
 
 **日常就两条命令**:
 
 ```powershell
-just dev        # 起全套(基础设施 + 后端 + web)并自动灌种子
+just dev        # 起全套并自动灌种子:postgres + rustfs + api + web
 just dev-down   # 全停
 ```
 
@@ -211,10 +202,10 @@ just dev-down   # 全停
 | 起全套 | `just dev` |
 | 全停 | `just dev-down` |
 | 看后端日志 | `just dev-logs`(它跑在容器里,不占你的终端) |
-| 改完代码生效 | `docker compose restart api` —— 增量重编,约 5 秒 |
+| 改完 Rust 代码生效 | `docker compose restart api` —— 增量重编,约 5 秒 |
+| 改完 Dart,要在 `:8090` 看 | `just dev-web`(nginx 不编译,只端静态文件) |
 | **连数据一起清掉** | `docker compose down -v` —— 删库,之后 `just dev` 会重建并重新灌种子 |
 | 看谁还在跑 | `docker compose ps` |
-| 只要基础设施(想在主机上 `just dev-api`)| `just dev-up` |
 
 占用的端口:**8080** 后端、**8090** web、**5432** postgres、**9000/9001** rustfs。
 
@@ -222,17 +213,27 @@ just dev-down   # 全停
 > 之后改一行代码重编 + 重启约 **5 秒** —— 依赖都在 `mica-cargo-target` /
 > `mica-cargo-registry` 两个具名卷里,`down` 不会清掉,只有 `down -v` 才会。
 >
-> 后端用的是 compose 的 `api` 服务(官方 Rust 镜像 + 挂载源码),**不是** `api`。
-> `api` 走 `deploy/Dockerfile.api`,把源码烤进镜像层、`--release` 全量编译,拿它做
-> 开发迭代等于每改一行等十分钟。它已被放进 `prod-image` profile,**默认不启动** ——
-> 所以 `docker compose up -d` 裸跑也是安全的,`just dev` 就是它加上等健康和灌种子。
-> 真要单独构建那个镜像:`docker compose --profile prod-image up -d api`。
->
-> (`just parity-check` 不走这个服务 —— 它用 `deploy/docker-compose.single.yml` 跑
-> 预先构建好的真镜像。)
->
-> 想回到「后端跑主机」的老方式也行:`just dev-up` + `just dev-api`,但那样
-> `dev-down` 停不掉后端,得自己 Ctrl+C。
+> **后端只有这一种跑法。** 曾经还有「`dev-up` 起基础设施 + `dev-api` 在主机上
+> `cargo run`」那条路,已删除:容器增量只要 5 秒,主机那条没有速度优势可言,却让
+> `dev-down` 停不掉后端、`:8080` 被一个栈里查不到的进程占着。两种启动方式、其中
+> 一种带陷阱,比只有一种更糟。
+
+### 前端怎么开发
+
+前端**不经过 nginx 也能连上后端** —— web 端在非标准端口(即 Flutter 开发服务器)下会
+自动把 API 基址解析成 `同主机:8080`(`api/client.dart` 的 `_resolveBaseUri`),那正是
+容器里的 api。
+
+| 场景 | 命令 | 说明 |
+|---|---|---|
+| 改 UI(占绝大多数时间)| `just app chrome` | 热重载,零构建步骤,自动连 :8080 |
+| 桌面端 | `just app` | 热重载 |
+| 验证生产形态 | `just dev-web` 后刷新 `:8090` | 经 nginx,**必须手工重新构建** |
+
+`:8090` 那条不是多余的:`deploy/nginx.dev.conf` 里的 SPA 深链回退(`try_files`)、
+`/api` 同源代理、`/ws` 的 WebSocket `Upgrade` 头转发,开发服务器一个都不经过——
+协同编辑的 `/ws` 代理配错、刷新非根路径 404,只有走这条才能提前发现。生产用的
+就是 nginx(`deploy/Dockerfile.web`)。
 
 `just seed-dev` 灌的是 [`seeds/dev_seed.sql`](../seeds/dev_seed.sql):**demo@mica.dev / password123**
 外加一个名为 `demo` 的工作区。幂等,`docker compose down -v` 之后重跑即可。**顺序不能反**——

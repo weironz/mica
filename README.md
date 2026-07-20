@@ -174,10 +174,10 @@ every recipe.
 
 ```sh
 cp .env.example .env
-just dev-up          # Postgres + MinIO in Docker
-just dev-api         # cargo run -p mica-api-server (migrations run on start)
+just dev             # whole backend stack in Docker, seeded (first run compiles)
 just app             # Flutter desktop client
-just app chrome      # Flutter web client
+just app chrome      # Flutter web client — talks to the stack on :8080
+just dev-down        # stop it all
 just test            # cargo test + flutter test
 just check           # fmt + clippy + analyze
 ```

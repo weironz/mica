@@ -24,17 +24,15 @@ hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 
 # ---------------------------------------------------------------- dev loop
 
-# Infra only — for when you'd rather run the API on the host (`just dev-api`).
-# Named services here because this IS a deliberate subset; the full stack is
-# `just dev`.
-[doc("Start dev infra only (postgres + rustfs)")]
-dev-up:
-    docker compose up -d postgres rustfs
-
-# One command in, one command out. The API runs as `api` (bind-mounted
-# source, cargo cache in volumes) rather than on the host, so `dev-down` really
-# does stop everything — the old split left a host cargo process running that no
-# amount of `docker compose down` would touch.
+# One command in, one command out. The API is the `api` container (bind-mounted
+# source, cargo cache in volumes), so `dev-down` really does stop everything.
+#
+# There used to be a second way — `dev-up` (infra only) plus `dev-api`
+# (cargo run on the host) — kept around as an escape hatch. It earned nothing:
+# the container rebuilds a one-line change in ~5 s, so the host had no speed
+# left to offer, while `dev-down` silently failed to stop it and left :8080 held
+# by a process nothing in the stack accounted for. Two ways to start the backend,
+# one of them booby-trapped, is worse than one way.
 #
 # First run compiles the workspace into the volume (~5.5 min here); after that a
 # one-line change rebuilds and restarts in ~5 s.
@@ -58,10 +56,6 @@ dev-logs:
 [doc("Stop the whole dev stack (add -v to also wipe the database volume)")]
 dev-down:
     docker compose down
-
-[doc("Run the API on the host against .env (fast cargo cycle)")]
-dev-api:
-    set -a && . ./.env && set +a && cargo run -p mica-api-server
 
 # Run AFTER the API has started once, so sqlx::migrate! has created the tables.
 # Idempotent — safe to re-run after `docker compose down -v`.

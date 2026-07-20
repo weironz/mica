@@ -6,7 +6,7 @@
 --
 --   demo@mica.dev / password123
 --
--- Usage (after `just dev-up` and one API start, so `sqlx::migrate!` has created
+-- Usage (after `just dev` — it starts the API, so `sqlx::migrate!` has created
 -- the tables):
 --
 --   just seed-dev
