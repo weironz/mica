@@ -33,7 +33,22 @@ if ($env:MICA_VERSION) {
 
 Write-Host "Installing mica-cli $version -> $exe"
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+
+# Download beside the target first, then swap it in. Writing straight to $exe
+# fails with "being used by another process" whenever an MCP client has
+# mica-cli running — the normal state for anyone actually using it, so
+# "re-run to update" used to break exactly when it mattered. Windows refuses to
+# OVERWRITE a running image but is happy to RENAME it: move the old one aside
+# and put the new one in its place. The running process keeps its handle to the
+# renamed file and exits normally.
+$tmp = "$exe.new"
+Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+$old = "$exe.old"
+if (Test-Path $old) { Remove-Item $old -Force -ErrorAction SilentlyContinue }
+if (Test-Path $exe) { Move-Item $exe $old -Force }
+Move-Item $tmp $exe -Force
+# Best-effort: only succeeds once nothing is holding the previous binary.
+Remove-Item $old -Force -ErrorAction SilentlyContinue
 
 # Add the install dir to the USER PATH once (idempotent), and to THIS session so
 # `mica-cli` works without reopening the terminal.
