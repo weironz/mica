@@ -374,6 +374,10 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 | `24ff9bd` | **P1-4** | 导出 list `indent` `.min(8)` 镜像 Dart 编辑器的 `clamp(0,8)`——非编辑器客户端写 `indent>8` 时两端渲染不再分叉。 |
 | `6491ff2` | **P1-2** | 扩 conformance fixture（3 例，锁定 parity）+ 修引用标签 `ß→ss` case-fold 漂移（confirmed #9，一行镜像 Rust）。**确认为真、但故意保守未改**（Dart 核心 parser，无人值守有回归风险，留待带全神修）：**#3 nested-link**（`label_contains_link` 缺失）、**#4 link-title 转义**（Dart 吞任意反斜杠、Rust 只吞标点）。 |
 
+| `e527445` | **修我自己的 flaky 测试** | CI 在 `24ff9bd` 报红，failing 的是我在 `278e2b9` 写的 `a_corrupt_snapshot_is_an_error_not_a_panic`——`from_blocks` mint **随机 client_id**，编码字节逐次不同，翻 byte 9 是"整合期 panic"还是"decode_v1 拒"成了掷骰子。**时绿时红比没有测试更糟。** 实测钉住 client_id 后**再无任何偏移能触发可捕获的整合期 panic**（172 字节逐偏移单进程扫过），故改成确定性两件套：直接喂 panic 闭包测守卫契约（实测移除 `catch_unwind` 即 FAILED）+ 端到端只断言"返回 Err 而非 unwind"。连跑 15 次 15/15。教训记入 `docs/lessons.md`。 |
+
 **这轮全量验证**：Rust 全 workspace 36 个测试二进制 + `clippy -D warnings` 绿；Flutter 610 测试全过、0 个 error/warning 级 analyze。未发版（等用户指令）。
+
+> 附带验证：过程中本地 dev postgres 容器停掉，`sync_pg` 8 个测试**全部报红**并打出 `DATABASE_URL is set but the connection failed: PoolTimedOut`——这正是 P2-3「假绿改真红」在野外自证：换作从前它们会静默跳过并报绿。
 
 **仍未动**：P1-1 剩余 9 处漂移里的 nested-link/link-title（上表 #3/#4，已确认）+ 其余 7 处未复核；P3 全部（架构债，判断重、风险高，计划本就建议缓做）。P1-2 的机制已就位，后续补 fixture 即可继续暴露。

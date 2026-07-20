@@ -254,6 +254,17 @@ CI 加 `flutter build web --release` 关卡。
   看起来像卡死 → 一律 `cargo ... 2>&1 | Out-File log` 再 tail。
 - **tag 触发的 workflow 用的是标签所在 commit 的版本。** 打 tag 的那个 commit
   必须已经含有该 workflow 文件;`workflow_dispatch` 也要等它进默认分支才在 UI 出现。
+- **别拿"翻一个字节让 yrs 崩"当断言依据 —— `MicaDoc::from_blocks` 每次
+  mint 随机 client_id。** 编码字节因此逐次不同,同一个偏移一会儿"过了
+  decode_v1、在整合期 panic",一会儿"decode_v1 直接拒",断言具体错误变体
+  就成了掷骰子。我写的 `a_corrupt_snapshot_is_an_error_not_a_panic` 因此在
+  本地和一次 CI 绿、另一次 CI 红。**时绿时红比没有测试更糟:它训练人忽略红。**
+  要确定性就 `from_blocks_with_client_id(..., Some(1))`;但实测钉住之后
+  **再没有任何偏移能触发可捕获的整合期 panic**(172 字节逐偏移单进程扫过,
+  非 decode_err 即 ok,字符串区还会撞上游 UTF-8 UB 直接 abort)。
+  结论:**要测"守卫把 panic 收成错误",就直接喂一个会 panic 的闭包**
+  (`contain_yrs_panic("d", || panic!(...))`),别绕道构造畸形字节;
+  端到端那条只断言"返回 Err 而非 unwind"这个真正要守的契约。
 
 ### 用 computer-use 测桌面版
 
