@@ -2,8 +2,8 @@
 
 **一句话**:**CI 构建一切,上线仍然要人按一下 —— 但那个按钮现在在 Actions 页面。**
 
-推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow 并
-批准,生产滚到那个版本。两步,没有第三步。
+推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow,
+生产滚到那个版本。两步,没有第三步。
 
 `just deploy-prod X.Y.Z` **保留**为兜底(GitHub 挂了、或要同步 compose 时用),走的是
 同一个节点入口。
@@ -13,7 +13,7 @@
 | `Mica-Setup-X.Y.Z.exe` | **CI** job `windows` | GitHub Release(驱动应用内自动更新) |
 | `mica-cli` ×3(win/linux/macos) | **CI** job `cli` | GitHub Release |
 | `mica-api` / `mica-web` / `mica-cli` 镜像 | **CI** job `images` | **阿里云 ACR**(生产拉这里)+ Docker Hub(异地副本) |
-| 生产上线 | **你批准** `Deploy` workflow(兜底:`just deploy-prod X.Y.Z`) | node72 从 ACR pull |
+| 生产上线 | **你触发** `Deploy` workflow(兜底:`just deploy-prod X.Y.Z`) | node72 从 ACR pull |
 
 ## CI 部署用的不是 root key
 
