@@ -50,6 +50,12 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
+          # `ssh ... | tee` hides ssh's exit code behind tee's, and the default
+          # runner shell does not set pipefail. On v0.12.9 the node REFUSED the
+          # deploy (compose fingerprint mismatch) and this step still reported
+          # success — only the health check further down caught it. A deploy step
+          # that goes green on a refused deploy is worse than no step at all.
+          set -o pipefail
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
