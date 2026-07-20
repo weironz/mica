@@ -166,6 +166,18 @@ pub struct MicaStore {
 }
 
 impl MicaStore {
+    /// The store lock, recovering from poisoning rather than propagating it.
+    /// Same reasoning as `MicaDocument::doc` — one panic must not make the
+    /// on-device store permanently unusable. rusqlite statements are executed
+    /// one at a time here, so an unwind leaves the connection usable; a
+    /// half-written multi-statement change is bounded by SQLite's own
+    /// transaction, not by this mutex.
+    fn store(&self) -> std::sync::MutexGuard<'_, LocalStore> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl MicaStore {
     /// Open (creating if needed) the local store at `path`. Returns null on
     /// failure (e.g. an unwritable path).
     #[frb(sync)]
@@ -194,29 +206,26 @@ impl MicaStore {
     /// Ids of all stored documents (sorted).
     #[frb(sync)]
     pub fn list_docs(&self) -> Vec<String> {
-        self.inner.lock().unwrap().list_docs().unwrap_or_default()
+        self.store().list_docs().unwrap_or_default()
     }
 
     #[frb(sync)]
     pub fn delete_doc(&self, doc_id: String) {
-        let _ = self.inner.lock().unwrap().delete_doc(&doc_id);
+        let _ = self.store().delete_doc(&doc_id);
     }
 
     /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
     /// points (doc open/close) so a later corruption can be rolled back.
     #[frb(sync)]
     pub fn checkpoint_doc(&self, doc_id: String) {
-        let _ = self.inner.lock().unwrap().checkpoint_doc(&doc_id);
+        let _ = self.store().checkpoint_doc(&doc_id);
     }
 
     /// Restore a doc from its last checkpoint, returning the recovered document
     /// (null if there's no checkpoint).
     #[frb(sync)]
     pub fn rollback_doc(&self, doc_id: String) -> Option<MicaDocument> {
-        let loaded = self
-            .inner
-            .lock()
-            .unwrap()
+        let loaded = self.store()
             .rollback_doc(&doc_id, self.client_id)
             .ok()??;
         Some(MicaDocument {
@@ -227,8 +236,8 @@ impl MicaStore {
     /// Persist a document under `doc_id` (full snapshot).
     #[frb(sync)]
     pub fn save_doc(&self, doc_id: String, doc: &MicaDocument) {
-        let doc_guard = doc.inner.lock().unwrap();
-        let _ = self.inner.lock().unwrap().save_doc(&doc_id, &doc_guard);
+        let doc_guard = doc.doc();
+        let _ = self.store().save_doc(&doc_id, &doc_guard);
     }
 
     // ── local page version history (docs/version-history-plan.md §6) ──────────
@@ -237,9 +246,7 @@ impl MicaStore {
     /// on a cadence by `save_doc`) and named checkpoints interleaved.
     #[frb(sync)]
     pub fn list_local_versions(&self, doc_id: String) -> Vec<LocalVersion> {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .list_local_versions(&doc_id)
             .unwrap_or_default()
             .into_iter()
@@ -251,9 +258,7 @@ impl MicaStore {
     /// if the document has no saved snapshot yet.
     #[frb(sync)]
     pub fn create_local_version(&self, doc_id: String, label: String) -> Option<LocalVersion> {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .create_local_version(&doc_id, &label)
             .ok()?
             .map(LocalVersion::from)
@@ -264,10 +269,7 @@ impl MicaStore {
     /// `to_blocks_json()` / `root_block_id()` in a read-only editor.
     #[frb(sync)]
     pub fn local_version_doc(&self, doc_id: String, version_id: String) -> Option<MicaDocument> {
-        let bytes = self
-            .inner
-            .lock()
-            .unwrap()
+        let bytes = self.store()
             .local_version_state(&doc_id, &version_id)
             .ok()??;
         crate::api::document::MicaDocument::from_state_with_client_id(bytes, self.client_id)
@@ -282,10 +284,7 @@ impl MicaStore {
         doc_id: String,
         version_id: String,
     ) -> Option<MicaDocument> {
-        let loaded = self
-            .inner
-            .lock()
-            .unwrap()
+        let loaded = self.store()
             .restore_local_version(&doc_id, &version_id, self.client_id)
             .ok()??;
         Some(MicaDocument {
@@ -300,9 +299,7 @@ impl MicaStore {
     /// filters trash.
     #[frb(sync)]
     pub fn list_views(&self, origin: String) -> Vec<LocalView> {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .list_views(&origin)
             .unwrap_or_default()
             .into_iter()
@@ -313,7 +310,7 @@ impl MicaStore {
     /// Upsert a view (create / rename / move / trash-toggle).
     #[frb(sync)]
     pub fn save_view(&self, view: LocalView) {
-        let _ = self.inner.lock().unwrap().save_view(&view.into());
+        let _ = self.store().save_view(&view.into());
     }
 
     /// Permanently remove one `origin`'s view row (delete its document via
@@ -321,15 +318,13 @@ impl MicaStore {
     /// local/cloud namespaces (v4 composite PK).
     #[frb(sync)]
     pub fn purge_view(&self, origin: String, id: String) {
-        let _ = self.inner.lock().unwrap().purge_view(&origin, &id);
+        let _ = self.store().purge_view(&origin, &id);
     }
 
     /// All workspaces for `origin` ("local" or a server URL), ordered by position.
     #[frb(sync)]
     pub fn list_workspaces(&self, origin: String) -> Vec<LocalWorkspace> {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .list_workspaces(&origin)
             .unwrap_or_default()
             .into_iter()
@@ -340,24 +335,21 @@ impl MicaStore {
     /// Upsert a workspace (create / rename / reorder).
     #[frb(sync)]
     pub fn save_workspace(&self, workspace: LocalWorkspace) {
-        let _ = self.inner.lock().unwrap().save_workspace(&workspace.into());
+        let _ = self.store().save_workspace(&workspace.into());
     }
 
     /// Delete one `origin`'s workspace and all its view rows (delete documents
     /// separately). Origin-scoped (v4 composite PK).
     #[frb(sync)]
     pub fn delete_workspace(&self, origin: String, id: String) {
-        let _ = self.inner.lock().unwrap().delete_workspace(&origin, &id);
+        let _ = self.store().delete_workspace(&origin, &id);
     }
 
     /// Load a document by id, decoded with this device's stable client id, or
     /// null if there's no such document.
     #[frb(sync)]
     pub fn load_doc(&self, doc_id: String) -> Option<MicaDocument> {
-        let loaded = self
-            .inner
-            .lock()
-            .unwrap()
+        let loaded = self.store()
             .load_doc(&doc_id, self.client_id)
             .ok()??;
         Some(MicaDocument {
@@ -437,9 +429,7 @@ impl MicaStore {
     /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
     #[frb(sync)]
     pub fn append_update(&self, doc_id: String, update: Vec<u8>) -> i64 {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .append_update(&doc_id, &update)
             .unwrap_or(0)
     }
@@ -448,9 +438,7 @@ impl MicaStore {
     /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
     #[frb(sync)]
     pub fn updates_after(&self, doc_id: String, after: i64) -> Vec<DocUpdate> {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .updates_after(&doc_id, after)
             .unwrap_or_default()
             .into_iter()
@@ -467,9 +455,7 @@ impl MicaStore {
     /// review CRITICAL).
     #[frb(sync)]
     pub fn append_remote_update(&self, doc_id: String, rid: i64, update: Vec<u8>) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .append_remote_update(&doc_id, rid, &update)
             .is_ok()
     }
@@ -485,9 +471,7 @@ impl MicaStore {
     ) -> bool {
         let items: Vec<(i64, Vec<u8>)> =
             rids.into_iter().zip(updates.into_iter()).collect();
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .append_remote_updates(&doc_id, &items)
             .is_ok()
     }
@@ -495,9 +479,7 @@ impl MicaStore {
     /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
     #[frb(sync)]
     pub fn log_sizes(&self, doc_id: String) -> (i64, i64) {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .log_sizes(&doc_id)
             .unwrap_or((0, 0))
     }
@@ -506,7 +488,7 @@ impl MicaStore {
     /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
     #[frb(sync)]
     pub fn squash(&self, doc_id: String) {
-        let _ = self.inner.lock().unwrap().squash(&doc_id, self.client_id);
+        let _ = self.store().squash(&doc_id, self.client_id);
     }
 
     /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
@@ -515,19 +497,14 @@ impl MicaStore {
     /// monotonic across this so no future clock is reused below the trim.
     #[frb(sync)]
     pub fn trim_updates_through(&self, doc_id: String, up_to_clock: i64) {
-        let _ = self
-            .inner
-            .lock()
-            .unwrap()
+        let _ = self.store()
             .trim_updates_through(&doc_id, up_to_clock);
     }
 
     /// This doc's sync progress (0/0 if it has never synced).
     #[frb(sync)]
     pub fn sync_cursor(&self, doc_id: String) -> SyncCursor {
-        self.inner
-            .lock()
-            .unwrap()
+        self.store()
             .sync_cursor(&doc_id)
             .unwrap_or(CoreSyncCursor { last_synced_rid: 0, pushed_clock: 0 })
             .into()
@@ -536,10 +513,7 @@ impl MicaStore {
     /// Persist this doc's sync progress.
     #[frb(sync)]
     pub fn set_sync_cursor(&self, doc_id: String, cursor: SyncCursor) {
-        let _ = self
-            .inner
-            .lock()
-            .unwrap()
+        let _ = self.store()
             .set_sync_cursor(&doc_id, cursor.into());
     }
 }

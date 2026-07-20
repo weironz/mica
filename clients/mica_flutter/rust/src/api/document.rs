@@ -16,6 +16,30 @@ pub struct MicaDocument {
     pub(crate) inner: Mutex<MicaDoc>,
 }
 
+impl MicaDocument {
+    /// The doc lock, recovering from poisoning instead of propagating it.
+    ///
+    /// Every FFI entry point below goes through here, and each one used to be
+    /// `.lock().unwrap()`. That turned ONE panic anywhere in the Rust core into
+    /// permanent data loss: the mutex poisons, and from then on every read —
+    /// `read_blocks` included — panics too, so the page renders blank for the
+    /// rest of the process. A user reported exactly that (PanicException /
+    /// PoisonError, "页面数据看不见了"); the PoisonError is the *second*
+    /// failure, and it is the one that does the damage.
+    ///
+    /// Recovering is sound here because a yrs `TransactionMut` commits in its
+    /// `Drop`, so an unwind still leaves a well-formed CRDT document — at worst
+    /// a half-applied edit. Trading "maybe half an edit" for "this document is
+    /// unreadable until restart" is not a close call.
+    ///
+    /// This does NOT fix whatever panics first; it stops that panic from being
+    /// amplified. The root cause needs the FIRST `panicked at` line from the
+    /// logs — see docs/code-review-2026-07-20.md.
+    pub(crate) fn doc(&self) -> std::sync::MutexGuard<'_, MicaDoc> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// One on-device image blob to bundle into a page ZIP export: the block's
 /// `file_id` plus the bytes Dart read from the local blob CAS.
 pub struct ZipAsset {
@@ -116,7 +140,7 @@ impl MicaDocument {
     /// The document as a JSON array of blocks (tree order).
     #[frb(sync)]
     pub fn to_blocks_json(&self) -> String {
-        serde_json::to_string(&self.inner.lock().unwrap().to_blocks())
+        serde_json::to_string(&self.doc().to_blocks())
             .unwrap_or_else(|_| "[]".into())
     }
 
@@ -133,7 +157,7 @@ impl MicaDocument {
         image_srcs: std::collections::HashMap<String, String>,
         content_width: u32,
     ) -> String {
-        let doc = self.inner.lock().unwrap();
+        let doc = self.doc();
         let root_block_id = doc.root_block_id();
         // mica_core::Block and mica_markdown::Block mirror each other field-for-
         // field (see from_markdown); translate to the engine's type.
@@ -162,7 +186,7 @@ impl MicaDocument {
     /// and the local folder-tree export (`api::store`).
     /// mica_core::Block and mica_markdown::Block mirror each other field-for-field.
     pub(crate) fn snapshot(&self) -> mica_markdown::DocumentSnapshotPayload {
-        let doc = self.inner.lock().unwrap();
+        let doc = self.doc();
         let root_block_id = doc.root_block_id();
         let blocks = doc
             .to_blocks()
@@ -247,7 +271,7 @@ impl MicaDocument {
     /// Encode the full document state (the base snapshot to persist locally).
     #[frb(sync)]
     pub fn encode_state(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().encode_state()
+        self.doc().encode_state()
     }
 
     // ── sync primitives (P2-M4.5): let Dart compute diffs to push + apply
@@ -257,16 +281,14 @@ impl MicaDocument {
     /// [`Self::encode_diff_since`] after to get just that batch's update to push.
     #[frb(sync)]
     pub fn state_vector(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().state_vector()
+        self.doc().state_vector()
     }
 
     /// The minimal update carrying everything added since `state_vector` was
     /// taken — the bytes to push to the cloud. Empty on a malformed vector.
     #[frb(sync)]
     pub fn encode_diff_since(&self, state_vector: Vec<u8>) -> Vec<u8> {
-        self.inner
-            .lock()
-            .unwrap()
+        self.doc()
             .encode_diff(&state_vector)
             .unwrap_or_default()
     }
@@ -275,27 +297,25 @@ impl MicaDocument {
     /// bytes don't decode (caller should resync rather than trust local state).
     #[frb(sync)]
     pub fn apply_update(&self, update: Vec<u8>) -> bool {
-        self.inner.lock().unwrap().apply_update(&update).is_ok()
+        self.doc().apply_update(&update).is_ok()
     }
 
     #[frb(sync)]
     pub fn root_block_id(&self) -> String {
-        self.inner.lock().unwrap().root_block_id()
+        self.doc().root_block_id()
     }
 
     #[frb(sync)]
     pub fn insert_block_json(&self, parent_id: String, index: u32, block_json: String) {
         if let Ok(b) = serde_json::from_str::<Block>(&block_json) {
-            self.inner
-                .lock()
-                .unwrap()
+            self.doc()
                 .insert_block(&parent_id, index as usize, &b);
         }
     }
 
     #[frb(sync)]
     pub fn update_block_kind(&self, id: String, kind: String) {
-        self.inner.lock().unwrap().update_block_kind(&id, &kind);
+        self.doc().update_block_kind(&id, &kind);
     }
 
     /// Mirror the editor's coarse `update_block` op: apply any subset of
@@ -312,7 +332,7 @@ impl MicaDocument {
         text: Option<String>,
         data_json: Option<String>,
     ) {
-        let mut doc = self.inner.lock().unwrap();
+        let mut doc = self.doc();
         if let Some(k) = kind {
             doc.update_block_kind(&id, &k);
         }
@@ -335,18 +355,18 @@ impl MicaDocument {
     #[frb(sync)]
     pub fn set_block_data_json(&self, id: String, data_json: String) {
         if let Ok(data) = serde_json::from_str(&data_json) {
-            self.inner.lock().unwrap().set_block_data(&id, &data);
+            self.doc().set_block_data(&id, &data);
         }
     }
 
     #[frb(sync)]
     pub fn text_insert(&self, id: String, at: u32, text: String) {
-        self.inner.lock().unwrap().text_insert(&id, at, &text);
+        self.doc().text_insert(&id, at, &text);
     }
 
     #[frb(sync)]
     pub fn text_delete(&self, id: String, at: u32, len: u32) {
-        self.inner.lock().unwrap().text_delete(&id, at, len);
+        self.doc().text_delete(&id, at, len);
     }
 
     #[frb(sync)]
@@ -366,39 +386,59 @@ impl MicaDocument {
             href,
             title,
         };
-        self.inner.lock().unwrap().text_format(&id, &mark);
+        self.doc().text_format(&id, &mark);
     }
 
     #[frb(sync)]
     pub fn delete_block(&self, id: String, bring_children: bool) {
-        self.inner.lock().unwrap().delete_block(&id, bring_children);
+        self.doc().delete_block(&id, bring_children);
     }
 
     #[frb(sync)]
     pub fn move_block(&self, id: String, new_parent: String, index: u32) {
-        self.inner
-            .lock()
-            .unwrap()
+        self.doc()
             .move_block(&id, &new_parent, index as usize);
     }
 
     #[frb(sync)]
     pub fn split_block(&self, id: String, at: u32, new_id: String, new_kind: String) {
-        self.inner
-            .lock()
-            .unwrap()
+        self.doc()
             .split_block(&id, at, &new_id, &new_kind);
     }
 
     #[frb(sync)]
     pub fn join_into_prev(&self, id: String) {
-        self.inner.lock().unwrap().join_into_prev(&id);
+        self.doc().join_into_prev(&id);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug the user hit: a panic elsewhere poisons the mutex, and every
+    /// later read panics too, so the page goes blank until the app restarts.
+    /// With `.lock().unwrap()` this test panics on the LAST line, not the
+    /// simulated one — which is precisely the amplification being fixed.
+    #[test]
+    fn a_poisoned_lock_still_reads() {
+        let doc = std::sync::Arc::new(MicaDocument::from_markdown("hello".to_string()));
+
+        let other = std::sync::Arc::clone(&doc);
+        let crashed = std::thread::spawn(move || {
+            let _guard = other.doc();
+            panic!("simulated panic while holding the doc lock");
+        })
+        .join();
+        assert!(crashed.is_err(), "the helper thread must actually panic");
+
+        // The lock is poisoned now. Reading must still work.
+        let json = doc.to_blocks_json();
+        assert!(
+            json.contains("hello"),
+            "document still readable after poisoning: {json}"
+        );
+    }
 
     #[test]
     fn from_markdown_parses_headings_and_marks() {
