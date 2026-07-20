@@ -51,6 +51,12 @@ pub enum DocumentOperationError {
 
   #[error("block type is required")]
   EmptyBlockType,
+
+  #[error("block id is required")]
+  EmptyBlockId,
+
+  #[error("a newly inserted block must be a leaf (empty children); attach children with their own inserts")]
+  InsertBlockWithChildren,
 }
 
 pub type DocumentOperationResult<T> = Result<T, DocumentOperationError>;

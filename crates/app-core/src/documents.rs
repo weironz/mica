@@ -90,6 +90,17 @@ fn insert_block(
 ) -> DocumentOperationResult<()> {
   validate_block(&block)?;
 
+  // A newly inserted block is ALWAYS a leaf — both clients send `children: []`
+  // (see controller.dart `_insertOp` and workspace_migration.dart). Accepting
+  // caller-supplied children is how a crafted op forged a cycle (`{id:X,
+  // children:[root]}` → delete_block infinite-loops) or a second parent (a child
+  // already owned elsewhere → its subtree silently vanishes on read). Children
+  // are attached by their own inserts/moves; refuse them here.
+  // (docs/code-review-2026-07-20.md P0-2 / P0-3.)
+  if !block.children.is_empty() {
+    return Err(DocumentOperationError::InsertBlockWithChildren);
+  }
+
   if block_index(snapshot, &block.id).is_some() {
     return Err(DocumentOperationError::BlockAlreadyExists(block.id));
   }
@@ -142,12 +153,22 @@ fn delete_block(
   block_index(snapshot, block_id)
     .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
 
+  // A `seen` set bounds the walk. Without it, a block graph that ever became
+  // cyclic (see the insert_block guard above) makes this loop grow delete_ids
+  // without end — 100% CPU + OOM while holding the document's FOR UPDATE lock,
+  // no timeout, no log. (docs/code-review-2026-07-20.md P0-3.)
+  let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+  seen.insert(block_id.to_string());
   let mut delete_ids = vec![block_id.to_string()];
   let mut cursor = 0;
   while cursor < delete_ids.len() {
     let current_id = delete_ids[cursor].clone();
     if let Some(index) = block_index(snapshot, &current_id) {
-      delete_ids.extend(snapshot.blocks[index].children.iter().cloned());
+      for child in snapshot.blocks[index].children.clone() {
+        if seen.insert(child.clone()) {
+          delete_ids.push(child);
+        }
+      }
     }
     cursor += 1;
   }
@@ -198,6 +219,14 @@ fn move_block(
 }
 
 fn validate_block(block: &Block) -> DocumentOperationResult<()> {
+  // An empty id is the block-level twin of the 2026-07-19 root-erasure incident:
+  // `block_index(snapshot, "")` never matches, so BlockAlreadyExists never fires,
+  // and an id-`""` block lands in the CRDT with a `""` child reference that every
+  // later read reports as `block not found:` — undeletable, self-perpetuating.
+  // (docs/code-review-2026-07-20.md P0-1.)
+  if block.id.trim().is_empty() {
+    return Err(DocumentOperationError::EmptyBlockId);
+  }
   if block.kind.trim().is_empty() {
     return Err(DocumentOperationError::EmptyBlockType);
   }
@@ -356,6 +385,77 @@ mod tests {
     .expect_err("cycle should be rejected");
 
     assert!(matches!(error, DocumentOperationError::ParentIsDescendant));
+  }
+
+  // ── P0-1/2/3: block-level invariants (docs/code-review-2026-07-20.md) ──────
+
+  #[test]
+  fn insert_block_rejects_empty_id() {
+    let err = apply_operations(
+      sample_snapshot(),
+      &[DocumentOperation::InsertBlock {
+        parent_id: "root".to_string(),
+        index: None,
+        block: Block {
+          id: String::new(),
+          kind: "paragraph".to_string(),
+          text: "x".to_string(),
+          data: Value::Null,
+          children: vec![],
+        },
+      }],
+    )
+    .expect_err("empty id must be rejected");
+    assert!(matches!(err, DocumentOperationError::EmptyBlockId));
+  }
+
+  #[test]
+  fn insert_block_rejects_children() {
+    // The crafted-cycle vector: an inserted block carrying `children: [root]`.
+    let err = apply_operations(
+      sample_snapshot(),
+      &[DocumentOperation::InsertBlock {
+        parent_id: "root".to_string(),
+        index: None,
+        block: Block {
+          id: "x".to_string(),
+          kind: "paragraph".to_string(),
+          text: String::new(),
+          data: Value::Null,
+          children: vec!["root".to_string()],
+        },
+      }],
+    )
+    .expect_err("insert with children must be rejected");
+    assert!(matches!(err, DocumentOperationError::InsertBlockWithChildren));
+  }
+
+  #[test]
+  fn delete_block_terminates_on_a_cyclic_graph() {
+    // A pre-existing cycle a<->b (built directly, as if forged before the
+    // insert guard existed). Without the `seen` set delete_block loops forever;
+    // with it, this returns. NOTE: absent the fix this test HANGS (a timeout in
+    // CI), which is the honest failure signature of an unbounded loop.
+    let snapshot = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        block("root", vec!["a"]),
+        block("a", vec!["b"]),
+        block("b", vec!["a"]),
+      ],
+    };
+    let updated = apply_operations(
+      snapshot,
+      &[DocumentOperation::DeleteBlock {
+        block_id: "a".to_string(),
+      }],
+    )
+    .expect("delete must terminate and succeed");
+    // a and b both removed; root left childless.
+    assert_eq!(updated.blocks.len(), 1);
+    assert_eq!(updated.blocks[0].id, "root");
+    assert_eq!(updated.blocks[0].children, Vec::<String>::new());
   }
 
   #[test]
