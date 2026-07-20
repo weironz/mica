@@ -41,12 +41,25 @@
 2. **判断服务端要不要跟着发**:改动是否触及 `crates/markdown` 等服务端依赖?
    链路 `api-server → mica-app-core → mica-markdown`。用 `cargo tree -p <crate> | grep <dep>`
    实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)
-3. `just test` 全绿;想更稳就 `just parity-check` 跑一遍真镜像。
+3. `just test` 全绿。**跑测试时要带 `DATABASE_URL`** —— 否则 `sync_pg` 这类 DB 集成
+   测试会**静默跳过**,整套 0.00s「全过」,那是真空通过不是验证(见 `docs/lessons.md`)。
+   本地栈起着的话:`$env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"`,
+   跑完看耗时 —— 秒级才说明真跑了。想更稳再跑 `just parity-check`(容器形态,见下)。
 4. 提交 → `git push origin main` → `git tag vX.Y.Z && git push origin vX.Y.Z`
    → **CI 自动产出全部 7 个产物**(约 10–15 分钟)。
 5. `gh run watch` 等 CI 绿;`gh release view vX.Y.Z` 确认 4 个 asset 都在。
-6. `just deploy-prod X.Y.Z` → 节点改 `.env` 的 `MICA_VERSION` → 从 ACR pull → 重建
-   api+web → 等健康 → **验证 `/api/health` 真的报这个版本**。
+6. **带数据改动就先落还原点**(`deploy-prod` 自己不做备份,理由见「生产运维要点」):
+   ```bash
+   ssh root@mica.cloudcele.com \
+     'docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-X.Y.Z-$(date +%Y%m%d-%H%M%S).sql.gz'
+   # 验完整性:gzip -t <file>,再 zcat <file> | grep -c "^COPY public.documents " 确认目标表在内
+   ```
+7. `just deploy-prod X.Y.Z` → 节点改 `.env` 的 `MICA_VERSION` → 从 ACR pull → 重建
+   api+web → 等健康 → `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**。
+8. **冒烟测这一版真正改了什么。** `verify-prod` 只断言版本号,证明不了功能。挑一个
+   改动前后行为可区分的操作实测 —— 例如 v0.12.7 修的是「文档读取 400」,判据就是
+   同一个 `mica_read_document` 调用:部署前报 `bad request: block not found:`,
+   部署后返回正文。有这种硬判据就用它,没有就手工点一遍受影响的入口。
 
 > `deploy-prod` 会把 `MICA_VERSION` **写进节点 `.env`**,所以之后重启/重启机器都会回到
 > 同一个版本,不会悄悄退回旧版。
