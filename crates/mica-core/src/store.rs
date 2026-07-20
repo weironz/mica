@@ -2155,9 +2155,9 @@ mod tests {
             .unwrap();
 
         let mut bad = good.clone();
-        bad[9] ^= 0xff;
+        bad[0] ^= 0xff;
         // Corrupt the bytes AND null the checksum → the crc can't mask the flip,
-        // so the corruption reaches yrs and only the guard can save us.
+        // so the corruption actually reaches yrs.
         store
             .conn
             .execute(
@@ -2166,17 +2166,37 @@ mod tests {
             )
             .unwrap();
 
-        // Returning at all is the point: without the guard this line unwinds
-        // out of `load_doc` and poisons the caller's mutex.
-        match store.load_doc("d", 1) {
+        // The contract that matters: `load_doc` RETURNS instead of unwinding out
+        // of the caller's mutex. We deliberately do NOT assert a specific error
+        // variant: which yrs failure mode a corrupted blob hits (decode_v1
+        // rejecting it vs. an integration panic the guard converts) depends on
+        // the exact bytes, and asserting `CorruptDoc` is what made this test
+        // FLAKY — `from_blocks` mints a RANDOM client id, so the encoding (and
+        // thus the failure mode) differed per run. It passed locally and on one
+        // CI run, then failed on another with "got a different error: failed to
+        // decode yrs update". The guard mechanism itself is pinned deterministically
+        // by `contain_yrs_panic_converts_a_panic_into_corrupt_doc` below.
+        assert!(
+            store.load_doc("d", 1).is_err(),
+            "a corrupt snapshot must come back as an error, never unwind"
+        );
+    }
+
+    /// The panic-containment contract, deterministically — no dependence on
+    /// coaxing yrs into panicking (which is not portable, see above). Remove the
+    /// `catch_unwind` in `contain_yrs_panic` and this test unwinds instead of
+    /// returning, so it still kills that mutation.
+    #[test]
+    fn contain_yrs_panic_converts_a_panic_into_corrupt_doc() {
+        let caught: Result<(), StoreError> =
+            contain_yrs_panic("d", || panic!("simulated yrs panic while integrating"));
+        match caught {
             Err(StoreError::CorruptDoc { doc_id }) => assert_eq!(doc_id, "d"),
-            Ok(_) => panic!(
-                "expected CorruptDoc but the load SUCCEEDED — yrs changed and the \
-                 mutation no longer reaches the panicking path, so this test has \
-                 stopped covering anything"
-            ),
-            Err(e) => panic!("expected CorruptDoc, got a different error: {e}"),
+            other => panic!("a panic must become CorruptDoc, got {other:?}"),
         }
+        // The non-panicking path passes values through untouched.
+        let passed: Result<u8, StoreError> = contain_yrs_panic("d", || Ok(7));
+        assert!(matches!(passed, Ok(7)));
     }
 
     /// UPSTREAM SOUNDNESS BUG, still present in yrs 0.27.3 (checked 2026-07-21).
