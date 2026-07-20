@@ -38,6 +38,12 @@ dev-down:
 dev-api:
     set -a && . ./.env && set +a && cargo run -p mica-api-server
 
+# Run AFTER the API has started once, so sqlx::migrate! has created the tables.
+# Idempotent — safe to re-run after `docker compose down -v`.
+[doc("Seed a local demo account (demo@mica.dev / password123) + workspace")]
+seed-dev:
+    docker exec -i mica-postgres psql -U mica -d mica < seeds/dev_seed.sql
+
 # The compose `web` (nginx) serves the bind-mounted build dir live; just
 # refresh the browser afterwards. The chmod matters: flutter recreates
 # build/web with 750 and the nginx container (different uid) 403s on it.

@@ -193,8 +193,16 @@ cargo test                  # 可选但推荐
 ```powershell
 just dev-up                 # Docker 里的 postgres + rustfs
 just dev-api                # cargo run -p mica-api-server(启动即跑迁移)
+just seed-dev               # 建 demo 账号 + 工作区(必须在 dev-api 起过一次之后)
 just app                    # Flutter 桌面客户端;just app chrome 跑 web
 ```
+
+`just seed-dev` 灌的是 [`seeds/dev_seed.sql`](../seeds/dev_seed.sql):**demo@mica.dev / password123**
+外加一个名为 `demo` 的工作区。幂等,`docker compose down -v` 之后重跑即可。**顺序不能反**——
+表是 api 启动时由 `sqlx::migrate!` 建的,库还空着时灌种子会直接报表不存在。
+
+> 那份 SQL 里的 argon2 哈希由服务端自己的 `hash_password` 生成,所以走正常登录路径就能验过。
+> 仅限本地:密码是公开的,别往共享库或生产库上灌。
 
 ## 7. 实测耗时参考
 
