@@ -12,6 +12,8 @@
 
 本报告**没有**做的事：未跑依赖漏洞扫描（`cargo-audit`/`deny`/`machete` 均未安装）、未做任何性能测量、未验证 12 处 Markdown 漂移中的 11 处。这些是本报告自身的空白，**不是「查过没问题」**。
 
+> **更新（2026-07-21）**：本文 07-20 以只读方式产出。此后进入修复阶段，已落地的改动见文末「修复进度」。其中排查一起线上崩溃（用户粘贴内容后页面空白 + `PoisonError`）时，定位到一条**此前审查未覆盖**的严重问题，补记为下方 **P0-0**——它是本次会话发现的最严重一条，且与 P2-4「依赖零漏洞扫描」直接相关：正是没有依赖审计才会漏掉的东西。
+
 ---
 
 ## 摘要：三个结构性结论
@@ -25,6 +27,39 @@
 ---
 
 ## P0 — 会造成数据损坏或服务不可用
+
+### P0-0 yrs 对畸形输入 panic / UB，一条能毒化锁、一条远程可达且不可拦截 【实测】
+
+**来历**：用户报「粘贴内容后页面空白 + `PanicException(PoisonError)`」。debug 构建抓到第一现场：
+
+```
+panicked at yrs-0.27.0/src/block_store.rs:60:46:
+index out of bounds: the len is 732 but the index is 715827364
+```
+
+Dart 栈：`crateApiStoreMicaStoreLoadDoc` → `StoreCloudDocStore.load` → `CloudSyncSession._seedFromLocalOnce` → `connect` → `_setupCloudYrs`。
+
+**根因链**（两层，务必分清）：
+
+1. **能毒化锁的那条（已修）**：`load_doc`（`crates/mica-core/src/store.rs`）从本地 SQLite 读出**已损坏的 yrs 状态**，yrs 整合区块时索引越界 panic。注意 `decode_v1` **已经成功**，炸在之后的整合阶段——所以那几行的 `?` 从来接不住。FFI 持 `Mutex<LocalStore>` 跨这次调用 → 锁毒化 → 之后每次 `list_views` 都失败 → 页面树空白且重启前不恢复。云同步每次启动都走 `load_doc`，所以稳定复现。Dart 侧 [`cloud_sync_io.dart:276`](../clients/mica_flutter/lib/cloud/cloud_sync_io.dart) 其实**早已写好降级逻辑**（注释：损坏副本 → 冷启动从服务端 bootstrap），但 Rust 直接 panic，那段代码从没机会跑——**一个被预见的可恢复情况，被下层变成了进程级故障**。
+
+2. **不可拦截、且远程可达的那条（无法自修）**：给 yrs 喂任意变异字节，会走到
+
+   ```
+   core/src/str/validations.rs: unsafe precondition(s) violated:
+     hint::unreachable_unchecked must never be reached
+   thread caused non-unwinding panic. aborting.   (exit 0xc0000409)
+   ```
+
+   yrs 把**未校验的字节当合法 UTF-8 读**——这是上游 soundness bug，**升级到 0.27.3 仍在**（2026-07-21 实测）。它**不可拦截**：`catch_unwind` 接不住 non-unwinding abort，release 构建里该检查被编掉，同样输入就是纯 UB。
+   **影响面不止本地缓存**：`crates/app-core/src/sync.rs:171` 的 `apply_update` 会应用**客户端推来的 update**——即**远程可达**。构造过的 update 推给服务端，轻则打挂 API 进程（所有连接掉线），重则 release 下 UB。触发者需已登录且有编辑权限（非匿名），严重性因此降低，但恶意协作者或有 bug 的客户端仍可达。**该 UB 除崩溃外是否可被利用，未做分析。**
+
+**已做的防线**（见文末修复进度）：
+- `contain_yrs_panic` 把 `load_doc` 的三处 yrs 调用（base + 两条 update 日志）包进 `catch_unwind` → 收敛成 `StoreError::CorruptDoc`，本地库是缓存、云端有正本，损坏降级为可重新播种。
+- FFI 45 处 `.lock().unwrap()` 改成毒化恢复式取锁——即使别处再 panic，文档也不再永久不可读。
+- **本地校验和**（进行中）：给存进 SQLite 的 blob 附 CRC32，读时先验再喂 yrs——这是**唯一能在本地挡住上游 UB 的手段**（在字节到达 yrs 之前拦下）。只覆盖本地存储；服务端远程路径不适用（攻击者同时控制字节与校验和）。
+
+**仍未解决**：① 本地快照**当初为何损坏**未查清——修复只让它可生还，未让它不发生；② 服务端远程 UB 路径的根治在上游，本地无解，可选项为给 yrs 提 issue 或把解码放进隔离进程。
 
 ### P0-1 空 block id 可写入 CRDT，是 7 月 19 日事故的块级同款 【实测】
 
@@ -304,3 +339,21 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 - 未跑依赖漏洞扫描
 - 未做任何性能测量；P3 里所有「每帧执行」的陈述只说明代码位置，**不构成对影响大小的断言**
 - 四个子代理各自独立工作，未做交叉验证
+
+---
+
+## 修复进度（2026-07-21）
+
+已落地并推送（每条均配回归测试，且实测「退回修复即失败」）：
+
+| commit | 覆盖 | 说明 |
+| --- | --- | --- |
+| `2e84422` | **P2-1 / P2-2 / P2-3** | 解开 clippy（源头一个 `#[allow]` + 13 条 trivial）并进 CI（`-D warnings`）；CI 加 `services: postgres` + `-p app-core -p infra` + `--features store`，**激活 121 个此前从不执行的测试**；`sync_pg.rs` 的假绿改真红，`web_interop.rs` 改 `#[ignore]`。CI 实跑全绿。 |
+| `f48f704` | **P0-0 兜底** | FFI 45 处 `.lock().unwrap()` → 毒化恢复式取锁，一次 panic 不再让文档永久空白。 |
+| `4170414` | **P0-0 收窄** | HTML 导出不再持文档锁跑整个渲染引擎（merman/数学，318 个 panic 点），移出锁作用域。 |
+| `a02feb3` | 覆盖补强 | 钉住 LLM 输出形态的粘贴内容（嵌套围栏 / CJK / marks 边界）——排查 panic 的副产物，未复现但补上了此前缺失的覆盖。 |
+| `278e2b9` | **P0-0 根因** | `contain_yrs_panic` 把 `load_doc` 的 yrs 调用包进 `catch_unwind` → `CorruptDoc`；yrs 0.27.0→0.27.3；记录上游 UB（`yrs_corrupt_input_is_unsound`，`#[ignore]`）。 |
+
+进行中：**本地校验和**（P0-0 的第 4 层防线，见上）。
+
+尚未动：P0-1/2/3（块级空 id + 环检查）、P1 全部、P3 全部。执行顺序仍按上方「建议的执行顺序」，但 **P0-0 因线上复现被提到了最前**。
