@@ -66,9 +66,16 @@ seed-dev:
 # The compose `web` (nginx) serves the bind-mounted build dir live; just
 # refresh the browser afterwards. The chmod matters: flutter recreates
 # build/web with 750 and the nginx container (different uid) 403s on it.
+#
+# SAME FLAGS AS `build-web`, deliberately. This used to pass
+# --no-tree-shake-icons while the shipped bundle (build-web) tree-shakes, so the
+# thing you eyeballed at :8090 was not the thing you released: icon glyphs that
+# get stripped in production were all present here. The whole point of this
+# target is to look at the real artifact, so any flag that diverges from
+# build-web defeats it — keep the two lines identical.
 [doc("Rebuild the dev web bundle served by compose nginx")]
 dev-web:
-    cd clients/mica_flutter && {{flutter}} build web --no-tree-shake-icons
+    cd clients/mica_flutter && {{flutter}} build web --release
     chmod -R a+rX clients/mica_flutter/build/web
 
 # Hot reload: press r; quit: q. Desktop opens the offline local world —
