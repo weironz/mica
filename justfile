@@ -209,8 +209,20 @@ deploy-prod version:
     # would find two files and pick the other one.
     # (No backticks anywhere in a recipe body: just runs them as commands,
     # even inside a # comment.)
-    echo "==> syncing compose + pinning MICA_VERSION=$tag"
-    scp -q deploy/docker-compose.yml {{node}}:{{node_dir}}/docker-compose.yaml.new
+    # Take the compose from the TAG, not the working tree. `scp deploy/...`
+    # shipped whatever happened to be checked out: deploying 0.12.6 from a
+    # branch that had already moved on sent prod a compose from a DIFFERENT
+    # version, and a dirty tree sent uncommitted edits. Nothing announced it —
+    # the deploy just succeeded with a file nobody reviewed as part of that
+    # release. `git show <tag>:<path>` makes the pairing exact and reproducible
+    # from any checkout state.
+    if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+      echo "==> tag $tag not local, fetching"
+      git fetch -q origin "refs/tags/$tag:refs/tags/$tag"
+    fi
+    echo "==> syncing compose (from $tag) + pinning MICA_VERSION=$tag"
+    git show "$tag:deploy/docker-compose.yml" \
+      | ssh {{node}} "cat > {{node_dir}}/docker-compose.yaml.new"
     ssh {{node}} "cd {{node_dir}} \
       && cp docker-compose.yaml docker-compose.yaml.bak-\$(date +%Y%m%d-%H%M%S) \
       && mv docker-compose.yaml.new docker-compose.yaml \
