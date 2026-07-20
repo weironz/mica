@@ -20,6 +20,41 @@ mica-cli auth token create --name claude-code --scope read --scope write
 # 记下输出里的 "token": "mica_pat_…" —— 只显示这一次
 ```
 
+> 已经有 token 了?跳过这一节,直接看下面的
+> [已经有 token 了怎么连](#已经有-token-了怎么连) —— 不用重新登录。
+
+## 已经有 token 了怎么连
+
+手里已经有 `mica_pat_…`(别的机器建的、同事给的、或上次记下来的),**不需要再登录一次**
+—— `auth login` 的唯一作用就是拿到凭证,凭证已经有了就直接用。缺的只是服务器地址。
+
+```bash
+# 一条命令写好客户端配置,token 直接嵌进去
+mica-cli mcp install --client claude-code \
+  --server https://your-server.example.com \
+  --pat mica_pat_…
+```
+
+`--pat` 会**跳过**建 token 那一步(它在需要联网鉴权之前就短路了),所以这台机器从没
+`auth login` 过也能配好。`--server` 不能省 —— 除非本机已有登录配置或设了 `MICA_SERVER`,
+否则会报 `no server`。
+
+不想写任何配置文件的话,MCP server 本身只认两个环境变量,直接给就行:
+
+```bash
+MICA_API_BASE_URL=https://your-server.example.com MICA_PAT=mica_pat_… mica-cli mcp
+```
+
+**优先级**(先到先得):`MICA_API_BASE_URL` / `MICA_PAT` → `--server` / `MICA_SERVER` /
+`MICA_TOKEN` → `auth login` 存下的配置。所以环境变量总能盖过本机已登录的账号 —— 想让
+MCP 用另一个身份连,不必先登出。
+
+> **token 只在创建时显示一次**,`auth token list` 只看得到名字和元数据,看不到明文。
+> 弄丢了就 `auth token create` 建个新的(旧的可以撤销)。
+
+已经配过一次、只想换 token:重跑上面的 `mcp install` 即可,它是**合并**写入,
+只覆盖 `mica` 这一条,保留其它 MCP server。
+
 ## 最快:让 mica-cli 自己配
 
 装好 `mica-cli`(见 [`cli.md`](cli.md#install))后,一条命令写好客户端配置 + 生成并嵌入
