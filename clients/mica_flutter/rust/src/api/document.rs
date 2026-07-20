@@ -157,26 +157,15 @@ impl MicaDocument {
         image_srcs: std::collections::HashMap<String, String>,
         content_width: u32,
     ) -> String {
-        let doc = self.doc();
-        let root_block_id = doc.root_block_id();
-        // mica_core::Block and mica_markdown::Block mirror each other field-for-
-        // field (see from_markdown); translate to the engine's type.
-        let blocks = doc
-            .to_blocks()
-            .into_iter()
-            .map(|b| mica_markdown::Block {
-                id: b.id,
-                kind: b.kind,
-                text: b.text,
-                data: b.data,
-                children: b.children,
-            })
-            .collect();
-        let mut payload = mica_markdown::DocumentSnapshotPayload {
-            schema_version: 1,
-            root_block_id,
-            blocks,
-        };
+        // `snapshot()` takes the lock and gives it back; RENDERING MUST NOT HOLD
+        // IT. This used to bind the guard here and keep it alive across
+        // `export_html_document` below, which — with the `render` feature on —
+        // runs the whole markdown engine plus merman, a third-party mermaid
+        // renderer, over arbitrary user diagram source. Any panic in there
+        // poisoned this document's mutex, and from then on every read panicked
+        // too: the page went blank until the app restarted. `unwrap_or_default`
+        // catches the Err arm; a panic goes straight past it.
+        let mut payload = self.snapshot();
         let srcs: std::collections::BTreeMap<String, String> = image_srcs.into_iter().collect();
         mica_markdown::set_image_srcs(&mut payload, &srcs);
         mica_markdown::export_html_document(&payload, &title, content_width).unwrap_or_default()
