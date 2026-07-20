@@ -1,6 +1,10 @@
 # Mica 开发环境与辅助工具
 
-> 换机/新机重配环境的清单。核心工具链(Flutter、Rust、Docker、平台 SDK)见 `docs/desktop-plan.md` 的「环境备忘」;发版/构建工具链(just、Inno Setup、docker login)见 `docs/release.md`;本文专记 **AI 辅助开发工具**(MCP、codebase-memory-mcp、skills)。
+> **新机器从零搭建请先看 [`bootstrap.md`](bootstrap.md)** —— 那份是按顺序照做的完整清单(系统前置、
+> 工具链、国内镜像、MCP、验收、实测耗时)。**本文是参考层**:同样的东西讲得更细,并记录每条规则的来历
+> 和踩过的坑。两份有出入时以 `bootstrap.md` 的命令为准(它是实测验证过的)。
+>
+> 另见:发版/构建工具链(Inno Setup、docker login)→ `docs/release.md`;桌面端里程碑 → `docs/desktop-plan.md`。
 
 ## MCP 服务器
 

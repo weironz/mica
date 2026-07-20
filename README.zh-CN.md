@@ -191,6 +191,7 @@ just check           # fmt + clippy + analyze
 | [CommonMark 记分牌](docs/commonmark-scoreboard.md) | 规范一致性,逐版本跟踪 |
 | [本地优先](docs/local-first-plan.md) · [Vault 模式](docs/vault-mode.md) | 本地世界 |
 | [MCP 服务](docs/mcp-server.md) · [接入客户端](docs/mcp-connect.md) | AI 工具访问 |
+| [新机搭建](docs/bootstrap.md) | 一台干净的 Windows 机器,从零到能开发 |
 | [部署](docs/deploy.md) · [发版](docs/release.md) · [备份](docs/backup.md) | 怎么跑起来 |
 | [快捷键](docs/shortcuts.md) | 权威快捷键清单 |
 | [路线图](docs/roadmap.md) | 接下来做什么 |

@@ -212,6 +212,7 @@ Three rules that will otherwise bite you:
 | [CommonMark scoreboard](docs/commonmark-scoreboard.md) | Spec conformance, tracked per release |
 | [Local-first](docs/local-first-plan.md) · [Vault mode](docs/vault-mode.md) | The local world |
 | [MCP server](docs/mcp-server.md) · [Connecting a client](docs/mcp-connect.md) | AI tool access |
+| [Machine setup](docs/bootstrap.md) | Clean Windows box to a working dev environment |
 | [Deployment](docs/deploy.md) · [Release](docs/release.md) · [Backup](docs/backup.md) | Running it |
 | [Shortcuts](docs/shortcuts.md) | Authoritative keyboard shortcut list |
 | [Roadmap](docs/roadmap.md) | What's next |
