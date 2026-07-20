@@ -26,6 +26,34 @@ const List<String> kCodeLanguages = [
   'html',
   'css',
   'mermaid',
+  // Application languages people paste next to the ones above.
+  'kotlin',
+  'swift',
+  'csharp',
+  'php',
+  'ruby',
+  'objective-c',
+  'lua',
+  'perl',
+  'r',
+  'scala',
+  'groovy',
+  'elixir',
+  'haskell',
+  'zig',
+  // Config / markup / ops formats — the bulk of what actually lands in notes.
+  'dockerfile',
+  'xml',
+  'toml',
+  'ini',
+  'diff',
+  'markdown',
+  'graphql',
+  'protobuf',
+  'nginx',
+  'makefile',
+  'latex',
+  'nix',
 ];
 
 // Light-theme token palette.
@@ -73,9 +101,17 @@ const Map<String, String> _languageAliases = {
   'hpp': 'cpp',
   'h': 'c',
   'htm': 'html',
-  'xml': 'html',
-  'svg': 'html',
   'xhtml': 'html',
+  // `xml` used to alias to `html`. It now has its own entry: the tag rules are
+  // the same, but XML also has `<![CDATA[ ]]>` and `<?pi ?>`, and an XML block
+  // labelled "html" in the picker reads as a mistake.
+  'xsd': 'xml',
+  'xsl': 'xml',
+  'xslt': 'xml',
+  'svg': 'xml',
+  'plist': 'xml',
+  'rss': 'xml',
+  'pom': 'xml',
   'jsonc': 'json',
   'json5': 'json',
   'sqlite': 'sql',
@@ -83,6 +119,50 @@ const Map<String, String> _languageAliases = {
   'postgres': 'sql',
   'postgresql': 'sql',
   'mysql': 'sql',
+  'kt': 'kotlin',
+  'kts': 'kotlin',
+  'cs': 'csharp',
+  'c#': 'csharp',
+  'dotnet': 'csharp',
+  'php3': 'php',
+  'php8': 'php',
+  'rb': 'ruby',
+  'ruby-script': 'ruby',
+  'gemfile': 'ruby',
+  'objc': 'objective-c',
+  'objectivec': 'objective-c',
+  'obj-c': 'objective-c',
+  'mm': 'objective-c',
+  'pl': 'perl',
+  'pm': 'perl',
+  'rlang': 'r',
+  'rscript': 'r',
+  'sc': 'scala',
+  'gradle': 'groovy',
+  'ex': 'elixir',
+  'exs': 'elixir',
+  'hs': 'haskell',
+  'lhs': 'haskell',
+  'docker': 'dockerfile',
+  'containerfile': 'dockerfile',
+  'cfg': 'ini',
+  'editorconfig': 'ini',
+  'patch': 'diff',
+  'udiff': 'diff',
+  'md': 'markdown',
+  'mkd': 'markdown',
+  'mdown': 'markdown',
+  'gql': 'graphql',
+  'proto': 'protobuf',
+  'proto3': 'protobuf',
+  // `conf` is ambiguous in the abstract, but in practice a fence labelled
+  // `conf` is nginx far more often than anything else.
+  'conf': 'nginx',
+  'nginxconf': 'nginx',
+  'make': 'makefile',
+  'mk': 'makefile',
+  'gnumakefile': 'makefile',
+  'tex': 'latex',
   'text': 'plaintext',
   'txt': 'plaintext',
   'none': 'plaintext',
@@ -348,6 +428,419 @@ final Map<String, _Lang> _langs = {
     },
     lineComments: ['%%'],
     blockComments: false,
+  ),
+
+  // ---------------------------------------------------------------------
+  // Application languages.
+  //
+  // The recurring trap in this block is `strings`, whose default is
+  // `['"', "'", '`']`. A backtick is a string delimiter in almost nothing
+  // (JS/Go/Dart aside): in Kotlin it quotes an identifier, in Ruby/Perl it
+  // runs a subprocess, in Markdown it opens inline code. Leaving the default
+  // opens a "string" at the first one and paints the rest of the line green.
+  // Every entry below therefore states `strings` explicitly.
+  // ---------------------------------------------------------------------
+
+  // Backtick excluded: in Kotlin it quotes an identifier (`` `is` ``, and JUnit
+  // test names are written that way constantly), never a string.
+  'kotlin': const _Lang(
+    keywords: {
+      'fun', 'val', 'var', 'class', 'object', 'interface', 'data', 'sealed',
+      'enum', 'companion', 'init', 'constructor', 'override', 'open',
+      'abstract', 'private', 'protected', 'public', 'internal', 'suspend',
+      'inline', 'reified', 'return', 'if', 'else', 'when', 'for', 'while',
+      'do', 'break', 'continue', 'try', 'catch', 'finally', 'throw', 'import',
+      'package', 'in', 'is', 'as', 'by', 'out', 'null', 'true', 'false',
+      'this', 'super', 'lateinit', 'typealias', 'vararg', 'operator', 'infix',
+      'const', 'annotation', 'crossinline', 'noinline', 'expect', 'actual',
+    },
+    strings: ['"', "'"],
+  ),
+  // Only `"` — Swift has no single-quoted literal at all (a character is
+  // `"a"` typed as Character), so `'` is never a delimiter.
+  'swift': const _Lang(
+    keywords: {
+      'func', 'let', 'var', 'class', 'struct', 'enum', 'protocol', 'extension',
+      'init', 'deinit', 'guard', 'if', 'else', 'switch', 'case', 'default',
+      'for', 'while', 'repeat', 'return', 'break', 'continue', 'in', 'is',
+      'as', 'throw', 'throws', 'rethrows', 'try', 'catch', 'defer', 'import',
+      'public', 'private', 'internal', 'fileprivate', 'open', 'static',
+      'final', 'lazy', 'weak', 'unowned', 'mutating', 'override', 'where',
+      'associatedtype', 'typealias', 'some', 'any', 'async', 'await', 'actor',
+      'inout', 'subscript', 'willSet', 'didSet', 'nil', 'true', 'false',
+      'self', 'Self', 'convenience', 'required', 'indirect',
+    },
+    strings: ['"'],
+  ),
+  'csharp': const _Lang(
+    keywords: {
+      'using', 'namespace', 'class', 'struct', 'interface', 'enum', 'record',
+      'public', 'private', 'protected', 'internal', 'static', 'readonly',
+      'const', 'void', 'int', 'long', 'short', 'byte', 'char', 'bool',
+      'float', 'double', 'decimal', 'string', 'object', 'var', 'dynamic',
+      'new', 'return', 'if', 'else', 'switch', 'case', 'default', 'for',
+      'foreach', 'while', 'do', 'break', 'continue', 'try', 'catch',
+      'finally', 'throw', 'async', 'await', 'get', 'set', 'this', 'base',
+      'null', 'true', 'false', 'override', 'virtual', 'abstract', 'sealed',
+      'partial', 'in', 'out', 'ref', 'is', 'as', 'typeof', 'nameof', 'yield',
+      'lock', 'params', 'delegate', 'event', 'operator', 'when', 'where',
+    },
+    strings: ['"', "'"],
+  ),
+  // `#` is a second line comment in PHP alongside `//`.
+  'php': _Lang(
+    keywords: const {
+      'function', 'class', 'interface', 'trait', 'extends', 'implements',
+      'public', 'private', 'protected', 'static', 'const', 'return', 'if',
+      'else', 'elseif', 'endif', 'foreach', 'endforeach', 'as', 'for',
+      'while', 'do', 'switch', 'case', 'default', 'break', 'continue', 'try',
+      'catch', 'finally', 'throw', 'new', 'echo', 'print', 'require',
+      'require_once', 'include', 'include_once', 'namespace', 'use', 'array',
+      'null', 'true', 'false', 'this', 'abstract', 'final', 'global', 'isset',
+      'unset', 'instanceof', 'fn', 'match', 'enum', 'readonly', 'yield',
+    },
+    lineComments: const ['//', '#'],
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'<\?(?:php|=)?|\?>', _kwColor),
+      _Rule(r'\$[A-Za-z_][A-Za-z0-9_]*', _keyColor),
+    ],
+  ),
+  // Backtick excluded: `` `cmd` `` runs a subprocess in Ruby. `=begin/=end`
+  // block comments are neither `//` nor `/* */`, so they render plain rather
+  // than wrong.
+  'ruby': _Lang(
+    keywords: const {
+      'def', 'end', 'class', 'module', 'if', 'elsif', 'else', 'unless',
+      'case', 'when', 'while', 'until', 'for', 'in', 'do', 'begin', 'rescue',
+      'ensure', 'raise', 'return', 'yield', 'next', 'break', 'redo', 'retry',
+      'then', 'self', 'nil', 'true', 'false', 'and', 'or', 'not', 'require',
+      'require_relative', 'include', 'extend', 'attr_accessor', 'attr_reader',
+      'attr_writer', 'lambda', 'proc', 'puts', 'new', 'super', 'alias',
+      'undef', 'private', 'public', 'protected', 'defined',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'@@?[A-Za-z_][A-Za-z0-9_]*', _keyColor), // @ivar / @@cvar
+      _Rule(r':[A-Za-z_][A-Za-z0-9_]*[?!]?', _fnColor), // :symbol
+    ],
+  ),
+  // `@interface` / `#import` are the shape of the language; the plain C
+  // keyword set alone leaves an Objective-C header nearly grey.
+  'objective-c': _Lang(
+    keywords: const {
+      'id', 'self', 'super', 'nil', 'YES', 'NO', 'BOOL', 'instancetype',
+      'void', 'int', 'char', 'float', 'double', 'long', 'short', 'unsigned',
+      'signed', 'const', 'static', 'extern', 'struct', 'union', 'enum',
+      'typedef', 'return', 'if', 'else', 'for', 'while', 'do', 'switch',
+      'case', 'break', 'continue', 'sizeof', 'inline', 'NULL',
+    },
+    strings: const ['"'],
+    rules: [
+      _Rule(r'@[A-Za-z_][A-Za-z0-9_]*', _kwColor), // @interface @property @end
+      _Rule(r'#[a-z]+', _kwColor), // #import #define
+    ],
+  ),
+  // `--` line comments; `--[[ ]]` blocks are not `/* */`, hence false.
+  'lua': const _Lang(
+    keywords: {
+      'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
+      'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
+      'return', 'then', 'true', 'until', 'while', 'self', 'require', 'pairs',
+      'ipairs', 'print', 'pcall', 'setmetatable',
+    },
+    lineComments: ['--'],
+    blockComments: false,
+    strings: ['"', "'"],
+  ),
+  // Backtick excluded (subprocess, as in Ruby). Sigils carry the structure.
+  'perl': _Lang(
+    keywords: const {
+      'my', 'our', 'local', 'sub', 'package', 'use', 'no', 'require', 'if',
+      'elsif', 'else', 'unless', 'while', 'until', 'for', 'foreach', 'do',
+      'last', 'next', 'redo', 'return', 'die', 'warn', 'print', 'printf',
+      'say', 'chomp', 'chop', 'defined', 'undef', 'ref', 'bless', 'wantarray',
+      'eval', 'qw', 'and', 'or', 'not', 'eq', 'ne', 'lt', 'gt', 'le', 'ge',
+      'cmp', 'keys', 'values', 'push', 'pop', 'shift', 'unshift', 'split',
+      'join', 'map', 'grep', 'sort', 'scalar', 'exists', 'delete',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'[$@%][$#]?[A-Za-z_][A-Za-z0-9_:]*', _keyColor), // $x @a %h
+    ],
+  ),
+  // Backtick excluded: in R it quotes a non-syntactic name (`` `my col` ``).
+  'r': const _Lang(
+    keywords: {
+      'function', 'if', 'else', 'for', 'while', 'repeat', 'break', 'next',
+      'return', 'TRUE', 'FALSE', 'NULL', 'NA', 'Inf', 'NaN', 'library',
+      'require', 'in', 'invisible', 'switch', 'stop', 'warning', 'print',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: ['"', "'"],
+  ),
+  // Only `"` — `'foo` is a Symbol literal in Scala and would otherwise open an
+  // unterminated string and eat the line.
+  'scala': const _Lang(
+    keywords: {
+      'def', 'val', 'var', 'class', 'object', 'trait', 'case', 'match',
+      'extends', 'with', 'override', 'implicit', 'import', 'package', 'new',
+      'if', 'else', 'for', 'while', 'do', 'yield', 'try', 'catch', 'finally',
+      'throw', 'return', 'sealed', 'abstract', 'final', 'private',
+      'protected', 'lazy', 'type', 'this', 'super', 'null', 'true', 'false',
+      'given', 'using', 'enum', 'then', 'forSome',
+    },
+    strings: ['"'],
+  ),
+  'groovy': const _Lang(
+    keywords: {
+      'def', 'class', 'interface', 'trait', 'enum', 'extends', 'implements',
+      'import', 'package', 'new', 'return', 'if', 'else', 'for', 'while',
+      'do', 'switch', 'case', 'default', 'break', 'continue', 'try', 'catch',
+      'finally', 'throw', 'throws', 'public', 'private', 'protected',
+      'static', 'final', 'void', 'int', 'long', 'boolean', 'String', 'true',
+      'false', 'null', 'this', 'super', 'as', 'in', 'assert', 'it',
+    },
+    strings: ['"', "'"],
+  ),
+  'elixir': _Lang(
+    keywords: const {
+      'def', 'defp', 'defmodule', 'defstruct', 'defprotocol', 'defimpl',
+      'defmacro', 'defdelegate', 'defexception', 'do', 'end', 'if', 'else',
+      'unless', 'cond', 'case', 'when', 'fn', 'receive', 'after', 'rescue',
+      'catch', 'try', 'raise', 'throw', 'import', 'alias', 'require', 'use',
+      'with', 'for', 'and', 'or', 'not', 'in', 'nil', 'true', 'false',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    // `'…'` is a charlist — a real literal, so both quotes stay.
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r':[A-Za-z_][A-Za-z0-9_]*[?!]?', _fnColor), // :atom
+      _Rule(r'@[a-z_][A-Za-z0-9_]*', _keyColor), // @moduledoc @spec
+    ],
+  ),
+  // `--` comments; `{- -}` blocks are not `/* */`. Only `"` for strings: an
+  // apostrophe is a legal identifier character in Haskell (`x'`, `foldl'`),
+  // so treating it as a quote would swallow the rest of the line.
+  'haskell': const _Lang(
+    keywords: {
+      'module', 'where', 'import', 'qualified', 'as', 'hiding', 'let', 'in',
+      'do', 'case', 'of', 'if', 'then', 'else', 'data', 'newtype', 'type',
+      'class', 'instance', 'deriving', 'default', 'infix', 'infixl', 'infixr',
+      'foreign', 'forall', 'True', 'False', 'Nothing', 'Just', 'IO', 'Maybe',
+      'Either', 'Left', 'Right',
+    },
+    lineComments: ['--'],
+    blockComments: false,
+    strings: ['"'],
+  ),
+  // Zig has NO block comments at all (`//` only, by design), so leaving the
+  // generic `/* */` on would be inventing syntax.
+  'zig': _Lang(
+    keywords: const {
+      'const', 'var', 'fn', 'pub', 'return', 'if', 'else', 'switch', 'while',
+      'for', 'break', 'continue', 'defer', 'errdefer', 'try', 'catch',
+      'orelse', 'unreachable', 'struct', 'enum', 'union', 'error',
+      'comptime', 'inline', 'export', 'extern', 'test', 'and', 'or', 'null',
+      'undefined', 'true', 'false', 'usingnamespace', 'async', 'await',
+      'suspend', 'resume', 'anytype', 'noreturn', 'void', 'bool', 'u8',
+      'u16', 'u32', 'u64', 'i8', 'i16', 'i32', 'i64', 'usize', 'isize',
+      'f32', 'f64', 'align', 'packed', 'opaque', 'threadlocal', 'volatile',
+      'callconv', 'anyerror', 'linksection', 'noalias',
+    },
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'@[A-Za-z_][A-Za-z0-9_]*', _fnColor), // @import @intCast
+    ],
+  ),
+
+  // ---------------------------------------------------------------------
+  // Config / markup / ops formats.
+  // ---------------------------------------------------------------------
+
+  // Instructions are conventionally shouted but the parser accepts any case
+  // (`from alpine` is valid), and real Dockerfiles mix them — hence
+  // caseInsensitive, as for SQL and PowerShell.
+  'dockerfile': const _Lang(
+    keywords: {
+      'from', 'run', 'cmd', 'label', 'maintainer', 'expose', 'env', 'add',
+      'copy', 'entrypoint', 'volume', 'user', 'workdir', 'arg', 'onbuild',
+      'stopsignal', 'healthcheck', 'shell', 'as',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: ['"', "'"],
+    caseInsensitive: true,
+  ),
+  // Same shape as `html` — tags and attributes are the structure — plus the
+  // two things XML has and HTML does not: `<![CDATA[ ]]>` and `<?pi ?>`.
+  'xml': _Lang(
+    keywords: const {},
+    lineComments: const [],
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'<!--[\s\S]*?(?:-->|$)', _comColor),
+      _Rule(r'<!\[CDATA\[[\s\S]*?(?:\]\]>|$)', _strColor),
+      _Rule(r'<[!/?]?[A-Za-z_][A-Za-z0-9:._\-]*', _kwColor),
+      _Rule(r'\??/?>', _kwColor),
+      _Rule(r'[A-Za-z_:][A-Za-z0-9_:.\-]*(?=\s*=)', _keyColor),
+      _Rule(r'&[a-zA-Z]+;|&#\d+;', _numColor),
+    ],
+  ),
+  // Tables and keys, like YAML — a keyword set can only reach `true`/`false`.
+  'toml': _Lang(
+    keywords: const {'true', 'false'},
+    lineComments: _hashLike,
+    blockComments: false,
+    // `'…'` is TOML's literal string. No backtick.
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'\[\[?[^\]\n]*\]\]?', _fnColor, leadOnly: true), // [tbl] [[arr]]
+      _Rule(r'"(?:[^"\\]|\\.)*"(?=\s*=)', _keyColor, leadOnly: true),
+      _Rule(r'[A-Za-z_][A-Za-z0-9_.\-]*(?=\s*=)', _keyColor, leadOnly: true),
+    ],
+  ),
+  // INI takes BOTH `;` and `#` as line comments — `;` is the older, and still
+  // the more common one in .gitconfig / php.ini / systemd-adjacent files.
+  'ini': _Lang(
+    keywords: const {'true', 'false', 'yes', 'no', 'on', 'off'},
+    lineComments: const [';', '#'],
+    blockComments: false,
+    strings: const ['"', "'"],
+    caseInsensitive: true,
+    rules: [
+      _Rule(r'\[[^\]\n]*\]', _fnColor, leadOnly: true), // [section]
+      _Rule(r'[A-Za-z_][A-Za-z0-9_.\-]*(?=\s*=)', _keyColor, leadOnly: true),
+    ],
+  ),
+  // A diff has no lexical structure whatsoever — it is line-oriented, and the
+  // ONLY thing that matters is the first column. Every generic mechanism is
+  // therefore off, including `strings`: quotes in a diff are just whatever the
+  // patched file happened to contain, and pairing them across `+`/`-` lines
+  // would paint arbitrary regions green.
+  'diff': _Lang(
+    keywords: const {},
+    lineComments: const [],
+    blockComments: false,
+    strings: const [],
+    rules: [
+      // `---`/`+++` first: they are also `-`/`+` lines.
+      _Rule(r'(?:\+\+\+|---)[^\n]*', _keyColor, leadOnly: true),
+      _Rule(r'@@[^\n]*', _fnColor, leadOnly: true),
+      _Rule(r'(?:diff|index|similarity|rename|new file|deleted file)[^\n]*',
+          _comColor, leadOnly: true),
+      _Rule(r'\+[^\n]*', _strColor, leadOnly: true), // added
+      _Rule(r'-[^\n]*', _numColor, leadOnly: true), // removed
+    ],
+  ),
+  // Markdown is punctuation, not words. Note `strings: []`: a backtick opens
+  // inline code (handled by a rule, coloured as a string), and an apostrophe
+  // in ordinary prose ("don't") would otherwise open a string and swallow the
+  // rest of the paragraph.
+  'markdown': _Lang(
+    keywords: const {},
+    lineComments: const [],
+    blockComments: false,
+    strings: const [],
+    rules: [
+      _Rule(r'#{1,6}[^\n]*', _kwColor, leadOnly: true), // # Heading
+      _Rule(r'>[^\n]*', _comColor, leadOnly: true), // > quote
+      _Rule(r'(?:```|~~~)[^\n]*', _keyColor), // fence
+      _Rule(r'`[^`\n]+`', _strColor), // `inline code`
+      _Rule(r'\*\*[^\n]*?\*\*|__[^\n]*?__', _kwColor), // **bold**
+      _Rule(r'\*[^*\n]+\*|_[^_\n]+_', _kwColor), // *italic*
+      _Rule(r'!?\[[^\]\n]*\]\([^)\n]*\)', _fnColor), // [text](url)
+      _Rule(r'[-*+](?=\s)', _numColor, leadOnly: true), // list bullet
+    ],
+  ),
+  'graphql': _Lang(
+    keywords: const {
+      'query', 'mutation', 'subscription', 'fragment', 'on', 'type', 'input',
+      'interface', 'union', 'enum', 'scalar', 'schema', 'extend',
+      'implements', 'directive', 'repeatable', 'true', 'false', 'null',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: const ['"'],
+    rules: [
+      _Rule(r'[A-Za-z_][A-Za-z0-9_]*(?=\s*:)', _keyColor), // field:
+      _Rule(r'[$@][A-Za-z_][A-Za-z0-9_]*', _fnColor), // $var / @directive
+    ],
+  ),
+  'protobuf': const _Lang(
+    keywords: {
+      'syntax', 'package', 'import', 'message', 'enum', 'service', 'rpc',
+      'returns', 'repeated', 'optional', 'required', 'reserved', 'oneof',
+      'map', 'extend', 'extensions', 'option', 'stream', 'public', 'bool',
+      'string', 'bytes', 'int32', 'int64', 'uint32', 'uint64', 'sint32',
+      'sint64', 'fixed32', 'fixed64', 'float', 'double', 'true', 'false',
+    },
+    strings: ['"', "'"],
+  ),
+  // nginx.conf is directives and blocks: the first word of a line IS the
+  // language, exactly like a YAML key.
+  'nginx': _Lang(
+    keywords: const {'on', 'off', 'true', 'false'},
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'[a-z_][a-z0-9_]*(?=[\s;{])', _keyColor, leadOnly: true),
+      _Rule(r'\$[A-Za-z_][A-Za-z0-9_]*', _fnColor), // $host $remote_addr
+    ],
+  ),
+  // Targets and variable expansions. `$(…)` is claimed before anything else,
+  // otherwise the `$` and the name split into unrelated tokens.
+  'makefile': _Lang(
+    keywords: const {
+      'ifeq', 'ifneq', 'ifdef', 'ifndef', 'else', 'endif', 'include',
+      'define', 'endef', 'export', 'unexport', 'override', 'vpath',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: const ['"', "'"],
+    rules: [
+      _Rule(r'\$[({][^)}\n]*[)}]|\$\$?[A-Za-z@<^?*]', _kwColor),
+      // `target:` — but not `VAR :=`, hence the (?!=).
+      _Rule(r'\.?[A-Za-z0-9_%./\-]+(?=\s*:(?!=))', _fnColor, leadOnly: true),
+      _Rule(r'[A-Za-z_][A-Za-z0-9_]*(?=\s*[:?+!]?=)', _keyColor,
+          leadOnly: true),
+    ],
+  ),
+  // `%` line comments and NO block comment form at all. `strings: []` because
+  // LaTeX has no string literal — `"` is a plain character and the idiomatic
+  // quotes are `` ` `` and `'`, which as delimiters would eat whole paragraphs.
+  'latex': _Lang(
+    keywords: const {},
+    lineComments: const ['%'],
+    blockComments: false,
+    strings: const [],
+    rules: [
+      _Rule(r'\\(?:begin|end)\{[^}\n]*\}', _fnColor),
+      _Rule(r'\\[A-Za-z@]+\*?', _kwColor), // \section \textbf
+      _Rule(r'\\[^A-Za-z\s]', _kwColor), // \% \& \\
+      _Rule(r'[\$&]', _keyColor), // math toggle, alignment tab
+    ],
+  ),
+  // Nix genuinely uses `/* */` (unlike every other `#`-comment language here),
+  // so blockComments stays on. Only `"`: the multi-line form is `'' … ''`, and
+  // treating a lone `'` as a delimiter would break it in half.
+  'nix': const _Lang(
+    keywords: {
+      'let', 'in', 'rec', 'with', 'inherit', 'if', 'then', 'else', 'assert',
+      'or', 'import', 'builtins', 'true', 'false', 'null', 'derivation',
+      'mkDerivation', 'callPackage', 'fetchurl', 'fetchFromGitHub',
+    },
+    lineComments: _hashLike,
+    strings: ['"'],
   ),
 };
 

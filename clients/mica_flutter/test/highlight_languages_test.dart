@@ -75,6 +75,32 @@ void main() {
       'html': '<div class="a">x</div>',
       'css': 'body { color: red; }',
       'mermaid': 'graph TD\n  A --> B\n',
+      'kotlin': 'fun main() { val x = 1 }',
+      'swift': 'func f() -> Int { return 1 }',
+      'csharp': 'public class A { void B() { } }',
+      'php': '<?php echo "hi";',
+      'ruby': 'def f\n  puts "hi"\nend\n',
+      'objective-c': '@interface Foo : NSObject\n@end\n',
+      'lua': 'local x = 1\n',
+      'perl': 'my \$x = 1;\n',
+      'r': 'f <- function(x) { x + 1 }\n',
+      'scala': 'object A { def b = 1 }',
+      'groovy': 'def x = [1, 2]\n',
+      'elixir': 'defmodule A do\n  def b, do: :ok\nend\n',
+      'haskell': 'main :: IO ()\nmain = putStrLn "hi"\n',
+      'zig': 'const std = @import("std");\n',
+      'dockerfile': 'FROM alpine:3.19\nRUN apk add curl\n',
+      'xml': '<?xml version="1.0"?>\n<a b="c"/>\n',
+      'toml': '[package]\nname = "mica"\n',
+      'ini': '[core]\nkey = value\n',
+      'diff': '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n',
+      'markdown': '# Title\n\nSome **bold** text.\n',
+      'graphql': 'query { user(id: 1) { name } }',
+      'protobuf': 'message A {\n  string b = 1;\n}\n',
+      'nginx': 'server {\n    listen 80;\n}\n',
+      'makefile': 'build:\n\tgo build ./...\n',
+      'latex': r'\documentclass{article}' '\n' r'\begin{document}' '\nHi\n',
+      'nix': 'let x = 1; in x\n',
     };
 
     test('every entry has a sample here', () {
@@ -142,6 +168,139 @@ void main() {
 
     test('a # comment is a comment', () {
       expect(colourOf('# note\nexit 0\n', 'powershell', '# note'), isNotNull);
+    });
+  });
+
+  // The default `strings` is `['"', "'", '`']`, the default `lineComments` is
+  // `['//']` and `blockComments` defaults to `/* */`. For most of the languages
+  // added alongside PowerShell at least one of those defaults is actively
+  // WRONG, and the failure mode is the loud one: a delimiter that never closes
+  // paints the rest of the line — or the paragraph — a single colour. "It
+  // colours something" cannot catch that, so each decision gets a test.
+  group('tokenizer defaults that would be wrong', () {
+    /// Longest run of consecutive characters carrying one colour. A swallowed
+    /// line shows up here and nowhere else.
+    int longestRun(String code, String lang) {
+      var best = 0;
+      void walk(InlineSpan s) {
+        if (s is TextSpan) {
+          if (s.style?.color != null && s.text != null && s.text!.length > best) {
+            best = s.text!.length;
+          }
+          s.children?.forEach(walk);
+        }
+      }
+
+      walk(buildCodeSpan(code, lang, base));
+      return best;
+    }
+
+    test('an apostrophe in markdown prose is not a string', () {
+      // "don't" would open a string that never closes.
+      const md = "It doesn't matter, and it isn't a string either.\n";
+      expect(longestRun(md, 'markdown'), lessThan(10),
+          reason: 'an unclosed quote would paint the whole sentence');
+    });
+
+    test('a backtick in markdown opens inline code, not a string', () {
+      expect(colourOf('use `git log` here\n', 'markdown', '`git log`'),
+          isNotNull);
+    });
+
+    test('a markdown heading and a bullet are coloured', () {
+      expect(colourOf('# Title\n', 'markdown', '# Title'), isNotNull);
+      expect(colourOf('- item\n', 'markdown', '-'), isNotNull);
+    });
+
+    test('an apostrophe in Haskell is an identifier character', () {
+      // `foldl'` and `x'` are ordinary names; as a quote they would eat the
+      // rest of the line. Control has the same length with a plain letter.
+      expect(longestRun("let xs' = foldl' f z ys\n", 'haskell'),
+          longestRun('let xsA = foldlA f z ys\n', 'haskell'));
+    });
+
+    test('a backtick in Ruby is a subprocess, not a string', () {
+      expect(longestRun('x = `ls -la`\ny = 1\n', 'ruby'), lessThan(8));
+    });
+
+    test('a Scala symbol literal does not open a string', () {
+      // The rest of the line has to be long enough to be worth swallowing —
+      // the scanner gives up at a newline, so a short line would pass either
+      // way and prove nothing.
+      expect(longestRun("val sym = 'notAString and more text here\n", 'scala'),
+          lessThan(8));
+    });
+
+    test('diff colours added and removed lines differently', () {
+      const d = '--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n';
+      final added = colourOf(d, 'diff', '+new');
+      final removed = colourOf(d, 'diff', '-old');
+      expect(added, isNotNull);
+      expect(removed, isNotNull);
+      expect(added, isNot(removed), reason: 'a diff is +/- or it is nothing');
+      expect(colourOf(d, 'diff', '+++ b/x'), isNot(added),
+          reason: 'the file header is not an added line');
+    });
+
+    test('a quote inside a diff body does not pair across lines', () {
+      const d = '-  say "hi\n+  say "hello"\n';
+      expect(colourOf(d, 'diff', '-  say "hi'), isNotNull,
+          reason: 'the whole line is one token; quotes are just characters');
+    });
+
+    test('an INI comment can start with ; as well as #', () {
+      expect(colourOf('; note\nk = 1\n', 'ini', '; note'), isNotNull);
+      expect(colourOf('# note\nk = 1\n', 'ini', '# note'), isNotNull);
+    });
+
+    test('a Lua -- comment is a comment, and -- blocks are not /* */', () {
+      expect(colourOf('-- note\nlocal x = 1\n', 'lua', '-- note'), isNotNull);
+    });
+
+    test('a LaTeX % is a comment and \\cmd is a keyword', () {
+      expect(colourOf('% note\n', 'latex', '% note'), isNotNull);
+      expect(colourOf(r'\textbf{hi}', 'latex', r'\textbf'), isNotNull);
+    });
+
+    test('Dockerfile instructions are case-insensitive', () {
+      final upper = coloured('FROM alpine\nRUN true\n', 'dockerfile');
+      expect(upper, greaterThan(0));
+      expect(coloured('from alpine\nrun true\n', 'dockerfile'), upper);
+    });
+
+    test('a TOML table and key are coloured differently', () {
+      const toml = '[package]\nname = "mica"\n';
+      final table = colourOf(toml, 'toml', '[package]');
+      expect(table, isNotNull);
+      expect(colourOf(toml, 'toml', 'name'), isNot(table));
+    });
+
+    test('an nginx directive is coloured at the head of a line only', () {
+      const conf = 'server {\n    listen 80;\n}\n';
+      expect(colourOf(conf, 'nginx', 'listen'), isNotNull);
+      expect(colourOf(conf, 'nginx', 'server'), isNotNull);
+    });
+
+    test('a Makefile target is not confused with a := assignment', () {
+      const mk = 'CC := gcc\nbuild:\n\t\$(CC) main.c\n';
+      final target = colourOf(mk, 'makefile', 'build');
+      expect(target, isNotNull);
+      expect(colourOf(mk, 'makefile', 'CC'), isNot(target),
+          reason: 'a variable is not a target');
+    });
+
+    test('XML gets its own entry, and CDATA is not markup', () {
+      expect(canonicalCodeLanguage('xml'), 'xml');
+      expect(canonicalCodeLanguage('svg'), 'xml');
+      const xml = '<a><![CDATA[<not a tag>]]></a>';
+      expect(colourOf(xml, 'xml', '<![CDATA[<not a tag>]]>'), isNotNull);
+    });
+
+    test('Zig has no block comments', () {
+      // `/*` is division-then-star in Zig; treating it as a comment opener
+      // would grey out everything after it.
+      expect(longestRun('const a = b / *c;\nconst d = 1;\n', 'zig'),
+          lessThan(10));
     });
   });
 
