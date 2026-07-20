@@ -22,6 +22,7 @@ const List<String> kCodeLanguages = [
   'yaml',
   'sql',
   'bash',
+  'powershell',
   'html',
   'css',
   'mermaid',
@@ -51,6 +52,12 @@ const Map<String, String> _languageAliases = {
   'console': 'bash',
   'shell-session': 'bash',
   'yml': 'yaml',
+  // `ps1` is the file extension people paste from; `ps` and `pwsh` are what
+  // shiki/vscode accept, so pasted fences use all three.
+  'ps': 'powershell',
+  'ps1': 'powershell',
+  'pwsh': 'powershell',
+  'posh': 'powershell',
   'rs': 'rust',
   'js': 'javascript',
   'jsx': 'javascript',
@@ -272,6 +279,31 @@ final Map<String, _Lang> _langs = {
     },
     lineComments: _hashLike,
     blockComments: false,
+  ),
+  // Two things here are not the defaults, and both would be wrong if left:
+  //
+  //  * NO BACKTICK in `strings`. In PowerShell the backtick is the ESCAPE
+  //    character (`` `n ``, `` `t ``), not a string delimiter — leaving the
+  //    default would open a string at the first escape and swallow the rest of
+  //    the line as one green blob.
+  //  * `caseInsensitive`, because PowerShell genuinely is: `ForEach`, `foreach`
+  //    and `FOREACH` are the same keyword, and real scripts mix them freely.
+  //
+  // `blockComments: false` for the same reason as bash: the generic block
+  // comment is `/* */`, and PowerShell's is `<# #>`, which the tokenizer has no
+  // way to express yet. A `<# #>` block renders plain rather than wrong.
+  'powershell': const _Lang(
+    keywords: {
+      'if', 'elseif', 'else', 'switch', 'foreach', 'for', 'while', 'do',
+      'until', 'break', 'continue', 'return', 'function', 'filter', 'param',
+      'begin', 'process', 'end', 'try', 'catch', 'finally', 'throw', 'trap',
+      'class', 'enum', 'in', 'exit', 'using', 'workflow', 'data', 'dynamicparam',
+      'true', 'false', 'null', 'not', 'and', 'or',
+    },
+    lineComments: _hashLike,
+    blockComments: false,
+    strings: ['"', "'"],
+    caseInsensitive: true,
   ),
   // CSS has no keywords worth the name — it is selectors, properties and
   // values. It scored 1 coloured character out of 36 before these rules.

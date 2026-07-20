@@ -45,6 +45,106 @@ Color? colourOf(String code, String lang, String needle) {
 }
 
 void main() {
+  // AppFlowy ships a code-block picker with no HTML and no C#. It intersects a
+  // hardcoded name list against its highlighter's grammar ids, and entries whose
+  // spelling differs (`HTML` vs hljs's `xml`, `C#` vs `csharp`) are dropped
+  // silently — nothing checks the intersection, so the gap shipped.
+  //
+  // Our list (`kCodeLanguages`) and our tokenizer configs are likewise two
+  // hand-maintained places. This group keeps them in step: an entry that reaches
+  // the dropdown but colours nothing is worse than an absent one, because the
+  // user picks it and concludes the highlighter is broken.
+  group('every language offered in the picker actually works', () {
+    // One representative line per language. Deliberately boring — the question
+    // is "does this entry produce ANY colour", not tokenizer quality.
+    const samples = <String, String>{
+      'dart': 'void main() { return; }',
+      'javascript': 'const x = 1;',
+      'typescript': 'let x: number = 1;',
+      'python': 'def f():\n    return 1\n',
+      'rust': 'fn main() { let x = 1; }',
+      'go': 'func main() { return }',
+      'java': 'public class A { }',
+      'c': 'int main() { return 0; }',
+      'cpp': 'int main() { return 0; }',
+      'json': '{"a": 1}',
+      'yaml': 'name: mica\n',
+      'sql': 'SELECT * FROM t;',
+      'bash': 'echo hi\n',
+      'powershell': r'if ($true) { exit 0 }',
+      'html': '<div class="a">x</div>',
+      'css': 'body { color: red; }',
+      'mermaid': 'graph TD\n  A --> B\n',
+    };
+
+    test('every entry has a sample here', () {
+      // Forces this test to be updated when a language is added, instead of the
+      // new entry quietly escaping coverage.
+      final expected =
+          kCodeLanguages.where((l) => l != 'auto' && l != 'plaintext');
+      expect(samples.keys.toSet(), expected.toSet());
+    });
+
+    test('every entry colours something', () {
+      for (final entry in samples.entries) {
+        expect(
+          coloured(entry.value, entry.key),
+          greaterThan(0),
+          reason: '${entry.key} is in the dropdown but highlights nothing',
+        );
+      }
+    });
+
+    test('every entry is its own canonical name, not an alias', () {
+      // An entry that canonicalises to something else would highlight as that
+      // other language while claiming to be itself.
+      for (final lang in kCodeLanguages.where((l) => l != 'auto')) {
+        expect(canonicalCodeLanguage(lang), lang, reason: lang);
+      }
+    });
+  });
+
+  group('powershell', () {
+    test('it is offered, and highlights', () {
+      expect(kCodeLanguages, contains('powershell'));
+      expect(
+          coloured(r'if ($x -eq 1) { exit 0 }', 'powershell'), greaterThan(0));
+    });
+
+    test('ps / ps1 / pwsh resolve to it', () {
+      for (final a in ['ps', 'ps1', 'pwsh', 'posh', 'PS1']) {
+        expect(canonicalCodeLanguage(a), 'powershell', reason: a);
+      }
+    });
+
+    test('a backtick is an escape, not a string delimiter', () {
+      // The generic default treats ` as a string quote. In PowerShell it escapes
+      // the next character, so the default would open a string at the first `n
+      // and swallow the rest of the line as one green blob.
+      //
+      // The control has the SAME LENGTH — a backtick swapped for an ordinary
+      // letter. Comparing against `"anb"` instead would fail on the missing
+      // character alone and prove nothing about delimiters.
+      expect(
+        coloured(r'Write-Output "a`nb"', 'powershell'),
+        coloured(r'Write-Output "axnb"', 'powershell'),
+        reason: 'a backtick must tokenize as an ordinary character in a string',
+      );
+    });
+
+    test('keywords are case-insensitive', () {
+      // Real scripts mix ForEach / foreach / FOREACH freely.
+      final lower = coloured(r'foreach ($i in $a) { }', 'powershell');
+      expect(lower, greaterThan(0));
+      expect(coloured(r'ForEach ($i in $a) { }', 'powershell'), lower);
+      expect(coloured(r'FOREACH ($i in $a) { }', 'powershell'), lower);
+    });
+
+    test('a # comment is a comment', () {
+      expect(colourOf('# note\nexit 0\n', 'powershell', '# note'), isNotNull);
+    });
+  });
+
   group('language aliases', () {
     const py = 'def f(x):\n    return x + 1\n';
     const sh = '#!/bin/bash\necho hi\n';
