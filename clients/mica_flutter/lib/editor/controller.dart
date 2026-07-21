@@ -900,7 +900,13 @@ class EditorController extends ChangeNotifier {
         final target =
             (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
                 as String;
-        return '![${node.text}]($target)';
+        // Same title rule as the inline serializer (marks.dart) — an image
+        // BLOCK keeps its title in `data`, and dropping it here lost it on
+        // every copy of a titled image.
+        final title = node.data['title'] as String?;
+        return title == null
+            ? '![${node.text}]($target)'
+            : '![${node.text}]($target "${title.replaceAll('"', r'\"')}")';
       }
       if (node.kind == 'divider') return '---';
       final len = node.text.length;
@@ -916,9 +922,18 @@ class EditorController extends ChangeNotifier {
       for (final m in marksFromData(node.data)) {
         final s = m.start.clamp(a, b);
         final e = m.end.clamp(a, b);
-        if (e > s) marks.add(Mark(s - a, e - a, m.type, href: m.href));
+        // `title` rides along or the link/image loses it: `[t](/u "the title")`
+        // came out as `[t](/u)`, silently dropping data the model carries.
+        if (e > s) {
+          marks.add(Mark(s - a, e - a, m.type, href: m.href, title: m.title));
+        }
       }
-      var inline = marks.isEmpty ? sub : inlineToMarkdown(sub, marks);
+      // Unmarked text still needs escaping. Returning `sub` raw meant a literal
+      // `*not bold*` or `[not a link](x)` in the source came back as emphasis
+      // and as a real link when the copy was pasted — the round-trip invariant
+      // broken by the one path that skipped the serializer entirely.
+      var inline =
+          marks.isEmpty ? escapeInline(sub) : inlineToMarkdown(sub, marks);
       if (full && node.kind == 'paragraph') {
         // A copied paragraph that looks like a list/heading/divider must
         // not change kind when pasted back as markdown.

@@ -37,26 +37,27 @@ import 'package:mica_flutter/editor/model.dart';
 /// fix gets proven; adding one requires justifying why a new divergence is
 /// acceptable, which it almost never is.
 ///
-/// Two distinct causes are mixed in here and have NOT been separated yet — do
-/// not assume every entry is a bug:
+/// Triaged 2026-07-21: all 15 were REAL — the "maybe it is a legitimate
+/// product difference between `export_markdown` and `selectionText`" theory
+/// was wrong. Every one of them changes meaning when the copy is pasted back.
+/// Five were fixed on the spot (11, 13, 16, 19, 34) by three lines in
+/// `controller.dart`; the ten below are structural and still open:
 ///
-///  * The list/quote cluster (03, 04, 05, 15, 17, 20) differs in blank-line
-///    and loose-list placement. Plausibly legitimate: Rust's gold is
-///    `export_markdown` (whole-document export) while Dart's is
-///    `selectionText` (copy-to-clipboard). Those are different products and
-///    may be allowed to disagree on spacing.
-///  * The inline cluster (11, 13, 16, 19, 21, 22, 23, 34) is more suspicious.
-///    `34-link-title-escape` in particular loses a link title outright
-///    (`[a](/u "C:\name")` → `[a](/u)`), which is the same data-loss shape as
-///    the `render_span` link-dropping bug fixed on 2026-07-21.
+///  * **Blank line between every block** (03, 04, 10, 15, 20) — a TIGHT list
+///    is copied as a LOOSE one. Different rendering, not just whitespace.
+///  * **Continuation prefixes dropped** (05, 15, 17, 20) — a quote's second
+///    line loses its `>`, a list item's continuation loses its indent, so on
+///    paste the line escapes the block it belonged to. Fenced code inside a
+///    quote loses `>` entirely.
+///  * **Multi-line heading exported as ATX** (15) — `#` cannot hold a newline,
+///    so a two-line setext heading becomes a heading plus a stray paragraph.
+///  * 21/22/23 not yet root-caused individually.
 ///
-/// Triage is tracked in `docs/rust-migration-assessment-2026-07-21.md`.
+/// Full triage in `docs/rust-migration-assessment-2026-07-21.md`.
 const _knownDivergent = {
   '03-lists.md', '04-todo.md', '05-quote.md', '10-mixed.md',
-  '11-escapes-autolinks.md', '13-links.md', '15-list-items.md',
-  '16-images.md', '17-quotes.md', '19-entities-defs.md',
-  '20-item-containers.md', '21-html.md', '22-gfm.md', '23-math.md',
-  '34-link-title-escape.md',
+  '15-list-items.md', '17-quotes.md', '20-item-containers.md',
+  '21-html.md', '22-gfm.md', '23-math.md',
 };
 
 void main() {
