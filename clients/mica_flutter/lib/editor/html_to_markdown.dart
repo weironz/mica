@@ -337,7 +337,7 @@ void _list(
   // older editors emit it, and html5 parsing keeps it): it belongs under the
   // last item we wrote.
   var lastChildIndent = _capQuoteIndent('$indent  ');
-  for (final item in list.children) {
+  for (final item in _listItems(list)) {
     final t = _tag(item);
     if (t == 'ul' || t == 'ol') {
       _list(item, out, ordered: t == 'ol', indent: lastChildIndent);
@@ -504,6 +504,31 @@ String _inline(dom.Node node) {
   // \s+ (not just spaces/tabs): source-formatting newlines inside a heading
   // or emphasis are inter-word whitespace — kept raw they split the block.
   return sb.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+/// A list's items and nested lists, seen THROUGH wrapper elements.
+///
+/// Per the spec an `<ol>`/`<ul>` may only contain `<li>`, but real copy
+/// sources put a wrapper in between — Google's AI overview emits
+/// `<ol><div data-bfc><li>…</li></div>…</ol>` — and the HTML parser preserves
+/// it. `_list` iterated DIRECT children and skipped anything that was not an
+/// `li`, so every item sat inside a skipped `<div>` and the ENTIRE list
+/// disappeared from the paste: the user saw the surrounding paragraphs arrive
+/// and the numbered list simply not be there.
+///
+/// Nested `<ul>`/`<ol>` are yielded whole rather than descended into, so a
+/// sub-list keeps its own structure (and this cannot hoist grandchildren up a
+/// level). Same spirit as the sibling-nesting case `_list` already handles:
+/// browsers keep invalid list markup, so the converter has to read it.
+Iterable<dom.Element> _listItems(dom.Element list) sync* {
+  for (final child in list.children) {
+    final t = _tag(child);
+    if (t == 'li' || t == 'ul' || t == 'ol') {
+      yield child;
+    } else {
+      yield* _listItems(child);
+    }
+  }
 }
 
 String _directInline(dom.Element item) {
