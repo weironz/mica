@@ -1,35 +1,46 @@
-// Guards against re-introducing EAGER nested-link detection in the Dart mirror.
+// Pins inline parsing as NON-exponential in bracket nesting.
 //
-// The CommonMark "a link's text may not contain a link" rule needs a recursive
-// re-parse of every bracket label. Computing it up-front for EVERY '[' made even
-// plain bracket nesting exponential (depth 24 ≈ 12s), and this runs on the
-// editor's PASTE path — a UI freeze, not just a slow test. It is now computed
-// lazily, so brackets matching no link form cost nothing.
+// CommonMark's "a link's text may not contain a link" rule needs a recursive
+// re-parse of every bracket label. Two things keep that from exploding, and
+// this file guards both:
 //
-// WHAT THIS TEST DOES **NOT** COVER — stated plainly so it is not mistaken for a
-// clean bill of health: nested *links* (`[[[a](/u)](/u)](/u)`) are STILL
-// exponential, because each level forces the check, gets rejected, and the span
-// is re-parsed on the way back down. That residual is pre-existing and tracked
-// in docs/code-review-2026-07-20.md; it is NOT fixed by the laziness pinned
-// here. No assertion is made about that shape, because asserting it would mean
-// encoding the bad behavior as "expected".
+// 1. LAZINESS — the check only gates the two link forms, so brackets matching
+//    no link form never pay it. Guards `[[[[a]]]]` (was ~12s at depth 24).
+// 2. A SHARED MEMO — without it, a label that DOES contain a link is parsed
+//    twice per level (once for the check, once by the scan falling through the
+//    rejected brackets): T(n) = 2*T(n-1). Guards `[[[a](/u)](/u)](/u)`.
+//
+// Both shapes are asserted because fixing only the first still left a real
+// freeze vector: this runs on the editor's PASTE path.
+//
+// Thresholds are deliberately loose (seconds against a ~0-4ms actual) so they
+// catch a return to exponential without flaking on a loaded CI box.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
+
+int parseMs(String src) {
+  final sw = Stopwatch()..start();
+  final parsed = parseInline(src);
+  sw.stop();
+  expect(parsed.text.isNotEmpty, isTrue, reason: 'sanity: it should still parse');
+  return sw.elapsedMilliseconds;
+}
 
 void main() {
   test('plain bracket nesting is not exponential', () {
     const depth = 24;
-    final src = '${'[' * depth}a${']' * depth}';
-    final sw = Stopwatch()..start();
-    final parsed = parseInline(src);
-    sw.stop();
-    expect(parsed.text.isNotEmpty, isTrue, reason: 'sanity: it still parses');
-    expect(
-      sw.elapsedMilliseconds < 3000,
-      isTrue,
-      reason: 'depth-$depth PLAIN nesting took ${sw.elapsedMilliseconds}ms — the '
-          'nested-link check is eager again (exponential even for non-links); '
-          'keep it lazy',
-    );
+    final ms = parseMs('${'[' * depth}a${']' * depth}');
+    expect(ms < 3000, isTrue,
+        reason: 'depth-$depth PLAIN nesting took ${ms}ms — the nested-link '
+            'check is eager again (exponential even for non-links)');
+  });
+
+  test('nested-link nesting is not exponential', () {
+    const depth = 24;
+    final ms = parseMs('${'[' * depth}a${'](/u)' * depth}');
+    expect(ms < 3000, isTrue,
+        reason: 'depth-$depth NESTED-LINK nesting took ${ms}ms — the '
+            '_labelHasLinkCached memo is no longer shared across recursive '
+            'parses, so each level is re-parsed twice again');
   });
 }

@@ -1005,12 +1005,41 @@ String? autolinkTarget(String inner) {
   return null;
 }
 
+/// Does this link label already contain a link? CommonMark §6.3 forbids links
+/// inside link text, so when true the surrounding brackets stay literal. Images
+/// are fine (`[![alt](img)](url)`), so only `link` marks count.
+///
+/// Memoized, with the cache SHARED across the recursive parses of one top-level
+/// parse. Without sharing, a label that DOES contain a link is parsed twice per
+/// nesting level — once for this check, then again by the scan that falls
+/// through the rejected outer brackets — giving T(n) = 2·T(n-1), exponential on
+/// `[[[a](/u)](/u)](/u)`. Pure function + pure cache: output cannot change.
+bool _labelHasLinkCached(
+  String label,
+  Map<String, ({String dest, String? title})> defs,
+  Map<String, bool> cache,
+) {
+  final hit = cache[label];
+  if (hit != null) return hit;
+  final answer =
+      _parseInlineMemo(label, defs, cache).marks.any((m) => m.type == 'link');
+  cache[label] = answer;
+  return answer;
+}
+
 /// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`,
 /// `[t](url)`, `\*escapes\*`, `<autolinks>`) into clean text plus marks.
 ({String text, List<Mark> marks}) parseInline(
   String src, {
   Map<String, ({String dest, String? title})> defs = const {},
-}) {
+}) =>
+    _parseInlineMemo(src, defs, <String, bool>{});
+
+({String text, List<Mark> marks}) _parseInlineMemo(
+  String src,
+  Map<String, ({String dest, String? title})> defs,
+  Map<String, bool> cache,
+) {
   final out = StringBuffer();
   final marks = <Mark>[];
   final delims = <_Delim>[];
@@ -1181,25 +1210,19 @@ String? autolinkTarget(String inner) {
         // linked image), so only `link` marks disqualify. Mirrors Rust
         // `label_contains_link`; without it the Dart mirror produced a different
         // mark range than the engine. (P1-2 confirmed drift.)
-        // Evaluated LAZILY and memoized, mirroring the Rust engine. The flag only
-        // gates the two link forms below, so deferring it to the point a form
-        // actually matches is output-identical (differential-fuzzed against the
-        // eager order, ~2.8M inputs, zero divergence).
+        // The nested-link check is LAZY (it only gates the two link forms below)
+        // and memoized through a cache SHARED across the whole parse — see
+        // `_labelHasLinkCached`. Together they turn parsing from exponential to
+        // flat on nested input, which matters because this runs on the editor's
+        // PASTE path — the old behavior was a UI freeze on crafted content.
+        // Measured, before -> after: `[[[[a]]]]` depth 24 ~12s -> 0ms;
+        // `[[[a](/u)](/u)](/u)` depth 32 -> 4ms.
         //
-        // SCOPE OF THE WIN — do not overstate it: it removes the cost only for
-        // brackets matching NO link form (`[[[[a]]]]` at depth 24: ~12s -> 0ms).
-        // It does NOT help when every level IS a link — `[[[a](/u)](/u)](/u)`
-        // stays exponential, because each level forces the check, is rejected,
-        // and the span is re-parsed on the way back down. This runs on the PASTE
-        // path, so that residual is a potential UI freeze on crafted input. It is
-        // PRE-EXISTING (eager was worse) — see docs/code-review-2026-07-20.md.
-        bool? nestedCache;
-        bool labelHasLink() => nestedCache ??=
-            parseInline(label, defs: defs).marks.any((m) => m.type == 'link');
-
+        // Output is unchanged (the shared conformance fixtures pin that against
+        // the Rust engine); pinned for speed by nested_bracket_perf_test.dart.
         if (close + 1 < src.length && src[close + 1] == '(') {
           final suffix = parseLinkSuffix(src, close + 2);
-          if (suffix != null && !labelHasLink()) {
+          if (suffix != null && !_labelHasLinkCached(label, defs, cache)) {
             addLink('link', label, suffix.dest, suffix.title);
             i = suffix.next;
             continue;
@@ -1219,7 +1242,7 @@ String? autolinkTarget(String inner) {
             }
           }
           final def = defs[normalizeLabel(refLabel)];
-          if (def != null && !labelHasLink()) {
+          if (def != null && !_labelHasLinkCached(label, defs, cache)) {
             addLink('link', label, def.dest, def.title);
             i = next;
             continue;

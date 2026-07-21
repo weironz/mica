@@ -4132,14 +4132,10 @@ fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<Str
   if i < n && chars[i] == ')' { Some((dest, title, i + 1)) } else { None }
 }
 
-/// Does this link-label content already contain a link (inline, reference,
-/// or autolink)? CommonMark forbids links nested inside link text, so when
-/// this is true the surrounding brackets must stay literal. Images are fine
-/// (`[![alt](img)](url)` is a valid linked image), so we ignore those.
-fn label_contains_link(inner: &[char], defs: &RefDefs) -> bool {
-  let src: String = inner.iter().collect();
-  parse_inline_with(&src, defs).marks.iter().any(|m| m.kind == "link")
-}
+// NOTE: the uncached `label_contains_link` was removed — every caller now goes
+// through `label_has_link_cached`, which shares one memo across the recursive
+// parses (see LinkCache). Reintroducing an uncached path would silently restore
+// the exponential blow-up on nested links.
 
 /// If a code span, autolink, or raw inline HTML span starts at `chars[i]`,
 /// return its exclusive end index. These spans bind tighter than link
@@ -4224,7 +4220,40 @@ fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
 
 /// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
 /// marks over it, with offsets in UTF-16 code units.
+/// Memo of `label_contains_link` results, keyed by label text and SHARED across
+/// the recursive parses of one top-level parse.
+///
+/// Without it, a label that DOES contain a link is parsed twice per nesting
+/// level — once to answer the check, then again by the scan that falls through
+/// the rejected outer brackets — giving T(n) = 2·T(n-1), i.e. exponential on
+/// `[[[a](/u)](/u)](/u)`. The memo makes the second visit a hash hit.
+type LinkCache = std::collections::HashMap<String, bool>;
+
+/// Does this link-label content already contain a link (inline, reference, or
+/// autolink)? CommonMark §6.3 forbids links nested inside link text, so when
+/// this is true the surrounding brackets must stay literal. Images are fine
+/// (`[![alt](img)](url)` is a valid linked image), so only `link` marks count.
+///
+/// Memoized: pure function + pure cache, so this cannot change any output —
+/// only how often the answer is recomputed.
+fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut LinkCache) -> bool {
+  if let Some(&hit) = cache.get(label) {
+    return hit;
+  }
+  let answer = parse_inline_memo(label, defs, cache)
+    .marks
+    .iter()
+    .any(|m| m.kind == "link");
+  cache.insert(label.to_string(), answer);
+  answer
+}
+
 fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
+  let mut cache = LinkCache::new();
+  parse_inline_memo(src, defs, &mut cache)
+}
+
+fn parse_inline_memo(src: &str, defs: &RefDefs, cache: &mut LinkCache) -> ParsedInline {
   // Line-ending canonicalization (§6.7/6.9/6.12) with span awareness: a run
   // of 2+ trailing spaces before '\n' OUTSIDE code spans / autolinks / raw
   // inline HTML is a hard break — canonicalized to the "\\\n" stored-text
@@ -4507,32 +4536,26 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
         // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
         // brackets stay literal and the inner link wins. `[foo [bar](/uri)]`
         // is therefore `[foo <a>bar</a>]`, not a nested anchor.
-        // Computed LAZILY and memoized. The flag only ever gates the two link
-        // forms below, so computing it up-front made EVERY bracket pay a full
-        // recursive re-parse of its label. Deferring is output-identical
-        // (verified by differential fuzzing, ~2.8M inputs, zero divergence:
-        // the transform is `!A && X` -> `X && !A` and both are pure).
+        // The nested-link check is (a) computed LAZILY — it only ever gates the
+        // two link forms below, so computing it up-front made EVERY bracket pay
+        // a recursive re-parse — and (b) memoized through a cache SHARED across
+        // the whole parse (see `LinkCache`), which is what removes the second
+        // re-parse of a label that DOES contain a link.
         //
-        // SCOPE OF THE WIN — do not overstate it: this removes the cost only for
-        // brackets that match NO link form. `[[[[a]]]]` at depth 24 went 6s -> 0ms.
-        // It does NOT help when every level IS a link: `[[[a](/u)](/u)](/u)`
-        // still costs T(n) = 2*T(n-1) because each level forces the check and is
-        // then rejected, so the span is re-parsed on the way back down. Measured
-        // (release): depth 16 44ms, 18 191ms, 20 834ms for 121 bytes — still
-        // exponential, and `import_markdown` runs on user-supplied markdown.
-        // That residual is PRE-EXISTING (eager was strictly worse) and needs a
-        // real fix: share a memo across the recursive parses, or answer
-        // "contains a link?" with a cheap scan instead of a full re-parse.
-        // See docs/code-review-2026-07-20.md.
-        let mut nested_cache: Option<bool> = None;
-        let mut label_has_link = || -> bool {
-          *nested_cache.get_or_insert_with(|| label_contains_link(&chars[i + 1..close], defs))
-        };
-
+        // Both together turn parsing from exponential to flat on nested input.
+        // Measured (release, `import_markdown`), before -> after:
+        //   `[[[[a]]]]`            depth 24:   ~6s   -> 0ms
+        //   `[[[a](/u)](/u)](/u)`  depth 20:  834ms  -> 0ms   (depth 32: 0ms)
+        // This matters because `import_markdown` runs on user-supplied markdown
+        // (import + MCP), so ~170 bytes used to pin a core for minutes.
+        //
+        // Output is unchanged: laziness is `!A && X` -> `X && !A` with both pure
+        // (differential-fuzzed, ~2.8M inputs, zero divergence), and the memo is a
+        // pure cache over a pure function. Pinned by tests/nested_bracket_perf.rs.
         // Inline form — empty text is allowed (`[](/url)` → empty anchor).
         if close + 1 < chars.len() && chars[close + 1] == '(' {
           if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
-            if !label_has_link() {
+            if !label_has_link_cached(&label, defs, cache) {
               push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks);
               i = next;
               continue;
@@ -4558,7 +4581,7 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
               (label.clone(), close + 1) // shortcut [text]
             };
             if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
-              if !label_has_link() {
+              if !label_has_link_cached(&label, defs, cache) {
                 push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
                 i = next;
                 continue;

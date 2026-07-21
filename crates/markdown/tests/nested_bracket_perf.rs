@@ -1,34 +1,51 @@
-//! Guards against re-introducing EAGER `label_contains_link`.
+//! Pins inline parsing as NON-exponential in bracket nesting.
 //!
-//! The CommonMark "a link's text may not contain a link" rule needs a recursive
-//! re-parse of every bracket label. Computing it up-front for EVERY `[` made
-//! even plain bracket nesting exponential (depth 24 ≈ 6s release). It is now
-//! computed lazily, so brackets matching no link form cost nothing.
+//! CommonMark's "a link's text may not contain a link" rule needs a recursive
+//! re-parse of every bracket label. Two things keep that from exploding, and
+//! this file guards both:
 //!
-//! WHAT THIS TEST DOES **NOT** COVER — stated plainly so it is not mistaken for
-//! a clean bill of health: nested *links* (`[[[a](/u)](/u)](/u)`) are STILL
-//! exponential — each level forces the check, gets rejected, and the span is
-//! re-parsed on the way back down. Measured in release: depth 16 44ms, 18 191ms,
-//! 20 834ms from 121 bytes. `import_markdown` runs on user-supplied markdown, so
-//! that residual is a real (pre-existing) DoS vector; it is tracked in
-//! docs/code-review-2026-07-20.md and is NOT fixed by the laziness this pins.
-//! No assertion is made about that shape here because it would have to encode
-//! the bad behavior as "expected".
+//! 1. LAZINESS — the check only gates the two link forms, so brackets matching
+//!    no link form never pay it. Guards `[[[[a]]]]` (was ~6s at depth 24).
+//! 2. A SHARED MEMO (`LinkCache`) — without it, a label that DOES contain a link
+//!    is parsed twice per level (once for the check, once by the scan falling
+//!    through the rejected brackets): T(n) = 2·T(n-1). Guards
+//!    `[[[a](/u)](/u)](/u)` (was 834ms at depth 20, ~8s at 22).
+//!
+//! Both shapes are asserted because fixing only the first still left a real DoS
+//! vector: `import_markdown` runs on user-supplied markdown (import + MCP), so
+//! ~170 bytes of the second shape used to pin a core for minutes.
+//!
+//! Thresholds are deliberately loose (seconds against a ~0ms actual) so they
+//! catch a return to exponential without flaking on a loaded CI box.
+
+fn parse_ms(src: &str) -> u128 {
+    let started = std::time::Instant::now();
+    let payload = mica_markdown::import_markdown(src, "root");
+    assert!(!payload.blocks.is_empty(), "sanity: it should still parse");
+    started.elapsed().as_millis()
+}
 
 #[test]
 fn plain_bracket_nesting_is_not_exponential() {
     let depth = 24;
     let src = format!("{}a{}", "[".repeat(depth), "]".repeat(depth));
-    let started = std::time::Instant::now();
-    let payload = mica_markdown::import_markdown(&src, "root");
-    let elapsed = started.elapsed();
+    let ms = parse_ms(&src);
     assert!(
-        !payload.blocks.is_empty(),
-        "sanity: the document should still parse"
+        ms < 3000,
+        "depth-{depth} PLAIN nesting took {ms}ms — the nested-link check is \
+         eager again (exponential even for non-links); keep it lazy"
     );
+}
+
+#[test]
+fn nested_link_nesting_is_not_exponential() {
+    let depth = 24;
+    let src = format!("{}a{}", "[".repeat(depth), "](/u)".repeat(depth));
+    let ms = parse_ms(&src);
     assert!(
-        elapsed < std::time::Duration::from_secs(3),
-        "depth-{depth} PLAIN bracket nesting took {elapsed:?} — label_contains_link \
-         is being evaluated eagerly again (exponential even for non-links); keep it lazy"
+        ms < 3000,
+        "depth-{depth} NESTED-LINK nesting took {ms}ms — the label_contains_link \
+         memo is no longer shared across the recursive parses, so each level is \
+         re-parsed twice again (T(n) = 2*T(n-1)); keep LinkCache threaded"
     );
 }
