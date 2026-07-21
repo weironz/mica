@@ -909,6 +909,17 @@ class EditorController extends ChangeNotifier {
             : '![${node.text}]($target "${title.replaceAll('"', r'\"')}")';
       }
       if (node.kind == 'divider') return '---';
+      // A math block is LaTeX source, not prose: it needs its `$$` fence and
+      // must not be escaped. Falling through to the paragraph path ran it
+      // through `escapeInline`, so copying a formula produced
+      // `\\int\_0^\\infty …` — broken on paste, and unreadable everywhere else.
+      if (node.kind == 'math_block') {
+        final body = node.text.substring(
+          from.clamp(0, node.text.length),
+          to.clamp(0, node.text.length),
+        );
+        return from == 0 && to == node.text.length ? '\$\$\n$body\n\$\$' : body;
+      }
       final len = node.text.length;
       final a = from.clamp(0, len);
       final b = to.clamp(0, len);
@@ -941,7 +952,22 @@ class EditorController extends ChangeNotifier {
       }
       // Prepend the block-level Markdown marker only for a fully-selected block
       // (a partial first/last line is copied as plain inline text).
-      return full ? '${_blockPrefix(node)}$inline' : inline;
+      if (!full) return inline;
+      // EVERY line needs its prefix, not just the first. A block's text can
+      // hold newlines (a quote with two lines, a list item with a lazy
+      // continuation), and prefixing only line 1 meant the rest escaped the
+      // block on paste: a quote's second line lost its `>` and became a
+      // separate paragraph. Mirrors the Rust exporter, which re-prefixes every
+      // emitted line and turns blank ones into a bare marker.
+      final head = _blockPrefix(node);
+      if (!inline.contains('\n')) return '$head$inline';
+      final cont = _continuationPrefix(node);
+      final lines = inline.split('\n');
+      return [
+        '$head${lines.first}',
+        for (final l in lines.skip(1))
+          l.isEmpty ? cont.trimRight() : '$cont$l',
+      ].join('\n');
     }
 
     if (s.node == e.node) {
@@ -959,7 +985,18 @@ class EditorController extends ChangeNotifier {
           nodes[i].kind == 'quote' &&
           nodes[i - 1].kind == 'quote' &&
           nodes[i].data['qbreak'] != true;
-      buf.write(sameQuoteGroup ? '\n' : '\n\n');
+      // Consecutive list items are TIGHT: a blank line between them is what
+      // makes a list loose in CommonMark, which wraps every item in <p> and
+      // renders differently. Copying a tight list used to paste back a loose
+      // one. Mirrors `append_markdown_children`, which pushes a blank only
+      // when a list run ENDS (before a non-item), never between items.
+      // ...but only within ONE run. Switching kind (bullets → numbers → todo)
+      // starts a NEW list, and without the blank the two merge back into one
+      // on paste. Same rule as the Rust exporter.
+      final sameListRun = nodes[i].isListKind &&
+          nodes[i - 1].isListKind &&
+          nodes[i].kind == nodes[i - 1].kind;
+      buf.write(sameQuoteGroup || sameListRun ? '\n' : '\n\n');
       buf.write(
         i == e.node
             ? nodeText(e.node, 0, e.offset)
@@ -1000,6 +1037,22 @@ class EditorController extends ChangeNotifier {
       default:
         return quote;
     }
+  }
+
+  /// What lines 2..n of a multi-line block carry so they stay inside it.
+  ///
+  /// A quote repeats its `> `; a list item indents to its own content column
+  /// (the width of the marker it just emitted), which is what makes the line a
+  /// continuation rather than a new paragraph on re-import.
+  String _continuationPrefix(EditorNode node) {
+    final quote = '> ' * node.quoteDepth.clamp(node.kind == 'quote' ? 1 : 0, 16);
+    if (!node.isListKind) return quote;
+    final marker = switch (node.kind) {
+      'todo' => 6, // `- [x] `
+      'numbered_list' => '${node.data['start'] ?? 1}. '.length,
+      _ => 2, // `- `
+    };
+    return '$quote${'    ' * node.indent}${' ' * marker}';
   }
 
   /// The (node, from, to) slices the current ranged selection covers, in order.

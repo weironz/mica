@@ -43,21 +43,30 @@ import 'package:mica_flutter/editor/model.dart';
 /// Five were fixed on the spot (11, 13, 16, 19, 34) by three lines in
 /// `controller.dart`; the ten below are structural and still open:
 ///
-///  * **Blank line between every block** (03, 04, 10, 15, 20) — a TIGHT list
-///    is copied as a LOOSE one. Different rendering, not just whitespace.
-///  * **Continuation prefixes dropped** (05, 15, 17, 20) — a quote's second
-///    line loses its `>`, a list item's continuation loses its indent, so on
-///    paste the line escapes the block it belonged to. Fenced code inside a
-///    quote loses `>` entirely.
+/// Fixed since: tight/loose list runs (03, 04, 22), math blocks losing their
+/// `$$` fence and being escaped as prose (23), and per-line block prefixes so
+/// a multi-line quote or list item keeps its marker on every line.
+///
+/// Still open, and NOT all of them are necessarily bugs:
+///
+///  * **A quote group's closing bare `>`** (05, 10, 17) — Rust ends every
+///    group with one. Adding it to the copy path was tried and REVERTED: it
+///    broke two long-standing tests that deliberately assert the opposite
+///    ("a blank line would SPLIT the blockquote on re-parse and shatter the
+///    quote bar"). Byte-parity with `export_markdown` is the wrong target
+///    here; `selectionText` is a different product. Whoever picks this up
+///    should decide which side is right before touching either.
+///  * **Container children** (15, 20) — blocks carrying `data.li` (a fence or
+///    quote nested inside a list item) need the item's content-column indent,
+///    which the copy path does not apply.
 ///  * **Multi-line heading exported as ATX** (15) — `#` cannot hold a newline,
 ///    so a two-line setext heading becomes a heading plus a stray paragraph.
-///  * 21/22/23 not yet root-caused individually.
+///  * **21-html** not yet root-caused.
 ///
 /// Full triage in `docs/rust-migration-assessment-2026-07-21.md`.
 const _knownDivergent = {
-  '03-lists.md', '04-todo.md', '05-quote.md', '10-mixed.md',
-  '15-list-items.md', '17-quotes.md', '20-item-containers.md',
-  '21-html.md', '22-gfm.md', '23-math.md',
+  '05-quote.md', '10-mixed.md', '15-list-items.md', '17-quotes.md',
+  '20-item-containers.md', '21-html.md',
 };
 
 void main() {
