@@ -1164,7 +1164,15 @@ String? autolinkTarget(String inner) {
     // Links: [text](dest "title") | [text][label] | [text][] | [shortcut]
     if (src[i] == '[') {
       final close = matchingBracket(src, i);
-      if (close > i + 1) {
+      // `close > i` (not `> i + 1`): an EMPTY label is legal for the inline form
+      // — `[](/url)` is a valid CommonMark link with empty text, and the Rust
+      // engine accepts it (`matching_bracket` alone gates its branch). Requiring
+      // a non-empty label made Dart leave `[](/url)` literal while Rust produced
+      // a zero-width anchor, so `x [](/url) y` differed in BOTH text and marks
+      // between server import and client paste. The reference forms below still
+      // require a non-empty label, matching Rust's `!label.is_empty()`.
+      // (-1 = no match, so `> i` also rejects that.)
+      if (close > i) {
         final label = src.substring(i + 1, close);
         // CommonMark §6.3: a link's text may not itself contain a link. When
         // the label already holds one, the OUTER brackets stay literal and the
@@ -1197,7 +1205,9 @@ String? autolinkTarget(String inner) {
             continue;
           }
         }
-        if (defs.isNotEmpty) {
+        // Reference forms still require a NON-empty label (Rust:
+        // `!label.is_empty()`); only the inline form above accepts `[](/url)`.
+        if (label.isNotEmpty && defs.isNotEmpty) {
           var refLabel = label;
           var next = close + 1;
           if (close + 1 < src.length && src[close + 1] == '[') {
