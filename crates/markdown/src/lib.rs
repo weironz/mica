@@ -4507,18 +4507,39 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
         // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
         // brackets stay literal and the inner link wins. `[foo [bar](/uri)]`
         // is therefore `[foo <a>bar</a>]`, not a nested anchor.
-        let nested_link = label_contains_link(&chars[i + 1..close], defs);
-        if !nested_link {
-          // Inline form — empty text is allowed (`[](/url)` → empty anchor).
-          if close + 1 < chars.len() && chars[close + 1] == '(' {
-            if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
+        // Computed LAZILY and memoized. The flag only ever gates the two link
+        // forms below, so computing it up-front made EVERY bracket pay a full
+        // recursive re-parse of its label. Deferring is output-identical
+        // (verified by differential fuzzing, ~2.8M inputs, zero divergence:
+        // the transform is `!A && X` -> `X && !A` and both are pure).
+        //
+        // SCOPE OF THE WIN — do not overstate it: this removes the cost only for
+        // brackets that match NO link form. `[[[[a]]]]` at depth 24 went 6s -> 0ms.
+        // It does NOT help when every level IS a link: `[[[a](/u)](/u)](/u)`
+        // still costs T(n) = 2*T(n-1) because each level forces the check and is
+        // then rejected, so the span is re-parsed on the way back down. Measured
+        // (release): depth 16 44ms, 18 191ms, 20 834ms for 121 bytes — still
+        // exponential, and `import_markdown` runs on user-supplied markdown.
+        // That residual is PRE-EXISTING (eager was strictly worse) and needs a
+        // real fix: share a memo across the recursive parses, or answer
+        // "contains a link?" with a cheap scan instead of a full re-parse.
+        // See docs/code-review-2026-07-20.md.
+        let mut nested_cache: Option<bool> = None;
+        let mut label_has_link = || -> bool {
+          *nested_cache.get_or_insert_with(|| label_contains_link(&chars[i + 1..close], defs))
+        };
+
+        // Inline form — empty text is allowed (`[](/url)` → empty anchor).
+        if close + 1 < chars.len() && chars[close + 1] == '(' {
+          if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
+            if !label_has_link() {
               push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks);
               i = next;
               continue;
             }
           }
         }
-        if !label.is_empty() && !nested_link {
+        if !label.is_empty() {
           // Reference forms (full / collapsed / shortcut).
           if !defs.is_empty() {
             let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
@@ -4537,9 +4558,11 @@ fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
               (label.clone(), close + 1) // shortcut [text]
             };
             if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
-              push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
-              i = next;
-              continue;
+              if !label_has_link() {
+                push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
+                i = next;
+                continue;
+              }
             }
           }
         }

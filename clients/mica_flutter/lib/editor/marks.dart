@@ -964,18 +964,24 @@ String _unescapeMd(String s) {
   if (i < n && (src[i] == '"' || src[i] == "'" || src[i] == '(')) {
     final close = src[i] == '(' ? ')' : src[i];
     var j = i + 1;
-    final buf = StringBuffer();
+    final start = j;
     while (j < n && src[j] != close) {
+      // A backslash escapes the next char (so an escaped close delimiter does
+      // not end the title); keep the RAW span and decode it once at the end —
+      // exactly as Rust `parse_link_suffix` does.
       if (src[j] == r'\' && j + 1 < n) {
-        buf.write(src[j + 1]);
         j += 2;
         continue;
       }
-      buf.write(src[j]);
       j++;
     }
     if (j >= n) return null;
-    title = buf.toString();
+    // Decode through `_unescapeMd`, which (mirroring Rust `unescape_md`) only
+    // unescapes backslash before ASCII PUNCTUATION and decodes entities.
+    // Building the string inline here instead dropped the backslash before ANY
+    // character, so `[a](/u "C:\name")` yielded the title `C:name` — silent
+    // data loss, and a Rust/Dart divergence. (P1-2 confirmed drift.)
+    title = _unescapeMd(src.substring(start, j));
     i = j + 1;
     while (i < n && ws(src[i])) {
       i++;
@@ -1160,9 +1166,32 @@ String? autolinkTarget(String inner) {
       final close = matchingBracket(src, i);
       if (close > i + 1) {
         final label = src.substring(i + 1, close);
+        // CommonMark §6.3: a link's text may not itself contain a link. When
+        // the label already holds one, the OUTER brackets stay literal and the
+        // inner link wins — `[foo [bar](/uri)](/baz)` is `[foo <a>bar</a>](/baz)`,
+        // not a nested anchor. Images are fine (`[![alt](img)](url)` is a valid
+        // linked image), so only `link` marks disqualify. Mirrors Rust
+        // `label_contains_link`; without it the Dart mirror produced a different
+        // mark range than the engine. (P1-2 confirmed drift.)
+        // Evaluated LAZILY and memoized, mirroring the Rust engine. The flag only
+        // gates the two link forms below, so deferring it to the point a form
+        // actually matches is output-identical (differential-fuzzed against the
+        // eager order, ~2.8M inputs, zero divergence).
+        //
+        // SCOPE OF THE WIN — do not overstate it: it removes the cost only for
+        // brackets matching NO link form (`[[[[a]]]]` at depth 24: ~12s -> 0ms).
+        // It does NOT help when every level IS a link — `[[[a](/u)](/u)](/u)`
+        // stays exponential, because each level forces the check, is rejected,
+        // and the span is re-parsed on the way back down. This runs on the PASTE
+        // path, so that residual is a potential UI freeze on crafted input. It is
+        // PRE-EXISTING (eager was worse) — see docs/code-review-2026-07-20.md.
+        bool? nestedCache;
+        bool labelHasLink() => nestedCache ??=
+            parseInline(label, defs: defs).marks.any((m) => m.type == 'link');
+
         if (close + 1 < src.length && src[close + 1] == '(') {
           final suffix = parseLinkSuffix(src, close + 2);
-          if (suffix != null) {
+          if (suffix != null && !labelHasLink()) {
             addLink('link', label, suffix.dest, suffix.title);
             i = suffix.next;
             continue;
@@ -1180,7 +1209,7 @@ String? autolinkTarget(String inner) {
             }
           }
           final def = defs[normalizeLabel(refLabel)];
-          if (def != null) {
+          if (def != null && !labelHasLink()) {
             addLink('link', label, def.dest, def.title);
             i = next;
             continue;
