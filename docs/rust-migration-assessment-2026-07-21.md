@@ -154,6 +154,8 @@ Rust 侧 `GEN_GOLD` 为同一批 fixture 额外产出 `.md.gold` = `export_markd
 
 〔状态核对 2026-07-21：后三项已入 Rust（1610653 等），但该提交声明的「甲类清零」**过度**——`zip_writer.dart` 仍在。原因（当时未记录，现补）：`buildStoreZip` 在云端导入路径上且 **web 可达**（`_importTreeIntoWorkspace` 未 gate `kIsWeb`），纯 FFI 替换覆盖不了 web。可行解：桌面走 FFI + web 保留 Dart（暴露面减半），并给两端加字节一致的 gold-zip conformance 测试钉死漂移；彻底删除要等乙类 wasm 通道。〕
 
+〔✅ 已按上述可行解落地（2026-07-22）：桌面经 `rust/src/api/zip.rs` 走 `mica_interchange::build_zip`（与服务端/导出同一权威实现）；web 保留纯 Dart 参考实现（`zip_writer_dart.dart`，条件导入）；共享 gold fixture（`crates/interchange/tests/zip_gold.rs` 生成，Rust 测试 + Dart `zip_writer_conformance_test.dart` 双端钉死，覆盖 CJK 文件名/全 256 字节值/空文件）+ FFI 穿越集成测试。「漂移出打不开的 zip」这一最重后果自此有硬地板。甲类至此真·收口。〕
+
 ### 第 3 步：WASM spike ✅ 已完成（2026-07-21）—— **延迟这条否决理由不成立**
 
 阈值**在测量之前**定死（免得事后找理由）：< 1 ms 可行 / 1–5 ms 灰色 / > 5 ms 否决。

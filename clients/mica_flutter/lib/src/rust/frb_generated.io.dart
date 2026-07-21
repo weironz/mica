@@ -8,6 +8,7 @@ import 'api/pdf.dart';
 import 'api/render.dart';
 import 'api/simple.dart';
 import 'api/store.dart';
+import 'api/zip.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
@@ -148,6 +149,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<(String, String)> dco_decode_list_record_string_string(dynamic raw);
 
   @protected
+  List<StoreZipEntry> dco_decode_list_store_zip_entry(dynamic raw);
+
+  @protected
   List<ZipAsset> dco_decode_list_zip_asset(dynamic raw);
 
   @protected
@@ -188,6 +192,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   (String, String) dco_decode_record_string_string(dynamic raw);
+
+  @protected
+  StoreZipEntry dco_decode_store_zip_entry(dynamic raw);
 
   @protected
   SyncCursor dco_decode_sync_cursor(dynamic raw);
@@ -348,6 +355,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<StoreZipEntry> sse_decode_list_store_zip_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<ZipAsset> sse_decode_list_zip_asset(SseDeserializer deserializer);
 
   @protected
@@ -396,6 +408,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   (String, String) sse_decode_record_string_string(
     SseDeserializer deserializer,
   );
+
+  @protected
+  StoreZipEntry sse_decode_store_zip_entry(SseDeserializer deserializer);
 
   @protected
   SyncCursor sse_decode_sync_cursor(SseDeserializer deserializer);
@@ -598,6 +613,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_store_zip_entry(
+    List<StoreZipEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_zip_asset(List<ZipAsset> self, SseSerializer serializer);
 
   @protected
@@ -658,6 +679,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     (String, String) self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_store_zip_entry(StoreZipEntry self, SseSerializer serializer);
 
   @protected
   void sse_encode_sync_cursor(SyncCursor self, SseSerializer serializer);

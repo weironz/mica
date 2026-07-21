@@ -8,6 +8,7 @@ import 'api/pdf.dart';
 import 'api/render.dart';
 import 'api/simple.dart';
 import 'api/store.dart';
+import 'api/zip.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -70,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1948658695;
+  int get rustContentHash => -870802918;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -426,6 +427,8 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 a,
     required PlatformInt64 b,
   });
+
+  Uint8List crateApiZipBuildStoreZip({required List<StoreZipEntry> entries});
 
   String crateApiSimpleCoreVersion();
 
@@ -2626,12 +2629,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "add", argNames: ["a", "b"]);
 
   @override
+  Uint8List crateApiZipBuildStoreZip({required List<StoreZipEntry> entries}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_store_zip_entry(entries, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiZipBuildStoreZipConstMeta,
+        argValues: [entries],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiZipBuildStoreZipConstMeta =>
+      const TaskConstMeta(debugName: "build_store_zip", argNames: ["entries"]);
+
+  @override
   String crateApiSimpleCoreVersion() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2657,7 +2683,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 66,
+            funcId: 67,
             port: port_,
           );
         },
@@ -2682,7 +2708,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2707,7 +2733,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 68,
+            funcId: 69,
             port: port_,
           );
         },
@@ -2735,7 +2761,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 69,
+            funcId: 70,
             port: port_,
           );
         },
@@ -3011,6 +3037,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<StoreZipEntry> dco_decode_list_store_zip_entry(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_store_zip_entry).toList();
+  }
+
+  @protected
   List<ZipAsset> dco_decode_list_zip_asset(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_zip_asset).toList();
@@ -3131,6 +3163,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       throw Exception('Expected 2 elements, got ${arr.length}');
     }
     return (dco_decode_String(arr[0]), dco_decode_String(arr[1]));
+  }
+
+  @protected
+  StoreZipEntry dco_decode_store_zip_entry(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return StoreZipEntry(
+      name: dco_decode_String(arr[0]),
+      bytes: dco_decode_list_prim_u_8_strict(arr[1]),
+    );
   }
 
   @protected
@@ -3509,6 +3553,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<StoreZipEntry> sse_decode_list_store_zip_entry(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <StoreZipEntry>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_store_zip_entry(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<ZipAsset> sse_decode_list_zip_asset(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3669,6 +3727,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_field0 = sse_decode_String(deserializer);
     var var_field1 = sse_decode_String(deserializer);
     return (var_field0, var_field1);
+  }
+
+  @protected
+  StoreZipEntry sse_decode_store_zip_entry(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_bytes = sse_decode_list_prim_u_8_strict(deserializer);
+    return StoreZipEntry(name: var_name, bytes: var_bytes);
   }
 
   @protected
@@ -4059,6 +4125,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_store_zip_entry(
+    List<StoreZipEntry> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_store_zip_entry(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_zip_asset(
     List<ZipAsset> self,
     SseSerializer serializer,
@@ -4206,6 +4284,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.$1, serializer);
     sse_encode_String(self.$2, serializer);
+  }
+
+  @protected
+  void sse_encode_store_zip_entry(
+    StoreZipEntry self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_list_prim_u_8_strict(self.bytes, serializer);
   }
 
   @protected
