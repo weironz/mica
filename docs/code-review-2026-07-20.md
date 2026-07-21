@@ -380,4 +380,17 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 
 > 附带验证：过程中本地 dev postgres 容器停掉，`sync_pg` 8 个测试**全部报红**并打出 `DATABASE_URL is set but the connection failed: PoolTimedOut`——这正是 P2-3「假绿改真红」在野外自证：换作从前它们会静默跳过并报绿。
 
-**仍未动**：P1-1 剩余 9 处漂移里的 nested-link/link-title（上表 #3/#4，已确认）+ 其余 7 处未复核；P3 全部（架构债，判断重、风险高，计划本就建议缓做）。P1-2 的机制已就位，后续补 fixture 即可继续暴露。
+### 带全神修：最后两处漂移 + 一个指数级 DoS（2026-07-21，用户在场）
+
+| commit | 覆盖 | 说明 |
+| --- | --- | --- |
+| `0f918ae` | **P1-2 剩余两处漂移** | ① link title 反斜杠：Dart 原本吃掉**任意**字符前的反斜杠，`[a](/u "C:\name")` → `C:name`（静默丢内容）；改成"扫边界跳 `\X`、末尾整体 `_unescapeMd`"，对齐 Rust。② 嵌套链接：补 CommonMark §6.3 的 `label_contains_link` 守卫。两个 fixture 归队，conformance 27 → **29**。 |
+| `d70bc66` | **第三处漂移（审查发现）** | 空标签 `[](/url)`：Dart 的 `close > i + 1` 要求标签非空，Rust 只要括号匹配 → `x [](/url) y` 两端**文本和 mark 都不同**。改 `close > i`，引用形式补 `label.isNotEmpty`。新增 `link_parity_test.dart`（期望值全部取自 Rust 实际输出），顺带补上审查指出的"引用分支零覆盖"。 |
+| `32fcd70` | **指数级 DoS（A）** | `label_contains_link` 的 memo **跨整棵递归共享**。此前 2·T(n-1)：每层为检查解析一遍、被拒后主扫描再解析一遍。实测(release) `[[[a](/u)](/u)]` depth 20 **834ms → 0ms**（depth 32 仍 0ms）；`[[[[a]]]]` depth 24 ~6s → 0ms。`import_markdown` 吃用户提交内容，~170 字节曾能占住一个核数分钟。输出不变（差分模糊 ~280 万输入零分歧 + 641 scoreboard 未变）。 |
+
+**这一轮最该记住的**：第一版只做了惰性求值，我在注释和测试标题里宣称 DoS 已解决——**但那两个 perf 测试只钉了被治好的良性形状**，真正的向量绿着溜过去。对抗性审查抓出来，我复测确认后才补上共享 memo，并让两端守卫**同时钉住两种形状**。这是本轮第二次「测试声称超出证据」，两次都是我自己写的。
+
+**仍未动**：
+- P1-1 其余 7 处漂移未复核（机制已就位，补 fixture 即可继续暴露）。
+- **块层差异（新发现，未查）**：`[![a](/img)](/u)` 在 **inline 层两端完全一致**，但 Dart 的 `markdownToBlocks` 会把"只含一张图的段落"提升成 image 块并**丢掉外层链接**，Rust 保留段落 + image/link 两个 mark。与本轮改动无关，属块层既有差异。
+- P3 全部（架构债，判断重、风险高，计划本就建议缓做）。
