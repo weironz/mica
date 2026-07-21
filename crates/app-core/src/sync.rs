@@ -124,7 +124,7 @@ pub(crate) async fn ensure_base_tx(
     let doc = MicaDoc::from_blocks(&payload.root_block_id, &blocks);
     let state = doc.encode_state();
     let state_vector = doc.state_vector();
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, updated_at)
          VALUES ($1, $2, $3, 0, now())
          ON CONFLICT (document_id) DO NOTHING",
@@ -134,6 +134,28 @@ pub(crate) async fn ensure_base_tx(
     .bind(&state_vector)
     .execute(&mut **tx)
     .await?;
+    if inserted.rows_affected() == 0 {
+        // Lost the first-bootstrap race: a concurrent connection built and
+        // committed its own base while we were building ours. The two encodings
+        // are NOT interchangeable — `MicaDoc::from_blocks` mints a fresh random
+        // yrs actor, so our local twin lives in a parallel CRDT universe.
+        // Handing it out would strand this client: every peer edit references
+        // the stored base's structs and parks as pending forever (applyUpdate
+        // still returns Ok — permanent, silent divergence; red line #1). Return
+        // the stored winner instead. Our INSERT waited on the winner's unique-
+        // index lock until it committed, so this re-read sees its row.
+        let (state, state_vector, base_rid) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
+            "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
+        )
+        .bind(document_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        return Ok(YrsBase {
+            state,
+            state_vector,
+            base_rid,
+        });
+    }
     Ok(YrsBase {
         state,
         state_vector,

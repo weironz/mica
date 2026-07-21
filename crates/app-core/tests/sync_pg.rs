@@ -518,3 +518,50 @@ async fn op_write_lands_in_the_yrs_base_a_reader_actually_sees() {
 
     cleanup(&db, ws, user).await;
 }
+
+/// Regression: two connections bootstrapping a FRESH document concurrently must
+/// receive the SAME base. `ensure_base_tx` used to return its locally-built
+/// state even when its INSERT lost the `ON CONFLICT DO NOTHING` race — and
+/// `MicaDoc::from_blocks` mints a random yrs actor per call, so the loser's
+/// client lived in a parallel CRDT universe: every peer edit referenced the
+/// stored base's structs and parked as PENDING forever (applyUpdate still
+/// returned Ok — permanent silent divergence, red line #1). Found via the flaky
+/// `cloud_sync_test` (B never saw A's paragraph on a fresh doc).
+#[tokio::test]
+async fn concurrent_first_bootstrap_returns_one_universe() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // The winner: an open transaction that has inserted its base but not yet
+    // committed — exactly what a concurrent bootstrapper races against.
+    let winner_doc = MicaDoc::from_blocks("r", &[para("r", ""), para("a", "Hello")]);
+    let winner_state = winner_doc.encode_state();
+    let mut tx = db.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,updated_at)
+         VALUES ($1,$2,$3,0,now())",
+    )
+    .bind(doc)
+    .bind(&winner_state)
+    .bind(winner_doc.state_vector())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+
+    // The loser: bootstraps while the winner is uncommitted. It reads "no base"
+    // (READ COMMITTED), builds its own twin, and its INSERT then blocks on the
+    // winner's unique-index lock until the commit below releases it.
+    let db2 = db.clone();
+    let racer = tokio::spawn(async move { sync::bootstrap_base(&db2, doc).await });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tx.commit().await.unwrap();
+
+    let got = racer.await.unwrap().unwrap();
+    assert_eq!(
+        got.state, winner_state,
+        "the losing bootstrapper must hand out the STORED base, not its own twin \
+         (a twin has a different yrs actor — peers' edits would pend forever)"
+    );
+
+    cleanup(&db, ws, user).await;
+}
