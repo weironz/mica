@@ -110,18 +110,49 @@ Future<void> downloadAndApplyUpdate(
   // visible prompt beats a silent rollback. The log gives us something to read
   // when someone reports "it didn't update".
   final logPath = '${dir.path}\\inno-install.log';
+  final script = writeUpdateScript(dir, setup.path, logPath);
   await Process.start(
     'cmd',
-    [
-      '/c',
-      'ping 127.0.0.1 -n 4 >nul & '
-          '"${setup.path}" /VERYSILENT /NOCANCEL /CLOSEAPPLICATIONS '
-          '/NORESTART "/LOG=$logPath"',
-    ],
+    ['/c', script.path],
     mode: ProcessStartMode.detached,
   );
 
   // Quit immediately: every millisecond spent here is one Setup may have to
   // spend prying the files loose.
   exit(0);
+}
+
+/// Write the post-exit update script and return it.
+///
+/// This is a FILE, not a `cmd /c "…"` one-liner, and that is the whole point.
+/// Dart builds a Windows command line using the MSVC argv convention, which
+/// escapes an embedded `"` as `\"`. `cmd.exe` does not speak that convention —
+/// it takes `\"` literally — so the installer path arrived as
+/// `\"C:\…\Mica-Setup-0.12.10.exe\"`, which is not a path. cmd gave up at that
+/// token and the rest of the `&` chain, Setup included, never ran. The update
+/// silently did nothing while the leading `ping` still flashed a console: the
+/// exact "downloaded, restarted, same old version" report, one layer earlier
+/// than the RestartManager race described above.
+///
+/// A script file has no such round-trip: the quoting is interpreted once, by
+/// cmd, from bytes we wrote. The only argument passed through Dart is the
+/// script's own path, which carries no inner quotes.
+///
+/// Exposed for testing — `updater_script_test.dart` runs the real thing against
+/// a stub installer, which is the only way to catch a quoting bug like this.
+File writeUpdateScript(Directory dir, String setupPath, String logPath) {
+  // Backslashes throughout: the caller joins with '/', and a mixed separator
+  // inside a quoted cmd token is asking for trouble.
+  String win(String p) => p.replaceAll('/', r'\');
+  final script = File('${dir.path}\\apply-update.cmd');
+  script.writeAsStringSync(
+    '@echo off\r\n'
+    // Names the window, so the console that necessarily appears reads as part
+    // of the update the user just asked for rather than as something strange.
+    'title Mica\r\n'
+    'ping 127.0.0.1 -n 4 >nul\r\n'
+    '"${win(setupPath)}" /VERYSILENT /NOCANCEL /CLOSEAPPLICATIONS '
+    '/NORESTART "/LOG=${win(logPath)}"\r\n',
+  );
+  return script;
 }
