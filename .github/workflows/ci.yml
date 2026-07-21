@@ -167,5 +167,7 @@ jobs:
       # compiles clean everywhere EXCEPT the release web image — exactly what
       # silently broke the v0.12.0–v0.12.3 web images at tag time. Compile the
       # web bundle on every push so that class of drift fails pre-merge.
+      # Same flags as the release build (justfile build-web / release.yml) so
+      # this checks the artifact we actually ship.
       - name: Web compiles (dart2js resolves the web stubs)
-        run: flutter build web --release
+        run: flutter build web --release --no-web-resources-cdn

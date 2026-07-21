@@ -293,7 +293,9 @@ jobs:
         run: |
           cd clients/mica_flutter
           flutter pub get
-          flutter build web --release
+          # --no-web-resources-cdn: serve CanvasKit same-origin instead of from
+          # www.gstatic.com (CORP-header dependency + unreliable from CN).
+          flutter build web --release --no-web-resources-cdn
           cd ../..
           rm -rf deploy/web && mkdir -p deploy/web
           cp -r clients/mica_flutter/build/web/. deploy/web/

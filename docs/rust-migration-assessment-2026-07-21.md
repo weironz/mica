@@ -267,7 +267,7 @@ error: failed to run custom build command for `libsqlite3-sys`
 
 - frb 官方文档有「Run without cross-origin headers」路径：`default_dart_async: false`（全 `#[frb(sync)]`，只跑主线程）+ `--wasm-pack-rustflags` 去掉默认线程化标志 → **完全不需要 COOP/COEP**。对我们反而天然契合——要上 web 的 markdown 引擎本就是同步调用形态。运行时 frb 对非隔离页面只 warn 不炸。（免 COOP/COEP ≠ 免 nightly：`build-web` 硬编码 `-Z build-std`；绕开 build-web 用 stable wasm-pack 可免，spike #1 已实证。）
 - 即便真要上，对本项目破坏面逐项核查后很小：无 OAuth 弹窗（纯 JWT 表单）、字体全打包、图片走 CORS 模式 XHR 自绘（RustFS CORS 已在用）、CanvasKit gstatic 实测带 CORP 头。真正的工作量在 nginx 头作用域纪律：`add_header` 继承陷阱 + `/s/` 分享页必须豁免（第三方热链 `<img>` 会被站级 COEP 拦掉）；「只对 wasm 路径加头」原理上不可行（`crossOriginIsolated` 由顶层文档响应头决定）。
-- 顺手发现（与丁无关但该修）：构建没加 `--no-web-resources-cdn`，CanvasKit 实际从 gstatic CDN 拉取，打包在 `deploy/web/canvaskit/` 的副本是死重——建议补上该 flag，消除对 Google 持续提供 CORP 头的依赖 + 国内访问 gstatic 的不确定性。
+- 顺手发现（与丁无关但该修）：构建没加 `--no-web-resources-cdn`，CanvasKit 实际从 gstatic CDN 拉取，打包在 `deploy/web/canvaskit/` 的副本是死重——建议补上该 flag，消除对 Google 持续提供 CORP 头的依赖 + 国内访问 gstatic 的不确定性。**已修（2026-07-21）**：justfile `dev-web`/`build-web`、ci.yml、release.yml 四处 `flutter build web` 统一加 flag；实测新 buildConfig 带 `useLocalCanvasKit:true`，:8090 冒烟 CanvasKit 走同源 `canvaskit/chromium/`、页面渲染正常、console 零错误。残留：引擎**字体回退**（Noto Sans SC 等）仍在运行时从 `fonts.gstatic.com` 拉取——与 CanvasKit 无关的另一条 gstatic 依赖，断网只影响缺字形回退不致命，要消除得走字体打包/FontManifest，另行评估。
 
 #### 判决
 

@@ -75,7 +75,7 @@ seed-dev:
 # build-web defeats it — keep the two lines identical.
 [doc("Rebuild the dev web bundle served by compose nginx")]
 dev-web:
-    cd clients/mica_flutter && {{flutter}} build web --release
+    cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     chmod -R a+rX clients/mica_flutter/build/web
 
 # Hot reload: press r; quit: q. Desktop opens the offline local world —
@@ -151,9 +151,14 @@ build-installer version:
     @echo "-> clients/mica_flutter/installer/Output/Mica-Setup-{{version}}.exe"
 
 # `cp -r`, not rsync: Windows has no rsync (the old recipe just failed).
+# --no-web-resources-cdn: without it flutter_bootstrap.js loads CanvasKit from
+# www.gstatic.com at runtime and the canvaskit/ we ship is dead weight — the
+# app then depends on gstatic serving CORP headers (COOP/COEP) and on gstatic
+# being reachable from CN at all. Same-origin is strictly better; keep the
+# flag on every `flutter build web` (dev-web, here, ci.yml, release.yml).
 [doc("3/4  Flutter web bundle -> deploy/web (staged for the web image)")]
 build-web:
-    cd clients/mica_flutter && {{flutter}} build web --release
+    cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     rm -rf deploy/web && mkdir -p deploy/web
     cp -r clients/mica_flutter/build/web/. deploy/web/
     @echo "-> deploy/web (main.dart.js $(md5sum deploy/web/main.dart.js | cut -c1-12)…)"
