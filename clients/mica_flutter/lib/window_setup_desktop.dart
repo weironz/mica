@@ -13,6 +13,7 @@ import 'package:window_manager/window_manager.dart';
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_controller.dart';
 import 'prefs.dart';
+import 'window_snapped_win.dart';
 
 const Size _minSize = Size(860, 600);
 const Size _defaultSize = Size(1280, 800);
@@ -289,8 +290,8 @@ Future<String?> _askCloseBehavior() async {
 }
 
 /// Persists the window rect after the user finishes a resize or move. Skips
-/// maximized/minimized/fullscreen states so those don't become the saved
-/// "restore" geometry.
+/// maximized/minimized/fullscreen/SNAPPED states so those don't become the
+/// saved "restore" geometry.
 class _BoundsPersister with WindowListener {
   @override
   void onWindowResized() => _save();
@@ -308,9 +309,22 @@ class _BoundsPersister with WindowListener {
   void onWindowUnmaximize() => savePref('windowMaximized', 'false');
 
   Future<void> _save() async {
+    // Aero Snap belongs on this list and was the one state missing from it.
+    // Windows reports a snapped window as plain SW_SHOWNORMAL — not maximized,
+    // not minimized, not fullscreen — so a Win+Left half-screen rect sailed
+    // past these checks and became the restore geometry. Skipping the write
+    // leaves the last UN-snapped rect in place, which is exactly the pre-snap
+    // geometry the user would want back; no rect arithmetic needed.
+    //
+    // (`WINDOWPLACEMENT.rcNormalPosition` does preserve the pre-snap rect —
+    // measured, and Microsoft says so — but it is in WORKSPACE coordinates,
+    // which diverge from the screen coordinates `setBounds` restores with when
+    // the taskbar sits on the top or left edge. Not saving sidesteps that
+    // conversion entirely.)
     if (await windowManager.isMaximized() ||
         await windowManager.isMinimized() ||
-        await windowManager.isFullScreen()) {
+        await windowManager.isFullScreen() ||
+        isWindowSnapped()) {
       return;
     }
     final b = await windowManager.getBounds();
