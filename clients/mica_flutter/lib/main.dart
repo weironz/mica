@@ -3108,34 +3108,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// recursive-CTE handlers. Without this, trashing a folder orphans its
   /// children: deep descendants vanish from the sidebar (the orphan fallback in
   /// _visibleDocumentTree only lifts direct children) until the parent returns.
-  List<ViewData> _localSubtree(String rootId) {
-    final all = _local.listViews();
-    final ids = collectSubtreeIds(
-      all.map((v) => (id: v.id, parentId: v.parentId)),
-      rootId,
-    );
-    return [
-      for (final v in all)
-        if (ids.contains(v.id)) v,
-    ];
-  }
-
   Future<void> _localDeleteView(DocumentView view) async {
     // Soft-delete the page AND its whole subtree (folders carry children).
-    final subtree = _localSubtree(view.id);
-    final ids = {for (final v in subtree) v.id};
-    for (final v in subtree) {
-      _local.saveView((
-        id: v.id,
-        workspaceId: v.workspaceId,
-        parentId: v.parentId,
-        objectId: v.objectId,
-        name: v.name,
-        position: v.position,
-        trashed: true,
-        objectType: v.objectType,
-      ));
-    }
+    // The cascade lives in Rust; what stays here is the UI consequence.
+    final ids = _local.trashViewSubtree(view.id).toSet();
     if (!mounted) return;
     setState(() {
       _reloadLocalViews();
@@ -3191,50 +3167,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localRestoreView(DocumentView view) async {
-    // Restore the page and the subtree that was trashed with it.
-    for (final v in _localSubtree(view.id)) {
-      _local.saveView((
-        id: v.id,
-        workspaceId: v.workspaceId,
-        parentId: v.parentId,
-        objectId: v.objectId,
-        name: v.name,
-        position: v.position,
-        trashed: false,
-        objectType: v.objectType,
-      ));
-    }
-    // Mirror the server's restore_view: if the restored root's parent is no
-    // longer an active view, lift it to the top level so it isn't an orphan.
-    final active = {
-      for (final v in _local.listViews())
-        if (!v.trashed) v.id,
-    };
-    final root = _local.listViews().where((v) => v.id == view.id).firstOrNull;
-    if (root != null &&
-        root.parentId != null &&
-        !active.contains(root.parentId)) {
-      _local.saveView((
-        id: root.id,
-        workspaceId: root.workspaceId,
-        parentId: null,
-        objectId: root.objectId,
-        name: root.name,
-        position: root.position,
-        trashed: false,
-        objectType: root.objectType,
-      ));
-    }
+    // Restores the subtree, and lifts the root to the top level when its parent
+    // is still trashed — both in Rust now, matching the server's restore_view
+    // instead of reimplementing it here.
+    _local.restoreViewSubtree(view.id);
     if (mounted) setState(_reloadLocalViews);
   }
 
   Future<void> _localPurgeView(DocumentView view) async {
     // Permanently remove the page and its subtree from the recycle bin.
-    final subtree = _localSubtree(view.id);
-    final ids = {for (final v in subtree) v.id};
-    for (final v in subtree) {
-      _local.purgeView(v.id, v.objectId);
-    }
+    final ids = _local.purgeViewSubtree(view.id).toSet();
     if (!mounted) return;
     setState(() {
       _reloadLocalViews();

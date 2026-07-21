@@ -72,6 +72,25 @@ pub struct CloneViewResult {
     pub docs: u32,
 }
 
+/// Copy a view row field-by-field.
+///
+/// `LocalView` is an frb wire struct and deliberately not `Clone` — the bridge
+/// owns its shape. The subtree operations need a copy to edit one field of, so
+/// this spells it out rather than deriving a trait onto the wire type.
+fn clone_view_row(v: &LocalView) -> LocalView {
+    LocalView {
+        id: v.id.clone(),
+        workspace_id: v.workspace_id.clone(),
+        parent_id: v.parent_id.clone(),
+        object_id: v.object_id.clone(),
+        name: v.name.clone(),
+        position: v.position.clone(),
+        trashed: v.trashed,
+        origin: v.origin.clone(),
+        object_type: v.object_type.clone(),
+    }
+}
+
 /// `base` if free among `siblings`, else `base 2`, `base 3`, … — the number is
 /// locale-neutral, the caller supplies the localized base.
 ///
@@ -345,6 +364,95 @@ impl MicaStore {
     #[frb(sync)]
     pub fn purge_view(&self, origin: String, id: String) {
         let _ = self.store().purge_view(&origin, &id);
+    }
+
+    /// `view_id` plus every descendant, in `list_views` order.
+    ///
+    /// The recursive walk the three subtree operations below share, and the
+    /// local mirror of the server's recursive-CTE cascade.
+    fn subtree_ids(&self, view_id: &str) -> Vec<String> {
+        let all = self.list_views("local".to_string());
+        let mut ids: Vec<String> = Vec::new();
+        let mut queue = vec![view_id.to_string()];
+        while let Some(id) = queue.pop() {
+            if ids.iter().any(|k| k == &id) {
+                continue; // a cycle must not wedge the walk
+            }
+            queue.extend(
+                all.iter()
+                    .filter(|v| v.parent_id.as_deref() == Some(id.as_str()))
+                    .map(|v| v.id.clone()),
+            );
+            ids.push(id);
+        }
+        // Report in tree order, not pop order — the caller shows these.
+        all.iter()
+            .filter(|v| ids.iter().any(|k| k == &v.id))
+            .map(|v| v.id.clone())
+            .collect()
+    }
+
+    /// Move `view_id` and its whole subtree to the recycle bin. Returns the
+    /// affected ids so the caller can close an editor that was inside it.
+    ///
+    /// A folder carries its children: trashing one must trash the subtree, or
+    /// the children survive as orphans pointing at a trashed parent.
+    #[frb(sync)]
+    pub fn trash_view_subtree(&self, view_id: String) -> Vec<String> {
+        let ids = self.subtree_ids(&view_id);
+        self.set_trashed(&ids, true);
+        ids
+    }
+
+    /// Bring `view_id` and the subtree trashed with it back out of the bin.
+    ///
+    /// If the restored ROOT's parent is no longer a live view, the root is
+    /// lifted to the top level — restoring into a trashed parent would leave it
+    /// invisible with no way back. Mirrors the server's `restore_view`.
+    #[frb(sync)]
+    pub fn restore_view_subtree(&self, view_id: String) -> Vec<String> {
+        let ids = self.subtree_ids(&view_id);
+        self.set_trashed(&ids, false);
+
+        let all = self.list_views("local".to_string());
+        let parent_is_gone = all
+            .iter()
+            .find(|v| v.id == view_id)
+            .and_then(|root| root.parent_id.clone())
+            .is_some_and(|pid| !all.iter().any(|v| v.id == pid && !v.trashed));
+        if parent_is_gone {
+            if let Some(root) = all.iter().find(|v| v.id == view_id) {
+                self.save_view(LocalView {
+                    parent_id: None,
+                    trashed: false,
+                    ..clone_view_row(root)
+                });
+            }
+        }
+        ids
+    }
+
+    /// Permanently remove `view_id` and its subtree, documents included.
+    /// Returns the affected ids. There is no undo past this point.
+    #[frb(sync)]
+    pub fn purge_view_subtree(&self, view_id: String) -> Vec<String> {
+        let ids = self.subtree_ids(&view_id);
+        let all = self.list_views("local".to_string());
+        for id in &ids {
+            if let Some(v) = all.iter().find(|v| &v.id == id) {
+                self.delete_doc(v.object_id.clone());
+            }
+            self.purge_view("local".to_string(), id.clone());
+        }
+        ids
+    }
+
+    /// Flip `trashed` on exactly `ids`, leaving every other field alone.
+    fn set_trashed(&self, ids: &[String], trashed: bool) {
+        let all = self.list_views("local".to_string());
+        for v in all.iter().filter(|v| ids.iter().any(|k| k == &v.id)) {
+            self.save_view(LocalView { trashed, ..clone_view_row(v) });
+        }
     }
 
     /// Duplicate `view_id` and everything under it, beside the original.
@@ -754,5 +862,96 @@ mod clone_view_tests {
             store.load_doc(copy.object_id.clone()).is_some(),
             "the copy still opens to an empty document rather than nothing",
         );
+    }
+
+    #[test]
+    fn trashing_a_folder_takes_its_whole_subtree() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("folder", None, "F", "0000000010"));
+        store.save_view(view("kid", Some("folder"), "K", "0000000020"));
+        store.save_view(view("grandkid", Some("kid"), "G", "0000000030"));
+        store.save_view(view("outside", None, "O", "0000000040"));
+
+        let hit = store.trash_view_subtree("folder".into());
+        assert_eq!(hit.len(), 3, "the folder and both descendants");
+
+        let all = store.list_views("local".to_string());
+        for id in ["folder", "kid", "grandkid"] {
+            assert!(all.iter().find(|v| v.id == id).unwrap().trashed, "{id} should be trashed");
+        }
+        assert!(
+            !all.iter().find(|v| v.id == "outside").unwrap().trashed,
+            "an unrelated view must not be touched",
+        );
+    }
+
+    #[test]
+    fn restoring_lifts_a_root_whose_parent_is_still_trashed() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("parent", None, "P", "0000000010"));
+        store.save_view(view("child", Some("parent"), "C", "0000000020"));
+        // Trash both, then restore ONLY the child.
+        store.trash_view_subtree("parent".into());
+        store.restore_view_subtree("child".into());
+
+        let all = store.list_views("local".to_string());
+        let child = all.iter().find(|v| v.id == "child").unwrap();
+        assert!(!child.trashed, "the child came back");
+        assert_eq!(
+            child.parent_id, None,
+            "its parent is still in the bin, so the child lifts to the top              level instead of restoring into an invisible parent",
+        );
+        assert!(all.iter().find(|v| v.id == "parent").unwrap().trashed);
+    }
+
+    #[test]
+    fn restoring_keeps_the_parent_when_it_is_alive() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("parent", None, "P", "0000000010"));
+        store.save_view(view("child", Some("parent"), "C", "0000000020"));
+        store.trash_view_subtree("child".into());
+        store.restore_view_subtree("child".into());
+
+        let all = store.list_views("local".to_string());
+        let child = all.iter().find(|v| v.id == "child").unwrap();
+        assert_eq!(
+            child.parent_id.as_deref(),
+            Some("parent"),
+            "a live parent must be kept — lifting here would silently reparent",
+        );
+    }
+
+    #[test]
+    fn purging_removes_the_subtree_and_its_documents() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("folder", None, "F", "0000000010"));
+        store.save_view(view("kid", Some("folder"), "K", "0000000020"));
+        store.save_view(view("outside", None, "O", "0000000030"));
+        for id in ["folder", "kid", "outside"] {
+            store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
+        }
+
+        let hit = store.purge_view_subtree("folder".into());
+        assert_eq!(hit.len(), 2);
+
+        let all = store.list_views("local".to_string());
+        assert_eq!(all.len(), 1, "only the unrelated view survives");
+        assert_eq!(all[0].id, "outside");
+        assert!(store.load_doc("doc_kid".into()).is_none(), "its document went too");
+        assert!(
+            store.load_doc("doc_outside".into()).is_some(),
+            "an unrelated document must survive",
+        );
+    }
+
+    #[test]
+    fn a_parent_cycle_does_not_wedge_the_walk() {
+        let (store, _dir) = tmp_store();
+        // Corrupt shape: a points at b, b points at a. Real data should never
+        // look like this, but a hang here would be unrecoverable for the user.
+        store.save_view(view("a", Some("b"), "A", "0000000010"));
+        store.save_view(view("b", Some("a"), "B", "0000000020"));
+        let hit = store.trash_view_subtree("a".into());
+        assert_eq!(hit.len(), 2, "both, once each");
     }
 }

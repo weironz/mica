@@ -70,7 +70,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1472243466;
+  int get rustContentHash => -748316997;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -316,10 +316,20 @@ abstract class RustLibApi extends BaseApi {
     required String id,
   });
 
+  List<String> crateApiStoreMicaStorePurgeViewSubtree({
+    required MicaStore that,
+    required String viewId,
+  });
+
   MicaDocument? crateApiStoreMicaStoreRestoreLocalVersion({
     required MicaStore that,
     required String docId,
     required String versionId,
+  });
+
+  List<String> crateApiStoreMicaStoreRestoreViewSubtree({
+    required MicaStore that,
+    required String viewId,
   });
 
   MicaDocument? crateApiStoreMicaStoreRollbackDoc({
@@ -357,6 +367,11 @@ abstract class RustLibApi extends BaseApi {
   SyncCursor crateApiStoreMicaStoreSyncCursor({
     required MicaStore that,
     required String docId,
+  });
+
+  List<String> crateApiStoreMicaStoreTrashViewSubtree({
+    required MicaStore that,
+    required String viewId,
   });
 
   void crateApiStoreMicaStoreTrimUpdatesThrough({
@@ -1887,6 +1902,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<String> crateApiStoreMicaStorePurgeViewSubtree({
+    required MicaStore that,
+    required String viewId,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(viewId, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStorePurgeViewSubtreeConstMeta,
+        argValues: [that, viewId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStorePurgeViewSubtreeConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_purge_view_subtree",
+        argNames: ["that", "viewId"],
+      );
+
+  @override
   MicaDocument? crateApiStoreMicaStoreRestoreLocalVersion({
     required MicaStore that,
     required String docId,
@@ -1902,7 +1950,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(docId, serializer);
           sse_encode_String(versionId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 46)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1923,6 +1971,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<String> crateApiStoreMicaStoreRestoreViewSubtree({
+    required MicaStore that,
+    required String viewId,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(viewId, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 47)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreRestoreViewSubtreeConstMeta,
+        argValues: [that, viewId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreRestoreViewSubtreeConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_restore_view_subtree",
+        argNames: ["that", "viewId"],
+      );
+
+  @override
   MicaDocument? crateApiStoreMicaStoreRollbackDoc({
     required MicaStore that,
     required String docId,
@@ -1936,7 +2017,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(docId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 46)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 48)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1975,7 +2056,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             doc,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 47)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 49)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2008,7 +2089,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_box_autoadd_local_view(view, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 48)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 50)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2041,7 +2122,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_box_autoadd_local_workspace(workspace, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 49)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 51)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2076,7 +2157,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(docId, serializer);
           sse_encode_box_autoadd_sync_cursor(cursor, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 50)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 52)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2109,7 +2190,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(docId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 51)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2142,7 +2223,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(docId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 52)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_sync_cursor,
@@ -2162,6 +2243,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<String> crateApiStoreMicaStoreTrashViewSubtree({
+    required MicaStore that,
+    required String viewId,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+            that,
+            serializer,
+          );
+          sse_encode_String(viewId, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 55)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStoreMicaStoreTrashViewSubtreeConstMeta,
+        argValues: [that, viewId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStoreMicaStoreTrashViewSubtreeConstMeta =>
+      const TaskConstMeta(
+        debugName: "MicaStore_trash_view_subtree",
+        argNames: ["that", "viewId"],
+      );
+
+  @override
   void crateApiStoreMicaStoreTrimUpdatesThrough({
     required MicaStore that,
     required String docId,
@@ -2177,7 +2291,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(docId, serializer);
           sse_encode_i_64(upToClock, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2212,7 +2326,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(docId, serializer);
           sse_encode_i_64(after, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 57)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_doc_update,
@@ -2242,7 +2356,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_64(a, serializer);
           sse_encode_i_64(b, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 55)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 58)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_64,
@@ -2264,7 +2378,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 59)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2290,7 +2404,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 60,
             port: port_,
           );
         },
@@ -2315,7 +2429,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 58)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 61)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2340,7 +2454,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 59,
+            funcId: 62,
             port: port_,
           );
         },
@@ -2368,7 +2482,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 60,
+            funcId: 63,
             port: port_,
           );
         },
@@ -4281,6 +4395,13 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
       .api
       .crateApiStoreMicaStorePurgeView(that: this, origin: origin, id: id);
 
+  /// Permanently remove `view_id` and its subtree, documents included.
+  /// Returns the affected ids. There is no undo past this point.
+  List<String> purgeViewSubtree({required String viewId}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStorePurgeViewSubtree(that: this, viewId: viewId);
+
   /// Restore the document to a version, returning the recovered doc (null if
   /// the version isn't found). The pre-restore state is kept as an auto version
   /// so the restore is itself undoable.
@@ -4292,6 +4413,16 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
     docId: docId,
     versionId: versionId,
   );
+
+  /// Bring `view_id` and the subtree trashed with it back out of the bin.
+  ///
+  /// If the restored ROOT's parent is no longer a live view, the root is
+  /// lifted to the top level — restoring into a trashed parent would leave it
+  /// invisible with no way back. Mirrors the server's `restore_view`.
+  List<String> restoreViewSubtree({required String viewId}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStoreRestoreViewSubtree(that: this, viewId: viewId);
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).
@@ -4330,6 +4461,16 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// This doc's sync progress (0/0 if it has never synced).
   SyncCursor syncCursor({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreSyncCursor(that: this, docId: docId);
+
+  /// Move `view_id` and its whole subtree to the recycle bin. Returns the
+  /// affected ids so the caller can close an editor that was inside it.
+  ///
+  /// A folder carries its children: trashing one must trash the subtree, or
+  /// the children survive as orphans pointing at a trashed parent.
+  List<String> trashViewSubtree({required String viewId}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStoreTrashViewSubtree(that: this, viewId: viewId);
 
   /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
   /// bounding the append-log while leaving the un-pushed tail intact. The base

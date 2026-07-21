@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `dedup_sibling_name`, `store`
+// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `set_trashed`, `store`, `subtree_ids`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
@@ -131,6 +131,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// local/cloud namespaces (v4 composite PK).
   void purgeView({required String origin, required String id});
 
+  /// Permanently remove `view_id` and its subtree, documents included.
+  /// Returns the affected ids. There is no undo past this point.
+  List<String> purgeViewSubtree({required String viewId});
+
   /// Restore the document to a version, returning the recovered doc (null if
   /// the version isn't found). The pre-restore state is kept as an auto version
   /// so the restore is itself undoable.
@@ -138,6 +142,13 @@ abstract class MicaStore implements RustOpaqueInterface {
     required String docId,
     required String versionId,
   });
+
+  /// Bring `view_id` and the subtree trashed with it back out of the bin.
+  ///
+  /// If the restored ROOT's parent is no longer a live view, the root is
+  /// lifted to the top level — restoring into a trashed parent would leave it
+  /// invisible with no way back. Mirrors the server's `restore_view`.
+  List<String> restoreViewSubtree({required String viewId});
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).
@@ -161,6 +172,13 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// This doc's sync progress (0/0 if it has never synced).
   SyncCursor syncCursor({required String docId});
+
+  /// Move `view_id` and its whole subtree to the recycle bin. Returns the
+  /// affected ids so the caller can close an editor that was inside it.
+  ///
+  /// A folder carries its children: trashing one must trash the subtree, or
+  /// the children survive as orphans pointing at a trashed parent.
+  List<String> trashViewSubtree({required String viewId});
 
   /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
   /// bounding the append-log while leaving the un-pushed tail intact. The base

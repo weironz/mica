@@ -71,6 +71,15 @@ abstract interface class LocalOfflineApi {
   CloudPageTreeCache? cachedCloudPageTree(String serverUrl);
   DocData? openCloudDocMirror(String docId);
   void purgeView(String viewId, String objectId);
+
+  /// Trash / restore / permanently remove a view AND its whole subtree,
+  /// returning the ids touched so the caller can drop an open editor that was
+  /// inside it. The cascade — and the "lift a restored root whose parent is
+  /// still trashed" rule — live in Rust, so the local world and the server
+  /// enforce one implementation instead of two.
+  List<String> trashViewSubtree(String viewId);
+  List<String> restoreViewSubtree(String viewId);
+  List<String> purgeViewSubtree(String viewId);
   ({String workspaceId, int docs})? detachCloudWorkspace(
     String serverUrl,
     String cloudWorkspaceId,
