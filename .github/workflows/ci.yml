@@ -88,6 +88,12 @@ jobs:
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
           done
 
+      # mica-core's web_interop.rs is the yjs↔yrs cross-engine gate (CLAUDE.md
+      # dependency exemption #7's load-bearing premise): it shells out to `node`
+      # (preinstalled on GitHub-hosted runners) to run the COMMITTED web bundle
+      # (clients/mica_flutter/web/yjs_bundle.js) headlessly against the yrs
+      # side. No setup-node needed; on a bare self-hosted runner without node
+      # the test fails loudly rather than skipping.
       - name: Test (incl. app-core + infra, Postgres-backed)
         run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra
 

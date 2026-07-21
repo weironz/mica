@@ -274,7 +274,7 @@ error: failed to run custom build command for `libsqlite3-sys`
 - **丁-1【做】**：抽 8 方法 `SyncDocReplica` 接口 + 平台工厂（照 `doc_store_platform` 的条件导入模式），两份 session 合成一份共享（~750 行）+ 桌面适配器 ~50 行 + web 适配器 ~20 行（`MicaYDoc` 当初就是按镜像 `MicaDocument` 写的，方法一一对应）。红线 #1 的语义从两份人肉同步变一份。零新工具链、零部署改动;做完后若将来上 wasm，只换一个适配器，session 与 store 全不动——**两步解耦，互不阻塞**。
   〔✅ 已落地（当日）：`cloud_sync_io.dart`(739) + `cloud_sync_web.dart`(611) = 1,350 行 → `cloud_sync_session.dart`(747) + 契约 44 + 两适配器 57/48 + 门面 6 = 902 行，净 -448；外部消费者(main.dart 等 9 处)零改动。验证：analyzer 干净、676 单测、7 个 sync 集成测试 + 4 个 FFI 集成测试全绿。**验证过程的意外收获**：基线实验(旧代码同样失败)把 `cloud_sync_test` 的"随机"失败追到一个真服务端 bug——并发首次 bootstrap 的 ensure_base 竞态让输家客户端拿到平行 CRDT 宇宙的 base，对端编辑永远 pending 且 applyUpdate 返回 Ok（红线 #1 静默分歧），修复 + 确定性回归测试见 commit `eaefb6e`；顺带补齐 FFI workspace 漏升的 yrs 0.27.3（`1a68142`）。〕
 - **丁-2【挂起，带触发条件】**：换引擎消那 ~680 行。它的漂移面是真实的（`doc.rs`/`marks.rs` 每次演进都要人肉同步 `mica_ydoc.dart`，且**没有**乙类那样的 fixture 守护），但参照系全部反向、无先例可抄。触发条件：`mica_ydoc` 镜像再出漂移 bug、yjs/yrs 升级破坏字节兼容、或参照系出现窄核先例。
-- **独立必做（不论哪条路）**：yjs↔yrs 字节兼容是依赖豁免 #7 的承重前提，但唯一的跨引擎测试 `web_interop.rs` 是 `#[ignore]` 状态（要手工从浏览器捕获 `MICA_WEB_STATE_B64`），**无任何 CI 守护**。任一端升级改编码都不会被自动抓住——这正是 AFFiNE y-octo 踩过的面。要固化成回归地板。
+- **独立必做（不论哪条路）**：yjs↔yrs 字节兼容是依赖豁免 #7 的承重前提，但唯一的跨引擎测试 `web_interop.rs` 是 `#[ignore]` 状态（要手工从浏览器捕获 `MICA_WEB_STATE_B64`），**无任何 CI 守护**。任一端升级改编码都不会被自动抓住——这正是 AFFiNE y-octo 踩过的面。要固化成回归地板。**✅ 已落地（2026-07-21）**：`web_interop.rs` 摘掉 `#[ignore]`，改为自包含双向 round-trip——yrs 写 base → `node` 加载**已提交的生产 bundle**（`web/yjs_bundle.js`，经 `tool/yjs/w2_headless.cjs`）读取并施加 W2 编辑 → yrs 读回断言 marks/props/树。随 `cargo test -p mica-core` 在 CI 每次 push 执行，node 缺失时响亮失败而非跳过。
 
 ---
 
