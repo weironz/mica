@@ -148,9 +148,11 @@ Rust 侧 `GEN_GOLD` 为同一批 fixture 额外产出 `.md.gold` = `export_markd
 
 > 这 15 条的分诊 = 把本次会话追那 12 处漂移的过程再走一遍，是独立一轮的工作量。**但机制已经就位** —— 在此之前，这 15 处差异一个都不会有人发现。
 
-### 第 2 步：甲类去重
+### 第 2 步：甲类去重 —— 3/4 完成，`zip_writer` 是漏网项
 
 `zip_writer` 优先（模式已验证、无新技术、漂移后果最重），再 `cloneView`/`_dedupName`、markdown 正则，最后本地世界 CRUD（~980 行，量最大、和 `setState` 交织最深）。
+
+〔状态核对 2026-07-21：后三项已入 Rust（1610653 等），但该提交声明的「甲类清零」**过度**——`zip_writer.dart` 仍在。原因（当时未记录，现补）：`buildStoreZip` 在云端导入路径上且 **web 可达**（`_importTreeIntoWorkspace` 未 gate `kIsWeb`），纯 FFI 替换覆盖不了 web。可行解：桌面走 FFI + web 保留 Dart（暴露面减半），并给两端加字节一致的 gold-zip conformance 测试钉死漂移；彻底删除要等乙类 wasm 通道。〕
 
 ### 第 3 步：WASM spike ✅ 已完成（2026-07-21）—— **延迟这条否决理由不成立**
 
