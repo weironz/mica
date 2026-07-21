@@ -1,0 +1,11 @@
+![banner](assets/banner.png)
+
+![photo](train.jpg "a title")
+
+inline ![icon](https://x.io/i.png) inside text
+
+![alt with emphasis](/gallery/art.png "gallery")
+
+ref shortcut ![art](/gallery/art.png "gallery") and full ![other](/gallery/art.png "gallery")
+
+!\[escaped\] and \![link form](/gallery/art.png "gallery")

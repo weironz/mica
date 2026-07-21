@@ -1,0 +1,11 @@
+plain *italic* and **bold** basics
+
+intraword st*ar*s work but sn\_ake\_s do not
+
+*(*parens rule*)* and a \* loose star
+
+***both at once*** and **nested *inner* tail**
+
+foo*bar* edge and *underscore* word
+
+rule of three: \***strong* in em*

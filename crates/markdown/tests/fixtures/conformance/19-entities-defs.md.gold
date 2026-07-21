@@ -1,0 +1,13 @@
+copy © and star \*foo\* and hex 'quote'
+
+unknown &MadeUpEntity; stays literal
+
+see [multi](/multi-url "multi
+line title") resolves
+
+```python
+fenced with indent
+keep
+```
+
+ref with entity dest: [ent](/föö "tïtle")

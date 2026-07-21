@@ -1,0 +1,23 @@
+- plain item
+- 
+    ```py
+    fenced inside item
+    ```
+
+- item then code
+    ```
+    indented code child
+    ```
+- 
+    ---
+- item with quote
+    > quoted in item
+    > still quoted
+    >
+
+1. fence first
+    ```
+    code
+    ```
+
+    paragraph after child

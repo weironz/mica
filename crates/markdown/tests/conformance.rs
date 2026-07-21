@@ -47,6 +47,53 @@ fn parse_to_gold(markdown: &str) -> Value {
   Value::Array(blocks)
 }
 
+/// The EXPORT direction's gold: `export_markdown(import_markdown(md))`.
+///
+/// The import gold below pins Dart's parser against Rust's. Nothing pinned the
+/// two SERIALIZERS against each other — Rust's `fixtures_round_trip` exercises
+/// only Rust's own exporter, and Dart's conformance test only ever called
+/// `markdownToBlocks`. So the whole export path (`inlineToMarkdown`,
+/// `escapeBlockLeader`, `escapeInline`) had ZERO cross-engine coverage, and
+/// both drifts that reached users came through exactly there:
+///
+///   * `escapeBlockLeader` — a body line `===` exported unescaped, then
+///     re-imported as a setext heading that ate the previous paragraph.
+///   * `render_span` dropping a link whose range coincided with a code mark —
+///     `` [`useState`](url) `` exported as `` `useState` ``, URL gone.
+///
+/// Adding more `.md` fixtures could never have caught either: the corpus was
+/// not the gap, the harness shape was. Dart reads this same file back through
+/// `EditorController.selectionText()`.
+#[test]
+fn fixtures_export_match_gold() {
+  let dir = fixture_dir();
+  let generate = std::env::var("GEN_GOLD").is_ok();
+  let mut checked = 0;
+  let mut entries: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+  entries.sort_by_key(|e| e.file_name());
+  for entry in entries {
+    let path = entry.path();
+    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+      continue;
+    }
+    let markdown = std::fs::read_to_string(&path).unwrap();
+    let exported = mica_markdown::export_markdown(&import_markdown(&markdown, "root")).unwrap();
+    let gold_path = path.with_extension("md.gold");
+    if generate {
+      std::fs::write(&gold_path, &exported).unwrap();
+      continue;
+    }
+    let gold = std::fs::read_to_string(&gold_path).unwrap_or_else(|_| {
+      panic!("missing export gold for {path:?} — run with GEN_GOLD=1 to create")
+    });
+    assert_eq!(exported, gold, "export drift in {path:?}");
+    checked += 1;
+  }
+  if !generate {
+    assert!(checked >= 10, "expected at least 10 export fixtures, found {checked}");
+  }
+}
+
 #[test]
 fn fixtures_match_gold() {
   let dir = fixture_dir();
