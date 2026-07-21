@@ -180,7 +180,58 @@ Rust 侧 `GEN_GOLD` 为同一批 fixture 额外产出 `.md.gold` = `export_markd
 
 `docs/architecture.md` 给出的承重理由是「热路径不能每次按键过一趟往返」。**就 wasm 而言，这条经测量不成立** —— 它比现状还快。
 
-但「可行」不等于「现在就做」。下一步不是删那 2,400 行，而是**第二个 spike**：在真实 Flutter web 里跑通 frb 的 web 路径，量它的 interop 开销与真实产物体积。在那之前，本条维持「可行但未决」。
+但「可行」不等于「现在就做」。下一步不是删那 2,400 行，而是第二个 spike。
+
+### 第 3b 步：frb web spike ✅ 已完成（2026-07-21）—— **可行，但 web 上没有性能收益**
+
+第一个 spike 测的是 Node + 裸 wasm-bindgen。这一个把 frb 的 web 路径在**真实 Chrome** 里跑通，并且——这点关键——**对照组换成同一个浏览器里的 Dart**（先前拿 Dart VM 比浏览器，是拿 JIT 比浏览器，证明不了任何事）。
+
+两轮样本，同一台机器、同一个 Chrome、同一批输入【实测】：
+
+| | Dart→JS（浏览器） | frb wasm（浏览器，含 JSON） | frb wasm（仅解析） |
+|---|---|---|---|
+| **热路径** 87 字符 | 0.085 / 0.046 ms | 0.093 / 0.079 ms | 0.083 / 0.046 ms |
+| **批量** 7,118 字符 | 4.22 / 6.38 ms | 5.73 / 5.43 ms | 4.74 / 5.62 ms |
+
+**结论：在浏览器里两者基本打平**，算上 JSON 序列化 wasm 还略慢一点。第一个 spike 里「快一倍」那个优势，在 frb 的编解码层 + dart2js 本身够快之下消失了。
+
+产物体积（frb 真实 `build-web`，含 `wasm-opt`）：
+
+- wasm **180 KB 原始 / 78 KB gzip**
+- JS 胶水 **30 KB 原始 / 6 KB gzip**
+- 合计传输量 **~84 KB**
+
+比第一个 spike 的裸 wasm-bindgen 版**还小**（201 KB → 180 KB）。此前说 frb 产物「结构不同、更大」的推断【未证实】**也是错的，此处修正**。
+
+#### 一个结构性阻碍（实测）
+
+现有 FFI crate `rust_lib_mica_flutter` **整体无法上 web**：
+
+```
+Compiling libsqlite3-sys v0.35.0
+error: failed to run custom build command for `libsqlite3-sys`
+```
+
+它依赖 `mica-core` 的 `store` feature = `rusqlite` + `bundled`（要编 C 版 SQLite）。而更本质的是**浏览器里没有本地 SQLite 文件存储**——整个 `MicaStore` 面在 web 上没有意义（`local_offline_web.dart` 那 207 行空壳正是这个原因）。
+
+→ 要把 Markdown 引擎搬上 web，**必须另建一个只暴露 markdown 的 web 专用 bridge crate**，而不是复用现有的。这不是可选项，是前提。
+
+#### 工程代价（已实测，不再是推断）
+
+- nightly 工具链 + `rust-src` 组件（`-Z build-std` 要它）
+- `wasm-pack`
+- COOP/COEP 响应头是**硬要求**：默认静态服务器不设，得自己加（本次要手写一个 server 才跑得起来）
+- 构建耗时：cargo ~55s + wasm-pack ~67s，且 `-Z build-std` 每次重编标准库
+
+#### 结论
+
+三条否决理由：**延迟不成立**（打平）、**体积不成立**（84 KB）、**「web 跑不了」不成立**（跑通了）。
+
+但**支持它的理由也只剩一条**：少维护 2,400 行重复。代价是 nightly 工具链 + 第二个 bridge crate + COOP/COEP + 一条新的 web 构建链路。
+
+**且这条理由今天变弱了**：双表示危险的根源是静默漂移，而 import 与 export 两个方向现在都有共享 fixture 守着（本日建立，坏用例已清零）。漂移会被自动抓住，不再是「迟早出事」。
+
+**建议：可行但暂不推进。** 真要做，触发条件应当是「又出现了 fixture 抓不到的漂移」或「要新增一个平台」，而不是「因为能做」。
 
 ### 第 4 步：丙类 —— 最后，或永远不做
 
