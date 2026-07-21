@@ -2310,17 +2310,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Next sibling position under [parentViewId] (zero-padded, 10-spaced).
-  String _nextLocalPosition(String? parentViewId) {
-    var max = 0;
-    for (final v in _localViews) {
-      if (v.parentViewId == parentViewId) {
-        final n = int.tryParse(v.position) ?? 0;
-        if (n > max) max = n;
-      }
-    }
-    return (max + 10).toString().padLeft(10, '0');
-  }
-
   /// Open the on-device store, load the page tree, and select (or seed) a page.
   Future<void> _initLocalOffline() async {
     if (_localReady) return;
@@ -2448,19 +2437,26 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }) async {
     final title = name.trim().isEmpty ? kUntitledPage : name.trim();
     final created = _local.newDoc();
-    final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
-    final position = _nextLocalPosition(parentViewId);
-    final data = (
-      id: viewId,
-      workspaceId: _localSelectedWorkspace?.id ?? 'local',
+    // Rust assigns the id and the position (after the last live sibling) —
+    // the same rule clone and reorder use.
+    final workspaceId = _localSelectedWorkspace?.id ?? 'local';
+    final viewId = _local.createView(
+      workspaceId: workspaceId,
       parentId: parentViewId,
       objectId: created.docId,
       name: title,
-      position: position,
+      objectType: 'document',
+    );
+    final data = (
+      id: viewId,
+      workspaceId: workspaceId,
+      parentId: parentViewId,
+      objectId: created.docId,
+      name: title,
+      position: _local.listViews().firstWhere((v) => v.id == viewId).position,
       trashed: false,
       objectType: 'document',
     );
-    _local.saveView(data);
     final view = _viewFromData(data);
     if (!mounted) return null;
     setState(() {
@@ -2483,18 +2479,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? parentViewId,
   }) async {
     final title = name.trim().isEmpty ? context.l10n.folderNewDefault : name.trim();
-    final viewId = 'view_${DateTime.now().microsecondsSinceEpoch}';
-    _local.saveView((
-      id: viewId,
+    // A folder has no document; object_id is an unused placeholder.
+    final viewId = _local.createView(
       workspaceId: _localSelectedWorkspace?.id ?? 'local',
       parentId: parentViewId,
-      // A folder has no document; object_id is an unused placeholder.
-      objectId: 'folder_$viewId',
+      objectId: 'folder_${DateTime.now().microsecondsSinceEpoch}',
       name: title,
-      position: _nextLocalPosition(parentViewId),
-      trashed: false,
       objectType: 'folder',
-    ));
+    );
     if (!mounted) return null;
     setState(_reloadLocalViews);
     return viewId;
@@ -3139,22 +3131,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? parentViewId,
     List<DocumentView> ordered,
   ) async {
-    for (var i = 0; i < ordered.length; i++) {
-      final v = ordered[i];
-      final position = ((i + 1) * 10).toString().padLeft(10, '0');
-      if (v.position != position || v.parentViewId != parentViewId) {
-        _local.saveView((
-          id: v.id,
-          workspaceId: _workspaceIdOfView(v.id),
-          parentId: parentViewId,
-          objectId: v.objectId,
-          name: v.name,
-          position: position,
-          trashed: false,
-          objectType: v.objectType,
-        ));
-      }
-    }
+    // Renumbering and reparenting are one move, and the step-of-ten scheme
+    // lives with the create/clone paths rather than being spelled out again.
+    _local.reorderViews(parentViewId, [for (final v in ordered) v.id]);
     if (mounted) setState(_reloadLocalViews);
   }
 

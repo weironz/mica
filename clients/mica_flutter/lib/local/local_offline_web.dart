@@ -199,6 +199,18 @@ class LocalOffline implements LocalOfflineApi {
   @override
   List<String> purgeViewSubtree(String viewId) => const [];
 
+  @override
+  String createView({
+    required String workspaceId,
+    String? parentId,
+    required String objectId,
+    required String name,
+    required String objectType,
+  }) => '';
+
+  @override
+  void reorderViews(String? parentId, List<String> orderedIds) {}
+
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})
       newDoc() => throw UnsupportedError('local offline is not available on web');
 

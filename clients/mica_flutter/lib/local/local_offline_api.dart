@@ -80,6 +80,21 @@ abstract interface class LocalOfflineApi {
   List<String> trashViewSubtree(String viewId);
   List<String> restoreViewSubtree(String viewId);
   List<String> purgeViewSubtree(String viewId);
+
+  /// Create a page or folder row and return its id. Position is assigned by
+  /// Rust (after the last live sibling, in steps of ten) — the same rule
+  /// clone and reorder use, so all three agree on where things land.
+  String createView({
+    required String workspaceId,
+    String? parentId,
+    required String objectId,
+    required String name,
+    required String objectType,
+  });
+
+  /// Renumber [orderedIds] as consecutive children of [parentId], reparenting
+  /// them if they came from elsewhere.
+  void reorderViews(String? parentId, List<String> orderedIds);
   ({String workspaceId, int docs})? detachCloudWorkspace(
     String serverUrl,
     String cloudWorkspaceId,

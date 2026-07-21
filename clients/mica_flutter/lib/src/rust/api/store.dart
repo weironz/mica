@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `set_trashed`, `store`, `subtree_ids`
+// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `set_trashed`, `store`, `subtree_ids`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
@@ -67,6 +67,20 @@ abstract class MicaStore implements RustOpaqueInterface {
   LocalVersion? createLocalVersion({
     required String docId,
     required String label,
+  });
+
+  /// Create a page or folder row under `parent_id` and return its id.
+  ///
+  /// Serves both kinds: a document passes the `object_id` its freshly-created
+  /// doc got, a folder passes a placeholder (it owns no document). Position
+  /// comes from [`Self::next_position`], so a page created here and a page
+  /// cloned by [`Self::clone_view`] land by the same rule.
+  String createView({
+    required String workspaceId,
+    String? parentId,
+    required String objectId,
+    required String name,
+    required String objectType,
   });
 
   void deleteDoc({required String docId});
@@ -134,6 +148,15 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Permanently remove `view_id` and its subtree, documents included.
   /// Returns the affected ids. There is no undo past this point.
   List<String> purgeViewSubtree({required String viewId});
+
+  /// Renumber `ordered_ids` as consecutive children of `parent_id`.
+  ///
+  /// Positions restart at 10 and step by ten, matching
+  /// [`Self::next_position`] so a later insert still lands after them. Rows
+  /// already in the right place are left alone — an untouched row is one less
+  /// write and one less sync update. Reparenting is part of the same move:
+  /// dragging into another folder changes both.
+  void reorderViews({String? parentId, required List<String> orderedIds});
 
   /// Restore the document to a version, returning the recovered doc (null if
   /// the version isn't found). The pre-restore state is kept as an auto version

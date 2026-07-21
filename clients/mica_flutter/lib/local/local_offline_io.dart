@@ -277,6 +277,27 @@ class LocalOffline implements LocalOfflineApi {
   List<String> purgeViewSubtree(String viewId) =>
       _store?.purgeViewSubtree(viewId: viewId) ?? const [];
 
+  @override
+  String createView({
+    required String workspaceId,
+    String? parentId,
+    required String objectId,
+    required String name,
+    required String objectType,
+  }) =>
+      _store?.createView(
+        workspaceId: workspaceId,
+        parentId: parentId,
+        objectId: objectId,
+        name: name,
+        objectType: objectType,
+      ) ??
+      '';
+
+  @override
+  void reorderViews(String? parentId, List<String> orderedIds) =>
+      _store?.reorderViews(parentId: parentId, orderedIds: orderedIds);
+
   /// Detach a mirrored cloud workspace into a NEW independent local workspace
   /// (P3f §6.2, the "换 id 版"): copies the workspace + view rows to origin
   /// 'local' and every mirrored document to a FRESH doc id, so the local fork

@@ -366,6 +366,83 @@ impl MicaStore {
         let _ = self.store().purge_view(&origin, &id);
     }
 
+    /// Where the next child of `parent_id` goes: after the last LIVE sibling,
+    /// in steps of ten, zero-padded to ten digits so string ordering is
+    /// numeric ordering.
+    ///
+    /// One rule, one place. It used to be written out separately in the Dart
+    /// create path, the Dart reorder path and `clone_view` below — three copies
+    /// of a convention where a single disagreement puts a new page in the wrong
+    /// spot. The gap of ten is what leaves room to drop something between two
+    /// siblings without renumbering them.
+    fn next_position(&self, parent_id: Option<&str>) -> String {
+        let max = self
+            .list_views("local".to_string())
+            .iter()
+            .filter(|v| !v.trashed && v.parent_id.as_deref() == parent_id)
+            .filter_map(|v| v.position.parse::<i64>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("{:010}", max + 10)
+    }
+
+    /// Create a page or folder row under `parent_id` and return its id.
+    ///
+    /// Serves both kinds: a document passes the `object_id` its freshly-created
+    /// doc got, a folder passes a placeholder (it owns no document). Position
+    /// comes from [`Self::next_position`], so a page created here and a page
+    /// cloned by [`Self::clone_view`] land by the same rule.
+    #[frb(sync)]
+    pub fn create_view(
+        &self,
+        workspace_id: String,
+        parent_id: Option<String>,
+        object_id: String,
+        name: String,
+        object_type: String,
+    ) -> String {
+        let id = format!("view_{}", uuid::Uuid::new_v4());
+        self.save_view(LocalView {
+            id: id.clone(),
+            workspace_id,
+            position: self.next_position(parent_id.as_deref()),
+            parent_id,
+            object_id,
+            name,
+            trashed: false,
+            origin: "local".to_string(),
+            object_type,
+        });
+        id
+    }
+
+    /// Renumber `ordered_ids` as consecutive children of `parent_id`.
+    ///
+    /// Positions restart at 10 and step by ten, matching
+    /// [`Self::next_position`] so a later insert still lands after them. Rows
+    /// already in the right place are left alone — an untouched row is one less
+    /// write and one less sync update. Reparenting is part of the same move:
+    /// dragging into another folder changes both.
+    #[frb(sync)]
+    pub fn reorder_views(&self, parent_id: Option<String>, ordered_ids: Vec<String>) {
+        let all = self.list_views("local".to_string());
+        for (i, id) in ordered_ids.iter().enumerate() {
+            let Some(v) = all.iter().find(|v| &v.id == id) else {
+                continue;
+            };
+            let position = format!("{:010}", (i as i64 + 1) * 10);
+            if v.position == position && v.parent_id == parent_id {
+                continue;
+            }
+            self.save_view(LocalView {
+                parent_id: parent_id.clone(),
+                position,
+                trashed: false,
+                ..clone_view_row(v)
+            });
+        }
+    }
+
     /// `view_id` plus every descendant, in `list_views` order.
     ///
     /// The recursive walk the three subtree operations below share, and the
@@ -483,19 +560,16 @@ impl MicaStore {
             subtree.push(v);
         }
 
-        // Dedup against LIVE siblings under the same parent, and land after
-        // them (max position + 10, the step the create paths already use).
-        let mut max_pos = 0i64;
-        let mut sibling_names: Vec<String> = Vec::new();
-        for v in all
+        // Dedup against LIVE siblings under the same parent; position comes
+        // from the shared rule so a clone lands exactly where a newly created
+        // page would.
+        let sibling_names: Vec<String> = all
             .iter()
             .filter(|v| v.parent_id == root.parent_id && !v.trashed)
-        {
-            sibling_names.push(v.name.clone());
-            max_pos = max_pos.max(v.position.parse::<i64>().unwrap_or(0));
-        }
+            .map(|v| v.name.clone())
+            .collect();
         let new_name = dedup_sibling_name(&root_name, &sibling_names);
-        let root_position = format!("{:010}", max_pos + 10);
+        let root_position = self.next_position(root.parent_id.as_deref());
 
         // Fresh id per node. The ROOT keeps its parent (it lands beside the
         // original); inner nodes point at their COPIED parent.
@@ -953,5 +1027,99 @@ mod clone_view_tests {
         store.save_view(view("b", Some("a"), "B", "0000000020"));
         let hit = store.trash_view_subtree("a".into());
         assert_eq!(hit.len(), 2, "both, once each");
+    }
+
+    #[test]
+    fn a_new_view_lands_after_its_live_siblings() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("a", None, "A", "0000000010"));
+        store.save_view(view("b", None, "B", "0000000020"));
+
+        let id = store.create_view(
+            "ws".into(), None, "doc_x".into(), "C".into(), "document".into(),
+        );
+        let all = store.list_views("local".to_string());
+        let made = all.iter().find(|v| v.id == id).unwrap();
+        assert_eq!(made.position, "0000000030");
+        assert!(made.id.starts_with("view_"));
+        assert!(!made.trashed);
+    }
+
+    #[test]
+    fn a_trashed_sibling_does_not_reserve_its_slot() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("a", None, "A", "0000000010"));
+        store.save_view(view("gone", None, "G", "0000000090"));
+        store.trash_view_subtree("gone".into());
+
+        let id = store.create_view(
+            "ws".into(), None, "doc_x".into(), "C".into(), "document".into(),
+        );
+        let all = store.list_views("local".to_string());
+        assert_eq!(
+            all.iter().find(|v| v.id == id).unwrap().position,
+            "0000000020",
+            "counting a trashed row would leave a growing gap forever",
+        );
+    }
+
+    #[test]
+    fn positions_are_scoped_to_the_parent() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("folder", None, "F", "0000000010"));
+        store.save_view(view("deep", Some("folder"), "D", "0000000500"));
+
+        let id = store.create_view(
+            "ws".into(), None, "top".into(), "T".into(), "document".into(),
+        );
+        assert_eq!(
+            store.list_views("local".to_string()).iter().find(|v| v.id == id).unwrap().position,
+            "0000000020",
+            "a child's position must not push the top level along",
+        );
+    }
+
+    #[test]
+    fn a_clone_lands_where_a_new_page_would() {
+        // The whole point of sharing next_position: these two must agree.
+        let (store, _dir) = tmp_store();
+        store.save_view(view("a", None, "A", "0000000010"));
+        store.save_doc("doc_a".into(), &MicaDocument::from_markdown("x".into()));
+
+        let cloned = store.clone_view("a".into(), "A".into()).unwrap();
+        let all = store.list_views("local".to_string());
+        let clone_pos = &all.iter().find(|v| v.id == cloned.root_view_id).unwrap().position;
+        assert_eq!(clone_pos, "0000000020");
+    }
+
+    #[test]
+    fn reorder_renumbers_and_reparents_in_one_move() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("x", None, "X", "0000000010"));
+        store.save_view(view("y", None, "Y", "0000000020"));
+        store.save_view(view("folder", None, "F", "0000000030"));
+
+        // Drag y above x, and move both under the folder.
+        store.reorder_views(
+            Some("folder".into()),
+            vec!["y".to_string(), "x".to_string()],
+        );
+        let all = store.list_views("local".to_string());
+        let y = all.iter().find(|v| v.id == "y").unwrap();
+        let x = all.iter().find(|v| v.id == "x").unwrap();
+        assert_eq!((y.position.as_str(), y.parent_id.as_deref()), ("0000000010", Some("folder")));
+        assert_eq!((x.position.as_str(), x.parent_id.as_deref()), ("0000000020", Some("folder")));
+    }
+
+    #[test]
+    fn reorder_leaves_an_unknown_id_alone() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("x", None, "X", "0000000010"));
+        // A stale id from a list the user dragged before a refresh must not
+        // panic or create a phantom row.
+        store.reorder_views(None, vec!["ghost".to_string(), "x".to_string()]);
+        let all = store.list_views("local".to_string());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].position, "0000000020", "x took the second slot it was given");
     }
 }
