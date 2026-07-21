@@ -31,18 +31,31 @@ typedef BlockSpec = ({String kind, String text, Map<String, dynamic> data});
   return null;
 }
 
+/// Drop line terminators from the end, keeping every other trailing
+/// character (spaces included). Mirrors Rust `trim_end_matches(['\n','\r'])`.
+String _trimEndNewlines(String s) {
+  var e = s.length;
+  while (e > 0 && (s[e - 1] == '\n' || s[e - 1] == '\r')) {
+    e--;
+  }
+  return e == s.length ? s : s.substring(0, e);
+}
+
 /// A paragraph-like block kept open for multi-line continuation.
 class _OpenItem {
   _OpenItem(this.index, this.kind, this.contentCol, this.raw, this.base,
-      {this.qdepth = 0, this.endsHard = false});
+      {this.qdepth = 0});
   final int index;
   final String kind;
   final int contentCol;
+
+  /// Accumulated source text, joined with plain newlines and KEEPING each
+  /// line's trailing spaces: hard-break detection happens at inline-parse
+  /// time (it must see code spans), so this must not destroy the evidence.
   String raw;
   final Map<String, dynamic> base;
   bool hadBlank = false;
   final int qdepth;
-  bool endsHard;
 }
 
 /// Block-level HTML tag names (CommonMark type-6 start condition).
@@ -546,9 +559,14 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     }
     final raw = lines[i].trimRight();
     final line = raw.trimLeft();
-    // Two or more trailing spaces on the source line = a hard line break if
-    // a continuation joins (canonicalized to a backslash break).
-    final endsHard = lines[i].endsWith('  ');
+    // The same content as `line` but KEEPING the source line's trailing
+    // spaces. Hard-break detection moved to inline-parse time (only there can
+    // it see code spans, which may straddle the line ending), so the block
+    // layer must carry the evidence instead of judging it. Mirrors Rust
+    // `body`. `body` is always `line` plus a run of trailing whitespace.
+    final body = _trimEndNewlines(lines[i]).trimLeft();
+    // `t` (a marker-stripped PREFIX of `line`) with those spaces restored.
+    String withTrailing(String t) => t + body.substring(line.length);
 
     if (line.isEmpty) {
       // Blank lines between items keep the list context, end the open
@@ -585,8 +603,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     // A 4+-column line cannot start a new block while a top-level
     // paragraph-like block is open — it is lazy continuation text.
     if (col >= 4 && listStack.isEmpty && open != null && !open!.hadBlank) {
-      open!.raw = '${open!.raw}${open!.endsHard ? '\\\n' : '\n'}$line';
-      open!.endsHard = endsHard;
+      open!.raw = '${open!.raw}\n$body';
       reapply(open!);
       i++;
       continue;
@@ -702,8 +719,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
           }
           final base = <String, dynamic>{'li': level};
           result.add(_inline('paragraph', line, {'li': level}, defs: defs));
-          open = _OpenItem(result.length - 1, 'paragraph', cc, line, base,
-              endsHard: endsHard);
+          open = _OpenItem(result.length - 1, 'paragraph', cc, body, base);
           i++;
           continue;
         }
@@ -923,8 +939,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
           open != null &&
           open!.qdepth >= qdepth &&
           !open!.hadBlank) {
-        open!.raw = '${open!.raw}${open!.endsHard ? '\\\n' : '\n'}$qrestTrim';
-        open!.endsHard = endsHard;
+        open!.raw = '${open!.raw}\n${stripQuoteMarkers(body).$2.trimLeft()}';
         reapply(open!);
         quoteActive = true;
         i++;
@@ -1015,8 +1030,8 @@ List<BlockSpec> markdownToBlocks(String markdown) {
                 qkind == 'bulleted_list' ||
                 qkind == 'numbered_list' ||
                 qkind == 'todo')
-            ? _OpenItem(result.length - 1, qkind, 0, qtext, qbase,
-                qdepth: qdepth, endsHard: endsHard)
+            ? _OpenItem(result.length - 1, qkind, 0, withTrailing(qtext), qbase,
+                qdepth: qdepth)
             : null;
       }
       quoteActive = true;
@@ -1052,7 +1067,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         if (open!.hadBlank) {
           if (col >= open!.contentCol && open!.raw.isNotEmpty && !itemChildren) {
             open!.hadBlank = false;
-            open!.raw = '${open!.raw}\n\n$line';
+            open!.raw = '${open!.raw}\n\n$body';
             open!.base['loose'] = true;
             pendingLoose = false;
             reapply(open!);
@@ -1061,10 +1076,8 @@ List<BlockSpec> markdownToBlocks(String markdown) {
           }
           // The blank closed the item; whatever follows is a new block.
         } else {
-          open!.raw = open!.raw.isEmpty
-              ? line
-              : '${open!.raw}${open!.endsHard ? '\\\n' : '\n'}$line';
-          open!.endsHard = endsHard;
+          open!.raw =
+              open!.raw.isEmpty ? body : '${open!.raw}\n$body';
           reapply(open!);
           i++;
           continue;
@@ -1195,8 +1208,8 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       result.add(_inline(kind, text, data, defs: defs));
       lastList = (result.length - 1, level, markerChar);
       itemChildren = false;
-      open = _OpenItem(result.length - 1, kind, contentCol, text, base,
-          endsHard: endsHard);
+      open = _OpenItem(
+          result.length - 1, kind, contentCol, withTrailing(text), base);
       i++;
       continue;
     }
@@ -1212,8 +1225,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     result.add(_inline(kind, text, data, defs: defs));
     // Paragraphs stay open for lazy continuation and setext underlines.
     if (kind == 'paragraph') {
-      open = _OpenItem(result.length - 1, 'paragraph', 0, line, {},
-          endsHard: endsHard);
+      open = _OpenItem(result.length - 1, 'paragraph', 0, body, {});
     }
     i++;
   }

@@ -5100,6 +5100,14 @@ fn render_inline(block: &Block) -> String {
   render_span(&units, 0, units.len(), &refs)
 }
 
+/// Marks whose rendering is TERMINAL: the branch writes the span literally and
+/// cannot nest anything inside it, so it must never win an exact-range tie — it
+/// would swallow the mark it coincides with. `[`a`](/x)` used to export as
+/// `` `a` ``, dropping the link outright (and with it the URL).
+fn renders_terminal(kind: &str) -> bool {
+  matches!(kind, "code" | "math" | "html" | "footnote")
+}
+
 /// Render `[lo, hi)` of the text wrapping marks as properly NESTED markdown:
 /// the outermost mark opens once over its whole range with inner marks
 /// recursing inside (`**bold *italic* tail**`) — per-segment wrapping breaks
@@ -5109,7 +5117,8 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
   let mut out = String::new();
   let mut pos = lo;
   while pos < hi {
-    // The next mark by clipped start; ties prefer the widest (outermost).
+    // The next mark by clipped start; ties prefer the widest (outermost), then
+    // the nestable one — a terminal kind sorts last so it renders INSIDE.
     let next = marks
       .iter()
       .enumerate()
@@ -5118,7 +5127,7 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
         let e = m.end.min(hi);
         (e > s).then_some((s, e, i))
       })
-      .min_by_key(|&(s, e, _)| (s, usize::MAX - e));
+      .min_by_key(|&(s, e, i)| (s, usize::MAX - e, renders_terminal(&marks[i].kind)));
     let Some((s, e, picked)) = next else {
       out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..hi])));
       break;
@@ -5192,10 +5201,19 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
         let href = m.href.as_deref().unwrap_or("");
         let plain = String::from_utf16_lossy(&units[s..e]);
         // A title-less link whose text IS its target → autolink form; a
-        // bare `www.` link writes back bare (GFM re-links it on read).
-        if m.title.is_none() && plain.starts_with("www.") && href == format!("http://{plain}") {
+        // bare `www.` link writes back bare (GFM re-links it on read). Both
+        // shorthands write `plain`, so they DISCARD inner marks — only take
+        // them when there are none to lose (`[`x`](x)` must stay bracketed).
+        if m.title.is_none()
+          && inner.is_empty()
+          && plain.starts_with("www.")
+          && href == format!("http://{plain}")
+        {
           plain.to_string()
-        } else if m.title.is_none() && (href == plain || href == format!("mailto:{plain}")) {
+        } else if m.title.is_none()
+          && inner.is_empty()
+          && (href == plain || href == format!("mailto:{plain}"))
+        {
           format!("<{plain}>")
         } else {
           let dest = if href.contains(char::is_whitespace) {

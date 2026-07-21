@@ -1,0 +1,67 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 1,
+          "start": 0,
+          "type": "code"
+        },
+        {
+          "end": 1,
+          "href": "/x",
+          "start": 0,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "a"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 3,
+          "start": 0,
+          "type": "code"
+        },
+        {
+          "end": 3,
+          "href": "/x",
+          "start": 0,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "a]b"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 11,
+          "start": 4,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "[foo](/uri)"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 17,
+          "href": "https://e.com/x",
+          "start": 2,
+          "type": "link"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "[ahttps://e.com/xb](/y)"
+  }
+]

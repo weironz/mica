@@ -1,0 +1,33 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 13,
+          "start": 2,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "a code   span b"
+  },
+  {
+    "data": {},
+    "kind": "paragraph",
+    "text": "x\\\ny"
+  },
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 20,
+          "start": 2,
+          "type": "html"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "t <span  \nclass=\"k\">u"
+  }
+]

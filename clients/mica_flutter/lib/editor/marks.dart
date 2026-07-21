@@ -320,8 +320,98 @@ const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
 String normalizeLabel(String label) =>
     label.trim().split(RegExp(r'\s+')).join(' ').toLowerCase().replaceAll('ß', 'ss');
 
+/// One past the code span / autolink / raw-inline-HTML region opening at
+/// [i], or -1 when [i] opens none. Mirrors Rust `inline_span_end`.
+///
+/// These three bind tighter than every other inline construct (CommonMark
+/// §6.1), so scanners looking for a delimiter must step over them whole.
+int _inlineSpanEnd(String src, int i) {
+  final c = src[i];
+  if (c == '`') return _codeSpanClose(src, i);
+  if (c == '<') {
+    // Autolink first — it constrains the closing `>` — then raw HTML.
+    final close = src.indexOf('>', i + 1);
+    if (close > i && autolinkTarget(src.substring(i + 1, close)) != null) {
+      return close + 1;
+    }
+    final html = inlineHtmlEnd(src, i);
+    return html > i ? html : -1;
+  }
+  return -1;
+}
+
+/// Line-ending canonicalization (§6.7/6.9/6.12) with span awareness: a run of
+/// 2+ trailing spaces before `\n` OUTSIDE code spans / autolinks / raw inline
+/// HTML is a hard break — rewritten to the `\`+newline stored-text convention;
+/// a soft break just drops the trailing whitespace. INSIDE those spans every
+/// byte is content: ``` `code␠␠⏎span` ``` keeps its spaces (the code-span
+/// handler maps `\n` to a space).
+///
+/// This lives at the INLINE layer because only it can see code spans — a span
+/// may straddle the line ending, so the block layer, which works line by line,
+/// cannot decide. It used to decide anyway (`endsHard` on the open block) and
+/// injected a literal backslash into code content. Mirrors the Rust engine's
+/// `parse_inline_memo` preamble. Idempotent, so the recursive re-parse of link
+/// labels is safe.
+String _canonicalizeBreaks(String src) {
+  const sp = 0x20, tab = 0x09, nl = 0x0a, backslash = 0x5c;
+  final out = <int>[];
+  var i = 0;
+  while (i < src.length) {
+    final c = src.codeUnitAt(i);
+    // Escaped char (incl. `` \` ``): never a span opener; copy as-is. A
+    // backslash directly before `\n` falls through — it IS a hard break.
+    if (c == backslash && i + 1 < src.length && src.codeUnitAt(i + 1) != nl) {
+      out.add(c);
+      out.add(src.codeUnitAt(i + 1));
+      i += 2;
+      continue;
+    }
+    if (c == 0x60 /* ` */ || c == 0x3c /* < */) {
+      final end = _inlineSpanEnd(src, i);
+      if (end > i) {
+        for (var k = i; k < end; k++) {
+          out.add(src.codeUnitAt(k));
+        }
+        i = end;
+        continue;
+      }
+    }
+    if (c == nl) {
+      // Hard break = 2+ SPACES immediately before the newline; any other
+      // trailing whitespace (tabs included) just drops with a soft break.
+      var spaces = 0;
+      while (spaces < out.length && out[out.length - 1 - spaces] == sp) {
+        spaces++;
+      }
+      var ws = spaces;
+      while (ws < out.length &&
+          (out[out.length - 1 - ws] == sp || out[out.length - 1 - ws] == tab)) {
+        ws++;
+      }
+      out.removeRange(out.length - ws, out.length);
+      if (spaces >= 2) out.add(backslash);
+      out.add(nl);
+      i++;
+      continue;
+    }
+    out.add(c);
+    i++;
+  }
+  // End-of-text trailing whitespace is outside spans by construction.
+  while (out.isNotEmpty && (out.last == sp || out.last == tab)) {
+    out.removeLast();
+  }
+  return String.fromCharCodes(out);
+}
+
 /// The `]` matching the `[` at [open], honoring nesting and escapes; -1 if
 /// none.
+///
+/// Code spans, autolinks and raw inline HTML bind tighter than link brackets
+/// (CommonMark §6.5), so a `]` inside one of those does not close the link.
+/// Mirrors Rust `matching_bracket`; without the skip, ``[`a]b`](/x)`` lost
+/// its link entirely on the Dart side (confirmed drift).
 int matchingBracket(String src, int open) {
   var depth = 0;
   var j = open;
@@ -329,6 +419,11 @@ int matchingBracket(String src, int open) {
     final c = src[j];
     if (c == r'\' && j + 1 < src.length) {
       j += 2;
+      continue;
+    }
+    final span = _inlineSpanEnd(src, j);
+    if (span > j) {
+      j = span;
       continue;
     }
     if (c == '[') depth++;
@@ -1036,10 +1131,11 @@ bool _labelHasLinkCached(
     _parseInlineMemo(src, defs, <String, bool>{});
 
 ({String text, List<Mark> marks}) _parseInlineMemo(
-  String src,
+  String rawSrc,
   Map<String, ({String dest, String? title})> defs,
   Map<String, bool> cache,
 ) {
+  final src = _canonicalizeBreaks(rawSrc);
   final out = StringBuffer();
   final marks = <Mark>[];
   final delims = <_Delim>[];
@@ -1348,10 +1444,14 @@ bool _labelHasLinkCached(
       }
       if (close >= 0) {
         var inner = src.substring(i + n, close).replaceAll('\n', ' ');
+        // The "content isn't blank" guard is «not all SPACES» (§6.1), not
+        // «not all whitespace»: `` ` \t ` `` strips to a tab. `trim()` also
+        // eats tabs, so it answered "blank" and skipped the strip — a
+        // confirmed drift from Rust's `!inner.bytes().all(|b| b == b' ')`.
         if (inner.length >= 2 &&
             inner.startsWith(' ') &&
             inner.endsWith(' ') &&
-            inner.trim().isNotEmpty) {
+            inner.codeUnits.any((u) => u != 0x20)) {
           inner = inner.substring(1, inner.length - 1);
         }
         final start = out.length;
@@ -1611,21 +1711,36 @@ String inlineToMarkdown(String text, List<Mark> marks) {
   return _renderSpan(text, 0, text.length, marks);
 }
 
+/// Marks whose rendering is TERMINAL: the branch writes the span literally and
+/// cannot nest anything inside it, so it must never win an exact-range tie — it
+/// would swallow the mark it coincides with. ``[`a`](/x)`` used to export as
+/// `` `a` ``, dropping the link outright (and with it the URL).
+/// Mirrors Rust `renders_terminal`.
+bool _rendersTerminal(String kind) =>
+    kind == 'code' || kind == 'math' || kind == 'html' || kind == 'footnote';
+
 String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
   final out = StringBuffer();
   var pos = lo;
   while (pos < hi) {
-    // Next mark by clipped start; ties prefer the widest (outermost).
+    // Next mark by clipped start; ties prefer the widest (outermost), then the
+    // nestable one — a terminal kind sorts last so it renders INSIDE.
     Mark? pick;
     var ps = 0, pe = 0;
+    var pickTerm = false;
     for (final m in marks) {
       final s = m.start < pos ? pos : m.start;
       final e = m.end > hi ? hi : m.end;
       if (e <= s) continue;
-      if (pick == null || s < ps || (s == ps && e > pe)) {
+      final term = _rendersTerminal(m.type);
+      if (pick == null ||
+          s < ps ||
+          (s == ps && e > pe) ||
+          (s == ps && e == pe && pickTerm && !term)) {
         pick = m;
         ps = s;
         pe = e;
+        pickTerm = term;
       }
     }
     if (pick == null) {
@@ -1697,12 +1812,17 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       case 'link':
         final href = pick.href ?? '';
         final plain = text.substring(ps, pe);
+        // Both shorthands below write `plain`, so they DISCARD inner marks —
+        // only take them when there are none to lose (``[`x`](x)`` must stay
+        // bracketed).
         if (pick.title == null &&
+            inner.isEmpty &&
             plain.startsWith('www.') &&
             href == 'http://$plain') {
           // A bare `www.` link writes back bare (GFM re-links it on read).
           out.write(plain);
         } else if (pick.title == null &&
+            inner.isEmpty &&
             (href == plain || href == 'mailto:$plain')) {
           out.write('<$plain>');
         } else {

@@ -391,6 +391,23 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 **这一轮最该记住的**：第一版只做了惰性求值，我在注释和测试标题里宣称 DoS 已解决——**但那两个 perf 测试只钉了被治好的良性形状**，真正的向量绿着溜过去。对抗性审查抓出来，我复测确认后才补上共享 memo，并让两端守卫**同时钉住两种形状**。这是本轮第二次「测试声称超出证据」，两次都是我自己写的。
 
 **仍未动**：
-- P1-1 其余 7 处漂移未复核（机制已就位，补 fixture 即可继续暴露）。
 - **块层差异（新发现，未查）**：`[![a](/img)](/u)` 在 **inline 层两端完全一致**，但 Dart 的 `markdownToBlocks` 会把"只含一张图的段落"提升成 image 块并**丢掉外层链接**，Rust 保留段落 + image/link 两个 mark。与本轮改动无关，属块层既有差异。
 - P3 全部（架构债，判断重、风险高，计划本就建议缓做）。
+
+### 清空漂移清单：最后 3 处 + 序列化器丢链接（2026-07-21，用户在场）
+
+先纠正上一轮两个报数错误：**剩余是 5 处不是 7 处**（我多报了）；**和 Docker 无关**——漂移验证是纯本地两步（Rust `GEN_GOLD` 生成 gold + Dart `flutter test` 比对），Postgres 只有 `sync_pg`/api-server 那批测试要用。
+
+实测 5 处：**2 处证伪**（`mathRunSpans` 不跳 code span —— `` `$a` $b$ `` 两端逐字节相同，Dart 的 `_findMathCloser` 早已调用 `_codeSpanClose`；空白定义 Unicode vs ASCII —— 全角空格后的 `www.example.com` 两端都识别为 autolink），**3 处确认为真并已修**：
+
+| commit | 覆盖 | 说明 |
+| --- | --- | --- |
+| （本轮） | **漂移 ①硬换行判定跨 code span** | 根因是**架构层级错位**：Dart 在**块层**用 `lines[i].endsWith('  ')`(`_OpenItem.endsHard`) 预判硬换行，而 code span 可以跨行——块层逐行看，根本无法判定。`` a `code␠␠⏎span` `` 被注入一个字面 `\` 进代码内容。照 Rust 的做法把判定**整体下移到行内层**（新增 `_canonicalizeBreaks`，跳过 code span/autolink/raw HTML），块层改为保留行尾空格、一律 `\n` 拼接（新增 `body`/`withTrailing`，对齐 Rust `body`），`endsHard` 连同 10 处引用一并删除。 |
+| （本轮） | **漂移 ②`matchingBracket` 不跳 span** | `` [`a]b`](/x) ``：Rust 得到 code+link，Dart 只得到 code，**链接整个丢失**。新增 `_inlineSpanEnd`（镜像 Rust `inline_span_end`，含 autolink 与 raw HTML 分支），`matchingBracket` 扫描时整体跳过。 |
+| （本轮） | **漂移 ③code span 空格剥离条件** | 判空用的是「非全 **空格**」(§6.1) 而不是「非全 **空白**」。Dart 用 `inner.trim().isNotEmpty`，`trim()` 连 tab 一起吃 → `` ` ⇥ ` `` 答"空"而跳过剥离。改为 `inner.codeUnits.any((u) => u != 0x20)`，对齐 Rust `!inner.bytes().all(|b| b == b' ')`。 |
+
+新增 fixture `38-hardbreak-spans` / `39-bracket-spans` / `40-code-span-strip`，conformance 29 → **32**，三个 case 在 Dart 侧全部对上 Rust 生成的 gold。**至此 12 处原始清单全部有定论：10 处已修、2 处证伪。**
+
+**补 fixture 当场炸出一个更严重的 bug（两端同病，与三处漂移无关）**：`render_span` 选下一个 mark 的键是 `(start, 最宽)`，而 `code` 分支是**终止性**的（写完字面量就 `pos = e; continue;`，从不渲染 `inner`）。当 code mark 与 link mark **范围完全重合**时，谁在数组里靠前谁赢——`` [`a`](/x) `` 导出成 `` `a` ``，**URL 静默消失**。`` [`useState`](https://react.dev/…) `` 这种形状在技术文档里遍地都是，任何一次导出/复制为 Markdown 都在毁真实内容。修法：终止性 kind（code/math/html/footnote）**输掉范围完全重合的平局**，让可嵌套的 mark 包在外面；同时给 autolink / 裸 `www.` 两个简写分支加 `inner.is_empty()` 守卫（它们写 `plain`、丢弃内嵌 mark，只有无内容可丢时才该用）。两端各配 5 条断言完全相同的回归测试（`linked_code_span.rs` / `linked_code_span_test.dart`），含两条**反向**守卫防止修过头。
+
+**这一轮最该记住的**：① 漂移不都是"照抄漏了一行"——①是**架构层级放错**，块层被迫在信息不足的位置做判定，修法是搬层级而不是打补丁。② **fixture 机制本身比它当下钉住的用例更值钱**：这次三个新 fixture 里，真正的重头戏是它顺带炸出的序列化器丢链接——那个 bug 不在任何漂移清单上，是 round-trip 断言自己抓的。③ Dart 侧那个 bug 我起初是从**代码结构推断**的（探针编译失败没跑成），提交前把平局规则临时改回去实测它确实会红，才确认测试不是空跑。

@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "marks": [
+        {
+          "end": 7,
+          "start": 6,
+          "type": "code"
+        },
+        {
+          "end": 13,
+          "start": 12,
+          "type": "code"
+        },
+        {
+          "end": 25,
+          "start": 23,
+          "type": "code"
+        },
+        {
+          "end": 31,
+          "start": 30,
+          "type": "code"
+        }
+      ]
+    },
+    "kind": "paragraph",
+    "text": "strip \t and a but keep    and  "
+  }
+]
