@@ -1,28 +1,40 @@
-// P2-M4.5: a live cloud editing session for one document, backed by a yrs CRDT
-// replica.
+// P2-M4.5 / 丁-1: THE live cloud editing session for one document — one shared
+// protocol state machine for every platform.
 //
-// It owns a [MicaDocument] (the device's replica, pinned to the device's stable
-// yrs client id), speaks the WS sync protocol added in M4.4
-// (sync.bootstrap/pull/push + sync.update), pushes local editor ops as yrs
-// diffs, and merges remote updates — firing [onRemoteBlocks] so the editor can
-// reconcile. CRDT merge makes concurrent edits converge with no central locking.
+// It owns a [SyncDocReplica] (the device's CRDT replica — Rust yrs over FFI on
+// desktop, JS yjs on web; wire-compatible, chosen by the conditional import
+// below), speaks the WS sync protocol added in M4.4 (sync.bootstrap/pull/push +
+// sync.update), pushes local editor ops as CRDT diffs, and merges remote
+// updates — firing [onRemoteBlocks] so the editor can reconcile. CRDT merge
+// makes concurrent edits converge with no central locking.
 //
-// Not imported on web (depends on the native FFI); callers guard with `!kIsWeb`.
+// Local-first (P2 Phase 1 desktop / P4-2 web): when [persistence] is set (the
+// platform's [CloudDocStore]), the session runs the append-log machinery —
+// seed-from-store offline read, durable outbox with contiguous-prefix ack
+// tracking, remote-update log, timerless compaction. Without a store it falls
+// back to the legacy in-memory queue + prefs.
+//
+// History: until 2026-07-21 this file existed twice (cloud_sync_io.dart /
+// cloud_sync_web.dart) with 407 non-comment lines byte-identical, red line #1
+// kept in sync by hand. The engine seam ([SyncDocReplica]) ended that; keep
+// engine types out of this file.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import '../local/doc_ops.dart';
-import '../src/rust/api/document.dart';
 import 'cloud_doc_store.dart';
+import 'sync_doc_replica.dart';
+import 'sync_replica_io.dart' if (dart.library.html) 'sync_replica_web.dart';
 
 export 'cloud_doc_store.dart';
+export 'sync_doc_replica.dart' show DocOp, SyncDocReplica;
 
-/// A local yrs diff awaiting the server's ack. Tagged with a client id the
+/// A local CRDT diff awaiting the server's ack. Tagged with a client id the
 /// server echoes in `sync.ack` so an ack matches its specific diff even across
 /// reconnect resends; `sent` avoids re-transmitting while a push is in flight.
+/// Legacy path — with a store the durable outbox replaces this.
 class _Pending {
   _Pending(this.id, this.bytes);
   final String id;
@@ -46,8 +58,10 @@ class CloudSyncSession {
   /// The document WebSocket URI (already carrying the auth token).
   final Uri uri;
 
-  /// This device's stable yrs client id (from the local store identity) — so all
-  /// of a device's edits share one CRDT actor across sessions.
+  /// This device's stable CRDT actor id. Desktop pins the replica to it (from
+  /// the local store identity) so all of a device's edits share one actor
+  /// across sessions; the web adapter ignores it — yjs assigns a per-session
+  /// actor, which is CRDT-correct (convergence holds).
   final BigInt clientId;
 
   /// Fired once after bootstrap with the root block id + the editor's nodes.
@@ -66,27 +80,30 @@ class CloudSyncSession {
 
   /// Fired once per session the first time a valid frame arrives from the server
   /// — a definitive "we are online" signal. Used to leave the P1c offline-nav
-  /// fallback (refetch the authoritative workspace list once reachable again).
+  /// fallback (refetch the authoritative workspace list once reachable again);
+  /// P4-2 gave web one too, wired to `_recoverOnlineNav`.
   final void Function()? onServerConnected;
 
-  /// Unacked diffs (raw yrs bytes) restored from local persistence at startup,
-  /// so a crash / hard close doesn't lose edits the server never acked (C1).
-  /// Replayed after (re)connect; the server folds duplicates idempotently.
+  /// Unacked diffs (raw update bytes) restored from local persistence at
+  /// startup, so a crash / hard close doesn't lose edits the server never acked
+  /// (C1). Replayed after (re)connect; the server folds duplicates idempotently.
+  /// Legacy path only — unused when [persistence] is set (the durable outbox IS
+  /// the crash record).
   final List<Uint8List>? restoreUnacked;
 
   /// Persists the current unacked queue whenever it changes (debounced), so it
-  /// survives a restart. Desktop wires this to the local store / prefs.
+  /// survives a restart. Legacy path only (prefs-backed).
   final void Function(List<Uint8List> unacked)? onPersistUnacked;
 
-  /// Local-first mirror for this cloud doc (P2 Phase 1, desktop): seeds the
-  /// replica from the on-device store for offline read, and write-throughs the
-  /// doc + sync cursor so it survives a restart. Null on web / when not mirrored.
+  /// Local-first mirror for this cloud doc: seeds the replica from the
+  /// on-device store for offline read, and holds the durable outbox + remote
+  /// log + sync cursor so they survive a restart. Desktop wires the SQLite
+  /// store, web the IndexedDB store; null → online-only (e.g. private mode).
   final CloudDocStore? persistence;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
-  MicaDocument? _doc;
-  final DocOpMirror _mirror = DocOpMirror();
+  SyncDocReplica? _doc;
   String _rootBlockId = '';
 
   /// Highest stream rid this replica has applied (per-document cursor).
@@ -141,17 +158,17 @@ class CloudSyncSession {
   bool _restored = false;
   Timer? _persistTimer;
 
-  /// Local-first mirror state (Phase 1): [_seeded] gates the one-time seed of
-  /// the replica from the on-device store.
+  /// Local-first mirror state: [_seeded] gates the one-time seed of the replica
+  /// from the on-device store.
   bool _seeded = false;
   bool _sawServerFrame = false;
 
   String get rootBlockId => _rootBlockId;
   bool get isReady => _ready;
 
-  /// Durable-outbox mode: on desktop the on-device store's append-log is the
-  /// outbox (survives restart/crash), replacing the in-memory queue + prefs used
-  /// on web / when no store is available.
+  /// Durable-outbox mode: the platform store's append-log is the outbox
+  /// (survives restart/crash), replacing the in-memory queue + prefs used
+  /// when no store is available.
   bool get _useAppendLog => persistence != null;
 
   /// True when nothing local is still waiting for a server ack.
@@ -183,19 +200,13 @@ class CloudSyncSession {
 
   /// The full document as a flat block list (tree order) — for callers that
   /// rebuild a snapshot/bootstrap from the live replica.
-  List<Map<String, dynamic>> allBlocks() {
-    final doc = _doc;
-    if (doc == null) return const [];
-    return (jsonDecode(doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
-  }
+  List<Map<String, dynamic>> allBlocks() => _doc?.toBlocks() ?? const [];
 
   /// Current editor nodes (root block's children, in order).
   List<Map<String, dynamic>> childBlocks() {
     final doc = _doc;
     if (doc == null) return const [];
-    final all =
-        (jsonDecode(doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
-    final byId = {for (final b in all) b['id'] as String: b};
+    final byId = {for (final b in doc.toBlocks()) b['id'] as String: b};
     final root = byId[_rootBlockId];
     if (root == null) return const [];
     final children = (root['children'] as List?)?.cast<String>() ?? const [];
@@ -230,7 +241,7 @@ class CloudSyncSession {
       cancelOnError: false,
     );
     if (_doc == null) {
-      // Cold start: fetch the yrs base (the server also auto-sends a
+      // Cold start: fetch the CRDT base (the server also auto-sends a
       // `document.bootstrap` op snapshot first, which we ignore). Any recovered
       // unacked diffs are replayed once the base arrives (see `sync.base`).
       _send({'type': 'sync.bootstrap'});
@@ -245,7 +256,7 @@ class CloudSyncSession {
   /// The sync.pull payload. P4-3: alongside the stream cursor we advertise the
   /// replica's state vector, so a prune-forced re-bootstrap answers with the
   /// minimal diff instead of the full doc (`sync.base` carries either — both
-  /// are yrs updates, applied identically). An old server ignores `sv`; the
+  /// are CRDT updates, applied identically). An old server ignores `sv`; the
   /// deliberate exception is the integrity-fault heal, which requests a FULL
   /// base (no sv) since a corrupt replica's sv is the wrong basis for a diff.
   Map<String, dynamic> _pullPayload() {
@@ -270,25 +281,22 @@ class CloudSyncSession {
     }
   }
 
-  /// Seed the replica from the on-device store exactly once (Phase 1 offline
-  /// read). If a persisted copy exists, decode it, fire [onReady] with its
-  /// content immediately, and resume the stream from the saved cursor — so the
-  /// doc opens with zero connectivity. A corrupt/absent copy falls through to the
-  /// normal server bootstrap (`_doc` stays null → `connect` sends sync.bootstrap).
+  /// Seed the replica from the on-device store exactly once (offline read). If
+  /// a persisted copy exists, decode it, fire [onReady] with its content
+  /// immediately, and resume the stream from the saved cursor — so the doc
+  /// opens with zero connectivity. A corrupt/absent copy falls through to the
+  /// normal server bootstrap (`_doc` stays null → `connect` sends
+  /// sync.bootstrap).
   void _seedFromLocalOnce() {
     if (_seeded || _doc != null || persistence == null) return;
     _seeded = true;
     final loaded = persistence!.load();
     if (loaded == null) return;
-    final doc = MicaDocument.fromStateWithClientId(
-      bytes: loaded.state,
-      clientId: clientId,
-    );
+    final doc = replicaFromState(loaded.state, clientId);
     if (doc == null) return; // corrupt local copy → cold-bootstrap from server
     _doc = doc;
     _rootBlockId = doc.rootBlockId();
     _cursor = loaded.cursor;
-    _mirror.seedFrom(doc);
     _ready = true;
     if (!_readyCompleter.isCompleted) _readyCompleter.complete();
     onReady(_rootBlockId, childBlocks());
@@ -305,7 +313,7 @@ class CloudSyncSession {
     // A valid frame means the link is live — reset the reconnect backoff.
     _reconnectAttempts = 0;
     // First contact with the server this session → surface "we are online" once
-    // (lets the P1c offline-nav fallback refetch the authoritative nav).
+    // (lets the offline-nav fallback refetch the authoritative nav).
     if (!_sawServerFrame) {
       _sawServerFrame = true;
       onServerConnected?.call();
@@ -318,10 +326,7 @@ class CloudSyncSession {
         final existing = _doc;
         if (existing == null) {
           // Cold bootstrap.
-          final doc = MicaDocument.fromStateWithClientId(
-            bytes: base64.decode(b64),
-            clientId: clientId,
-          );
+          final doc = replicaFromState(base64.decode(b64), clientId);
           if (doc == null) {
             // A base we can't decode is an integrity fault, not a no-op — surface
             // it (and retry, capped) instead of leaving the session stuck empty.
@@ -331,7 +336,6 @@ class CloudSyncSession {
           _doc = doc;
           _rootBlockId = doc.rootBlockId();
           _cursor = baseRid;
-          _mirror.seedFrom(doc);
           _ready = true;
           if (!_readyCompleter.isCompleted) _readyCompleter.complete();
           onReady(_rootBlockId, childBlocks());
@@ -341,14 +345,15 @@ class CloudSyncSession {
           // fast-forward the cursor when the base is genuinely ahead. The merge
           // must NOT be gated on `baseRid > _cursor`: a single `sync.update`
           // frame can advance `_cursor` past a rid whose content we couldn't
-          // fully integrate (yrs stores an update with missing deps as *pending*
-          // and returns Ok, so the cursor jumps but the bytes aren't live). If a
-          // broadcast races ahead of the pull reply on reconnect, the cursor can
-          // sit at/above base_rid while the pruned range 11..base_rid is still
-          // missing; gating the merge would skip the very base that backfills it
-          // — permanent silent divergence (red line #1), persisted by P4-1 and
-          // surviving restart. Re-merging an equal/older base is a CRDT no-op.
-          final ok = existing.applyUpdate(update: base64.decode(b64));
+          // fully integrate (the engine stores an update with missing deps as
+          // *pending* and returns Ok, so the cursor jumps but the bytes aren't
+          // live). If a broadcast races ahead of the pull reply on reconnect,
+          // the cursor can sit at/above base_rid while the pruned range
+          // 11..base_rid is still missing; gating the merge would skip the very
+          // base that backfills it — permanent silent divergence (red line #1),
+          // persisted by P4-1 and surviving restart. Re-merging an equal/older
+          // base is a CRDT no-op.
+          final ok = existing.applyUpdate(base64.decode(b64));
           if (!ok) {
             _onIntegrityFault('bad_base');
             return;
@@ -454,7 +459,8 @@ class CloudSyncSession {
         // contention, or a permanent permission error. The rejected clock stays
         // in the outbox (contiguous pushed_clock never passed it); re-enable and
         // retry it, bounded so a permanent rejection can't spin, then surface via
-        // onFault. (Web keeps its per-id retry-on-reconnect; nothing to do here.)
+        // onFault. (The legacy path keeps its per-id retry-on-reconnect; nothing
+        // to do here.)
         final errId = m['ack_id'];
         if (_useAppendLog && errId is String) {
           final clock = int.tryParse(errId);
@@ -479,7 +485,7 @@ class CloudSyncSession {
     if (doc == null) return false;
     final b64 = u['update'];
     if (b64 is! String) return false;
-    final ok = doc.applyUpdate(update: base64.decode(b64));
+    final ok = doc.applyUpdate(base64.decode(b64));
     if (!ok) {
       // Red line #1: a remote update we can't apply is an integrity fault, not
       // something to skip. Do NOT advance the cursor past it — that would
@@ -536,17 +542,17 @@ class CloudSyncSession {
     }
   }
 
-  /// Apply the editor's op batch to the local replica and push the resulting yrs
-  /// diff to the cloud. The same op stream the offline backend consumes, so local
-  /// and cloud editing behave identically.
+  /// Apply the editor's op batch to the local replica and push the resulting
+  /// CRDT diff to the cloud. The same op stream the offline backend consumes, so
+  /// local and cloud editing behave identically.
   void applyLocalOps(List<DocOp> ops) {
     final doc = _doc;
     if (doc == null) return; // not bootstrapped yet
     final sv = doc.stateVector();
     for (final op in ops) {
-      _mirror.apply(doc, op);
+      doc.applyEditorOp(op);
     }
-    final diff = doc.encodeDiffSince(stateVector: sv);
+    final diff = doc.encodeDiffSince(sv);
     if (diff.isEmpty) return;
     _enqueue(diff);
   }
@@ -568,7 +574,7 @@ class CloudSyncSession {
     }
     final p = _Pending('${_pushSeq++}', diff);
     _unacked.add(p);
-    _persistSoon(); // legacy (web) durability: the prefs unacked queue
+    _persistSoon(); // legacy durability: the prefs unacked queue
     if (_channel != null && _ready) _sendPush(p);
   }
 
@@ -585,7 +591,8 @@ class CloudSyncSession {
       // skip what we already sent (> _sentThroughClock). Idempotent regardless —
       // the server folds duplicate updates.
       final pushed = persistence!.cursor().pushedClock;
-      final floor = resendAll || pushed > _sentThroughClock ? pushed : _sentThroughClock;
+      final floor =
+          resendAll || pushed > _sentThroughClock ? pushed : _sentThroughClock;
       for (final e in persistence!.outboxAfter(floor)) {
         _sendPushRaw(e.clock.toString(), e.bytes);
         if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;
@@ -623,13 +630,11 @@ class CloudSyncSession {
     onPersistUnacked?.call([for (final p in _unacked) p.bytes]);
   }
 
-  /// Debounced write-through of the replica + cursor to the on-device store
-  /// (Phase 1). Coalesces edit/remote-update bursts so we re-encode the doc once
-  /// per idle window, not per keystroke — offline durability without I/O churn.
   /// Persist the full replica as the base snapshot NOW. P4-1: this runs only
-  /// when a server base arrives (once per bootstrap/re-bootstrap) — steady-state
-  /// persistence is pure append-log (appendOutbox/appendRemote, durable at the
-  /// moment of the event), and [_maybeCompact] re-baselines periodically.
+  /// when a server base arrives (once per bootstrap/re-bootstrap) or as
+  /// self-heal — steady-state persistence is pure append-log
+  /// (appendOutbox/appendRemote, durable at the moment of the event), and
+  /// [_maybeCompact] re-baselines periodically.
   void _saveBaseNow() {
     final doc = _doc;
     final store = persistence;
@@ -712,8 +717,11 @@ class CloudSyncSession {
   /// Fast, synchronous local-durability flush for a hard app-exit(0): write the
   /// 300ms-debounced state to the local store so quitting loses no edits. Skips
   /// compaction (a reopen-speed optimization, not correctness) and the socket
-  /// (we're quitting; unacked edits sit in the local outbox and resend). Cheap
-  /// enough to run on the close path without stalling the quit.
+  /// (we're quitting; unacked edits sit in the local outbox and resend). Only
+  /// the desktop exit(0) path calls it (window_setup_desktop) — on web the
+  /// browser owns tab close and IndexedDB is already durable — but it must
+  /// exist on every platform for the shared `_cloudSession?.flushForExit()`
+  /// call site.
   void flushForExit() {
     if (_disposed) return;
     _persistNow();
@@ -734,6 +742,6 @@ class CloudSyncSession {
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
-    persistence?.dispose(); // release per-session store resources (web: lock+IDB)
+    persistence?.dispose(); // release per-session store resources (locks/handles)
   }
 }
