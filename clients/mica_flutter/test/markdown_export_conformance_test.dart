@@ -43,29 +43,44 @@ import 'package:mica_flutter/editor/model.dart';
 /// Five were fixed on the spot (11, 13, 16, 19, 34) by three lines in
 /// `controller.dart`; the ten below are structural and still open:
 ///
-/// Fixed since: tight/loose list runs (03, 04, 22), math blocks losing their
-/// `$$` fence and being escaped as prose (23), and per-line block prefixes so
-/// a multi-line quote or list item keeps its marker on every line.
+/// Fixtures whose copy output differs from Rust's byte-for-byte but re-imports
+/// to EXACTLY the same blocks — measured, not assumed.
 ///
-/// Still open, and NOT all of them are necessarily bugs:
+/// These are not bugs, and byte-parity was the wrong bar for them.
+/// `export_markdown` (whole-document export) and `selectionText`
+/// (copy-to-clipboard) are different products; Rust ends every quote group
+/// with a decorative bare `>` that is not in the source and not in the block
+/// model, and Dart's output round-trips correctly without it. Adding it was
+/// tried and reverted — it broke two long-standing tests that deliberately
+/// assert the opposite ("a blank line would SPLIT the blockquote on re-parse
+/// and shatter the quote bar").
 ///
-///  * **A quote group's closing bare `>`** (05, 10, 17) — Rust ends every
-///    group with one. Adding it to the copy path was tried and REVERTED: it
-///    broke two long-standing tests that deliberately assert the opposite
-///    ("a blank line would SPLIT the blockquote on re-parse and shatter the
-///    quote bar"). Byte-parity with `export_markdown` is the wrong target
-///    here; `selectionText` is a different product. Whoever picks this up
-///    should decide which side is right before touching either.
-///  * **Container children** (15, 20) — blocks carrying `data.li` (a fence or
-///    quote nested inside a list item) need the item's content-column indent,
-///    which the copy path does not apply.
-///  * **Multi-line heading exported as ATX** (15) — `#` cannot hold a newline,
-///    so a two-line setext heading becomes a heading plus a stray paragraph.
-///  * **21-html** not yet root-caused.
+/// So these still run: they just assert the invariant that actually matters
+/// (copy → paste preserves the content) instead of an exact byte string.
+const _cosmeticDivergence = {'05-quote.md', '10-mixed.md'};
+
+/// Fixtures whose copy output does NOT re-import to the same blocks — genuine,
+/// still-open bugs.
 ///
-/// Full triage in `docs/rust-migration-assessment-2026-07-21.md`.
-const _knownDivergent = {
-  '05-quote.md', '10-mixed.md', '15-list-items.md', '17-quotes.md',
+/// A weaker check (comparing only kind + text) had cleared 17/20/21; comparing
+/// `data` as well is what exposed them, so do not weaken it back. What it
+/// found: round-tripping 17-quotes ADDS `qbreak: true` to a block, i.e. the
+/// copy splits one quote group into two — exactly the failure the copy path's
+/// own tests warn about ("a blank line would SPLIT the blockquote on re-parse
+/// and shatter the quote bar").
+///
+///  * 15 — a list item's lazy continuation, plus a two-line setext heading
+///    exported as ATX (`#` cannot hold a newline, so it becomes a heading plus
+///    a stray paragraph).
+///  * 17, 20 — blank-line placement around quote groups and container children
+///    (`data.li`: a fence or quote nested inside a list item) changes the
+///    grouping on re-import.
+///  * 21 — HTML blocks, not yet root-caused.
+///
+/// Tracked in `docs/rust-migration-assessment-2026-07-21.md`. Entries may only
+/// be removed by fixing them — never by widening the exception.
+const _knownBroken = {
+  '15-list-items.md', '17-quotes.md',
   '20-item-containers.md', '21-html.md',
 };
 
@@ -87,8 +102,8 @@ void main() {
   for (final md in mdFiles) {
     final name = md.uri.pathSegments.last;
     test('export conformance: $name', () {
-      if (_knownDivergent.contains(name)) {
-        markTestSkipped('$name: known export divergence, pending triage');
+      if (_knownBroken.contains(name)) {
+        markTestSkipped('$name: known-broken export, see _knownBroken');
         return;
       }
       final goldFile = File(md.path.replaceAll(RegExp(r'\.md$'), '.md.gold'));
@@ -105,11 +120,33 @@ void main() {
         return;
       }
 
+      // THE invariant, asserted for every fixture: what you copy is what you
+      // get back. Byte-parity with Rust is a proxy for this; this is the thing
+      // itself, and it is what a user loses when it breaks.
+      expect(_canon(_shape(markdownToBlocks(got))), _canon(_shape(specs)),
+          reason: 'copy → paste CHANGED the content in $name');
+
+      if (_cosmeticDivergence.contains(name)) return;
       expect(got.trimRight(), goldFile.readAsStringSync().trimRight(),
           reason: 'EXPORT drift between the Dart mirror and the Rust engine in '
               '$name — the serializers disagree');
     });
   }
+}
+
+List<Map<String, dynamic>> _shape(List<BlockSpec> specs) => [
+      for (final s in specs) {'kind': s.kind, 'text': s.text, 'data': s.data},
+    ];
+
+/// Canonical JSON so map ordering and int/double form cannot cause a false diff.
+dynamic _canon(dynamic v) {
+  if (v is Map) {
+    final keys = v.keys.cast<String>().toList()..sort();
+    return {for (final k in keys) k: _canon(v[k])};
+  }
+  if (v is List) return [for (final e in v) _canon(e)];
+  if (v is num) return v.toDouble() == v.toInt() ? v.toInt() : v;
+  return v;
 }
 
 /// Run the editor's real copy-as-Markdown path: load the blocks, select all,
