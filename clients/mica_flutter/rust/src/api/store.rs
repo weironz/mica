@@ -63,6 +63,32 @@ impl From<CoreVersion> for LocalVersion {
     }
 }
 
+/// What [`MicaStore::clone_view`] produced: where the copy landed, the name it
+/// settled on after dedup, and how many documents were actually copied
+/// (folders and doc-less views do not count).
+pub struct CloneViewResult {
+    pub root_view_id: String,
+    pub new_name: String,
+    pub docs: u32,
+}
+
+/// `base` if free among `siblings`, else `base 2`, `base 3`, … — the number is
+/// locale-neutral, the caller supplies the localized base.
+///
+/// Same rule as the server's `dedup_sibling_name` (api-server documents.rs) so
+/// a page cloned offline and one cloned in the cloud settle on the same name.
+/// Kept a free function: pure, and that is what makes it testable without a
+/// store.
+fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
+    if !siblings.iter().any(|s| s == base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|c| !siblings.iter().any(|s| s == c))
+        .expect("an unused suffix always exists")
+}
+
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
 /// `DocumentView`. `object_id` is the document's `doc_id`.
 pub struct LocalView {
@@ -321,6 +347,101 @@ impl MicaStore {
         let _ = self.store().purge_view(&origin, &id);
     }
 
+    /// Duplicate `view_id` and everything under it, beside the original.
+    ///
+    /// The WHOLE operation, not a helper: subtree walk, fresh ids, doc copies,
+    /// sibling-name dedup and positioning all happen here. That is the point —
+    /// moving a leaf helper across the bridge would leave the tree rules
+    /// duplicated and pay a crossing per node; moving the operation deletes the
+    /// Dart copy outright. Mirrors `export_folder_zip` above, the composite
+    /// that was already de-duplicated this way.
+    ///
+    /// Returns `None` when the view is gone.
+    #[frb(sync)]
+    pub fn clone_view(&self, view_id: String, root_name: String) -> Option<CloneViewResult> {
+        let all = self.list_views("local".to_string());
+        let root: &LocalView = all.iter().find(|v| v.id == view_id)?;
+
+        // Subtree = root + every descendant. Walked by REFERENCE: `LocalView`
+        // is an frb wire struct with no `Clone`, and the only copies we
+        // actually want are the new rows written at the end.
+        let mut subtree: Vec<&LocalView> = Vec::new();
+        let mut queue: Vec<&LocalView> = vec![root];
+        while let Some(v) = queue.pop() {
+            queue.extend(
+                all.iter()
+                    .filter(|c| c.parent_id.as_deref() == Some(v.id.as_str())),
+            );
+            subtree.push(v);
+        }
+
+        // Dedup against LIVE siblings under the same parent, and land after
+        // them (max position + 10, the step the create paths already use).
+        let mut max_pos = 0i64;
+        let mut sibling_names: Vec<String> = Vec::new();
+        for v in all
+            .iter()
+            .filter(|v| v.parent_id == root.parent_id && !v.trashed)
+        {
+            sibling_names.push(v.name.clone());
+            max_pos = max_pos.max(v.position.parse::<i64>().unwrap_or(0));
+        }
+        let new_name = dedup_sibling_name(&root_name, &sibling_names);
+        let root_position = format!("{:010}", max_pos + 10);
+
+        // Fresh id per node. The ROOT keeps its parent (it lands beside the
+        // original); inner nodes point at their COPIED parent.
+        let id_map: std::collections::HashMap<String, String> = subtree
+            .iter()
+            .map(|v| (v.id.clone(), format!("view_{}", uuid::Uuid::new_v4())))
+            .collect();
+        let mut docs: u32 = 0;
+        for v in &subtree {
+            let is_root = v.id == view_id;
+            let new_doc_id = format!("doc_{}", uuid::Uuid::new_v4());
+            match self.load_doc(v.object_id.clone()) {
+                Some(doc) => {
+                    self.save_doc(new_doc_id.clone(), &doc);
+                    docs += 1;
+                }
+                // A view with no document still gets an empty one, or the copy
+                // opens to nothing.
+                None => self.save_doc(
+                    new_doc_id.clone(),
+                    &MicaDocument::from_markdown(String::new()),
+                ),
+            }
+            self.save_view(LocalView {
+                id: id_map[&v.id].clone(),
+                workspace_id: v.workspace_id.clone(),
+                parent_id: if is_root {
+                    v.parent_id.clone()
+                } else {
+                    v.parent_id.as_ref().and_then(|p| id_map.get(p).cloned())
+                },
+                object_id: new_doc_id,
+                name: if is_root {
+                    new_name.clone()
+                } else {
+                    v.name.clone()
+                },
+                position: if is_root {
+                    root_position.clone()
+                } else {
+                    v.position.clone()
+                },
+                trashed: false,
+                origin: "local".to_string(),
+                object_type: v.object_type.clone(),
+            });
+        }
+        Some(CloneViewResult {
+            root_view_id: id_map[&view_id].clone(),
+            new_name,
+            docs,
+        })
+    }
+
     /// All workspaces for `origin` ("local" or a server URL), ordered by position.
     #[frb(sync)]
     pub fn list_workspaces(&self, origin: String) -> Vec<LocalWorkspace> {
@@ -515,5 +636,123 @@ impl MicaStore {
     pub fn set_sync_cursor(&self, doc_id: String, cursor: SyncCursor) {
         let _ = self.store()
             .set_sync_cursor(&doc_id, cursor.into());
+    }
+}
+
+#[cfg(test)]
+mod clone_view_tests {
+    use super::*;
+
+    // Mirrors the server's own test (api-server documents.rs) on purpose: the
+    // two implementations have to agree, so they are checked against the same
+    // cases. If one changes, this is where the disagreement shows up.
+    #[test]
+    fn free_name_is_used_as_is() {
+        assert_eq!(dedup_sibling_name("日志方案 副本", &[]), "日志方案 副本");
+    }
+
+    #[test]
+    fn collision_takes_the_first_free_number() {
+        let sibs = vec!["Notes".to_string()];
+        assert_eq!(dedup_sibling_name("Notes", &sibs), "Notes 2");
+    }
+
+    #[test]
+    fn skips_numbers_already_taken() {
+        let sibs = vec!["Notes".into(), "Notes 2".into(), "Notes 3".into()];
+        assert_eq!(dedup_sibling_name("Notes", &sibs), "Notes 4");
+    }
+
+    #[test]
+    fn a_gap_is_reused_rather_than_appended_past() {
+        let sibs = vec!["Notes".into(), "Notes 3".into()];
+        assert_eq!(dedup_sibling_name("Notes", &sibs), "Notes 2");
+    }
+
+    // The dedup tests above are pure. These open a REAL store in a temp dir and
+    // clone an actual tree, because the parts most likely to break -- the
+    // subtree walk, the parent remap, the doc copies -- only exist once rows
+    // are in SQLite. This is the layer the Dart mirror used to own.
+    fn tmp_store() -> (MicaStore, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mica_clone_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = MicaStore::open(dir.join("s.db").to_string_lossy().to_string()).unwrap();
+        (store, dir)
+    }
+
+    fn view(id: &str, parent: Option<&str>, name: &str, pos: &str) -> LocalView {
+        LocalView {
+            id: id.into(),
+            workspace_id: "ws".into(),
+            parent_id: parent.map(str::to_string),
+            object_id: format!("doc_{id}"),
+            name: name.into(),
+            position: pos.into(),
+            trashed: false,
+            origin: "local".into(),
+            object_type: "document".into(),
+        }
+    }
+
+    #[test]
+    fn clones_the_whole_subtree_and_remaps_parents() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("root", None, "Parent", "0000000010"));
+        store.save_view(view("kid", Some("root"), "Child", "0000000020"));
+        store.save_view(view("grandkid", Some("kid"), "Grandchild", "0000000030"));
+        for id in ["root", "kid", "grandkid"] {
+            store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown(format!("# {id}")));
+        }
+
+        let out = store.clone_view("root".into(), "Parent".into()).unwrap();
+        assert_eq!(out.docs, 3, "every node's document should be copied");
+        assert_eq!(out.new_name, "Parent 2", "name collides with the original");
+
+        let all = store.list_views("local".to_string());
+        assert_eq!(all.len(), 6, "three originals + three copies");
+
+        // The copied root sits beside the original (same parent), and the copy
+        // is a SEPARATE row -- the originals must be untouched.
+        let new_root = all.iter().find(|v| v.id == out.root_view_id).unwrap();
+        assert_eq!(new_root.parent_id, None);
+        assert_eq!(new_root.position, "0000000020", "lands after max sibling + 10");
+
+        // Inner nodes point at their COPIED parent, not the original.
+        let copied_kid = all
+            .iter()
+            .find(|v| v.parent_id.as_deref() == Some(out.root_view_id.as_str()))
+            .expect("the copied child hangs off the copied root");
+        assert_ne!(copied_kid.id, "kid");
+        assert_eq!(copied_kid.name, "Child", "only the ROOT gets the deduped name");
+        let copied_grandkid = all
+            .iter()
+            .find(|v| v.parent_id.as_deref() == Some(copied_kid.id.as_str()))
+            .expect("the copied grandchild hangs off the copied child");
+        assert_ne!(copied_grandkid.id, "grandkid");
+
+        // Content came along, and each copy owns a fresh doc id.
+        assert_ne!(copied_kid.object_id, "doc_kid");
+        let doc = store.load_doc(copied_kid.object_id.clone()).expect("copied doc exists");
+        assert!(doc.export_markdown().contains("kid"), "content copied, not just the row");
+    }
+
+    #[test]
+    fn a_missing_view_is_none_not_a_panic() {
+        let (store, _dir) = tmp_store();
+        assert!(store.clone_view("nope".into(), "X".into()).is_none());
+    }
+
+    #[test]
+    fn a_view_with_no_document_still_gets_one() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("solo", None, "Folder", "0000000010"));
+        let out = store.clone_view("solo".into(), "Folder".into()).unwrap();
+        assert_eq!(out.docs, 0, "nothing was there to copy");
+        let all = store.list_views("local".to_string());
+        let copy = all.iter().find(|v| v.id == out.root_view_id).unwrap();
+        assert!(
+            store.load_doc(copy.object_id.clone()).is_some(),
+            "the copy still opens to an empty document rather than nothing",
+        );
     }
 }

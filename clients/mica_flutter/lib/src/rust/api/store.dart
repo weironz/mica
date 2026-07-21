@@ -7,6 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `dedup_sibling_name`, `store`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
@@ -46,6 +47,21 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// The stable yrs client id new/loaded documents should use.
   BigInt clientId();
 
+  /// Duplicate `view_id` and everything under it, beside the original.
+  ///
+  /// The WHOLE operation, not a helper: subtree walk, fresh ids, doc copies,
+  /// sibling-name dedup and positioning all happen here. That is the point —
+  /// moving a leaf helper across the bridge would leave the tree rules
+  /// duplicated and pay a crossing per node; moving the operation deletes the
+  /// Dart copy outright. Mirrors `export_folder_zip` above, the composite
+  /// that was already de-duplicated this way.
+  ///
+  /// Returns `None` when the view is gone.
+  CloneViewResult? cloneView({
+    required String viewId,
+    required String rootName,
+  });
+
   /// Pin the current saved state as a NAMED version (never auto-pruned). Null
   /// if the document has no saved snapshot yet.
   LocalVersion? createLocalVersion({
@@ -65,7 +81,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Export a folder's subtree (`folder_id = Some`) — or the whole workspace
   /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
   /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
-  /// byte-identical to a cloud one and the export→import round-trip holds. The
+  /// the same format as a cloud one and the export→import round-trip holds. The
   /// store supplies views + document payloads; [`images`] supplies the blob
   /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
   /// folder-export gap (was cloud-only).
@@ -161,6 +177,33 @@ abstract class MicaStore implements RustOpaqueInterface {
     required String docId,
     required PlatformInt64 after,
   });
+}
+
+/// What [`MicaStore::clone_view`] produced: where the copy landed, the name it
+/// settled on after dedup, and how many documents were actually copied
+/// (folders and doc-less views do not count).
+class CloneViewResult {
+  final String rootViewId;
+  final String newName;
+  final int docs;
+
+  const CloneViewResult({
+    required this.rootViewId,
+    required this.newName,
+    required this.docs,
+  });
+
+  @override
+  int get hashCode => rootViewId.hashCode ^ newName.hashCode ^ docs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CloneViewResult &&
+          runtimeType == other.runtimeType &&
+          rootViewId == other.rootViewId &&
+          newName == other.newName &&
+          docs == other.docs;
 }
 
 /// One entry from a doc's local update log: its monotonic `clock` and the yrs

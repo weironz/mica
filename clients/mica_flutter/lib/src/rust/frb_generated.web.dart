@@ -90,6 +90,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CloneViewResult dco_decode_box_autoadd_clone_view_result(dynamic raw);
+
+  @protected
   LocalVersion dco_decode_box_autoadd_local_version(dynamic raw);
 
   @protected
@@ -100,6 +103,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SyncCursor dco_decode_box_autoadd_sync_cursor(dynamic raw);
+
+  @protected
+  CloneViewResult dco_decode_clone_view_result(dynamic raw);
 
   @protected
   DocUpdate dco_decode_doc_update(dynamic raw);
@@ -169,6 +175,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     dynamic raw,
   );
+
+  @protected
+  CloneViewResult? dco_decode_opt_box_autoadd_clone_view_result(dynamic raw);
 
   @protected
   LocalVersion? dco_decode_opt_box_autoadd_local_version(dynamic raw);
@@ -263,6 +272,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CloneViewResult sse_decode_box_autoadd_clone_view_result(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   LocalVersion sse_decode_box_autoadd_local_version(
     SseDeserializer deserializer,
   );
@@ -277,6 +291,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SyncCursor sse_decode_box_autoadd_sync_cursor(SseDeserializer deserializer);
+
+  @protected
+  CloneViewResult sse_decode_clone_view_result(SseDeserializer deserializer);
 
   @protected
   DocUpdate sse_decode_doc_update(SseDeserializer deserializer);
@@ -356,6 +373,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MicaStore?
   sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CloneViewResult? sse_decode_opt_box_autoadd_clone_view_result(
     SseDeserializer deserializer,
   );
 
@@ -470,6 +492,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_clone_view_result(
+    CloneViewResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_local_version(
     LocalVersion self,
     SseSerializer serializer,
@@ -490,6 +518,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_sync_cursor(
     SyncCursor self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_clone_view_result(
+    CloneViewResult self,
     SseSerializer serializer,
   );
 
@@ -594,6 +628,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     MicaStore? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_clone_view_result(
+    CloneViewResult? self,
     SseSerializer serializer,
   );
 
