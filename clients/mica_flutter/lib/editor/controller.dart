@@ -1039,22 +1039,32 @@ class EditorController extends ChangeNotifier {
       // ...but only within ONE run. Switching kind (bullets → numbers → todo)
       // starts a NEW list, and without the blank the two merge back into one
       // on paste. Same rule as the Rust exporter.
-      // ...unless the item is marked LOOSE, which is exactly what a blank line
-      // before it encodes. Emitting it tight dropped the flag on re-import and
-      // the list rendered with different spacing than it was copied from.
-      final sameListRun = nodes[i].isListKind &&
-          nodes[i - 1].isListKind &&
-          nodes[i].kind == nodes[i - 1].kind &&
+      // A list RUN includes its items AND their container children
+      // (`data.li` — a fence, quote or divider nested in an item). Everything
+      // inside one run joins tightly; a blank line anywhere inside it is what
+      // marks the list loose on re-import, which wraps every item in `<p>`.
+      //
+      // Two things still force the blank, and each encodes something:
+      //   * `loose: true` on the item IS a recorded blank line — dropping it
+      //     changes how the list renders;
+      //   * a child PARAGRAPH, where the blank is what made it a child
+      //     paragraph rather than a lazy continuation of the item's text.
+      //
+      // A KIND change (bullets → numbers → todo) deliberately does NOT force
+      // one. Changing the list type already starts a new list in CommonMark,
+      // so the blank is redundant — and it is not free: it sets `pendingLoose`
+      // in the importer, which the next item consumes, so the item came back
+      // marked loose when it never was. Verified by removing the rule: every
+      // fixture still round-trips, including the ones with adjacent lists of
+      // different kinds, whose blank comes from `loose` instead.
+      bool inRun(EditorNode n) => n.isListKind || n.data['li'] is int;
+      final childParagraph =
+          nodes[i].data['li'] is int && nodes[i].kind == 'paragraph';
+      final sameListRun = inRun(nodes[i]) &&
+          inRun(nodes[i - 1]) &&
+          !childParagraph &&
           nodes[i].data['loose'] != true;
-      // A container child (`data.li`) joins its item tightly — EXCEPT a
-      // paragraph, where the blank line is what made it a child paragraph in
-      // the first place. Putting a blank before a fence/quote/divider child
-      // instead made the whole ITEM loose on re-import.
-      final tightChild =
-          nodes[i].data['li'] is int && nodes[i].kind != 'paragraph';
-      buf.write(
-        sameQuoteGroup || sameListRun || tightChild ? '\n' : '\n\n',
-      );
+      buf.write(sameQuoteGroup || sameListRun ? '\n' : '\n\n');
       buf.write(
         i == e.node
             ? nodeText(e.node, 0, e.offset)

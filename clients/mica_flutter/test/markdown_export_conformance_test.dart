@@ -58,30 +58,24 @@ import 'package:mica_flutter/editor/model.dart';
 /// So these still run: they just assert the invariant that actually matters
 /// (copy → paste preserves the content) instead of an exact byte string.
 const _cosmeticDivergence = {
-  '05-quote.md', '10-mixed.md', '17-quotes.md',
+  '05-quote.md', '10-mixed.md', '15-list-items.md',
+  '17-quotes.md', '20-item-containers.md',
 };
 
 /// Fixtures whose copy output does NOT re-import to the same blocks — genuine,
 /// still-open bugs.
 ///
-/// A weaker check (comparing only kind + text) had cleared these; comparing
-/// `data` as well is what exposed them, so do not weaken it back.
+/// EMPTY, and it should stay that way: every fixture's copy output now
+/// re-imports to exactly the blocks it came from.
 ///
-/// Down to ONE remaining cause, in both: an item that owns a container child
-/// (`data.li` — a fence or quote nested inside it) comes back carrying
-/// `loose: true` when the original had none. Loose vs tight is a rendering
-/// difference (items get wrapped in `<p>`), not lost content, so this is the
-/// mildest of the failures found here — but it is still a difference between
-/// what was copied and what pastes back.
+/// It held 15 entries when this harness was written. Do not add one back to
+/// make a failure go away — a name here means the editor silently changes a
+/// user's content on copy-paste, which is what all fifteen turned out to be.
 ///
-/// Everything else these two used to fail on is fixed: container children
-/// losing their `li` indent, `3)` pasting back as `3.`, a two-line setext
-/// heading exported as ATX (which silently dropped its second line), fenced
-/// code inside a quote losing its `>`, and raw HTML blocks being re-fenced.
-///
-/// Tracked in `docs/rust-migration-assessment-2026-07-21.md`. Entries may only
-/// be removed by fixing them — never by widening the exception.
-const _knownBroken = {'15-list-items.md', '20-item-containers.md'};
+/// Note for whoever hits a failure: the weaker check that compares only
+/// kind + text once cleared three of these. Comparing `data` too is what
+/// exposed them. Do not weaken it back.
+const _knownBroken = <String>{};
 
 void main() {
   final dir = Directory('../../crates/markdown/tests/fixtures/conformance');

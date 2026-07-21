@@ -89,14 +89,14 @@ void main() {
       anchor: DocPosition(0, 0),
       focus: DocPosition(3, 1),
     );
-    // Assert the INVARIANT (the copy re-parses to the same nesting), not one
-    // exact byte string. The old assertion pinned a blank line between every
-    // item — which is what makes a list LOOSE in CommonMark — and so
-    // contradicted this test's own name. Items of one kind now stay tight;
-    // a kind change (bullets → numbers) still gets its blank, because without
-    // it the two lists merge on paste.
+    // Assert the INVARIANT (the copy re-parses to the same nesting), not just
+    // an exact byte string. The original assertion pinned a blank line between
+    // every item — which is what makes a list LOOSE in CommonMark — and so
+    // contradicted this test's own name. A tight list now copies tight, kind
+    // changes included: changing the list type already starts a new list, so
+    // the blank is redundant, and adding it made the item paste back `loose`.
     final copied = c.selectionText();
-    expect(copied, '- a\n    - b\n\n        1. c\n\n- d');
+    expect(copied, '- a\n    - b\n        1. c\n- d');
     expect(
       [for (final s in markdownToBlocks(copied)) s.data['indent'] ?? 0],
       [0, 1, 2, 0],
