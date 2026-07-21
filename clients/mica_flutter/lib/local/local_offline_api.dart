@@ -95,6 +95,17 @@ abstract interface class LocalOfflineApi {
   /// Renumber [orderedIds] as consecutive children of [parentId], reparenting
   /// them if they came from elsewhere.
   void reorderViews(String? parentId, List<String> orderedIds);
+
+  /// Create a local workspace and return its id (position assigned by Rust).
+  String createLocalWorkspace(String name);
+
+  /// Rename, keeping position and role.
+  void renameLocalWorkspace(String id, String name);
+
+  /// Delete a workspace with its views and documents. Returns false — and
+  /// changes nothing — when it is the last one on the device, so the caller
+  /// only has to decide what to SAY about it.
+  bool deleteLocalWorkspace(String id);
   ({String workspaceId, int docs})? detachCloudWorkspace(
     String serverUrl,
     String cloudWorkspaceId,

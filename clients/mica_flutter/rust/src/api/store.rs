@@ -443,6 +443,101 @@ impl MicaStore {
         }
     }
 
+    /// Where the next workspace goes — the same step-of-ten rule as
+    /// [`Self::next_position`], over workspaces instead of sibling views.
+    fn next_workspace_position(&self) -> String {
+        let max = self
+            .list_workspaces("local".to_string())
+            .iter()
+            .filter_map(|w| w.position.parse::<i64>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("{:010}", max + 10)
+    }
+
+    /// Create a local workspace and return its id.
+    #[frb(sync)]
+    pub fn create_workspace(&self, name: String) -> String {
+        let id = format!("ws_{}", uuid::Uuid::new_v4());
+        self.save_workspace(LocalWorkspace {
+            id: id.clone(),
+            name,
+            position: self.next_workspace_position(),
+            origin: "local".to_string(),
+            role: "owner".to_string(),
+        });
+        id
+    }
+
+    /// Rename a workspace, KEEPING its position and role.
+    ///
+    /// The Dart version had to read the row back to preserve `position`,
+    /// because the only primitive was a whole-row upsert — and when the read
+    /// missed it invented `0000000010`, which can collide with a real
+    /// neighbour. Doing it here means a missing row is simply a no-op.
+    #[frb(sync)]
+    pub fn rename_workspace(&self, id: String, name: String) {
+        let all = self.list_workspaces("local".to_string());
+        let Some(w) = all.iter().find(|w| w.id == id) else {
+            return;
+        };
+        self.save_workspace(LocalWorkspace {
+            id: w.id.clone(),
+            name,
+            position: w.position.clone(),
+            origin: w.origin.clone(),
+            role: w.role.clone(),
+        });
+    }
+
+    /// Delete a workspace, its views and their documents. Returns false — and
+    /// changes nothing — when it is the last one.
+    ///
+    /// Both rules live here rather than in the caller. "Keep at least one
+    /// workspace" was a UI-side check, so any other path into delete could
+    /// leave the device with none and nowhere to put a page; and dropping the
+    /// workspace row without its documents left orphaned blobs that nothing
+    /// would ever reach again.
+    #[frb(sync)]
+    pub fn delete_workspace_cascade(&self, id: String) -> bool {
+        if self.list_workspaces("local".to_string()).len() <= 1 {
+            return false;
+        }
+        for v in self
+            .list_views("local".to_string())
+            .iter()
+            .filter(|v| v.workspace_id == id)
+        {
+            self.delete_doc(v.object_id.clone());
+            self.purge_view("local".to_string(), v.id.clone());
+        }
+        self.delete_workspace("local".to_string(), id);
+        true
+    }
+
+    /// Renumber workspaces to match `ordered_ids` (drag-reorder), same
+    /// step-of-ten scheme as [`Self::reorder_views`].
+    #[frb(sync)]
+    pub fn reorder_workspaces(&self, ordered_ids: Vec<String>) {
+        let all = self.list_workspaces("local".to_string());
+        for (i, id) in ordered_ids.iter().enumerate() {
+            let Some(w) = all.iter().find(|w| &w.id == id) else {
+                continue;
+            };
+            let position = format!("{:010}", (i as i64 + 1) * 10);
+            if w.position == position {
+                continue;
+            }
+            self.save_workspace(LocalWorkspace {
+                id: w.id.clone(),
+                name: w.name.clone(),
+                position,
+                origin: w.origin.clone(),
+                role: w.role.clone(),
+            });
+        }
+    }
+
     /// `view_id` plus every descendant, in `list_views` order.
     ///
     /// The recursive walk the three subtree operations below share, and the
@@ -1122,4 +1217,122 @@ mod clone_view_tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].position, "0000000020", "x took the second slot it was given");
     }
+
+    fn ws(id: &str, name: &str, pos: &str) -> LocalWorkspace {
+        LocalWorkspace {
+            id: id.into(),
+            name: name.into(),
+            position: pos.into(),
+            origin: "local".into(),
+            role: "owner".into(),
+        }
+    }
+
+    #[test]
+    fn a_new_workspace_lands_after_the_last_one() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("a", "A", "0000000010"));
+        let id = store.create_workspace("New".into());
+        let all = store.list_workspaces("local".to_string());
+        let made = all.iter().find(|w| w.id == id).unwrap();
+        assert_eq!(made.position, "0000000020");
+        assert!(made.id.starts_with("ws_"));
+        assert_eq!(made.role, "owner");
+    }
+
+    #[test]
+    fn rename_keeps_position_and_role() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("a", "Old", "0000000070"));
+        store.rename_workspace("a".into(), "New".into());
+        let all = store.list_workspaces("local".to_string());
+        let w = all.iter().find(|w| w.id == "a").unwrap();
+        assert_eq!(w.name, "New");
+        assert_eq!(
+            w.position, "0000000070",
+            "the Dart version reinvented this as 0000000010 when its read missed",
+        );
+        assert_eq!(w.role, "owner");
+    }
+
+    #[test]
+    fn renaming_a_missing_workspace_is_a_no_op() {
+        let (store, _dir) = tmp_store();
+        let before = store.list_workspaces("local".to_string()).len();
+        store.rename_workspace("ghost".into(), "X".into());
+        let all = store.list_workspaces("local".to_string());
+        assert_eq!(all.len(), before, "no phantom row invented");
+        assert!(all.iter().all(|w| w.name != "X"));
+    }
+
+    #[test]
+    fn the_last_workspace_cannot_be_deleted() {
+        let (store, _dir) = tmp_store();
+        // A fresh store already carries the default workspace (id "local"),
+        // so THAT is the last one — deleting it must be refused.
+        assert_eq!(store.list_workspaces("local".to_string()).len(), 1);
+        assert!(!store.delete_workspace_cascade("local".into()));
+        assert_eq!(
+            store.list_workspaces("local".to_string()).len(),
+            1,
+            "the device must always have somewhere to put a page",
+        );
+    }
+
+    #[test]
+    fn deleting_a_workspace_takes_its_views_and_documents() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("keep", "Keep", "0000000010"));
+        store.save_workspace(ws("drop", "Drop", "0000000020"));
+        // Two views in the doomed workspace, one in the survivor.
+        for (id, wsid) in [("v1", "drop"), ("v2", "drop"), ("v3", "keep")] {
+            store.save_view(LocalView {
+                id: id.into(),
+                workspace_id: wsid.into(),
+                parent_id: None,
+                object_id: format!("doc_{id}"),
+                name: id.into(),
+                position: "0000000010".into(),
+                trashed: false,
+                origin: "local".into(),
+                object_type: "document".into(),
+            });
+            store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
+        }
+
+        assert!(store.delete_workspace_cascade("drop".into()));
+        assert!(
+            store.list_workspaces("local".to_string()).iter().all(|w| w.id != "drop"),
+            "the workspace row itself is gone",
+        );
+        let views = store.list_views("local".to_string());
+        assert_eq!(views.len(), 1, "its views went with it");
+        assert_eq!(views[0].id, "v3");
+        assert!(store.load_doc("doc_v1".into()).is_none(), "orphaned docs would be unreachable forever");
+        assert!(store.load_doc("doc_v3".into()).is_some(), "the survivor is untouched");
+    }
+
+    #[test]
+    fn reorder_workspaces_renumbers_by_ten() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("a", "A", "0000000010"));
+        store.save_workspace(ws("b", "B", "0000000020"));
+        store.reorder_workspaces(vec!["b".into(), "a".into()]);
+        let all = store.list_workspaces("local".to_string());
+        assert_eq!(all.iter().find(|w| w.id == "b").unwrap().position, "0000000010");
+        assert_eq!(all.iter().find(|w| w.id == "a").unwrap().position, "0000000020");
+    }
+
+    #[test]
+    fn a_created_workspace_lands_where_reorder_would_put_it() {
+        // The step-of-ten rule is shared; these must not drift apart.
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("a", "A", "0000000010"));
+        store.save_workspace(ws("b", "B", "0000000020"));
+        store.reorder_workspaces(vec!["a".into(), "b".into()]);
+        let id = store.create_workspace("C".into());
+        let all = store.list_workspaces("local".to_string());
+        assert_eq!(all.iter().find(|w| w.id == id).unwrap().position, "0000000030");
+    }
+
 }

@@ -211,6 +211,15 @@ class LocalOffline implements LocalOfflineApi {
   @override
   void reorderViews(String? parentId, List<String> orderedIds) {}
 
+  @override
+  String createLocalWorkspace(String name) => '';
+
+  @override
+  void renameLocalWorkspace(String id, String name) {}
+
+  @override
+  bool deleteLocalWorkspace(String id) => false;
+
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})
       newDoc() => throw UnsupportedError('local offline is not available on web');
 

@@ -125,13 +125,24 @@ class LocalOffline implements LocalOfflineApi {
   /// are zero-padded `n*10` so lexical order == intended order (same scheme the
   /// server uses). Unknown ids are skipped.
   void reorderWorkspaces(List<String> ids, {String origin = 'local'}) {
+    // Local ordering is Rust's, by the same step-of-ten rule as create and as
+    // the view tree. A mirrored cloud origin keeps the row-by-row path: its
+    // order is the server's, and this only writes the mirror.
+    if (origin == 'local') {
+      _store?.reorderWorkspaces(orderedIds: ids);
+      return;
+    }
     final byId = {for (final w in listWorkspaces(origin: origin)) w.id: w};
     for (var i = 0; i < ids.length; i++) {
       final w = byId[ids[i]];
       if (w == null) continue;
-      final pos = ((i + 1) * 10).toString().padLeft(10, '0');
       saveWorkspace(
-        (id: w.id, name: w.name, position: pos, role: w.role),
+        (
+          id: w.id,
+          name: w.name,
+          position: ((i + 1) * 10).toString().padLeft(10, '0'),
+          role: w.role,
+        ),
         origin: origin,
       );
     }
@@ -297,6 +308,18 @@ class LocalOffline implements LocalOfflineApi {
   @override
   void reorderViews(String? parentId, List<String> orderedIds) =>
       _store?.reorderViews(parentId: parentId, orderedIds: orderedIds);
+
+  @override
+  String createLocalWorkspace(String name) =>
+      _store?.createWorkspace(name: name) ?? '';
+
+  @override
+  void renameLocalWorkspace(String id, String name) =>
+      _store?.renameWorkspace(id: id, name: name);
+
+  @override
+  bool deleteLocalWorkspace(String id) =>
+      _store?.deleteWorkspaceCascade(id: id) ?? false;
 
   /// Detach a mirrored cloud workspace into a NEW independent local workspace
   /// (P3f §6.2, the "换 id 版"): copies the workspace + view rows to origin

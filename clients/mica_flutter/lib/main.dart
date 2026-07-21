@@ -2300,15 +2300,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  String _nextWorkspacePosition() {
-    var max = 0;
-    for (final w in _local.listWorkspaces()) {
-      final n = int.tryParse(w.position) ?? 0;
-      if (n > max) max = n;
-    }
-    return (max + 10).toString().padLeft(10, '0');
-  }
-
   /// The workspace a stored view belongs to (views carry it; DocumentView does
   /// not), falling back to the selected workspace.
   String _workspaceIdOfView(String viewId) {
@@ -2381,13 +2372,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _localCreateWorkspace(String name) async {
     final title = name.trim().isEmpty ? context.l10n.workspaceDefaultName : name.trim();
-    final id = 'ws_${DateTime.now().microsecondsSinceEpoch}';
-    _local.saveWorkspace((
-      id: id,
-      name: title,
-      position: _nextWorkspacePosition(),
-      role: 'owner',
-    ));
+    // Rust mints the id and the position, by the same step-of-ten rule the
+    // view tree uses.
+    final id = _local.createLocalWorkspace(title);
     if (!mounted) return;
     setState(() {
       _reloadLocalWorkspaces();
@@ -2416,24 +2403,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _localRenameWorkspace(Workspace workspace, String name) async {
     final title = name.trim().isEmpty ? workspace.name : name.trim();
-    final pos = _local
-        .listWorkspaces()
-        .firstWhere(
-          (w) => w.id == workspace.id,
-          orElse: () => (
-            id: workspace.id,
-            name: title,
-            position: '0000000010',
-            role: 'owner',
-          ),
-        )
-        .position;
-    _local.saveWorkspace((
-      id: workspace.id,
-      name: title,
-      position: pos,
-      role: 'owner',
-    ));
+    // Position and role are preserved by Rust. This used to read the row back
+    // to keep the position, and when that read missed it invented
+    // `0000000010` — a value that can collide with a real neighbour.
+    _local.renameLocalWorkspace(workspace.id, title);
     if (mounted) {
       setState(() {
         _reloadLocalWorkspaces();
@@ -2448,12 +2421,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localDeleteWorkspace(Workspace workspace) async {
-    // Keep at least one workspace on the device.
-    if (_localWorkspaces.length <= 1) {
-      setState(() => _message = context.l10n.snackKeepOneLocalWorkspace);
+    // "Keep at least one workspace" is enforced in Rust, beside the delete
+    // itself — a UI-side check only covers the paths that go through the UI.
+    // What stays here is saying so.
+    if (!_local.deleteLocalWorkspace(workspace.id)) {
+      if (mounted) {
+        setState(() => _message = context.l10n.snackKeepOneLocalWorkspace);
+      }
       return;
     }
-    _local.deleteWorkspace(workspace.id);
     if (!mounted) return;
     final wasSelected = _localSelectedWorkspace?.id == workspace.id;
     setState(() {

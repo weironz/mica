@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `set_trashed`, `store`, `subtree_ids`
+// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `set_trashed`, `store`, `subtree_ids`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
@@ -83,11 +83,24 @@ abstract class MicaStore implements RustOpaqueInterface {
     required String objectType,
   });
 
+  /// Create a local workspace and return its id.
+  String createWorkspace({required String name});
+
   void deleteDoc({required String docId});
 
   /// Delete one `origin`'s workspace and all its view rows (delete documents
   /// separately). Origin-scoped (v4 composite PK).
   void deleteWorkspace({required String origin, required String id});
+
+  /// Delete a workspace, its views and their documents. Returns false — and
+  /// changes nothing — when it is the last one.
+  ///
+  /// Both rules live here rather than in the caller. "Keep at least one
+  /// workspace" was a UI-side check, so any other path into delete could
+  /// leave the device with none and nowhere to put a page; and dropping the
+  /// workspace row without its documents left orphaned blobs that nothing
+  /// would ever reach again.
+  bool deleteWorkspaceCascade({required String id});
 
   /// The persisted device id.
   String deviceId();
@@ -149,6 +162,14 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Returns the affected ids. There is no undo past this point.
   List<String> purgeViewSubtree({required String viewId});
 
+  /// Rename a workspace, KEEPING its position and role.
+  ///
+  /// The Dart version had to read the row back to preserve `position`,
+  /// because the only primitive was a whole-row upsert — and when the read
+  /// missed it invented `0000000010`, which can collide with a real
+  /// neighbour. Doing it here means a missing row is simply a no-op.
+  void renameWorkspace({required String id, required String name});
+
   /// Renumber `ordered_ids` as consecutive children of `parent_id`.
   ///
   /// Positions restart at 10 and step by ten, matching
@@ -157,6 +178,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// write and one less sync update. Reparenting is part of the same move:
   /// dragging into another folder changes both.
   void reorderViews({String? parentId, required List<String> orderedIds});
+
+  /// Renumber workspaces to match `ordered_ids` (drag-reorder), same
+  /// step-of-ten scheme as [`Self::reorder_views`].
+  void reorderWorkspaces({required List<String> orderedIds});
 
   /// Restore the document to a version, returning the recovered doc (null if
   /// the version isn't found). The pre-restore state is kept as an auto version

@@ -140,6 +140,36 @@ void main() {
     expect(s.loadDoc(docId: 'd_p'), isNull, reason: 'the document went too');
   });
 
+  test('workspace create / rename / delete cross the bridge', () {
+    final s = freshStore();
+    // A fresh store already carries the default workspace, so this one is the
+    // second — and the last-one guard below must NOT fire for it.
+    final id = s.createWorkspace(name: 'Second');
+    expect(id, startsWith('ws_'));
+
+    s.renameWorkspace(id: id, name: 'Renamed');
+    final after = s
+        .listWorkspaces(origin: 'local')
+        .firstWhere((w) => w.id == id);
+    expect(after.name, 'Renamed');
+    expect(after.position, '0000000020', reason: 'position survived a rename');
+    expect(after.role, 'owner');
+
+    // Its pages go with it; the other workspace is untouched.
+    final page = s.createView(
+        workspaceId: id, objectId: 'd_w', name: 'P', objectType: 'document');
+    s.saveDoc(docId: 'd_w', doc: MicaDocument.fromMarkdown(markdown: 'x'));
+    expect(s.deleteWorkspaceCascade(id: id), isTrue);
+    expect(s.listViews(origin: 'local').any((v) => v.id == page), isFalse);
+    expect(s.loadDoc(docId: 'd_w'), isNull);
+
+    // Only one left — refusing to delete it is the point.
+    final last = s.listWorkspaces(origin: 'local').single;
+    expect(s.deleteWorkspaceCascade(id: last.id), isFalse,
+        reason: 'the device must always have somewhere to put a page');
+    expect(s.listWorkspaces(origin: 'local').length, 1);
+  });
+
   test('restoring under a still-trashed parent lifts to the top level', () {
     final s = freshStore();
     final parent = s.createView(
