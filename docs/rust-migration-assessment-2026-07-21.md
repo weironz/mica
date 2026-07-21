@@ -220,7 +220,7 @@ error: failed to run custom build command for `libsqlite3-sys`
 
 - nightly 工具链 + `rust-src` 组件（`-Z build-std` 要它）
 - `wasm-pack`
-- COOP/COEP 响应头是**硬要求**：默认静态服务器不设，得自己加（本次要手写一个 server 才跑得起来）
+- COOP/COEP 响应头是**硬要求**：默认静态服务器不设，得自己加（本次要手写一个 server 才跑得起来）〔第 5 步复审修正：这只是**默认线程化构建**的要求，frb 官方有免线程路径，见下〕
 - 构建耗时：cargo ~55s + wasm-pack ~67s，且 `-Z build-std` 每次重编标准库
 
 #### 结论
@@ -237,6 +237,44 @@ error: failed to run custom build command for `libsqlite3-sys`
 
 收益纯属"数据面归位"，不修任何现存 bug。真要动，`html_to_markdown` 优先于 `highlight`（前者在粘贴路径上、后者只影响显示）。
 
+### 第 5 步：丁类复审 ✅ 已完成（2026-07-21）—— 拆成两半：丁-1 纯 Dart 今天就做，丁-2 继续挂起
+
+4 路并行调查（前提提取 / 重复解剖 / AppFlowy 扒真实源码 / COOP-COEP 代价核查），结论**改写了丁的性质**：它不是一个「要不要换引擎」的决定，是两个独立问题。
+
+#### 前提核对：`phase2-offline-crdt.md:133` 的理由已全部过期
+
+- 决定原文的括号理由「web 仍走现有云端 API 路径」——写下 **2 天后**即失效（d147184 建 `cloud_sync_web.dart`，web 切到 yjs CRDT 路径）；「web 不需要离线」死于 P4-2（cdd1caf）；「wasm 慢 / 大 / 跑不了」死于 §3/§3b 两个 spike。git blame：决定文本自 a112cf5（2026-06-06）起一字未改。
+- 红线 #4「数据面权威单点留在 Rust，别被『AFFiNE 用 Yjs 也行』诱回 JS」——P4-2 之后 web 恰恰长成了 AFFiNE 形状（JS yjs 数据面 + 1,600 行 Dart 驱动 + IndexedDB）。当初豁免的支撑（wasm 不可行）已被证伪，只剩工程代价一条腿。
+
+#### 解剖【实测】：「统一引擎才能合并 sync 逻辑」被证伪
+
+两份 sync session 机械 diff：io 456 / web 446 非注释行，其中 **407 行逐字节相同**（LCS）；引擎只透过 **8 个方法**被触碰（每文件真正碰引擎的只有 ~25-30 行）。三类划分：
+
+| 类 | 行数 | 内容 | 消除条件 |
+|---|---|---|---|
+| 只有换引擎才消得掉 | ~680 | `mica_ydoc.dart` 437（**mica-core doc/marks 语义的 Dart 镜像**，M4.7 字段级 props 被迫实现两遍的就是它）+ yjs 胶水 ~145 + 兼容验证负担 ~100 | 丁-2 |
+| 平台固有，任何方案消不掉 | ~690 | IndexedDB vs SQLite——且这两份**本就不是逐行重复**，是同一契约（`cloud_doc_store.dart`，已抽好）的异构实现 | 无 |
+| **不动引擎今天就能抽** | **~630** | **整个同步状态机**（bootstrap 合并规则、ack 连续前缀、poison-edit 熔断、重连退避、outbox、compaction、persist 防抖——红线 #1 的语义现在存在两份，靠人肉同步，web 版注释里写了 15 次 "mirrors io"）+ op 重放 ~50 | 丁-1 |
+
+#### 参照系（AppFlowy / AFFiNE，扒真实仓库源码）
+
+- **AppFlowy 生产架构 = 桌面 yrs + web yjs + 服务端 yrs——与我们现状完全同构**（AppFlowy-Web package.json: `yjs@14.0.0-1` + `y-indexeddb`，零 wasm；AppFlowy-Collab: `yrs 0.25`）。它**实弹试过**全 Rust wasm（`frontend/appflowy_web` af-wasm 全家，跑了约 6 个月），2024-07 整体删库（#5671），2024-11 连只剩网络层的 wasm client 也删（AppFlowy-Cloud #989）。
+- **ywasm**（yrs 官方 wasm 绑定）：免 COOP/COEP（单线程 wasm-bindgen），363 KB gzip（完整 API 面），维护活跃但**用户全是基准套件，零生产应用**。
+- **AFFiNE y-octo**：止步服务端 napi、`experimental.yocto` 默认关、d.ts 里明写 round-trip 兼容问题未解决前不得回发 yjs 客户端——**双引擎架构的风险集中在字节兼容面**，一次实证不够，要回归地板压着。
+- 排除法结论：现状不是权宜之计，是被生产验证过的架构（AppFlowy-Web yjs ↔ AppFlowy-Cloud yrs 天天互通）。窄核 wasm（我们 84 KB 的那种）**无先例可抄但也未被证伪**——AppFlowy 失败的是全后端 wasm 化，不同类。
+
+#### COOP/COEP 修正：不是硬成本
+
+- frb 官方文档有「Run without cross-origin headers」路径：`default_dart_async: false`（全 `#[frb(sync)]`，只跑主线程）+ `--wasm-pack-rustflags` 去掉默认线程化标志 → **完全不需要 COOP/COEP**。对我们反而天然契合——要上 web 的 markdown 引擎本就是同步调用形态。运行时 frb 对非隔离页面只 warn 不炸。（免 COOP/COEP ≠ 免 nightly：`build-web` 硬编码 `-Z build-std`；绕开 build-web 用 stable wasm-pack 可免，spike #1 已实证。）
+- 即便真要上，对本项目破坏面逐项核查后很小：无 OAuth 弹窗（纯 JWT 表单）、字体全打包、图片走 CORS 模式 XHR 自绘（RustFS CORS 已在用）、CanvasKit gstatic 实测带 CORP 头。真正的工作量在 nginx 头作用域纪律：`add_header` 继承陷阱 + `/s/` 分享页必须豁免（第三方热链 `<img>` 会被站级 COEP 拦掉）；「只对 wasm 路径加头」原理上不可行（`crossOriginIsolated` 由顶层文档响应头决定）。
+- 顺手发现（与丁无关但该修）：构建没加 `--no-web-resources-cdn`，CanvasKit 实际从 gstatic CDN 拉取，打包在 `deploy/web/canvaskit/` 的副本是死重——建议补上该 flag，消除对 Google 持续提供 CORP 头的依赖 + 国内访问 gstatic 的不确定性。
+
+#### 判决
+
+- **丁-1【做】**：抽 8 方法 `SyncDocReplica` 接口 + 平台工厂（照 `doc_store_platform` 的条件导入模式），两份 session 合成一份共享（~750 行）+ 桌面适配器 ~50 行 + web 适配器 ~20 行（`MicaYDoc` 当初就是按镜像 `MicaDocument` 写的，方法一一对应）。红线 #1 的语义从两份人肉同步变一份。零新工具链、零部署改动;做完后若将来上 wasm，只换一个适配器，session 与 store 全不动——**两步解耦，互不阻塞**。
+- **丁-2【挂起，带触发条件】**：换引擎消那 ~680 行。它的漂移面是真实的（`doc.rs`/`marks.rs` 每次演进都要人肉同步 `mica_ydoc.dart`，且**没有**乙类那样的 fixture 守护），但参照系全部反向、无先例可抄。触发条件：`mica_ydoc` 镜像再出漂移 bug、yjs/yrs 升级破坏字节兼容、或参照系出现窄核先例。
+- **独立必做（不论哪条路）**：yjs↔yrs 字节兼容是依赖豁免 #7 的承重前提，但唯一的跨引擎测试 `web_interop.rs` 是 `#[ignore]` 状态（要手工从浏览器捕获 `MICA_WEB_STATE_B64`），**无任何 CI 守护**。任一端升级改编码都不会被自动抓住——这正是 AFFiNE y-octo 踩过的面。要固化成回归地板。
+
 ---
 
 ## 本报告的局限
@@ -244,4 +282,4 @@ error: failed to run custom build command for `libsqlite3-sys`
 - 甲类 #2（本地世界 CRUD ~980 行）的体量是**估算**：逻辑与 `setState` 在 `main.dart` L2280–3260 交织，未逐行分离，可提取的纯逻辑核心**小于** 980 行。
 - ~52 对镜像函数中约 10 对是"语义等价、命名不同"，**未逐一 diff 函数体**，对数 ±3。
 - 乙类那个 wasm 体积估计（~1 MB）是**类比 comrak-wasm 的推断【未证实】**；frb 的 `-Z build-std` + 线程运行时会推高体积，**没有任何公开的 frb-wasm 体积数据**。只有本地实际编一次才能定。
-- 丁类三项均未重新审视 `phase2-offline-crdt.md` 的决定本身。
+- ~~丁类三项均未重新审视 `phase2-offline-crdt.md` 的决定本身。~~（2026-07-21 已复审，见第 5 步。）

@@ -130,7 +130,7 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 - 核心 crate 编译成动态/静态库,**frb v2** 生成 Dart↔Rust 桥(省掉 AppFlowy 自研 .proto + codegen 一大摊)。
 - 暴露给 Dart 的 API 按「编辑器意图」设计:`openDoc / applyEditorOp(insert/update/delete/move block, text delta) / subscribeDocChanges(stream) / resolveFile…`,**底层是 yrs transaction**。
 - 编辑器(`render.dart`/`controller.dart`/`editor.dart`)从核心读文档、把编辑写成核心 API 调用;yrs 变更事件 → 推回 Dart 驱动重绘。
-- web 端:核心 crate **不编译进 web**(web 仍走现有云端 API 路径);用条件导入/平台分支隔离 FFI。
+- web 端:核心 crate **不编译进 web**(web 仍走现有云端 API 路径);用条件导入/平台分支隔离 FFI。〔2026-07-21 复审:括号里的理由在写下 2 天后即失效(web 已切 yjs CRDT 路径),「wasm 跑不了/慢/大」也均被 spike 证伪;但参照系(AppFlowy 实弹试过全 Rust wasm 后删库退回 yjs)支持维持现状。结论:sync 状态机重复用纯 Dart 接口消除(丁-1),换引擎挂起带触发条件(丁-2)。全文见 `rust-migration-assessment-2026-07-21.md` 第 5 步。〕
 
 ## 9. 里程碑拆解(Phase 2)
 
