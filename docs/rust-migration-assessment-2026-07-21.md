@@ -269,7 +269,7 @@ error: failed to run custom build command for `libsqlite3-sys`
 
 - frb 官方文档有「Run without cross-origin headers」路径：`default_dart_async: false`（全 `#[frb(sync)]`，只跑主线程）+ `--wasm-pack-rustflags` 去掉默认线程化标志 → **完全不需要 COOP/COEP**。对我们反而天然契合——要上 web 的 markdown 引擎本就是同步调用形态。运行时 frb 对非隔离页面只 warn 不炸。（免 COOP/COEP ≠ 免 nightly：`build-web` 硬编码 `-Z build-std`；绕开 build-web 用 stable wasm-pack 可免，spike #1 已实证。）
 - 即便真要上，对本项目破坏面逐项核查后很小：无 OAuth 弹窗（纯 JWT 表单）、字体全打包、图片走 CORS 模式 XHR 自绘（RustFS CORS 已在用）、CanvasKit gstatic 实测带 CORP 头。真正的工作量在 nginx 头作用域纪律：`add_header` 继承陷阱 + `/s/` 分享页必须豁免（第三方热链 `<img>` 会被站级 COEP 拦掉）；「只对 wasm 路径加头」原理上不可行（`crossOriginIsolated` 由顶层文档响应头决定）。
-- 顺手发现（与丁无关但该修）：构建没加 `--no-web-resources-cdn`，CanvasKit 实际从 gstatic CDN 拉取，打包在 `deploy/web/canvaskit/` 的副本是死重——建议补上该 flag，消除对 Google 持续提供 CORP 头的依赖 + 国内访问 gstatic 的不确定性。**已修（2026-07-21）**：justfile `dev-web`/`build-web`、ci.yml、release.yml 四处 `flutter build web` 统一加 flag；实测新 buildConfig 带 `useLocalCanvasKit:true`，:8090 冒烟 CanvasKit 走同源 `canvaskit/chromium/`、页面渲染正常、console 零错误。残留：引擎**字体回退**（Noto Sans SC 等）仍在运行时从 `fonts.gstatic.com` 拉取——与 CanvasKit 无关的另一条 gstatic 依赖，断网只影响缺字形回退不致命，要消除得走字体打包/FontManifest，另行评估。
+- 顺手发现（与丁无关但该修）：构建没加 `--no-web-resources-cdn`，CanvasKit 实际从 gstatic CDN 拉取，打包在 `deploy/web/canvaskit/` 的副本是死重——建议补上该 flag，消除对 Google 持续提供 CORP 头的依赖 + 国内访问 gstatic 的不确定性。**已修（2026-07-21）**：justfile `dev-web`/`build-web`、ci.yml、release.yml 四处 `flutter build web` 统一加 flag；实测新 buildConfig 带 `useLocalCanvasKit:true`，:8090 冒烟 CanvasKit 走同源 `canvaskit/chromium/`、页面渲染正常、console 零错误。残留：引擎**字体回退**（Noto Sans SC 等）仍在运行时从 `fonts.gstatic.com` 拉取——与 CanvasKit 无关的另一条 gstatic 依赖。**✅ 已消除（2026-07-22），见第 5b 步**；当时猜的「字体打包/FontManifest」两条路评估后都不成立，真正的口子在引擎配置 `fontFallbackBaseUrl`。
 
 #### 判决
 
@@ -277,6 +277,47 @@ error: failed to run custom build command for `libsqlite3-sys`
   〔✅ 已落地（当日）：`cloud_sync_io.dart`(739) + `cloud_sync_web.dart`(611) = 1,350 行 → `cloud_sync_session.dart`(747) + 契约 44 + 两适配器 57/48 + 门面 6 = 902 行，净 -448；外部消费者(main.dart 等 9 处)零改动。验证：analyzer 干净、676 单测、7 个 sync 集成测试 + 4 个 FFI 集成测试全绿。**验证过程的意外收获**：基线实验(旧代码同样失败)把 `cloud_sync_test` 的"随机"失败追到一个真服务端 bug——并发首次 bootstrap 的 ensure_base 竞态让输家客户端拿到平行 CRDT 宇宙的 base，对端编辑永远 pending 且 applyUpdate 返回 Ok（红线 #1 静默分歧），修复 + 确定性回归测试见 commit `eaefb6e`；顺带补齐 FFI workspace 漏升的 yrs 0.27.3（`1a68142`）。〕
 - **丁-2【挂起，带触发条件】**：换引擎消那 ~680 行。它的漂移面是真实的（`doc.rs`/`marks.rs` 每次演进都要人肉同步 `mica_ydoc.dart`，且**没有**乙类那样的 fixture 守护），但参照系全部反向、无先例可抄。触发条件：`mica_ydoc` 镜像再出漂移 bug、yjs/yrs 升级破坏字节兼容、或参照系出现窄核先例。
 - **独立必做（不论哪条路）**：yjs↔yrs 字节兼容是依赖豁免 #7 的承重前提，但唯一的跨引擎测试 `web_interop.rs` 是 `#[ignore]` 状态（要手工从浏览器捕获 `MICA_WEB_STATE_B64`），**无任何 CI 守护**。任一端升级改编码都不会被自动抓住——这正是 AFFiNE y-octo 踩过的面。要固化成回归地板。**✅ 已落地（2026-07-21）**：`web_interop.rs` 摘掉 `#[ignore]`，改为自包含双向 round-trip——yrs 写 base → `node` 加载**已提交的生产 bundle**（`web/yjs_bundle.js`，经 `tool/yjs/w2_headless.cjs`）读取并施加 W2 编辑 → yrs 读回断言 marks/props/树。随 `cargo test -p mica-core` 在 CI 每次 push 执行，node 缺失时响亮失败而非跳过。
+
+### 第 5b 步：web 字体回退的 gstatic 依赖 ✅ 已消除（2026-07-22）—— 走引擎 `fontFallbackBaseUrl`，不走字体打包
+
+#### 机制核实（读 Flutter 3.44.6 引擎源码，`flutter_web_sdk/lib/_engine`）
+
+引擎在运行时打 `fonts.gstatic.com` 的是**两条独立路径**，`--no-web-resources-cdn` 都管不着（那个 flag 只管 CanvasKit）：
+
+1. **默认字体 Roboto**（`canvaskit/fonts.dart`）：`loadAssetFonts` 发现 FontManifest 里没有名为**恰好** `Roboto` 的家族就必拉一枚 woff2——我们打包的是 `RobotoMono`，不算。**每次页面加载都发生**，与内容无关。
+2. **回退分片**（`font_fallbacks.dart`）：文本 run 的字形若不被**该 run 样式链里的家族**覆盖，贪心算法从编译进引擎的 724 个分片表（Noto 全家）挑覆盖最多的下载。关键：**只查样式链内的家族**——所以尽管 pubspec 早已打包全量 `NotoSansSC-Regular.otf`（8.5MB），漏挂 `cjkFontFallback` 链的 run（实测登录页就有 ~10 个 SC 分片的量）、emoji、∑√ 等散符号照样触发下载。
+
+两条路径的 URL 都是 `configuration.fontFallbackBaseUrl + 相对路径`（默认 `https://fonts.gstatic.com/s/`），且该配置可由 loader 传入——**一个配置口子同时接管两条依赖**。
+
+#### 候选路径评估
+
+- **pubspec 打包 Noto Sans SC 子集**【否】：字体早就打包了、还是全量——问题根本不在"缺字体"，在引擎回退只查样式链。子集化反而引入罕字缺口，且管不住 emoji/符号/漏链 run，依赖消不干净。
+- **FontManifest/FontLoader 预载**【否】：同理，预载改变不了回退面只查样式链的行为；给每处样式补链是打地鼠，新代码漏一处就静默复发。
+- **`fontFallbackBaseUrl` 指同源镜像**【选定】：零应用代码改动、懒加载行为不变、字节级同现状（引擎要什么就给什么的副本）。
+
+#### 体积实测（HEAD 全部 724 个分片，content-length 求和）
+
+| 集合 | 文件数 | 体积 |
+|---|---|---|
+| 引擎表全量 | 724 | 20.73 MB |
+| JP/KR/TC/HK 四姊妹 | 462 | 9.49 MB |
+| **镜像集 = 全量 − 四姊妹 + roboto** | **263** | **11.24 MB** |
+| 其中：notosanssc（101 片）/ notocoloremoji（12 片）/ notosans | | 2.30 / 1.92 / 0.19 MB |
+
+四姊妹排除的理由：字库是泛 CJK（假名/谚文 SC 也有），zh locale 下贪心算法本就偏好 SC 分片，styled run 还有打包的 DroidSansFallback 兜底。教训一条：**plain `notosans` 必须镜像**——∑√ 这类散符号的贪心赢家是它，第一版没收，实测每次重排版 404 重试刷屏（引擎对失败家族不记账，~60 次/几分钟）。
+
+#### 落地（零应用代码改动）
+
+- `clients/mica_flutter/tool/gfonts/mirror.sh`：从**本机安装的引擎数据表**抽 URL 全集（排除式配置，引擎升级新增家族自动纳入），下载/剪枝 `web/gfonts/`；`--check` 模式给 CI。
+- `web/flutter_bootstrap.js`：自定义模板（构建工具原生支持），与默认生成物逐行一致，仅加 `config: { fontFallbackBaseUrl: "gfonts/" }`。
+- `web/gfonts/`：263 个 woff2 入库（gstatic 目录结构原样，路径带版本号 `notosanssc/v37/…`）+ NOTICE.md（OFL/Apache）。
+- CI 守护：ci.yml / release.yml 在 `flutter build web` 后跑 `--check`——CI 是 `channel: stable` 不锁版本，引擎 bump 挪动分片路径时**构建期响亮失败**，而不是线上 404。
+
+#### 验证【实测，:8099 本地 serve release 产物 + playwright】
+
+加载即见 `gfonts/roboto/v32/…` 200（默认字体同源）；登录页 ~10 个 SC 分片全走同源 200；输入 😀🎉 触发 `notocoloremoji` 分片、∑√ 触发 `notosans`，均同源 200；**全程零 `fonts.gstatic.com` 请求**，console 零错误；截图核对中文/彩色 emoji/数学符号渲染正常。
+
+残余（有意接受）：JP/KR/TC/HK 专属分片在非 zh locale + 漏链 run 的组合下会同源 404（渲染仍由样式链兜底，且引擎会重试刷 console）——要消除就把四姊妹从 `EXCLUDE` 拿掉（+9.5MB）。另一个顺手观察：既然回退面已同源自洽，打包的 8.5MB `NotoSansSC-Regular.otf` 对 **web** 理论上成了可卸载的死重（CJK 可全走懒加载分片，初始负载 −8.5MB），但它同时是桌面端字体链的尾巴，pubspec 资产不分平台——要做得引入 web 专用 FontManifest 手段，另行评估。
 
 ---
 

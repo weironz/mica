@@ -177,3 +177,9 @@ jobs:
       # this checks the artifact we actually ship.
       - name: Web compiles (dart2js resolves the web stubs)
         run: flutter build web --release --no-web-resources-cdn
+      # CI tracks `channel: stable`, so its engine can be newer than the one the
+      # committed web/gfonts mirror was generated from. The engine's fallback
+      # shard URLs are version-pinned (notosanssc/v37/…) — if a Flutter bump
+      # moves them, runtime font fallback would silently 404. Fail here instead.
+      - name: gfonts mirror matches this engine's fallback tables
+        run: bash tool/gfonts/mirror.sh --check

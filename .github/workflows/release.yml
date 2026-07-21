@@ -297,6 +297,10 @@ jobs:
           # www.gstatic.com (CORP-header dependency + unreliable from CN).
           flutter build web --release --no-web-resources-cdn
           cd ../..
+          # Runtime font fallback is served same-origin from web/gfonts; make
+          # sure the committed mirror matches THIS Flutter's engine tables
+          # before baking the image (shard URLs are engine-version-pinned).
+          bash clients/mica_flutter/tool/gfonts/mirror.sh --check
           rm -rf deploy/web && mkdir -p deploy/web
           cp -r clients/mica_flutter/build/web/. deploy/web/
 
