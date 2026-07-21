@@ -411,3 +411,5 @@ static final Map<String, AtomicBlockRenderer> _renderersByKind = {
 **补 fixture 当场炸出一个更严重的 bug（两端同病，与三处漂移无关）**：`render_span` 选下一个 mark 的键是 `(start, 最宽)`，而 `code` 分支是**终止性**的（写完字面量就 `pos = e; continue;`，从不渲染 `inner`）。当 code mark 与 link mark **范围完全重合**时，谁在数组里靠前谁赢——`` [`a`](/x) `` 导出成 `` `a` ``，**URL 静默消失**。`` [`useState`](https://react.dev/…) `` 这种形状在技术文档里遍地都是，任何一次导出/复制为 Markdown 都在毁真实内容。修法：终止性 kind（code/math/html/footnote）**输掉范围完全重合的平局**，让可嵌套的 mark 包在外面；同时给 autolink / 裸 `www.` 两个简写分支加 `inner.is_empty()` 守卫（它们写 `plain`、丢弃内嵌 mark，只有无内容可丢时才该用）。两端各配 5 条断言完全相同的回归测试（`linked_code_span.rs` / `linked_code_span_test.dart`），含两条**反向**守卫防止修过头。
 
 **这一轮最该记住的**：① 漂移不都是"照抄漏了一行"——①是**架构层级放错**，块层被迫在信息不足的位置做判定，修法是搬层级而不是打补丁。② **fixture 机制本身比它当下钉住的用例更值钱**：这次三个新 fixture 里，真正的重头戏是它顺带炸出的序列化器丢链接——那个 bug 不在任何漂移清单上，是 round-trip 断言自己抓的。③ Dart 侧那个 bug 我起初是从**代码结构推断**的（探针编译失败没跑成），提交前把平局规则临时改回去实测它确实会红，才确认测试不是空跑。
+
+> 前两条已搬进 **`docs/lessons.md`**（§2「变种：判定放在看不见证据的层」、§3「补 fixture 的收益在暴露面」）——那份是每个新会话都会读的常驻文档，本报告是一次性记录。以后要引用请引 `lessons.md`。
