@@ -331,6 +331,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late String? _fontFamily = widget.appearance.fontFamily;
   late double _pageWidth = widget.pageWidth;
   late bool _reHostImages = widget.reHostImages;
+
+  /// Read straight from prefs rather than passed in: nothing else in the app
+  /// reacts to it, so threading it through the widget tree would be ceremony.
+  late bool _diagnostics = diagnosticsOn;
   late bool _gpuLowPower = widget.gpuLowPower ?? false;
   late bool _showFormatBar = widget.showFormatBar;
   // Read straight from prefs rather than threaded through widget params: the
@@ -1232,6 +1236,47 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     child: Text(text, style: const TextStyle(fontSize: 12)),
   );
 
+  /// Opt-in capture, for handing a reproducible bug over instead of describing
+  /// it. Off by default and stated plainly, because it records real content.
+  List<Widget> _diagnosticsSection(BuildContext context) {
+    final l = context.l10n;
+    return [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        value: _diagnostics,
+        title: Text(l.settingsDiagnosticsToggle),
+        subtitle: Text(l.settingsDiagnosticsToggleSub),
+        onChanged: (value) {
+          setDiagnostics(value);
+          setState(() => _diagnostics = value);
+        },
+      ),
+      const SizedBox(height: 12),
+      Row(
+        children: [
+          OutlinedButton.icon(
+            onPressed: openDiagnosticsFolder,
+            icon: const Icon(Icons.folder_open_outlined, size: 18),
+            label: Text(l.settingsDiagnosticsFolder),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: SelectableText(
+              diagnosticsDir,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      Text(
+        l.settingsDiagnosticsPrivacy,
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    ];
+  }
+
   List<Widget> _shortcutsSection(BuildContext context) {
     Widget head(String t) => Padding(
       padding: const EdgeInsets.only(top: 8, bottom: 4),
@@ -1333,6 +1378,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         icon: Icons.keyboard_outlined,
         section: _shortcutsSection(context),
       ),
+      // Web has no filesystem to capture into, so the tab is simply absent
+      // there rather than offering a switch that cannot do anything.
+      if (diagnosticsSupported)
+        (
+          title: context.l10n.settingsDiagnostics,
+          icon: Icons.bug_report_outlined,
+          section: _diagnosticsSection(context),
+        ),
     ];
     final titles = [for (final t in tabs) t.title];
     final icons = [for (final t in tabs) t.icon];

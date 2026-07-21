@@ -782,5 +782,25 @@
     }
   },
   "worldKeepCloudOriginal": "Keep cloud original",
-  "worldDeleteCloudOriginal": "Delete cloud original"
+  "worldDeleteCloudOriginal": "Delete cloud original",
+  "settingsDiagnostics": "Diagnostics",
+  "settingsDiagnosticsToggle": "Capture bug reproductions",
+  "settingsDiagnosticsToggleSub": "Off by default. Turn it on, reproduce the problem, then send the folder below — it records what the app received (e.g. the exact clipboard markup of a paste), which is usually the missing piece.",
+  "settingsDiagnosticsFolder": "Open folder",
+  "settingsDiagnosticsPrivacy": "Captures include the content you pasted or opened. Keeps the last 20; delete the folder any time.",
+  "@settingsDiagnostics": {
+    "description": "Settings tab: diagnostics capture."
+  },
+  "@settingsDiagnosticsToggle": {
+    "description": "Switch that turns bug-reproduction capture on."
+  },
+  "@settingsDiagnosticsToggleSub": {
+    "description": "Explains what capture records and how to use it."
+  },
+  "@settingsDiagnosticsFolder": {
+    "description": "Button that reveals the capture folder."
+  },
+  "@settingsDiagnosticsPrivacy": {
+    "description": "Warns that captures contain user content."
+  }
 }

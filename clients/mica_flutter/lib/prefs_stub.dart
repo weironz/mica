@@ -10,22 +10,25 @@ import 'dart:io';
 
 Map<String, String>? _cache;
 
-File _prefsFile() {
+/// The per-user config directory (`{appdata}/mica`). Public so anything that
+/// needs to sit beside the preferences — the diagnostics capture — uses this
+/// rule instead of writing a second copy of it.
+String configDir() {
   final env = Platform.environment;
-  String dir;
   if (Platform.isWindows) {
     final appData = env['APPDATA'];
-    dir = '${(appData == null || appData.isEmpty) ? '.' : appData}/mica';
-  } else if (Platform.isMacOS) {
-    dir = '${env['HOME'] ?? '.'}/Library/Application Support/mica';
-  } else {
-    final xdg = env['XDG_CONFIG_HOME'];
-    dir = (xdg != null && xdg.isNotEmpty)
-        ? '$xdg/mica'
-        : '${env['HOME'] ?? '.'}/.config/mica';
+    return '${(appData == null || appData.isEmpty) ? '.' : appData}/mica';
   }
-  return File('$dir/prefs.json');
+  if (Platform.isMacOS) {
+    return '${env['HOME'] ?? '.'}/Library/Application Support/mica';
+  }
+  final xdg = env['XDG_CONFIG_HOME'];
+  return (xdg != null && xdg.isNotEmpty)
+      ? '$xdg/mica'
+      : '${env['HOME'] ?? '.'}/.config/mica';
 }
+
+File _prefsFile() => File('${configDir()}/prefs.json');
 
 Map<String, String> _store() {
   final cached = _cache;

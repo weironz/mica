@@ -15,6 +15,7 @@ import 'cloud/cloud_sync.dart';
 import 'cloud/doc_store_platform.dart';
 import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
+import 'diagnostics.dart';
 import 'local/local_offline.dart';
 import 'web/yjs_probe.dart';
 import 'editor/model.dart' show kMonoFont;
@@ -1993,6 +1994,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // the network returns.
         bootstrap = await _offlineCloudBootstrap(view);
       }
+      // One line per page load: what came back, and from where. This is the
+      // record that turns "the page went blank" into "the server returned 2
+      // blocks while the local copy has 114" — a data problem, not a UI one.
+      trace(
+        'bootstrap doc=${view.objectId} view=${view.id} '
+        'blocks=${(bootstrap?.snapshot.payload['blocks'] as List?)?.length ?? -1} '
+        'source=${reachedServer ? 'server' : 'mirror'}',
+      );
       final wasShowingThisView =
           _selectedView?.id == view.id && _selectedBootstrap != null;
       setState(() {

@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:pasteboard/pasteboard.dart';
 
+import '../diagnostics.dart';
 import 'html_to_markdown.dart';
 
 /// Returns true if the paste was consumed by the handler.
@@ -96,7 +97,14 @@ Uint8List? _windowsClipboardPng() {
 Future<String?> readClipboardHtmlAsMarkdown() async {
   final h = await Pasteboard.html;
   if (h == null || h.trim().isEmpty) return null;
-  final md = htmlToMarkdown(stripCfHtmlHeader(h));
+  final raw = stripCfHtmlHeader(h);
+  final md = htmlToMarkdown(raw);
+  // The exact bytes that were pasted, when the user has diagnostics on. Real
+  // clipboard markup is nothing like what one guesses: a list that silently
+  // vanished turned out to wrap every `<li>` in a `<div>`, while five
+  // hand-written samples all converted fine. With the pair on disk that is a
+  // replayable test instead of an afternoon.
+  captureIo('paste', 'html', raw, md);
   return md.trim().isEmpty ? null : md;
 }
 

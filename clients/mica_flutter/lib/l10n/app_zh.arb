@@ -441,5 +441,10 @@
   "worldDetachDoneTitle": "已转为本地副本",
   "worldDetachDoneBody": "「{name}」已复制为本地工作区。云端原工作区仍在(还在同步)。要保留云端原件,还是删掉它、只留本地副本?",
   "worldKeepCloudOriginal": "保留云端原件",
-  "worldDeleteCloudOriginal": "删除云端原件"
+  "worldDeleteCloudOriginal": "删除云端原件",
+  "settingsDiagnostics": "诊断",
+  "settingsDiagnosticsToggle": "记录问题复现",
+  "settingsDiagnosticsToggleSub": "默认关闭。打开后复现一次问题，把下面的文件夹发来即可——它记录 app 实际收到了什么（例如粘贴时的原始剪贴板内容），那通常正是缺的那块。",
+  "settingsDiagnosticsFolder": "打开文件夹",
+  "settingsDiagnosticsPrivacy": "记录内容包含你粘贴或打开的正文。只保留最近 20 条，可随时删除该文件夹。"
 }
