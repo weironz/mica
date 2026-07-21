@@ -630,6 +630,33 @@ rebuildCloudNavFromCache(CloudPageTreeCache cache, String ownerId) {
 /// every auto-open path — online, offline mirror, and local — skips folders and
 /// lands on the first document. Shared + testable so the three worlds can't
 /// drift back to `.firstOrNull` (which would land on a folder → blank editor).
+/// Does tapping [targetViewId] need a bootstrap, or is that page already up?
+///
+/// Re-tapping the open row used to re-run the whole load. Two taps inside the
+/// double-click window then had two bootstraps in flight; the loser hit a
+/// disposed session, fell back to the on-device mirror, got nothing (a doc
+/// opened online has no mirror) and blanked the page being read. Switching away
+/// and back reloaded it — which is exactly why the content always "came back"
+/// and the bug looked like a rename gone wrong.
+///
+/// Pure + named so the guard reads as a rule instead of an inlined `&&` that
+/// the next person deletes as redundant.
+bool needsBootstrapOnSelect({
+  required String? openViewId,
+  required bool openViewHasContent,
+  required String targetViewId,
+}) => !(openViewId == targetViewId && openViewHasContent);
+
+/// May a finished load write its result over what is on screen?
+///
+/// No, when it has nothing and the same page is already rendering: an empty
+/// pane is strictly worse than content that is merely a moment old. This only
+/// ever declines to blank a view that had something to lose.
+bool mayReplaceBootstrap({
+  required bool haveNewBootstrap,
+  required bool wasShowingSameView,
+}) => haveNewBootstrap || !wasShowingSameView;
+
 DocumentView? firstOpenableView(Iterable<DocumentView> views) =>
     views.where((v) => v.objectType == 'document').firstOrNull;
 

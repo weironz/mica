@@ -1943,6 +1943,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // A folder has no document to open (the sidebar routes folder taps to
     // expand/collapse; this guards other callers, e.g. internal page links).
     if (view.objectType == 'folder') return Future.value();
+    // Re-tapping the page that is already open and rendered does nothing.
+    //
+    // It used to re-run the whole bootstrap, and a second tap within the
+    // double-click window put two of them in flight at once. The loser hit a
+    // disposed session, fell into the offline branch below, got null back
+    // (nothing is mirrored for a doc opened online), and blanked the page the
+    // user was reading. Switching away and back reloaded it, which is why the
+    // content always "came back".
+    //
+    // Skipping also drops a pointless outbox drain + round trip from every
+    // re-tap of the current row, which the sidebar does on any stray click.
+    if (!needsBootstrapOnSelect(
+      openViewId: _selectedView?.id,
+      openViewHasContent: _selectedBootstrap != null,
+      targetViewId: view.id,
+    )) {
+      return Future.value();
+    }
     return _run(() async {
       // The editor's pending edits were just flushed (see _navigateToView) into
       // the current doc's cloud session. Drain it — wait for those pushes to be
@@ -1975,10 +1993,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // the network returns.
         bootstrap = await _offlineCloudBootstrap(view);
       }
+      final wasShowingThisView =
+          _selectedView?.id == view.id && _selectedBootstrap != null;
       setState(() {
         _selectedView = view;
-        _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
+        // Never blank a page that is already on screen. `bootstrap` is null
+        // when the server was unreachable AND the doc has no on-device mirror;
+        // for a doc we are already rendering, keeping what we have beats
+        // replacing it with an empty pane. The guard above catches the common
+        // case, but two taps can both pass it before either finishes.
+        if (mayReplaceBootstrap(
+          haveNewBootstrap: bootstrap != null,
+          wasShowingSameView: wasShowingThisView,
+        )) {
+          _selectedBootstrap = bootstrap;
+          _selectedMarkdown = null;
+        }
       });
       // Reaching the server means we're back online — restore the real nav if we
       // had fallen back to the offline mirror.
