@@ -52,9 +52,17 @@ fn guarded_apply(doc: &mut MicaDoc, update: &[u8]) -> Result<(), DocError> {
 /// Keep at least this many already-folded updates on the stream so a briefly
 /// offline client can catch up incrementally; older ones are pruned (they live
 /// in the base). A client further behind re-bootstraps from the base instead.
-const STREAM_KEEP_MARGIN: i64 = 64;
-/// Prune roughly once every this-many pushes (keeps the prune off the hot path).
-const STREAM_PRUNE_EVERY: i64 = 32;
+///
+/// `pub` (with [`STREAM_PRUNE_EVERY`]) so the pruning integration test can
+/// drive the cadence deterministically instead of guessing at rid alignment —
+/// see stream_prunes_and_stale_cursor_rebootstraps.
+pub const STREAM_KEEP_MARGIN: i64 = 64;
+/// Prune roughly once every this-many pushes (keeps the prune off the hot
+/// path). "This-many" counts TABLE-wide rid draws, not this document's pushes:
+/// the check is `rid % STREAM_PRUNE_EVERY == 0` on the pushing row's rid from
+/// the shared sequence, so under concurrent writers a given document prunes
+/// only when one of ITS OWN pushes happens to draw a cadence rid.
+pub const STREAM_PRUNE_EVERY: i64 = 32;
 
 /// Result of catching a client up from its cursor: either the incremental
 /// updates, or a base to re-bootstrap from when the cursor fell behind the

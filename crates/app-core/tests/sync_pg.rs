@@ -214,30 +214,54 @@ async fn stream_prunes_and_stale_cursor_rebootstraps() {
     let base = sync::bootstrap_base(&db, doc).await.unwrap();
     let mut editing = MicaDoc::from_update(&base.state).unwrap();
 
-    // Push enough updates that periodic pruning kicks in.
-    let mut last_rid = 0;
-    for _ in 0..90 {
+    // "Push N times" cannot guarantee a prune: the cadence check is
+    // `rid % STREAM_PRUNE_EVERY == 0` on the pushing row's rid, and rid comes
+    // from the TABLE-wide sequence — a concurrently running test that draws
+    // the cadence rid prunes ITS document, not ours (2026-07-21 CI: 90 rows
+    // for 90 pushes, zero prunes). So push until one of OUR pushes draws a
+    // cadence rid far enough past our first rid that the keep-margin cutoff
+    // reaches our earliest row — from there the prune is deterministic.
+    let mut first_rid = 0i64;
+    let last_rid: i64;
+    let mut pushes = 0i64;
+    loop {
         let sv = editing.state_vector();
         editing.text_insert("a", 5, "x");
         let update = editing.encode_diff(&sv).unwrap();
-        last_rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+        let rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+        pushes += 1;
+        if first_rid == 0 {
+            first_rid = rid;
+        }
+        if rid % sync::STREAM_PRUNE_EVERY == 0 && rid - first_rid > sync::STREAM_KEEP_MARGIN {
+            last_rid = rid;
+            break;
+        }
+        assert!(
+            pushes < 500,
+            "no cadence rid drawn in {pushes} pushes — contention beyond plausible"
+        );
     }
 
-    // The stream is bounded — old folded updates were pruned, not all 90 kept.
+    // That last push pruned this doc's rows at rid <= last_rid - margin, and
+    // first_rid sits below that cutoff by construction — so rows went away.
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM workspace_updates WHERE document_id = $1")
             .bind(doc)
             .fetch_one(&db)
             .await
             .unwrap();
-    assert!(count < 90, "stream pruned (got {count} rows for 90 pushes)");
+    assert!(count < pushes, "stream pruned (got {count} rows for {pushes} pushes)");
 
     // A stale cursor (0) re-bootstraps from the base — the gap was pruned.
+    // Every push folds synchronously, so the base holds ALL edits: "Hello"
+    // (5) + one 'x' per push, exactly.
     match sync::catch_up_document(&db, doc, 0, 1000).await.unwrap() {
         sync::CatchUp::Rebootstrap(b) => {
             let d = MicaDoc::from_update(&b.state).unwrap();
             let text = d.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
-            assert!(text.starts_with("Hello") && text.len() >= 95, "base has all edits: {text}");
+            assert!(text.starts_with("Hello"), "base has all edits: {text}");
+            assert_eq!(text.len() as i64, 5 + pushes, "base has all edits: {text}");
         }
         sync::CatchUp::Updates(_) => panic!("expected rebootstrap for a stale cursor"),
     }
