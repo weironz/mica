@@ -57,32 +57,31 @@ import 'package:mica_flutter/editor/model.dart';
 ///
 /// So these still run: they just assert the invariant that actually matters
 /// (copy → paste preserves the content) instead of an exact byte string.
-const _cosmeticDivergence = {'05-quote.md', '10-mixed.md'};
+const _cosmeticDivergence = {
+  '05-quote.md', '10-mixed.md', '17-quotes.md',
+};
 
 /// Fixtures whose copy output does NOT re-import to the same blocks — genuine,
 /// still-open bugs.
 ///
-/// A weaker check (comparing only kind + text) had cleared 17/20/21; comparing
-/// `data` as well is what exposed them, so do not weaken it back. What it
-/// found: round-tripping 17-quotes ADDS `qbreak: true` to a block, i.e. the
-/// copy splits one quote group into two — exactly the failure the copy path's
-/// own tests warn about ("a blank line would SPLIT the blockquote on re-parse
-/// and shatter the quote bar").
+/// A weaker check (comparing only kind + text) had cleared these; comparing
+/// `data` as well is what exposed them, so do not weaken it back.
 ///
-///  * 15 — a list item's lazy continuation, plus a two-line setext heading
-///    exported as ATX (`#` cannot hold a newline, so it becomes a heading plus
-///    a stray paragraph).
-///  * 17, 20 — blank-line placement around quote groups and container children
-///    (`data.li`: a fence or quote nested inside a list item) changes the
-///    grouping on re-import.
-///  * 21 — HTML blocks, not yet root-caused.
+/// Down to ONE remaining cause, in both: an item that owns a container child
+/// (`data.li` — a fence or quote nested inside it) comes back carrying
+/// `loose: true` when the original had none. Loose vs tight is a rendering
+/// difference (items get wrapped in `<p>`), not lost content, so this is the
+/// mildest of the failures found here — but it is still a difference between
+/// what was copied and what pastes back.
+///
+/// Everything else these two used to fail on is fixed: container children
+/// losing their `li` indent, `3)` pasting back as `3.`, a two-line setext
+/// heading exported as ATX (which silently dropped its second line), fenced
+/// code inside a quote losing its `>`, and raw HTML blocks being re-fenced.
 ///
 /// Tracked in `docs/rust-migration-assessment-2026-07-21.md`. Entries may only
 /// be removed by fixing them — never by widening the exception.
-const _knownBroken = {
-  '15-list-items.md', '17-quotes.md',
-  '20-item-containers.md', '21-html.md',
-};
+const _knownBroken = {'15-list-items.md', '20-item-containers.md'};
 
 void main() {
   final dir = Directory('../../crates/markdown/tests/fixtures/conformance');

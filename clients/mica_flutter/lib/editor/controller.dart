@@ -890,7 +890,7 @@ class EditorController extends ChangeNotifier {
     final s = sel.start;
     final e = sel.end;
 
-    String nodeText(int i, int from, int to) {
+    String nodeBody(int i, int from, int to) {
       final node = nodes[i];
       if (node.kind == 'table') {
         return tableToMarkdown(TableData.fromBlock(node.data));
@@ -927,7 +927,23 @@ class EditorController extends ChangeNotifier {
       final sub = node.text.substring(a, b);
       if (node.kind == 'code_block') {
         if (!full) return sub;
-        return '```${_copyLanguage(node)}\n$sub\n```';
+        // `data.raw` marks an HTML BLOCK, which the importer stores as a code
+        // block only to hold the source. Fencing it turns live HTML into a
+        // displayed code listing — the `raw` flag is lost on re-import and the
+        // block renders as code from then on. Emit it verbatim.
+        final body = node.data['raw'] == true
+            ? sub
+            : '```${_copyLanguage(node)}\n$sub\n```';
+        // Quote membership must survive too. This branch used to return before
+        // any prefix was applied, so a fenced block inside a blockquote came
+        // out with no `>` at all and fell straight out of the quote on paste.
+        final depth = node.quoteDepth.clamp(0, 16);
+        if (depth == 0) return body;
+        final marker = ('> ' * depth).trimRight();
+        return body
+            .split('\n')
+            .map((l) => l.isEmpty ? marker : '$marker $l')
+            .join('\n');
       }
       final marks = <Mark>[];
       for (final m in marksFromData(node.data)) {
@@ -959,6 +975,18 @@ class EditorController extends ChangeNotifier {
       // block on paste: a quote's second line lost its `>` and became a
       // separate paragraph. Mirrors the Rust exporter, which re-prefixes every
       // emitted line and turns blank ones into a bare marker.
+      // A heading whose text spans lines has no ATX form — `#` ends at the
+      // newline, so `# para first\npara second` pasted back as a heading plus
+      // a stray paragraph, losing the second line from the heading entirely.
+      // Setext (`===` / `---`) is the shape that holds it, and it is what the
+      // Rust exporter emits.
+      if (node.kind == 'heading' &&
+          inline.contains('\n') &&
+          node.headingLevel <= 2) {
+        final rule = (node.headingLevel == 1 ? '=' : '-') * 3;
+        final q = '> ' * node.quoteDepth.clamp(0, 16);
+        return '${inline.split('\n').map((l) => '$q$l').join('\n')}\n$q$rule';
+      }
       final head = _blockPrefix(node);
       if (!inline.contains('\n')) return '$head$inline';
       final cont = _continuationPrefix(node);
@@ -968,6 +996,20 @@ class EditorController extends ChangeNotifier {
         for (final l in lines.skip(1))
           l.isEmpty ? cont.trimRight() : '$cont$l',
       ].join('\n');
+    }
+
+    // `data.li` marks a block as a CHILD of a list item — a fence, quote,
+    // divider or second paragraph living inside it. What makes it a child on
+    // re-import is the indent to the item's content column; without it the
+    // block came back as a top-level sibling and the item lost its contents.
+    // A wrapper because the kind branches above each return early, so there is
+    // no single exit to hang it off.
+    String nodeText(int i, int from, int to) {
+      final body = nodeBody(i, from, to);
+      final li = nodes[i].data['li'];
+      if (li is! int || body.isEmpty) return body;
+      final pad = '    ' * (li + 1);
+      return body.split('\n').map((l) => l.isEmpty ? '' : '$pad$l').join('\n');
     }
 
     if (s.node == e.node) {
@@ -981,9 +1023,13 @@ class EditorController extends ChangeNotifier {
       nodeText(s.node, s.offset, nodes[s.node].text.length),
     );
     for (var i = s.node + 1; i <= e.node; i++) {
-      final sameQuoteGroup =
-          nodes[i].kind == 'quote' &&
-          nodes[i - 1].kind == 'quote' &&
+      // Membership in a quote group is `quoteDepth`, not `kind == 'quote'`: a
+      // heading, list or fence nested in a blockquote carries `data.quote` and
+      // keeps its own kind. Testing the kind missed those, so a blank line
+      // went in between them — and a blank line ENDS a blockquote, so the
+      // group split (`qbreak`) and the quote bar broke on paste.
+      final sameQuoteGroup = nodes[i].quoteDepth > 0 &&
+          nodes[i - 1].quoteDepth > 0 &&
           nodes[i].data['qbreak'] != true;
       // Consecutive list items are TIGHT: a blank line between them is what
       // makes a list loose in CommonMark, which wraps every item in <p> and
@@ -993,10 +1039,22 @@ class EditorController extends ChangeNotifier {
       // ...but only within ONE run. Switching kind (bullets → numbers → todo)
       // starts a NEW list, and without the blank the two merge back into one
       // on paste. Same rule as the Rust exporter.
+      // ...unless the item is marked LOOSE, which is exactly what a blank line
+      // before it encodes. Emitting it tight dropped the flag on re-import and
+      // the list rendered with different spacing than it was copied from.
       final sameListRun = nodes[i].isListKind &&
           nodes[i - 1].isListKind &&
-          nodes[i].kind == nodes[i - 1].kind;
-      buf.write(sameQuoteGroup || sameListRun ? '\n' : '\n\n');
+          nodes[i].kind == nodes[i - 1].kind &&
+          nodes[i].data['loose'] != true;
+      // A container child (`data.li`) joins its item tightly — EXCEPT a
+      // paragraph, where the blank line is what made it a child paragraph in
+      // the first place. Putting a blank before a fence/quote/divider child
+      // instead made the whole ITEM loose on re-import.
+      final tightChild =
+          nodes[i].data['li'] is int && nodes[i].kind != 'paragraph';
+      buf.write(
+        sameQuoteGroup || sameListRun || tightChild ? '\n' : '\n\n',
+      );
       buf.write(
         i == e.node
             ? nodeText(e.node, 0, e.offset)
@@ -1023,8 +1081,12 @@ class EditorController extends ChangeNotifier {
         // lists — serialize it or the lists merge back into one on paste.
         return '$quote$pad${(node.data['marker'] as String?) ?? '-'} ';
       case 'numbered_list':
-        // The real start number: `5. five` must not paste back as `1.`.
-        return '$quote$pad${node.data['start'] ?? 1}. ';
+        // The real start number: `5. five` must not paste back as `1.`. The
+        // delimiter matters too — `)` and `.` are DIFFERENT list types in
+        // CommonMark, so hardcoding `.` merged `3) …` back into the `.` list
+        // above it.
+        final delim = (node.data['marker'] as String?) ?? '.';
+        return '$quote$pad${node.data['start'] ?? 1}$delim ';
       case 'quote':
         // Nested quotes repeat the marker, matching the Rust exporter.
         return '> ' * node.quoteDepth.clamp(1, 16);
