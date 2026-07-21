@@ -152,10 +152,35 @@ Rust 侧 `GEN_GOLD` 为同一批 fixture 额外产出 `.md.gold` = `export_markd
 
 `zip_writer` 优先（模式已验证、无新技术、漂移后果最重），再 `cloneView`/`_dedupName`、markdown 正则，最后本地世界 CRUD（~980 行，量最大、和 `setState` 交织最深）。
 
-### 第 3 步：WASM spike —— **只量延迟，不动生产代码**
+### 第 3 步：WASM spike ✅ 已完成（2026-07-21）—— **延迟这条否决理由不成立**
 
-把 `crates/markdown`（关掉 `render` feature）编成 wasm，测按键路径实际耗时。**数字出来之前，删那 2,400 行不该拍板。**
-先解掉 `Uuid::new_v4()` 的 wasm 兼容。
+阈值**在测量之前**定死（免得事后找理由）：< 1 ms 可行 / 1–5 ms 灰色 / > 5 ms 否决。
+
+实测【实测】，同一批输入喂两边：
+
+| | Dart | WASM（含 JSON 序列化） | WASM（仅解析） |
+|---|---|---|---|
+| **热路径** 87 字符 | 0.059 ms | **0.029 ms** | 0.019 ms |
+| **批量** 10,935 字符 | 3.642 ms | **1.801 ms** | 1.574 ms |
+
+**WASM 比 Dart 快约一倍**，且已含跨边界与 JSON 开销。热路径 0.029 ms，低于阈值 34 倍。
+
+体积：**wasm 201 KB + JS 胶水 4.5 KB**（`opt-level="z"` + LTO）。现有 web 产物 59 MB、其中 `mermaid.min.js` 单个 2.57 MB —— 这个 wasm 是**那一个资源的 1/13**。此前报告里「~1 MB」是从 comrak-wasm 外推的【未证实】推断，**偏悲观，此处修正**。
+
+`Uuid::new_v4()` 阻塞点属实但很小：`uuid` 需要它**自己的** `js` feature（只开 `getrandom/js` 不够）。一个 target-gated 的 feature 即可。
+
+#### spike **没有**证明的事（同样重要）
+
+- **测的是 Node/V8 + 纯 wasm-bindgen，不是 Flutter web。** dart2js/dart2wasm 调 wasm 另有一层 interop 开销，未测。
+- **201 KB 不是 frb 的数字。** frb 的 `build-web` 用 `-Z build-std` + 线程标志，产物结构不同、更大。
+- **工程代价未量化**：强制 nightly Rust、COOP/COEP 响应头（等于强制 HTTPS）、`catch_unwind` 在 web 上失效（本会话刚用它兜住 yrs panic）。
+- **没有解释桌面端**：Windows 早就有原生 FFI 却仍用 Dart 镜像。那条路的开销是另一回事。
+
+#### 结论
+
+`docs/architecture.md` 给出的承重理由是「热路径不能每次按键过一趟往返」。**就 wasm 而言，这条经测量不成立** —— 它比现状还快。
+
+但「可行」不等于「现在就做」。下一步不是删那 2,400 行，而是**第二个 spike**：在真实 Flutter web 里跑通 frb 的 web 路径，量它的 interop 开销与真实产物体积。在那之前，本条维持「可行但未决」。
 
 ### 第 4 步：丙类 —— 最后，或永远不做
 
