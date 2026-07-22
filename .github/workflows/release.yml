@@ -162,13 +162,24 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP 'mica-smoke'
 
           Write-Host "Silent-installing $setup -> $installDir"
+          # NO -Wait: the installer's [Run] entry auto-launches Mica (no
+          # `skipifsilent`, see below) and the Inno process does NOT exit until
+          # that GUI app closes — so `-Wait` here hangs forever (it did, 28min,
+          # on run 29937817979). Poll for the installed exe instead: Inno runs
+          # [Run] only after all files land, so the exe existing IS the
+          # "install finished" signal. Hard timeout guards a genuinely stuck run.
           $inst = Start-Process -FilePath $setup `
             -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installDir" `
-            -Wait -PassThru
-          if ($inst.ExitCode -ne 0) { throw "installer exited with code $($inst.ExitCode)" }
-
+            -PassThru
           $exe = Join-Path $installDir 'mica_flutter.exe'
-          if (-not (Test-Path $exe)) { throw "installed exe not found: $exe" }
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not (Test-Path $exe) -and (Get-Date) -lt $deadline) {
+            if ($inst.HasExited -and $inst.ExitCode -ne 0) {
+              throw "installer exited with code $($inst.ExitCode) before producing $exe"
+            }
+            Start-Sleep -Seconds 2
+          }
+          if (-not (Test-Path $exe)) { throw "installed exe not found after 120s: $exe" }
           Write-Host "Installed OK: $exe"
 
           # The installer's [Run] entry auto-launches Mica under /VERYSILENT (it has
@@ -188,9 +199,12 @@ jobs:
             Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"
           } finally {
             # Always tear down the launched app (and any installer-spawned one) so
-            # the step leaves no stray process behind.
+            # the step leaves no stray process behind. The installer process
+            # itself may still be lingering (it waits on the app it auto-launched
+            # until that closes), so stop it too.
             Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
             Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            if ($inst -and -not $inst.HasExited) { Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue }
           }
 
       - name: Publish installer to release
