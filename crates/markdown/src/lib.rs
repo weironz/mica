@@ -3149,8 +3149,9 @@ fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> Stri
       continue;
     }
     if m.kind == "html" {
-      // Raw inline HTML passes through unescaped (GFM tagfilter applied).
-      out.push_str(&tagfilter(&String::from_utf16_lossy(&units[s..e])));
+      // Raw inline HTML passes through unescaped (GFM tagfilter applied, then
+      // an event-handler / `javascript:`-URL scrub for no-CSP consumers).
+      out.push_str(&strip_unsafe_attrs(&tagfilter(&String::from_utf16_lossy(&units[s..e]))));
       pos = e;
       continue;
     }
@@ -3258,9 +3259,12 @@ fn append_html_block(
         // persisted, keeping the cross-language block shape unchanged.
         let first_line = block.text.lines().next().unwrap_or("").trim_start();
         if html_block_start(first_line) == Some(1) {
+          // Type-1 (script/style/pre/textarea) stays byte-for-byte verbatim to
+          // preserve CommonMark round-trip fidelity — NOT scrubbed here; the
+          // share response's strict CSP is what neutralizes it.
           out.push_str(&block.text);
         } else {
-          out.push_str(&tagfilter(&block.text));
+          out.push_str(&strip_unsafe_attrs(&tagfilter(&block.text)));
         }
         out.push('\n');
         return Ok(());
@@ -3431,6 +3435,234 @@ fn tagfilter(s: &str) -> String {
     }
     out.push(s.as_bytes()[i] as char);
     i += 1;
+  }
+  out
+}
+
+/// Names of attributes whose value is fetched as a URL — the vectors for a
+/// `javascript:`/`vbscript:` scheme injection. Lower-cased for comparison.
+const URL_ATTRS: &[&str] = &[
+  "href", "src", "xlink:href", "action", "formaction", "poster",
+];
+
+/// Is `name`+`value` a dangerous attribute that must be dropped?
+///
+/// Two rules: (1) any `on…` event-handler attribute (`on` + one-or-more ASCII
+/// letters, case-insensitive — `onerror`, `OnLoad`, …); (2) a URL attribute
+/// whose value's scheme is `javascript:` / `vbscript:`. For the scheme test we
+/// strip ASCII whitespace and control bytes (leading AND embedded up to the
+/// colon) before comparing, so `  JAVAScript:` and `java\tscript:` are both
+/// caught. Entity-encoded schemes (`&#106;avascript:`) are NOT decoded here —
+/// that residual vector is why the share response still carries a strict CSP.
+fn is_unsafe_attr(name: &str, value: &str) -> bool {
+  let nb = name.as_bytes();
+  if nb.len() > 2
+    && nb[0].eq_ignore_ascii_case(&b'o')
+    && nb[1].eq_ignore_ascii_case(&b'n')
+    && nb[2..].iter().all(u8::is_ascii_alphabetic)
+  {
+    return true;
+  }
+  let lname = name.to_ascii_lowercase();
+  if URL_ATTRS.contains(&lname.as_str()) {
+    // Probe = value with all ASCII whitespace/control bytes removed, lowercased.
+    // A real URL never collapses to a `javascript:`/`vbscript:` prefix, so this
+    // has no realistic false positive while closing the tab/newline bypass.
+    let probe: String = value
+      .bytes()
+      .filter(|b| *b > 0x20 && *b != 0x7f)
+      .map(|b| b.to_ascii_lowercase() as char)
+      .take(11) // len("javascript:")
+      .collect();
+    if probe.starts_with("javascript:") || probe.starts_with("vbscript:") {
+      return true;
+    }
+  }
+  false
+}
+
+/// Defense-in-depth over raw HTML: strip event-handler (`on*`) attributes and
+/// `javascript:`/`vbscript:` URL attributes from element tags. This is a
+/// belt-and-suspenders layer for consumers WITHOUT a CSP (e.g. a locally saved
+/// `.html` download); the share response's own strict CSP remains the primary
+/// XSS defense. Written in the same hand-rolled byte-scanner style as
+/// [tagfilter], with no regex dependency.
+///
+/// Only the INSIDE of an element tag is scanned. Text nodes are copied byte-for
+/// byte (UTF-8 preserved by slicing at ASCII boundaries only). Comments
+/// (`<!-- -->`), declarations (`<!…>`) and processing instructions (`<?…?>`)
+/// pass through verbatim — never scanned for attributes.
+fn strip_unsafe_attrs(s: &str) -> String {
+  let b = s.as_bytes();
+  let mut out = String::with_capacity(s.len());
+  let mut i = 0;
+  while i < b.len() {
+    // Text run: copy verbatim up to the next '<' (keeps multibyte UTF-8 intact).
+    if b[i] != b'<' {
+      let start = i;
+      while i < b.len() && b[i] != b'<' {
+        i += 1;
+      }
+      out.push_str(&s[start..i]);
+      continue;
+    }
+    // `<!-- … -->` comment: copy verbatim, do not scan.
+    if s[i + 1..].starts_with("!--") {
+      let mut k = i + 4;
+      while k + 2 < b.len() && !(b[k] == b'-' && b[k + 1] == b'-' && b[k + 2] == b'>') {
+        k += 1;
+      }
+      let end = if k + 2 < b.len() { k + 3 } else { b.len() };
+      out.push_str(&s[i..end]);
+      i = end;
+      continue;
+    }
+    // `<! … >` declaration (e.g. DOCTYPE): copy verbatim to the next '>'.
+    if b.get(i + 1) == Some(&b'!') {
+      let mut k = i + 2;
+      while k < b.len() && b[k] != b'>' {
+        k += 1;
+      }
+      let end = (k + 1).min(b.len());
+      out.push_str(&s[i..end]);
+      i = end;
+      continue;
+    }
+    // `<? … ?>` processing instruction: copy verbatim.
+    if b.get(i + 1) == Some(&b'?') {
+      let mut k = i + 2;
+      while k + 1 < b.len() && !(b[k] == b'?' && b[k + 1] == b'>') {
+        k += 1;
+      }
+      let end = if k + 1 < b.len() { k + 2 } else { b.len() };
+      out.push_str(&s[i..end]);
+      i = end;
+      continue;
+    }
+    // A tag: `<` optional `/` then a name starting with an ASCII letter.
+    let mut j = i + 1;
+    let closing = b.get(j) == Some(&b'/');
+    if closing {
+      j += 1;
+    }
+    if !b.get(j).is_some_and(u8::is_ascii_alphabetic) {
+      // Not a real tag start — emit the bare '<' as literal text.
+      out.push('<');
+      i += 1;
+      continue;
+    }
+    // Emit `<`, optional `/`, then the tag name.
+    out.push('<');
+    if closing {
+      out.push('/');
+    }
+    let name_start = j;
+    while b
+      .get(j)
+      .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'-')
+    {
+      j += 1;
+    }
+    out.push_str(&s[name_start..j]);
+    // Attribute region: loop until the tag terminator (`>` / `/>` / EOF).
+    loop {
+      let ws_start = j;
+      while b.get(j).is_some_and(u8::is_ascii_whitespace) {
+        j += 1;
+      }
+      let ws = &s[ws_start..j];
+      match b.get(j) {
+        None => {
+          out.push_str(ws);
+          break;
+        }
+        Some(&b'>') => {
+          out.push_str(ws);
+          out.push('>');
+          j += 1;
+          break;
+        }
+        Some(&b'/') if b.get(j + 1) == Some(&b'>') => {
+          out.push_str(ws);
+          out.push_str("/>");
+          j += 2;
+          break;
+        }
+        _ => {}
+      }
+      // Parse one attribute: name [ = value ].
+      let attr_start = j;
+      while b
+        .get(j)
+        .is_some_and(|c| !c.is_ascii_whitespace() && !matches!(c, b'=' | b'>' | b'/'))
+      {
+        j += 1;
+      }
+      if j == attr_start {
+        // A stray char (e.g. a lone '/') that isn't a tag end — emit and move on
+        // so the scanner can't stall.
+        out.push_str(ws);
+        out.push(b[j] as char);
+        j += 1;
+        continue;
+      }
+      let name = &s[attr_start..j];
+      let mut value = "";
+      // Optional value, allowing whitespace around '=' (HTML-legal).
+      let mut k = j;
+      while b.get(k).is_some_and(u8::is_ascii_whitespace) {
+        k += 1;
+      }
+      if b.get(k) == Some(&b'=') {
+        k += 1;
+        while b.get(k).is_some_and(u8::is_ascii_whitespace) {
+          k += 1;
+        }
+        match b.get(k) {
+          Some(&b'"') => {
+            let vs = k + 1;
+            k += 1;
+            while b.get(k).is_some_and(|c| *c != b'"') {
+              k += 1;
+            }
+            value = &s[vs..k.min(b.len())];
+            if b.get(k) == Some(&b'"') {
+              k += 1;
+            }
+          }
+          Some(&b'\'') => {
+            let vs = k + 1;
+            k += 1;
+            while b.get(k).is_some_and(|c| *c != b'\'') {
+              k += 1;
+            }
+            value = &s[vs..k.min(b.len())];
+            if b.get(k) == Some(&b'\'') {
+              k += 1;
+            }
+          }
+          _ => {
+            let vs = k;
+            while b.get(k).is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>') {
+              k += 1;
+            }
+            value = &s[vs..k];
+          }
+        }
+        j = k;
+      }
+      let attr_text = &s[attr_start..j];
+      if is_unsafe_attr(name, value) {
+        // Drop: skip the leading whitespace AND the attribute entirely.
+      } else {
+        out.push_str(ws);
+        out.push_str(attr_text);
+      }
+    }
+    // Advance the outer cursor past the tag the attribute loop just consumed
+    // (`j` walked to the `>` / `/>` / EOF). Without this the outer `while` would
+    // re-scan the same tag forever.
+    i = j;
   }
   out
 }
@@ -5350,7 +5582,7 @@ pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_
 
 #[cfg(test)]
 mod security_tests {
-  use super::tagfilter;
+  use super::{export_html, import_markdown, strip_unsafe_attrs, tagfilter};
 
   // Pins what the GFM tagfilter does — and, crucially, what it does NOT do — for
   // raw HTML rendered onto a Mica same-origin surface (the public share page).
@@ -5376,5 +5608,86 @@ mod security_tests {
     let svg = tagfilter("<svg onload=\"steal()\">");
     assert!(svg.contains("onload"), "tagfilter unexpectedly stripped onload: {svg}");
     assert!(svg.starts_with("<svg"), "svg tag should not be escaped: {svg}");
+  }
+
+  // The defense-in-depth layer that DOES strip the event handlers / js: URLs the
+  // tagfilter leaves behind — belt-and-suspenders for no-CSP consumers.
+  #[test]
+  fn strip_unsafe_attrs_removes_event_handlers() {
+    // Double-quoted, single-quoted, unquoted, and mixed-case + no-quote forms.
+    let a = strip_unsafe_attrs("<img src=x onerror=\"steal()\">");
+    assert!(!a.contains("onerror"), "onerror survived: {a}");
+    assert!(a.contains("src=x"), "safe src dropped: {a}");
+    assert!(a.starts_with("<img"), "tag mangled: {a}");
+
+    let b = strip_unsafe_attrs("<svg onload='x'>");
+    assert!(!b.contains("onload"), "onload survived: {b}");
+
+    // Mixed case + unquoted value.
+    let c = strip_unsafe_attrs("<body OnLoad=x>");
+    assert!(!c.to_ascii_lowercase().contains("onload"), "OnLoad survived: {c}");
+    assert_eq!(c, "<body>");
+
+    // Unquoted handler with call syntax.
+    let d = strip_unsafe_attrs("<img src=x onerror=steal()>");
+    assert!(!d.contains("onerror"), "unquoted onerror survived: {d}");
+  }
+
+  #[test]
+  fn strip_unsafe_attrs_removes_js_and_vbscript_urls() {
+    let a = strip_unsafe_attrs("<a href=\"javascript:alert(1)\">x</a>");
+    assert!(!a.contains("javascript"), "javascript: href survived: {a}");
+
+    // Leading whitespace + mixed case.
+    let b = strip_unsafe_attrs("<a href=\"  JAVAScript:x\">x</a>");
+    assert!(!b.to_ascii_lowercase().contains("javascript"), "js href survived: {b}");
+
+    // Embedded tab in the scheme (browser-normalized bypass).
+    let c = strip_unsafe_attrs("<a href=\"java\tscript:x\">x</a>");
+    assert!(!c.to_ascii_lowercase().contains("script:"), "tab-split js href survived: {c}");
+
+    // vbscript: on a URL attribute other than href.
+    let d = strip_unsafe_attrs("<img src=\"vbscript:msgbox(1)\">");
+    assert!(!d.to_ascii_lowercase().contains("vbscript"), "vbscript src survived: {d}");
+  }
+
+  #[test]
+  fn strip_unsafe_attrs_preserves_safe_content() {
+    // A real image with a benign URL and an alt that contains "on" as a word.
+    let img = strip_unsafe_attrs("<img src=\"x.png\" alt=\"turn on the light\">");
+    assert_eq!(img, "<img src=\"x.png\" alt=\"turn on the light\">");
+
+    // A class literally named "on" — the substring must not trip the on* rule.
+    assert_eq!(strip_unsafe_attrs("<div class=\"on\">"), "<div class=\"on\">");
+
+    // Valueless (boolean) attribute survives.
+    assert_eq!(strip_unsafe_attrs("<input disabled>"), "<input disabled>");
+
+    // Plain text with `<` that isn't a tag, and `on=` in prose — byte-identical.
+    assert_eq!(strip_unsafe_attrs("a < b and on=off"), "a < b and on=off");
+
+    // A comment mentioning onerror is NOT scanned — passes through verbatim.
+    assert_eq!(strip_unsafe_attrs("<!-- onerror=x -->"), "<!-- onerror=x -->");
+
+    // Self-closing tag terminator preserved; multibyte text intact.
+    assert_eq!(strip_unsafe_attrs("café <br/> more"), "café <br/> more");
+
+    // A URL attribute with a normal http URL is untouched.
+    assert_eq!(
+      strip_unsafe_attrs("<a href=\"https://x.test/on\">y</a>"),
+      "<a href=\"https://x.test/on\">y</a>"
+    );
+  }
+
+  #[test]
+  fn export_html_strips_event_handler_from_raw_block() {
+    // A raw (non-type-1) HTML block carrying an onerror handler must come out of
+    // the full export pipeline with the handler gone.
+    let md = "<div>\n<img src=x onerror=\"steal(document.cookie)\">\n</div>\n";
+    let snapshot = import_markdown(md, "root");
+    let html = export_html(&snapshot).expect("export_html");
+    assert!(!html.contains("onerror"), "onerror leaked into export: {html}");
+    assert!(!html.contains("steal("), "handler body leaked into export: {html}");
+    assert!(html.contains("<img"), "the img tag itself should survive: {html}");
   }
 }
