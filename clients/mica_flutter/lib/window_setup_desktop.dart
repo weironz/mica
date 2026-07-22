@@ -59,10 +59,14 @@ bool get _isDesktop =>
 /// Ask on the next close, and remember what they pick.
 const kCloseAsk = 'ask';
 const kCloseQuit = 'quit';
-const kCloseMinimize = 'minimize';
 const kCloseTray = 'tray';
 
-String loadCloseBehavior() => loadPref('closeBehavior') ?? kCloseAsk;
+/// 'minimize' (minimize-to-taskbar) was removed as an option; anyone who had it
+/// set re-picks between Quit and Tray on the next close.
+String loadCloseBehavior() {
+  final v = loadPref('closeBehavior');
+  return (v == null || v == 'minimize') ? kCloseAsk : v;
+}
 void saveCloseBehavior(String v) => savePref('closeBehavior', v);
 
 /// Whether this platform can put an icon in the tray.
@@ -165,8 +169,6 @@ Future<bool> ensureTray() async {
 /// close listener can reuse it.
 Future<void> applyCloseBehavior(String behavior) async {
   switch (behavior) {
-    case kCloseMinimize:
-      await windowManager.minimize();
     case kCloseTray:
       // Fall back to a plain minimize if the tray didn't come up: hiding a
       // window whose only restore path is a missing icon strands the user.
@@ -256,10 +258,6 @@ Future<String?> _askCloseBehavior() async {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: Text(l.closeCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, kCloseMinimize),
-            child: Text(l.closeMinimizeTaskbar),
           ),
           if (trayIsSupported)
             TextButton(

@@ -720,48 +720,6 @@ class LocalOffline implements LocalOfflineApi {
   /// are read from the on-device blob CAS and inlined as `data:` URIs; a missing
   /// blob just degrades to a broken `<img>`, never a failed export. Returns null
   /// if the doc isn't in the store.
-  /// Backed by a flag FILE, not a pref: the Windows runner reads it BEFORE the
-  /// engine starts (long before any Dart runs) to pick the GPU adapter — see
-  /// main.cpp, which rebuilds this exact path natively. Keep the two in sync.
-  bool? get gpuLowPower {
-    if (!Platform.isWindows) return null;
-    final path = _gpuFlagPath();
-    if (path == null) return null; // runner gives up too — hide the switch
-    return File(path).existsSync();
-  }
-
-  void setGpuLowPower(bool value) {
-    if (!Platform.isWindows) return;
-    final path = _gpuFlagPath();
-    if (path == null) return;
-    final flag = File(path);
-    try {
-      if (value) {
-        flag.parent.createSync(recursive: true);
-        flag.writeAsStringSync('1');
-      } else if (flag.existsSync()) {
-        flag.deleteSync();
-      }
-    } catch (_) {
-      // A failed toggle just leaves the previous mode; the switch re-reads on
-      // next settings open, so the UI can't drift from the file.
-    }
-  }
-
-  /// Beside (not inside) the local store dir: %APPDATA%/mica/gpu_low_power.
-  /// Deliberately ignores [_rootOverride] — this is a machine-level launch
-  /// flag for the real runner, meaningless under a test root.
-  ///
-  /// null when %APPDATA% is unavailable: the runner skips the flag check in
-  /// that case (main.cpp gives up on len==0), so a CWD fallback here would
-  /// show an "enabled" switch that silently does nothing — the review's
-  /// split-brain finding. No path ⇒ no knob.
-  String? _gpuFlagPath() {
-    final appData = Platform.environment['APPDATA'];
-    if (appData == null || appData.isEmpty) return null;
-    return '$appData/mica/gpu_low_power';
-  }
-
   String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) {
     final store = _store;
     if (store == null) return null;

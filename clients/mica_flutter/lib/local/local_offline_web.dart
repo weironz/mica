@@ -47,10 +47,6 @@ class LocalOffline implements LocalOfflineApi {
   bool hasBlob(String fileId) => false;
   String? blobFileUri(String fileId) => null;
 
-  /// Desktop-only knob (GPU adapter choice happens in the Windows runner).
-  bool? get gpuLowPower => null;
-  void setGpuLowPower(bool value) {}
-
   String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) =>
       null;
 
