@@ -31,6 +31,11 @@ pub struct AiSettingsResponse {
 #[derive(Debug, Deserialize)]
 pub struct UpdateAiSettingsRequest {
   provider: Option<String>,
+  /// Accepted for backward compatibility but DELIBERATELY IGNORED: `base_url` is
+  /// operator-controlled only (see `update_settings`). A user-supplied value
+  /// would redirect the operator's API key, so old clients that still send it
+  /// are silently no-op'd rather than rejected.
+  #[allow(dead_code)]
   base_url: Option<String>,
   model: Option<String>,
   /// Write-only; omit to keep the existing key, send "" to clear it.
@@ -104,12 +109,17 @@ pub async fn update_settings(
       .unwrap_or(AiProvider::OpenAi),
   };
 
-  let base_url = payload
-    .base_url
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .or_else(|| current.as_ref().map(|c| c.base_url.clone()))
-    .unwrap_or_else(|| default_base_url(provider));
+  // `base_url` is OPERATOR-controlled only. `state.ai` is a process-wide
+  // singleton that carries the operator's provider API key; letting a normal
+  // user point `base_url` at their own host would exfiltrate that key (and open
+  // an SSRF). So the request body's `base_url` is deliberately ignored (old
+  // clients that still send it are not rejected — just no-op'd): keep the
+  // env/config endpoint when the provider is unchanged, else the provider
+  // default on a switch.
+  let base_url = match current.as_ref() {
+    Some(c) if c.provider == provider => c.base_url.clone(),
+    _ => default_base_url(provider),
+  };
 
   let model = payload
     .model

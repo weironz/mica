@@ -2028,6 +2028,14 @@ pub async fn public_share_page(
   let Ok(Some(share)) = store::fetch_share_by_token(&state.db, &token).await else {
     return not_found();
   };
+  // The share row alone is not enough: a token can outlive its document. If the
+  // view was trashed (`is_deleted`) or purged, `fetch_document_view` (which
+  // filters `is_deleted = false`) returns `None`, and we must 404 rather than
+  // keep serving the still-present `current_payload` of deleted content.
+  let Ok(Some(view)) = fetch_document_view(&state.db, share.workspace_id, share.document_id).await
+  else {
+    return not_found();
+  };
   let Ok(Some(mut payload)) = store::current_payload(&state.db, share.document_id).await else {
     return not_found();
   };
@@ -2035,16 +2043,30 @@ pub async fn public_share_page(
   let Ok(body) = export_html(&payload) else {
     return not_found();
   };
-  let title = fetch_document_view(&state.db, share.workspace_id, share.document_id)
-    .await
-    .ok()
-    .flatten()
-    .map(|v| v.name)
-    .unwrap_or_default();
+  let title = view.name;
 
   let html = render_share_shell(&title, &body, share.allow_indexing);
-  ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
+  (
+    [
+      (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+      // The share page is server-rendered static HTML that needs no JS. A
+      // strict CSP with no `script-src` falls back to `default-src 'none'`,
+      // which neutralizes inline `<script>` AND `on*` event handlers (e.g.
+      // `<img onerror>`) that survive the GFM tagfilter in raw-HTML content —
+      // the storage-XSS -> token-theft vector. `img-src`/`font-src`/`style-src`
+      // match what `render_share_shell` actually uses (inline CSS, blob/data
+      // images, system fonts).
+      (header::CONTENT_SECURITY_POLICY, SHARE_CSP),
+    ],
+    html,
+  )
+    .into_response()
 }
+
+/// CSP for the public share page. No `script-src` -> inline scripts and `on*`
+/// event handlers are blocked via the `default-src 'none'` fallback.
+const SHARE_CSP: &str =
+  "default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
 
 /// Wrap the HTML export fragment in a standalone, readable page. `noindex`
 /// unless the share opted into indexing, so a shared page is not silently
@@ -3533,5 +3555,130 @@ mod tests {
     assert_eq!(ordered.len(), 3);
     assert!(pos(root) < pos(child), "root must precede its child");
     assert!(pos(child) < pos(grandchild), "child must precede its grandchild");
+  }
+
+  /// The page-tree invariant guard runs entirely in SQL — `object_type` lives in
+  /// Postgres, and the backstop is a DB trigger — so a mock would assert nothing.
+  /// Gated on `DATABASE_URL`, hardened the same way as auth.rs::refresh_pg and
+  /// app-core/tests/sync_pg.rs: skipped (green) without a database locally, but a
+  /// set-but-unreachable URL — or a missing one in CI — is a hard failure, never
+  /// a silent pass.
+  ///
+  ///   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
+  ///   cargo test -p mica-api-server parent_guard_pg
+  mod parent_guard_pg {
+    use super::*;
+
+    async fn pool() -> Option<PgPool> {
+      let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+          std::env::var("CI").is_err(),
+          "DATABASE_URL is unset in CI — the postgres service block regressed; \
+           these tests must not silently pass"
+        );
+        return None;
+      };
+      Some(
+        PgPool::connect(&url)
+          .await
+          .expect("DATABASE_URL is set but the connection failed"),
+      )
+    }
+
+    /// Seed the FK chain a view needs: user → workspace. Returns (workspace, user).
+    async fn seed_workspace(db: &PgPool) -> (Uuid, Uuid) {
+      let user = Uuid::new_v4();
+      let ws = Uuid::new_v4();
+      sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+        .bind(user)
+        .bind(format!("{user}@parent.test"))
+        .execute(db)
+        .await
+        .unwrap();
+      sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+        .bind(ws)
+        .bind(user)
+        .execute(db)
+        .await
+        .unwrap();
+      (ws, user)
+    }
+
+    /// Insert a top-level view (parent_view_id NULL, so the trigger stays out of
+    /// the way) of the given object_type. Returns its id.
+    async fn seed_view(db: &PgPool, ws: Uuid, user: Uuid, object_type: &str) -> Uuid {
+      let id = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$3,$4::object_type,'V','0',$5)",
+      )
+      .bind(id)
+      .bind(ws)
+      .bind(Uuid::new_v4())
+      .bind(object_type)
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+      id
+    }
+
+    #[tokio::test]
+    async fn a_page_is_refused_as_a_parent_but_a_folder_is_accepted() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let folder = seed_view(&db, ws, user, "folder").await;
+      let page = seed_view(&db, ws, user, "document").await;
+
+      // A folder is a legal container.
+      ensure_parent_accepts_children(&db, ws, folder)
+        .await
+        .expect("a folder must accept children");
+
+      // A page is a leaf: the guard rejects it with a readable 400, not the
+      // trigger's 500.
+      let err = ensure_parent_accepts_children(&db, ws, page)
+        .await
+        .expect_err("a page must not accept children");
+      assert!(
+        matches!(err, ApiError::BadRequest(_)),
+        "a page parent must be a 400, got {err:?}"
+      );
+
+      // A parent that does not exist in this workspace is a 404, not a 400.
+      let missing = ensure_parent_accepts_children(&db, ws, Uuid::new_v4())
+        .await
+        .expect_err("an unknown parent must be rejected");
+      assert!(
+        matches!(missing, ApiError::NotFound),
+        "an unknown parent must be a 404, got {missing:?}"
+      );
+    }
+
+    #[tokio::test]
+    async fn the_db_trigger_backstops_a_write_that_skips_the_guard() {
+      // The guard is the front door; `views_parent_must_be_folder` (migration
+      // 0011) covers every path that forgets to call it. Writing
+      // parent_view_id = <page> straight into the table must still be refused.
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let page = seed_view(&db, ws, user, "document").await;
+
+      let direct = sqlx::query(
+        "INSERT INTO views(workspace_id,parent_view_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$3,'document'::object_type,'V','0',$4)",
+      )
+      .bind(ws)
+      .bind(page)
+      .bind(Uuid::new_v4())
+      .bind(user)
+      .execute(&db)
+      .await;
+      assert!(
+        direct.is_err(),
+        "the trigger must reject nesting a view under a page"
+      );
+    }
   }
 }

@@ -7,8 +7,6 @@ name: CI
 #
 # Deliberately NOT covered yet (need infra a headless runner can't trivially
 # provide — left for a reviewer to enable + validate against a real run):
-#   - api-server's 59 tests (14 need Postgres) — the `services: postgres` block
-#     below already provisions a database, so this is now just a `-p` away.
 #   - The Windows integration_test suite (yrs sync e2e, page-switch fidelity) —
 #     needs a desktop runner + the native FFI (flutter_rust_bridge) build.
 #
@@ -94,8 +92,8 @@ jobs:
       # (clients/mica_flutter/web/yjs_bundle.js) headlessly against the yrs
       # side. No setup-node needed; on a bare self-hosted runner without node
       # the test fails loudly rather than skipping.
-      - name: Test (incl. app-core + infra, Postgres-backed)
-        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra
+      - name: Test (incl. app-core + infra + api-server, Postgres-backed)
+        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server
 
       # Separate invocation: `store` is a non-default feature, and features do
       # not apply across a multi-package `-p` list. Without this the 24 local

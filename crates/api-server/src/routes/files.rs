@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -155,6 +156,39 @@ pub async fn resolve(
   Ok(Json(ResolveResponse { files }))
 }
 
+/// True for addresses an import fetch must never reach: loopback, private,
+/// link-local (incl. the 169.254.169.254 cloud-metadata IP), CGNAT, and their
+/// IPv6 equivalents. Keeps `import-url` from being turned into an SSRF probe of
+/// the server's own network.
+fn is_blocked_addr(ip: IpAddr) -> bool {
+  match ip {
+    IpAddr::V4(v4) => {
+      let o = v4.octets();
+      v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_documentation()
+        || v4.is_unspecified()
+        || o[0] == 0
+        // CGNAT 100.64.0.0/10
+        || (o[0] == 100 && (64..=127).contains(&o[1]))
+    }
+    IpAddr::V6(v6) => {
+      if let Some(mapped) = v6.to_ipv4_mapped() {
+        return is_blocked_addr(IpAddr::V4(mapped));
+      }
+      let seg0 = v6.segments()[0];
+      v6.is_loopback()
+        || v6.is_unspecified()
+        // ULA fc00::/7
+        || (seg0 & 0xfe00) == 0xfc00
+        // link-local fe80::/10
+        || (seg0 & 0xffc0) == 0xfe80
+    }
+  }
+}
+
 /// `POST /api/workspaces/{workspace_id}/files/import-url`
 ///
 /// Server-side fetch a remote image and re-host it (so pasted image URLs don't
@@ -172,12 +206,36 @@ pub async fn import_url(
   let storage = storage(&state)?;
 
   let url = payload.url.trim();
-  if !(url.starts_with("http://") || url.starts_with("https://")) {
+  let parsed =
+    reqwest::Url::parse(url).map_err(|_| ApiError::BadRequest("url must be http(s)".to_string()))?;
+  if !matches!(parsed.scheme(), "http" | "https") {
     return Err(ApiError::BadRequest("url must be http(s)".to_string()));
+  }
+  // SSRF guard: resolve the host and refuse any loopback/private/link-local
+  // target (127/8, 10/8, 172.16-31/12, 192.168/16, 169.254/16 incl. the cloud
+  // metadata IP, CGNAT 100.64/10, ::1, fc00::/7, fe80::/10, IPv4-mapped v6).
+  // The `reqwest` client below re-resolves, so this is a best-effort screen (a
+  // rebinding host could still slip a later lookup), paired with redirects off
+  // so a public URL cannot 30x-bounce onto an internal address.
+  let resolved = parsed
+    .socket_addrs(|| match parsed.scheme() {
+      "https" => Some(443),
+      _ => Some(80),
+    })
+    .map_err(|_| {
+      ApiError::BadRequest(
+        "could not fetch the image url: DNS or network unreachable from this server".to_string(),
+      )
+    })?;
+  if resolved.is_empty() || resolved.iter().any(|addr| is_blocked_addr(addr.ip())) {
+    return Err(ApiError::BadRequest(
+      "refusing to fetch that url: it resolves to a private or loopback address".to_string(),
+    ));
   }
 
   let client = reqwest::Client::builder()
     .timeout(Duration::from_secs(20))
+    .redirect(reqwest::redirect::Policy::none())
     .build()
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -606,5 +664,36 @@ mod tests {
       validate_byte_size(101, 100),
       Err(ApiError::BadRequest(_))
     ));
+  }
+
+  #[test]
+  fn ssrf_guard_blocks_private_and_metadata_addresses() {
+    let blocked = [
+      "127.0.0.1",         // loopback
+      "0.0.0.0",           // unspecified
+      "10.1.2.3",          // private A
+      "172.16.0.1",        // private B
+      "172.31.255.255",    // private B (upper)
+      "192.168.1.1",       // private C
+      "169.254.169.254",   // link-local / cloud metadata
+      "100.64.0.1",        // CGNAT
+      "::1",               // v6 loopback
+      "::",                // v6 unspecified
+      "fc00::1",           // v6 ULA
+      "fd12:3456::1",      // v6 ULA
+      "fe80::1",           // v6 link-local
+      "::ffff:127.0.0.1",  // v4-mapped loopback
+      "::ffff:169.254.169.254", // v4-mapped metadata
+    ];
+    for s in blocked {
+      let ip: IpAddr = s.parse().unwrap();
+      assert!(is_blocked_addr(ip), "{s} should be blocked");
+    }
+
+    let allowed = ["8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:4700:4700::1111"];
+    for s in allowed {
+      let ip: IpAddr = s.parse().unwrap();
+      assert!(!is_blocked_addr(ip), "{s} should be allowed");
+    }
   }
 }

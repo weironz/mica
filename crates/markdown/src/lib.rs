@@ -5347,3 +5347,34 @@ pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_
 
   false
 }
+
+#[cfg(test)]
+mod security_tests {
+  use super::tagfilter;
+
+  // Pins what the GFM tagfilter does — and, crucially, what it does NOT do — for
+  // raw HTML rendered onto a Mica same-origin surface (the public share page).
+  // The 9-tag blacklist neutralizes `<script>`/`<iframe>` etc., but it does
+  // nothing about `on*` event-handler attributes on allowed tags. So the raw
+  // string `<img onerror=...>` / `<svg onload=...>` passes through VERBATIM.
+  // That is exactly why the share-page HTTP response carries a strict CSP
+  // (`default-src 'none'`, no `script-src`) — the tagfilter alone is not a
+  // sufficient XSS defense. If tagfilter is ever hardened to strip event
+  // handlers, update this test AND revisit whether the CSP is still needed.
+  #[test]
+  fn tagfilter_blacklist_neutralizes_script_but_not_event_handlers() {
+    // Blacklisted element tags get their opening `<` escaped -> inert.
+    assert!(tagfilter("<script>alert(1)</script>").starts_with("&lt;script"));
+    assert!(tagfilter("<iframe src=x>").starts_with("&lt;iframe"));
+
+    // Event handlers on non-blacklisted tags survive UNCHANGED. These are the
+    // token-theft vectors the CSP has to catch at the response layer.
+    let img = tagfilter("<img src=x onerror=\"steal()\">");
+    assert!(img.contains("onerror"), "tagfilter unexpectedly stripped onerror: {img}");
+    assert!(img.starts_with("<img"), "img tag should not be escaped: {img}");
+
+    let svg = tagfilter("<svg onload=\"steal()\">");
+    assert!(svg.contains("onload"), "tagfilter unexpectedly stripped onload: {svg}");
+    assert!(svg.starts_with("<svg"), "svg tag should not be escaped: {svg}");
+  }
+}

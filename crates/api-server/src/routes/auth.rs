@@ -875,8 +875,10 @@ mod tests {
 
 /// The rotation's correctness IS its SQL — the conditional UPDATE is what makes
 /// spending a token atomic, and a mocked database would test nothing at all. So
-/// these run against a real Postgres, gated on `DATABASE_URL` and skipped (green)
-/// without one, matching app-core/tests/sync_pg.rs.
+/// these run against a real Postgres, gated on `DATABASE_URL`: skipped (green)
+/// without one locally, but any failure to reach the database is a hard error,
+/// matching app-core/tests/sync_pg.rs. Skipping WITH a database set — or in CI,
+/// where one is always provisioned — would be a silent lie, not a convenience.
 ///
 ///   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
 ///   cargo test -p mica-api-server refresh_pg
@@ -885,9 +887,25 @@ mod refresh_pg {
   use super::*;
   use sqlx::PgPool;
 
+  /// Skipping without a database is a local convenience; skipping WITH one is a
+  /// lie. A set-but-unusable `DATABASE_URL` panics, and in CI a MISSING one
+  /// panics too, because there the database is always provisioned: its absence
+  /// means the workflow regressed, not that these assertions may quietly stop
+  /// running. (See app-core/tests/sync_pg.rs, which learned this the hard way.)
   async fn pool() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    PgPool::connect(&url).await.ok()
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — the postgres service block regressed; \
+         these tests must not silently pass"
+      );
+      return None;
+    };
+    Some(
+      PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
   }
 
   async fn seed_user(db: &PgPool) -> Uuid {
