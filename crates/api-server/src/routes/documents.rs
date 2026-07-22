@@ -169,93 +169,143 @@ pub async fn search_workspace(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
-  let needle = query.q.trim().to_lowercase();
+  let needle = query.q.trim();
   if needle.is_empty() {
     return Ok(Json(SearchResponse { results: vec![] }));
   }
 
-  let views = fetch_workspace_views(&state.db, workspace_id).await?;
-  // Only documents carry body text; folders have none.
-  let docs: Vec<View> = views
-    .into_iter()
-    .filter(|v| v.object_type == "document")
-    .collect();
-
-  // Each document's current text is reconstructed from its yrs base (a DB round
-  // trip + a CRDT decode) — the body is NOT a queryable column, so a workspace
-  // with N documents is N reconstructions no matter what. Two things keep that
-  // from being O(N) latency: run them concurrently (`buffered` preserves tree
-  // order), and STOP once 50 hits are in hand — buffered stops polling new
-  // futures the moment we stop consuming, so a 5000-doc workspace reconstructs
-  // ~50-plus-a-window, not all 5000. Before this it was a sequential await loop.
-  let db = &state.db;
-  let needle = needle.as_str();
-  use futures_util::StreamExt as _;
-  let mut hits = futures_util::stream::iter(docs.into_iter().map(|view| async move {
-    let title_match = view.name.to_lowercase().contains(needle);
-    let mut snippet = String::new();
-    // A single corrupt/unreadable document drops out of the results rather than
-    // 500-ing the whole search — discovery is best-effort by nature. But it must
-    // not do so SILENTLY: a corrupt payload vanishing from search was the only
-    // early signal of the kind of corruption the 2026-07-19 incident produced
-    // (P1-3; blob_gc.rs logs the same class of error).
-    match store::current_payload(db, view.object_id).await {
-      Ok(Some(payload)) => {
-        for block in &payload.blocks {
-          if let Some(found) = snippet_for(&block.text, needle) {
-            snippet = found;
-            break;
-          }
-        }
-      }
-      Ok(None) => {}
-      Err(error) => tracing::warn!(
-        view_id = %view.id,
-        object_id = %view.object_id,
-        %error,
-        "search: skipping unreadable document"
-      ),
-    }
-    (title_match || !snippet.is_empty()).then_some(SearchResult {
-      view_id: view.id,
-      object_id: view.object_id,
-      name: view.name,
-      snippet,
-      title_match,
-    })
-  }))
-  .buffered(SEARCH_CONCURRENCY);
-
-  let mut results = Vec::new();
-  while let Some(hit) = hits.next().await {
-    if let Some(result) = hit {
-      results.push(result);
-      if results.len() >= 50 {
-        break;
-      }
-    }
-  }
-
+  let results = search_views(&state.db, workspace_id, needle).await?;
   Ok(Json(SearchResponse { results }))
 }
 
-/// How many document reconstructions run at once during a search. Bounded so a
-/// large workspace cannot drain the connection pool; small enough to leave room
-/// for everything else the server is doing.
+/// One row of the FTS M1 search query: a document view plus its indexed body
+/// text (NULL for a document that has no yrs base yet — never opened/edited).
+#[derive(FromRow)]
+struct SearchRow {
+  view_id: Uuid,
+  object_id: Uuid,
+  name: String,
+  content_text: Option<String>,
+}
+
+/// The full-text search behind [`search_workspace`], extracted so a DB test can
+/// drive the real query (the same pattern `scan_backlinks` follows).
+///
+/// FTS M1: ONE SQL statement instead of the old per-document CRDT decode loop.
+/// `document_yrs_base.content_text` is a maintained, queryable projection of each
+/// document's body (see `mica_app_core::sync::content_text_from_doc`), so the
+/// body match is a plain `ILIKE` over a column. CJK matches by substring — no PG
+/// extension, no tokenizer (M2 adds a `pg_trgm` GIN index for speed only).
+///
+/// LEFT JOIN, not INNER: a document keeps showing up on a TITLE hit even before
+/// it has a base row, and a document with no base simply isn't body-searchable
+/// until first edited (`content_text` NULL → the `ILIKE` is NULL/false). Only
+/// documents are searched (folders carry no body and were never title-searched).
+///
+/// Corruption note: search no longer decodes anything, so the "unreadable
+/// document" signal `search_workspace` used to log moved to where the decode now
+/// happens — `sync::backfill_content_text` at startup and the write paths (a bad
+/// update is a 400 in `push_update`). A base that failed to decode has empty
+/// `content_text` and is warn-logged there, not silently missing here.
+async fn search_views(
+  db: &PgPool,
+  workspace_id: Uuid,
+  needle: &str,
+) -> ApiResult<Vec<SearchResult>> {
+  let pattern = like_pattern(needle);
+  let rows = sqlx::query_as::<_, SearchRow>(
+    r#"
+      SELECT v.id AS view_id, v.object_id, v.name, yb.content_text
+      FROM views v
+      LEFT JOIN document_yrs_base yb ON yb.document_id = v.object_id
+      WHERE v.workspace_id = $1
+        AND v.is_deleted = false
+        AND v.object_type::text = 'document'
+        AND (v.name ILIKE $2 ESCAPE '\' OR yb.content_text ILIKE $2 ESCAPE '\')
+      ORDER BY v.updated_at DESC
+      LIMIT 50
+    "#,
+  )
+  .bind(workspace_id)
+  .bind(&pattern)
+  .fetch_all(db)
+  .await?;
+
+  let needle_lower = needle.to_lowercase();
+  Ok(
+    rows
+      .into_iter()
+      .map(|row| {
+        let title_match = row.name.to_lowercase().contains(&needle_lower);
+        // The SQL already guaranteed name OR content matched. A content-only hit
+        // yields a snippet; a title-only hit may have an empty snippet, which the
+        // client renders as a bare title result (unchanged contract).
+        let snippet = row
+          .content_text
+          .as_deref()
+          .and_then(|text| snippet_for(text, &needle_lower))
+          .unwrap_or_default();
+        SearchResult {
+          view_id: row.view_id,
+          object_id: row.object_id,
+          name: row.name,
+          snippet,
+          title_match,
+        }
+      })
+      .collect(),
+  )
+}
+
+/// Wrap `needle` as a `%…%` `LIKE`/`ILIKE` pattern, escaping the wildcard
+/// metacharacters (`% _ \`) with a leading backslash so a query containing them
+/// matches literally (paired with `ESCAPE '\'` in the SQL). Without this a search
+/// for `50%` would match anything.
+fn like_pattern(needle: &str) -> String {
+  let mut out = String::with_capacity(needle.len() + 2);
+  out.push('%');
+  for c in needle.chars() {
+    if matches!(c, '%' | '_' | '\\') {
+      out.push('\\');
+    }
+    out.push(c);
+  }
+  out.push('%');
+  out
+}
+
+/// How many document reconstructions run at once during a backlink scan. Bounded
+/// so a large workspace cannot drain the connection pool; small enough to leave
+/// room for everything else the server is doing.
 const SEARCH_CONCURRENCY: usize = 8;
 
-/// First ~160 chars of a block that contains the query, or `None`.
+/// A ~160-char snippet of `text` centered on the first case-insensitive match of
+/// `needle_lower`, with an ellipsis on each clipped edge. `None` if the needle is
+/// absent. `text` is the whole document body (`content_text`), so unlike the old
+/// per-block snippet this must WINDOW around the hit, not take the head.
 fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {
-  if !text.to_lowercase().contains(needle_lower) {
-    return None;
+  const WINDOW: usize = 160;
+  /// Chars of context to keep before the match so the hit isn't flush-left.
+  const LEAD: usize = 40;
+  let lower = text.to_lowercase();
+  let byte_pos = lower.find(needle_lower)?;
+  // Char index of the match start. `to_lowercase` is char-count-preserving for
+  // the scripts we search (ASCII, CJK), so counting chars in the lowercased
+  // prefix indexes the original `chars` too — an approximation that at worst
+  // shifts the window by a few chars for exotic scripts, never drops the match.
+  let match_char = lower[..byte_pos].chars().count();
+  let chars: Vec<char> = text.chars().collect();
+  let start = match_char.saturating_sub(LEAD);
+  let end = (start + WINDOW).min(chars.len());
+  let mut out = String::new();
+  if start > 0 {
+    out.push('…');
   }
-  let trimmed = text.trim();
-  let snippet: String = trimmed.chars().take(160).collect();
-  if trimmed.chars().count() > 160 {
-    Some(format!("{snippet}…"))
-  } else {
-    Some(snippet)
+  out.extend(&chars[start..end]);
+  if end < chars.len() {
+    out.push('…');
   }
+  Some(out)
 }
 
 #[derive(Debug, Serialize)]
@@ -3279,6 +3329,45 @@ mod tests {
 
   use super::*;
 
+  /// The `%…%` pattern escapes LIKE metacharacters so a query for `50%` or `a_b`
+  /// matches literally rather than as a wildcard (paired with `ESCAPE '\'`).
+  #[test]
+  fn like_pattern_escapes_wildcards() {
+    assert_eq!(like_pattern("hello"), "%hello%");
+    assert_eq!(like_pattern("50%"), "%50\\%%");
+    assert_eq!(like_pattern("a_b"), "%a\\_b%");
+    assert_eq!(like_pattern("c\\d"), "%c\\\\d%");
+    // CJK carries no metacharacters — passes through, just wrapped.
+    assert_eq!(like_pattern("全文搜索"), "%全文搜索%");
+  }
+
+  /// The snippet windows AROUND the first hit (not the head of the body) and
+  /// marks each clipped edge with an ellipsis. A hit in the middle of a long
+  /// body must keep context on both sides; CJK counts by character.
+  #[test]
+  fn snippet_windows_around_the_match() {
+    // Absent needle → None.
+    assert!(snippet_for("nothing here", "zzz").is_none());
+
+    // Short body: whole thing, no ellipses.
+    assert_eq!(snippet_for("hello world", "world").as_deref(), Some("hello world"));
+
+    // Case-insensitive.
+    assert_eq!(snippet_for("Hello World", "hello").as_deref(), Some("Hello World"));
+
+    // A hit deep in a long body keeps left+right context and both ellipses.
+    let body = format!("{}NEEDLE{}", "a".repeat(200), "b".repeat(200));
+    let snip = snippet_for(&body, "needle").unwrap();
+    assert!(snip.starts_with('…') && snip.ends_with('…'), "clipped both ends: {snip}");
+    assert!(snip.contains("NEEDLE"), "keeps the match: {snip}");
+    assert!(snip.chars().count() <= 162, "≈160-char window (+2 ellipses): {snip}");
+
+    // CJK windowing: a 2-char substring hit inside a longer sentence is found.
+    let cjk = "这是一段很长的中文文本用来测试全文搜索索引化的片段窗口功能";
+    let snip = snippet_for(cjk, "索引").unwrap();
+    assert!(snip.contains("索引"), "CJK substring windowed: {snip}");
+  }
+
   #[test]
   fn outline_lists_headings_and_block_ids_in_document_order() {
     use mica_app_core::documents::{Block, DocumentSnapshotPayload};
@@ -3965,6 +4054,85 @@ mod tests {
         direct.is_err(),
         "the trigger must reject nesting a view under a page"
       );
+    }
+
+    /// Give a seeded document a search index row with known `content_text`. The
+    /// derivation of that text from the yrs base is covered in app-core's
+    /// sync_pg.rs; here we insert it directly to exercise the SEARCH SQL (join,
+    /// ILIKE, escaping, snippet, title_match) in isolation. `state`/`state_vector`
+    /// are unused by search, so empty bytes suffice.
+    async fn set_content_text(db: &PgPool, doc_id: Uuid, content_text: &str) {
+      sqlx::query(
+        "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,content_text) \
+         VALUES($1,$2,$3,0,$4) \
+         ON CONFLICT (document_id) DO UPDATE SET content_text = excluded.content_text",
+      )
+      .bind(doc_id)
+      .bind(Vec::<u8>::new())
+      .bind(Vec::<u8>::new())
+      .bind(content_text)
+      .execute(db)
+      .await
+      .unwrap();
+    }
+
+    /// FTS M1 end-to-end over the real query: title hits, CJK body substrings
+    /// (3-char and 2-char), a body-only hit's snippet + title_match=false, and
+    /// LIKE-metacharacter escaping.
+    #[tokio::test]
+    async fn search_matches_title_and_cjk_body() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let (view_a, doc_a) = seed_document(&db, ws, user, "会议纪要", serde_json::json!([])).await;
+      set_content_text(&db, doc_a, "今天讨论了全文搜索索引化方案的细节").await;
+      let (view_b, doc_b) = seed_document(&db, ws, user, "Roadmap", serde_json::json!([])).await;
+      set_content_text(&db, doc_b, "no chinese here, just english text").await;
+
+      // 3+ char CJK body hit → doc A only, title_match=false, snippet has the hit.
+      let hits = search_views(&db, ws, "全文搜索").await.unwrap();
+      assert_eq!(hits.len(), 1, "one body hit: {hits:?}");
+      assert_eq!(hits[0].view_id, view_a);
+      assert!(!hits[0].title_match, "matched the body, not the title");
+      assert!(hits[0].snippet.contains("全文搜索"), "snippet: {}", hits[0].snippet);
+
+      // 2-char CJK substring still matches (substring fallback, no tokenizer).
+      let hits = search_views(&db, ws, "索引").await.unwrap();
+      assert_eq!(hits.len(), 1);
+      assert_eq!(hits[0].view_id, view_a);
+
+      // Title hit → title_match=true (body may or may not also match).
+      let hits = search_views(&db, ws, "会议").await.unwrap();
+      assert_eq!(hits.len(), 1);
+      assert_eq!(hits[0].view_id, view_a);
+      assert!(hits[0].title_match);
+
+      // A latin title hit resolves the other doc.
+      let hits = search_views(&db, ws, "roadmap").await.unwrap();
+      assert_eq!(hits.len(), 1);
+      assert_eq!(hits[0].view_id, view_b);
+      assert!(hits[0].title_match);
+
+      // A query matching neither returns nothing.
+      assert!(search_views(&db, ws, "缺失关键词").await.unwrap().is_empty());
+    }
+
+    /// A `%` in the query is a LITERAL, not a wildcard: a search for `100%` must
+    /// NOT match a body containing `100 percent` (which `%100%%` unescaped would).
+    #[tokio::test]
+    async fn search_escapes_like_metacharacters() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let (view_p, doc_p) = seed_document(&db, ws, user, "Pct", serde_json::json!([])).await;
+      set_content_text(&db, doc_p, "the battery is at 100% now").await;
+      let (_view_q, doc_q) = seed_document(&db, ws, user, "Words", serde_json::json!([])).await;
+      set_content_text(&db, doc_q, "confident to 100 percent sure").await;
+
+      // Literal "100%" matches only the doc that actually contains "100%".
+      let hits = search_views(&db, ws, "100%").await.unwrap();
+      assert_eq!(hits.len(), 1, "only the literal '100%' body, not '100 percent': {hits:?}");
+      assert_eq!(hits[0].view_id, view_p);
     }
   }
 }

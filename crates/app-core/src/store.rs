@@ -229,17 +229,24 @@ where
   .await?;
   let yrs_state = doc.encode_state();
   let yrs_state_vector = doc.state_vector();
+  // Derive the search text from the SAME `doc` that produced `yrs_state` and
+  // upsert it in one statement — the REST/MCP write path keeps content_text in
+  // lockstep with the base exactly as the collaborative push path does (red
+  // line #1: content_text is a co-written pure projection of the base).
+  let yrs_content_text = crate::sync::content_text_from_doc(&doc);
   sqlx::query(
-    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
      ON CONFLICT (document_id) DO UPDATE SET
          state = excluded.state, state_vector = excluded.state_vector,
-         base_rid = excluded.base_rid, updated_at = now()",
+         base_rid = excluded.base_rid, content_text = excluded.content_text,
+         updated_at = now()",
   )
   .bind(document_id)
   .bind(&yrs_state)
   .bind(&yrs_state_vector)
   .bind(yrs_rid)
+  .bind(&yrs_content_text)
   .execute(&mut *tx)
   .await?;
 

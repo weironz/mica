@@ -100,6 +100,92 @@ pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
     }
 }
 
+/// The document's plain, queryable text: every block's clean `text` in tree
+/// order, joined by newlines (empty-text blocks — page root, images — dropped).
+///
+/// This is the ONLY producer of `document_yrs_base.content_text`, and it is a
+/// pure projection of the SAME folded `doc` whose `encode_state()` is written as
+/// `state` in the same statement. So the search index can never diverge from the
+/// base it indexes (red line #1: no second representation, derived + co-written).
+/// Newlines between blocks keep a needle from spuriously matching across a block
+/// boundary. Marks/attributes live in `data`, never in `text`, so this carries no
+/// formatting — exactly what a substring search wants.
+pub(crate) fn content_text_from_doc(doc: &MicaDoc) -> String {
+    doc.to_blocks()
+        .iter()
+        .map(|b| b.text.trim_end_matches('\n'))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// How many base rows the startup backfill decodes per DB round trip.
+const BACKFILL_BATCH: i64 = 256;
+
+/// One-time startup backfill of `document_yrs_base.content_text` for rows migration
+/// 0012 created with the empty default (the yrs decode is Rust, not SQL, so the
+/// migration could only add an empty column). Run once after `run_migrations`,
+/// before the server accepts traffic.
+///
+/// Idempotent and safe to run every boot: it walks only rows whose `content_text`
+/// is still `''`, keyset-paginated by `document_id` so each row is visited at most
+/// once per pass regardless of the value it derives (a genuinely-empty document
+/// stays `''` and is simply re-derived on the next boot — cheap and rare). A base
+/// that fails to decode is warn-logged and skipped, never blocking startup — this
+/// is where the "unreadable document" corruption signal that `search_workspace`
+/// used to emit at query time now surfaces (search no longer decodes anything).
+///
+/// Returns how many rows were given non-empty text (for the startup log line).
+pub async fn backfill_content_text(db: &PgPool) -> ApiResult<usize> {
+    let mut filled = 0usize;
+    // Byte-wise uuid cursor; `Uuid::nil()` is the minimum, so `> $cursor` starts
+    // from the first row. Advancing by document_id (not by re-querying `= ''`)
+    // guarantees the loop terminates within a pass even when every row in a batch
+    // derives empty text or fails to decode.
+    let mut cursor = Uuid::nil();
+    loop {
+        let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
+            "SELECT document_id, state FROM document_yrs_base
+             WHERE content_text = '' AND document_id > $1
+             ORDER BY document_id
+             LIMIT $2",
+        )
+        .bind(cursor)
+        .bind(BACKFILL_BATCH)
+        .fetch_all(db)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        for (document_id, state) in &rows {
+            cursor = *document_id;
+            let text = match guarded_from_update(state) {
+                Ok(doc) => content_text_from_doc(&doc),
+                Err(error) => {
+                    tracing::warn!(
+                        document_id = %document_id,
+                        %error,
+                        "content_text backfill: skipping undecodable yrs base"
+                    );
+                    continue;
+                }
+            };
+            // Nothing to index for a genuinely-empty doc; leave it '' (it will be
+            // re-derived — to the same '' — on a later boot, which is harmless).
+            if text.is_empty() {
+                continue;
+            }
+            sqlx::query("UPDATE document_yrs_base SET content_text = $2 WHERE document_id = $1")
+                .bind(document_id)
+                .bind(&text)
+                .execute(db)
+                .await?;
+            filled += 1;
+        }
+    }
+    Ok(filled)
+}
+
 /// Load the document's folded yrs base, building it from the latest op-model
 /// snapshot on first access (the lazy migration bridge). Errors if the document
 /// has neither a yrs base nor a snapshot.
@@ -132,14 +218,19 @@ pub(crate) async fn ensure_base_tx(
     let doc = MicaDoc::from_blocks(&payload.root_block_id, &blocks);
     let state = doc.encode_state();
     let state_vector = doc.state_vector();
+    // content_text derived from the SAME doc (red line #1) — co-written with the
+    // base it indexes, so this first-touch base is searchable immediately, not
+    // only after the startup backfill.
+    let content_text = content_text_from_doc(&doc);
     let inserted = sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, updated_at)
-         VALUES ($1, $2, $3, 0, now())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
+         VALUES ($1, $2, $3, 0, $4, now())
          ON CONFLICT (document_id) DO NOTHING",
     )
     .bind(document_id)
     .bind(&state)
     .bind(&state_vector)
+    .bind(&content_text)
     .execute(&mut **tx)
     .await?;
     if inserted.rows_affected() == 0 {
@@ -243,17 +334,23 @@ pub async fn push_update(
 
     let state = doc.encode_state();
     let state_vector = doc.state_vector();
+    // content_text is re-derived from the just-folded doc and upserted in the
+    // SAME statement as `state`, so the search index moves atomically with the
+    // base on every push (never a stale window between the two).
+    let content_text = content_text_from_doc(&doc);
     sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, updated_at)
-         VALUES ($1, $2, $3, $4, now())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
          ON CONFLICT (document_id) DO UPDATE SET
              state = excluded.state, state_vector = excluded.state_vector,
-             base_rid = excluded.base_rid, updated_at = now()",
+             base_rid = excluded.base_rid, content_text = excluded.content_text,
+             updated_at = now()",
     )
     .bind(document_id)
     .bind(&state)
     .bind(&state_vector)
     .bind(rid)
+    .bind(&content_text)
     .execute(&mut *tx)
     .await?;
 
@@ -442,6 +539,43 @@ pub async fn workspace_head(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // content_text is the plain body text in tree order, block-separated by
+    // newlines, with empty blocks (page root, images) dropped. Proving it here
+    // (no DB) pins the exact projection every write path co-writes with the base.
+    #[test]
+    fn content_text_is_block_text_in_tree_order() {
+        let doc = MicaDoc::from_blocks(
+            "r",
+            &[
+                CoreBlock::new("r", "page").with_children(vec!["h".into(), "p".into(), "img".into()]),
+                CoreBlock::new("h", "heading").with_text("标题一"),
+                CoreBlock::new("p", "paragraph").with_text("正文内容 hello"),
+                CoreBlock::new("img", "image"), // no text — must not add a blank line
+            ],
+        );
+        assert_eq!(content_text_from_doc(&doc), "标题一\n正文内容 hello");
+    }
+
+    // An encode→decode round trip (what the server stores + re-reads) preserves
+    // the derived text exactly, so the index a query reads equals the projection
+    // the writer computed.
+    #[test]
+    fn content_text_survives_encode_decode() {
+        let doc = MicaDoc::from_blocks(
+            "r",
+            &[
+                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+                CoreBlock::new("a", "paragraph").with_text("汉字子串搜索"),
+            ],
+        );
+        let restored = MicaDoc::from_update(&doc.encode_state()).unwrap();
+        assert_eq!(
+            content_text_from_doc(&doc),
+            content_text_from_doc(&restored)
+        );
+        assert_eq!(content_text_from_doc(&restored), "汉字子串搜索");
+    }
 
     /// A malformed update that makes yrs PANIC must come back as a `DocError`,
     /// not unwind out of the server handler. Byte 9 flipped survives `decode_v1`

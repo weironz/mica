@@ -657,3 +657,178 @@ async fn concurrent_first_bootstrap_returns_one_universe() {
 
     cleanup(&db, ws, user).await;
 }
+
+// ── FTS M1: document_yrs_base.content_text (the search index) ────────────────
+
+/// The document's stored search text.
+async fn stored_content_text(db: &PgPool, doc: Uuid) -> String {
+    sqlx::query_scalar("SELECT content_text FROM document_yrs_base WHERE document_id = $1")
+        .bind(doc)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+/// The pure projection `content_text` MUST equal: block text in tree order,
+/// empties dropped, newline-joined. Mirrors `sync::content_text_from_doc` (which
+/// is pub(crate), so it can't be called from this integration crate) — asserting
+/// the stored column equals THIS is the red-line #1 check (index == derivation of
+/// the base, no second source of truth).
+fn derive_text(state: &[u8]) -> String {
+    MicaDoc::from_update(state)
+        .unwrap()
+        .to_blocks()
+        .iter()
+        .map(|b| b.text.trim_end_matches('\n'))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The collaborative push path keeps content_text in lockstep with the base, and
+/// the derived text is exactly a pure projection of the stored base — including
+/// CJK, so a 3-char and a 2-char substring both live in the column an `ILIKE`
+/// scans. Multiple writes must not drift the index off the base.
+#[tokio::test]
+async fn push_update_maintains_content_text() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping push_update_maintains_content_text: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    // Replace "Hello" with a Chinese sentence.
+    editing.text_insert("a", 5, "，全文搜索索引化");
+    let update = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+
+    let stored = stored_content_text(&db, doc).await;
+    let base2 = sync::document_base(&db, doc).await.unwrap().unwrap();
+    assert_eq!(
+        stored,
+        derive_text(&base2.state),
+        "content_text is a pure projection of the base it is stored beside"
+    );
+    // 3+ char CJK hit and 2-char substring hit both present in the index.
+    assert!(stored.contains("全文搜索"), "3+ char CJK substring: {stored}");
+    assert!(stored.contains("索引"), "2-char CJK substring: {stored}");
+
+    // A second push must not leave a stale index: content_text tracks the base.
+    let mut editing2 = MicaDoc::from_update(&base2.state).unwrap();
+    let sv2 = editing2.state_vector();
+    editing2.text_insert("a", 0, "追加：");
+    let update2 = editing2.encode_diff(&sv2).unwrap();
+    sync::push_update(&db, ws, doc, user, &update2).await.unwrap();
+    let base3 = sync::document_base(&db, doc).await.unwrap().unwrap();
+    assert_eq!(
+        stored_content_text(&db, doc).await,
+        derive_text(&base3.state),
+        "repeated writes do not drift the index off the base"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
+/// The REST/MCP op-model write path (`store::apply_document_operations`) folds
+/// through yrs and must maintain content_text identically to the sync path.
+#[tokio::test]
+async fn op_write_maintains_content_text() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping op_write_maintains_content_text: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    use mica_app_core::documents::DocumentOperation;
+    let ops = vec![DocumentOperation::UpdateBlock {
+        block_id: "a".to_string(),
+        kind: None,
+        text: Some("中文全文检索".to_string()),
+        data: None,
+    }];
+    store::apply_document_operations(&db, ws, doc, user, &ops)
+        .await
+        .unwrap();
+
+    let stored = stored_content_text(&db, doc).await;
+    let base = sync::document_base(&db, doc).await.unwrap().unwrap();
+    assert_eq!(stored, derive_text(&base.state));
+    assert!(stored.contains("全文检索"), "3+ char CJK: {stored}");
+    assert!(stored.contains("检索"), "2-char CJK substring: {stored}");
+
+    cleanup(&db, ws, user).await;
+}
+
+/// Startup backfill fills every still-empty row from its base, and a base that
+/// fails to decode is skipped (warn-logged) without erroring or blocking. A
+/// genuinely-empty row and a decoded one are the two `content_text = ''` shapes
+/// the keyset walk must both survive.
+#[tokio::test]
+async fn backfill_fills_valid_and_skips_corrupt() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping backfill_fills_valid_and_skips_corrupt: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // A valid base inserted WITHOUT content_text (the pre-0012 shape → '').
+    let good = MicaDoc::from_blocks("r", &[para("r", ""), para("a", "回填后的可搜索文本")]);
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,updated_at)
+         VALUES ($1,$2,$3,0,now())",
+    )
+    .bind(doc)
+    .bind(good.encode_state())
+    .bind(good.state_vector())
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // A second document whose base is undecodable garbage — must be skipped.
+    let doc2 = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO documents(id,workspace_id,root_block_id,current_seq,created_by)
+         VALUES($1,$2,'r',0,$3)",
+    )
+    .bind(doc2)
+    .bind(ws)
+    .bind(user)
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,updated_at)
+         VALUES ($1,$2,$3,0,now())",
+    )
+    .bind(doc2)
+    .bind(b"not a yrs update".to_vec())
+    .bind(b"nope".to_vec())
+    .execute(&db)
+    .await
+    .unwrap();
+
+    assert_eq!(stored_content_text(&db, doc).await, "", "starts empty");
+    let filled = sync::backfill_content_text(&db).await.unwrap();
+    assert!(filled >= 1, "at least the valid row was indexed");
+
+    assert_eq!(
+        stored_content_text(&db, doc).await,
+        "回填后的可搜索文本",
+        "valid base backfilled from its yrs state"
+    );
+    assert_eq!(
+        stored_content_text(&db, doc2).await,
+        "",
+        "undecodable base skipped, left empty, no error"
+    );
+
+    // Idempotent: a second pass changes nothing (the filled row is skipped by the
+    // content_text='' filter; the corrupt row is re-skipped) and terminates.
+    sync::backfill_content_text(&db).await.unwrap();
+    assert_eq!(stored_content_text(&db, doc).await, "回填后的可搜索文本");
+
+    cleanup(&db, ws, user).await;
+}

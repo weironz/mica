@@ -1,0 +1,17 @@
+-- FTS M1: a plain, queryable text column on the folded yrs base so full-text
+-- search is one `ILIKE` over a column instead of decoding every document's CRDT
+-- base per query (the old `search_workspace` did N yrs decodes).
+--
+-- `content_text` is a PURE DERIVATION of `state`: every path that writes
+-- `document_yrs_base` writes `content_text` in the SAME statement, from the same
+-- folded doc whose `encode_state()` becomes `state` (see app-core `sync.rs`
+-- push_update / ensure_base_tx and `store.rs` apply_derived_operations). It is
+-- NOT a second source of truth — search reads it, writes derive it.
+--
+-- The column lands with DEFAULT '' because the backfill of existing rows needs
+-- the yrs decode, which is Rust, not SQL — the server backfills every still-empty
+-- row once at startup (idempotent; see sync::backfill_content_text).
+--
+-- No PG extension / tokenizer: CJK matches by substring (ILIKE), same as
+-- Joplin-class notes. A `pg_trgm` GIN index is a later (M2) one-line drop-in.
+ALTER TABLE document_yrs_base ADD COLUMN content_text text NOT NULL DEFAULT '';

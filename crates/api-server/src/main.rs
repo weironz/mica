@@ -22,6 +22,17 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("failed to run database migrations")?;
 
+  // FTS M1: one-time backfill of `document_yrs_base.content_text` for rows that
+  // predate migration 0012 (the yrs decode is Rust, not SQL). Idempotent — only
+  // touches still-empty rows — so it is cheap on every subsequent boot. Best
+  // effort: a decode failure warn-logs and skips that document (search misses
+  // its body until it's next edited) but never blocks startup.
+  match mica_app_core::sync::backfill_content_text(&db).await {
+    Ok(filled) if filled > 0 => info!("content_text backfill: indexed {filled} document(s)"),
+    Ok(_) => {}
+    Err(error) => tracing::warn!(%error, "content_text backfill failed; search may miss some bodies until next edit"),
+  }
+
   // Test-environment convenience: keep the seeded test account's credentials
   // valid across restarts and DB resets. AppConfig never populates this in
   // production.
