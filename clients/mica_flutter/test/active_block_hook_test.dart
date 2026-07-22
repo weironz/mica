@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 // The format toolbar highlights the current block type (which heading level
 // you're in, etc.). It reads EditorActiveBlockHook, which the editor publishes
@@ -27,6 +28,8 @@ void main() {
     final hook = EditorActiveBlockHook();
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',

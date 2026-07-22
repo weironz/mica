@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 
 // Ctrl/Cmd+Alt+1…6 sets the focused block's heading level; Ctrl/Cmd+Alt+0
 // returns it to plain text (Notion/Word convention — bare Ctrl+digit is owned
@@ -15,6 +16,8 @@ void main() {
     final hook = EditorActiveBlockHook();
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: MicaEditor(
             rootBlockId: 'root',
