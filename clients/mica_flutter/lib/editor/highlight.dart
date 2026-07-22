@@ -900,6 +900,18 @@ String detectLanguage(String code) {
   final strong = strongLanguageSignature(c);
   if (strong != null) return strong;
 
+  // Shell — Tier A: a session PROMPT or a HERE-DOC is shell-exclusive and can't
+  // be confused with any other language, so it's checked before the weaker
+  // keyword heuristics (a `python3 -c "print(1)"` line inside a session must not
+  // read as python). Mirrors Pygments' PS1 prompt + here-doc. Command NAMES are
+  // deliberately NOT consulted — the command set is open-ended, and keying on it
+  // is exactly why highlight.js over-claims bash on prose. (Shebang: `strong`.)
+  if (hasLine(r'[\w.-]+@[\w.-]+:[^\n]*[$#%]') || // user@host:~/path$  /  …#
+      hasLine(r'^\s*\[[^\]]+\]:?\s*[$#%]\s') || //  [root@box ~]#
+      hasLine(r'<<-?\s*[\x27"]?\w+\s*$')) {      //  cmd <<EOF  /  <<'EOF'
+    return 'bash';
+  }
+
   if (has(r'^\s*<\?xml') || has(r'<\w+[^>]*>.*</\w+>') || has(r'<!DOCTYPE')) {
     return 'html';
   }
@@ -945,24 +957,50 @@ String detectLanguage(String code) {
   }
   if (has(r'\bvoid\s+main\b') || c.contains('Widget build(')) return 'dart';
   if (c.trimLeft().startsWith('{') || c.trimLeft().startsWith('[')) return 'json';
-  // Shell: real pasted sessions carry strong signals even without a shebang —
-  // a prompt line (`user@host:…$`/`#`), a pipe into a text tool, a redirect, or
-  // a common admin/CLI command at line start. The old check only knew `echo` and
-  // shebangs, so `nvidia-smi | grep …`, `systemctl is-active …`, or a
-  // `root@host:~# …` session fell through to plaintext (no highlighting).
-  if (hasLine(r'^\s*#!.*\bsh\b') ||
-      hasLine(r'[\w.-]+@[\w.-]+:.*[$#]') ||
-      has(r'\becho\s+') ||
-      has(r'\|\s*(?:grep|awk|sed|head|tail|xargs|sort|uniq|wc|cut|tr|less)\b') ||
+  // Shell — Tier B/C: weaker syntax, checked LAST so real Python/Ruby/Perl/JS
+  // (which also use `#` comments, `$` sigils, `${…}` template literals, backticks)
+  // win first. Keyed on shell SYNTAX, not command vocabulary (Pygments/linguist
+  // model; highlight.js keys on commands and famously over-claims). A STRONG
+  // signal — a pipe into a unix filter, a `2>&1`/`>/dev/null` redirect, `$((…))`
+  // arithmetic, a here-string, shell param expansion `${VAR:-…}`, or an
+  // if…fi/for…done/case…esac pair — is shell-exclusive enough to return on its
+  // own. WEAK signals (bare `$(…)`/backtick, `${VAR}`, `&&`/`||`, a no-space
+  // `VAR=value`, an `export`/`source` line, or a short admin-command list gated
+  // behind a shell operator) need ≥2 together, since each alone also appears in
+  // Perl/Ruby/Make.
+  final strongShell =
+      has(r'\|\s*(?:grep|awk|sed|xargs|head|tail|sort|uniq|wc|cut|tr|tee|less)\b') ||
       has(r'2>&1') ||
       has(r'>\s*/dev/null') ||
+      has(r'&>') ||
+      has(r'\$\(\(') ||
+      has(r'<<<') ||
+      has(r'\$\{[#!]?\w+(?:\[[^\]]*\]|:[-=+?]|##?|%%?|/)') || // ${VAR:-x} ${#a} ${a[@]} ${x%%.y}
+      (hasLine(r'^\s*(?:if|elif|for|while|until|case)\b') &&
+          has(r'\b(?:fi|done|esac)\b'));
+  if (strongShell) return 'bash';
+
+  var weakShell = 0;
+  // `$(cmd)` and backticks: command substitution — but a JS template literal
+  // `` `x ${y}` `` also has both a backtick and (bare) `${}`, so bare `${VAR}` is
+  // NOT a signal here (only the shell-specific `${VAR:-…}` form, already STRONG).
+  if (has(r'\$\((?!\()') || has(r'`[^`\n$]+`')) weakShell++; // $(cmd) / `cmd` (no $ inside → not a template)
+  if (has(r'\s(?:&&|\|\|)\s')) weakShell++;
+  if (hasLine(r'^\s*(?:export|source|local|readonly)\s+\w')) weakShell++;
+  if (hasLine(r'^\s*[A-Za-z_]\w*=(?!=)\S')) weakShell++; // VAR=value, no spaces (python/ruby space it)
+  if (has(r'\becho\s+')) weakShell++;
+  // Gated command list: ONE signal, and only when a shell operator co-occurs —
+  // never a bare command word (that's the highlight.js over-claim bug).
+  if ((has(r'[|]') || has(r'\s&&\s') || has(r'>') || hasLine(r'\\\s*$')) &&
       hasLine(
         r'^\s*(?:sudo|apt|apt-get|yum|dnf|systemctl|service|journalctl|docker|'
-        r'kubectl|helm|git|curl|wget|ssh|scp|rsync|tar|chmod|chown|mkdir|export|'
-        r'source|pip3?|python3?|nvidia-smi|dcgmi)\b',
+        r'kubectl|helm|git|curl|wget|ssh|scp|rsync|chmod|chown|nvidia-smi|dcgmi|'
+        r'pip3?|python3?)\b',
       )) {
-    return 'bash';
+    weakShell++;
   }
+  if (weakShell >= 2) return 'bash';
+
   return 'plaintext';
 }
 

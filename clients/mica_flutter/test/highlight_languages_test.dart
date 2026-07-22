@@ -613,11 +613,27 @@ after
       expect(detectLanguage('run_thing >/dev/null 2>&1\n'), 'bash');
     });
 
+    // The point of keying on SYNTAX not a command list: a command that is NOT
+    // in any whitelist is still bash, via the pipe / param-expansion / control
+    // flow around it.
+    test('an unlisted command is bash via shell syntax, not vocabulary', () {
+      expect(detectLanguage('podman ps -a | grep running\n'), 'bash'); // pipe → filter
+      expect(detectLanguage('ethtool eth0 >/dev/null 2>&1\n'), 'bash'); // redirect
+      expect(detectLanguage(r'echo "${LOG_DIR:-/var/log}/app.log"' '\n'), 'bash'); // ${x:-y}
+      expect(
+        detectLanguage('for f in *.log; do gzip "\$f"; done\n'),
+        'bash', // for…done pair — gzip is in no list
+      );
+      expect(detectLanguage('cat <<EOF\nhello\nEOF\n'), 'bash'); // here-doc
+    });
+
     // Guard against over-detection: real Python still wins via its own rules,
-    // and prose with an `@` handle is not a shell prompt.
-    test('does not steal Python or plain prose', () {
+    // prose with an `@` handle is not a shell prompt, and a JS template literal
+    // (backtick + `${…}`) is NOT mistaken for shell.
+    test('does not steal Python, prose, or a JS template literal', () {
       expect(detectLanguage('def f(x):\n    return x + 1\n'), 'python');
       expect(detectLanguage('Ping @alice about the docs, thanks!\n'), 'plaintext');
+      expect(detectLanguage('`Hello \${name}, welcome back`\n'), isNot('bash'));
     });
   });
 }
