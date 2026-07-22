@@ -397,5 +397,18 @@ async fn insert_page(
   .await?;
 
   tx.commit().await?;
+
+  // Eagerly build the yrs base so each imported page's BODY is searchable at
+  // once (batch import of a whole Notion workspace is the case that motivated
+  // this — 100+ pages a user searches before opening any). content_text lives on
+  // the base, built lazily on first open otherwise. Best-effort per page: the
+  // page is committed; no base degrades to "searchable on first open" (pre-M1),
+  // so one page's build failing must not abort the rest of the import.
+  if let Err(error) = mica_app_core::sync::bootstrap_base(&state.db, document.id).await {
+    tracing::warn!(
+      document_id = %document.id, %error,
+      "import: eager base build failed; page body searchable after first open"
+    );
+  }
   Ok(())
 }

@@ -637,6 +637,21 @@ pub async fn import_document_markdown(
 
   tx.commit().await?;
 
+  // Eagerly build the yrs base so the imported BODY is searchable immediately.
+  // Import writes only an op-model snapshot; `content_text` (the FTS index) lives
+  // on the yrs base, which is otherwise built lazily on first open — so without
+  // this an imported-but-never-opened page's body is unsearchable (title always
+  // is). Best-effort: the import already committed, and a doc with no base just
+  // degrades to "searchable on first open" (the pre-M1 behavior), so a hiccup
+  // here must never fail the import. Reuses the same builder the WS bootstrap and
+  // startup backfill use — no new write path.
+  if let Err(error) = mica_app_core::sync::bootstrap_base(&state.db, document.id).await {
+    tracing::warn!(
+      document_id = %document.id, %error,
+      "import: eager base build failed; body searchable after first open"
+    );
+  }
+
   Ok(Json(DocumentBootstrapResponse {
     document,
     view,
@@ -4133,6 +4148,53 @@ mod tests {
       let hits = search_views(&db, ws, "100%").await.unwrap();
       assert_eq!(hits.len(), 1, "only the literal '100%' body, not '100 percent': {hits:?}");
       assert_eq!(hits[0].view_id, view_p);
+    }
+
+    /// FTS M1 tail: a document with only an op-model snapshot and NO yrs base yet
+    /// — exactly the state right after import, before it is ever opened — is not
+    /// body-searchable, because `content_text` lives on the base. The import
+    /// handlers now call `bootstrap_base` eagerly to build that base (+content_text)
+    /// from the snapshot, so the imported body is searchable immediately. This
+    /// pins both halves: the gap without a base, and the fix that closes it.
+    #[tokio::test]
+    async fn import_body_is_searchable_after_eager_base() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      // Snapshot-only doc (seed_document inserts document_snapshots, never a base).
+      let (view, doc) = seed_document(
+        &db,
+        ws,
+        user,
+        "导入页",
+        serde_json::json!([{
+          "id": "blk1",
+          "type": "paragraph",
+          "text": "全文搜索索引化的正文内容",
+          "data": {}
+        }]),
+      )
+      .await;
+
+      // Before a base exists, the body is unsearchable — the title still is.
+      assert!(
+        search_views(&db, ws, "正文内容").await.unwrap().is_empty(),
+        "no base yet → body not in content_text"
+      );
+      assert_eq!(
+        search_views(&db, ws, "导入页").await.unwrap().len(),
+        1,
+        "title is always searchable, base or not"
+      );
+
+      // What the import handlers now do post-commit: build the base eagerly.
+      mica_app_core::sync::bootstrap_base(&db, doc).await.unwrap();
+
+      // Now the imported body is searchable, resolving to the right view.
+      let hits = search_views(&db, ws, "正文内容").await.unwrap();
+      assert_eq!(hits.len(), 1, "body searchable after eager base: {hits:?}");
+      assert_eq!(hits[0].view_id, view);
+      assert!(!hits[0].title_match, "matched the body, not the title");
     }
   }
 }
