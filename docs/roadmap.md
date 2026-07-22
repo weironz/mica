@@ -40,14 +40,14 @@
 - 🆕 **`files/import-url` 服务端抓取任意 URL —— 盲 SSRF**(medium / 未记录) —— 只校验 http(s) 前缀,不拦 127.0.0.1/localhost/169.254.169.254/内网段;reqwest 默认跟 10 次重定向可 302 跳内网绕过;差异化错误回显构成内网可达性探测预言机。开放注册下门槛极低。修:私网 IP/元数据地址黑名单 + 解析后校验 + 禁跳转。(`files.rs:174/189`)(M) `[需后端]`
 - 🆕 **可上传携带脚本的 SVG,直开 blob 链接执行脚本**(medium / 未记录) —— 允许 `image/svg+xml`,blob 端点只 302 到存储、不改 Content-Type、不加 `Content-Disposition: attachment`;若 `public_base_url` 与 App 同源即又一处 XSS。修:svg blob 强制 attachment 或改 `text/plain` 下发;并核 merman 内联 SVG 的净化。(`files.rs:479/292`, `markdown/lib.rs:3273`)(M) `[需后端]`
 - 🆕 **客户端令牌明文存储放大 XSS 后果**(medium / 部分记录) —— web `authToken`+`refreshToken` 明文写 localStorage(任意同源 JS 可读,直接放大分享页 XSS);桌面明文存 prefs(无 DPAPI/secure_storage)。(`prefs_web.dart:6`, `main.dart:475`)(M)(桌面部分见下方「桌面 token DPAPI」)
-- ~~**无 refresh / 无撤销的 24h JWT**~~ 🟡 refresh + rotation + reuse-detection + `revoke_family`/`revoke_user_sessions` 已落地(`auth.rs:252/351/461`)。**残留**:access JWT 在其 24h TTL 内仍不可单独吊销 —— 缩短 `access_token_ttl_seconds` 或上 per-user token-version 表(见「最该做」)。(M) `[需后端]`
+- ~~**无 refresh / 无撤销的 24h JWT**~~ ✅ refresh + rotation + reuse-detection + `revoke_family`/`revoke_user_sessions` 已落地;access JWT TTL 默认 **24h→1h**(`config.rs`,4a3042a),把「本该失效的 token 仍可用」窗口从 24h 压到 1h(客户端透明续期,无感)。更强的即时吊销(per-user token-version 表)仍可选,但收益已大幅下降。
 - ~~**改密不失效旧令牌**~~ ✅ `change_password` 已 `revoke_user_sessions`(`auth.rs:246`);唯一残留是被盗 access JWT 在剩余 TTL 内仍活(同上,靠缩 TTL/token-version 收口)。
-- **登录/注册/refresh/WS 无限流** —— 每请求跑一次 Argon2,可在线爆破 + CPU DoS;`app_router` 只有 Trace+permissive CORS,无 governor 依赖(`auth.rs`, `main.rs`)。(M) `[需后端]`
+- ~~**登录/注册无限流**~~ ✅ per-IP 令牌桶 + 全局 Argon2 并发门(`rate_limit.rs`,9f97a23);反代后取真实 IP 走「XFF 从右跳私网」对双跳(Traefik+nginx)/单机都对,自研无依赖。**残留**:refresh 端点与 WS 建连尚未限流(把同一 `AuthGuard` 挂上去即可)。(S) `[需后端]`
 - **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文** —— 叠加 query token,未配 TLS 即明文泄露,且无启动告警(`config.rs`)。(M) `[需后端]`
 - **鉴权逐 handler 手写、非中间件** —— 新路由默认不鉴权,忘加即漏(`main.rs`, `auth.rs`)。(M) `[需后端]`
 - **WS token 走 query string** —— 明文 JWT 落反代日志/浏览器历史(`ws.rs`)。(M) `[需后端]`
 - **长连 WS 超 token TTL 不再认证** —— 过期前建的 socket 可授权数小时,无 re-auth 心跳(`ws.rs`)。(M) `[需后端]`
-- **CORS 全放行**(`CorsLayer::permissive()`)—— 应收紧到配置 origin(`main.rs:70`)。(S) `[需后端]`
+- ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
 - **开放注册无验证 + 弱口令(仅 ≥8)** —— 公网可无限刷号(`auth.rs`)。(M) `[需后端]`
 - 🆕 **安全清单卫生**(low) —— 上面两条已勾除即本轮校准;后续改动请同步勾选,避免半真半假的清单掩盖真未修项。
@@ -164,7 +164,7 @@
 3. **AI 配置授权 + 收口 base_url**(high / M)—— 任意登录用户能外泄运营者 LLM 密钥 + SSRF,多用户下的硬洞。`[需后端]`
 4. **CI 锁住数据面回归**(high / S–M)—— api-server 59 测进 CI + `auth.rs` 假绿改 fail + 页树不变量守卫补测 + 安装包安装-启动冒烟。刚做完数据安全里程碑,核心却无回归网。`[需后端]`
 5. **客户端兜底三件**(high / S)—— 崩溃上报(`runZonedGuarded`)+ 单实例守卫(防双开丢数据)+ 本地损坏不再静默覆盖恢复点。桌面用户真丢数据的三条路径,单个都很小。
-6. **限流 + 收紧 CORS + Token 撤销收口**(high / S–M)—— Argon2 逐请求可爆破/DoS;access JWT 24h 内不可吊销(缩 TTL 或 token-version 表)。`[需后端]`
+6. ~~**限流 + 收紧 CORS + Token 撤销收口**~~ ✅ 2026-07-22 完成:认证端点 per-IP 令牌桶 + Argon2 并发门(9f97a23)、CORS prod 拒跨源(4a3042a)、access JWT 24h→1h、修 prod 误认作 dev(727ebab)。残留:refresh/WS 限流(小)。
 7. **文档内查找/替换**(medium / S)—— 基线编辑器能力、高频、基于现有文本模型即可落地,性价比最高的功能补齐。
 
 ---
