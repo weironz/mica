@@ -21,7 +21,11 @@ dependencies:
   web_socket_channel: ^3.0.0
   # Desktop-only: window min-size + size/position memory (M2). Gated behind a
   # conditional import so it never enters the web bundle. In-house exemption #2.
-  window_manager: ^0.5.0
+  # PINNED to exact 0.5.1 (not ^0.5.0): the caret let every `flutter pub get`
+  # (which every build runs) re-resolve 0.5.1 -> 0.5.2, rewriting pubspec.lock
+  # AND the tracked generated_plugin_registrant.* each time — pure churn. Pin to
+  # stop it; bump deliberately when you actually want a newer window_manager.
+  window_manager: 0.5.1
   # Exemption #8 (CLAUDE.md): system tray for "close to tray". window_manager
   # has no tray API at all — its own example app pulls this package in to demo a
   # tray — so the alternative is hand-writing Win32 Shell_NotifyIcon plus a Linux
