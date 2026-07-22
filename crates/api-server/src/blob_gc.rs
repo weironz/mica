@@ -264,6 +264,48 @@ pub async fn sweep_all(db: &PgPool, storage: &S3Config, dry_run: bool) -> SweepR
     report
 }
 
+/// Global row-level lifecycle cleanup that shares the blob GC's cadence but not
+/// its object-store concern — it only prunes DB rows that have outlived their
+/// purpose and that no per-request path is positioned to reap:
+///
+///  - Expired refresh tokens, past a 7-day grace beyond `expires_at`. Rotation
+///    only ever touches the token being presented, so a family that simply goes
+///    quiet (browser closed, device retired) leaves its rows behind forever.
+///    The grace keeps a just-expired token around long enough for reuse
+///    detection to still fire on a late replay.
+///  - Expired AUTO version snapshots. `sync::push_update` prunes these, but only
+///    for a document that is itself still being edited (the prune rides its own
+///    push cadence); a document that stops changing keeps its expired autos
+///    indefinitely. `expires_at IS NOT NULL` is what scopes this to autos —
+///    named checkpoints carry a NULL `expires_at` and are never collected.
+async fn cleanup_lifecycle_rows(db: &PgPool) {
+    match sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < now() - interval '7 days'")
+        .execute(db)
+        .await
+    {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                tracing::info!(deleted = result.rows_affected(), "blob gc: pruned expired refresh tokens");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "blob gc: refresh-token cleanup failed"),
+    }
+
+    match sqlx::query(
+        "DELETE FROM document_yrs_versions WHERE expires_at IS NOT NULL AND expires_at < now()",
+    )
+    .execute(db)
+    .await
+    {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                tracing::info!(deleted = result.rows_affected(), "blob gc: pruned expired auto versions");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "blob gc: auto-version cleanup failed"),
+    }
+}
+
 /// Run the sweep forever on [SWEEP_INTERVAL]. Spawned at boot; never panics the
 /// server — a GC that fails is a disk-space problem, not an outage.
 pub fn spawn(db: PgPool, storage: std::sync::Arc<S3Config>) {
@@ -282,6 +324,7 @@ pub fn spawn(db: PgPool, storage: std::sync::Arc<S3Config>) {
                 bytes_freed = report.bytes_freed,
                 "blob gc: sweep complete"
             );
+            cleanup_lifecycle_rows(&db).await;
             tokio::time::sleep(SWEEP_INTERVAL).await;
         }
     });

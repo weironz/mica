@@ -262,6 +262,39 @@ pub async fn delete(
     return Err(ApiError::Forbidden);
   }
 
+  // Reclaim this workspace's stored objects BEFORE the DB cascade removes the
+  // `files` rows that hold their keys. The blob GC scans by existing workspace,
+  // so once the workspace (and its files rows) are gone the objects are
+  // unreachable orphans forever. Order is therefore load-bearing: keys first,
+  // row deletion second.
+  //
+  // Best-effort: a single object that won't delete only warns — an undeletable
+  // object must never make the workspace itself undeletable (the DB delete has
+  // to proceed regardless). Storage may also be unconfigured, in which case
+  // there is nothing to delete.
+  if let Some(storage) = &state.storage {
+    let keys: Vec<String> =
+      sqlx::query_scalar("SELECT DISTINCT object_key FROM files WHERE workspace_id = $1")
+        .bind(workspace_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_else(|error| {
+          tracing::warn!(%workspace_id, %error, "workspace delete: cannot list objects, leaving them as orphans");
+          Vec::new()
+        });
+    if !keys.is_empty() {
+      let http = reqwest::Client::new();
+      for key in &keys {
+        // Same delete shape as the blob GC: a 404 is success (already gone).
+        match http.delete(storage.presign_delete(key)).send().await {
+          Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => {}
+          Ok(resp) => tracing::warn!(%workspace_id, object_key = %key, status = %resp.status(), "workspace delete: object delete rejected, leaving orphan"),
+          Err(error) => tracing::warn!(%workspace_id, object_key = %key, %error, "workspace delete: object delete failed, leaving orphan"),
+        }
+      }
+    }
+  }
+
   sqlx::query("DELETE FROM workspaces WHERE id = $1")
     .bind(workspace_id)
     .execute(&state.db)

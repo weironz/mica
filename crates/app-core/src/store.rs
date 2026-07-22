@@ -243,6 +243,32 @@ where
   .execute(&mut *tx)
   .await?;
 
+  // Version history: archive the just-folded state as an AUTO snapshot, exactly
+  // as the collaborative sync path does (`sync::push_update`). REST/MCP writes
+  // land here and never touch that path, so without this a document maintained
+  // purely over MCP/REST accrues no user-visible version history at all. `state`
+  // is already in hand, so this is one indexed insert-or-nothing — gated, like
+  // the sync path, to at most one auto version per 10-minute window (a burst of
+  // writes converges to a single version rather than flooding the table). Auto
+  // rows carry a 30-day `expires_at`; named checkpoints (label set, expires_at
+  // NULL) are written elsewhere and are never touched by this or by retention.
+  // This only writes the version-history archive from the yrs `state` already
+  // computed above — it introduces no second representation of the content.
+  sqlx::query(
+    "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
+     SELECT $1, $2, $3, now() + interval '30 days'
+     WHERE NOT EXISTS (
+         SELECT 1 FROM document_yrs_versions
+         WHERE document_id = $1 AND label IS NULL
+           AND created_at > now() - interval '10 minutes'
+     )",
+  )
+  .bind(document_id)
+  .bind(yrs_rid)
+  .bind(&yrs_state)
+  .execute(&mut *tx)
+  .await?;
+
   let next_payload_value =
     serde_json::to_value(next_payload).map_err(|error| ApiError::Internal(error.to_string()))?;
   let operations_value =

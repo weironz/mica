@@ -291,54 +291,82 @@ pub async fn backlinks(
   // list — matches transfer/move's `ensure_view_in_workspace` contract.
   ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
 
+  let backlinks = scan_backlinks(&state.db, workspace_id, view_id).await?;
+  Ok(Json(BacklinksResponse { backlinks }))
+}
+
+/// The backlink walk behind [`backlinks`], extracted so tests exercise the real
+/// scan rather than a re-implementation of it.
+///
+/// Unlike full-text search there is NO early stop — a backlink panel must be
+/// complete, so every document is reconstructed regardless of how many hits are
+/// already in hand. That makes a sequential await loop O(N) latency on a large
+/// workspace, so the per-document reconstructions run concurrently, `buffered`
+/// and bounded exactly like `search_workspace` to keep the scan off the
+/// connection pool. Order is irrelevant here (the results are sorted at the end),
+/// but `buffered` preserves it anyway.
+async fn scan_backlinks(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_id: Uuid,
+) -> ApiResult<Vec<Backlink>> {
   let target = view_id.to_string();
   // Live views only (fetch_workspace_views filters is_deleted); folders carry no
   // blocks so they can never be a source.
-  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+  let views = fetch_workspace_views(db, workspace_id).await?;
+
+  let target = target.as_str();
+  use futures_util::StreamExt as _;
+  // A page linking to itself is not a backlink, and only documents carry blocks,
+  // so both are filtered out before the (costly) reconstruction rather than
+  // inside it. Each async block OWNS its `View` (via `into_iter`), mirroring
+  // `search_workspace` — borrowing `&View` into the futures trips a higher-ranked
+  // lifetime bound in `stream::iter`.
+  let mut stream = futures_util::stream::iter(
+    views
+      .into_iter()
+      .filter(|view| view.object_type == "document" && view.id != view_id)
+      .map(|view| async move {
+        // Each document's payload is a DB round-trip + CRDT decode (body text is
+        // not a queryable column). A single unreadable document drops out rather
+        // than 500-ing the whole panel — but it must not vanish SILENTLY (same
+        // corruption signal search_workspace logs).
+        let payload = match store::current_payload(db, view.object_id).await {
+          Ok(Some(payload)) => payload,
+          Ok(None) => return None,
+          Err(error) => {
+            tracing::warn!(
+              view_id = %view.id,
+              object_id = %view.object_id,
+              %error,
+              "backlinks: skipping unreadable document"
+            );
+            return None;
+          }
+        };
+        payload
+          .blocks
+          .iter()
+          .any(|block| page_link_targets(&block.data).iter().any(|t| *t == target))
+          .then(|| Backlink {
+            view_id: view.id,
+            document_id: view.object_id,
+            title: view.name.clone(),
+          })
+      }),
+  )
+  .buffered(SEARCH_CONCURRENCY);
 
   let mut backlinks = Vec::new();
-  for view in &views {
-    if view.object_type != "document" {
-      continue;
-    }
-    // A page linking to itself is not a backlink.
-    if view.id == view_id {
-      continue;
-    }
-    // Each document's payload is a DB round-trip + CRDT decode (body text is not
-    // a queryable column). A single unreadable document drops out rather than
-    // 500-ing the whole panel — but it must not vanish SILENTLY (same corruption
-    // signal search_workspace logs).
-    let payload = match store::current_payload(&state.db, view.object_id).await {
-      Ok(Some(payload)) => payload,
-      Ok(None) => continue,
-      Err(error) => {
-        tracing::warn!(
-          view_id = %view.id,
-          object_id = %view.object_id,
-          %error,
-          "backlinks: skipping unreadable document"
-        );
-        continue;
-      }
-    };
-    let links_here = payload
-      .blocks
-      .iter()
-      .any(|block| page_link_targets(&block.data).iter().any(|t| *t == target));
-    if links_here {
-      backlinks.push(Backlink {
-        view_id: view.id,
-        document_id: view.object_id,
-        title: view.name.clone(),
-      });
+  while let Some(hit) = stream.next().await {
+    if let Some(backlink) = hit {
+      backlinks.push(backlink);
     }
   }
 
   // Stable order: title first (what the panel shows), view_id to break ties.
   backlinks.sort_by(|a, b| a.title.cmp(&b.title).then(a.view_id.cmp(&b.view_id)));
-
-  Ok(Json(BacklinksResponse { backlinks }))
+  Ok(backlinks)
 }
 
 pub async fn create_document(
@@ -3871,30 +3899,47 @@ mod tests {
       title: String,
     }
 
-    /// Run the backlink scan the handler runs (member auth is orthogonal here) and
-    /// return its rows, round-tripped through JSON to prove the wire shape.
+    /// Run the REAL backlink scan the handler runs (member auth is orthogonal
+    /// here) and return its rows, round-tripped through JSON to prove the wire
+    /// shape. Calls `scan_backlinks` directly rather than re-deriving the walk, so
+    /// the concurrent scan itself is what's under test.
     async fn collect_backlinks(db: &PgPool, ws: Uuid, view_id: Uuid) -> Vec<BacklinkRow> {
-      let target = view_id.to_string();
-      let views = fetch_workspace_views(db, ws).await.unwrap();
-      let mut rows = Vec::new();
-      for view in &views {
-        if view.object_type != "document" || view.id == view_id {
-          continue;
-        }
-        let Some(payload) = store::current_payload(db, view.object_id).await.unwrap() else {
-          continue;
-        };
-        let hit = payload
-          .blocks
-          .iter()
-          .any(|b| page_link_targets(&b.data).iter().any(|t| *t == target));
-        if hit {
-          let json = serde_json::json!({"view_id": view.id, "title": view.name});
-          rows.push(serde_json::from_value(json).unwrap());
-        }
-      }
-      rows.sort_by(|a: &BacklinkRow, b: &BacklinkRow| a.title.cmp(&b.title));
-      rows
+      scan_backlinks(db, ws, view_id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| serde_json::from_value(serde_json::to_value(b).unwrap()).unwrap())
+        .collect()
+    }
+
+    /// The concurrent scan returns EVERY source (no early stop) in the stable
+    /// (title, view_id) order, matching the pre-concurrency sequential walk.
+    #[tokio::test]
+    async fn backlinks_return_all_sources_in_stable_order() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let (view_target, _doc_t) = seed_document(&db, ws, user, "T", serde_json::json!([])).await;
+      let blocks = serde_json::json!([{
+        "id": "blk",
+        "type": "paragraph",
+        "text": "see T",
+        "data": {"marks": [
+          {"type": "link", "href": format!("mica://page/{view_target}")}
+        ]}
+      }]);
+      // Seed three linking pages out of title order; the scan must still sort.
+      let (view_c, _c) = seed_document(&db, ws, user, "C", blocks.clone()).await;
+      let (view_a, _a) = seed_document(&db, ws, user, "A", blocks.clone()).await;
+      let (view_b, _b) = seed_document(&db, ws, user, "B", blocks.clone()).await;
+
+      let links = collect_backlinks(&db, ws, view_target).await;
+      let titles: Vec<&str> = links.iter().map(|r| r.title.as_str()).collect();
+      assert_eq!(titles, vec!["A", "B", "C"], "all sources, title-sorted");
+      // The sort is total: view_ids follow their titles' order.
+      assert_eq!(links[0].view_id, view_a);
+      assert_eq!(links[1].view_id, view_b);
+      assert_eq!(links[2].view_id, view_c);
     }
 
     #[tokio::test]

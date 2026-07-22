@@ -543,6 +543,74 @@ async fn op_write_lands_in_the_yrs_base_a_reader_actually_sees() {
     cleanup(&db, ws, user).await;
 }
 
+/// An op-model (MCP/REST) write must capture an AUTO version snapshot, on the
+/// same cadence as the collaborative sync path — otherwise a document only ever
+/// maintained over MCP/REST accrues no user-visible version history at all.
+///
+/// Pins both halves: the first op write creates exactly one auto version whose
+/// blob decodes to the written content, and a rapid second write inside the
+/// 10-minute window does NOT add another (the cadence guard, so a burst of MCP
+/// edits converges to one version rather than flooding the table).
+#[tokio::test]
+async fn op_write_captures_an_auto_version_on_cadence() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping op_write_captures_an_auto_version_on_cadence: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // No version history before the first write (seed_doc only lays the op
+    // snapshot; ensure_base folds it lazily on the first op write).
+    assert!(
+        store::list_yrs_versions(&db, doc).await.unwrap().is_empty(),
+        "a freshly seeded document has no versions yet"
+    );
+
+    async fn insert(db: &PgPool, ws: Uuid, doc: Uuid, user: Uuid, id: &str, text: &str) {
+        store::apply_document_operations(
+            db,
+            ws,
+            doc,
+            user,
+            &[mica_app_core::documents::DocumentOperation::InsertBlock {
+                block: serde_json::from_value(json!({"id": id, "type": "paragraph", "text": text}))
+                    .unwrap(),
+                parent_id: "r".to_string(),
+                index: None,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+
+    insert(&db, ws, doc, user, "b", "first op write").await;
+    let autos = store::list_yrs_versions(&db, doc).await.unwrap();
+    assert_eq!(autos.len(), 1, "the first op write captures one auto version");
+    assert!(autos[0].label.is_none(), "an op-path auto snapshot has no label");
+
+    // The blob is a real decodable document state carrying the write.
+    let state = store::fetch_yrs_version_state(&db, doc, autos[0].id)
+        .await
+        .unwrap()
+        .expect("version state present");
+    let snap = MicaDoc::from_update(&state).unwrap();
+    assert!(
+        snap.to_blocks().iter().any(|b| b.id == "b"),
+        "the auto version holds the op-written block"
+    );
+
+    // A second op write moments later stays inside the cadence window — still
+    // exactly one auto version, not two.
+    insert(&db, ws, doc, user, "c", "second op write").await;
+    assert_eq!(
+        store::list_yrs_versions(&db, doc).await.unwrap().len(),
+        1,
+        "a second write inside the 10-min window does not add an auto version"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
 /// Regression: two connections bootstrapping a FRESH document concurrently must
 /// receive the SAME base. `ensure_base_tx` used to return its locally-built
 /// state even when its INSERT lost the `ON CONFLICT DO NOTHING` race — and
