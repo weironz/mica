@@ -77,6 +77,15 @@
       }
     }
   },
+  "backlinksHeading": "{count, plural, =1{1 backlink} other{{count} backlinks}}",
+  "@backlinksHeading": {
+    "description": "Header of the backlinks (reverse references) panel under a page, showing how many pages link to it.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "updateDialogTitle": "Update to v{version}",
   "@updateDialogTitle": {
     "placeholders": {

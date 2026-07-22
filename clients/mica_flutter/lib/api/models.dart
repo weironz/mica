@@ -327,6 +327,30 @@ class SearchResult {
   final bool titleMatch;
 }
 
+/// One page that links TO the page being viewed — the source of a reverse
+/// reference. `viewId` is the source page's view (open it / follow a
+/// `mica://page/<viewId>` link the same way a forward link resolves). Cloud
+/// workspaces only; the local world has no backlinks endpoint.
+class Backlink {
+  const Backlink({
+    required this.viewId,
+    required this.documentId,
+    required this.title,
+  });
+
+  factory Backlink.fromJson(Map<String, dynamic> json) {
+    return Backlink(
+      viewId: json['view_id'] as String,
+      documentId: json['document_id'] as String,
+      title: json['title'] as String? ?? 'Untitled',
+    );
+  }
+
+  final String viewId;
+  final String documentId;
+  final String title;
+}
+
 /// A named, restorable checkpoint of a document (the server's version history).
 /// One entry in a document's yrs-native version timeline. `label` is null for an
 /// AUTO snapshot (captured on a cadence); set for a named user checkpoint.

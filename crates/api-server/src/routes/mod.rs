@@ -102,6 +102,10 @@ pub fn api_router() -> Router<AppState> {
       patch(documents::update_view).delete(documents::delete_view),
     )
     .route(
+      "/workspaces/{workspace_id}/views/{view_id}/backlinks",
+      get(documents::backlinks),
+    )
+    .route(
       "/workspaces/{workspace_id}/views/{view_id}/move",
       post(documents::move_view),
     )

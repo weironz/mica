@@ -545,6 +545,24 @@ class ApiClient {
         .toList();
   }
 
+  /// The pages in [workspaceId] that link TO [viewId] (reverse references).
+  /// Cloud only — the local (offline) world has no backlinks endpoint, so the
+  /// panel is hidden there rather than calling this.
+  Future<List<Backlink>> backlinks(
+    String token,
+    String workspaceId,
+    String viewId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/views/$viewId/backlinks',
+      token,
+    );
+    final items = response['backlinks'] as List<dynamic>;
+    return items
+        .map((item) => Backlink.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<User> updateMe(String token, String displayName) async {
     final response = await _patch('/api/auth/me', {
       'display_name': displayName,

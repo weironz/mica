@@ -64,6 +64,7 @@
   "rowMoreActions": "删除、重命名等",
   "rowDuplicate": "创建副本",
   "presenceEditing": "{count, plural, other{{count} 人正在编辑}}",
+  "backlinksHeading": "{count, plural, other{{count} 个反向链接}}",
   "updateDialogTitle": "更新到 v{version}",
   "updateDialogBody": "将下载安装包，然后自动关闭并重启 Mica 完成更新。是否继续？",
   "updateAndRestart": "更新并重启",

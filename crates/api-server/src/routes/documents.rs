@@ -258,6 +258,89 @@ fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {
   }
 }
 
+#[derive(Debug, Serialize)]
+struct Backlink {
+  view_id: Uuid,
+  document_id: Uuid,
+  title: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BacklinksResponse {
+  backlinks: Vec<Backlink>,
+}
+
+/// `GET /api/workspaces/{workspace_id}/views/{view_id}/backlinks` — the pages in
+/// this workspace that link TO `view_id`, i.e. any live document whose blocks
+/// carry a `mica://page/<view_id>` link mark.
+///
+/// This is the inverse of the forward page-link scan the transfer flow runs
+/// ([`page_link_targets`] over each document's [`store::current_payload`]).
+/// Computed on demand with NO maintained index — the same on-the-fly O(document)
+/// walk as full-text search (see `search_workspace`); a real reverse-index table
+/// only earns its keep once the scan itself is the bottleneck. Cloud-only: the
+/// local (offline) world has its own store and never hits this endpoint.
+pub async fn backlinks(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<BacklinksResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  // A backlink query for a page that doesn't live here is a 404, not an empty
+  // list — matches transfer/move's `ensure_view_in_workspace` contract.
+  ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
+
+  let target = view_id.to_string();
+  // Live views only (fetch_workspace_views filters is_deleted); folders carry no
+  // blocks so they can never be a source.
+  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+
+  let mut backlinks = Vec::new();
+  for view in &views {
+    if view.object_type != "document" {
+      continue;
+    }
+    // A page linking to itself is not a backlink.
+    if view.id == view_id {
+      continue;
+    }
+    // Each document's payload is a DB round-trip + CRDT decode (body text is not
+    // a queryable column). A single unreadable document drops out rather than
+    // 500-ing the whole panel — but it must not vanish SILENTLY (same corruption
+    // signal search_workspace logs).
+    let payload = match store::current_payload(&state.db, view.object_id).await {
+      Ok(Some(payload)) => payload,
+      Ok(None) => continue,
+      Err(error) => {
+        tracing::warn!(
+          view_id = %view.id,
+          object_id = %view.object_id,
+          %error,
+          "backlinks: skipping unreadable document"
+        );
+        continue;
+      }
+    };
+    let links_here = payload
+      .blocks
+      .iter()
+      .any(|block| page_link_targets(&block.data).iter().any(|t| *t == target));
+    if links_here {
+      backlinks.push(Backlink {
+        view_id: view.id,
+        document_id: view.object_id,
+        title: view.name.clone(),
+      });
+    }
+  }
+
+  // Stable order: title first (what the panel shows), view_id to break ties.
+  backlinks.sort_by(|a, b| a.title.cmp(&b.title).then(a.view_id.cmp(&b.view_id)));
+
+  Ok(Json(BacklinksResponse { backlinks }))
+}
+
 pub async fn create_document(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -3654,6 +3737,164 @@ mod tests {
         matches!(missing, ApiError::NotFound),
         "an unknown parent must be a 404, got {missing:?}"
       );
+    }
+
+    /// A page that links to another page shows up in that page's backlinks, and
+    /// never the reverse (link direction is not symmetric). Gated the same way as
+    /// the parent-guard tests: green without a DB locally, hard-fail in CI.
+    ///
+    ///   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
+    ///   cargo test -p mica-api-server backlinks_pg
+    #[tokio::test]
+    async fn backlinks_are_the_inverse_of_forward_page_links() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      // Two pages; A has a block whose link mark points at B.
+      let (view_b, _doc_b) = seed_document(&db, ws, user, "B", serde_json::json!([])).await;
+      let (view_a, _doc_a) = seed_document(
+        &db,
+        ws,
+        user,
+        "A",
+        serde_json::json!([{
+          "id": "blk_link",
+          "type": "paragraph",
+          "text": "see B",
+          "data": {"marks": [
+            {"type": "link", "href": format!("mica://page/{view_b}")}
+          ]}
+        }]),
+      )
+      .await;
+
+      // B's backlinks contain A (and carry A's view id + document id + title).
+      let b_links = collect_backlinks(&db, ws, view_b).await;
+      assert_eq!(b_links.len(), 1, "B should have exactly one backlink");
+      assert_eq!(b_links[0].view_id, view_a, "the backlink source is A's view");
+      assert_eq!(b_links[0].title, "A");
+
+      // A's backlinks are empty — links point one way.
+      let a_links = collect_backlinks(&db, ws, view_a).await;
+      assert!(a_links.is_empty(), "A should have no backlinks, got {a_links:?}");
+    }
+
+    /// A page that links to ITSELF is not its own backlink.
+    #[tokio::test]
+    async fn a_self_link_is_not_a_backlink() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      // Seed the page, then rewrite its snapshot to link to its own view id.
+      let (view_id, doc_id) = seed_document(&db, ws, user, "S", serde_json::json!([])).await;
+      let payload = serde_json::json!({
+        "schema_version": 1,
+        "root_block_id": "root",
+        "blocks": [{
+          "id": "root",
+          "type": "paragraph",
+          "text": "self",
+          "data": {"marks": [
+            {"type": "link", "href": format!("mica://page/{view_id}")}
+          ]}
+        }]
+      });
+      sqlx::query(
+        "UPDATE document_snapshots SET payload = $1 WHERE document_id = $2 AND version_seq = 0",
+      )
+      .bind(&payload)
+      .bind(doc_id)
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let links = collect_backlinks(&db, ws, view_id).await;
+      assert!(links.is_empty(), "a self-link must not be a backlink, got {links:?}");
+    }
+
+    /// Seed a document view (a leaf page) with a content snapshot. `blocks` is the
+    /// snapshot payload's `blocks` array; with no yrs base row `current_payload`
+    /// falls back to this snapshot verbatim, so link marks placed here are exactly
+    /// what the backlink scan sees. Returns (view_id, document_id).
+    async fn seed_document(
+      db: &PgPool,
+      ws: Uuid,
+      user: Uuid,
+      title: &str,
+      blocks: serde_json::Value,
+    ) -> (Uuid, Uuid) {
+      let doc_id = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO documents(id,workspace_id,root_block_id,created_by) VALUES($1,$2,'root',$3)",
+      )
+      .bind(doc_id)
+      .bind(ws)
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+      let payload = serde_json::json!({
+        "schema_version": 1,
+        "root_block_id": "root",
+        "blocks": blocks,
+      });
+      sqlx::query(
+        "INSERT INTO document_snapshots(document_id,version_seq,schema_version,payload) \
+         VALUES($1,0,1,$2)",
+      )
+      .bind(doc_id)
+      .bind(&payload)
+      .execute(db)
+      .await
+      .unwrap();
+      let view_id = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$3,'document'::object_type,$4,'0',$5)",
+      )
+      .bind(view_id)
+      .bind(ws)
+      .bind(doc_id)
+      .bind(title)
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+      (view_id, doc_id)
+    }
+
+    /// A row of the backlinks endpoint's JSON response, minimal fields the tests
+    /// assert on. `Backlink` itself is private and Serialize-only.
+    #[derive(Debug, serde::Deserialize)]
+    struct BacklinkRow {
+      view_id: Uuid,
+      title: String,
+    }
+
+    /// Run the backlink scan the handler runs (member auth is orthogonal here) and
+    /// return its rows, round-tripped through JSON to prove the wire shape.
+    async fn collect_backlinks(db: &PgPool, ws: Uuid, view_id: Uuid) -> Vec<BacklinkRow> {
+      let target = view_id.to_string();
+      let views = fetch_workspace_views(db, ws).await.unwrap();
+      let mut rows = Vec::new();
+      for view in &views {
+        if view.object_type != "document" || view.id == view_id {
+          continue;
+        }
+        let Some(payload) = store::current_payload(db, view.object_id).await.unwrap() else {
+          continue;
+        };
+        let hit = payload
+          .blocks
+          .iter()
+          .any(|b| page_link_targets(&b.data).iter().any(|t| *t == target));
+        if hit {
+          let json = serde_json::json!({"view_id": view.id, "title": view.name});
+          rows.push(serde_json::from_value(json).unwrap());
+        }
+      }
+      rows.sort_by(|a: &BacklinkRow, b: &BacklinkRow| a.title.cmp(&b.title));
+      rows
     }
 
     #[tokio::test]

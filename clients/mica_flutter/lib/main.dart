@@ -1694,6 +1694,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// The cloud pages that link TO [viewId] (reverse references). Cloud only —
+  /// the local world has no backlinks endpoint, so [_unifiedWorkspaceView]
+  /// passes null in 本地模式 and the panel stays hidden.
+  Future<List<Backlink>> _loadBacklinks(String viewId) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null) return const [];
+    return _api.backlinks(session.accessToken, workspace.id, viewId);
+  }
+
   Future<void> _updateProfile(String displayName) async {
     final session = _requireSession();
     final user = await _api.updateMe(session.accessToken, displayName);
@@ -4247,6 +4257,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       },
       onSearch: local ? (_) async => const <SearchResult>[] : _searchWorkspace,
       onOpenSearchResult: local ? (_) async {} : _openViewById,
+      // Cloud only: null in 本地模式 hides the backlinks panel entirely.
+      onLoadBacklinks: local ? null : _loadBacklinks,
       // Local workspaces have no server to bundle the zip; SAY so rather than
       // handing back Uint8List(0), which the caller happily saved as a 0-byte
       // page.zip and called it a successful export.
@@ -4588,6 +4600,130 @@ class _SidePanelState extends State<SidePanel> {
 /// before quitting. Null when no editor is on screen (settings, empty state).
 Future<void> Function()? _activeEditorFlush;
 
+/// Reverse-reference panel under a cloud page: the pages that link TO it.
+///
+/// Lazy: fetches on mount and whenever [viewId] changes, so opening a page is
+/// never blocked on the backlink scan (it lands a frame or two later). Renders
+/// NOTHING while loading, on error, or when empty — a page with no backlinks
+/// shows no panel at all, matching the "empty ⇒ hide" spec. Only when there are
+/// results does the "N backlinks" header + tappable source list appear; a tap
+/// reuses the same view-open path search results use ([onOpen]).
+class _BacklinksPanel extends StatefulWidget {
+  const _BacklinksPanel({
+    required this.viewId,
+    required this.load,
+    required this.onOpen,
+    super.key,
+  });
+
+  final String viewId;
+  final Future<List<Backlink>> Function(String viewId) load;
+  final Future<void> Function(String viewId) onOpen;
+
+  @override
+  State<_BacklinksPanel> createState() => _BacklinksPanelState();
+}
+
+class _BacklinksPanelState extends State<_BacklinksPanel> {
+  List<Backlink> _links = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  @override
+  void didUpdateWidget(_BacklinksPanel old) {
+    super.didUpdateWidget(old);
+    // A ValueKey on viewId remounts this widget per page, so this rarely fires;
+    // kept as a belt-and-braces refresh if the key strategy ever changes.
+    if (old.viewId != widget.viewId) {
+      setState(() => _links = const []);
+      _fetch();
+    }
+  }
+
+  Future<void> _fetch() async {
+    final viewId = widget.viewId;
+    try {
+      final links = await widget.load(viewId);
+      // Guard against a late response after the user navigated away.
+      if (!mounted || widget.viewId != viewId) return;
+      setState(() => _links = links);
+    } catch (_) {
+      // Backlinks are a best-effort convenience; a failed scan just shows no
+      // panel rather than surfacing an error over the page.
+      if (!mounted || widget.viewId != viewId) return;
+      setState(() => _links = const []);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_links.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.link,
+                size: 16,
+                color: Color(0xFF64748B),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                context.l10n.backlinksHeading(_links.length),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final link in _links)
+            InkWell(
+              onTap: () => widget.onOpen(link.viewId),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 6,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.description_outlined,
+                      size: 16,
+                      color: Color(0xFF475569),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        link.title.isEmpty ? 'Untitled' : link.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF334155),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.session,
@@ -4674,6 +4810,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onAppearanceChanged,
     required this.onSearch,
     required this.onOpenSearchResult,
+    this.onLoadBacklinks,
     required this.onExportPageZip,
     required this.onExportPage,
     required this.onExportPageHtml,
@@ -4871,6 +5008,11 @@ class WorkspaceView extends StatefulWidget {
   onAppearanceChanged;
   final Future<List<SearchResult>> Function(String query) onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
+
+  /// Load the cloud pages that link TO a view (reverse references), for the
+  /// backlinks panel under the editor. Null in 本地模式 — the local world has no
+  /// backlinks endpoint, so the panel is hidden there entirely.
+  final Future<List<Backlink>> Function(String viewId)? onLoadBacklinks;
   final Future<Uint8List> Function() onExportPageZip;
   final Future<({Uint8List bytes, String name, String mime})> Function(
     String title,
@@ -6868,6 +7010,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ],
                   ),
                 ),
+                // Reverse references — the cloud pages that link to this one.
+                // Cloud + documents only (folders have no body); lazy-loaded so
+                // it never blocks the page opening. Hidden entirely in 本地模式
+                // (onLoadBacklinks null there).
+                if (widget.onLoadBacklinks != null &&
+                    widget.selectedView?.objectType == 'document')
+                  Padding(
+                    padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                    child: _BacklinksPanel(
+                      key: ValueKey('backlinks#${widget.selectedView!.id}'),
+                      viewId: widget.selectedView!.id,
+                      load: widget.onLoadBacklinks!,
+                      onOpen: widget.onOpenSearchResult,
+                    ),
+                  ),
                 if (widget.selectedMarkdown != null) ...[
                   const SizedBox(height: 28),
                   Text(
