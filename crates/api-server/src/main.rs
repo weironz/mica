@@ -7,6 +7,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 mod blob_gc;
+mod rate_limit;
 mod routes;
 
 #[tokio::main]
@@ -47,10 +48,15 @@ async fn main() -> anyhow::Result<()> {
 
   info!("HTTP server listening on {addr}");
 
-  axum::serve(listener, app)
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("HTTP server failed")?;
+  // `into_make_service_with_connect_info` so the rate-limit middleware can read
+  // the socket peer (ConnectInfo) as the fallback when there's no usable XFF.
+  axum::serve(
+    listener,
+    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+  )
+  .with_graceful_shutdown(shutdown_signal())
+  .await
+  .context("HTTP server failed")?;
 
   Ok(())
 }
@@ -67,6 +73,11 @@ fn app_router(state: AppState) -> Router {
     .merge(routes::ws_router())
     .merge(routes::share_router())
     .layer(TraceLayer::new_for_http())
+    // Throttle the auth endpoints per client IP + cap Argon2 concurrency. Inner
+    // to CORS (so a preflight is answered before the limiter sees it); the
+    // Extension carries the shared guard the middleware extracts.
+    .layer(axum::middleware::from_fn(rate_limit::auth_rate_limit))
+    .layer(axum::Extension(rate_limit::AuthGuard::from_env()))
     .layer(cors_layer(&state.config))
     .with_state(state)
 }
