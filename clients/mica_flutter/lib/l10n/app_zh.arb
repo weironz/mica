@@ -433,6 +433,7 @@
   "versionUntitled": "未命名版本",
   "updaterGithubError": "GitHub 返回 {code}",
   "updaterWindowsOnly": "自动更新目前仅支持 Windows。",
+  "updaterIntegrityFailed": "更新已中止：下载的安装包未通过完整性校验。",
   "updaterDownloadFailed": "下载失败：HTTP {code}",
   "transferMoveTitle": "移动到工作区",
   "transferCopyTitle": "复制到工作区",

@@ -11,6 +11,8 @@ class UpdateInfo {
     required this.version,
     required this.downloadUrl,
     this.notes,
+    this.size,
+    this.sha256,
   });
 
   /// Version of the latest release, without the leading `v` (e.g. `0.1.6`).
@@ -21,6 +23,16 @@ class UpdateInfo {
 
   /// The release notes (markdown), if any.
   final String? notes;
+
+  /// Expected byte size of the asset (GitHub's `assets[].size`). The download is
+  /// rejected unless it matches — a truncated installer must never be run.
+  final int? size;
+
+  /// Expected SHA-256 of the asset as lowercase hex, parsed from GitHub's
+  /// `assets[].digest` (`sha256:…`) when present. Verified before the installer
+  /// is launched, so a swapped/corrupted download can't be executed. Null when
+  /// the release predates GitHub asset digests (then only [size] is checked).
+  final String? sha256;
 }
 
 /// Compare two dotted versions numerically: >0 if [a] is newer than [b], <0 if

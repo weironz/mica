@@ -14,6 +14,7 @@
 @TestOn('windows')
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -87,5 +88,27 @@ void main() {
     expect(script.readAsStringSync(), contains('title Mica'),
         reason: 'an unlabelled console mid-update reads as something strange '
             'happening to the machine');
+  });
+
+  // The integrity gate that stands between a network download and running an
+  // .exe with the user's privileges. Known vector: sha256("abc").
+  group('installerMatches', () {
+    final bytes = utf8.encode('abc'); // 3 bytes
+    const sha =
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+
+    test('accepts a matching size + sha256', () {
+      expect(installerMatches(bytes, size: 3, sha256: sha), isTrue);
+    });
+    test('rejects a truncated download (size mismatch)', () {
+      expect(installerMatches(bytes, size: 4, sha256: sha), isFalse);
+    });
+    test('rejects a swapped download (sha256 mismatch)', () {
+      expect(installerMatches(bytes, size: 3, sha256: 'deadbeef'), isFalse);
+    });
+    test('falls back to size-only when the release has no digest', () {
+      expect(installerMatches(bytes, size: 3), isTrue);
+      expect(installerMatches(bytes, size: 4), isFalse);
+    });
   });
 }

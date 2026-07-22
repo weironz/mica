@@ -18,6 +18,13 @@ dependencies:
   intl: any
   flutter_math_fork: ^0.7.4
   http: ^1.4.0
+  # SHA-256 for the desktop self-updater's pre-launch integrity check (verify the
+  # downloaded installer against GitHub's asset digest before running it). A
+  # Dart-team package (dart.dev/packages/crypto), already in the tree transitively;
+  # promoted to a direct dep since we now depend on it directly. Standard crypto
+  # primitive, security-critical, no sane in-house alternative — same class of
+  # exemption as intl.
+  crypto: ^3.0.0
   web_socket_channel: ^3.0.0
   # Desktop-only: window min-size + size/position memory (M2). Gated behind a
   # conditional import so it never enters the web bundle. In-house exemption #2.

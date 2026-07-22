@@ -9,6 +9,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 
 import 'l10n/locale_controller.dart';
@@ -50,10 +51,18 @@ Future<UpdateInfo?> checkForUpdate(String currentVersion) async {
   }
   final url = setup?['browser_download_url'] as String?;
   if (url == null) return null; // release without a Windows installer asset
+  // `digest` is GitHub's server-computed asset hash (`sha256:…`), present on
+  // releases uploaded since GitHub added it; `size` is always present. Both feed
+  // the pre-launch integrity check in downloadAndApplyUpdate.
+  final digest = setup?['digest'] as String?;
   return UpdateInfo(
     version: latest,
     downloadUrl: url,
     notes: (json['body'] as String?)?.trim(),
+    size: setup?['size'] as int?,
+    sha256: (digest != null && digest.startsWith('sha256:'))
+        ? digest.substring('sha256:'.length).toLowerCase()
+        : null,
   );
 }
 
@@ -88,6 +97,14 @@ Future<void> downloadAndApplyUpdate(
       }
     } finally {
       await sink.close();
+    }
+
+    // Verify BEFORE running it: this launches an installer with the user's
+    // privileges, so a truncated or swapped file must be rejected, never run.
+    final bytes = await setup.readAsBytes();
+    if (!installerMatches(bytes, size: info.size, sha256: info.sha256)) {
+      await _discard(setup);
+      throw Exception(l10nNoContext.updaterIntegrityFailed);
     }
   } finally {
     client.close();
@@ -155,4 +172,26 @@ File writeUpdateScript(Directory dir, String setupPath, String logPath) {
     '/NORESTART "/LOG=${win(logPath)}"\r\n',
   );
   return script;
+}
+
+/// Whether the downloaded installer [bytes] match the release's expected [size]
+/// and [sha256] (lowercase hex). A null field is not checked — an older release
+/// has no `digest`, so only its `size` gates. Pure (no I/O), so the integrity
+/// gate that stands between a network download and running an .exe is unit-tested
+/// directly. `size` rejects a truncated download; `sha256` rejects a corrupted
+/// or swapped one.
+bool installerMatches(List<int> bytes, {int? size, String? sha256}) {
+  if (size != null && bytes.length != size) return false;
+  if (sha256 != null && crypto.sha256.convert(bytes).toString() != sha256) {
+    return false;
+  }
+  return true;
+}
+
+/// Best-effort delete of a rejected/failed installer download, so a corrupt file
+/// is never left where a later run might pick it up.
+Future<void> _discard(File f) async {
+  try {
+    if (await f.exists()) await f.delete();
+  } catch (_) {}
 }

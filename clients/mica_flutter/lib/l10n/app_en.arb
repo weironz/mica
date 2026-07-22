@@ -711,6 +711,10 @@
     }
   },
   "updaterWindowsOnly": "Auto-update currently supports Windows only.",
+  "updaterIntegrityFailed": "Update aborted: the downloaded installer failed its integrity check.",
+  "@updaterIntegrityFailed": {
+    "description": "Shown when the downloaded installer's size/hash doesn't match the release, so it is not run."
+  },
   "updaterDownloadFailed": "Download failed: HTTP {code}",
   "@updaterDownloadFailed": {
     "placeholders": {
