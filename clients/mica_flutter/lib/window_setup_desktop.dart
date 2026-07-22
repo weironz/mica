@@ -27,15 +27,21 @@ const Size _defaultSize = Size(1280, 800);
 /// this hook makes it safe by persisting local state first. Cloud unacked edits
 /// already sit in the local outbox and resend next launch, so dropping the
 /// socket loses nothing.
-void Function()? appExitFlush;
+Future<void> Function()? appExitFlush;
 
-/// Persist local state, then terminate the process immediately. The single quit
-/// path for both the X button and the tray "退出".
-Never _quitNow() {
+/// Persist local state, then terminate the process. The single quit path for
+/// both the X button and the tray "退出". The flush is now awaited (it drains the
+/// editor's 400ms typing debounce into durable storage, which dispatches on a
+/// microtask + async apply — a synchronous exit(0) would beat it and drop the
+/// last-typed segment). Bounded by a timeout so a wedged flush can never turn
+/// "quit" into "hang": the awaited work is a local apply, not a network
+/// round-trip, so it resolves in well under this cap in practice.
+Future<void> _quitNow() async {
   try {
-    appExitFlush?.call();
+    final f = appExitFlush?.call();
+    if (f != null) await f.timeout(const Duration(milliseconds: 1500));
   } catch (_) {
-    // A flush failure must not wedge the quit — exit regardless.
+    // A flush failure (or the timeout) must not wedge the quit — exit regardless.
   }
   exit(0);
 }
@@ -173,7 +179,7 @@ Future<void> applyCloseBehavior(String behavior) async {
       // Quit. exit(0), not windowManager.destroy(): destroy() runs the engine's
       // graceful teardown, which blocks for seconds on plugin/socket shutdown
       // (the "几秒卡顿"). _quitNow() persists local state first, then exits now.
-      _quitNow();
+      await _quitNow();
   }
 }
 

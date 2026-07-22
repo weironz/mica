@@ -23,10 +23,25 @@ typedef ApplyOps = Future<void> Function(List<DocOp> operations);
 /// pending text first and send immediately. Remote snapshots are reconciled
 /// without clobbering a node the user is actively editing or the caret.
 class EditorController extends ChangeNotifier {
-  EditorController({required this.rootBlockId, required this.onOps});
+  EditorController({
+    required this.rootBlockId,
+    required this.onOps,
+    this.onOpFault,
+  });
 
   final String rootBlockId;
   final ApplyOps onOps;
+
+  /// Fired when committing an op batch through [onOps] fails — most importantly a
+  /// StoreCloudDocStore.appendOutbox failure (it throws a StateError precisely so
+  /// a dropped-from-outbox edit can't pass silently, red line #1). `count` is the
+  /// running total. Without this the failure was swallowed by a bare catchError
+  /// and the edit vanished with no trace. Never rethrown — surfacing must not
+  /// break the editing hot path.
+  final void Function(Object error, int count)? onOpFault;
+
+  /// Running count of failed [onOps] commits (see [onOpFault]).
+  int opFaultCount = 0;
 
   final List<EditorNode> nodes = [];
   DocSelection? selection;
@@ -3092,7 +3107,14 @@ class EditorController extends ChangeNotifier {
     // Record the pre-change document before this committed mutation, unless we
     // are mid-restore (undo/redo emit their own diff ops through here).
     if (!_restoring) _recordHistory();
-    final done = _chain.then((_) => onOps(ops)).catchError((_) {});
+    final done = _chain.then((_) => onOps(ops)).catchError((Object e) {
+      // Do NOT swallow: a failed commit (e.g. appendOutbox StateError) means the
+      // batch didn't reach durable storage. Count it and surface via [onOpFault]
+      // so it's visible, but keep the chain alive — throwing here would break the
+      // editing hot path for every subsequent edit.
+      opFaultCount++;
+      onOpFault?.call(e, opFaultCount);
+    });
     _chain = done;
     return done;
   }

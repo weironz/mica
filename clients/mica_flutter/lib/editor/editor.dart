@@ -186,6 +186,7 @@ class MicaEditor extends StatefulWidget {
     required this.version,
     required this.canEdit,
     required this.onApplyOperations,
+    this.onOpFault,
     this.onSelectionChanged,
     this.remoteCursors = const [],
     this.onAiStream,
@@ -218,6 +219,11 @@ class MicaEditor extends StatefulWidget {
   final int version;
   final bool canEdit;
   final ApplyOps onApplyOperations;
+
+  /// Fired when committing an op batch fails (e.g. the durable outbox write
+  /// throws) — routed to the controller so a dropped edit is counted and can be
+  /// surfaced instead of silently swallowed. See [EditorController.onOpFault].
+  final void Function(Object error, int count)? onOpFault;
 
   /// Fired (debounced by the host) when the local caret moves — `(blockId,
   /// offset)`, or `(null, null)` when there's no selection — so the host can
@@ -451,6 +457,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller = EditorController(
       rootBlockId: widget.rootBlockId,
       onOps: widget.onApplyOperations,
+      onOpFault: widget.onOpFault,
     );
     // Load before subscribing so the initial notify doesn't setState in init.
     _controller.load(widget.nodes);

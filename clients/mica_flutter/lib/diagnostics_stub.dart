@@ -59,6 +59,32 @@ void captureIo(String kind, String ext, String input, String output) {
   }
 }
 
+/// Append an uncaught error + stack to `crash.log`. The ONE record here that is
+/// deliberately NOT gated by [diagnosticsOn]: a crash is exactly the case the
+/// opt-in capture can't be armed for in advance, and the volume is negligible
+/// (a few lines only when the app actually faults). Best-effort and
+/// self-silencing — a diagnostics write must never be able to worsen a crash —
+/// and self-bounding so a crash loop can't fill the user's disk.
+void logCrash(String message) {
+  try {
+    final dir = Directory(diagnosticsDir)..createSync(recursive: true);
+    final file = File('${dir.path}/crash.log');
+    try {
+      if (file.existsSync() && file.lengthSync() > 256 * 1024) {
+        file.writeAsStringSync(''); // truncate a runaway log
+      }
+    } catch (_) {
+      // A stat/truncate hiccup is not worth losing the crash line over.
+    }
+    file.writeAsStringSync(
+      '${DateTime.now().toIso8601String()}  $message\n',
+      mode: FileMode.append,
+    );
+  } catch (_) {
+    // As with the rest of this file: never break the thing being diagnosed.
+  }
+}
+
 /// Append one line to `trace.log` — a decision worth being able to look back at.
 void trace(String line) {
   if (!diagnosticsOn) return;
@@ -90,13 +116,15 @@ Future<void> openDiagnosticsFolder() async {
   }
 }
 
-/// Keep the newest [_keep] captures. `trace.log` is exempt: it is one file,
-/// appended a line at a time.
+/// Keep the newest [_keep] captures. `trace.log` and `crash.log` are exempt:
+/// each is one self-bounding file, appended a line at a time — and pruning the
+/// crash log (which capture doesn't produce) would defeat its whole purpose.
 void _prune(Directory dir) {
   final files = dir
       .listSync()
       .whereType<File>()
-      .where((f) => !f.path.endsWith('trace.log'))
+      .where((f) =>
+          !f.path.endsWith('trace.log') && !f.path.endsWith('crash.log'))
       .toList()
     ..sort((a, b) => a.path.compareTo(b.path));
   final excess = files.length - _keep;

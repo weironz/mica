@@ -22,6 +22,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'cloud_doc_store.dart';
@@ -455,13 +456,24 @@ class CloudSyncSession {
           }
         }
       case 'error':
-        // A push we sent was rejected (not acked) — e.g. transient server-side
-        // contention, or a permanent permission error. The rejected clock stays
-        // in the outbox (contiguous pushed_clock never passed it); re-enable and
-        // retry it, bounded so a permanent rejection can't spin, then surface via
-        // onFault. (The legacy path keeps its per-id retry-on-reconnect; nothing
-        // to do here.)
+        // Two shapes share `type:'error'`. First, the server's lag notice: the
+        // per-document broadcast channel overflowed and dropped updates for us
+        // (`code:'client_out_of_date'`, no ack_id — it's a stream-state signal,
+        // not a per-push rejection). This branch used to only recognise a push
+        // rejection (String ack_id), so the lag notice fell through and was
+        // dropped — leaving the replica silently behind (red line #1). Catch up
+        // now with a fresh pull/bootstrap.
         final errId = m['ack_id'];
+        if (errId == null && m['code'] == 'client_out_of_date') {
+          _resyncFromLag();
+          break;
+        }
+        // Otherwise: a push we sent was rejected (not acked) — e.g. transient
+        // server-side contention, or a permanent permission error. The rejected
+        // clock stays in the outbox (contiguous pushed_clock never passed it);
+        // re-enable and retry it, bounded so a permanent rejection can't spin,
+        // then surface via onFault. (The legacy path keeps its per-id
+        // retry-on-reconnect; nothing to do here.)
         if (_useAppendLog && errId is String) {
           final clock = int.tryParse(errId);
           if (clock != null) {
@@ -541,6 +553,40 @@ class CloudSyncSession {
       _send({'type': 'sync.bootstrap'});
     }
   }
+
+  DateTime? _lastLagResync;
+
+  /// Test-only counter of lag-triggered resyncs; bumped even when offline (no
+  /// channel to actually send on) so a test can assert the frame was recognised.
+  @visibleForTesting
+  int debugLagResyncCount = 0;
+
+  /// Catch up after the server flags us out of date (broadcast lag). We still
+  /// hold our replica, so a `sync.pull` carrying our cursor + state vector
+  /// re-delivers just the missing diff; a cold replica (no doc) has no basis for
+  /// a diff → full `sync.bootstrap`. Debounced so a burst of lag notices costs
+  /// one catch-up, not a storm.
+  void _resyncFromLag() {
+    if (_disposed) return;
+    final now = DateTime.now();
+    final last = _lastLagResync;
+    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastLagResync = now;
+    debugLagResyncCount++;
+    // Offline: nothing to send now; the reconnect path re-pulls from our cursor.
+    if (_channel == null) return;
+    _send(
+      _doc == null
+          ? {'type': 'sync.bootstrap'}
+          : {'type': 'sync.pull', 'payload': _pullPayload()},
+    );
+  }
+
+  /// Test-only: feed a raw server frame through the message handler.
+  @visibleForTesting
+  void debugHandleFrame(String raw) => _onMessage(raw);
 
   /// Apply the editor's op batch to the local replica and push the resulting
   /// CRDT diff to the cloud. The same op stream the offline backend consumes, so

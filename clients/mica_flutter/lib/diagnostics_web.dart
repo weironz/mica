@@ -17,6 +17,8 @@ String get diagnosticsDir => '';
 
 void captureIo(String kind, String ext, String input, String output) {}
 
+void logCrash(String message) {}
+
 void trace(String line) {}
 
 Future<void> openDiagnosticsFolder() async {}

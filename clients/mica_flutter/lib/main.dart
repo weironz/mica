@@ -139,21 +139,44 @@ const int kPageWidthDivisions = 10;
   }
 }
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  // Desktop: restore window size/position + enforce a min size before the first
-  // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
-  await initDesktopWindow();
-  // Seed the UI language from the persisted choice (prefs are file/localStorage
-  // backed and loaded synchronously) before the first frame renders.
-  loadPersistedLocale();
-  // Suppress the browser's native right-click menu so the editor can show its
-  // own (e.g. image actions) on web.
-  if (kIsWeb) BrowserContextMenu.disableContextMenu();
-  // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
-  registerYjsSelfTest();
-  _warmUpFonts();
-  runApp(const MicaApp());
+void main() {
+  // Run the whole app inside a guarded zone so an uncaught async error can't
+  // vanish without a trace. Binding init + runApp MUST share this zone (Flutter
+  // asserts they match), so they live inside the callback. Every fault sink here
+  // routes to the diagnostics crash log, which is deliberately NOT gated by the
+  // "诊断" toggle (a crash can't be armed for in advance) and is a no-op on web.
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    // Framework errors (build/layout/paint/gesture): log then keep the default
+    // console dump so nothing that worked before is lost.
+    final priorOnError = FlutterError.onError;
+    FlutterError.onError = (details) {
+      logCrash('FlutterError: ${details.exceptionAsString()}\n${details.stack}');
+      priorOnError?.call(details);
+    };
+    // Errors the engine dispatches outside the zone (some platform callbacks).
+    // Return false → still propagate to the zone/default handler (console).
+    WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+      logCrash('PlatformError: $error\n$stack');
+      return false;
+    };
+    // Desktop: restore window size/position + enforce a min size before the first
+    // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
+    await initDesktopWindow();
+    // Seed the UI language from the persisted choice (prefs are file/localStorage
+    // backed and loaded synchronously) before the first frame renders.
+    loadPersistedLocale();
+    // Suppress the browser's native right-click menu so the editor can show its
+    // own (e.g. image actions) on web.
+    if (kIsWeb) BrowserContextMenu.disableContextMenu();
+    // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
+    registerYjsSelfTest();
+    _warmUpFonts();
+    runApp(const MicaApp());
+  }, (error, stack) {
+    // Last-resort net for uncaught async errors anywhere in the zone.
+    logCrash('Uncaught: $error\n$stack');
+  });
 }
 
 /// Flutter Web doesn't bundle CJK fonts — the engine downloads a Noto fallback
@@ -989,7 +1012,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// cloud socket is intentionally not drained (unacked edits already sit in the
   /// local outbox and resend next launch). Each guard is independent so one
   /// failing store never blocks the other — or the quit.
-  void _flushForExit() {
+  Future<void> _flushForExit() async {
+    // Drain the editor's 400ms text debounce FIRST, so the last-typed segment is
+    // committed through onOps (→ local store / cloud outbox) before we persist
+    // below. Without this, typing-then-quitting loses the final <=400ms: the
+    // edit is still sitting in the controller's dirty set, never handed to a
+    // durable store. Awaited (not fire-and-forget) because onOps dispatches on a
+    // microtask + async apply — a synchronous exit(0) would beat it. Bounded: the
+    // apply is a local FFI / in-memory enqueue, not a network round-trip.
+    try {
+      final flush = _activeEditorFlush;
+      if (flush != null) await flush();
+    } catch (_) {}
     try {
       _cloudSession?.flushForExit();
     } catch (_) {}
@@ -1042,6 +1076,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ],
       ),
     );
+  }
+
+  /// The editor's op pipeline (controller `_send`) failed to commit a batch —
+  /// most importantly a StoreCloudDocStore.appendOutbox StateError, which used to
+  /// be swallowed by a bare `catchError`, silently dropping the edit from the
+  /// durable outbox (red line #1: never lose an edit without a trace). Count and
+  /// log it; when a cloud session is what's failing, reuse the "sync paused"
+  /// banner+retry once past its threshold. In local-only mode there's nothing to
+  /// re-bootstrap, so we just log/count (still better than the silent swallow).
+  void _onEditorFault(Object error, int count) {
+    debugPrint('[editor-op] commit failed — #$count: $error');
+    if (_cloudSession != null) {
+      _onCloudSyncFault(
+        _selectedBootstrap?.document.id ?? 'editor',
+        'editor_op_failed',
+        count,
+      );
+    }
   }
 
   /// Clear the sync-paused banner (B3) — recovery succeeded, doc switched, or the
@@ -2585,8 +2637,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (view == null) return;
     final docId = view.objectId;
     // A local page persists on a debounce; force a save so "current" is captured
-    // before the user browses/creates a version.
-    _flushForExit();
+    // before the user browses/creates a version. Awaited now that the flush
+    // drains the editor debounce asynchronously too.
+    await _flushForExit();
     DocVersion toDocVersion(({String id, String? label, int createdAt}) v) =>
         DocVersion(
           id: v.id,
@@ -4076,6 +4129,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onMoveBlock: local ? (_, _) async {} : _moveBlock,
       onApplyOperations:
           _applyEditorOperations, // P3d: one entry, self-dispatches
+      onEditorFault: _onEditorFault,
       onUploadImage: local ? _localUploadImage : _uploadEditorImage,
       onImportImageUrl: local ? _localImportImageUrl : _importEditorImageUrl,
       onLoadImageBytes: local ? _localLoadImageBytes : _loadEditorImageBytes,
@@ -4486,6 +4540,12 @@ class _SidePanelState extends State<SidePanel> {
   }
 }
 
+/// The currently-mounted editor's debounce flush, registered by the active
+/// [WorkspaceView] (via its command hook) so the app-exit path
+/// ([_WorkspaceShellState._flushForExit]) can drain the last <=400ms of typing
+/// before quitting. Null when no editor is on screen (settings, empty state).
+Future<void> Function()? _activeEditorFlush;
+
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.session,
@@ -4594,6 +4654,7 @@ class WorkspaceView extends StatefulWidget {
     this.onMigrateEntry,
     this.onDetachEntry,
     this.onCursorChanged,
+    this.onEditorFault,
     this.editorEpoch = 0,
     super.key,
   });
@@ -4829,6 +4890,11 @@ class WorkspaceView extends StatefulWidget {
   /// single-user (local) mode.
   final void Function(String? blockId, int? offset)? onCursorChanged;
 
+  /// The editor's op pipeline failed to commit a batch (e.g. the durable outbox
+  /// write threw). `count` is the running total. Surfaced by the host instead of
+  /// being swallowed, so a dropped edit is visible (red line #1).
+  final void Function(Object error, int count)? onEditorFault;
+
   @override
   State<WorkspaceView> createState() => _WorkspaceViewState();
 }
@@ -4915,6 +4981,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final EditorScrollHook _scrollHook = EditorScrollHook();
   final GlobalKey _editorSurfaceKey = GlobalKey();
   final EditorCommandHook _commandHook = EditorCommandHook();
+  // Bound once so initState/dispose register and clear the *same* reference in
+  // the app-exit flush slot (a fresh `_commandHook.flush` tear-off each access
+  // would never compare equal under `identical`).
+  late final Future<void> Function() _boundExitFlush = _commandHook.flush;
   // Live document outline (TOC). The editor republishes headings on every edit;
   // the outline panel listens, so it tracks typing instead of only navigation.
   final EditorOutlineHook _outlineHook = EditorOutlineHook();
@@ -4953,6 +5023,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       _fitNavWidthToContent();
     }
     _seedOutline();
+    // Expose this editor's debounce flush to the app-exit path so quitting right
+    // after typing commits the last <=400ms instead of dropping it.
+    _activeEditorFlush = _boundExitFlush;
   }
 
   /// Seed the live outline from the current page's bootstrap snapshot so the
@@ -5077,6 +5150,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _activeBlockHook.dispose();
     _stopAutoScroll();
     _treeScroll.dispose();
+    // Only clear the exit-flush slot if it still points at ours (a remounting
+    // sibling may have already claimed it).
+    if (identical(_activeEditorFlush, _boundExitFlush)) _activeEditorFlush = null;
     super.dispose();
   }
 
@@ -6719,6 +6795,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           ),
                     ],
                     onApplyOperations: widget.onApplyOperations,
+                    onOpFault: widget.onEditorFault,
                     onUploadImage: widget.onUploadImage,
                     onImportImageUrl: widget.onImportImageUrl,
                     onLoadImageBytes: widget.onLoadImageBytes,

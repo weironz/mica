@@ -1,8 +1,11 @@
 /// Desktop/mobile preference persistence: a single JSON file under the
 /// platform's per-user config directory. Mirrors the web variant's
 /// localStorage semantics (synchronous string get/set/remove) by holding the
-/// whole map in memory and rewriting the file on each mutation. The map is a
-/// handful of appearance toggles, so full rewrites stay cheap.
+/// whole map in memory and rewriting the file on each mutation. Each rewrite
+/// goes to a temp file and renames it over the target (same volume → atomic),
+/// so a crash mid-write can't leave a half-written prefs.json that reads back
+/// corrupt and silently starts empty. The map is a handful of appearance
+/// toggles, so full rewrites stay cheap.
 library;
 
 import 'dart:convert';
@@ -54,7 +57,21 @@ void _flush() {
   try {
     final file = _prefsFile();
     file.parent.createSync(recursive: true);
-    file.writeAsStringSync(jsonEncode(_cache));
+    // Write the full payload to a sibling temp file first, then rename it over
+    // the target. The rename is the only mutation of the real file, so it is
+    // either the old complete file or the new complete file that survives a
+    // crash — never a truncated one.
+    final tmp = File('${file.path}.tmp');
+    tmp.writeAsStringSync(jsonEncode(_cache), flush: true);
+    try {
+      tmp.renameSync(file.path);
+    } on FileSystemException {
+      // Windows' rename won't overwrite an existing destination. Remove it and
+      // retry; the temp still holds the complete new content if we're
+      // interrupted between the two calls.
+      if (file.existsSync()) file.deleteSync();
+      tmp.renameSync(file.path);
+    }
   } catch (_) {
     // Best-effort: a failed write just means this preference won't persist.
   }
