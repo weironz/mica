@@ -18,9 +18,9 @@
 - **实时字符级并发协同未落地** —— presence 光标已画(`render.dart`),但同块并发输入仍靠 last-write,「协同」名不副实。(L) `[需后端]`
 - **M-R 收尾 C3/D1/D2/A3** —— 坏更新加载自愈 + schema 版本号、静默 `catch{}`→计数日志、同步健康态、会话持久化 e2e。(M)
 - **离线→在线 blob 自动 reconcile** —— 现只在重开文档时懒重传;可挂到自动重连成功事件上。(M) `[需后端]`
-- **双向 state-vector 协商** —— bootstrap 永远发整档 base(`ws.rs`),server 存了 SV 却不算 diff,大档新客户端很贵。(L) `[需后端]`
-- **broadcast lag 触发整档重载** —— 已有 rid cursor + `sync.pull`,lag 本可增量续拉而非重载(`ws.rs`)。(M) `[需后端]`
-- 🆕 **`client_out_of_date` 客户端零处理 → 被跳过的更新永久静默丢失**(high) —— broadcast channel(容量 256)慢接收方落后时服务端发 `{type:'error',code:'client_out_of_date'}`,但客户端 `error` 分支只认带 int `ack_id` 的 push 拒绝,这个通知直接落空;之后 cursor 越洞并持久化进本地镜像,`catch_up` 的 gap 判定在 cursor 近 head 时永假,不再触发能治愈它的 rebootstrap → 该设备上此洞及其后同 actor 内容持续不可见。`rooms.rs` 注释与上一条 roadmap 都误以为客户端会重载。修法很小:收到即触发一次 `sync.bootstrap`。(`ws.rs:170`, `cloud_sync_session.dart:457`)(S) `[需后端]`
+- ~~**双向 state-vector 协商**~~ ✅ 已做(校准复核)—— P4-3:`ws.rs:508` `client_sv.and_then(|sv| sync::diff_from_base(base, sv))` 按 client SV 发最小 diff,base_message delta 分支 + 单测 `base_message_sends_delta_only_when_sv_yields_one`。
+- ~~**broadcast lag 触发整档重载**~~ ✅ 已做(校准复核)—— 客户端 `_resyncFromLag` 发 `sync.pull` 带 cursor+SV 增量续拉,非整档重载。(`cloud_sync_session.dart`)
+- ~~🆕 **`client_out_of_date` 客户端零处理 → 被跳过的更新永久静默丢失**~~ ✅ 已做(校准复核)—— `cloud_sync_session.dart:467` 收到 `code:'client_out_of_date'`(无 ack_id)即 `_resyncFromLag()` 触发 pull/bootstrap 补洞;server 侧 `ws.rs:170` 发 notice。
 - ~~🆕 **离线 outbox 按文档滞留:重连后只有当前打开的文档会推送**~~ ✅ 已做(5b7536a)—— 上线/重连(`onServerConnected → _onCloudOnline`)跑 `_sweepPendingOutboxes`:枚举云视图,跳活跃文档,对每个有非空 outbox 的云文档起短命 headless `CloudSyncSession`(persistence=该 doc 的 store)connect→drainOutbox→dispose。桌面 only;串行 + 单例锁 + best-effort + 双检跳活跃 + 空 outbox 不连;blast radius 有界(mis-drain=幂等/超时不损坏)。**注**:纯客户端编排、组合已测原语,无新增自动化测试(端到端需真 WS+多文档集成环境),待实机冒烟。(`main.dart` `_sweepPendingOutboxes`)
 - 🆕 **长离线重连 = 推送风暴**(medium) —— `_flushUnacked(resendAll:true)` 逐条重发整个 outbox,无分批/背压/合并;服务端每条 push 全档 decode+encode+upsert = O(条数×文档大小)。可先用 yrs merge 把尾巴合成一条再推,或分批节流。(`cloud_sync_session.dart:584`, `sync.rs:217`)(M) `[需后端]`
 - 🆕 **协议无版本协商 / 无最低版本闸门**(medium) —— WS 握手不交换客户端/协议版本,未知帧与未知 error code 均静默忽略,兼容全靠「每次改动做成双向后向兼容」的纪律 + op-model REST 兜底。桌面是用户自装包、服务端本地独立部署,版本天然会漂;op 模型退役后没有任何机制(WS hello / min-version 拒连 / 健康检查版本比对)挡老客户端连上不再兼容的服务端并静默错乱。(`ws.rs:36`, `health.rs:10`)(M) `[需后端]`
@@ -44,7 +44,7 @@
 - ~~**改密不失效旧令牌**~~ ✅ `change_password` 已 `revoke_user_sessions`(`auth.rs:246`);唯一残留是被盗 access JWT 在剩余 TTL 内仍活(同上,靠缩 TTL/token-version 收口)。
 - ~~**登录/注册/refresh 无限流**~~ ✅ per-IP 令牌桶 + 全局 Argon2 并发门(`rate_limit.rs`);反代后取真实 IP 走「XFF 从右跳私网」对双跳(Traefik+nginx)/单机都对,自研无依赖。refresh 也纳入 per-IP 限流(但不占 Argon2 门——它不 hash,占了会饿死登录)。**WS 建连有意不限**:已 token 鉴权、低威胁,共享桶会误伤「同时开多文档」——按「不要过度设计」先不做并记因(CLAUDE.md 协作约定)。
 - **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文** —— 叠加 query token,未配 TLS 即明文泄露,且无启动告警(`config.rs`)。(M) `[需后端]`
-- **鉴权逐 handler 手写、非中间件** —— 新路由默认不鉴权,忘加即漏(`main.rs`, `auth.rs`)。(M) `[需后端]`
+- ~~**鉴权逐 handler 手写、非中间件**~~ ✅ 已做(校准复核)—— `auth.rs:618` `scope_guard` 是 router-wide **默认拒绝**中间件 + `is_public` 白名单;新路由默认已鉴权。
 - **WS token 走 query string** —— 明文 JWT 落反代日志/浏览器历史(`ws.rs`)。(M) `[需后端]`
 - **长连 WS 超 token TTL 不再认证** —— 过期前建的 socket 可授权数小时,无 re-auth 心跳(`ws.rs`)。(M) `[需后端]`
 - ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
@@ -56,10 +56,10 @@
 
 > 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
 
-- 🆕 **备份 sidecar 静默失败无任何告警**(high) —— 失败只写容器 stderr 后继续睡;PAT 过期 / OSS key 轮换没跟上 / repo 未 init 都只在 `docker logs` 留痕,没有流程要求去看 → 要恢复那天才发现停了几个月。修法很小:成功后 curl 一个 healthchecks.io 死人开关,或外部定时断言最新快照 <48h。(`deploy/mica-backup-loop.sh:16`)(S)
-- 🆕 **Postgres 全库无自动异地备份**(high) —— rustic→OSS 只备份内容导出(Markdown+图片);账号/密码/成员/CRDT 编辑历史/版本/回收站/分享/token 全不在自动备份里,唯一 pg_dump 是发版前手动、落在同机。整机丢失 = 这些全没。`backup.md:35` 已承认此局限并建议「顺带 pg_dump」但从未自动化。修:`mica-backup.sh` 加 `pg_dump|gzip` 进 EXPORT_DIR(库仅 22MB,cli 镜像需加 postgres-client + DB 凭据),rustic 顺带异地快照 —— 该 dump/restore 路径同时是 PG 大版本升级路径。(S)
-- 🆕 **生产无任何外部探活**(high) —— `/api/health` 只在部署那刻被查,三个 workflow 无 schedule 触发器;api 半夜 OOM / 连接池耗尽 / 证书翻车全靠「哪天打开发现打不开」。修:任一免费拨测打 `/api/health`(顺带覆盖 TLS/DNS/Traefik),或 Actions schedule 每 15min curl。(S)
-- 🆕 **容器 HEALTHCHECK 用不摸库的静态 `/api/health`**(medium) —— 代码里明明有会 ping 库的 `/api/ready` 却没用;DB 挂了容器照样 healthy,部署验证照过,restart 不触发。修法一行:HEALTHCHECK 与部署验证改打 `/api/ready`。(`health.rs:13`, `Dockerfile.api:22`, `justfile:294`)(S)
+- ~~🆕 **备份 sidecar 静默失败无任何告警**~~ ✅ 已做(校准复核)—— `mica-backup-loop.sh:16` 死人开关:成功/失败分别 ping `${HEALTHCHECK_URL}`(healthchecks.io 式),compose 已布线。
+- ~~🆕 **Postgres 全库无自动异地备份**~~ ✅ 已做(校准复核)—— `mica-backup.sh:70` `pg_dump|gzip` 进 PGDUMP_DIR、rustic 顺带异地;`Dockerfile.cli` 装 postgresql-client-16。
+- ~~🆕 **生产无任何外部探活**~~ ✅ 已做(校准复核)—— `.github/workflows/uptime.yml` cron `*/15` 打 `/api/ready`。
+- ~~🆕 **容器 HEALTHCHECK 用不摸库的静态 `/api/health`**~~ ✅ 已做(校准复核)—— `Dockerfile.api:22` HEALTHCHECK + 部署验证均改打摸库的 `/api/ready`。
 - 🆕 **磁盘只增不减且无水位告警**(medium) —— ① compose 所有服务无 `logging:` 配置,docker 默认 json-file 不限大小,api `RUST_LOG=info` 常开 + nginx access log 全量;② 每次发版从 ACR 拉 3 个新 tag 镜像,无 `docker image prune`;③ `/data/mica/pre-*.sql.gz` 还原点只加不删。磁盘满 = postgres 写失败 = 生产事故且无人预警。修:compose 加 `max-size/max-file` + 部署脚本尾部 prune。(S)
 - ~~**坏迁移的「恢复」流程无文档**~~ ✅ backup.md 加「从 pg_dump 恢复/回滚坏迁移」runbook(停 api→drop/create→zcat|psql→钉旧 tag→health/ready 验证,0d9c404)。
 - 🆕 **备份恢复演练纯手动、`rustic check` 不在自动流程**(medium) —— `backup.md:135` 自写「没恢复过的备份只是猜测」,但无 cron/CI/脚本承载,每日脚本也不跑 `rustic check`(OSS 端静默损坏只在恢复那天发现,prune 又最易放大损坏)。修:`rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)
@@ -109,12 +109,12 @@
 
 > 2026-07-22 新增小节。离线功能面做得全,但崩溃/损坏/双开几处兜底缺失会真丢数据。
 
-- 🆕 **客户端零崩溃/错误上报**(high) —— 全 `clients/mica_flutter` 无 `FlutterError.onError`/`runZonedGuarded`/`PlatformDispatcher.onError`,`main()` 裸 `runApp`;桌面 release 无控制台,崩了进黑洞(仓库那个 yrs `panic.log` 能留下纯因开发时 `flutter run|tee`)。「诊断」开关默认关、仅 2 个调用点、web 端 no-op。修:`main()` 套 `runZonedGuarded`+`FlutterError.onError`,未捕获异常追加写进已有 diagnosticsDir(错误落盘可不受诊断开关限制)。(`main.dart:142`, `diagnostics_stub.dart:36`)(M)
-- 🆕 **本地世界文档损坏 → 静默变空白且自毁恢复检查点**(high) —— Rust 层有 CRC+`contain_yrs_panic`→`CorruptDoc` 防线,但 FFI 一行 `.ok()??` 把它折叠成「文档不存在」→ Dart 播种空白页 + `saveDoc` 覆盖损坏快照(写入新 CRC=launder)+ `checkpointDoc` 把空白页复制进 backup → §10 回滚网被自己冲掉。云文档不受影响(有正本),本地世界文档没有。修:FFI 区分 None/CorruptDoc,Dart 遇 corrupt 提示 + 引导 rollback/版本历史,绝不自动 saveDoc+checkpoint。(`rust/api/store.rs:749`, `local_doc.dart:53`, `mica-core/store.rs:1117`)(M)
-- 🆕 **桌面无单实例守卫,双开丢本地文档**(high) —— `windows/runner/main.cpp` 无 `CreateMutex`;本地世界文档走「整篇快照 upsert」,两实例后保存者覆盖前者;WAL 打开无排他锁。触发常见:「关闭最小化到托盘」后窗口不可见,再点快捷方式必拉起第二实例。修:named mutex + 把已有窗口带回前台(顺手修好托盘 UX)。(`runner/main.cpp:10`, `mica-core/store.rs:213/568`)(S)
-- 🆕 **退出路径漏掉编辑器 400ms 防抖文本**(medium) —— `appExitFlush` 只冲云会话 + 本地后端,但 `EditorController` 自己那层 400ms 可重置防抖没接进退出链(只接了页面切换)→ 打字后 400ms 内 Alt+F4/托盘退出丢最后一段。修:把 `editor.flush()` 挂进 `appExitFlush`。(`window_setup_desktop.dart:21`, `main.dart:992`, `controller.dart:476`)(S)
-- 🆕 **`prefs.json` 非原子写 + 损坏静默清空**(medium) —— 单 JSON 全量重写无 temp+rename;写入中途断电→截断→下次 `jsonDecode` 失败即「start empty」→ 静默登出 + 全部设置归零 +(legacy)未推送队列丢失,用户只觉「软件抽风」。修:写临时文件后 rename(同卷原子)。(`prefs_stub.dart:33`)(S)
-- 🆕 **编辑器 op 管道 `catchError((_){})` 吞掉本应浮出的 outbox 写失败**(medium) —— `_chain.then(onOps).catchError((_){})` 把 `StoreCloudDocStore.appendOutbox` 特意抛的 `StateError` 一起吞了(磁盘满/store 写失败时编辑只活内存、重启即丢、无人感知),与红线 #1 相悖。修:至少计数 + 触发已有 onFault/banner 通道。(`controller.dart:3091`, `store_cloud_doc_store.dart:45`)(S)
+- ~~🆕 **客户端零崩溃/错误上报**~~ ✅ 已做(校准复核)—— `main.dart:149` `runZonedGuarded` + `FlutterError.onError`,未捕获异常落盘 diagnosticsDir。
+- ~~🆕 **本地世界文档损坏 → 静默变空白且自毁恢复检查点**~~ ✅ 已做(校准复核)—— FFI `store.rs` `load_doc` 区分 None/corrupt(throw);`local_doc.dart:56` 捕获即 rethrow `LocalDocCorruptException`,不再 seed+saveDoc+checkpoint(§10 回滚网不再被冲)。
+- ~~🆕 **桌面无单实例守卫,双开丢本地文档**~~ ✅ 已做(校准复核)—— `windows/runner/main.cpp:24` `CreateMutexW("Local\\MicaSingleInstance")` + `ERROR_ALREADY_EXISTS` 守卫(fail-open)。
+- ~~🆕 **退出路径漏掉编辑器 400ms 防抖文本**~~ ✅ 已做(校准复核)—— `main.dart:1016` `_flushForExit` 先 `await _activeEditorFlush()` 再冲会话/后端。
+- ~~🆕 **`prefs.json` 非原子写 + 损坏静默清空**~~ ✅ 已做(校准复核)—— `prefs_stub.dart:64` 写 `.tmp` 后 `renameSync`(同卷原子,含 Windows 覆盖处理)。
+- ~~🆕 **编辑器 op 管道 `catchError((_){})` 吞掉本应浮出的 outbox 写失败**~~ ✅ 已做(校准复核)—— `controller.dart` 现 `opFaultCount++` + `onOpFault?.call` 上浮,不再吞(红线 #1)。
 - 🆕 **云文档离线/未同步状态零指示**(medium) —— 唯一状态 UI 是 integrity-fault banner(且 count>3 才出),断网继续编辑云文档界面与在线零差别、无「离线中/N 条未同步/已保存」任何指示;配合滞留 outbox,用户有理由以为「看到了=已同步」直接换设备造成分叉。数据源现成(`outboxAfter(pushedClock).length`)。(`main.dart:1024`, `cloud_sync_session.dart:672`)(M)
 - 🆕 **i18n 漏网**(low) —— 默认页名 `kUntitledPage='未命名页面'` 硬编码中文并持久化(英文用户新建页得到中文标题、且与 'Untitled' 双轨),代码块 AI 动作 prompt 全中文;语言仅 en+zh。(`models.dart:667`, `editor.dart:5109`)(S)
 
@@ -130,14 +130,14 @@
 ## 开发者体验 / CI / Markdown
 
 - 🆕 **api-server 全部 59 个测试不进 CI;其中 14 个 DB 测试本地也静默跳过**(high) —— CI 的 `-p` 白名单无 api-server;`auth.rs` 的 `refresh_pg`(覆盖「条件 UPDATE 原子花费 token」安全关键 SQL)用 `let Some(db)=pool().await else {return}` 没库就全绿 —— 正是 `sync_pg.rs` 刚消灭的假绿模式在此复活,注释还写着已过时的 "matching sync_pg.rs"。CI 的 postgres service 已在,加进 `-p` + 把静默跳过改成 fail 即可。(`ci.yml:98`, `auth.rs:878`)(S) `[需后端]`
-- 🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**(high) —— 修复「137 个页面下挂页面」事故的守卫 + `views_parent_must_be_folder` 触发器全无测试(CI 只把迁移应用到空库,从不插违规行验证触发器拒绝)。正是 `lessons.md`「不变量只写在客户端等于没写」对应的修复,现处于「只写代码没写测试」。(`documents.rs:2294`, `migrations/0011`)(S) `[需后端]`
+- ~~🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**~~ ✅ 已做(校准复核)—— `documents.rs` `parent_guard_pg` 测 folder 接受/page 拒绝/缺失父 + 触发器 backstop(真 PG 门控)。
 - ~~**Release 出的 Windows 安装包从未被自动安装-启动验证**~~ ✅ release.yml 加「安装-启动冒烟」(/VERYSILENT 装 + 启动 + 存活 10s + finally 清理,发布前拦,0d9c404;首跑盯 CI GUI 存活判定)。
 - **CI 补 Windows 集成测试** —— 18 个 integration_test(≈46 测,多条是真丢数据 bug 回归)只能本地手跑,且两个全栈文件并跑会撞 debug-connection race(`dev-environment.md:137`);Postgres 依赖测试已随 2e84422 进 CI。(M) `[需后端]`
 - 🆕 **全项目零自动化 e2e**(medium) —— 桌面 integration_test 手跑;web 端零 e2e,CLAUDE.md「playwright 截图」是人工手段,仓库无任何 `.spec.ts`/committed 脚本,CI 对 web 只验「能编译」。(L)
 - 🆕 **三个不可信输入解析面零 fuzz**(medium) —— 无 `fuzz/` 目录,任何 Cargo.toml 不含 proptest/quickcheck/arbitrary/cargo-fuzz;而手写逐字节 xor 已实证挖出远程可达(需认证)的 yrs UB。markdown/interchange 是自家代码,cargo-fuzz 可直接落地为回归。(`store.rs:2202`)(M)
 - 🆕 **本地 SQLite 真库升级冒烟不在发版清单**(medium) —— `upgrade_real_store_smoke`(`#[ignore]`+需手动设 `MICA_REAL_STORE`)是发版前手动步骤,但 `release.md` 全篇不含其字样 → 发版流程不会触发任何人想起它;而桌面自动更新后首启就地迁移本地库,迁移写坏=用户笔记不可见。(`store.rs:2083`, `local-first-p3-design.md:288`)(S)
 - 🆕 **无覆盖率度量;`crates/cli`(备份导出引擎+MCP 代理,779 行)零测试**(medium) —— 无 tarpaulin/llvm-cov 配置;cli 是 prod backup sidecar 每天执行的导出命令本体 + 用户 MCP 接入代理层,唯一验证是 mcp-conformance 的握手/schema(不碰导出/REST 逻辑)。装 cargo-llvm-cov 让「0% 的洞」在数字上无法被忽视。(S)
-- 🆕 **`just test` 漏 `--features store`**(low) —— 本地官方「跑全部测试」入口不含它 → mica-core SQLite store 全部测试(迁移链、corrupt-snapshot 守卫)本地根本不编译,CI 专门加了独立步骤但 justfile 没同步。修法一行:test recipe 追加 `cargo test -p mica-core --features store`。(`justfile` test recipe, `ci.yml:100`)(S)
+- ~~🆕 **`just test` 漏 `--features store`**~~ ✅ 已做(校准复核)—— `justfile:133` 已有 `cargo test -p mica-core --features store`。
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
 - **仅结构化日志,无 /metrics/telemetry** —— 同步后端生产盲飞(`telemetry.rs`)。(M) `[需后端]`
 - **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
@@ -160,16 +160,14 @@
 
 > 数据安全里程碑已收口后,重心转向「公网自托管的硬底线」——发出去前一次事故就不可挽回的类型。
 
-1. **分享页安全三件套**(high / S–M)—— 白名单净化 export_html + 分享响应加 CSP + 分享渲染前校验 view 存活。一次解决存储型 XSS→token 接管 与「删了还在公网」两个高危,是最尖锐的安全+隐私事故面。`[需后端]`
-2. **备份可信化**(high / S)—— sidecar 加死人开关告警 + `pg_dump` 进异地备份(全库 DR)+ 恢复演练/`rustic check` 排期。当前是「盲飞 + 静默失败」,成本极低。
-3. **AI 配置授权 + 收口 base_url**(high / M)—— 任意登录用户能外泄运营者 LLM 密钥 + SSRF,多用户下的硬洞。`[需后端]`
-4. **CI 锁住数据面回归**(high / S–M)—— api-server 59 测进 CI + `auth.rs` 假绿改 fail + 页树不变量守卫补测 + 安装包安装-启动冒烟。刚做完数据安全里程碑,核心却无回归网。`[需后端]`
-5. **客户端兜底三件**(high / S)—— 崩溃上报(`runZonedGuarded`)+ 单实例守卫(防双开丢数据)+ 本地损坏不再静默覆盖恢复点。桌面用户真丢数据的三条路径,单个都很小。
+1. ~~**分享页安全三件套**~~ ✅ 完成(200c3b1/81ff653)—— export_html 白名单净化(strip_unsafe_attrs)+ 分享响应 CSP + 渲染前校验 view 存活。存储型 XSS→token 接管 与「删了还在公网」两个高危都堵上。
+2. ~~**备份可信化**~~ ✅ 完成(死人开关 + pg_dump 异地 DR + `/api/ready` 探活)—— 仅 `rustic check`/恢复演练排期这一件 S 未做(见「生产运维」小节)。
+3. ~~**AI 配置授权 + 收口 base_url**~~ ✅ 完成(200c3b1)—— base_url 钉死服务端配置,密钥外泄 + SSRF 堵上。
+4. ~~**CI 锁住数据面回归**~~ ✅ 完成 —— api-server 测进 CI(postgres service)+ auth.rs `pool()` CI-assert(缺库即 fail)+ 页树守卫补测 + real_store_smoke。
+5. ~~**客户端兜底三件**~~ ✅ 完成 —— 崩溃上报(runZonedGuarded)+ 单实例守卫(CreateMutexW)+ 本地损坏兜底(LocalDocCorruptException,不再自毁恢复点)。
 6. ~~**限流 + 收紧 CORS + Token 撤销收口**~~ ✅ 2026-07-22 完成:认证端点(含 refresh)per-IP 令牌桶 + Argon2 并发门、CORS prod 拒跨源、access JWT 24h→1h、修 prod 误认作 dev。WS 建连限流有意不做(已鉴权低威胁,见 CLAUDE.md「不要过度设计」);per-user token-version 即时吊销可选。
 7. ~~**文档内查找/替换**~~ ✅ 2026-07-22 完成(9fe9ae8):查找侧原已具备,补齐替换 + F3。至此本「最该做」清单全部清空——下一批优先级见下方各小节(反链、表格、虚拟化等)。
 
 ---
 
-**整体判断**:安全(分享页/AI 密钥/限流)+ 备份可信化 + CI 回归网是「发出去前必须补的底线」;
-客户端崩溃上报/单实例/损坏兜底是桌面真丢数据的三条路径;
-再往后**虚拟化 + 表格 + 反链**决定它像不像一个成熟笔记。
+**整体判断**(2026-07-22 校准后):上面「发出去前必须补的底线」——安全(分享页/AI 密钥/限流)、备份可信化、CI 回归网、客户端桌面丢数据三路径——**均已落地**(本轮对着代码逐条核实,勾除了 18+ 项 roadmap 陈旧误报的已做项)。剩的高价值真·未做偏「基建/成熟度」:更新器 Authenticode 签名、协议版本协商、恢复演练排期、op 模型表 GC、长文档虚拟化;产品广度上**虚拟化 + 表格 + 反链**决定它像不像一个成熟笔记。
