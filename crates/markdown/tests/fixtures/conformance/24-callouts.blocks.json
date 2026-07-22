@@ -1,0 +1,111 @@
+[
+  {
+    "data": {
+      "alert": "note"
+    },
+    "kind": "quote",
+    "text": "Useful information that users should know."
+  },
+  {
+    "data": {
+      "alert": "tip",
+      "marks": [
+        {
+          "end": 24,
+          "start": 20,
+          "type": "bold"
+        },
+        {
+          "end": 32,
+          "start": 26,
+          "type": "italic"
+        },
+        {
+          "end": 41,
+          "start": 37,
+          "type": "code"
+        }
+      ],
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "Helpful advice with bold, italic and code."
+  },
+  {
+    "data": {
+      "alert": "important",
+      "marks": [
+        {
+          "end": 39,
+          "href": "/docs",
+          "start": 35,
+          "type": "link"
+        }
+      ],
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "Key information users need, with a link."
+  },
+  {
+    "data": {
+      "alert": "warning",
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "Urgent info that needs immediate attention."
+  },
+  {
+    "data": {
+      "alert": "caution",
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "Advises about risks or negative outcomes."
+  },
+  {
+    "data": {
+      "alert": "note",
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "A callout with a nested list:"
+  },
+  {
+    "data": {
+      "quote": 1
+    },
+    "kind": "bulleted_list",
+    "text": "first point"
+  },
+  {
+    "data": {
+      "quote": 1
+    },
+    "kind": "bulleted_list",
+    "text": "second point"
+  },
+  {
+    "data": {
+      "alert": "note",
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "A callout, then a normal quote below."
+  },
+  {
+    "data": {
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "Just a plain blockquote, not a callout."
+  },
+  {
+    "data": {
+      "alert": "note",
+      "qbreak": true
+    },
+    "kind": "quote",
+    "text": "Lowercase type is still a callout."
+  }
+]

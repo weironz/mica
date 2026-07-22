@@ -69,6 +69,57 @@ class EditorTheme {
   static const Color quoteBar = Color(0xFFCBD5E1);
   static const Color dropLine = Color(0xFF2563EB);
 
+  /// GFM callout (alert) accent per type — the left bar + title ink. Matches
+  /// GitHub's alert palette; the same 5 types the markdown engine round-trips.
+  /// A tinted wash of this sits behind the block (see [alertTint]).
+  static const Map<String, Color> alertAccents = {
+    'note': Color(0xFF0969DA),
+    'tip': Color(0xFF1A7F37),
+    'important': Color(0xFF8250DF),
+    'warning': Color(0xFF9A6700),
+    'caution': Color(0xFFCF222E),
+  };
+  static Color alertAccent(String type) =>
+      alertAccents[type] ?? alertAccents['note']!;
+  static Color alertTint(String type) => alertAccent(type).withValues(alpha: 0.06);
+
+  /// Reserved header strip above a callout's first block — holds the type
+  /// icon + label. Mirrors how code reserves [codePadV].
+  static const double alertHeader = 22.0;
+
+  /// Capitalized callout title label (`note` → `Note`) — the standard English
+  /// GitHub label, matching the HTML export and the `> [!TYPE]` marker.
+  static String alertLabel(String type) {
+    switch (type) {
+      case 'tip':
+        return 'Tip';
+      case 'important':
+        return 'Important';
+      case 'warning':
+        return 'Warning';
+      case 'caution':
+        return 'Caution';
+      default:
+        return 'Note';
+    }
+  }
+
+  /// Material icon codepoint for a callout type's title glyph.
+  static IconData alertIcon(String type) {
+    switch (type) {
+      case 'tip':
+        return Icons.lightbulb_outline;
+      case 'important':
+        return Icons.campaign_outlined;
+      case 'warning':
+        return Icons.warning_amber_outlined;
+      case 'caution':
+        return Icons.report_outlined;
+      default:
+        return Icons.info_outline;
+    }
+  }
+
   /// Left rail reserved for the block drag handle (every block shifts right).
   static const double gutter = 24.0;
 
@@ -286,6 +337,11 @@ class _NodeLayout {
   ui.Image? mathImage; // rendered formula (math_block), if captured
   Size mathSize = Size.zero;
   bool quoteBreak = false; // a blank separated this quote from the previous
+  // The GFM callout type this quoted block belongs to (propagated to every
+  // block of the group, not just the head): tints the bg + colors the bar.
+  // Null on plain quotes. The group HEAD additionally sets [alertHead].
+  String? alert;
+  bool alertHead = false; // this block owns the callout's title strip
   double boxLeft = 0; // where the node's box begins (item-child inset)
 
   // Table layout (kind == 'table').
@@ -879,9 +935,32 @@ class RenderDocument extends RenderBox {
     double y = 0;
     String? prevKind;
     final numberedCounters = <int>[];
+    // The callout type of the quote group currently being laid out — set by a
+    // head block (`data.alert`), carried to the group's later blocks, cleared
+    // when the quote ends or a `qbreak` starts a non-alert group. Mirrors the
+    // quote-bar grouping so the tint/bar span the whole callout.
+    String? quoteAlert;
     for (var nodeIndex = 0; nodeIndex < _nodes.length; nodeIndex++) {
       final node = _nodes[nodeIndex];
       y += EditorTheme.gapAbove(node.kind, prevKind);
+
+      // Callout membership: a head block (`data.alert`) opens the group; later
+      // blocks inherit its type; a `qbreak` without an alert or leaving the
+      // quote ends it. Computed before the atomic dispatch so continuity holds
+      // across every kind.
+      String? nodeAlert;
+      if (node.quoteDepth == 0 || node.liLevel != null) {
+        quoteAlert = null;
+      } else {
+        final a = node.data['alert'];
+        if (a is String) {
+          quoteAlert = a;
+        } else if (node.data['qbreak'] == true) {
+          quoteAlert = null;
+        }
+        nodeAlert = quoteAlert;
+      }
+      final isAlertHead = nodeAlert != null && node.data['alert'] is String;
 
       // Atomic blocks dispatch to their registered renderer; a null return
       // (math waiting on its raster, empty source) falls through to the text
@@ -1042,6 +1121,8 @@ class RenderDocument extends RenderBox {
         ..nodeId = node.id
         ..quoteDepth = node.quoteDepth
         ..quoteBreak = node.data['qbreak'] == true
+        ..alert = nodeAlert
+        ..alertHead = isAlertHead
         ..boxLeft = EditorTheme.gutter + liInset
         ..todoChecked = node.todoChecked
         ..langText = codeLang ?? ''
@@ -1071,11 +1152,15 @@ class RenderDocument extends RenderBox {
       layout.codeCollapsed = collapsed;
       layout.codeClipH = clipH;
 
-      final innerTop = isCode ? EditorTheme.codePadV : 0.0;
+      // A callout head reserves a title strip above its text (icon + label),
+      // the same mechanism code uses for its top padding.
+      final alertHeadPad = isAlertHead ? EditorTheme.alertHeader : 0.0;
+      final innerTop = isCode ? EditorTheme.codePadV : alertHeadPad;
       layout.boxTop = y;
       layout.textTop = y + innerTop;
       layout.textHeight = clipH;
-      layout.boxHeight = clipH + (isCode ? 2 * EditorTheme.codePadV : 0);
+      layout.boxHeight =
+          clipH + (isCode ? 2 * EditorTheme.codePadV : alertHeadPad);
 
       if (node.isListKind) {
         final level = node.indent;
@@ -1585,10 +1670,32 @@ class RenderDocument extends RenderBox {
           Paint()..color = EditorTheme.codeBg,
         );
       }
+      final prev = i > 0 ? _layouts[i - 1] : null;
+      // Callout (GFM alert) wash: a faint tint of the type accent behind every
+      // block of the group, bridging the inter-block gaps so it reads as one
+      // container. The colored bar below replaces the gray quote bar.
+      if (l.alert != null) {
+        var top = l.boxTop;
+        if (!l.quoteBreak && prev != null && prev.alert == l.alert) {
+          top = prev.boxTop + prev.boxHeight;
+        }
+        canvas.drawRect(
+          Rect.fromLTWH(
+            offset.dx + l.boxLeft,
+            offset.dy + top,
+            (size.width - l.boxLeft).clamp(0.0, double.infinity),
+            l.boxHeight + (l.boxTop - top),
+          ),
+          Paint()..color = EditorTheme.alertTint(l.alert!),
+        );
+      }
       // Blockquote bars: one per nesting depth, on any quoted block kind.
       // Within one quote group the bars run continuously across the gaps
-      // between blocks (a `qbreak` starts a fresh group).
-      final prev = i > 0 ? _layouts[i - 1] : null;
+      // between blocks (a `qbreak` starts a fresh group). A callout colors its
+      // bar by type instead of the neutral quote gray.
+      final barColor = l.alert != null
+          ? EditorTheme.alertAccent(l.alert!)
+          : EditorTheme.quoteBar;
       for (var k = 0; k < l.quoteDepth; k++) {
         var top = l.boxTop;
         if (!l.quoteBreak &&
@@ -1604,8 +1711,13 @@ class RenderDocument extends RenderBox {
             3,
             l.boxHeight + (l.boxTop - top),
           ),
-          Paint()..color = EditorTheme.quoteBar,
+          Paint()..color = barColor,
         );
+      }
+      // A callout's head block shows the type icon + label in its reserved
+      // title strip (above the first line of text).
+      if (l.alertHead && l.alert != null) {
+        _paintAlertTitle(canvas, offset, l);
       }
       // Toolbar (language left, wrap + copy right) — only while hovering the block.
       if (l.kind == 'code_block' && _hoverCode == i) {
@@ -1643,6 +1755,47 @@ class RenderDocument extends RenderBox {
         Paint()..color = EditorTheme.dropLine,
       );
     }
+  }
+
+  /// A callout's title strip: the type icon + label (e.g. a blue circle-i and
+  /// "Note") in the accent color, painted in the header space reserved above
+  /// the head block's text. Reuses the quote pipeline's chrome — no new block.
+  void _paintAlertTitle(Canvas canvas, Offset offset, _NodeLayout l) {
+    final type = l.alert!;
+    final accent = EditorTheme.alertAccent(type);
+    final left = offset.dx + l.contentLeft;
+    final top = offset.dy + l.boxTop + 3;
+    const iconSize = 15.0;
+    final icon = EditorTheme.alertIcon(type);
+    final iconPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontSize: iconSize,
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: accent,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    iconPainter.paint(canvas, Offset(left, top));
+    final labelPainter = TextPainter(
+      text: TextSpan(
+        text: EditorTheme.alertLabel(type),
+        style: TextStyle(
+          fontSize: 13,
+          height: 1.0,
+          fontWeight: FontWeight.w600,
+          color: accent,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    labelPainter.paint(
+      canvas,
+      Offset(left + iconSize + 5, top + (iconSize - labelPainter.height) / 2),
+    );
   }
 
   /// Line numbers in the reserved strip left of the code (contentLeft already

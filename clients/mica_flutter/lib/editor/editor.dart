@@ -4547,6 +4547,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// label for anything unmapped.
   String _slashLabel(_SlashOption o) {
     final l = context.l10n;
+    // Callouts ride the `quote` kind with a `data.alert` type — resolve their
+    // label by type before the generic quote fallback.
+    final alert = o.data['alert'];
+    if (alert is String) {
+      switch (alert) {
+        case 'tip':
+          return l.slashCalloutTip;
+        case 'important':
+          return l.slashCalloutImportant;
+        case 'warning':
+          return l.slashCalloutWarning;
+        case 'caution':
+          return l.slashCalloutCaution;
+        default:
+          return l.slashCalloutNote;
+      }
+    }
     switch (o.kind) {
       case _aiSlashKind:
         return l.aiAskTitle;
@@ -5769,6 +5786,12 @@ const List<_SlashOption> _slashOptions = [
   _SlashOption('Numbered list', Icons.format_list_numbered, 'numbered_list'),
   _SlashOption('To-do', Icons.check_box_outlined, 'todo', {'checked': false}),
   _SlashOption('Quote', Icons.format_quote, 'quote'),
+  // Callouts (GFM alerts) reuse the quote block, tagged with `data.alert`.
+  _SlashOption('Note', Icons.info_outline, 'quote', {'alert': 'note'}),
+  _SlashOption('Tip', Icons.lightbulb_outline, 'quote', {'alert': 'tip'}),
+  _SlashOption('Important', Icons.campaign_outlined, 'quote', {'alert': 'important'}),
+  _SlashOption('Warning', Icons.warning_amber_outlined, 'quote', {'alert': 'warning'}),
+  _SlashOption('Caution', Icons.report_outlined, 'quote', {'alert': 'caution'}),
   _SlashOption('Code', Icons.code, 'code_block'),
   _SlashOption('Math formula', Icons.functions, 'math_block'),
   _SlashOption('Table', Icons.grid_on, 'table'),

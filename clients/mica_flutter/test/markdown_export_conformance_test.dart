@@ -60,6 +60,11 @@ import 'package:mica_flutter/editor/model.dart';
 const _cosmeticDivergence = {
   '05-quote.md', '10-mixed.md', '15-list-items.md',
   '17-quotes.md', '20-item-containers.md',
+  // Callouts are quote groups (`data.alert` on the head): same decorative
+  // trailing-`>` divergence as the other quote fixtures. The copy output
+  // re-imports to identical blocks (the invariant above), it just omits the
+  // bare `>` the whole-document exporter adds.
+  '24-callouts.md',
 };
 
 /// Fixtures whose copy output does NOT re-import to the same blocks — genuine,

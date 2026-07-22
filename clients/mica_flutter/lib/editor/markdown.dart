@@ -177,6 +177,29 @@ bool _fenceClose(String content, String ch, int len) {
   return (depth, content.substring(i));
 }
 
+/// GFM alert (callout) type of a blockquote's first line — `[!NOTE]` and the
+/// four siblings, case-insensitive, marker-only. Mirrors the Rust engine's
+/// `alert_type_of`; `null` for any other line (a plain blockquote). Only the 5
+/// standard kinds round-trip to a portable `> [!TYPE]` marker.
+String? alertTypeOf(String line) {
+  final t = line.trim();
+  if (!t.startsWith('[!') || !t.endsWith(']')) return null;
+  switch (t.substring(2, t.length - 1).toLowerCase()) {
+    case 'note':
+      return 'note';
+    case 'tip':
+      return 'tip';
+    case 'important':
+      return 'important';
+    case 'warning':
+      return 'warning';
+    case 'caution':
+      return 'caution';
+    default:
+      return null;
+  }
+}
+
 /// Parse inline Markdown in [text] into clean text + marks, merged into [data].
 BlockSpec _inline(
   String kind,
@@ -456,6 +479,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   var quoteActive = false;
   var quoteBoundary = false;
   int? pendingEmptyQuote;
+  // A `> [!NOTE]` marker just opened a GFM alert (callout): the type waits
+  // here and attaches to the group's FIRST content block (`data.alert`),
+  // reusing the flat quote model. Mirrors the Rust engine's `pending_alert`.
+  String? pendingAlert;
   // Does the deepest open list item already hold container children
   // (code/quote/divider blocks carrying `data.li`)?
   var itemChildren = false;
@@ -588,8 +615,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         result.add((kind: 'quote', text: '', data: {
           if (pending > 1) 'quote': pending,
           if (quoteBoundary) 'qbreak': true,
+          'alert': ?pendingAlert,
         }));
         pendingEmptyQuote = null;
+        pendingAlert = null;
       }
       if (result.isNotEmpty && quoteDepthOf(result.last) > 0) {
         quoteBoundary = true;
@@ -920,6 +949,23 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       pendingLoose = false;
       final qrestTrim = qrest.trimLeft();
 
+      // GFM alert marker: `> [!NOTE]` (etc.) as the FIRST line of a top-level
+      // blockquote turns the group into a callout. Eat the marker (not body),
+      // remember the type for the group's first block, and arm the empty group
+      // so a body-less `> [!NOTE]` still round-trips. Depth 1, top level only
+      // (mirrors Rust) — nested/list-embedded `[!NOTE]` stays literal.
+      if (qdepth == 1 && liCtx == null && !quoteActive) {
+        final atype = alertTypeOf(qrestTrim);
+        if (atype != null) {
+          pendingAlert = atype;
+          pendingEmptyQuote = 1;
+          open = null;
+          quoteActive = true;
+          i++;
+          continue;
+        }
+      }
+
       // `>` with nothing after: a paragraph break inside the quote — or,
       // if the group never gets content, an empty blockquote.
       if (qrestTrim.isEmpty) {
@@ -949,6 +995,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       pendingEmptyQuote = null;
       final qbreak = quoteBoundary;
       quoteBoundary = false;
+      // A callout head's type attaches to this first content block, then
+      // clears (only the group head carries `data.alert`). Mirrors Rust.
+      final alert = pendingAlert;
+      pendingAlert = null;
 
       // Fenced code inside the quote: runs while the markers do.
       if (qrestTrim.startsWith('```')) {
@@ -970,6 +1020,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
           if (language.isNotEmpty) 'language': language,
           'quote': qdepth,
           if (qbreak) 'qbreak': true,
+          'alert': ?alert,
           'li': ?liCtx,
         }));
         if (liCtx != null) itemChildren = true;
@@ -983,6 +1034,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         result.add((kind: 'code_block', text: deindentColumns(qrest, 4), data: {
           'quote': qdepth,
           if (qbreak) 'qbreak': true,
+          'alert': ?alert,
           'li': ?liCtx,
         }));
         if (liCtx != null) itemChildren = true;
@@ -996,6 +1048,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         result.add((kind: 'divider', text: '', data: {
           'quote': qdepth,
           if (qbreak) 'qbreak': true,
+          'alert': ?alert,
           'li': ?liCtx,
         }));
         if (liCtx != null) itemChildren = true;
@@ -1012,6 +1065,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       final qdata = Map<String, dynamic>.of(qc.$3);
       if (qkind != 'quote' || qdepth > 1) qdata['quote'] = qdepth;
       if (qbreak) qdata['qbreak'] = true;
+      if (alert != null) qdata['alert'] = alert;
       if (liCtx != null) {
         qdata['li'] = liCtx;
         itemChildren = true;
@@ -1235,6 +1289,7 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     result.add((kind: 'quote', text: '', data: {
       if (pendingTail > 1) 'quote': pendingTail,
       if (quoteBoundary) 'qbreak': true,
+      'alert': ?pendingAlert,
     }));
   }
 

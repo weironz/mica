@@ -1020,8 +1020,19 @@ class EditorController extends ChangeNotifier {
     // A wrapper because the kind branches above each return early, so there is
     // no single exit to hang it off.
     String nodeText(int i, int from, int to) {
-      final body = nodeBody(i, from, to);
-      final li = nodes[i].data['li'];
+      var body = nodeBody(i, from, to);
+      final node = nodes[i];
+      // A callout group head carries `data.alert`: prepend the GFM marker line
+      // `> [!TYPE]` (only when the whole head block is in the copy range) so the
+      // blockquote re-imports as an alert. Mirrors the Rust exporter.
+      final alert = node.data['alert'];
+      if (alert is String &&
+          from <= 0 &&
+          to >= node.text.length &&
+          body.isNotEmpty) {
+        body = '> [!${alert.toUpperCase()}]\n$body';
+      }
+      final li = node.data['li'];
       if (li is! int || body.isEmpty) return body;
       final pad = '    ' * (li + 1);
       return body.split('\n').map((l) => l.isEmpty ? '' : '$pad$l').join('\n');

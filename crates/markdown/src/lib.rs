@@ -182,6 +182,19 @@ pub fn export_html_document(
      font-family:'Cascadia Code','Consolas','Courier New',monospace;}}\n\
      pre code{{background:none;padding:0;}}\n\
      blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
+     blockquote.markdown-alert{{padding:.4rem 1rem;color:inherit;border-left-width:4px;}}\n\
+     .markdown-alert-title{{display:flex;align-items:center;font-weight:600;\
+     margin:0 0 .25rem;text-transform:none;}}\n\
+     .markdown-alert-note{{border-left-color:#0969da;}}\n\
+     .markdown-alert-note .markdown-alert-title{{color:#0969da;}}\n\
+     .markdown-alert-tip{{border-left-color:#1a7f37;}}\n\
+     .markdown-alert-tip .markdown-alert-title{{color:#1a7f37;}}\n\
+     .markdown-alert-important{{border-left-color:#8250df;}}\n\
+     .markdown-alert-important .markdown-alert-title{{color:#8250df;}}\n\
+     .markdown-alert-warning{{border-left-color:#9a6700;}}\n\
+     .markdown-alert-warning .markdown-alert-title{{color:#9a6700;}}\n\
+     .markdown-alert-caution{{border-left-color:#cf222e;}}\n\
+     .markdown-alert-caution .markdown-alert-title{{color:#cf222e;}}\n\
      table{{width:100%;border-collapse:collapse;}}\n\
      td,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
      hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
@@ -406,6 +419,11 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
   let mut quote_active = false;
   let mut quote_boundary = false;
   let mut pending_empty_quote: Option<usize> = None;
+  // A `> [!NOTE]` marker line just opened a GFM alert (callout): the type
+  // waits here and attaches to the group's FIRST content block (`data.alert`),
+  // reusing the flat quote model — no new container. Consumed the moment that
+  // block is pushed (or, for a body-less alert, the empty quote block).
+  let mut pending_alert: Option<&'static str> = None;
   // Does the deepest open list item already hold container children
   // (code/quote/divider blocks carrying `data.li`)? Then later indented
   // paragraphs become child paragraphs instead of `\n\n` text joins.
@@ -453,6 +471,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
         if quote_boundary {
           data_insert(&mut data, "qbreak", json!(true));
+        }
+        if let Some(a) = pending_alert.take() {
+          data_insert(&mut data, "alert", json!(a));
         }
         push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
       }
@@ -1007,6 +1028,25 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       pending_loose = false;
       let qrest_trim = qrest.trim_start();
 
+      // GFM alert marker: `> [!NOTE]` (etc.) as the FIRST line of a top-level
+      // blockquote turns the group into a callout. Eat the marker line (it is
+      // not body), remember the type for the group's first content block, and
+      // arm `pending_empty_quote` so a body-less `> [!NOTE]` still round-trips
+      // as an empty alert. Restricted to depth 1, top level (`li_ctx` none) to
+      // match GitHub — nested/list-embedded `[!NOTE]` stays literal text.
+      if qdepth == 1
+        && li_ctx.is_none()
+        && !quote_active
+        && let Some(atype) = alert_type_of(qrest_trim)
+      {
+        pending_alert = Some(atype);
+        pending_empty_quote = Some(1);
+        open_item = None;
+        quote_active = true;
+        index += 1;
+        continue;
+      }
+
       // `>` with nothing after: a paragraph break inside the quote — or,
       // if the group never gets content, an empty blockquote.
       if qrest_trim.is_empty() {
@@ -1081,6 +1121,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
+        if let Some(a) = pending_alert.take() {
+          data_insert(&mut data, "alert", json!(a));
+        }
         if let Some(level) = li_ctx {
           data_insert(&mut data, "li", json!(level));
           item_children = true;
@@ -1118,6 +1161,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
+        if let Some(a) = pending_alert.take() {
+          data_insert(&mut data, "alert", json!(a));
+        }
         if let Some(level) = li_ctx {
           data_insert(&mut data, "li", json!(level));
           item_children = true;
@@ -1140,6 +1186,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
+        if let Some(a) = pending_alert.take() {
+          data_insert(&mut data, "alert", json!(a));
+        }
         if let Some(level) = li_ctx {
           data_insert(&mut data, "li", json!(level));
           item_children = true;
@@ -1159,6 +1208,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
       }
       if qbreak {
         data_insert(&mut data, "qbreak", json!(true));
+      }
+      if let Some(a) = pending_alert.take() {
+        data_insert(&mut data, "alert", json!(a));
       }
       if let Some(level) = li_ctx {
         data_insert(&mut data, "li", json!(level));
@@ -1584,6 +1636,9 @@ pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotP
     let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
     if quote_boundary {
       data_insert(&mut data, "qbreak", json!(true));
+    }
+    if let Some(a) = pending_alert.take() {
+      data_insert(&mut data, "alert", json!(a));
     }
     push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
   }
@@ -2764,6 +2819,36 @@ fn quote_depth_of(block: &Block) -> usize {
   if block.kind == "quote" { d.max(1) } else { d }
 }
 
+/// GFM alert (callout) type of a blockquote's first line: `[!NOTE]` and the
+/// four siblings, case-insensitive per the GitHub spec, with the line
+/// carrying nothing but the marker. `None` for any other line — a plain
+/// blockquote is unchanged. Only these 5 standard kinds round-trip to a
+/// portable `> [!TYPE]` marker, so no custom titles/icons (a dialect with no
+/// standard representation).
+fn alert_type_of(line: &str) -> Option<&'static str> {
+  let inner = line.trim().strip_prefix("[!")?.strip_suffix(']')?;
+  match inner.to_ascii_lowercase().as_str() {
+    "note" => Some("note"),
+    "tip" => Some("tip"),
+    "important" => Some("important"),
+    "warning" => Some("warning"),
+    "caution" => Some("caution"),
+    _ => None,
+  }
+}
+
+/// Capitalized label for an alert type (`note` → `Note`), the visible title
+/// GitHub renders on the callout.
+fn alert_title(kind: &str) -> &'static str {
+  match kind {
+    "tip" => "Tip",
+    "important" => "Important",
+    "warning" => "Warning",
+    "caution" => "Caution",
+    _ => "Note",
+  }
+}
+
 /// Insert a key into a block's `data`, upgrading `Null` to an object.
 fn data_insert(data: &mut Value, key: &str, value: Value) {
   match data {
@@ -2861,7 +2946,23 @@ fn render_quote_group(
   depth: usize,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
-  out.push_str("<blockquote>\n");
+  // A callout: the group head (depth 1) carries `data.alert`. Render a styled
+  // blockquote (GitHub's `markdown-alert` classes + a title row) — still the
+  // quote pipeline, just extra chrome, no separate block kind.
+  let alert = if depth == 1 {
+    items.first().and_then(|b| b.data.get("alert")).and_then(Value::as_str)
+  } else {
+    None
+  };
+  if let Some(a) = alert {
+    out.push_str(&format!(
+      "<blockquote class=\"markdown-alert markdown-alert-{a}\">\n\
+       <p class=\"markdown-alert-title\">{}</p>\n",
+      alert_title(a)
+    ));
+  } else {
+    out.push_str("<blockquote>\n");
+  }
   let mut i = 0;
   while i < items.len() {
     // A list run first — it swallows the items' container children
@@ -3738,6 +3839,13 @@ fn append_markdown_children(
     }
     prev_was_item = is_item(&child.kind) || li_child.is_some();
     prev_quote = if li_child.is_some() { 0 } else { quote };
+    // A callout group head carries `data.alert`: emit the GFM marker line
+    // `> [!TYPE]` before its content so the blockquote re-imports as an alert.
+    // The marker sits at depth 1 (alerts are top-level); the block's own lines
+    // get their `> ` prefix below.
+    if let Some(a) = child.data.get("alert").and_then(Value::as_str) {
+      lines.push(format!("> [!{}]", a.to_ascii_uppercase()));
+    }
     let from = lines.len();
     append_markdown_block(snapshot, child, depth, lines, images)?;
     if quote > 0 {
