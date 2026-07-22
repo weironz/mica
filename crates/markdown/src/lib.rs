@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+/// Structured page properties over the document root's raw front-matter string
+/// (front matter stays the sole authority; this is a lazy view + surgical edit).
+pub mod properties;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentSnapshotPayload {
   pub schema_version: i32,
