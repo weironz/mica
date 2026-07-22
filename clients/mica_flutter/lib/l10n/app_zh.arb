@@ -330,6 +330,7 @@
   "editorReplaceHint": "替换",
   "editorReplaceOne": "替换当前 (Enter)",
   "editorReplaceAll": "全部替换",
+  "editorWordCount": "{words} 词 · {chars} 字",
   "editorMoreHeadings": "更多标题",
   "editorHeadingN": "{level} 级标题",
   "editorUntitled": "无标题",

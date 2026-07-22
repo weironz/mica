@@ -569,6 +569,18 @@
   "editorReplaceHint": "Replace",
   "editorReplaceOne": "Replace (Enter)",
   "editorReplaceAll": "Replace all",
+  "editorWordCount": "{words, plural, =1{1 word} other{{words} words}} · {chars, plural, =1{1 char} other{{chars} chars}}",
+  "@editorWordCount": {
+    "description": "Corner badge showing the document's word and character counts.",
+    "placeholders": {
+      "words": {
+        "type": "int"
+      },
+      "chars": {
+        "type": "int"
+      }
+    }
+  },
   "editorMoreHeadings": "More headings",
   "editorHeadingN": "Heading {level}",
   "@editorHeadingN": {

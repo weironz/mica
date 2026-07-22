@@ -24,6 +24,7 @@ import 'render.dart';
 import 'rich_paste.dart';
 import 'cell_edit_controller.dart';
 import 'table.dart';
+import 'word_count.dart';
 import '../l10n/locale_controller.dart';
 
 export 'controller.dart' show DocOp, ApplyOps;
@@ -402,6 +403,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   final ValueNotifier<int> _imageFrameTick = ValueNotifier(0);
   // file_id -> fresh download URL, for copy/export of images.
   final Map<String, String> _imageUrlCache = {};
+  // Upper bound on decoded textures kept resident. [_imageCache] is a
+  // LinkedHashMap used as an LRU: [_touchImage] bumps a key to the freshest
+  // (last) slot on every paint, [_evictImages] drops the least-recently-PAINTED
+  // stills once the cap is exceeded. 64 sits far above how many image blocks the
+  // viewport (plus render cull slack) can show at once, so nothing on screen is
+  // ever a candidate — see [_evictImages].
+  static const int _maxCachedImages = 64;
+  // The file_id/url currently shown in the fullscreen viewer, if any. Its
+  // texture must never be evicted from under the open [RawImage] — the viewer is
+  // a modal over the (possibly not-repainting) canvas, so its LRU recency goes
+  // stale and it would otherwise look like a cold, evictable still.
+  String? _viewerKey;
+
+  // Word/character counts shown in the corner badge. Recomputed off a debounce
+  // (a full-document rune walk is wasted work on every keystroke); the badge
+  // just reads whatever is latest — a fraction-of-a-second lag is invisible.
+  DocCounts _counts = DocCounts.zero;
+  Timer? _countDebounce;
+  static const Duration _countDebounceDelay = Duration(milliseconds: 400);
   // Active table column resize: node, right-column index, start x, start
   // weights, full available width, and the table's width fraction at start.
   // col == weights.length means the table's right edge (overall width drag).
@@ -473,6 +493,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (!mounted) return;
       _publishOutline();
       _publishActiveBlock();
+      _recomputeCounts(); // seed the badge for an opened-but-unedited document
     });
   }
 
@@ -623,6 +644,32 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _findMatches = const [];
       _findIndex = 0;
     });
+  }
+
+  /// A muted words·chars badge in the bottom-right corner. [IgnorePointer] so it
+  /// never eats clicks meant for the document beneath it; sits inside the
+  /// content-height surface, so it reads as a footer stat at the page's end.
+  Widget _buildWordCount() {
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xF2F8FAFC), // slate-50, near-opaque
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0x14000000)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          child: Text(
+            context.l10n.editorWordCount(_counts.words, _counts.chars),
+            style: const TextStyle(
+              fontSize: 12,
+              height: 1.0,
+              color: Color(0xFF64748B), // slate-500
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildFindBar() {
@@ -935,6 +982,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     setRichPasteHandler(null);
     setRichImagePasteHandler(null);
     _stopAutoScroll();
+    _countDebounce?.cancel();
     _blink?.cancel();
     // After the render object detached (it removes its listener there).
     _caretBlink.dispose();
@@ -1012,6 +1060,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _reportCursor();
       _publishOutline();
       _publishActiveBlock();
+      _scheduleCountUpdate();
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).
@@ -1021,6 +1070,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     } else {
       apply();
     }
+  }
+
+  /// Debounced word-count refresh. Coalesces bursts of edits into one
+  /// full-document walk; the badge repaints on the next [setState] regardless,
+  /// so the number simply catches up ~[_countDebounceDelay] after typing stops.
+  void _scheduleCountUpdate() {
+    _countDebounce?.cancel();
+    _countDebounce = Timer(_countDebounceDelay, _recomputeCounts);
+  }
+
+  void _recomputeCounts() {
+    if (!mounted) return;
+    final next = countBlocks(_controller.nodes.map((n) => n.text));
+    if (next == _counts) return;
+    setState(() => _counts = next);
   }
 
   void _onFocusChange() {
@@ -2777,7 +2841,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final previous = _imageCache[key];
     _imageLoading.remove(key);
     _imageErrors.remove(key);
-    setState(() => _imageCache[key] = frame.image);
+    setState(() {
+      _imageCache[key] = frame.image;
+      _touchImage(key); // freshest
+      _evictImages(key); // bound resident textures
+    });
     previous?.dispose(); // never orphan the handle we just replaced
   }
 
@@ -2793,7 +2861,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _imageErrors.remove(key);
       // The first frame settles the block's natural size, so it has to go
       // through layout. Every frame after is the same size — paint only.
-      setState(() => _imageCache[key] = frame);
+      setState(() {
+        _imageCache[key] = frame;
+        _touchImage(key);
+        _evictImages(key);
+      });
       return;
     }
     final previous = _imageCache[key];
@@ -2810,9 +2882,47 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onImagePainted(String key) {
+    // Called from paint for every image block the viewport shows — this is the
+    // LRU "recently used" signal (visible stills get re-bumped every frame, so
+    // they sink to the freshest end and never fall to [_evictImages]).
+    _touchImage(key);
     _imagePainted.add(key);
     final anim = _imageAnims[key];
     if (anim != null && !anim.isPlaying) anim.start();
+  }
+
+  /// Bump [key] to the most-recently-used (last) slot of the [_imageCache]
+  /// LinkedHashMap. No parallel structure: the map's own iteration order IS the
+  /// LRU order. Cheap remove+reinsert; order is otherwise irrelevant (every
+  /// consumer looks up by key, and dispose iterates values regardless of order).
+  void _touchImage(String key) {
+    final img = _imageCache.remove(key);
+    if (img != null) _imageCache[key] = img;
+  }
+
+  /// Evict least-recently-painted STILLS until the cache is back under
+  /// [_maxCachedImages], disposing each evicted [ui.Image]. Dispose safety (the
+  /// lessons.md image-decode timing is load-bearing): a candidate is only ever a
+  /// still that is NOT on screen — the oldest keys here are ones no recent paint
+  /// touched, and the cap sits far above the viewport's simultaneous-image count,
+  /// so nothing being drawn this frame is reachable. We also skip:
+  ///  - [protect] (the just-inserted key — already freshest),
+  ///  - animated keys (`_imageAnims`): their frames are owned by a live
+  ///    [ImageAnimator] loop and get disposed through its own lifecycle,
+  ///  - [_viewerKey] (bound to an open fullscreen [RawImage]).
+  /// An evicted still that scrolls back re-fetches via [_requestImage] (its key
+  /// is no longer cached/loading/errored), so eviction is transparent.
+  void _evictImages(String protect) {
+    if (_imageCache.length <= _maxCachedImages) return;
+    // Oldest-first snapshot; mutate the map, not the list being walked.
+    for (final key in _imageCache.keys.toList(growable: false)) {
+      if (_imageCache.length <= _maxCachedImages) break;
+      if (key == protect || key == _viewerKey) continue;
+      if (_imageAnims.containsKey(key)) continue;
+      final img = _imageCache.remove(key);
+      _imagePainted.remove(key);
+      img?.dispose();
+    }
   }
 
   /// The image name to hang off a blob url, url-encoded. Cosmetic only (the
@@ -5090,6 +5200,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final data = _controller.nodes[node].data;
     final key = (data['file_id'] ?? data['url']) as String?;
     if (key == null || _imageCache[key] == null) return;
+    // Pin this texture against LRU eviction while the modal viewer holds it.
+    _viewerKey = key;
     showDialog<void>(
       context: context,
       barrierColor: const Color(0xCC000000),
@@ -5126,7 +5238,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           ],
         ),
       ),
-    );
+    ).whenComplete(() {
+      // Unpin once closed; a later eviction may now reclaim it. Guard against a
+      // second viewer having re-pinned a different key in the meantime.
+      if (_viewerKey == key) _viewerKey = null;
+    });
   }
 
   /// Pick an image file, upload it, and insert an image block at the caret.
@@ -5389,6 +5505,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 ),
                 if (_findOpen)
                   Positioned(top: 6, right: 6, child: _buildFindBar()),
+                if (_counts.chars > 0)
+                  Positioned(bottom: 6, right: 8, child: _buildWordCount()),
               ],
             ),
           ),
