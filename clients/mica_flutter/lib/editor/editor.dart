@@ -387,6 +387,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // A live cross-cell drag selecting a rectangular AREA of cells (starts when a
   // cell drag crosses into another cell — AFFiNE-style): the anchor cell.
   ({int node, int row, int col})? _areaDrag;
+  // The fixed corner for a Shift+click cell-area extend: the last cell a plain
+  // click focused or a drag began from. Survives an area selection (unlike
+  // _activeCell / _areaDrag, which clear), so Shift+click can grow the
+  // rectangle from where the selection started.
+  ({int node, int row, int col})? _cellSelectAnchor;
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
 
@@ -2302,6 +2307,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!widget.canEdit) return;
     _closeSlash();
     _closePageLink();
+    // Shift+click inside a table cell extends a rectangular cell-area selection
+    // from the anchor (the last plain-clicked / drag-origin cell) to the clicked
+    // cell — whole cells only, never a cross-cell text range (AFFiNE/Notion).
+    if (widget.canEdit && HardwareKeyboard.instance.isShiftPressed) {
+      final hit = r.tableCellAt(local);
+      final anchor = _cellSelectAnchor;
+      if (hit != null && anchor != null && anchor.node == hit.node) {
+        _closeCellEditor(); // commit + close any inline field first
+        _focus.requestFocus(); // area keys (Ctrl+C / Delete) need key focus
+        r.tableBlockSelection = (
+          node: hit.node,
+          r0: anchor.row < hit.row ? anchor.row : hit.row,
+          c0: anchor.col < hit.col ? anchor.col : hit.col,
+          r1: anchor.row > hit.row ? anchor.row : hit.row,
+          c1: anchor.col > hit.col ? anchor.col : hit.col,
+        );
+        return;
+      }
+    }
     // Any click clears a table row/column block-selection; the row/column
     // handle branches below re-set it when that's what was clicked.
     r.tableBlockSelection = null;
@@ -2458,6 +2482,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final cell = r.tableCellAt(local);
     if (cell != null) {
+      // Remember this as the anchor for a later Shift+click area extend.
+      _cellSelectAnchor = (node: cell.node, row: cell.row, col: cell.col);
       _openCellEditor(cell.node, cell.row, cell.col);
       return;
     }
@@ -4111,6 +4137,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final tcell = r.tableCellAt(local);
     if (tcell != null) {
       _dragAnchor = null;
+      // The drag origin is also the anchor for a later Shift+click extend.
+      _cellSelectAnchor = (node: tcell.node, row: tcell.row, col: tcell.col);
       _openCellEditor(tcell.node, tcell.row, tcell.col);
       // Begin a text drag-selection inside the cell — the field can't receive
       // the canvas-owned drag, so we drive its selection from the pointer.
