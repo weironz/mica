@@ -61,7 +61,7 @@
 - 🆕 **生产无任何外部探活**(high) —— `/api/health` 只在部署那刻被查,三个 workflow 无 schedule 触发器;api 半夜 OOM / 连接池耗尽 / 证书翻车全靠「哪天打开发现打不开」。修:任一免费拨测打 `/api/health`(顺带覆盖 TLS/DNS/Traefik),或 Actions schedule 每 15min curl。(S)
 - 🆕 **容器 HEALTHCHECK 用不摸库的静态 `/api/health`**(medium) —— 代码里明明有会 ping 库的 `/api/ready` 却没用;DB 挂了容器照样 healthy,部署验证照过,restart 不触发。修法一行:HEALTHCHECK 与部署验证改打 `/api/ready`。(`health.rs:13`, `Dockerfile.api:22`, `justfile:294`)(S)
 - 🆕 **磁盘只增不减且无水位告警**(medium) —— ① compose 所有服务无 `logging:` 配置,docker 默认 json-file 不限大小,api `RUST_LOG=info` 常开 + nginx access log 全量;② 每次发版从 ACR 拉 3 个新 tag 镜像,无 `docker image prune`;③ `/data/mica/pre-*.sql.gz` 还原点只加不删。磁盘满 = postgres 写失败 = 生产事故且无人预警。修:compose 加 `max-size/max-file` + 部署脚本尾部 prune。(S)
-- 🆕 **坏迁移的「恢复」流程无文档**(medium) —— 迁移前向不可回滚认识清楚(必须先落 pg_dump),但真出事那天怎么从 `pre-*.sql.gz` 恢复(停 api→restore→回滚旧 tag→处理恢复窗口丢写)全无文档,凌晨现场发明恢复流程最易二次事故。照 `lessons.md` 迁移预演规格写 10 行即可。(`mica-deploy.sh:145`, `release.md:109`)(S)
+- ~~**坏迁移的「恢复」流程无文档**~~ ✅ backup.md 加「从 pg_dump 恢复/回滚坏迁移」runbook(停 api→drop/create→zcat|psql→钉旧 tag→health/ready 验证,0d9c404)。
 - 🆕 **备份恢复演练纯手动、`rustic check` 不在自动流程**(medium) —— `backup.md:135` 自写「没恢复过的备份只是猜测」,但无 cron/CI/脚本承载,每日脚本也不跑 `rustic check`(OSS 端静默损坏只在恢复那天发现,prune 又最易放大损坏)。修:`rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)
 - 🆕 **单机兜底部署脚本 `deploy/deploy.sh` 已漂移**(low) —— `flutter build web` 缺 `--no-web-resources-cdn`(CN 环境运行时拉 gstatic CanvasKit 直接不可用)、带被点名修过的 `--no-tree-shake-icons`、用 Windows 没有的 rsync。按文档首次部署会得到依赖 gstatic 的 bundle。(`deploy/deploy.sh:16`, `justfile:154`)(S)
 - 🆕 **Postgres 大版本升级路径无文档**(low) —— 钉在 `postgres:16-alpine` + 命名卷,顺手改 tag 到 18 会 crash-loop(需 pg_upgrade/dump-restore)。PG16 支持到 2028,不急但三年后必忘。deploy.md 加三行「升级 = dump→新卷新镜像→restore,禁原地改 tag」。(S)
@@ -71,22 +71,22 @@
 
 > 2026-07-22 新增小节。多处「删除不真删」+「无界追加」,单节点小盘上会慢慢暴雷。
 
-- 🆕 **REST/MCP 写路径从不落自动版本快照**(high) —— 自动版本捕获(10min 节拍+30 天保留)只在 `sync::push_update`(WS 路径);`apply_derived_operations`(REST/MCP 走它)无任何 `document_yrs_versions` 写入 → 纯 MCP 维护的文档(AI agent 场景)无任何用户可见版本历史,AI 批量重写破坏后无从回滚。修法小:在 `apply_derived_operations` 复用那条 INSERT(state 已在手上)。(`sync.rs:267`, `store.rs:140`)(S) `[需后端]`
-- 🆕 **删除 workspace 永久泄漏其全部 S3/RustFS 图片对象**(medium) —— `workspaces::delete` 只 `DELETE FROM workspaces` 靠外键级联清 DB;对象存储里 `workspaces/{id}/{sha}.{ext}` 一个不删,而 blob GC 扫描入口是现存 workspaces → 该前缀对象从此不在扫描范围、永久孤儿。修:删 workspace 前按前缀列举删除对象。(`workspaces.rs:249`, `blob_gc.rs:255`)(S) `[需后端]`
+- ~~**REST/MCP 写路径从不落自动版本快照**~~ ✅ `apply_derived_operations` 复用 push_update 的 auto 版本 INSERT(同事务、10min cadence、30 天;只写版本归档表、不碰双表示红线,6612330;连真 PG 测试)。
+- ~~**删除 workspace 永久泄漏其全部 S3/RustFS 图片对象**~~ ✅ `workspaces::delete` 删库前枚举 `DISTINCT object_key` 逐个删存储对象(best-effort、objects-first,6612330)。
 - 🆕 **`purge_view`「永久删除」只删 views 行**(medium) —— documents 本体、yrs base、版本、op 日志、更新流全成永久孤儿(全仓无「清理无 view 指向 document」的任务);既磁盘无界堆积,又与分享链接缺陷叠成「永久删除实际不删内容」的隐私问题。(`documents.rs:639`, `blob_gc.rs:12`)(M) `[需后端]`
 - 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」是计划,退役前按「文档大小×写入次数」增长。(`store.rs:252`, `sync.rs:284`)(M) `[需后端]`
 - 🆕 **无任何容量配额**(medium) —— 唯一限制是单文件 25MB + 导入 1GiB body;无 workspace 总量/单文档大小/用户级上限,WS 路径默认可收 64MiB 单条消息,大文档写放大(每 push 全量 base 覆写 + 每 10min 全量版本)。开放注册单节点最易被无意/恶意打爆盘。(`storage.rs:50`, `ws.rs:60`, `sync.rs:244`)(M) `[需后端]`
-- 🆕 **`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**(low) —— 停编辑或只走 REST/MCP 的文档,过期 auto 版本(每份全量 state)永久留存;`list_yrs_versions` 还不过滤 `expires_at`,过期行仍现于面板可恢复(行为「有时消失有时不消失」)。修:全局周期清理挂进 blob_gc 6h 循环。(`sync.rs:284`, `store.rs:713`)(S) `[需后端]`
+- ~~**`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**~~ ✅ blob_gc 6h 循环加全局 `DELETE ... expires_at IS NOT NULL AND < now()`(只命中 auto、不碰命名检查点,6612330)。**残留**:`list_yrs_versions` 仍不过滤 expires_at(6h 扫前的过期行可能短暂现于面板,极小)。
 - 🆕 **回收站无保留期限,永久堆积**(low) —— 纯 `is_deleted` 标志,无自动清空/保留期;blob GC 刻意把回收站引用算存活 → 图片 blob 也永久保留。`blob_gc.rs:43` 注释预设了一个不存在的「回收站保留期」。可能是有意的产品选择(如 Notion),但从未写成决定且与注释矛盾。(S) `[需后端]`
-- 🆕 **`refresh_tokens` 只增不删**(low) —— 每次轮换/登录插新行、从不删,常开客户端一年数千行/设备;一条 `DELETE WHERE expires_at < now()-interval` 挂进 blob_gc 循环即可。(`auth.rs:324`)(S) `[需后端]`
-- 🆕 **账号删除功能不存在,且 users 外键多处 `ON DELETE RESTRICT`**(low) —— 将来实现时裸 `DELETE FROM users` 会被 workspaces.owner_id 等一堆约束挡下,需先转让/删 workspace + 逐表清理(叠加上面「删 workspace 泄漏 S3」)。趁现在把「删账号 = 什么顺序删什么」写进文档比两年后现场推导便宜。(M) `[需后端]`
+- ~~**`refresh_tokens` 只增不删**~~ ✅ blob_gc 6h 循环加 `DELETE ... expires_at < now()-7d`(6612330)。
+- 🟡 **账号删除功能不存在** —— **级联顺序备忘已写文档**(deploy.md:8 个 RESTRICT/NO-ACTION 外键完整 FK 图 + 删除顺序 + 删 ws 泄漏 S3 警告 + tombstone 策略,0d9c404);功能本身未实现。(M) `[需后端]`
 - 🆕 **导出(及其上的每日备份)不含回收站内容**(low) —— `fetch_workspace_views` 过滤 `is_deleted=false`,回收站页面及其独有图片不进导出包;一个页面在回收站躺过备份保留窗口(7天/4周/6月)后,备份里最后副本也被 prune,唯一副本只剩生产库。`backup.md` 记了排除编辑历史/用户数据,回收站排除没写。(`documents.rs:2101`)(S)
 
 ## 编辑器与功能广度
 
 - **全文搜索是无索引 O(N) 子串扫描** —— 每查询反序列化每篇快照做 `contains`,无分词/排序/高亮,随空间线性劣化(`documents.rs`)。(L) `[需后端]`
 - **表格未完成** —— 单元格是纯 `List<List<String>>`,无富文本 marks/矩形区选/合并(`table.dart`,editor-engine M6)。(M)
-- 🟡 **反向链接/引用面板/关系图** —— 正向 `[[` 已建;**引用面板已做**(云端页显示「谁链到我」可点跳转,`GET .../backlinks` 按需扫描、复用 page_link_targets,7de2c2a)。**残留**:①大工作区 O(N) 顺序扫描可能偏慢 → 改 search 的 buffered 并发;②规模成瓶颈再上维护式反向索引表(现在故意不建);③本地世界(offline)反链;④**关系图**(graph view)。(各 S–L)`[需后端]`
+- 🟡 **反向链接/引用面板/关系图** —— 正向 `[[` 已建;**引用面板已做**(云端页显示「谁链到我」可点跳转,`GET .../backlinks` 按需扫描、复用 page_link_targets,7de2c2a)。**残留**:~~①并发扫描~~ ✅(buffered(8),6612330);②规模成瓶颈再上维护式反向索引表(现在故意不建);③本地世界(offline)反链;④**关系图**(graph view)。(各 S–L)`[需后端]`
 - **无标签/页面属性/数据库视图** —— 对象模型只认 `document`(`documents.rs`)。(L) `[需后端]`
 - **评论/建议未建** —— 仅 `commenter` 角色打通,marks 模型本为 range 锚点预留。(L) `[需后端]`
 - **callout/toggle/embed/columns 块未建** —— Notion 类常见结构块。(L)
@@ -94,7 +94,7 @@
 - ~~**文档内查找/替换缺失**~~ ✅ Ctrl+F 查找栏(导航/计数/当前匹配高亮)原已具备;2026-07-22 补齐**替换**(`replaceRange`/`replaceAll` 走既有 op 路径,9fe9ae8)+ F3/Shift+F3。**全部匹配高亮**有意不做(要动 render.dart 加第二遍选区叠绘,超 MVP)。
 - ~~**行内数学未排版**~~ ✅ 2026-07-16:`$…$` 真排进行里(基线对齐、随字号缩放),公式为不可进入的原子(`inline_atoms.dart`,render-architecture.md Decision 4)。
 - **Web IME/光标滚动实况调优** —— Milestone 1 遗留(合成态/游离换行、caret scroll-into-view)。(M)
-- **AI 离线为空 stub / 无拼写检查 / 无字数统计**。(M / M / S)
+- **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
 
 ## 平台覆盖
 
@@ -120,7 +120,7 @@
 ## 性能
 
 - **长文档无虚拟化** —— paint 侧已有视口裁剪(`render.dart:1302`,±600px),但 `performLayout` 每次布局仍 dispose+重建全部节点 TextPainter,大档每击键全量重排。(L)
-- 🆕 **图片纹理缓存无逐出策略**(medium) —— `_imageCache` 只在编辑器 dispose 时清空,`decodeCapped` 注释自写「every image in an open document stays resident」;几百张图的文档纹理内存按每张最高 4096 宽累加、无上限。(`editor.dart:389`, `image_decode.dart:4`)(M)
+- ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
 - **每次 push 重建+重编码+重写整档(写放大)** —— `from_update`→全档 `encode_state`+upsert,成本 O(文档) 而非 O(更新)(`sync.rs`)。(M) `[需后端]`
 - **yrs base 无 squash/GC,无界增长** —— 只裁 stream 不压 base,长寿文档 base 越滚越大(`sync.rs`)。(L) `[需后端]`
 - **本地持久化仅全量快照** —— §4 的增量队列 + squash 折叠推迟中。(M)
@@ -130,7 +130,7 @@
 
 - 🆕 **api-server 全部 59 个测试不进 CI;其中 14 个 DB 测试本地也静默跳过**(high) —— CI 的 `-p` 白名单无 api-server;`auth.rs` 的 `refresh_pg`(覆盖「条件 UPDATE 原子花费 token」安全关键 SQL)用 `let Some(db)=pool().await else {return}` 没库就全绿 —— 正是 `sync_pg.rs` 刚消灭的假绿模式在此复活,注释还写着已过时的 "matching sync_pg.rs"。CI 的 postgres service 已在,加进 `-p` + 把静默跳过改成 fail 即可。(`ci.yml:98`, `auth.rs:878`)(S) `[需后端]`
 - 🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**(high) —— 修复「137 个页面下挂页面」事故的守卫 + `views_parent_must_be_folder` 触发器全无测试(CI 只把迁移应用到空库,从不插违规行验证触发器拒绝)。正是 `lessons.md`「不变量只写在客户端等于没写」对应的修复,现处于「只写代码没写测试」。(`documents.rs:2294`, `migrations/0011`)(S) `[需后端]`
-- 🆕 **Release 出的 Windows 安装包从未被自动安装-启动验证**(high) —— `release.yml` windows job 全程零测试步骤,publish 一翻 draft、in-app updater 就推给所有存量用户一个从未被任何机器启动过的安装包。windows-latest runner 完全能做 `/VERYSILENT` 装+启动+探活。(`release.yml:126`)(M)
+- ~~**Release 出的 Windows 安装包从未被自动安装-启动验证**~~ ✅ release.yml 加「安装-启动冒烟」(/VERYSILENT 装 + 启动 + 存活 10s + finally 清理,发布前拦,0d9c404;首跑盯 CI GUI 存活判定)。
 - **CI 补 Windows 集成测试** —— 18 个 integration_test(≈46 测,多条是真丢数据 bug 回归)只能本地手跑,且两个全栈文件并跑会撞 debug-connection race(`dev-environment.md:137`);Postgres 依赖测试已随 2e84422 进 CI。(M) `[需后端]`
 - 🆕 **全项目零自动化 e2e**(medium) —— 桌面 integration_test 手跑;web 端零 e2e,CLAUDE.md「playwright 截图」是人工手段,仓库无任何 `.spec.ts`/committed 脚本,CI 对 web 只验「能编译」。(L)
 - 🆕 **三个不可信输入解析面零 fuzz**(medium) —— 无 `fuzz/` 目录,任何 Cargo.toml 不含 proptest/quickcheck/arbitrary/cargo-fuzz;而手写逐字节 xor 已实证挖出远程可达(需认证)的 yrs UB。markdown/interchange 是自家代码,cargo-fuzz 可直接落地为回归。(`store.rs:2202`)(M)
