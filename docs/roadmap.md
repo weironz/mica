@@ -86,7 +86,7 @@
 
 - **全文搜索是无索引 O(N) 子串扫描** —— 每查询反序列化每篇快照做 `contains`,无分词/排序/高亮,随空间线性劣化(`documents.rs`)。(L) `[需后端]`
 - **表格未完成** —— 单元格是纯 `List<List<String>>`,无富文本 marks/矩形区选/合并(`table.dart`,editor-engine M6)。(M)
-- **无反向链接/引用面板/关系图** —— 正向 `[[` 已建,缺反向索引(wiki 类的定义能力)。(L) `[需后端]`
+- 🟡 **反向链接/引用面板/关系图** —— 正向 `[[` 已建;**引用面板已做**(云端页显示「谁链到我」可点跳转,`GET .../backlinks` 按需扫描、复用 page_link_targets,7de2c2a)。**残留**:①大工作区 O(N) 顺序扫描可能偏慢 → 改 search 的 buffered 并发;②规模成瓶颈再上维护式反向索引表(现在故意不建);③本地世界(offline)反链;④**关系图**(graph view)。(各 S–L)`[需后端]`
 - **无标签/页面属性/数据库视图** —— 对象模型只认 `document`(`documents.rs`)。(L) `[需后端]`
 - **评论/建议未建** —— 仅 `commenter` 角色打通,marks 模型本为 range 锚点预留。(L) `[需后端]`
 - **callout/toggle/embed/columns 块未建** —— Notion 类常见结构块。(L)
