@@ -6951,6 +6951,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 PropertyPanel(
                   frontMatter: bootstrap.rootFrontMatter,
                   canEdit: canEdit,
+                  // Clicking a tag opens workspace search for it (M2). Body +
+                  // property values are both indexed, so this finds pages
+                  // carrying the tag (and any that mention the word).
+                  onOpenTag: _openSearch,
                   onCommit: (fm) {
                     final data = Map<String, dynamic>.from(bootstrap.rootData);
                     if (fm.isEmpty) {
@@ -7698,11 +7702,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     }
   }
 
-  void _openSearch() {
+  void _openSearch([String? initialQuery]) {
     showDialog<void>(
       context: context,
       builder: (context) => _SearchDialog(
         onSearch: widget.onSearch,
+        initialQuery: initialQuery,
         onOpen: (viewId) {
           Navigator.of(context).pop();
           widget.onOpenSearchResult(viewId);

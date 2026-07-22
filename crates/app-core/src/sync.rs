@@ -101,22 +101,70 @@ pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
 }
 
 /// The document's plain, queryable text: every block's clean `text` in tree
-/// order, joined by newlines (empty-text blocks — page root, images — dropped).
+/// order, joined by newlines (empty-text blocks — page root, images — dropped),
+/// followed by the page's front-matter PROPERTY VALUES (tags included) so a
+/// workspace search finds a page by its properties, not just its body (M2).
 ///
 /// This is the ONLY producer of `document_yrs_base.content_text`, and it is a
 /// pure projection of the SAME folded `doc` whose `encode_state()` is written as
 /// `state` in the same statement. So the search index can never diverge from the
 /// base it indexes (red line #1: no second representation, derived + co-written).
-/// Newlines between blocks keep a needle from spuriously matching across a block
-/// boundary. Marks/attributes live in `data`, never in `text`, so this carries no
-/// formatting — exactly what a substring search wants.
+/// Front matter lives on the root block's `data['front_matter']`, which is part
+/// of that same base — appending its parsed values keeps content_text a pure
+/// projection. Newlines between blocks keep a needle from spuriously matching
+/// across a block boundary. Marks/attributes live in `data`, never in `text`, so
+/// the body part carries no formatting — exactly what a substring search wants.
 pub(crate) fn content_text_from_doc(doc: &MicaDoc) -> String {
-    doc.to_blocks()
+    let blocks = doc.to_blocks();
+    let mut text = blocks
         .iter()
         .map(|b| b.text.trim_end_matches('\n'))
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    // Append searchable front-matter property values (tags, status, etc.). The
+    // front matter is the raw string on the root block's data; parse it with the
+    // markdown authority's property parser and flatten the values.
+    let root_id = doc.root_block_id();
+    if let Some(fm) = blocks
+        .iter()
+        .find(|b| b.id == root_id)
+        .and_then(|b| b.data.get("front_matter"))
+        .and_then(|v| v.as_str())
+    {
+        let meta = searchable_metadata(fm);
+        if !meta.is_empty() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&meta);
+        }
+    }
+    text
+}
+
+/// Flatten a page's front-matter property VALUES into a space-joined string for
+/// the search index: list items (tags) and Text/Number/Date scalars, in order.
+/// Booleans and the keys themselves are dropped — a search for `done` should
+/// find a page tagged `done`, not every page with a `done: false` checkbox.
+fn searchable_metadata(front_matter: &str) -> String {
+    use mica_markdown::properties::PropertyValue;
+    let mut parts: Vec<String> = Vec::new();
+    for prop in mica_markdown::properties::parse_properties(front_matter) {
+        match prop.value {
+            PropertyValue::List(items) => parts.extend(items),
+            PropertyValue::Text(s) if !s.is_empty() => parts.push(s),
+            PropertyValue::Date(s) => parts.push(s),
+            PropertyValue::Number(n) => parts.push(if n.fract() == 0.0 && n.abs() < 1e15 {
+                (n as i64).to_string()
+            } else {
+                n.to_string()
+            }),
+            PropertyValue::Text(_) | PropertyValue::Checkbox(_) => {}
+        }
+    }
+    parts.join(" ")
 }
 
 /// How many base rows the startup backfill decodes per DB round trip.
@@ -555,6 +603,44 @@ mod tests {
             ],
         );
         assert_eq!(content_text_from_doc(&doc), "标题一\n正文内容 hello");
+    }
+
+    // M2: front-matter property VALUES (tags + scalars) are appended to
+    // content_text so a workspace search finds a page by its properties, while
+    // keys and booleans are dropped. This pins that the search index carries the
+    // metadata, keeping it a pure projection of the (front-matter-bearing) base.
+    #[test]
+    fn content_text_appends_front_matter_property_values() {
+        let doc = MicaDoc::from_blocks(
+            "r",
+            &[
+                CoreBlock::new("r", "page")
+                    .with_children(vec!["p".into()])
+                    .with_data(json!({
+                        "front_matter": "tags: [rust, crdt]\nstatus: 进行中\ndone: false\ncount: 3"
+                    })),
+                CoreBlock::new("p", "paragraph").with_text("正文"),
+            ],
+        );
+        // Body first, then property values (tag items, text, number). `done`
+        // (a bool) and the keys are not indexed.
+        assert_eq!(
+            content_text_from_doc(&doc),
+            "正文\nrust crdt 进行中 3"
+        );
+    }
+
+    // A page with front matter but no body still indexes its properties (no
+    // leading blank line).
+    #[test]
+    fn content_text_from_metadata_only_page() {
+        let doc = MicaDoc::from_blocks(
+            "r",
+            &[CoreBlock::new("r", "page").with_data(json!({
+                "front_matter": "tags: [urgent]"
+            }))],
+        );
+        assert_eq!(content_text_from_doc(&doc), "urgent");
     }
 
     // An encode→decode round trip (what the server stores + re-reads) preserves

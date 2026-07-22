@@ -16,6 +16,7 @@ class PropertyPanel extends StatefulWidget {
     required this.frontMatter,
     required this.canEdit,
     required this.onCommit,
+    this.onOpenTag,
   });
 
   /// The raw inner front matter (no `---` fences) from the document root.
@@ -24,6 +25,10 @@ class PropertyPanel extends StatefulWidget {
 
   /// Persist a new raw front-matter string (writes the root block's data).
   final Future<void> Function(String frontMatter) onCommit;
+
+  /// Open workspace search for a list/tag value (click-to-find). Null disables
+  /// the click affordance (e.g. the read-only / no-search contexts).
+  final void Function(String value)? onOpenTag;
 
   @override
   State<PropertyPanel> createState() => _PropertyPanelState();
@@ -84,6 +89,7 @@ class _PropertyPanelState extends State<PropertyPanel> {
               canEdit: widget.canEdit,
               onChanged: (v) => _setValue(p.key, v),
               onRemove: () => _remove(p.key),
+              onOpenTag: widget.onOpenTag,
             ),
           if (widget.canEdit)
             _addingKey
@@ -109,12 +115,14 @@ class _PropertyRow extends StatelessWidget {
     required this.canEdit,
     required this.onChanged,
     required this.onRemove,
+    this.onOpenTag,
   });
 
   final Property property;
   final bool canEdit;
   final ValueChanged<PropertyValue> onChanged;
   final VoidCallback onRemove;
+  final void Function(String value)? onOpenTag;
 
   @override
   Widget build(BuildContext context) {
@@ -143,6 +151,7 @@ class _PropertyRow extends StatelessWidget {
               value: property.value,
               canEdit: canEdit,
               onChanged: onChanged,
+              onOpenTag: onOpenTag,
             ),
           ),
           if (canEdit)
@@ -167,11 +176,13 @@ class _ValueEditor extends StatelessWidget {
     required this.value,
     required this.canEdit,
     required this.onChanged,
+    this.onOpenTag,
   });
 
   final PropertyValue value;
   final bool canEdit;
   final ValueChanged<PropertyValue> onChanged;
+  final void Function(String value)? onOpenTag;
 
   @override
   Widget build(BuildContext context) {
@@ -191,6 +202,7 @@ class _ValueEditor extends StatelessWidget {
           items: items,
           canEdit: canEdit,
           onChanged: (next) => onChanged(PropList(next)),
+          onOpenTag: onOpenTag,
         );
       case PropText(:final value):
         return _ScalarField(text: value, canEdit: canEdit, onChanged: onChanged);
@@ -287,11 +299,13 @@ class _TagList extends StatefulWidget {
     required this.items,
     required this.canEdit,
     required this.onChanged,
+    this.onOpenTag,
   });
 
   final List<String> items;
   final bool canEdit;
   final ValueChanged<List<String>> onChanged;
+  final void Function(String value)? onOpenTag;
 
   @override
   State<_TagList> createState() => _TagListState();
@@ -331,6 +345,9 @@ class _TagListState extends State<_TagList> {
             _Chip(
               label: widget.items[i],
               onDeleted: widget.canEdit ? () => _removeAt(i) : null,
+              onTap: widget.onOpenTag == null
+                  ? null
+                  : () => widget.onOpenTag!(widget.items[i]),
             ),
           if (widget.canEdit)
             SizedBox(
@@ -356,10 +373,13 @@ class _TagListState extends State<_TagList> {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({required this.label, this.onDeleted});
+  const _Chip({required this.label, this.onDeleted, this.onTap});
 
   final String label;
   final VoidCallback? onDeleted;
+
+  /// Tapping the chip body (not the delete ×) — used to search for the tag.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -377,9 +397,17 @@ class _Chip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: const TextStyle(color: EditorTheme.text, fontSize: 12),
+          MouseRegion(
+            cursor: onTap == null
+                ? MouseCursor.defer
+                : SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: onTap,
+              child: Text(
+                label,
+                style: const TextStyle(color: EditorTheme.text, fontSize: 12),
+              ),
+            ),
           ),
           if (onDeleted != null)
             GestureDetector(

@@ -5,10 +5,18 @@ part of '../main.dart';
 
 /// Workspace search: type to find pages by title or body text; click to open.
 class _SearchDialog extends StatefulWidget {
-  const _SearchDialog({required this.onSearch, required this.onOpen});
+  const _SearchDialog({
+    required this.onSearch,
+    required this.onOpen,
+    this.initialQuery,
+  });
 
   final Future<List<SearchResult>> Function(String query) onSearch;
   final void Function(String viewId) onOpen;
+
+  /// Pre-filled query, run immediately on open — e.g. clicking a page-property
+  /// tag opens search already looking for that tag.
+  final String? initialQuery;
 
   @override
   State<_SearchDialog> createState() => _SearchDialogState();
@@ -21,6 +29,17 @@ class _SearchDialogState extends State<_SearchDialog> {
   bool _failed = false;
   List<SearchResult> _results = const [];
   String _lastQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final q = widget.initialQuery?.trim();
+    if (q != null && q.isNotEmpty) {
+      _query.text = q;
+      // Run after first frame so the initial setState in _run is safe.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _run(q));
+    }
+  }
 
   @override
   void dispose() {
