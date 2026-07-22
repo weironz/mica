@@ -205,7 +205,7 @@ fn section_markdown(full: &str, needle: &str) -> String {
   let lines: Vec<&str> = full.lines().collect();
   let heading_level = |line: &str| -> Option<usize> {
     let hashes = line.chars().take_while(|c| *c == '#').count();
-    if hashes >= 1 && hashes <= 6 && line.chars().nth(hashes) == Some(' ') {
+    if (1..=6).contains(&hashes) && line.chars().nth(hashes) == Some(' ') {
       Some(hashes)
     } else {
       None
