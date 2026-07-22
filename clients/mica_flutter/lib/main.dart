@@ -332,6 +332,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   CloudSyncSession? _cloudSession;
   BigInt? _deviceClientId;
 
+  /// Guards [_sweepPendingOutboxes] so only one cross-document drain runs at a
+  /// time (it fires on every online/reconnect).
+  bool _sweepingOutboxes = false;
+
   /// B3: whether the "cloud sync paused" banner is up, so it shows once per
   /// stuck episode and clears on recovery.
   bool _syncBannerShown = false;
@@ -948,8 +952,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
       onFault: (reason, count) => _onCloudSyncFault(documentId, reason, count),
       // Reaching the server means we're back online — leave the P1c offline-nav
-      // fallback (refetch the authoritative workspace list / real roles).
-      onServerConnected: _recoverOnlineNav,
+      // fallback (refetch workspaces/roles) AND drain every other cloud doc's
+      // un-pushed offline outbox, not just this active one.
+      onServerConnected: _onCloudOnline,
       // Desktop's durable outbox is the append-log (persistence); web / no store
       // keeps the in-memory queue + prefs crash-recovery (C1).
       restoreUnacked: persistence == null ? _loadUnacked(unackedKey) : null,
@@ -3908,6 +3913,93 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (!_offlineNav || !mounted) return;
     _offlineNav = false;
     unawaited(_refreshWorkspaces());
+  }
+
+  /// Fired when a cloud session reaches the server (startup or reconnect): come
+  /// back online, then push the un-synced outbox of EVERY cloud doc, not just the
+  /// active one.
+  void _onCloudOnline() {
+    _recoverOnlineNav();
+    unawaited(_sweepPendingOutboxes());
+  }
+
+  /// After coming online, drain the durable outbox of every cloud document that
+  /// has un-pushed edits — not only the one currently open.
+  ///
+  /// The cloud session is a singleton bound to the ACTIVE doc, and each doc's
+  /// outbox is only ever read by that doc's own session. So editing pages A/B/C
+  /// offline and reconnecting while viewing C pushed only C; A and B's edits sat
+  /// in the on-device append-log forever, and other devices kept showing stale
+  /// content with no hint (the same gap the image-blob differ closed for images,
+  /// never for text). This sweep closes it: for each other cloud doc with a
+  /// non-empty outbox, spin up a short-lived headless [CloudSyncSession], let it
+  /// flush + ack, and dispose it.
+  ///
+  /// Desktop only — the cross-doc durable outbox is the FFI append-log; web's
+  /// store is per-tab IndexedDB with a single active doc and no enumeration.
+  /// Best-effort and bounded: a doc with nothing pending is never even connected;
+  /// a fault just leaves the edits durable for the next sweep. Sequential, so a
+  /// backlog can't open a burst of sockets.
+  Future<void> _sweepPendingOutboxes() async {
+    if (kIsWeb || _sweepingOutboxes) return;
+    final session = _session;
+    final clientId = _deviceClientId;
+    if (session == null || clientId == null) return;
+    _sweepingOutboxes = true;
+    try {
+      // Snapshot the cloud (workspace, doc) pairs up front so we don't read
+      // widget state across the awaits below. The active doc is drained by its
+      // own live session — skip it here.
+      final activeDoc = _selectedBootstrap?.document.id;
+      final targets = <({String workspaceId, String docId})>[];
+      for (final entry in _viewsByWorkspace.entries) {
+        for (final v in entry.value) {
+          if (v.objectType != 'document' || v.objectId == activeDoc) continue;
+          targets.add((workspaceId: entry.key, docId: v.objectId));
+        }
+      }
+      for (final t in targets) {
+        if (!mounted) break;
+        // Re-check: a doc opened mid-sweep is now the active one, drained live.
+        if (t.docId == _selectedBootstrap?.document.id) continue;
+        final store = _local.cloudDocStore(t.docId);
+        if (store == null) continue;
+        if (store.outboxAfter(store.cursor().pushedClock).isEmpty) {
+          store.dispose();
+          continue;
+        }
+        await _drainDocOutbox(t.workspaceId, t.docId, store, session.accessToken, clientId);
+      }
+    } finally {
+      _sweepingOutboxes = false;
+    }
+  }
+
+  /// Push one non-active cloud doc's outbox through a short-lived headless
+  /// session, then dispose it. The session owns [store] (its `dispose` releases
+  /// it). Best-effort: any failure leaves the edits durable for a later sweep.
+  Future<void> _drainDocOutbox(
+    String workspaceId,
+    String docId,
+    CloudDocStore store,
+    String token,
+    BigInt clientId,
+  ) async {
+    final session = CloudSyncSession(
+      uri: documentSocketUri(_api.baseUri, workspaceId, docId, token),
+      clientId: clientId,
+      onReady: (_, _) {},
+      onRemoteBlocks: (_) {},
+      persistence: store,
+    );
+    try {
+      session.connect();
+      await session.drainOutbox();
+    } catch (_) {
+      // Durable append-log keeps the edits; the next online sweep retries.
+    } finally {
+      session.dispose(); // also disposes `store` (persistence)
+    }
   }
 
   /// Build a bootstrap for a cloud [view] from its on-device mirror (offline
