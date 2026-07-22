@@ -560,6 +560,9 @@
     }
   },
   "importJobFailed": "import failed",
+  "importFolderTitle": "Import folder",
+  "importAsSingleFolder": "Import as a single folder",
+  "importAsSingleFolderHint": "Off: the folder's contents go straight into the destination. On: they stay nested inside one folder.",
   "editorFindNoResults": "No results",
   "editorFindHint": "Find in page",
   "editorFindPrevious": "Previous (Shift+Enter)",

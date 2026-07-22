@@ -55,10 +55,23 @@ pub enum ImportMode {
   /// name via [`ImportPlan::wrapper_name`]). Mica exports have no single
   /// wrapper, so this is identity for them (round-trip preserved).
   NewWorkspace,
-  /// Import INTO an existing workspace/folder: everything goes under ONE new
-  /// container folder. Its name is the collapsed wrapper's name if the archive
-  /// had one (avoids `zipname > samedir` double-nesting — the SiYuan bug /
-  /// Anytype fix), else the given fallback (the zip filename / picked folder).
+  /// Import INTO an existing workspace/folder, SMART default (the user's
+  /// "auto"): a single top-level wrapper — or a lone entry — SPILLS into the
+  /// destination (its children become top-level there); multiple loose roots
+  /// WRAP under the given fallback name to keep the destination uncluttered.
+  /// This is the AppFlowy/Anytype default. The peel itself happened in
+  /// `normalize_entries`, so "spill" here is simply "don't wrap".
+  Auto(String),
+  /// Import INTO an existing workspace/folder, forcing SPILL (user override):
+  /// top-level entries land directly under the destination, never wrapped —
+  /// even when there are many loose roots. A single wrapper is still peeled
+  /// (that happens in `normalize_entries`).
+  IntoLocation,
+  /// Import INTO an existing workspace/folder, forcing WRAP (user override):
+  /// everything goes under ONE new container folder. Its name is the collapsed
+  /// wrapper's name if the archive had one (avoids `zipname > samedir`
+  /// double-nesting — the SiYuan bug / Anytype fix), else the given fallback
+  /// (the zip filename / picked folder).
   IntoContainer(String),
 }
 
@@ -281,9 +294,26 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     ImportMode::NewWorkspace => {
       plan.wrapper_name = wrapper_name;
     }
-    // Into an existing location: everything under ONE container named after the
-    // peeled wrapper (if any — no `fallback > wrapper` double-nest) else the
-    // fallback (zip/folder name).
+    // Smart default into an existing location: spill a single wrapper (already
+    // peeled) or a lone entry directly into the destination; wrap MULTIPLE loose
+    // roots under the fallback so they don't litter the destination root. When
+    // the peel fired, `wrapper_name` is Some — that IS "there was a single
+    // wrapper" — so spill. Otherwise count the surviving top-level nodes.
+    ImportMode::Auto(fallback) => {
+      let top_level = plan.pages.iter().filter(|p| p.parent.is_none()).count();
+      if wrapper_name.is_none() && top_level > 1 {
+        wrap_in_container(&mut plan, fallback);
+      }
+      plan.wrapper_name = wrapper_name;
+    }
+    // Force spill: the peel already ran, so top-level nodes stay top-level and
+    // land directly under the destination — never wrapped.
+    ImportMode::IntoLocation => {
+      plan.wrapper_name = wrapper_name;
+    }
+    // Force wrap: everything under ONE container named after the peeled wrapper
+    // (if any — no `fallback > wrapper` double-nest) else the fallback (zip/
+    // folder name).
     ImportMode::IntoContainer(fallback) => {
       let name = wrapper_name.clone().unwrap_or(fallback);
       plan.wrapper_name = wrapper_name;
@@ -633,6 +663,61 @@ hello");
     assert_eq!(parent_title(&plan, "a"), Some("MyProject"));
     assert_eq!(parent_title(&plan, "sub"), Some("MyProject"));
     assert_eq!(parent_title(&plan, "b"), Some("sub"));
+  }
+
+  // ── ImportMode::Auto — smart default (peel single wrapper / wrap many) ──
+
+  // The user's case: one folder with subfolders, imported into an existing
+  // workspace. Auto peels the single wrapper → the subfolders spill to the
+  // destination root (outcome X), NOT re-wrapped under the folder's name.
+  #[test]
+  fn auto_spills_single_wrapper_to_root() {
+    let raw = vec![e("MyFolder/SubA/a.md", "# a"), e("MyFolder/SubB/b.md", "# b")];
+    let plan = plan_import(raw, false, ImportMode::Auto("MyFolder.zip".into()));
+    // Wrapper peeled: no "MyFolder" / no fallback container at the top.
+    assert!(plan.pages.iter().all(|p| p.title != "MyFolder" && p.title != "MyFolder.zip"));
+    assert_eq!(parent_title(&plan, "SubA"), None, "SubA at root");
+    assert_eq!(parent_title(&plan, "SubB"), None, "SubB at root");
+    assert_eq!(parent_title(&plan, "a"), Some("SubA"));
+  }
+
+  // Multiple loose roots (no shared wrapper): Auto wraps them under the fallback
+  // so they don't scatter across the destination root.
+  #[test]
+  fn auto_wraps_multiple_loose_roots() {
+    let plan = plan_import(
+      vec![e("a.md", "# a"), e("b.md", "# b")],
+      false,
+      ImportMode::Auto("notes".into()),
+    );
+    let notes = find(&plan, "notes");
+    assert!(notes.is_folder && notes.parent.is_none());
+    assert_eq!(parent_title(&plan, "a"), Some("notes"));
+    assert_eq!(parent_title(&plan, "b"), Some("notes"));
+  }
+
+  // A lone top-level entry is never wrapped (nothing to declutter).
+  #[test]
+  fn auto_spills_single_entry() {
+    let plan = plan_import(vec![e("solo.md", "# solo")], false, ImportMode::Auto("z".into()));
+    assert!(plan.pages.iter().all(|p| p.title != "z"));
+    assert_eq!(parent_title(&plan, "solo"), None);
+  }
+
+  // ── ImportMode::IntoLocation — forced spill (user override) ──
+
+  // Forced spill: even multiple loose roots land directly at the destination,
+  // no container — the override the smart default would have wrapped.
+  #[test]
+  fn into_location_spills_multiple_roots() {
+    let plan = plan_import(
+      vec![e("a.md", "# a"), e("b.md", "# b")],
+      false,
+      ImportMode::IntoLocation,
+    );
+    assert!(plan.pages.iter().all(|p| !p.is_folder), "no container created");
+    assert_eq!(parent_title(&plan, "a"), None);
+    assert_eq!(parent_title(&plan, "b"), None);
   }
 
   // A page that HAS subpages (Doc.md + Doc/Child.md) cannot exist in Mica —

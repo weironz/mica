@@ -44,6 +44,26 @@ pub struct ImportParams {
   /// [workspace_id]; must reference a folder view. Empty value = absent.
   #[serde(default, deserialize_with = "empty_as_none")]
   pub parent_view_id: Option<Uuid>,
+  /// How the archive's top level maps onto an existing destination:
+  /// `auto` (default) — peel a single wrapper folder and spill its contents in,
+  /// but wrap MULTIPLE loose roots under one container so they don't scatter;
+  /// `spill` — force top-level entries directly into the destination (never
+  /// wrap); `wrap` — force everything under one container named after the
+  /// source. Only meaningful with [workspace_id]; a new workspace IS the
+  /// container, so this is ignored there.
+  #[serde(default)]
+  pub container: ContainerMode,
+}
+
+/// The wrap-vs-spill choice surfaced to the user in the import dialog. Default
+/// `auto` mirrors AppFlowy/Anytype; `spill`/`wrap` are explicit overrides.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerMode {
+  #[default]
+  Auto,
+  Spill,
+  Wrap,
 }
 
 fn empty_as_none<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
@@ -143,10 +163,11 @@ async fn run_import(
   // Unzip + plan are CPU-bound — keep them off the async workers.
   let notion = params.notion;
   // Destination decides the "container vs flatten" shape (see import-convention
-  // research): into an existing workspace/folder → wrap everything under ONE
-  // container named after the source; as a NEW workspace → the workspace IS the
-  // container, so collapse a redundant single wrapper. The container fallback
-  // name is the client-supplied source name (zip/folder), else "Imported".
+  // research): into an existing workspace/folder the user picks `container`
+  // (auto/spill/wrap; default auto peels a single wrapper & spills, wraps only
+  // multiple loose roots); as a NEW workspace → the workspace IS the container,
+  // so `container` is moot and a redundant single wrapper is collapsed. The
+  // container fallback name is the client-supplied source name, else "Imported".
   let mode = if params.workspace_id.is_some() {
     let fallback = params
       .name
@@ -155,7 +176,11 @@ async fn run_import(
       .filter(|s| !s.is_empty())
       .unwrap_or("Imported")
       .to_string();
-    ImportMode::IntoContainer(fallback)
+    match params.container {
+      ContainerMode::Auto => ImportMode::Auto(fallback),
+      ContainerMode::Spill => ImportMode::IntoLocation,
+      ContainerMode::Wrap => ImportMode::IntoContainer(fallback),
+    }
   } else {
     ImportMode::NewWorkspace
   };

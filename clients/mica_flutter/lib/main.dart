@@ -1881,16 +1881,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     List<ArchiveFile> entries, {
     String? sourceName,
     String? parentViewId,
+    String? container,
   }) {
     // [sourceName] (the picked folder's name) names the container the server
-    // wraps the import under — see ImportMode::IntoContainer. Absent (loose
-    // multi-file selection) → the server falls back to "Imported".
+    // wraps the import under when [container] is 'wrap' — see
+    // ImportMode::IntoContainer. Absent (loose multi-file selection) → the
+    // server falls back to "Imported".
+    // [container] is the wrap-vs-spill choice: 'spill' drops the top-level
+    // entries straight into the destination, 'wrap' nests them under one
+    // container; null → server default (auto).
     // [parentViewId] imports UNDER a folder instead of the workspace root.
     return _runServerImport(
       buildStoreZip(entries),
       name: sourceName,
       workspaceId: workspace.id,
       parentViewId: parentViewId,
+      container: container,
     );
   }
 
@@ -1902,6 +1908,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     bool notion = false,
     String? workspaceId,
     String? parentViewId,
+    String? container,
   }) {
     final l10n = context.l10n;
     return _run(() async {
@@ -1913,6 +1920,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         notion: notion,
         workspaceId: workspaceId,
         parentViewId: parentViewId,
+        container: container,
       );
       ImportJobStatus job;
       while (true) {
@@ -2584,12 +2592,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     List<ArchiveFile> entries, {
     String? sourceName,
     String? parentViewId,
+    String? container,
   }) async {
     final l10n = context.l10n;
-    // Parity with the cloud IntoContainer wrap: a picked folder's name becomes
-    // a container folder here too, by prefixing every entry path with it.
+    // Parity with the cloud path: only when [container] is 'wrap' does the
+    // picked folder's name become a container folder here — prefix every entry
+    // path with it. 'spill' (the default) drops the contents straight in,
+    // matching the server's ImportMode::IntoLocation.
     final trimmed = sourceName?.trim() ?? '';
-    final prefix = trimmed.isEmpty ? '' : '$trimmed/';
+    final wrap = container == 'wrap' && trimmed.isNotEmpty;
+    final prefix = wrap ? '$trimmed/' : '';
     final files = <({String path, List<int> bytes})>[
       for (final f in entries) (path: '$prefix${f.name}', bytes: f.bytes),
     ];
@@ -4097,6 +4109,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     DocumentView folder,
     List<ArchiveFile> entries, {
     String? sourceName,
+    String? container,
   }) async {
     // The tree only ever shows the ACTIVE workspace, so the folder lives in it.
     if (_activeIsLocal) {
@@ -4108,6 +4121,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         entries,
         sourceName: sourceName,
         parentViewId: folder.id,
+        container: container,
       );
     } else {
       final ws = _selectedWorkspace;
@@ -4117,6 +4131,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         entries,
         sourceName: sourceName,
         parentViewId: folder.id,
+        container: container,
       );
     }
   }
@@ -4125,12 +4140,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     WorkspaceEntry e,
     List<ArchiveFile> entries, {
     String? sourceName,
+    String? container,
   }) => e.isLocal
-      ? _localImportVaultTree(e.workspace, entries, sourceName: sourceName)
+      ? _localImportVaultTree(
+          e.workspace,
+          entries,
+          sourceName: sourceName,
+          container: container,
+        )
       : _importTreeIntoWorkspace(
           e.workspace,
           entries,
           sourceName: sourceName,
+          container: container,
         );
 
   /// Sign in to the configured cloud server from the switcher / account UI
@@ -4954,6 +4976,7 @@ class WorkspaceView extends StatefulWidget {
     WorkspaceEntry entry,
     List<ArchiveFile> entries, {
     String? sourceName,
+    String? container,
   })
   onImportTreeIntoEntry;
 
@@ -4962,6 +4985,7 @@ class WorkspaceView extends StatefulWidget {
     DocumentView folder,
     List<ArchiveFile> entries, {
     String? sourceName,
+    String? container,
   })
   onImportTreeIntoFolder;
 
@@ -7940,6 +7964,54 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// Folder import (recursive) into an existing workspace: the folder's
   /// contents become pages, its subfolders the page tree.
+  /// Ask whether a picked folder imports as ONE container ("wrap") or spills
+  /// its contents straight into the destination ("spill", the default).
+  /// Returns the `container` value for the import API, or null if cancelled.
+  Future<String?> _askImportContainer() async {
+    final l10n = context.l10n;
+    var asFolder = false;
+    final choice = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setInner) => AlertDialog(
+          title: Text(l10n.importFolderTitle),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: asFolder,
+                onChanged: (v) => setInner(() => asFolder = v ?? false),
+                title: Text(l10n.importAsSingleFolder),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 4, top: 4),
+                child: Text(
+                  l10n.importAsSingleFolderHint,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(l10n.commonCancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(asFolder),
+              child: Text(l10n.commonImport),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null) return null; // cancelled
+    return choice ? 'wrap' : 'spill';
+  }
+
   Future<void> _importFolderIntoWorkspace(WorkspaceEntry entry) async {
     final picked = await pickImportFolder();
     if (picked.isEmpty || !mounted) return;
@@ -7960,7 +8032,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
       );
     }
-    await widget.onImportTreeIntoEntry(entry, entries, sourceName: folderName);
+    if (!mounted) return;
+    final container = await _askImportContainer();
+    if (container == null || !mounted) return;
+    await widget.onImportTreeIntoEntry(
+      entry,
+      entries,
+      sourceName: folderName,
+      container: container,
+    );
   }
 
   /// Multi-select import UNDER a folder: .md files (+ referenced images) become
@@ -7992,10 +8072,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
       );
     }
+    if (!mounted) return;
+    final container = await _askImportContainer();
+    if (container == null || !mounted) return;
     await widget.onImportTreeIntoFolder(
       folder,
       entries,
       sourceName: folderName,
+      container: container,
     );
   }
 

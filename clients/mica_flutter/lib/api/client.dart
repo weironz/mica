@@ -836,6 +836,7 @@ class ApiClient {
     bool notion = false,
     String? workspaceId,
     String? parentViewId,
+    String? container,
   }) async {
     final response = await http.post(
       baseUri.replace(
@@ -847,6 +848,9 @@ class ApiClient {
           // Import UNDER this folder (server validates it's a folder in the
           // workspace) instead of at the workspace root.
           'parent_view_id': ?parentViewId,
+          // Wrap-vs-spill choice for import-into-existing: auto (default) /
+          // spill / wrap. Omitted → server default (auto).
+          'container': ?container,
         },
       ),
       headers: {
