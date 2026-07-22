@@ -77,6 +77,10 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
+      # Identify as production: enables the restrictive CORS default and
+      # hard-ignores any MICA_SEED_TEST_USER. Without this the server defaults to
+      # Development even in prod (config.rs `Environment`).
+      APP_ENV: production
       HTTP_ADDR: 0.0.0.0:8080
       DATABASE_URL: postgres://${POSTGRES_USER:-mica}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mica}
       JWT_SECRET: ${JWT_SECRET:?set in .env.prod}
