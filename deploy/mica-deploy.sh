@@ -130,6 +130,14 @@ if [ -n "$(docker compose --profile backup ps -aq backup 2>/dev/null)" ]; then
   echo 'backup sidecar refreshed'
 fi
 
+# Reclaim disk: every deploy pulls a new image and orphans the one it replaced,
+# so the node's disk only ever grows (the reason for the once-a-release manual
+# cleanups). Prune conservatively — NO `-a`, so only DANGLING (untagged) images
+# go; the previous version's image stays TAGGED and pullable, which keeps the
+# EXIT-trap rollback above able to bring it back. `until=168h` spares anything
+# newer than a week as a second guard. Best-effort: never fail a deploy over it.
+docker image prune -f --filter "until=168h" || true
+
 for _ in $(seq 1 60); do
   state=$(docker inspect --format '{{.State.Health.Status}}' mica-api-1 2>/dev/null || true)
   if [ "$state" = healthy ]; then

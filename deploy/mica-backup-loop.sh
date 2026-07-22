@@ -13,11 +13,26 @@ set -uo pipefail
 
 HOUR="${BACKUP_HOUR:-3}"
 
+# Dead man's switch. Ping ${HEALTHCHECK_URL} after a successful run and
+# <URL>/fail after a failed one; a monitor (healthchecks.io etc.) alerts when
+# the expected success ping stops arriving — which catches a wedged loop or a
+# dead container that a stderr line reaches no one about. Best-effort: short
+# timeouts, never fatal (kept out of `run`'s status), so a flaky monitor
+# endpoint can't take the backup loop down with it. Unset URL → no-op.
+#   $1 = "" for success, "/fail" for failure
+ping_hc() {
+  [ -n "${HEALTHCHECK_URL:-}" ] || return 0
+  curl -fsS -m 10 --retry 3 -o /dev/null "${HEALTHCHECK_URL}${1:-}" \
+    || echo "[$(date -Is)] mica-backup-loop: healthcheck ping failed (non-fatal)" >&2
+}
+
 run() {
   if /usr/local/bin/mica-backup.sh; then
     echo "[$(date -Is)] mica-backup-loop: run ok"
+    ping_hc
   else
     echo "[$(date -Is)] mica-backup-loop: run FAILED (rc=$?)" >&2
+    ping_hc /fail
   fi
 }
 

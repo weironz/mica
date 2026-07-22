@@ -65,6 +65,25 @@ fi
 log "export all workspaces → ${EXPORT_DIR}"
 "$MICA_CLI" export --out "$EXPORT_DIR"
 
+# 3b) Off-site DB snapshot. The content export above is portable Markdown+images
+#     but NOT full-instance DR — it does not capture users / passwords /
+#     memberships / CRDT edit history. pg_dump the live Postgres so the rustic
+#     pass below carries a real disaster-recovery image off-site too. Written
+#     UNDER EXPORT_DIR (after export, so a pruning export can't wipe it mid-run).
+#     No MICA_BACKUP_PGURL → skip and WARN; never a silent content-only backup.
+PGDUMP_DIR="${EXPORT_DIR}/_pgdump"
+if [ -n "${MICA_BACKUP_PGURL:-}" ]; then
+  mkdir -p "$PGDUMP_DIR"
+  log "pg_dump → ${PGDUMP_DIR}/mica.sql.gz"
+  # pipefail (set -o above) makes a failed pg_dump abort the whole run — a broken
+  # dump must fail loudly, not ship a truncated .sql.gz. Dump to a temp file and
+  # rename, so an interrupted run never leaves a half-written dump behind.
+  pg_dump --no-owner --no-privileges "$MICA_BACKUP_PGURL" | gzip > "${PGDUMP_DIR}/mica.sql.gz.tmp"
+  mv "${PGDUMP_DIR}/mica.sql.gz.tmp" "${PGDUMP_DIR}/mica.sql.gz"
+else
+  log "WARN: MICA_BACKUP_PGURL unset — skipping pg_dump (content-only backup, no DB disaster recovery)"
+fi
+
 # 4) Snapshot each workspace as its own lineage: label = stable id, tag = name.
 manifest="${EXPORT_DIR}/manifest.json"
 count=0
@@ -80,6 +99,14 @@ while IFS=$'\t' read -r wsid wsname wsdir; do
   count=$((count + 1))
 done < <(jq -r '.workspaces[] | [.id, .name, .dir] | @tsv' "$manifest")
 log "snapshotted ${count} workspace(s)"
+
+# 4b) Snapshot the DB dump as its own retention lineage (stable label _pgdump,
+#     never a workspace id), so `forget --group-by label` below keeps/prunes it
+#     on the same keep-daily/weekly/monthly policy as each workspace.
+if [ -f "${PGDUMP_DIR}/mica.sql.gz" ]; then
+  log "snapshot pg_dump → label=_pgdump"
+  "$RUSTIC" backup "$PGDUMP_DIR" --label _pgdump --tag pgdump --tag mica
+fi
 
 # 5) Retention PER workspace (group by the stable label = id), then prune once.
 log "retention: keep ${KEEP_DAILY:-7}d / ${KEEP_WEEKLY:-4}w / ${KEEP_MONTHLY:-6}m per workspace + prune"

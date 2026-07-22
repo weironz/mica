@@ -19,6 +19,8 @@ RUN apt-get update \
 COPY --from=build /src/target/release/mica-api-server /usr/local/bin/mica-api-server
 ENV RUST_LOG=info
 EXPOSE 8080
+# /api/ready (not /api/health): it pings the Postgres pool, so an api that is
+# up but cannot reach the DB reports unhealthy instead of masking the outage.
 HEALTHCHECK --interval=10s --timeout=3s --retries=10 \
-  CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
+  CMD curl -fsS http://127.0.0.1:8080/api/ready || exit 1
 CMD ["mica-api-server"]

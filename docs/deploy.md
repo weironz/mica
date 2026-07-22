@@ -73,6 +73,43 @@ reload picks up new releases (asset files are content-hashed).
 | Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f deploy/docker-compose.single.yml exec postgres pg_dump -U mica mica > backup.sql` |
 | Image bytes | volume `mica-prod-rustfs` | snapshot the volume directory |
 
+The canonical stack also ships an off-site, encrypted, deduplicated backup of
+both content AND a `pg_dump` of Postgres — see [`backup.md`](backup.md).
+
+## PostgreSQL major-version upgrades
+
+**Never bump the `postgres:` tag in place** (e.g. `16-alpine` → `17-alpine` on the
+same volume). A new major refuses to start on the old major's data directory —
+it exits with `database files are incompatible with server` and the container
+crash-loops. There is no `restart: unless-stopped` around that; the fix is a
+dump-and-load onto a fresh volume:
+
+```bash
+cd /data/mica
+# 0) Take a restore point FIRST (deploy-prod does NOT back up before migrating):
+docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > pg16.sql.gz
+gzip -t pg16.sql.gz && zcat pg16.sql.gz | grep -c '^COPY public.' # sanity: tables present
+
+# 1) Stop writers, keep old postgres up to read from.
+docker compose stop api
+
+# 2) Point the postgres service at a NEW image tag AND a NEW named volume
+#    (edit docker-compose.yml: image: postgres:17-alpine, and rename the volume
+#    e.g. mica-prod-postgres17 so the old data dir is untouched), then:
+docker compose up -d --no-deps postgres          # new empty PG17 volume boots clean
+
+# 3) Load the dump into the new server.
+zcat pg16.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica
+
+# 4) Bring the api back and verify DB-backed readiness.
+docker compose up -d --no-deps api
+curl -fsS https://mica.cloudcele.com/api/ready
+```
+
+Keep the old `mica-prod-postgres` volume until the new one is proven — that
+un-renamed volume IS your rollback (revert the compose edit to fall back). Only
+`docker volume rm` it once `/api/ready` is green and content spot-checks pass.
+
 ## Behind Traefik (the canonical production stack)
 
 `deploy/docker-compose.yml` — used for mica.cloudcele.com. No host

@@ -95,6 +95,6 @@ jobs:
 
       - name: Verify prod actually serves this version
         run: |
-          got=$(curl -fsS https://mica.cloudcele.com/api/health); echo "$got"
+          got=$(curl -fsS https://mica.cloudcele.com/api/ready); echo "$got"
           echo "$got" | grep -q '"version":"${{ inputs.version }}"' \
             || { echo "VERSION MISMATCH — health does not report ${{ inputs.version }}"; exit 1; }

@@ -6,10 +6,20 @@
 #
 # Only ports 80 (app) and 9000 (S3, presigned browser access) are public.
 
+# Bound every container's logs: json-file defaults to unlimited, so one chatty
+# service (or a crash loop) can fill the disk and take the node down. Cap at
+# 3×10 MB per container; the ring buffer drops the oldest.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mica}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
@@ -25,6 +35,7 @@ services:
   rustfs:
     image: rustfs/rustfs:1.0.0-beta.6
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - "no-new-privileges:true"
     ports:
@@ -45,6 +56,7 @@ services:
       context: .
       dockerfile: deploy/Dockerfile.api
     restart: unless-stopped
+    logging: *default-logging
     environment:
       HTTP_ADDR: 0.0.0.0:8080
       DATABASE_URL: postgres://${POSTGRES_USER:-mica}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mica}
@@ -66,6 +78,7 @@ services:
   web:
     image: nginx:alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
     volumes:

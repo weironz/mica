@@ -1,0 +1,67 @@
+name: Uptime
+
+# External black-box probe, independent of the node itself: GitHub's runners
+# hit prod from outside every 15 min, so an outage that also takes down any
+# on-node monitor still trips this. A failed run emails the repo actors (the
+# built-in Actions failure notification) — no third-party monitor required.
+#
+# This is deliberately its own workflow: ci.yml gates code, this watches the
+# live site, and neither should be able to fail the other. Scheduled workflows
+# only run from the default branch.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {} # manual "is it up right now" button
+
+# Never pile probes on top of each other if one runs long.
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+# Public hostnames only — no secrets. If the S3 host ever changes, edit here.
+env:
+  MAIN_DOMAIN: mica.cloudcele.com
+  S3_DOMAIN: s3.mica.cloudcele.com
+  # Fail the run (→ notification) if a cert expires within this many days.
+  CERT_MIN_DAYS: "10"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: API readiness (proves the app AND its DB are up)
+        run: |
+          # /api/ready pings Postgres, so this catches a DB outage that a mere
+          # liveness check would sail past. Retry to ride out a single transient
+          # blip — a real outage still fails all attempts, a one-off 502 does not
+          # page anyone at 3am.
+          curl -fsS --max-time 20 \
+               --retry 4 --retry-delay 15 --retry-all-errors \
+               "https://${MAIN_DOMAIN}/api/ready"
+          echo   # trailing newline after the JSON body
+
+      - name: TLS certificate expiry (both public hosts)
+        run: |
+          fail=0
+          check() {
+            local host="$1"
+            local end
+            end=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
+                    | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [ -z "$end" ]; then
+              echo "::error::${host}: could not read a certificate (TLS handshake failed?)"
+              fail=1
+              return
+            fi
+            # -checkend returns non-zero if the cert expires within the window.
+            if echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
+                 | openssl x509 -noout -checkend $(( CERT_MIN_DAYS * 86400 )) >/dev/null 2>&1; then
+              echo "${host}: OK (expires ${end})"
+            else
+              echo "::error::${host}: certificate expires within ${CERT_MIN_DAYS}d (expires ${end})"
+              fail=1
+            fi
+          }
+          check "${MAIN_DOMAIN}"
+          check "${S3_DOMAIN}"
+          exit "$fail"

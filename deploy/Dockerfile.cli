@@ -31,8 +31,18 @@ RUN apt-get update \
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 # ca-certificates: TLS to the API + OSS. jq: parse export manifest.json.
+# curl: the dead man's switch ping in mica-backup-loop.sh (kept in the image).
+# postgresql-client-16: pg_dump for the off-site DB snapshot (mica-backup.sh).
+# It must be v16+ to dump the prod postgres:16 server — a pg_dump older than the
+# server aborts on a version mismatch — so pull it from PGDG rather than
+# bookworm's stock 15.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates jq \
+ && apt-get install -y --no-install-recommends ca-certificates curl jq \
+ && curl -fsSL -o /usr/share/keyrings/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+ && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-16 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
 COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic

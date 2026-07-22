@@ -12,10 +12,19 @@ snapshotting to Aliyun OSS. `mica-cli` itself has no `backup` command anymore.
 ```
 [daily + on start]
   mica-cli export --out /export            # every workspace → Markdown + images (mirrored) + manifest.json
+  pg_dump $MICA_BACKUP_PGURL | gzip > /export/_pgdump/mica.sql.gz   # off-site DB image (if MICA_BACKUP_PGURL set)
   per workspace (read from manifest.json):
     rustic backup /export/<dir> --label <workspace-id> --tag ws=<name> --tag mica
+  rustic backup /export/_pgdump --label _pgdump --tag pgdump --tag mica   # DB dump as its own lineage
   rustic forget --group-by label --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
 ```
+
+The daily loop also drives a **dead man's switch**: on a successful run it pings
+`${HEALTHCHECK_URL}`, on a failed one `${HEALTHCHECK_URL}/fail`. Point it at a
+monitor (e.g. healthchecks.io) and you get paged when the *expected* success
+ping stops arriving — a wedged loop or a dead container that a stderr line
+reaches no one about. Unset → no ping; the ping itself is best-effort and never
+fails the backup.
 
 **One rustic repo** (one bucket, one key, one dedup pool). Each workspace is its
 own **retention lineage**, keyed on the **stable workspace id** via rustic's
@@ -32,10 +41,12 @@ all GETs — a **read-scoped** token suffices.
 
 - **Content backup** — Markdown source + referenced images per workspace,
   portable and human-readable (restorable into Mica, or openable in Obsidian etc.).
-- **Not** a full-instance disaster-recovery image: it does not capture users /
-  passwords / memberships, nor the fine-grained CRDT edit history. For turnkey
-  whole-instance DR, also take a `pg_dump` of the Mica Postgres alongside this
-  (the two are complementary).
+- **Full-instance DR** — the `pg_dump` step (below) captures what the content
+  export cannot: users / passwords / memberships and the fine-grained CRDT edit
+  history. The two are complementary and now ride the SAME rustic repo off-site,
+  so a single restore point covers both. The DB dump is **only taken when
+  `MICA_BACKUP_PGURL` is set** — unset, the run logs a `WARN` and produces a
+  content-only backup (it never silently drops the DB image).
 
 ## Aliyun OSS setup (one-time)
 
@@ -80,6 +91,12 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    OSS_ACCESS_KEY_ID=…
    OSS_SECRET_ACCESS_KEY=…
    OSS_ROOT=mica                          # object-key prefix; use a fresh one to share a bucket
+   # Off-site DB image (full-instance DR). The backup container shares the
+   # default network with postgres, so use the INTERNAL host `postgres:5432`.
+   # Reuse the same password as POSTGRES_PASSWORD. Unset → content-only backup.
+   MICA_BACKUP_PGURL=postgres://mica:<POSTGRES_PASSWORD>@postgres:5432/mica
+   # Dead man's switch (optional): pinged on success, <URL>/fail on failure.
+   HEALTHCHECK_URL=https://hc-ping.com/<uuid>
    # optional: BACKUP_HOUR=3  KEEP_DAILY=7  KEEP_WEEKLY=4  KEEP_MONTHLY=6
    ```
 3. **Start the service, initialise the repo once, then trigger the first run.**
@@ -131,6 +148,62 @@ Find a workspace's id (the `--label`/`--filter-label` value) in `rustic snapshot
 To put content back into a Mica instance, re-import each workspace's tree (the
 app's Import / the `/api/workspaces/import` endpoint). Recreate user accounts
 separately — they are not part of a content backup.
+
+## Restore the database from a `pg_dump` (full-instance DR)
+
+Use this when the Postgres volume is lost/corrupt, or to stand up a clone — it
+brings back users / memberships / CRDT history the content re-import cannot. The
+DB dump rides its own rustic lineage (`--label _pgdump`), so pull it the same way
+as a workspace.
+
+**Rehearse on a scratch DB first** — the same discipline as a migration
+(`docs/lessons.md` §"迁移怎么验"): a restore you've never run is a guess, and a
+half-restored prod DB is worse than a down one.
+
+```bash
+# 1) Pull the latest DB dump out of the repo (its own label):
+docker exec mica-backup-1 rustic restore latest /tmp/pg --filter-label _pgdump
+docker cp mica-backup-1:/tmp/pg/mica.sql.gz ./mica.sql.gz
+gzip -t ./mica.sql.gz                                   # prove it's not truncated
+
+# 2) REHEARSE into a throwaway DB on the SAME server (no prod password leaves it):
+docker exec -i mica-postgres-1 psql -U mica -d postgres -c 'CREATE DATABASE mica_restest'
+zcat ./mica.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica_restest
+docker exec -i mica-postgres-1 psql -U mica -d mica_restest -c '\dt' # assert tables are there
+docker exec -i mica-postgres-1 psql -U mica -d postgres -c 'DROP DATABASE mica_restest'
+```
+
+**Restore over prod** (destructive — the rehearsal must have passed):
+
+```bash
+cd /data/mica
+# a) STOP the api so nothing writes mid-restore (the DB must be quiescent).
+#    Leave postgres up — you're restoring INTO it.
+docker compose up -d --no-deps --scale api=0 api || docker compose stop api
+
+# b) Drop + recreate the database, then load the dump.
+docker exec -i mica-postgres-1 psql -U mica -d postgres \
+  -c 'DROP DATABASE mica' -c 'CREATE DATABASE mica'
+zcat ./mica.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica
+
+# c) Pin MICA_VERSION to the tag the dump's SCHEMA matches, THEN bring api up.
+#    sqlx::migrate! is forward-only: a NEWER api meeting an OLDER restored schema
+#    just re-applies the missing migrations (fine), but an OLDER api meeting a
+#    NEWER schema will not start. If unsure, roll to the tag that was live when
+#    the dump was taken:
+sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=vX.Y.Z|' .env
+docker compose up -d --no-deps api
+curl -fsS https://mica.cloudcele.com/api/ready       # DB-backed readiness = restore worked
+```
+
+**The recovery-window gap.** The dump is a point-in-time snapshot (last daily run
++ any manual one). Writes between that instant and the outage are **not** in it
+and are lost on restore — there is no WAL archive here, this is dump-based DR, not
+PITR. Two mitigations before you drop prod: (1) if the old volume is still
+readable, take a fresh `pg_dump` off it first and restore THAT instead; (2)
+announce the restore point so users know which edits to redo. Widen the window by
+lowering `BACKUP_HOUR` cadence or adding manual `docker exec mica-backup-1
+mica-backup.sh` runs before risky changes.
 
 ## Restore test (do this — a backup you've never restored is a guess)
 

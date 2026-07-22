@@ -126,6 +126,11 @@ parity-down:
 [doc("Run all tests (Rust workspace + Flutter)")]
 test:
     cargo test --workspace
+    # `store` is a non-default feature and features do not apply across a
+    # multi-package `-p` list, so `--workspace` never compiles mica-core's
+    # gated SQLite migration tests. Mirror ci.yml's separate step (the 24
+    # local store tests only run under this invocation).
+    cargo test -p mica-core --features store
     cd clients/mica_flutter && {{flutter}} test
 
 [doc("Static analysis on both sides")]
@@ -291,7 +296,7 @@ deploy-prod version:
 verify-prod version:
     #!/usr/bin/env bash
     set -euo pipefail
-    got=$(curl -fsS {{site}}/api/health)
+    got=$(curl -fsS {{site}}/api/ready)
     echo "$got"
     echo "$got" | grep -q '"version":"{{version}}"' \
       || { echo "VERSION MISMATCH: prod is not {{version}}"; exit 1; }

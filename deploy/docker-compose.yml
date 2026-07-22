@@ -8,10 +8,21 @@
 # URLs embed https://S3_DOMAIN (SigV4 signs the Host header, which Traefik
 # forwards unchanged).
 
+# Bound every container's logs: json-file's default is unlimited, so one chatty
+# service (or a crash loop) fills the disk and takes the whole node down. Cap at
+# 3×10 MB per container and let the ring buffer drop the oldest — logs are a
+# convenience here, not the record of truth. Applied to all services via anchor.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mica}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
@@ -27,6 +38,7 @@ services:
   rustfs:
     image: rustfs/rustfs:1.0.0-beta.6
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - "no-new-privileges:true"
     networks: [default, traefik]
@@ -63,6 +75,7 @@ services:
   api:
     image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-api:${MICA_VERSION:-v0.5.0}
     restart: unless-stopped
+    logging: *default-logging
     environment:
       HTTP_ADDR: 0.0.0.0:8080
       DATABASE_URL: postgres://${POSTGRES_USER:-mica}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mica}
@@ -82,6 +95,7 @@ services:
   web:
     image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-web:${MICA_VERSION:-v0.5.0}
     restart: unless-stopped
+    logging: *default-logging
     networks: [default, traefik]
     depends_on:
       - api
@@ -104,6 +118,7 @@ services:
     image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-cli:${MICA_VERSION:-v0.5.0}
     profiles: ["backup"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     environment:
@@ -111,6 +126,16 @@ services:
       MICA_TOKEN: ${MICA_BACKUP_TOKEN:-}            # a read-scoped Mica token
       # rustic repo encryption password — SAVE OFF-HOST (lose it, lose the repo).
       RUSTIC_PASSWORD: ${MICA_BACKUP_PASSWORD:-}
+      # pg_dump connection string for the off-site DB snapshot (full-instance DR:
+      # users/memberships/CRDT history the content export does NOT capture). The
+      # backup container shares the default network with postgres, so point it at
+      # the internal host, e.g. in .env:
+      #   MICA_BACKUP_PGURL=postgres://mica:<POSTGRES_PASSWORD>@postgres:5432/mica
+      # Unset → mica-backup.sh skips pg_dump and warns (content-only backup).
+      MICA_BACKUP_PGURL: ${MICA_BACKUP_PGURL:-}
+      # Dead man's switch: mica-backup-loop.sh pings this on success and
+      # <URL>/fail on a failed run. Unset → no ping. e.g. a healthchecks.io URL.
+      HEALTHCHECK_URL: ${HEALTHCHECK_URL:-}
       # opendal S3 backend → Aliyun OSS. mica-backup.sh renders these into
       # /etc/rustic/rustic.toml (virtual-host style is forced on, required for
       # OSS). Each value stands alone so the AccessKey rotates without touching
