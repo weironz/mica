@@ -508,8 +508,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   // ---- In-page find (Ctrl+F) -----------------------------------------------
   bool _findOpen = false;
+  bool _replaceOpen = false; // the find bar's expanded replace row is showing
   final TextEditingController _findCtrl = TextEditingController();
   final FocusNode _findFocus = FocusNode(debugLabel: 'editorFind');
+  final TextEditingController _replaceCtrl = TextEditingController();
+  final FocusNode _replaceFocus = FocusNode(debugLabel: 'editorReplace');
   List<({int node, int start, int end})> _findMatches = const [];
   int _findIndex = 0;
 
@@ -579,6 +582,49 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _scrollToBlock(_controller.nodes[m.node].id);
   }
 
+  /// Toggle the expanded replace row (the chevron button). Focuses the replace
+  /// field when it opens.
+  void _toggleReplace() {
+    setState(() => _replaceOpen = !_replaceOpen);
+    if (_replaceOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _replaceOpen) _replaceFocus.requestFocus();
+      });
+    }
+  }
+
+  /// Replace the current match, then advance to the next one (VS Code feel).
+  /// Goes through the controller's single edit path (`replaceRange`), so no
+  /// second editing representation is introduced.
+  void _replaceCurrent() {
+    if (!widget.canEdit || _findCtrl.text.isEmpty) return;
+    if (_findMatches.isEmpty || _findIndex >= _findMatches.length) return;
+    final m = _findMatches[_findIndex];
+    if (!_controller.replaceRange(m.node, m.start, m.end, _replaceCtrl.text)) {
+      return;
+    }
+    // The splice shifted every following offset — recompute. Removing the
+    // replaced match slides the next one into _findIndex, so we land on it.
+    final matches = findTextMatches([
+      for (final n in _controller.nodes) n.text,
+    ], _findCtrl.text);
+    setState(() {
+      _findMatches = matches;
+      if (_findIndex >= matches.length) _findIndex = 0;
+    });
+    if (matches.isNotEmpty) _revealFind(_findIndex);
+  }
+
+  /// Replace every match in the document in one undo step, then refresh (0 left).
+  void _replaceAll() {
+    if (!widget.canEdit || _findCtrl.text.isEmpty) return;
+    _controller.replaceAll(_findCtrl.text, _replaceCtrl.text);
+    setState(() {
+      _findMatches = const [];
+      _findIndex = 0;
+    });
+  }
+
   Widget _buildFindBar() {
     final total = _findMatches.length;
     final label = _findCtrl.text.isEmpty
@@ -596,6 +642,84 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
           color: const Color(0xFF475569),
         );
+    // Row 1: find field + match count + prev/next/close.
+    final findRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.search, size: 16, color: Color(0xFF64748B)),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 170,
+          child: TextField(
+            controller: _findCtrl,
+            focusNode: _findFocus,
+            onChanged: (_) => _recomputeFind(reveal: true),
+            onSubmitted: (_) => _findStep(1),
+            textInputAction: TextInputAction.search,
+            style: const TextStyle(fontSize: 14),
+            decoration: InputDecoration(
+              isDense: true,
+              border: InputBorder.none,
+              hintText: context.l10n.editorFindHint,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 44,
+          child: Text(
+            label,
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+          ),
+        ),
+        iconBtn(
+          Icons.keyboard_arrow_up,
+          context.l10n.editorFindPrevious,
+          total == 0 ? null : () => _findStep(-1),
+        ),
+        iconBtn(
+          Icons.keyboard_arrow_down,
+          context.l10n.editorFindNext,
+          total == 0 ? null : () => _findStep(1),
+        ),
+        iconBtn(Icons.close, context.l10n.editorFindClose, _closeFind),
+      ],
+    );
+    // Row 2 (only when expanded): replace field + replace / replace-all.
+    // Editing must be allowed and there must be at least one match.
+    final canReplace = widget.canEdit && total > 0;
+    final replaceRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(width: 22),
+        SizedBox(
+          width: 170,
+          child: TextField(
+            controller: _replaceCtrl,
+            focusNode: _replaceFocus,
+            onSubmitted: (_) => _replaceCurrent(),
+            style: const TextStyle(fontSize: 14),
+            decoration: InputDecoration(
+              isDense: true,
+              border: InputBorder.none,
+              hintText: context.l10n.editorReplaceHint,
+            ),
+          ),
+        ),
+        const SizedBox(width: 50),
+        iconBtn(
+          Icons.find_replace,
+          context.l10n.editorReplaceOne,
+          canReplace ? _replaceCurrent : null,
+        ),
+        iconBtn(
+          Icons.change_circle_outlined,
+          context.l10n.editorReplaceAll,
+          canReplace ? _replaceAll : null,
+        ),
+      ],
+    );
     return Material(
       elevation: 4,
       borderRadius: BorderRadius.circular(8),
@@ -605,53 +729,43 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           const SingleActivator(LogicalKeyboardKey.escape): _closeFind,
           const SingleActivator(LogicalKeyboardKey.enter, shift: true): () =>
               _findStep(-1),
+          const SingleActivator(LogicalKeyboardKey.f3): () => _findStep(1),
+          const SingleActivator(LogicalKeyboardKey.f3, shift: true): () =>
+              _findStep(-1),
         },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           child: Row(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.search, size: 16, color: Color(0xFF64748B)),
-              const SizedBox(width: 6),
-              SizedBox(
-                width: 170,
-                child: TextField(
-                  controller: _findCtrl,
-                  focusNode: _findFocus,
-                  onChanged: (_) => _recomputeFind(reveal: true),
-                  onSubmitted: (_) => _findStep(1),
-                  textInputAction: TextInputAction.search,
-                  style: const TextStyle(fontSize: 14),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    hintText: context.l10n.editorFindHint,
-                  ),
+              // Chevron toggles the replace row (VS Code's find widget layout);
+              // avoids a Ctrl+H global binding (Ctrl+H = browser history on web).
+              IconButton(
+                icon: Icon(
+                  _replaceOpen
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_right,
+                  size: 18,
                 ),
+                tooltip: context.l10n.editorFindToggleReplace,
+                onPressed: widget.canEdit ? _toggleReplace : null,
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 22, minHeight: 30),
+                color: const Color(0xFF475569),
               ),
-              const SizedBox(width: 6),
-              SizedBox(
-                width: 44,
-                child: Text(
-                  label,
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF94A3B8),
-                  ),
-                ),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  findRow,
+                  if (_replaceOpen && widget.canEdit) ...[
+                    const SizedBox(height: 2),
+                    replaceRow,
+                  ],
+                ],
               ),
-              iconBtn(
-                Icons.keyboard_arrow_up,
-                context.l10n.editorFindPrevious,
-                total == 0 ? null : () => _findStep(-1),
-              ),
-              iconBtn(
-                Icons.keyboard_arrow_down,
-                context.l10n.editorFindNext,
-                total == 0 ? null : () => _findStep(1),
-              ),
-              iconBtn(Icons.close, context.l10n.editorFindClose, _closeFind),
             ],
           ),
         ),
@@ -834,6 +948,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (widget.findHook?._open == _openFind) widget.findHook?._open = null;
     _findCtrl.dispose();
     _findFocus.dispose();
+    _replaceCtrl.dispose();
+    _replaceFocus.dispose();
     _controller.dispose();
     super.dispose();
   }

@@ -222,6 +222,7 @@
   "shortcutsGroupApp": "App",
   "shortcutsNewPage": "New page",
   "shortcutsFindInPage": "Find in page",
+  "shortcutsFindNextPrev": "Next / previous match (in the find bar)",
   "shortcutsSearchWorkspace": "Search workspace",
   "shortcutsOpenSettings": "Open settings",
   "shortcutsRename": "Rename the highlighted page/folder",
@@ -555,6 +556,10 @@
   "editorFindPrevious": "Previous (Shift+Enter)",
   "editorFindNext": "Next (Enter)",
   "editorFindClose": "Close (Esc)",
+  "editorFindToggleReplace": "Toggle replace",
+  "editorReplaceHint": "Replace",
+  "editorReplaceOne": "Replace (Enter)",
+  "editorReplaceAll": "Replace all",
   "editorMoreHeadings": "More headings",
   "editorHeadingN": "Heading {level}",
   "@editorHeadingN": {

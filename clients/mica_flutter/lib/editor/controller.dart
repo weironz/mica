@@ -2926,6 +2926,105 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---------------------------------------------------------------------------
+  // In-page find / replace
+  // ---------------------------------------------------------------------------
+
+  /// Replace the text range `[start, end)` of node [i] with [replacement],
+  /// carrying inline marks through the splice and committing ONE `update_block`.
+  /// This rides the SAME edit path every other mutation uses (splice text +
+  /// `shiftMarks` + `_sendNow`) — the in-page replace introduces no second
+  /// editing representation. The caret lands just after the inserted text.
+  /// Returns false on an out-of-range request (e.g. the document shifted under
+  /// a stale match).
+  bool replaceRange(int i, int start, int end, String replacement) {
+    if (i < 0 || i >= nodes.length) return false;
+    final node = nodes[i];
+    final old = node.text;
+    if (start < 0 || end > old.length || start > end) return false;
+    final newText = old.substring(0, start) + replacement + old.substring(end);
+    final shifted = shiftMarks(
+      marksFromData(node.data),
+      start,
+      end,
+      replacement.length - (end - start),
+      newText.length,
+    );
+    node.text = newText;
+    node.data = {...node.data, 'marks': marksToJson(shifted)};
+    _dirty.remove(node.id);
+    selection = DocSelection.collapsed(
+      DocPosition(i, start + replacement.length),
+    );
+    goalX = null;
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': newText,
+        'data': node.data,
+      },
+    ]);
+    notifyListeners();
+    return true;
+  }
+
+  /// Replace every case-insensitive, non-overlapping occurrence of [query] with
+  /// [replacement] across the whole document, committing ONE op batch — a single
+  /// undo step. Per node the matches are spliced from the END backward so earlier
+  /// offsets stay valid, and inline marks ride each splice through [shiftMarks].
+  /// Returns the number of occurrences replaced. Mirrors [findTextMatches]'
+  /// case-insensitive matching so the count agrees with the find bar.
+  int replaceAll(String query, String replacement) {
+    if (query.isEmpty) return 0;
+    final needle = query.toLowerCase();
+    final ops = <DocOp>[];
+    var count = 0;
+    for (final node in nodes) {
+      final text = node.text;
+      if (text.length < needle.length) continue;
+      final hay = text.toLowerCase();
+      final spans = <(int, int)>[]; // ascending [start, end)
+      var from = 0;
+      while (from <= hay.length - needle.length) {
+        final at = hay.indexOf(needle, from);
+        if (at < 0) break;
+        spans.add((at, at + query.length));
+        from = at + query.length;
+      }
+      if (spans.isEmpty) continue;
+      var newText = text;
+      var marks = marksFromData(node.data);
+      for (var k = spans.length - 1; k >= 0; k--) {
+        final (s, e) = spans[k];
+        newText = newText.substring(0, s) + replacement + newText.substring(e);
+        marks = shiftMarks(
+          marks,
+          s,
+          e,
+          replacement.length - (e - s),
+          newText.length,
+        );
+        count++;
+      }
+      node.text = newText;
+      node.data = {...node.data, 'marks': marksToJson(marks)};
+      _dirty.remove(node.id);
+      ops.add({
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': newText,
+        'data': node.data,
+      });
+    }
+    if (ops.isEmpty) return 0;
+    // The selection may now point past shortened text; keep it in range.
+    _clampSelection();
+    _sendNow(ops);
+    notifyListeners();
+    return count;
+  }
+
   /// Move the block at [from] to insertion [index] (0..nodes.length) — the
   /// gutter drag handle. Emits a `move_block` op; undo snapshots apply.
   bool moveBlock(int from, int index) {

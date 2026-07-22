@@ -1274,6 +1274,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       head(context.l10n.shortcutsGroupApp),
       row('Ctrl + N', context.l10n.shortcutsNewPage),
       row('Ctrl + F', context.l10n.shortcutsFindInPage),
+      row('F3 / Shift + F3', context.l10n.shortcutsFindNextPrev),
       row('Ctrl + Shift + F', context.l10n.shortcutsSearchWorkspace),
       row('Ctrl + ,', context.l10n.shortcutsOpenSettings),
       row('F2', context.l10n.shortcutsRename),
