@@ -2055,7 +2055,7 @@ fn wire__crate__api__store__MicaStore_load_doc_impl(
       >>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
-      transform_result_sse::<_, ()>((move || {
+      transform_result_sse::<_, String>((move || {
         let mut api_that_guard = None;
         let decode_indices_ =
           flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
@@ -2068,10 +2068,7 @@ fn wire__crate__api__store__MicaStore_load_doc_impl(
           }
         }
         let api_that_guard = api_that_guard.unwrap();
-        let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::load_doc(
-          &*api_that_guard,
-          api_doc_id,
-        ))?;
+        let output_ok = crate::api::store::MicaStore::load_doc(&*api_that_guard, api_doc_id)?;
         Ok(output_ok)
       })())
     },

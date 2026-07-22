@@ -133,8 +133,13 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// All workspaces for `origin` ("local" or a server URL), ordered by position.
   List<LocalWorkspace> listWorkspaces({required String origin});
 
-  /// Load a document by id, decoded with this device's stable client id, or
-  /// null if there's no such document.
+  /// Load a document by id, decoded with this device's stable client id.
+  /// Returns `null` when there is simply no such document; returns `Err`
+  /// (throws in Dart) when the stored snapshot is PRESENT but corrupt/
+  /// unreadable. The two MUST stay distinct: the caller must not treat a
+  /// corrupt doc as "new" and seed a blank page over it, which would launder
+  /// the corruption and overwrite the recovery checkpoint (see
+  /// `LocalDocBackend.open`). Previously `.ok()??` collapsed both to null.
   MicaDocument? loadDoc({required String docId});
 
   /// Decode a version into a THROWAWAY document for read-only preview (never

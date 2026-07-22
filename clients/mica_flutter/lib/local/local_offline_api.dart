@@ -15,6 +15,17 @@ import 'dart:typed_data';
 
 import '../cloud/cloud_doc_store.dart';
 
+/// Thrown by the local backend when a document's on-device snapshot is PRESENT
+/// but corrupt/unreadable (distinct from simply absent). The app surfaces it
+/// and offers rollback / version history instead of clobbering the doc with a
+/// fresh blank page (which would also destroy the §10 recovery checkpoint).
+class LocalDocCorruptException implements Exception {
+  LocalDocCorruptException(this.docId);
+  final String docId;
+  @override
+  String toString() => 'LocalDocCorruptException($docId)';
+}
+
 /// One page-tree node, as plain data for the UI layer to map onto its own model.
 typedef ViewData = ({
   String id,

@@ -677,13 +677,13 @@ impl MicaStore {
             let is_root = v.id == view_id;
             let new_doc_id = format!("doc_{}", uuid::Uuid::new_v4());
             match self.load_doc(v.object_id.clone()) {
-                Some(doc) => {
+                Ok(Some(doc)) => {
                     self.save_doc(new_doc_id.clone(), &doc);
                     docs += 1;
                 }
-                // A view with no document still gets an empty one, or the copy
-                // opens to nothing.
-                None => self.save_doc(
+                // A view with no document — or one whose snapshot won't decode —
+                // still gets an empty one, or the copy opens to nothing.
+                _ => self.save_doc(
                     new_doc_id.clone(),
                     &MicaDocument::from_markdown(String::new()),
                 ),
@@ -743,16 +743,22 @@ impl MicaStore {
         let _ = self.store().delete_workspace(&origin, &id);
     }
 
-    /// Load a document by id, decoded with this device's stable client id, or
-    /// null if there's no such document.
+    /// Load a document by id, decoded with this device's stable client id.
+    /// Returns `null` when there is simply no such document; returns `Err`
+    /// (throws in Dart) when the stored snapshot is PRESENT but corrupt/
+    /// unreadable. The two MUST stay distinct: the caller must not treat a
+    /// corrupt doc as "new" and seed a blank page over it, which would launder
+    /// the corruption and overwrite the recovery checkpoint (see
+    /// `LocalDocBackend.open`). Previously `.ok()??` collapsed both to null.
     #[frb(sync)]
-    pub fn load_doc(&self, doc_id: String) -> Option<MicaDocument> {
-        let loaded = self.store()
-            .load_doc(&doc_id, self.client_id)
-            .ok()??;
-        Some(MicaDocument {
-            inner: Mutex::new(loaded),
-        })
+    pub fn load_doc(&self, doc_id: String) -> Result<Option<MicaDocument>, String> {
+        match self.store().load_doc(&doc_id, self.client_id) {
+            Ok(Some(loaded)) => Ok(Some(MicaDocument {
+                inner: Mutex::new(loaded),
+            })),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// Export a folder's subtree (`folder_id = Some`) — or the whole workspace
@@ -787,7 +793,9 @@ impl MicaStore {
             if v.workspace_id != workspace_id || v.trashed || v.object_type != "document" {
                 continue;
             }
-            if let Some(doc) = self.load_doc(v.object_id.clone()) {
+            // A corrupt snapshot is skipped from the export (it can't be
+            // serialized anyway) rather than aborting the whole export.
+            if let Ok(Some(doc)) = self.load_doc(v.object_id.clone()) {
                 payloads.insert(v.object_id.clone(), doc.snapshot());
             }
         }
@@ -1009,7 +1017,7 @@ mod clone_view_tests {
 
         // Content came along, and each copy owns a fresh doc id.
         assert_ne!(copied_kid.object_id, "doc_kid");
-        let doc = store.load_doc(copied_kid.object_id.clone()).expect("copied doc exists");
+        let doc = store.load_doc(copied_kid.object_id.clone()).expect("load ok").expect("copied doc exists");
         assert!(doc.export_markdown().contains("kid"), "content copied, not just the row");
     }
 
@@ -1028,7 +1036,7 @@ mod clone_view_tests {
         let all = store.list_views("local".to_string());
         let copy = all.iter().find(|v| v.id == out.root_view_id).unwrap();
         assert!(
-            store.load_doc(copy.object_id.clone()).is_some(),
+            store.load_doc(copy.object_id.clone()).unwrap().is_some(),
             "the copy still opens to an empty document rather than nothing",
         );
     }
@@ -1106,9 +1114,9 @@ mod clone_view_tests {
         let all = store.list_views("local".to_string());
         assert_eq!(all.len(), 1, "only the unrelated view survives");
         assert_eq!(all[0].id, "outside");
-        assert!(store.load_doc("doc_kid".into()).is_none(), "its document went too");
+        assert!(store.load_doc("doc_kid".into()).unwrap().is_none(), "its document went too");
         assert!(
-            store.load_doc("doc_outside".into()).is_some(),
+            store.load_doc("doc_outside".into()).unwrap().is_some(),
             "an unrelated document must survive",
         );
     }
@@ -1308,8 +1316,8 @@ mod clone_view_tests {
         let views = store.list_views("local".to_string());
         assert_eq!(views.len(), 1, "its views went with it");
         assert_eq!(views[0].id, "v3");
-        assert!(store.load_doc("doc_v1".into()).is_none(), "orphaned docs would be unreachable forever");
-        assert!(store.load_doc("doc_v3".into()).is_some(), "the survivor is untouched");
+        assert!(store.load_doc("doc_v1".into()).unwrap().is_none(), "orphaned docs would be unreachable forever");
+        assert!(store.load_doc("doc_v3".into()).unwrap().is_some(), "the survivor is untouched");
     }
 
     #[test]

@@ -2604,17 +2604,63 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _localSelectView(DocumentView view) async {
     if (view.objectType == 'folder') return; // a folder has no document to open
-    final data = _local.openDoc(view.objectId);
+    final DocData? data;
+    try {
+      data = _local.openDoc(view.objectId);
+    } on LocalDocCorruptException {
+      // The on-device copy is corrupt. openDoc deliberately did NOT clobber it
+      // with a blank page, so the recovery checkpoint / version history are
+      // still intact — select the view and offer to restore instead of dropping
+      // the user into a silent blank editor.
+      if (!mounted) return;
+      setState(() => _localSelectedView = view);
+      await _showLocalCorruptDialog(view);
+      return;
+    }
     if (data == null || !mounted) return;
+    final loaded = data;
     setState(() {
       _localSelectedView = view;
       _localBootstrap = _localBootstrapFrom(
         view.objectId,
-        data.rootBlockId,
-        data.blocks,
+        loaded.rootBlockId,
+        loaded.blocks,
         view,
       );
     });
+  }
+
+  /// A local page whose on-device snapshot failed to decode. Offer the two
+  /// non-destructive recovery paths (last checkpoint / version history) rather
+  /// than silently seeding a blank page over it.
+  Future<void> _showLocalCorruptDialog(DocumentView view) async {
+    final l = context.l10n;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l.localCorruptTitle),
+        content: Text(l.localCorruptBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(l.closeCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'history'),
+            child: Text(l.localCorruptHistory),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'rollback'),
+            child: Text(l.localCorruptRollback),
+          ),
+        ],
+      ),
+    );
+    if (action == 'rollback') {
+      await _localRollbackDoc();
+    } else if (action == 'history') {
+      await _openLocalVersionHistory();
+    }
   }
 
   /// Restore the open local document to its last checkpoint, then remount the

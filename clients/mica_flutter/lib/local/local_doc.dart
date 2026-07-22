@@ -17,6 +17,7 @@ import 'dart:convert';
 import '../src/rust/api/document.dart';
 import '../src/rust/api/store.dart';
 import 'doc_ops.dart';
+import 'local_offline_api.dart';
 
 export 'doc_ops.dart' show DocOp;
 
@@ -50,7 +51,17 @@ class LocalDocBackend {
     String rootId = 'root',
     List<Map<String, dynamic>>? seedBlocks,
   }) {
-    final existing = store.loadDoc(docId: docId);
+    final MicaDocument? existing;
+    try {
+      existing = store.loadDoc(docId: docId);
+    } catch (_) {
+      // The snapshot is PRESENT but corrupt/unreadable (the FFI throws now,
+      // distinct from a plain absence). Do NOT fall through to the seed path:
+      // seeding + saveDoc + checkpointDoc would launder the corruption AND
+      // overwrite the §10 recovery backup, destroying the one thing rollback
+      // needs. Surface it so the app can offer rollback / version history.
+      throw LocalDocCorruptException(docId);
+    }
     if (existing != null) {
       // Snapshot the last-good base before this session mutates it (§10 recovery
       // point — rollback restores it if an edit/merge later corrupts the doc).

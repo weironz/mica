@@ -1911,7 +1911,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         codec: SseCodec(
           decodeSuccessData:
               sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument,
-          decodeErrorData: null,
+          decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiStoreMicaStoreLoadDocConstMeta,
         argValues: [that, docId],
@@ -4741,8 +4741,13 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
       .api
       .crateApiStoreMicaStoreListWorkspaces(that: this, origin: origin);
 
-  /// Load a document by id, decoded with this device's stable client id, or
-  /// null if there's no such document.
+  /// Load a document by id, decoded with this device's stable client id.
+  /// Returns `null` when there is simply no such document; returns `Err`
+  /// (throws in Dart) when the stored snapshot is PRESENT but corrupt/
+  /// unreadable. The two MUST stay distinct: the caller must not treat a
+  /// corrupt doc as "new" and seed a blank page over it, which would launder
+  /// the corruption and overwrite the recovery checkpoint (see
+  /// `LocalDocBackend.open`). Previously `.ok()??` collapsed both to null.
   MicaDocument? loadDoc({required String docId}) => RustLib.instance.api
       .crateApiStoreMicaStoreLoadDoc(that: this, docId: docId);
 
