@@ -12,6 +12,14 @@ members = [
 resolver = "2"
 
 [workspace.package]
+# Single source of truth for the version of the RELEASED binaries (api-server's
+# /api/health, mica-cli's --version). Both inherit it via `version.workspace =
+# true`, so a release bumps ONE line and they can't drift (mica-cli shipped
+# 0.12.x but reported 0.1.6 for months because it had its own stale version).
+# Internal libs (mica-core/app-core/markdown/infra) keep their own 0.1.0 — their
+# version isn't user-visible. Keep in sync with pubspec.yaml + main.dart's
+# kAppVersion on release (see docs/release.md).
+version = "0.12.11"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.85"

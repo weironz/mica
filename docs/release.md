@@ -84,7 +84,7 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 1. **版本号三处同步**(必须一致):
    - `clients/mica_flutter/pubspec.yaml` 的 `version:`
    - `clients/mica_flutter/lib/main.dart` 的 `kAppVersion`
-   - `crates/api-server/Cargo.toml` 的 `version`(顺带 `cargo check` 更新 `Cargo.lock`)
+   - 根 `Cargo.toml` `[workspace.package]` 的 `version`(**api-server 与 mica-cli 都 `version.workspace=true` 继承它**——改这一处两个二进制的 `/api/health` / `--version` 一起对;顺带 `cargo check` 更新 `Cargo.lock`)
 2. **判断服务端要不要跟着发**:改动是否触及 `crates/markdown` 等服务端依赖?
    链路 `api-server → mica-app-core → mica-markdown`。用 `cargo tree -p <crate> | grep <dep>`
    实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)

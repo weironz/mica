@@ -1,6 +1,6 @@
 [package]
 name = "mica-api-server"
-version = "0.12.11"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
