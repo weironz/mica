@@ -161,7 +161,20 @@ fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
     std::env::var(key).ok()?.trim().parse().ok()
 }
 
-fn is_auth_sensitive(path: &str) -> bool {
+/// Per-IP throttled: the credential endpoints. `refresh` is included (a rotating
+/// refresh-token endpoint is an abuse vector) but does NOT hash, so it skips the
+/// Argon2 gate below. WS connects are deliberately NOT here: they are already
+/// token-authenticated and a shared per-IP bucket would throttle a user opening
+/// several documents at once — not worth the false positives for a low-severity
+/// authed path.
+fn is_rate_limited(path: &str) -> bool {
+    spends_argon2(path) || path.ends_with("/auth/refresh")
+}
+
+/// Endpoints that run an Argon2 hash/verify — the ones the concurrency gate must
+/// bound. `refresh` is excluded: it is a DB token rotation, and holding a scarce
+/// Argon2 permit for it would starve real logins.
+fn spends_argon2(path: &str) -> bool {
     path.ends_with("/auth/login") || path.ends_with("/auth/register")
 }
 
@@ -173,17 +186,27 @@ pub async fn auth_rate_limit(
     req: Request,
     next: Next,
 ) -> Response {
-    if !is_auth_sensitive(req.uri().path()) {
+    let (limited, argon2) = {
+        let path = req.uri().path();
+        (is_rate_limited(path), spends_argon2(path))
+    };
+    if !limited {
         return next.run(req).await;
     }
     let ip = client_ip(req.headers(), peer);
     if !guard.limiter.allow(ip) {
         return throttled("too many attempts; slow down and try again shortly");
     }
-    // Bound aggregate Argon2 concurrency; drop the permit when the request ends.
-    let _permit = match guard.argon2.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => return throttled("the server is busy; try again in a moment"),
+    // login/register also share a global Argon2 concurrency budget; drop the
+    // permit when the request ends. `refresh` is rate-limited above but does no
+    // hashing, so it holds no permit (that would starve real logins).
+    let _permit = if argon2 {
+        match guard.argon2.clone().try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => return throttled("the server is busy; try again in a moment"),
+        }
+    } else {
+        None
     };
     next.run(req).await
 }
@@ -250,6 +273,19 @@ mod tests {
         // One second later, one token has refilled.
         assert!(rl.allow_at(ip, t0 + Duration::from_secs(1)));
         assert!(!rl.allow_at(ip, t0 + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn refresh_is_rate_limited_but_not_argon2_gated() {
+        assert!(is_rate_limited("/api/auth/login"));
+        assert!(is_rate_limited("/api/auth/register"));
+        assert!(is_rate_limited("/api/auth/refresh"));
+        assert!(!is_rate_limited("/api/workspaces"));
+        assert!(!is_rate_limited("/ws/workspaces/x/documents/y"));
+        // Only login/register hash — refresh must not hold an Argon2 permit.
+        assert!(spends_argon2("/api/auth/login"));
+        assert!(spends_argon2("/api/auth/register"));
+        assert!(!spends_argon2("/api/auth/refresh"));
     }
 
     #[test]

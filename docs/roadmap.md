@@ -42,7 +42,7 @@
 - 🆕 **客户端令牌明文存储放大 XSS 后果**(medium / 部分记录) —— web `authToken`+`refreshToken` 明文写 localStorage(任意同源 JS 可读,直接放大分享页 XSS);桌面明文存 prefs(无 DPAPI/secure_storage)。(`prefs_web.dart:6`, `main.dart:475`)(M)(桌面部分见下方「桌面 token DPAPI」)
 - ~~**无 refresh / 无撤销的 24h JWT**~~ ✅ refresh + rotation + reuse-detection + `revoke_family`/`revoke_user_sessions` 已落地;access JWT TTL 默认 **24h→1h**(`config.rs`,4a3042a),把「本该失效的 token 仍可用」窗口从 24h 压到 1h(客户端透明续期,无感)。更强的即时吊销(per-user token-version 表)仍可选,但收益已大幅下降。
 - ~~**改密不失效旧令牌**~~ ✅ `change_password` 已 `revoke_user_sessions`(`auth.rs:246`);唯一残留是被盗 access JWT 在剩余 TTL 内仍活(同上,靠缩 TTL/token-version 收口)。
-- ~~**登录/注册无限流**~~ ✅ per-IP 令牌桶 + 全局 Argon2 并发门(`rate_limit.rs`,9f97a23);反代后取真实 IP 走「XFF 从右跳私网」对双跳(Traefik+nginx)/单机都对,自研无依赖。**残留**:refresh 端点与 WS 建连尚未限流(把同一 `AuthGuard` 挂上去即可)。(S) `[需后端]`
+- ~~**登录/注册/refresh 无限流**~~ ✅ per-IP 令牌桶 + 全局 Argon2 并发门(`rate_limit.rs`);反代后取真实 IP 走「XFF 从右跳私网」对双跳(Traefik+nginx)/单机都对,自研无依赖。refresh 也纳入 per-IP 限流(但不占 Argon2 门——它不 hash,占了会饿死登录)。**WS 建连有意不限**:已 token 鉴权、低威胁,共享桶会误伤「同时开多文档」——按「不要过度设计」先不做并记因(CLAUDE.md 协作约定)。
 - **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文** —— 叠加 query token,未配 TLS 即明文泄露,且无启动告警(`config.rs`)。(M) `[需后端]`
 - **鉴权逐 handler 手写、非中间件** —— 新路由默认不鉴权,忘加即漏(`main.rs`, `auth.rs`)。(M) `[需后端]`
 - **WS token 走 query string** —— 明文 JWT 落反代日志/浏览器历史(`ws.rs`)。(M) `[需后端]`
@@ -164,7 +164,7 @@
 3. **AI 配置授权 + 收口 base_url**(high / M)—— 任意登录用户能外泄运营者 LLM 密钥 + SSRF,多用户下的硬洞。`[需后端]`
 4. **CI 锁住数据面回归**(high / S–M)—— api-server 59 测进 CI + `auth.rs` 假绿改 fail + 页树不变量守卫补测 + 安装包安装-启动冒烟。刚做完数据安全里程碑,核心却无回归网。`[需后端]`
 5. **客户端兜底三件**(high / S)—— 崩溃上报(`runZonedGuarded`)+ 单实例守卫(防双开丢数据)+ 本地损坏不再静默覆盖恢复点。桌面用户真丢数据的三条路径,单个都很小。
-6. ~~**限流 + 收紧 CORS + Token 撤销收口**~~ ✅ 2026-07-22 完成:认证端点 per-IP 令牌桶 + Argon2 并发门(9f97a23)、CORS prod 拒跨源(4a3042a)、access JWT 24h→1h、修 prod 误认作 dev(727ebab)。残留:refresh/WS 限流(小)。
+6. ~~**限流 + 收紧 CORS + Token 撤销收口**~~ ✅ 2026-07-22 完成:认证端点(含 refresh)per-IP 令牌桶 + Argon2 并发门、CORS prod 拒跨源、access JWT 24h→1h、修 prod 误认作 dev。WS 建连限流有意不做(已鉴权低威胁,见 CLAUDE.md「不要过度设计」);per-user token-version 即时吊销可选。
 7. **文档内查找/替换**(medium / S)—— 基线编辑器能力、高频、基于现有文本模型即可落地,性价比最高的功能补齐。
 
 ---
