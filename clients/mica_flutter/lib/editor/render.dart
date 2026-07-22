@@ -1360,10 +1360,15 @@ class RenderDocument extends RenderBox {
   // Height of a code block's optional bottom caption row.
   static const double _codeTitleH = 24;
 
-  // Auto-fold a code block past this many lines (AFFiNE-style); when folded it
-  // shows the first _codeCollapsedLines with a fade + expand affordance.
-  static const int _codeCollapseThreshold = 20;
-  static const int _codeCollapsedLines = 10;
+  // Auto-fold a code block only once it exceeds roughly one screenful; when
+  // folded it shows the first _codeCollapsedLines with a fade + expand
+  // affordance. Folding is a space/UX affordance only — the painter lays out
+  // the FULL text either way (see layout: painter.layout runs before the
+  // collapse decision), so this threshold buys screen real estate, not perf.
+  // Kept generous so ordinary pasted snippets (a few dozen lines) stay open;
+  // only genuinely page-dominating blocks fold.
+  static const int _codeCollapseThreshold = 40;
+  static const int _codeCollapsedLines = 20;
   static const double _codeFoldBarH = 26; // fold/expand affordance strip
 
   // Image placeholder size (before the real image decodes) and vertical gap.
