@@ -42,6 +42,34 @@ extension type _LockManager(JSObject _) implements JSObject {
   );
 }
 
+/// `navigator.storage` (StorageManager) — used to request PERSISTENT storage so
+/// the durable outbox (unpushed offline edits) can't be silently evicted under
+/// storage pressure. Null on the rare browser without it.
+@JS('navigator.storage')
+external JSObject? get _jsStorageManager;
+
+extension type _StorageManager(JSObject _) implements JSObject {
+  external JSPromise<JSBoolean> persist();
+}
+
+bool _persistRequested = false;
+
+/// Ask the browser (once per session) to make this origin's storage persistent,
+/// so a storage-pressure eviction can't wipe the IndexedDB durable outbox —
+/// pushed content cold-bootstraps back, but UNPUSHED offline edits would vanish
+/// silently. Best-effort and fire-and-forget: the browser grants on its own
+/// heuristics (engagement / PWA install), a denial or a missing API is harmless,
+/// and it must never block or fail opening the store.
+void _requestPersistentStorage() {
+  if (_persistRequested) return;
+  _persistRequested = true;
+  final sm = _jsStorageManager;
+  if (sm == null) return;
+  try {
+    _StorageManager(sm).persist().toDart.then((_) {}, onError: (_) {});
+  } catch (_) {}
+}
+
 extension type _IdbFactory(JSObject _) implements JSObject {
   external _IdbRequest open(String name, int version);
   external _IdbRequest deleteDatabase(String name);
@@ -178,6 +206,9 @@ class WebIdbDocStore implements CloudDocStore {
     WebDocReplay? replay,
     String dbName = _dbName,
   }) async {
+    // Before relying on IndexedDB durability, ask for persistent storage so the
+    // unpushed outbox can't be evicted out from under us (best-effort, once).
+    _requestPersistentStorage();
     final key = '$origin|$docId';
     Completer<void>? release;
     try {
@@ -262,7 +293,7 @@ class WebIdbDocStore implements CloudDocStore {
 
   static Future<void> _deleteDb(String dbName) {
     final c = Completer<void>();
-    final req = _IdbFactory(_jsIndexedDb! as JSObject).deleteDatabase(dbName);
+    final req = _IdbFactory(_jsIndexedDb!).deleteDatabase(dbName);
     void done(JSAny? _) {
       if (!c.isCompleted) c.complete();
     }
