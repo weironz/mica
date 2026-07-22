@@ -129,7 +129,7 @@
 
 ## 开发者体验 / CI / Markdown
 
-- 🆕 **api-server 全部 59 个测试不进 CI;其中 14 个 DB 测试本地也静默跳过**(high) —— CI 的 `-p` 白名单无 api-server;`auth.rs` 的 `refresh_pg`(覆盖「条件 UPDATE 原子花费 token」安全关键 SQL)用 `let Some(db)=pool().await else {return}` 没库就全绿 —— 正是 `sync_pg.rs` 刚消灭的假绿模式在此复活,注释还写着已过时的 "matching sync_pg.rs"。CI 的 postgres service 已在,加进 `-p` + 把静默跳过改成 fail 即可。(`ci.yml:98`, `auth.rs:878`)(S) `[需后端]`
+- ~~🆕 **api-server 全部测试不进 CI;DB 测试本地也静默跳过**~~ ✅ 已做(校准复核)—— `ci.yml` 已有 postgres service + `-p mica-api-server`(测在 CI 实跑);`auth.rs:895` `pool()` **已带 sync_pg.rs 同款 CI-assert**(`assert!(env CI is_err, "DATABASE_URL unset in CI...")`)→ 缺库在 CI 里 panic、本地才 return None 跳过,那些 `else{return}` 在 CI 不会假绿。(校准注:审计曾误判为残留,因只看了 `else{return}` 调用点、未读 `pool()` 定义——同其 #1 的错。)
 - ~~🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**~~ ✅ 已做(校准复核)—— `documents.rs` `parent_guard_pg` 测 folder 接受/page 拒绝/缺失父 + 触发器 backstop(真 PG 门控)。
 - ~~**Release 出的 Windows 安装包从未被自动安装-启动验证**~~ ✅ release.yml 加「安装-启动冒烟」(/VERYSILENT 装 + 启动 + 存活 10s + finally 清理,发布前拦,0d9c404;首跑盯 CI GUI 存活判定)。
 - **CI 补 Windows 集成测试** —— 18 个 integration_test(≈46 测,多条是真丢数据 bug 回归)只能本地手跑,且两个全栈文件并跑会撞 debug-connection race(`dev-environment.md:137`);Postgres 依赖测试已随 2e84422 进 CI。(M) `[需后端]`
