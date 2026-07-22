@@ -945,7 +945,24 @@ String detectLanguage(String code) {
   }
   if (has(r'\bvoid\s+main\b') || c.contains('Widget build(')) return 'dart';
   if (c.trimLeft().startsWith('{') || c.trimLeft().startsWith('[')) return 'json';
-  if (has(r'^\s*#!/.*sh\b') || has(r'\becho\s+')) return 'bash';
+  // Shell: real pasted sessions carry strong signals even without a shebang —
+  // a prompt line (`user@host:…$`/`#`), a pipe into a text tool, a redirect, or
+  // a common admin/CLI command at line start. The old check only knew `echo` and
+  // shebangs, so `nvidia-smi | grep …`, `systemctl is-active …`, or a
+  // `root@host:~# …` session fell through to plaintext (no highlighting).
+  if (hasLine(r'^\s*#!.*\bsh\b') ||
+      hasLine(r'[\w.-]+@[\w.-]+:.*[$#]') ||
+      has(r'\becho\s+') ||
+      has(r'\|\s*(?:grep|awk|sed|head|tail|xargs|sort|uniq|wc|cut|tr|less)\b') ||
+      has(r'2>&1') ||
+      has(r'>\s*/dev/null') ||
+      hasLine(
+        r'^\s*(?:sudo|apt|apt-get|yum|dnf|systemctl|service|journalctl|docker|'
+        r'kubectl|helm|git|curl|wget|ssh|scp|rsync|tar|chmod|chown|mkdir|export|'
+        r'source|pip3?|python3?|nvidia-smi|dcgmi)\b',
+      )) {
+    return 'bash';
+  }
   return 'plaintext';
 }
 

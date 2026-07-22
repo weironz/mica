@@ -577,4 +577,47 @@ after
       expect(strongLanguageSignature('+def f(x):\n-    return x'), isNull);
     });
   });
+
+  group('detectLanguage — real shell sessions (no shebang)', () {
+    // A shell prompt is decisive even with a venv prefix and a command that
+    // merely mentions python. (Regression: reported as plaintext.)
+    test('a prompt line is detected as bash', () {
+      expect(
+        detectLanguage(
+          '(nvfwupd-venv) root@B300-10:~/open-nvfwupd# python3 nvfwupd.py -t ip=1.2.3.4 \\\n'
+          '        show_version -p /root/pkg.fwpkg\n'
+          'Connection Status: Successful\n',
+        ),
+        'bash',
+      );
+    });
+
+    test('# comments + admin commands + a pipe are bash', () {
+      expect(
+        detectLanguage(
+          '# 健康检查\n'
+          'nvidia-smi\n'
+          'systemctl is-active nvidia-fabricmanager\n'
+          'nvidia-smi -q -d ECC | grep -i aggregate\n'
+          'dcgmi diag -r 2\n',
+        ),
+        'bash',
+      );
+    });
+
+    test('a bare pipe into grep is bash', () {
+      expect(detectLanguage('cat log | grep error\n'), 'bash');
+    });
+
+    test('a redirect is bash', () {
+      expect(detectLanguage('run_thing >/dev/null 2>&1\n'), 'bash');
+    });
+
+    // Guard against over-detection: real Python still wins via its own rules,
+    // and prose with an `@` handle is not a shell prompt.
+    test('does not steal Python or plain prose', () {
+      expect(detectLanguage('def f(x):\n    return x + 1\n'), 'python');
+      expect(detectLanguage('Ping @alice about the docs, thanks!\n'), 'plaintext');
+    });
+  });
 }
