@@ -84,7 +84,7 @@
 
 ## 编辑器与功能广度
 
-- **全文搜索是无索引 O(N) 子串扫描** —— 每查询反序列化每篇快照做 `contains`,无分词/排序/高亮,随空间线性劣化(`documents.rs`)。(L) `[需后端]`
+- 🟡 **全文搜索**(2026-07-22 复核:原描述失实——不是「反序列化每篇快照」,是每查询把每篇 yrs base **全量 CRDT 解码**一遍,N 次 decode)—— **M1 已做**(aa4c5d8):加 `document_yrs_base.content_text` 派生列(migration 0012),搜索退化为**一条 LEFT JOIN + ILIKE SQL**,干掉 N 次 CRDT 解码。content_text 是 state 纯投影、三条写 base 路径同语句 co-write(红线#1 不漂移);启动一次性回填存量;LIKE 转义 + 命中处窗口 snippet;CJK 走子串(无扩展/无分词器)。**残留**:① **pg_trgm GIN 索引**(M2,速度优化,现在是 seq scan 上的 ILIKE,一行 `CREATE INDEX` 升级,需先确认生产 PG 镜像带 pg_trgm);② **导入未打开的文档正文暂不可搜**(无 base 行,标题始终可搜,首次打开即触发建 base+索引;强制导入即建 base 会踩 lazy-base 不变量,留 M2);③ 排序/高亮/分词。(各 S–L) `[需后端]`
 - 🟡 **表格**(2026-07-22 复核:原描述大幅失实)—— 实测:**富行内单元格**(粗体/斜体/行内代码/链接,cell 存可重解析 md 源码、两端渲染+编辑,`cellDisplaySpan`/`CellEditController`)与**矩形/行列选区**(跨格拖选、点行/列把手选整行列、Ctrl+C/X 复制为 TSV+HTML、Delete 清空、Esc 清除)**本来就能用**;本轮仅补 **Shift+点击扩展选区**。**合并单元格有意不做**——8 家同类(Notion/AFFiNE/AppFlowy/Outline/siyuan/Joplin/logseq/anytype)调研定论:合并与「Markdown 权威 + round-trip 不变量」在 GFM 下**架构级互斥**(siyuan 能合并因它放弃了 md 权威;Joplin 同约束只能冻单向 HTML;Logseq/Notion 干脆不做)。要做只能另开 HTML 逃生舱块退出 round-trip,是独立决策。块级单元格/列宽 GFM 表达不了,同样不做。
 - 🟡 **反向链接/引用面板/关系图** —— 正向 `[[` 已建;**引用面板已做**(云端页显示「谁链到我」可点跳转,`GET .../backlinks` 按需扫描、复用 page_link_targets,7de2c2a)。**残留**:~~①并发扫描~~ ✅(buffered(8),6612330);②规模成瓶颈再上维护式反向索引表(现在故意不建);③本地世界(offline)反链;④**关系图**(graph view)。(各 S–L)`[需后端]`
 - **无标签/页面属性/数据库视图** —— 对象模型只认 `document`(`documents.rs`)。(L) `[需后端]`
