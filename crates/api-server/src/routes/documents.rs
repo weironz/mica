@@ -803,6 +803,60 @@ pub async fn restore_view(
   Ok(Json(ViewListResponse { views }))
 }
 
+/// Permanently delete a view subtree AND the `documents` those views back,
+/// returning `(views_deleted, docs_deleted)`.
+///
+/// `views.object_id -> documents.id` is NOT a foreign key (object_id may be a
+/// folder, which has no document), so deleting views alone stranded the document
+/// plus its yrs base / snapshots / versions / shares — content "永久删除" claimed
+/// to erase kept living (a privacy hole, incl. a still-valid public share token)
+/// and leaked disk. Deleting the `documents` row cascades (ON DELETE CASCADE) to
+/// every document_* table: document_yrs_base (the CRDT content), snapshots,
+/// versions, op updates, and document_shares (revokes the public link). Blobs are
+/// content-addressed and may be shared by another page, so they are reclaimed
+/// lazily by blob_gc once their last referencing block is gone — never here.
+///
+/// One atomic statement: `subtree` gathers the view ids + object ids/types,
+/// `deleted_views` removes the views and returns what they backed, `purged_docs`
+/// removes the documents of the document-typed ones. Extracted so a DB test can
+/// prove the cascade without the full HTTP handler.
+async fn purge_view_subtree(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_id: Uuid,
+) -> ApiResult<(i64, i64)> {
+  let row = sqlx::query_as::<_, (i64, i64)>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, object_id, object_type FROM views WHERE id = $1 AND workspace_id = $2
+        UNION ALL
+        SELECT v.id, v.object_id, v.object_type
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      ),
+      deleted_views AS (
+        DELETE FROM views
+        WHERE id IN (SELECT id FROM subtree) AND workspace_id = $2
+        RETURNING object_id, object_type
+      ),
+      purged_docs AS (
+        DELETE FROM documents
+        WHERE id IN (
+          SELECT object_id FROM deleted_views WHERE object_type::text = 'document'
+        )
+        RETURNING id
+      )
+      SELECT
+        (SELECT count(*) FROM deleted_views)::bigint,
+        (SELECT count(*) FROM purged_docs)::bigint
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .fetch_one(db)
+  .await?;
+  Ok(row)
+}
+
 pub async fn purge_view(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -811,24 +865,12 @@ pub async fn purge_view(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  // Permanently remove the page and its subtree from the recycle bin.
-  let result = sqlx::query(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
-        UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      DELETE FROM views
-      WHERE id IN (SELECT id FROM subtree) AND workspace_id = $2
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .execute(&state.db)
-  .await?;
+  // Permanently remove the page + its subtree AND the documents they back (so no
+  // orphaned content/shares survive "永久删除"). See [`purge_view_subtree`].
+  let (views_deleted, _docs_deleted) =
+    purge_view_subtree(&state.db, workspace_id, view_id).await?;
 
-  if result.rows_affected() == 0 {
+  if views_deleted == 0 {
     return Err(ApiError::NotFound);
   }
 
@@ -4195,6 +4237,58 @@ mod tests {
       assert_eq!(hits.len(), 1, "body searchable after eager base: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
+    }
+
+    /// Permanent delete (`purge_view_subtree`) must erase the document AND every
+    /// thing that hangs off it — not just the `views` row. Otherwise "永久删除"
+    /// leaves the CRDT content, snapshots and a still-valid public share token
+    /// behind (privacy hole + disk leak). This pins the ON DELETE CASCADE chain.
+    #[tokio::test]
+    async fn purge_cascades_document_content_and_share() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (view, doc) = seed_document(&db, ws, user, "机密页", serde_json::json!([])).await;
+      set_content_text(&db, doc, "机密内容").await; // creates a document_yrs_base row
+      // A live public share token for the page.
+      sqlx::query(
+        "INSERT INTO document_shares(token, workspace_id, document_id, created_by) \
+         VALUES($1,$2,$3,$4)",
+      )
+      .bind(format!("tok_{}", Uuid::new_v4().simple()))
+      .bind(ws)
+      .bind(doc)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let (views_deleted, docs_deleted) =
+        purge_view_subtree(&db, ws, view).await.unwrap();
+      assert!(views_deleted >= 1, "the view subtree was removed");
+      assert_eq!(docs_deleted, 1, "the backing document was removed");
+
+      // Nothing that referenced the document may survive — the view, the
+      // document, and every cascaded child table (CRDT base, snapshot, share).
+      async fn count(db: &PgPool, sql: &'static str, id: Uuid) -> i64 {
+        sqlx::query_scalar(sql).bind(id).fetch_one(db).await.unwrap()
+      }
+      assert_eq!(count(&db, "SELECT count(*) FROM views WHERE id=$1", view).await, 0);
+      assert_eq!(count(&db, "SELECT count(*) FROM documents WHERE id=$1", doc).await, 0);
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM document_yrs_base WHERE document_id=$1", doc).await,
+        0,
+        "CRDT content left behind after purge"
+      );
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM document_snapshots WHERE document_id=$1", doc).await,
+        0,
+        "snapshot left behind after purge"
+      );
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM document_shares WHERE document_id=$1", doc).await,
+        0,
+        "public share token left behind after purge"
+      );
     }
   }
 }
