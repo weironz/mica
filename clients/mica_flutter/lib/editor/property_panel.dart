@@ -10,6 +10,10 @@ import 'render.dart' show EditorTheme;
 /// `upsertProperty` / `removeProperty` helpers (untouched keys stay byte-exact)
 /// and commits it through [onCommit], which persists it onto the root block's
 /// `data['front_matter']`. See docs/page-properties.md.
+///
+/// Layout follows AFFiNE's doc-info style: compact rows (type icon + narrow name
+/// + inline value), collapsible so a page with many properties doesn't push the
+/// body down — the header stays a one-line summary until expanded.
 class PropertyPanel extends StatefulWidget {
   const PropertyPanel({
     super.key,
@@ -37,6 +41,7 @@ class PropertyPanel extends StatefulWidget {
 class _PropertyPanelState extends State<PropertyPanel> {
   late String _fm = widget.frontMatter;
   bool _addingKey = false;
+  bool _collapsed = false;
 
   @override
   void didUpdateWidget(PropertyPanel old) {
@@ -82,33 +87,120 @@ class _PropertyPanelState extends State<PropertyPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final p in props)
-            _PropertyRow(
-              key: ValueKey(p.key),
-              property: p,
-              canEdit: widget.canEdit,
-              onChanged: (v) => _setValue(p.key, v),
-              onRemove: () => _remove(p.key),
-              onOpenTag: widget.onOpenTag,
+          if (props.isNotEmpty)
+            _CollapseHeader(
+              collapsed: _collapsed,
+              props: props,
+              onToggle: () => setState(() => _collapsed = !_collapsed),
             ),
-          if (widget.canEdit)
-            _addingKey
-                ? _KeyField(
-                    onSubmit: _addKey,
-                    onCancel: () => setState(() => _addingKey = false),
-                  )
-                : _AddPropertyButton(
-                    onTap: () => setState(() => _addingKey = true),
-                  ),
+          if (props.isEmpty || !_collapsed) ...[
+            for (final p in props)
+              _PropertyRow(
+                key: ValueKey(p.key),
+                property: p,
+                canEdit: widget.canEdit,
+                onChanged: (v) => _setValue(p.key, v),
+                onRemove: () => _remove(p.key),
+                onOpenTag: widget.onOpenTag,
+              ),
+            if (widget.canEdit)
+              _addingKey
+                  ? _KeyField(
+                      onSubmit: _addKey,
+                      onCancel: () => setState(() => _addingKey = false),
+                    )
+                  : _AddPropertyButton(
+                      onTap: () => setState(() => _addingKey = true),
+                    ),
+          ],
         ],
       ),
     );
   }
 }
 
-/// One property: a fixed-width key label + a type-appropriate value editor + a
-/// remove affordance (edit mode only).
-class _PropertyRow extends StatelessWidget {
+/// One-line collapse control. Expanded → just a down-chevron. Collapsed → a
+/// right-chevron plus a faint summary of the property values, so you can see
+/// what's there without expanding.
+class _CollapseHeader extends StatelessWidget {
+  const _CollapseHeader({
+    required this.collapsed,
+    required this.props,
+    required this.onToggle,
+  });
+
+  final bool collapsed;
+  final List<Property> props;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onToggle,
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Icon(
+              collapsed ? Icons.chevron_right : Icons.expand_more,
+              size: 16,
+              color: EditorTheme.faint,
+            ),
+            const SizedBox(width: 2),
+            if (collapsed)
+              Expanded(
+                child: Text(
+                  _summary(props),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: EditorTheme.faint, fontSize: 12),
+                ),
+              )
+            else
+              Text(
+                '${props.length}',
+                style: const TextStyle(color: EditorTheme.faint, fontSize: 12),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _summary(List<Property> props) {
+    final bits = <String>[];
+    for (final p in props) {
+      final v = switch (p.value) {
+        PropText(:final value) => value,
+        PropNumber(:final value) => _numText(value),
+        PropCheckbox(:final value) => value ? '✓' : '✗',
+        PropDate(:final value) => value,
+        PropList(:final items) => items.join(', '),
+      };
+      bits.add(v.isEmpty ? p.key : '${p.key}: $v');
+    }
+    return bits.join('  ·  ');
+  }
+}
+
+String _numText(double n) =>
+    n == n.truncateToDouble() && n.abs() < 1e15
+        ? n.toInt().toString()
+        : n.toString();
+
+IconData _typeIcon(PropertyValue v) => switch (v) {
+      PropText() => Icons.subject,
+      PropNumber() => Icons.tag,
+      PropCheckbox() => Icons.check_box_outlined,
+      PropDate() => Icons.calendar_today_outlined,
+      PropList() => Icons.sell_outlined,
+    };
+
+/// One property: a small type icon + a narrow key label + a type-appropriate
+/// value editor. The remove × is revealed on hover (edit mode only) to keep the
+/// row uncluttered.
+class _PropertyRow extends StatefulWidget {
   const _PropertyRow({
     super.key,
     required this.property,
@@ -125,45 +217,74 @@ class _PropertyRow extends StatelessWidget {
   final void Function(String value)? onOpenTag;
 
   @override
+  State<_PropertyRow> createState() => _PropertyRowState();
+}
+
+class _PropertyRowState extends State<_PropertyRow> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6, right: 8),
-              child: Text(
-                property.key,
-                style: const TextStyle(
-                  color: EditorTheme.muted,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-                overflow: TextOverflow.ellipsis,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Icon(
+                _typeIcon(widget.property.value),
+                size: 14,
+                color: EditorTheme.faint,
               ),
             ),
-          ),
-          Expanded(
-            child: _ValueEditor(
-              value: property.value,
-              canEdit: canEdit,
-              onChanged: onChanged,
-              onOpenTag: onOpenTag,
+            const SizedBox(width: 6),
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: SizedBox(
+                width: 84,
+                child: Text(
+                  widget.property.key,
+                  style: const TextStyle(
+                    color: EditorTheme.muted,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
-          ),
-          if (canEdit)
-            IconButton(
-              icon: const Icon(Icons.close, size: 14, color: EditorTheme.faint),
-              splashRadius: 14,
-              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              padding: EdgeInsets.zero,
-              tooltip: MaterialLocalizations.of(context).deleteButtonTooltip,
-              onPressed: onRemove,
+            const SizedBox(width: 8),
+            Expanded(
+              child: _ValueEditor(
+                value: widget.property.value,
+                canEdit: widget.canEdit,
+                onChanged: widget.onChanged,
+                onOpenTag: widget.onOpenTag,
+              ),
             ),
-        ],
+            // Remove × — reserved space always (no layout jump), shown on hover.
+            SizedBox(
+              width: 22,
+              child: (widget.canEdit && _hover)
+                  ? IconButton(
+                      icon: const Icon(Icons.close,
+                          size: 13, color: EditorTheme.faint),
+                      splashRadius: 12,
+                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints(minWidth: 22, minHeight: 22),
+                      padding: EdgeInsets.zero,
+                      tooltip:
+                          MaterialLocalizations.of(context).deleteButtonTooltip,
+                      onPressed: widget.onRemove,
+                    )
+                  : null,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -190,11 +311,16 @@ class _ValueEditor extends StatelessWidget {
       case PropCheckbox(:final value):
         return Align(
           alignment: Alignment.centerLeft,
-          child: Checkbox(
-            value: value,
-            visualDensity: VisualDensity.compact,
-            onChanged:
-                canEdit ? (v) => onChanged(PropCheckbox(v ?? false)) : null,
+          child: SizedBox(
+            height: 24,
+            width: 24,
+            child: Checkbox(
+              value: value,
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              onChanged:
+                  canEdit ? (v) => onChanged(PropCheckbox(v ?? false)) : null,
+            ),
           ),
         );
       case PropList(:final items):
@@ -216,11 +342,6 @@ class _ValueEditor extends StatelessWidget {
         return _ScalarField(text: value, canEdit: canEdit, onChanged: onChanged);
     }
   }
-
-  static String _numText(double n) =>
-      n == n.truncateToDouble() && n.abs() < 1e15
-          ? n.toInt().toString()
-          : n.toString();
 }
 
 /// A text field for a scalar property. Commits on submit / focus loss, and
@@ -283,7 +404,8 @@ class _ScalarFieldState extends State<_ScalarField> {
       style: const TextStyle(color: EditorTheme.text, fontSize: 13),
       decoration: const InputDecoration(
         isDense: true,
-        contentPadding: EdgeInsets.symmetric(vertical: 6),
+        isCollapsed: true,
+        contentPadding: EdgeInsets.symmetric(vertical: 4),
         border: InputBorder.none,
         hintText: '—',
         hintStyle: TextStyle(color: EditorTheme.faint, fontSize: 13),
@@ -335,7 +457,7 @@ class _TagListState extends State<_TagList> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.only(top: 2),
       child: Wrap(
         spacing: 6,
         runSpacing: 4,
@@ -351,17 +473,18 @@ class _TagListState extends State<_TagList> {
             ),
           if (widget.canEdit)
             SizedBox(
-              width: 96,
+              width: 84,
               child: TextField(
                 controller: _add,
                 style: const TextStyle(color: EditorTheme.text, fontSize: 13),
                 decoration: InputDecoration(
                   isDense: true,
+                  isCollapsed: true,
                   contentPadding: const EdgeInsets.symmetric(vertical: 4),
                   border: InputBorder.none,
                   hintText: context.l10n.propertyTagAdd,
                   hintStyle:
-                      const TextStyle(color: EditorTheme.faint, fontSize: 13),
+                      const TextStyle(color: EditorTheme.faint, fontSize: 12),
                 ),
                 onSubmitted: _submitAdd,
               ),
@@ -392,15 +515,14 @@ class _Chip extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: EditorTheme.codeBg,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           MouseRegion(
-            cursor: onTap == null
-                ? MouseCursor.defer
-                : SystemMouseCursors.click,
+            cursor:
+                onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
             child: GestureDetector(
               onTap: onTap,
               child: Text(
@@ -457,7 +579,7 @@ class _KeyFieldState extends State<_KeyField> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.only(top: 2, left: 20),
       child: SizedBox(
         width: 160,
         child: TextField(
@@ -466,7 +588,8 @@ class _KeyFieldState extends State<_KeyField> {
           style: const TextStyle(color: EditorTheme.text, fontSize: 13),
           decoration: InputDecoration(
             isDense: true,
-            contentPadding: const EdgeInsets.symmetric(vertical: 6),
+            isCollapsed: true,
+            contentPadding: const EdgeInsets.symmetric(vertical: 5),
             border: InputBorder.none,
             hintText: context.l10n.propertyKeyHint,
             hintStyle: const TextStyle(color: EditorTheme.faint, fontSize: 13),
@@ -486,12 +609,12 @@ class _AddPropertyButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.only(top: 1),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(4),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 2),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
