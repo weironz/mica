@@ -6979,10 +6979,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   PropertyPanel(
                     frontMatter: bootstrap.rootFrontMatter,
                     canEdit: canEdit,
-                    // Clicking a tag opens workspace search for it (M2). Body +
-                    // property values are both indexed, so this finds pages
-                    // carrying the tag (and any that mention the word).
-                    onOpenTag: _openSearch,
+                    // Clicking a tag opens workspace search for `#tag` — the
+                    // precise token the index stores for list/tag values, so it
+                    // finds pages that CARRY the tag, not ones that merely
+                    // mention the word in their body (M2).
+                    onOpenTag: (v) => _openSearch('#$v'),
                     onCommit: (fm) {
                     final data = Map<String, dynamic>.from(bootstrap.rootData);
                     if (fm.isEmpty) {

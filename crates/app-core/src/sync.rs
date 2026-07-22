@@ -148,12 +148,19 @@ pub(crate) fn content_text_from_doc(doc: &MicaDoc) -> String {
 /// the search index: list items (tags) and Text/Number/Date scalars, in order.
 /// Booleans and the keys themselves are dropped — a search for `done` should
 /// find a page tagged `done`, not every page with a `done: false` checkbox.
+///
+/// List items (tags) are emitted with a leading `#` — `#work`. This makes a
+/// TAG CLICK precise: the client searches `#work`, which matches only a page
+/// that carries the tag, not one whose body merely mentions "work". A plain typed
+/// search for `work` still finds it, because `work` is a substring of `#work`.
 fn searchable_metadata(front_matter: &str) -> String {
     use mica_markdown::properties::PropertyValue;
     let mut parts: Vec<String> = Vec::new();
     for prop in mica_markdown::properties::parse_properties(front_matter) {
         match prop.value {
-            PropertyValue::List(items) => parts.extend(items),
+            PropertyValue::List(items) => {
+                parts.extend(items.into_iter().map(|it| format!("#{it}")))
+            }
             PropertyValue::Text(s) if !s.is_empty() => parts.push(s),
             PropertyValue::Date(s) => parts.push(s),
             PropertyValue::Number(n) => parts.push(if n.fract() == 0.0 && n.abs() < 1e15 {
@@ -622,11 +629,11 @@ mod tests {
                 CoreBlock::new("p", "paragraph").with_text("正文"),
             ],
         );
-        // Body first, then property values (tag items, text, number). `done`
-        // (a bool) and the keys are not indexed.
+        // Body first, then property values: tags as `#item` (precise click),
+        // scalars plain. `done` (a bool) and the keys are not indexed.
         assert_eq!(
             content_text_from_doc(&doc),
-            "正文\nrust crdt 进行中 3"
+            "正文\n#rust #crdt 进行中 3"
         );
     }
 
@@ -640,7 +647,7 @@ mod tests {
                 "front_matter": "tags: [urgent]"
             }))],
         );
-        assert_eq!(content_text_from_doc(&doc), "urgent");
+        assert_eq!(content_text_from_doc(&doc), "#urgent");
     }
 
     // An encode→decode round trip (what the server stores + re-reads) preserves
