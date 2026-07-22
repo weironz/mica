@@ -101,7 +101,7 @@
 
 - **无触屏选择手势** —— 无长按选词/选择手柄/放大镜,手机端文本选择基本不可用。(L)
 - **Windows 未签名(SmartScreen 告警)** —— 路径:SignPath CA 证书接入 Inno SignTool(desktop-plan)。(M)
-- 🆕 **自动更新器不校验下载完整性/哈希/签名**(medium) —— 从 GitHub Release 下载 `Setup.exe` 后直接 `/VERYSILENT` 执行,不比对 `received==contentLength`、无 sha256(GitHub API 提供 asset digest 可用)、无 Authenticode 校验;安装包本身又未签名。release 资产被替换或受信 MITM 即静默装任意 exe。缓解:Inno 内部 CRC 让截断包多半启动失败。修:下载后校验长度 + GitHub 提供的 digest。(`updater_desktop.dart:63`)(S)
+- 🟡 **自动更新器不校验下载完整性/哈希/签名**(medium) —— **完整性校验已做**(508808e):下载后经纯函数 `installerMatches` 验 `size`(GitHub `assets[].size`,恒有→拒截断)+ `sha256`(`assets[].digest`,GitHub 服务端算→拒换包/损坏),不符即删+`updaterIntegrityFailed`,绝不运行;无 digest 老 release 退化仅 size。**残留**:① **Authenticode 签名**——安装包本身仍未签名(需代码签名证书,独立项);② digest 依赖 GitHub 是否为我方资产填充(未填时仅 size 兜底),要更强可让 release CI 自发 `SHA256SUMS`。(`updater_desktop.dart` `installerMatches`)(证书项 M / 其余已做)
 - **无内置自动更新** —— 现靠手动;可采 AppFlowy 的 WinSparkle + appcast(desktop-plan)。(L)
 - **window_manager→nativeapi / Turso 观望**(各 S,已隔离在 trait 后)。
 
