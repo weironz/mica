@@ -91,7 +91,7 @@
 - **评论/建议未建** —— 仅 `commenter` 角色打通,marks 模型本为 range 锚点预留。(L) `[需后端]`
 - **callout/toggle/embed/columns 块未建** —— Notion 类常见结构块。(L)
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;10+ 处硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
-- **文档内查找/替换缺失** —— 有全局搜索却无 Ctrl+F;基于现有文本模型很便宜。(S)
+- ~~**文档内查找/替换缺失**~~ ✅ Ctrl+F 查找栏(导航/计数/当前匹配高亮)原已具备;2026-07-22 补齐**替换**(`replaceRange`/`replaceAll` 走既有 op 路径,9fe9ae8)+ F3/Shift+F3。**全部匹配高亮**有意不做(要动 render.dart 加第二遍选区叠绘,超 MVP)。
 - ~~**行内数学未排版**~~ ✅ 2026-07-16:`$…$` 真排进行里(基线对齐、随字号缩放),公式为不可进入的原子(`inline_atoms.dart`,render-architecture.md Decision 4)。
 - **Web IME/光标滚动实况调优** —— Milestone 1 遗留(合成态/游离换行、caret scroll-into-view)。(M)
 - **AI 离线为空 stub / 无拼写检查 / 无字数统计**。(M / M / S)
@@ -165,7 +165,7 @@
 4. **CI 锁住数据面回归**(high / S–M)—— api-server 59 测进 CI + `auth.rs` 假绿改 fail + 页树不变量守卫补测 + 安装包安装-启动冒烟。刚做完数据安全里程碑,核心却无回归网。`[需后端]`
 5. **客户端兜底三件**(high / S)—— 崩溃上报(`runZonedGuarded`)+ 单实例守卫(防双开丢数据)+ 本地损坏不再静默覆盖恢复点。桌面用户真丢数据的三条路径,单个都很小。
 6. ~~**限流 + 收紧 CORS + Token 撤销收口**~~ ✅ 2026-07-22 完成:认证端点(含 refresh)per-IP 令牌桶 + Argon2 并发门、CORS prod 拒跨源、access JWT 24h→1h、修 prod 误认作 dev。WS 建连限流有意不做(已鉴权低威胁,见 CLAUDE.md「不要过度设计」);per-user token-version 即时吊销可选。
-7. **文档内查找/替换**(medium / S)—— 基线编辑器能力、高频、基于现有文本模型即可落地,性价比最高的功能补齐。
+7. ~~**文档内查找/替换**~~ ✅ 2026-07-22 完成(9fe9ae8):查找侧原已具备,补齐替换 + F3。至此本「最该做」清单全部清空——下一批优先级见下方各小节(反链、表格、虚拟化等)。
 
 ---
 
