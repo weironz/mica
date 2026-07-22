@@ -24,7 +24,7 @@
 - 🆕 **离线 outbox 按文档滞留:重连后只有当前打开的文档会推送**(high) —— 云会话是绑定活跃文档的单例,`StoreCloudDocStore.outboxAfter` 的唯一读取方是该文档自己的会话,没有「重连后扫描所有文档未推送 outbox」的后台清扫。离线连编 A/B/C、回在线只停在 C → A/B 编辑一直躺在本地库,其他设备见旧内容且无提示(与图片版同款限制,图片版已文档化、文本版没有)。修法:重连/启动时枚举有未推送 outbox 的 doc,起短命 headless 会话逐个 drain。(`main.dart:1001/926`, `store_cloud_doc_store.dart:59`)(M)
 - 🆕 **长离线重连 = 推送风暴**(medium) —— `_flushUnacked(resendAll:true)` 逐条重发整个 outbox,无分批/背压/合并;服务端每条 push 全档 decode+encode+upsert = O(条数×文档大小)。可先用 yrs merge 把尾巴合成一条再推,或分批节流。(`cloud_sync_session.dart:584`, `sync.rs:217`)(M) `[需后端]`
 - 🆕 **协议无版本协商 / 无最低版本闸门**(medium) —— WS 握手不交换客户端/协议版本,未知帧与未知 error code 均静默忽略,兼容全靠「每次改动做成双向后向兼容」的纪律 + op-model REST 兜底。桌面是用户自装包、服务端本地独立部署,版本天然会漂;op 模型退役后没有任何机制(WS hello / min-version 拒连 / 健康检查版本比对)挡老客户端连上不再兼容的服务端并静默错乱。(`ws.rs:36`, `health.rs:10`)(M) `[需后端]`
-- 🆕 **Web IndexedDB 被驱逐 → 未推送离线编辑静默蒸发**(medium) —— web durable outbox 只活在 IndexedDB,存储压力下可整库驱逐;已推送内容能冷 bootstrap 补回,但未推送 outbox 无声消失、无检测无提示。全客户端无 `navigator.storage.persist()` 调用(一行成本显著降低驱逐概率,是 y-indexeddb 类应用常规操作)。(`web_idb_doc_store.dart:276`)(S)
+- ~~🆕 **Web IndexedDB 被驱逐 → 未推送离线编辑静默蒸发**~~ ✅ 已做(60b8b67)—— `WebIdbDocStore.open` 首次打开时 best-effort 调 `navigator.storage.persist()`(js_interop 绑定 StorageManager),请求持久化存储、显著降低驱逐概率;guarded 每会话一次、fire-and-forget、缺 API/拒绝均降级。(`web_idb_doc_store.dart` `_requestPersistentStorage`)
 - **M-R 收尾:更细的「离线/重连中」状态提示** —— 见「客户端质量」小节的同步状态可见性条目。
 - ~~客户端自动重连~~ ✅ 已做(branch `feat/cloud-auto-reconnect`,退避重连,§13.1)。
 
