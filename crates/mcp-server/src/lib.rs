@@ -145,6 +145,96 @@ struct DocArg {
   document_id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReadDocArgs {
+  workspace_id: String,
+  /// The document's object id (a page view's `object_id`).
+  document_id: String,
+  /// Read only a WINDOW: 1-based first line to return. Omit to start at line 1.
+  /// Windowed reads save tokens on long pages — pull a slice, not the whole doc.
+  #[serde(default)]
+  offset: Option<usize>,
+  /// Read only a WINDOW: max lines to return from `offset`. Omit for the rest.
+  #[serde(default)]
+  limit: Option<usize>,
+  /// Read only the SECTION under a heading whose text contains this (case-
+  /// insensitive), up to the next heading of the same or higher level. Takes
+  /// precedence over offset/limit. Use `mica_get_outline` to see headings.
+  #[serde(default)]
+  section: Option<String>,
+}
+
+/// Return only the requested slice of a document's markdown, with a one-line
+/// header so the model knows what it is looking at (and that there is more).
+/// `section` wins over `offset`/`limit`. Pure — unit-tested below.
+fn window_markdown(
+  full: &str,
+  offset: Option<usize>,
+  limit: Option<usize>,
+  section: Option<&str>,
+) -> String {
+  if let Some(section) = section {
+    return section_markdown(full, section);
+  }
+  if offset.is_none() && limit.is_none() {
+    return full.to_string();
+  }
+  let lines: Vec<&str> = full.lines().collect();
+  let total = lines.len();
+  // 1-based offset; clamp into range.
+  let start = offset.unwrap_or(1).max(1).min(total.max(1)) - 1;
+  let end = match limit {
+    Some(n) => (start + n).min(total),
+    None => total,
+  };
+  let body = lines.get(start..end).unwrap_or(&[]).join("\n");
+  format!(
+    "[lines {}-{} of {}]\n{}",
+    start + 1,
+    end.max(start + 1).min(total.max(1)),
+    total,
+    body
+  )
+}
+
+/// The markdown from the first heading whose text contains [needle] (case-
+/// insensitive) through the line before the next heading of the same or higher
+/// level. Empty (with a note) when no heading matches. Pure.
+fn section_markdown(full: &str, needle: &str) -> String {
+  let needle_lc = needle.to_lowercase();
+  let lines: Vec<&str> = full.lines().collect();
+  let heading_level = |line: &str| -> Option<usize> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if hashes >= 1 && hashes <= 6 && line.chars().nth(hashes) == Some(' ') {
+      Some(hashes)
+    } else {
+      None
+    }
+  };
+  let mut start = None;
+  let mut start_level = 0;
+  for (i, line) in lines.iter().enumerate() {
+    if let Some(level) = heading_level(line)
+      && line.to_lowercase().contains(&needle_lc)
+    {
+      start = Some(i);
+      start_level = level;
+      break;
+    }
+  }
+  let Some(start) = start else {
+    return format!("[no heading contains {needle:?}; use mica_get_outline to list headings]");
+  };
+  let mut end = lines.len();
+  for (i, line) in lines.iter().enumerate().skip(start + 1) {
+    if heading_level(line).is_some_and(|lvl| lvl <= start_level) {
+      end = i;
+      break;
+    }
+  }
+  lines[start..end].join("\n")
+}
+
 /// Control characters a JSON unescape produces from a LaTeX command, paired with
 /// the escape that made them, and an example of the command each one eats.
 /// `\times` under-escaped in JSON is not an error — `\t` is a legal escape — so
@@ -244,7 +334,9 @@ struct UpdateDocArgs {
   /// Markdown to write (append/replace_all/insert_at). Omit for find_replace.
   #[serde(default)]
   markdown: Option<String>,
-  /// insert_at: the block id to insert after (from `mica_get_outline`).
+  /// insert_at: WHERE to insert after — a block id from `mica_get_outline`, OR
+  /// a heading's text (resolved to its block id for you). Heading text is safer
+  /// than a position: it survives edits above it.
   #[serde(default)]
   anchor: Option<String>,
   /// find_replace: the text to find and its replacement.
@@ -252,6 +344,16 @@ struct UpdateDocArgs {
   find: Option<String>,
   #[serde(default)]
   replace: Option<String>,
+  /// find_replace: require EXACTLY ONE occurrence, else refuse and report the
+  /// count — a precise single edit instead of a blind replace-all. Default false
+  /// (replace every match, the existing behaviour).
+  #[serde(default)]
+  unique: bool,
+  /// Optimistic concurrency: the `seq` you last read for this doc. If given and
+  /// the server has moved on, the write is refused so you can re-read — no silent
+  /// clobber of a concurrent edit. (Enforced once the API ships the check.)
+  #[serde(default)]
+  expected_seq: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -442,6 +544,21 @@ fn write_ack(value: Value) -> Result<CallToolResult, McpError> {
     .and_then(Value::as_array)
   {
     ack.insert("blocks".to_string(), json!(blocks.len()));
+    // The last top-level block id — the natural anchor for the NEXT insert_at
+    // after an append, so the caller chains edits without re-reading the doc.
+    if let Some(root_id) = value
+      .pointer("/snapshot/payload/root_block_id")
+      .and_then(Value::as_str)
+      && let Some(last) = blocks
+        .iter()
+        .find(|b| b.get("id").and_then(Value::as_str) == Some(root_id))
+        .and_then(|root| root.get("children"))
+        .and_then(Value::as_array)
+        .and_then(|children| children.last())
+        .and_then(Value::as_str)
+    {
+      ack.insert("last_block_id".to_string(), json!(last));
+    }
   }
   if let Some(seq) = value.pointer("/update/seq").and_then(Value::as_i64) {
     ack.insert("seq".to_string(), json!(seq));
@@ -567,23 +684,39 @@ impl MicaMcp {
   }
 
   #[tool(
-    description = "Read a document's content as Markdown.",
+    description = "Read a document as Markdown. For long pages, pass offset+limit \
+                       (a line window) or section (a heading name) to pull just a slice \
+                       and save tokens instead of the whole doc.",
     annotations(read_only_hint = true)
   )]
   async fn mica_read_document(
     &self,
-    Parameters(DocArg {
+    Parameters(ReadDocArgs {
       workspace_id,
       document_id,
-    }): Parameters<DocArg>,
+      offset,
+      limit,
+      section,
+    }): Parameters<ReadDocArgs>,
   ) -> Result<CallToolResult, McpError> {
-    tool_result(
-      self
-        .get(&format!(
-          "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
-        ))
-        .await,
-    )
+    let value = match self
+      .get(&format!(
+        "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
+      ))
+      .await
+    {
+      Ok(value) => value,
+      Err(error) => return Ok(tool_error(error)),
+    };
+    // The export endpoint returns bare markdown (a JSON string, or the raw text
+    // when it wasn't valid JSON). Either way, get the markdown, then slice it —
+    // the window is what saves tokens on a big page.
+    let full = match value {
+      Value::String(s) => s,
+      other => other.to_string(),
+    };
+    let out = window_markdown(&full, offset, limit, section.as_deref());
+    Ok(CallToolResult::success(vec![Content::text(out)]))
   }
 
   #[tool(
@@ -676,10 +809,11 @@ impl MicaMcp {
   }
 
   #[tool(
-    description = "Write into an EXISTING document. mode: append (after current content, \
-                       the safe default), replace_all (rewrite), insert_at (place after \
-                       `anchor` from mica_get_outline — a local edit), find_replace (swap \
-                       `find`→`replace`). Content is Markdown; the server derives the ops.",
+    description = "Write into an EXISTING doc. mode: append (safe default), \
+                       replace_all (rewrite), insert_at (place after `anchor` — a block id \
+                       or a heading's text, from mica_get_outline), find_replace (swap \
+                       `find`→`replace`; set unique=true for a precise single edit). \
+                       Content is Markdown; the server derives the ops.",
     annotations(
       title = "Write document",
       read_only_hint = false,
@@ -696,6 +830,8 @@ impl MicaMcp {
       anchor,
       find,
       replace,
+      unique,
+      expected_seq,
     }): Parameters<UpdateDocArgs>,
   ) -> Result<CallToolResult, McpError> {
     if let Err(error) = self.ensure_writable() {
@@ -712,12 +848,62 @@ impl MicaMcp {
         return Ok(tool_error(error));
       }
     }
+
+    // unique find_replace: refuse unless the target occurs EXACTLY ONCE, so a
+    // precise single edit never silently rewrites other matches (the Anthropic
+    // str_replace discipline). Costs one read; opt-in via unique=true.
+    if mode == "find_replace" && unique
+      && let Some(find) = find.as_deref().filter(|s| !s.is_empty())
+    {
+      match self
+        .get(&format!(
+          "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
+        ))
+        .await
+      {
+        Ok(v) => {
+          let full = match v {
+            Value::String(s) => s,
+            other => other.to_string(),
+          };
+          let n = full.matches(find).count();
+          if n != 1 {
+            return Ok(tool_error(McpError::invalid_params(
+              format!(
+                "unique find_replace: {find:?} occurs {n} time(s); need exactly 1 — add \
+                 surrounding context to disambiguate, or set unique=false to replace all."
+              ),
+              None,
+            )));
+          }
+        }
+        Err(error) => return Ok(tool_error(error)),
+      }
+    }
+
+    // insert_at: let the caller anchor by HEADING TEXT, not just a block id — a
+    // heading survives edits above it. Resolve it to the block id insert_at wants.
+    let anchor = if mode == "insert_at" {
+      match self
+        .resolve_anchor(&workspace_id, &document_id, anchor)
+        .await
+      {
+        Ok(a) => a,
+        Err(error) => return Ok(tool_error(error)),
+      }
+    } else {
+      anchor
+    };
+
     let body = json!({
         "mode": mode,
         "markdown": markdown.unwrap_or_default(),
         "anchor": anchor,
         "find": find,
         "replace": replace,
+        // Optimistic-concurrency hint; the current API ignores unknown fields,
+        // so this is inert until the server ships the seq check (Tier 1 #4).
+        "expected_seq": expected_seq,
     });
     match self
       .patch(
@@ -728,6 +914,50 @@ impl MicaMcp {
     {
       Ok(value) => write_ack(value),
       Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  /// insert_at anchor resolution: a `block_…` id passes through unchanged; None
+  /// passes through (the API's append-at-end fallback); anything else is treated
+  /// as heading text and resolved to the matching heading's block id via the
+  /// outline, so a caller can say "under ## Setup" without knowing block ids.
+  async fn resolve_anchor(
+    &self,
+    ws: &str,
+    doc: &str,
+    anchor: Option<String>,
+  ) -> Result<Option<String>, McpError> {
+    let Some(anchor) = anchor else {
+      return Ok(None);
+    };
+    if anchor.starts_with("block_") {
+      return Ok(Some(anchor));
+    }
+    let outline = self
+      .get(&format!("/api/workspaces/{ws}/documents/{doc}/outline"))
+      .await?;
+    let needle = anchor.to_lowercase();
+    let hit = outline
+      .get("headings")
+      .and_then(Value::as_array)
+      .into_iter()
+      .flatten()
+      .find(|h| {
+        h.get("text")
+          .and_then(Value::as_str)
+          .is_some_and(|t| t.to_lowercase().contains(&needle))
+      })
+      .and_then(|h| h.get("block_id").and_then(Value::as_str))
+      .map(str::to_string);
+    match hit {
+      Some(block_id) => Ok(Some(block_id)),
+      None => Err(McpError::invalid_params(
+        format!(
+          "insert_at: no heading contains {anchor:?}; pass a block id from \
+           mica_get_outline, or the exact text of a heading."
+        ),
+        None,
+      )),
     }
   }
 
@@ -1377,7 +1607,53 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 
 #[cfg(test)]
 mod tests {
-  use super::{reject_mangled_latex, urlencode};
+  use super::{reject_mangled_latex, section_markdown, urlencode, window_markdown};
+
+  #[test]
+  fn window_no_bounds_returns_full_unchanged() {
+    let doc = "line1\nline2\nline3";
+    assert_eq!(window_markdown(doc, None, None, None), doc);
+  }
+
+  #[test]
+  fn window_offset_limit_slices_and_headers() {
+    let doc = "a\nb\nc\nd\ne";
+    // lines 2..=3 (1-based offset 2, limit 2)
+    assert_eq!(
+      window_markdown(doc, Some(2), Some(2), None),
+      "[lines 2-3 of 5]\nb\nc"
+    );
+    // offset past the middle, no limit → to the end
+    assert_eq!(
+      window_markdown(doc, Some(4), None, None),
+      "[lines 4-5 of 5]\nd\ne"
+    );
+    // limit past the end clamps
+    assert_eq!(
+      window_markdown(doc, Some(4), Some(99), None),
+      "[lines 4-5 of 5]\nd\ne"
+    );
+  }
+
+  #[test]
+  fn section_returns_heading_through_next_same_or_higher() {
+    let doc = "# Title\n\nintro\n\n## Setup\n\nstep one\n\n### Sub\n\ndeep\n\n## Usage\n\nrun it";
+    // ## Setup through just before ## Usage (## Sub is deeper, stays in)
+    assert_eq!(
+      section_markdown(doc, "setup"),
+      "## Setup\n\nstep one\n\n### Sub\n\ndeep\n"
+    );
+    // A higher-level heading (# Title) captures everything under it until EOF
+    // here (no other level-1), so it spans the whole doc.
+    assert!(section_markdown(doc, "Title").starts_with("# Title"));
+    assert!(section_markdown(doc, "Title").contains("## Usage"));
+  }
+
+  #[test]
+  fn section_miss_is_a_readable_note_not_a_panic() {
+    let out = section_markdown("# Only\n\nbody", "nope");
+    assert!(out.contains("no heading contains"));
+  }
 
   #[test]
   fn urlencode_escapes_reserved_keeps_unreserved() {
