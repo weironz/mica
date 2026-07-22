@@ -205,6 +205,60 @@ announce the restore point so users know which edits to redo. Widen the window b
 lowering `BACKUP_HOUR` cadence or adding manual `docker exec mica-backup-1
 mica-backup.sh` runs before risky changes.
 
+### Roll back a bad migration (the `pre-*.sql.gz` restore point)
+
+Different trigger from the DR case above: not a lost volume, but a **deploy whose
+migration went wrong**. `just deploy-prod` runs the new api's migrations the moment
+it comes up and does **not** back up first (see the ⚠️ in [`deploy.md`](deploy.md)),
+so a data-touching migration must be preceded by a hand-taken restore point, per the
+CLAUDE.md discipline:
+
+```bash
+# BEFORE deploying a data migration (on the node, in /data/mica):
+ts=$(date +%Y%m%d-%H%M%S)
+docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > pre-<migration>-$ts.sql.gz
+gzip -t pre-<migration>-$ts.sql.gz                                    # prove it's not truncated
+zcat pre-<migration>-$ts.sql.gz | grep -c '^COPY public.<affected-table>'   # target table present
+```
+
+If the migration lands and prod is wrong (api won't start, data mangled, a spot
+check fails), roll back **both** the schema and the code:
+
+```bash
+cd /data/mica
+# 1) Stop the api so nothing writes into the half-migrated schema.
+docker compose up -d --no-deps --scale api=0 api || docker compose stop api
+
+# 2) Restore the pre-migration dump OVER prod. Same drop/create/load as
+#    "Restore over prod" above — the only difference is the source is your
+#    hand-taken pre-*.sql.gz, not the rustic _pgdump lineage.
+docker exec -i mica-postgres-1 psql -U mica -d postgres \
+  -c 'DROP DATABASE mica' -c 'CREATE DATABASE mica'
+zcat pre-<migration>-<ts>.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica
+
+# 3) Roll the DEPLOY back to the tag that was live before this one. The restored
+#    schema matches the OLD tag; bringing the NEW api back up would just re-run
+#    the same bad migration (sqlx::migrate! is forward-only), so you MUST pin the
+#    old image, not the new one.
+sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=v<OLD>.<Y>.<Z>|' .env
+docker compose up -d --no-deps api
+curl -fsS https://mica.cloudcele.com/api/health   # confirm it reports v<OLD>.<Y>.<Z>
+curl -fsS https://mica.cloudcele.com/api/ready    # DB-backed readiness = schema + code back in sync
+```
+
+**No `pre-*.sql.gz`?** You skipped the restore point. Fall back to the off-site
+`_pgdump` lineage (the section above) — it's the last daily snapshot, so you lose
+everything written since that night's run, but it's a real restore point.
+
+**Lost writes in the recovery window.** Any edit accepted between the bad deploy
+going live and the restore is **not** in `pre-*.sql.gz` and is gone on restore —
+the same point-in-time gap as the DR section. Two mitigations before you drop the
+corrupt DB: (1) if it's still readable, `pg_dump` it FIRST and diff/cherry-pick the
+rows written after the cutoff; (2) announce the restore point so users know which
+edits to redo. **Rehearse the restore into a scratch db** first
+(`docs/lessons.md` §"迁移怎么验": `CREATE DATABASE mica_restest` → `zcat … | psql`
+→ assert → `DROP DATABASE`) — a restore you've never run is a guess.
+
 ## Restore test (do this — a backup you've never restored is a guess)
 
 Periodically restore a workspace into a throwaway target and assert the Markdown

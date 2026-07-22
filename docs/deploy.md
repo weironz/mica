@@ -79,6 +79,62 @@ reload picks up new releases (asset files are content-hashed).
 The canonical stack also ships an off-site, encrypted, deduplicated backup of
 both content AND a `pg_dump` of Postgres — see [`backup.md`](backup.md).
 
+## Deleting a user account (cascade order — memo, not implemented)
+
+There is **no "delete account" today**, and it will not be a one-liner: `users` is
+pinned by `ON DELETE RESTRICT` (plus one `NO ACTION`) foreign keys across the
+schema, so a bare `DELETE FROM users` aborts on the first referencing row. Whoever
+builds it must tear the references down in order. This memo is the FK map so that
+work doesn't start by re-deriving it (sources: `migrations/0001_initial.sql`,
+`0003`, `0004`, `0006`, `0008`).
+
+**Blocks the delete — must be reassigned or removed first:**
+
+| Table.column | On delete | Why it pins the user |
+|---|---|---|
+| `workspaces.owner_id` | RESTRICT | user owns the workspace |
+| `documents.created_by` | RESTRICT | user created the doc |
+| `views.created_by` | RESTRICT | user created the page/folder view |
+| `files.uploaded_by` | RESTRICT | user uploaded the blob |
+| `document_versions.created_by` | RESTRICT | user named a version |
+| `document_shares.created_by` | RESTRICT | user made the public link |
+| `document_updates.actor_id` | RESTRICT | user authored an op (op model) |
+| `workspace_updates.actor_id` | NO ACTION | user authored a yrs update (CRDT model) — no `ON DELETE` clause, still blocks |
+
+**Auto-cleared by CASCADE when the user row goes:** `workspace_members.user_id`,
+`api_tokens.user_id`, `refresh_tokens.user_id`.
+
+**Not a FK at all:** `document_yrs_versions.created_by` is a plain `uuid` (NULL for
+system/auto) — neither blocks nor cascades; leave it or scrub it to NULL.
+
+### Order to actually delete
+
+1. **Workspaces the user OWNS.** Either **transfer ownership**
+   (`UPDATE workspaces SET owner_id = <existing-member>`) or **delete the whole
+   workspace**. Deleting a workspace CASCADEs everything scoped by `workspace_id` —
+   documents, views, files, document_updates, workspace_updates, document_shares,
+   and (via documents) snapshots/versions — in one shot, clearing most RESTRICT
+   rows above **for that workspace**.
+2. **⚠️ Deleting a workspace leaks S3/RustFS objects.** The `files` rows cascade in
+   the DB, but the **object bytes** they key (`files.object_key`) do **not** —
+   there is no DB→S3 hook. Enumerate the workspace's `object_key`s and delete them
+   from the bucket before/after the workspace delete, else they orphan forever: the
+   blob-GC sweep (`migrations/0007`) only reclaims blobs unreferenced by a *live*
+   document, and a hard-deleted workspace's files never get swept.
+3. **Rows the user created in OTHER people's workspaces.** A member who created a
+   doc/view/upload/share/op/version in a workspace they don't own still pins `users`
+   via those RESTRICT rows. Reassign `created_by`/`actor_id` to a **tombstone
+   ("deleted user") account** (keeps history/attribution, least destructive) or to
+   the workspace owner, or delete those specific rows. Choosing the tombstone
+   policy is the real design decision here.
+4. **Then the user row.** With every RESTRICT/NO ACTION reference cleared,
+   `DELETE FROM users WHERE id = <uid>` succeeds and cascades `workspace_members` /
+   `api_tokens` / `refresh_tokens` automatically.
+
+Do it in **one transaction** and dry-run the final `DELETE FROM users` on a scratch
+db first (`docs/lessons.md` §"迁移怎么验") — if any RESTRICT row was missed it
+aborts there, rather than leaving a half-deleted account.
+
 ## PostgreSQL major-version upgrades
 
 **Never bump the `postgres:` tag in place** (e.g. `16-alpine` → `17-alpine` on the

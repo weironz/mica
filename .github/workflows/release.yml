@@ -142,6 +142,57 @@ jobs:
           path: clients/mica_flutter/installer/Output/Mica-Setup-${{ steps.ver.outputs.version }}.exe
           if-no-files-found: error
 
+      # Smoke-test the ACTUAL packaged installer before it can reach a release.
+      # The in-app updater ships this exact .exe to every user, yet nothing so far
+      # has run it: build success only proves it compiled and ISCC zipped it.
+      # Here we silently install it and launch the installed app — if it can't
+      # even survive 10 s, the job fails and the release never publishes.
+      #
+      # Placed AFTER the artifact upload (so a failed smoke still leaves the .exe
+      # downloadable for post-mortem) and BEFORE "Publish installer to release"
+      # (which, being a later step, is skipped once this one fails).
+      - name: Smoke-test the installer (install + launch)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = '${{ steps.ver.outputs.version }}'
+          $setup = "installer\Output\Mica-Setup-$ver.exe"   # cwd = clients/mica_flutter
+          # Force a known install dir so exe location needs no guessing. /DIR
+          # overrides the .iss DefaultDirName even under PrivilegesRequired=lowest.
+          $installDir = Join-Path $env:RUNNER_TEMP 'mica-smoke'
+
+          Write-Host "Silent-installing $setup -> $installDir"
+          $inst = Start-Process -FilePath $setup `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installDir" `
+            -Wait -PassThru
+          if ($inst.ExitCode -ne 0) { throw "installer exited with code $($inst.ExitCode)" }
+
+          $exe = Join-Path $installDir 'mica_flutter.exe'
+          if (-not (Test-Path $exe)) { throw "installed exe not found: $exe" }
+          Write-Host "Installed OK: $exe"
+
+          # The installer's [Run] entry auto-launches Mica under /VERYSILENT (it has
+          # no `skipifsilent` — that is how the updater relaunches). Clear any such
+          # instance so the liveness check owns exactly one known process; the app
+          # has a single-instance guard, so a second launch would just exit.
+          Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          $app = Start-Process -FilePath $exe -PassThru
+          try {
+            Write-Host "Launched Mica (pid $($app.Id)); waiting 10s to confirm it stays up..."
+            Start-Sleep -Seconds 10
+            if ($app.HasExited) {
+              throw "Mica exited within 10s (exit code $($app.ExitCode)) - install/launch smoke FAILED"
+            }
+            Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"
+          } finally {
+            # Always tear down the launched app (and any installer-spawned one) so
+            # the step leaves no stray process behind.
+            Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+            Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Publish installer to release
         # Tag pushes always publish; manual runs only when publish=true (else
         # it's a dry-run that just builds + uploads the artifact above).
