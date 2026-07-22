@@ -54,7 +54,10 @@ reload picks up new releases (asset files are content-hashed).
 
 - **Same-origin API.** The web bundle auto-targets the page's own origin
   when served from port 80/443 (`_resolveBaseUri`), so one build works on
-  any IP — no per-server `--dart-define`, and no CORS in production.
+  any IP — no per-server `--dart-define`, and no cross-origin request in
+  production. The server therefore denies cross-origin browser reads by
+  default (production); set `CORS_ALLOWED_ORIGINS` (comma-separated) only if a
+  separate origin must reach the API.
 - **`S3_ENDPOINT` must be browser-reachable** (`http://<SERVER_IP>:9000`):
   presigned URLs embed that host; an internal hostname would break every
   image. `S3_PUBLIC_BASE_URL` stays unset — the bucket is private and GETs

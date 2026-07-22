@@ -458,7 +458,7 @@ pub async fn logout(
 
 /// Burn every sign-in a user has, everywhere. The access tokens already issued
 /// are JWTs and cannot be recalled — they die on their own within
-/// `access_token_ttl_seconds` (24h by default), which is the price of them being
+/// `access_token_ttl_seconds` (1h by default), which is the price of them being
 /// stateless. Nothing can mint a new one after this.
 pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
   sqlx::query(

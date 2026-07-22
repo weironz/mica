@@ -1,7 +1,7 @@
 use anyhow::Context;
 use axum::Router;
 use mica_app_core::AppState;
-use mica_infra::{AppConfig, connect_pg_pool, run_migrations, telemetry::init_tracing};
+use mica_infra::{AppConfig, Environment, connect_pg_pool, run_migrations, telemetry::init_tracing};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
@@ -67,8 +67,40 @@ fn app_router(state: AppState) -> Router {
     .merge(routes::ws_router())
     .merge(routes::share_router())
     .layer(TraceLayer::new_for_http())
-    .layer(CorsLayer::permissive())
+    .layer(cors_layer(&state.config))
     .with_state(state)
+}
+
+/// CORS policy. The bundled web app is served same-origin with `/api`, so it
+/// never triggers CORS; this only governs third-party browser reads. In
+/// production an empty allowlist denies all cross-origin (was
+/// `CorsLayer::permissive()`, which let any site read the API); in development
+/// the web app runs on a different localhost port than the API, so an empty
+/// allowlist stays permissive there for convenience. Set `CORS_ALLOWED_ORIGINS`
+/// (comma-separated) to grant specific origins in production.
+fn cors_layer(config: &AppConfig) -> CorsLayer {
+  use axum::http::{HeaderValue, Method, header};
+  if !config.cors_allowed_origins.is_empty() {
+    let origins: Vec<HeaderValue> = config
+      .cors_allowed_origins
+      .iter()
+      .filter_map(|origin| origin.parse::<HeaderValue>().ok())
+      .collect();
+    return CorsLayer::new()
+      .allow_origin(origins)
+      .allow_methods([
+        Method::GET,
+        Method::POST,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+      ])
+      .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+  }
+  match config.environment {
+    Environment::Production => CorsLayer::new(),
+    _ => CorsLayer::permissive(),
+  }
 }
 
 async fn shutdown_signal() {
