@@ -457,5 +457,8 @@
   "settingsDiagnosticsToggle": "记录问题复现",
   "settingsDiagnosticsToggleSub": "默认关闭。打开后复现一次问题，把下面的文件夹发来即可——它记录 app 实际收到了什么（例如粘贴时的原始剪贴板内容），那通常正是缺的那块。",
   "settingsDiagnosticsFolder": "打开文件夹",
-  "settingsDiagnosticsPrivacy": "记录内容包含你粘贴或打开的正文。只保留最近 20 条，可随时删除该文件夹。"
+  "settingsDiagnosticsPrivacy": "记录内容包含你粘贴或打开的正文。只保留最近 20 条，可随时删除该文件夹。",
+  "propertyAdd": "添加属性",
+  "propertyKeyHint": "属性名",
+  "propertyTagAdd": "添加标签"
 }

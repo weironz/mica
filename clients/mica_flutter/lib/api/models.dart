@@ -510,6 +510,21 @@ class DocumentBootstrap {
     return _blocksById[document.rootBlockId]?.text ?? '';
   }
 
+  /// The root block's full `data` map — where document-level metadata lives.
+  /// The page-properties panel edits `data['front_matter']` inside this and
+  /// writes the whole map back (preserving any other root-data keys).
+  Map<String, dynamic> get rootData {
+    return _blocksById[document.rootBlockId]?.data ?? const {};
+  }
+
+  /// The document's raw YAML front matter (the inner text, no `---` fences),
+  /// or `''` if none. This is the sole authority the property panel reads;
+  /// see `editor/properties.dart`.
+  String get rootFrontMatter {
+    final fm = rootData['front_matter'];
+    return fm is String ? fm : '';
+  }
+
   List<DocumentBlock> get childBlocks {
     final root = _blocksById[document.rootBlockId];
     if (root == null) {

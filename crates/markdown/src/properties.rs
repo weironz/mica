@@ -140,6 +140,18 @@ pub fn parse_properties(front_matter: &str) -> Vec<Property> {
     out
 }
 
+/// Infer a typed value from a user's raw single-line input (what a property
+/// editor commits): empty → empty text, otherwise the same bool/number/date/
+/// list/text inference `parse_properties` uses. The Dart mirror's `inferValue`
+/// must agree with this.
+pub fn infer_value(raw: &str) -> PropertyValue {
+    let t = raw.trim();
+    if t.is_empty() {
+        return PropertyValue::Text(String::new());
+    }
+    infer_scalar(t)
+}
+
 /// Insert or replace `key`'s value, editing only that key's line(s) and leaving
 /// the rest of the front matter byte-exact. A new key is appended (with a
 /// trailing newline discipline that matches the existing content). Returns the

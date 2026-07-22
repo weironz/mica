@@ -22,6 +22,7 @@ import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
+import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';
 import 'ui/autoscroll.dart';
 import 'cjk_fonts.dart';
@@ -6941,6 +6942,31 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   ),
                   const SizedBox(height: 4),
                 ],
+                // Page properties (front-matter) — a structured, editable view
+                // of the document's YAML front matter, above the body. Reads the
+                // root block's `data['front_matter']`; commits write it back
+                // through the same self-dispatching op sink the editor uses
+                // (local / cloud-CRDT / cloud-REST all handled). See
+                // docs/page-properties.md.
+                PropertyPanel(
+                  frontMatter: bootstrap.rootFrontMatter,
+                  canEdit: canEdit,
+                  onCommit: (fm) {
+                    final data = Map<String, dynamic>.from(bootstrap.rootData);
+                    if (fm.isEmpty) {
+                      data.remove('front_matter');
+                    } else {
+                      data['front_matter'] = fm;
+                    }
+                    return widget.onApplyOperations([
+                      {
+                        'type': 'update_block',
+                        'block_id': bootstrap.document.rootBlockId,
+                        'data': data,
+                      },
+                    ]);
+                  },
+                ),
                 Padding(
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),

@@ -832,5 +832,17 @@
   },
   "@settingsDiagnosticsPrivacy": {
     "description": "Warns that captures contain user content."
+  },
+  "propertyAdd": "Add property",
+  "@propertyAdd": {
+    "description": "Button to add a new page property (front-matter key)."
+  },
+  "propertyKeyHint": "Property name",
+  "@propertyKeyHint": {
+    "description": "Placeholder for the new-property name field."
+  },
+  "propertyTagAdd": "Add tag",
+  "@propertyTagAdd": {
+    "description": "Placeholder for adding an item to a list/tags property."
   }
 }

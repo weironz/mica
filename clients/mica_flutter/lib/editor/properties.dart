@@ -182,6 +182,15 @@ List<Property> parseProperties(String frontMatter) {
   return out;
 }
 
+/// Infer a typed value from a user's raw single-line input (what the property
+/// editor commits): empty → empty text, otherwise the same bool/number/date/
+/// list/text inference `parseProperties` uses. Mirrors `infer_value`.
+PropertyValue inferValue(String raw) {
+  final t = raw.trim();
+  if (t.isEmpty) return const PropText('');
+  return _inferScalar(t);
+}
+
 /// Insert or replace `key`'s value, editing only that key's line(s) and leaving
 /// the rest byte-exact. New key is appended. Mirrors `upsert_property`.
 String upsertProperty(String frontMatter, String key, PropertyValue value) {
