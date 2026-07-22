@@ -93,12 +93,13 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
   `just deploy-prod` 前 `export PATH="/c/Program Files/Git/usr/bin:$PATH"`,或直接在 Git Bash 里跑。
 - **强制重启/断电后 `.dart_tool/flutter_build` 缓存可能被截断** → frontend_server 报
   `RangeError`(离谱 offset)。`rm -rf clients/mica_flutter/.dart_tool/flutter_build` 即愈。
-- **重活限流(沿用,来历是上一台机器)**:**上一台**主力机有过 GPU/整机硬卡死,两次都发生在
-  重型构建窗口内(重编译功耗尖峰是合理扳机),那台机器后来确实报废了。本机尚未复现该现象,
-  但在有反证之前继续按保守档走。所以:`CARGO_BUILD_JOBS=8`;能交 CI 就交 CI;只需验 runner 改动时单编
-  `build/windows/x64/runner/mica_flutter.vcxproj -p:BuildProjectReferences=false`,别全量
-  `flutter build windows`;非必要不启 Docker Desktop(WSL2 冷启动本身要 100s+,且 `docker info`
-  在启动中会**阻塞**而非快速失败——别用十秒超时去判"卡死",踩过一次白等 15 分钟)。
+- **构建按标准来(不做热限流)**:上一台主力机报废前有过 GPU/整机硬卡死(发生在重型构建
+  窗口内),但那是**设备自身故障**,不作为本机的约束——本机按主流做法正常构建:`flutter build
+  windows` 全量该跑就跑,`cargo` 用默认并行度,不再为「功耗尖峰」人为设 `CARGO_BUILD_JOBS`
+  上限或回避重活/绕道单编 vcxproj。能交 CI 就交 CI 仍是好习惯(省本地时间 + 多平台覆盖),但
+  那是工程取舍,不是怕热。Docker Desktop 仍**非必要不启**,但理由与热无关:WSL2 冷启动要
+  100s+,且 `docker info` 在启动中会**阻塞**而非快速失败——别用十秒超时去判"卡死",踩过一次
+  白等 15 分钟。
 - **runner C++(`windows/runner/*.cpp`)是 warning-as-error**:注释必须纯 ASCII(CJK 代码页撞
   C4819)、`_wgetenv` 已弃用要换 `GetEnvironmentVariableW`。
 
