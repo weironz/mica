@@ -460,5 +460,6 @@
   "settingsDiagnosticsPrivacy": "记录内容包含你粘贴或打开的正文。只保留最近 20 条，可随时删除该文件夹。",
   "propertyAdd": "添加属性",
   "propertyKeyHint": "属性名",
-  "propertyTagAdd": "添加标签"
+  "propertyTagAdd": "添加标签",
+  "properties": "属性"
 }

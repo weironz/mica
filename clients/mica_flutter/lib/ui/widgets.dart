@@ -1617,3 +1617,122 @@ class _UpdateCheckerState extends State<UpdateChecker> {
     }
   }
 }
+
+/// AppFlowy-style breadcrumb: the current page's folder path, each ancestor
+/// segment clickable to jump there. A [trailing] widget (the properties toggle)
+/// sits at the end. `part of main.dart`, so it shares its imports / `context.l10n`.
+class _PageBreadcrumb extends StatelessWidget {
+  const _PageBreadcrumb({
+    required this.views,
+    required this.current,
+    required this.onSelect,
+    required this.trailing,
+  });
+
+  final List<DocumentView> views;
+  final DocumentView current;
+  final Future<void> Function(DocumentView view) onSelect;
+  final Widget trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final byId = {for (final v in views) v.id: v};
+    // Walk parent links up from the current page; `seen` guards a cyclic tree.
+    final chain = <DocumentView>[];
+    final seen = <String>{};
+    DocumentView? v = current;
+    while (v != null && seen.add(v.id)) {
+      chain.add(v);
+      final pid = v.parentViewId;
+      v = (pid == null) ? null : byId[pid];
+    }
+    final path = chain.reversed.toList(); // root … current
+
+    return Row(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < path.length; i++) ...[
+                  if (i > 0)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 3),
+                      child: Icon(Icons.chevron_right,
+                          size: 14, color: EditorTheme.faint),
+                    ),
+                  _crumb(path[i], isLast: i == path.length - 1),
+                ],
+              ],
+            ),
+          ),
+        ),
+        trailing,
+      ],
+    );
+  }
+
+  Widget _crumb(DocumentView v, {required bool isLast}) {
+    final label = v.name.trim().isEmpty ? '—' : v.name;
+    final text = Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: isLast ? EditorTheme.muted : EditorTheme.faint,
+        fontSize: 12,
+      ),
+    );
+    // The current page (tail) is not a link — you're already on it.
+    if (isLast) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: text,
+      );
+    }
+    return InkWell(
+      onTap: () => onSelect(v),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        child: text,
+      ),
+    );
+  }
+}
+
+/// AFFiNE-style info toggle: shows/hides the page-properties panel. Filled +
+/// accented when the page actually has properties, so a page's metadata is
+/// discoverable even while the panel is collapsed.
+class _PropertiesToggle extends StatelessWidget {
+  const _PropertiesToggle({
+    required this.active,
+    required this.hasProperties,
+    required this.onTap,
+  });
+
+  final bool active;
+  final bool hasProperties;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = active || hasProperties;
+    return IconButton(
+      tooltip: context.l10n.properties,
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      padding: EdgeInsets.zero,
+      icon: Icon(
+        filled ? Icons.info : Icons.info_outline,
+        size: 16,
+        color: active
+            ? EditorTheme.caret
+            : (hasProperties ? EditorTheme.muted : EditorTheme.faint),
+      ),
+    );
+  }
+}

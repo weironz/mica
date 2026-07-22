@@ -5085,6 +5085,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
   final FocusNode _pageTitleFocus = FocusNode(debugLabel: 'PageTitle');
   Timer? _pageTitleSaveTimer;
+  // Page properties are hidden by default (AFFiNE-style): revealed by the info
+  // toggle next to the breadcrumb, so a page with many properties never pushes
+  // the body down until you ask for it.
+  bool _showProperties = false;
   // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
   // default). The tree opens collapsed and remembers what the user expanded;
   // navigating to / creating a nested page reveals its ancestors.
@@ -6771,6 +6775,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Breadcrumb path (AppFlowy-style) with a trailing properties
+                // toggle (AFFiNE-style info button). Properties stay hidden
+                // behind the icon so they never occupy the page until asked for.
+                if (widget.selectedView != null)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      left: EditorTheme.gutter,
+                      bottom: 2,
+                    ),
+                    child: _PageBreadcrumb(
+                      views: widget.views,
+                      current: widget.selectedView!,
+                      onSelect: widget.onSelectView,
+                      trailing: _PropertiesToggle(
+                        active: _showProperties,
+                        hasProperties:
+                            bootstrap.rootFrontMatter.trim().isNotEmpty,
+                        onTap: () => setState(
+                          () => _showProperties = !_showProperties,
+                        ),
+                      ),
+                    ),
+                  ),
                 // The editor canvas reserves EditorTheme.gutter on the left
                 // for the block drag handles, so its text starts at x=gutter.
                 // Inset the title + meta rows by the same amount to keep the
@@ -6948,14 +6975,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 // through the same self-dispatching op sink the editor uses
                 // (local / cloud-CRDT / cloud-REST all handled). See
                 // docs/page-properties.md.
-                PropertyPanel(
-                  frontMatter: bootstrap.rootFrontMatter,
-                  canEdit: canEdit,
-                  // Clicking a tag opens workspace search for it (M2). Body +
-                  // property values are both indexed, so this finds pages
-                  // carrying the tag (and any that mention the word).
-                  onOpenTag: _openSearch,
-                  onCommit: (fm) {
+                if (_showProperties)
+                  PropertyPanel(
+                    frontMatter: bootstrap.rootFrontMatter,
+                    canEdit: canEdit,
+                    // Clicking a tag opens workspace search for it (M2). Body +
+                    // property values are both indexed, so this finds pages
+                    // carrying the tag (and any that mention the word).
+                    onOpenTag: _openSearch,
+                    onCommit: (fm) {
                     final data = Map<String, dynamic>.from(bootstrap.rootData);
                     if (fm.isEmpty) {
                       data.remove('front_matter');

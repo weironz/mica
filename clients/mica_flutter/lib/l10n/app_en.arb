@@ -844,5 +844,9 @@
   "propertyTagAdd": "Add tag",
   "@propertyTagAdd": {
     "description": "Placeholder for adding an item to a list/tags property."
+  },
+  "properties": "Properties",
+  "@properties": {
+    "description": "Tooltip on the toggle that shows/hides page properties."
   }
 }
