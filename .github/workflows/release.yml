@@ -162,12 +162,16 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP 'mica-smoke'
 
           Write-Host "Silent-installing $setup -> $installDir"
-          # NO -Wait: the installer's [Run] entry auto-launches Mica (no
-          # `skipifsilent`, see below) and the Inno process does NOT exit until
-          # that GUI app closes — so `-Wait` here hangs forever (it did, 28min,
-          # on run 29937817979). Poll for the installed exe instead: Inno runs
-          # [Run] only after all files land, so the exe existing IS the
-          # "install finished" signal. Hard timeout guards a genuinely stuck run.
+          # NO -Wait: `-Wait` on the installer hung 28min on run 29937817979.
+          # The exact cause is unconfirmed — the .iss [Run] has `nowait`, so the
+          # obvious "installer blocks on the app it launched" theory does NOT
+          # hold — but it does not matter here: the real auto-updater runs Setup
+          # DETACHED (ProcessStartMode.detached in updater_desktop.dart), so the
+          # installer's exit timing is irrelevant in production. Poll for the
+          # installed exe instead — Inno writes every file before running [Run],
+          # so the exe existing IS the "install finished" signal, independent of
+          # when (or whether) the installer process returns. Hard timeout guards
+          # a run that is genuinely stuck.
           $inst = Start-Process -FilePath $setup `
             -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installDir" `
             -PassThru
