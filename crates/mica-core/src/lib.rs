@@ -4,9 +4,10 @@
 //! - [`marks`]: inline marks ↔ yrs `Text` formatting attributes.
 //! - [`doc`]: the yrs CRDT document model ([`doc::MicaDoc`]) — P2-M1.
 //!
-//! Local store (SQLite), sync engine, and the editor binding arrive in later
-//! milestones — see `docs/phase2-offline-crdt.md`. The round-trip smoke
-//! functions below back the P2-M0 FFI pipeline check.
+//! The local store (SQLite) has since landed behind the `store` feature (the
+//! `store` module below); the sync engine and editor binding are tracked in
+//! `docs/phase2-offline-crdt.md`. The round-trip smoke functions below back the
+//! P2-M0 FFI pipeline check.
 
 pub mod block;
 pub mod doc;

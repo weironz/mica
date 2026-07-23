@@ -2,11 +2,11 @@
 ///
 /// The engine edits an in-memory document that is the source of truth while the
 /// user is typing; it is serialized to backend blocks via the operation list
-/// (see [EditorController]). For Milestone 1 the document is a flat, ordered
-/// list of text nodes under the document root — the same shape the backend
-/// stores today. Nesting, tables, and void nodes arrive in later milestones,
-/// so the types here are intentionally easy to extend (an `attributes`/`data`
-/// map per node, string node kinds matching the backend).
+/// (see [EditorController]). The document is a flat, ordered list of block
+/// nodes under the document root — the same shape the backend stores. Tables,
+/// void (atomic) nodes, and list nesting have since landed on this shape, which
+/// the types here were kept intentionally easy to extend for (an
+/// `attributes`/`data` map per node, string node kinds matching the backend).
 library;
 
 /// The bundled monospace face for code (block + inline). The generic
@@ -18,8 +18,8 @@ const String kMonoFont = 'RobotoMono';
 /// A single block-level node. `kind` matches the backend block `type`
 /// (`paragraph`, `heading`, `bulleted_list`, `numbered_list`, `todo`, `quote`,
 /// `code_block`). `data` mirrors the backend block `data` map (heading level,
-/// todo checked, …). For Milestone 1 `text` is plain text; inline marks live in
-/// `data.marks` and are layered on in a later milestone.
+/// todo checked, …). `text` is the plain text; inline marks live in
+/// `data.marks` (see `marks.dart`).
 class EditorNode {
   EditorNode({
     required this.id,

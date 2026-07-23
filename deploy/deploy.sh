@@ -13,9 +13,14 @@ fi
 FLUTTER="${FLUTTER:-flutter}"
 
 echo "==> building Flutter web bundle"
-(cd clients/mica_flutter && "$FLUTTER" build web --release --no-tree-shake-icons)
-mkdir -p deploy/web
-rsync -a --delete clients/mica_flutter/build/web/ deploy/web/
+# --no-web-resources-cdn: without it flutter_bootstrap.js fetches CanvasKit from
+# www.gstatic.com at runtime (unreachable from CN -> app breaks) and the
+# canvaskit/ we ship goes dead. Keep flags in lockstep with `just build-web`.
+(cd clients/mica_flutter && "$FLUTTER" build web --release --no-web-resources-cdn)
+# cp -r, not rsync: this is a Bash/Linux-only fallback but rsync still isn't a
+# given; a clean copy of the fresh bundle is all we need.
+rm -rf deploy/web && mkdir -p deploy/web
+cp -r clients/mica_flutter/build/web/. deploy/web/
 
 if [[ "${1:-}" == "--web-only" ]]; then
   echo "==> web bundle replaced (nginx serves it live, no restart needed)"
