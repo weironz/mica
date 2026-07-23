@@ -2,7 +2,19 @@
 
 > 2026-07-23。调研 CodeMirror 6 / AppFlowy / ProseMirror / Lexical / AFFiNE 后定稿。
 > 目标:大文档每次击键只重排"改动块 + 视口带 + caret/IME 块",其余复用缓存/估算,
-> 不破坏 caret / 选区 / IME / scroll-to-block / find。**这是设计与计划,落地留新会话。**
+> 不破坏 caret / 选区 / IME / scroll-to-block / find。
+
+## 状态一览(2026-07-23,先看这里)
+
+| 项 | 状态 | 出处 |
+|---|---|---|
+| Phase 1:每块 layout 缓存(干掉 dispose-all/rebuild-all) | ✅ 已落地 | da25075,`test/painter_cache_test.dart` |
+| 代码高亮记忆化(未变代码块不再每击键重新分词) | ✅ 已落地 | 7fe1997,`test/code_span_memo_test.dart` |
+| Phase 2/3:真·视口虚拟化(屏外跳过排版 + 估算高 + 前缀和 + caret 按需强排 + scroll/find 沉降) | ❌ 未做,**且非"照现设计就能做"**——见「两条架构约束」 | 只有剧本(下方 S0–S3) |
+| 交互验证闸门(万级块/滚远块/跨屏选区/真实 IME/巨代码块/基准) | ❌ 未做 | 下方清单 |
+
+> **本文档下半部(根因/数据结构/新 layout pass/分期剧本)是原始设计,其中部分假设已被
+> 「实测:两条架构约束」一节修正**——凡与那节冲突处,以那节为准(逐处已就地标注 ⚠️)。
 
 ## 决策:CodeMirror 式单画布虚拟化,不改 widget-per-block
 
@@ -20,15 +32,21 @@ height map"可行的存在证明。
 delta)。为它抛弃 mica 的自绘核心 + marks-over-plaintext + 自画 caret,得到一个几何保真度
 更差的版本——不划算。
 
-## 根因(就一个 bug)
-`render.dart` 的 `performLayout`(约 919–925)**每次都把所有块的 `TextPainter` dispose 重建**:
+## 根因(就一个 bug)—— ✅ 此根因 Phase 1 已修(da25075)
+> 下面描述的 dispose-all 已删除;`_painterCache` 复用替代。保留作背景。行号是 Phase 1 前的旧值。
+
+`render.dart` 的 `performLayout`(旧约 919–925)**每次都把所有块的 `TextPainter` dispose 重建**:
 ```
 for (final l in _layouts) l.painter.dispose(); _layouts.clear();
 ```
-而 **paint 侧其实早有视口裁剪**(`_nodeVisible` / `_cullSlack=600`,约 1405/2189)。所以要做的
-只是"让 layout 侧也虚拟化",跟上 paint。
+而 **paint 侧其实早有视口裁剪**(`_nodeVisible` / `_cullSlack=600`,现 @1506/1508)。所以要做的
+只是"让 layout 侧也虚拟化",跟上 paint。**⚠️ 但"让 layout 侧虚拟化"这句本身有前提问题——见
+「两条架构约束」#1:`performLayout` 拿不到视口,layout 侧无法像 paint 那样按可视带跳过。**
 
 ## 数据结构(CodeMirror `HeightOracle` 的最小对应)
+> **状态**:#1(每块 layout 缓存)✅ 已由 Phase 1 实现(指纹改用实际 TextSpan,比原写的
+> "marks hash" 更稳)。#2–#4(dirty 集 / 估算高 / 前缀和)❌ 未做,且受「两条架构约束」制约。
+
 1. **每块 layout 缓存**,按 block id 键:`TextPainter`(或 atomic 布局)、`boxHeight`、
    `contentLeft`/`textWidth`,以及**算它时的输入指纹**(text、marks hash、maxWidth、外观 rev、
    代码语言、quote/li 缩进)。把"dispose 全部 + 重建全部"换成"**只在输入变了才逐出+重算**"。
@@ -42,6 +60,10 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
    上 Fenwick,普通文档一个 `List<double>` dirty 时重算即可)。
 
 ## 新的 layout pass(替换现 `performLayout`)
+> ⚠️ **此节的核心前提已被证伪,勿照抄**:第一条"像 paint 一样算可视带"在 `performLayout` 里**做不到**
+> ——见「两条架构约束」#1(视口只在 paint 时知)。真要落地得改成"paint 期惰性成形"或"编辑器自管视口",
+> 触发点不在 `performLayout`。下面几条(复用缓存 painter、估算→测量自愈)本身仍成立,只是**驱动位置变了**。
+
 - 像 paint 一样算可视带(`clip` ± cull slack)。
 - 走块累计 Y。每块:若**在带内 OR dirty OR caret/合成块** → 真跑 `TextPainter.layout`(输入没变
   就复用缓存 painter),把**精确高**写回缓存 + 前缀和;否则用**缓存或估算**高、**完全跳过**
@@ -72,10 +94,10 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
   (`_fontsDirty`)一次性清缓存强制重排;含 fold 的块存而不复用(异步栅格竞态);pass 末按
   `seenTextIds` 逐出失效条目。回归见 `test/painter_cache_test.dart`。**注:本期只做了缓存复用
   (跳过未变块的 layout()),尚未做"屏外块跳过排版/估算高"——那是 Phase 2。**
-- **Phase 2(真虚拟化)**:估算高模型 + 屏外块**跳过** `TextPainter`(只用估算),`totalHeight`
-  估算→测量自愈。
-- **Phase 3**:offset→Y 前缀和 + caret 按需强排 + scroll/find 估算跳+沉降。
-- **验证**:大档基准(万级块/巨块击键延迟)、caret/选区/scroll-to/find/IME 回归(桌面 integration_test
+- **Phase 2(真虚拟化)❌ 未做**:估算高模型 + 屏外块**跳过** `TextPainter`(只用估算),`totalHeight`
+  估算→测量自愈。**⚠️ 落地前提见「两条架构约束」——不能在 `performLayout` 里做。**
+- **Phase 3 ❌ 未做**:offset→Y 前缀和 + caret 按需强排 + scroll/find 估算跳+沉降。
+- **验证 ❌ 未做**:大档基准(万级块/巨块击键延迟)、caret/选区/scroll-to/find/IME 回归(桌面 integration_test
   + web playwright 截图)。红线:round-trip 不受影响(纯渲染层改动,不碰文档模型)。
 
 ## 实测:两条架构约束(动手后确认,2026-07-23)——决定"真虚拟化"是独立架构项
