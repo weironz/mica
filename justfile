@@ -267,6 +267,20 @@ deploy-prod version:
       && mv docker-compose.yaml.new docker-compose.yaml \
       && sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=$tag|' .env \
       && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
+    # Self-heal the deploy policy the same way as compose: install the tag's
+    # mica-deploy.sh so the node script never drifts from the repo (the gh-Deploy
+    # path can only WARN on drift by design — the restricted key must not install
+    # the policy that restricts it; this root path is the blessed out-of-band
+    # installer, so doing it here means a full deploy always clears any drift).
+    # `bash -n` syntax-checks before the atomic mv, so a broken script can't land.
+    echo "==> syncing deploy policy (mica-deploy.sh from $tag)"
+    git show "$tag:deploy/mica-deploy.sh" \
+      | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
+          && chown root:root /usr/local/sbin/mica-deploy.new \
+          && chmod 0755 /usr/local/sbin/mica-deploy.new \
+          && bash -n /usr/local/sbin/mica-deploy.new \
+          && mv /usr/local/sbin/mica-deploy.new /usr/local/sbin/mica-deploy \
+          && sha256sum /usr/local/sbin/mica-deploy"
     echo "==> pulling + recreating api + web"
     ssh {{node}} "cd {{node_dir}} && docker compose pull api web && docker compose up -d --no-deps api web"
     # The backup sidecar (mica-cli: exports the workspace + external rustic

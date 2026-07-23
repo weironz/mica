@@ -64,6 +64,11 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 > **绝不能让 CI 装**。它是限制 CI 的那道闸 —— 能改写闸的人不受闸约束,把它改成
 > `exec bash` 就拿到了 root shell。`authorized_keys` 和 `sudoers` 同理。CI 只能**读**
 > 部署输出里的 `script_sha=` 来发现漂移。
+>
+> **漂移自愈**:`just deploy-prod` 现在会**从 tag 同步 `mica-deploy.sh`**(和它同步 compose
+> 一样,`bash -n` 校验 + 原子替换),所以脚本改动后的首次完整部署会自动清掉漂移 —— 不用
+> 记着单独跑 `sync-deploy-script`。gh-Deploy(受限 key)路径按设计**仍只能 WARN 不能装**,
+> 所以看到 `deploy policy … drift` warning 时,跑一次 `just deploy-prod` 即消。
 
 ## 镜像与 tag:两条硬规矩
 
