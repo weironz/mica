@@ -1005,7 +1005,52 @@ String detectLanguage(String code) {
 }
 
 /// Build a colored [TextSpan] for [code] under [language], over [base] style.
+/// Memo for [buildCodeSpan]. Highlighting is a hand-written tokenizer (O(n),
+/// worst-case O(n^2) via the per-char `code.substring(i)`), and the editor
+/// rebuilds every code block's span on every keystroke — render.dart's Phase-1
+/// painter cache always builds the span in order to compare it — so unchanged
+/// code blocks re-tokenize for nothing. A code span depends ONLY on
+/// (code, language, base): a code block carries no inline marks, so this key is
+/// complete and can never go stale (unlike a general hand-listed fingerprint).
+/// Small bounded LRU; an unchanged block hits in ~O(1) (String.hashCode is
+/// cached on the instance, and TextSpan.== short-circuits on identity).
+class _CodeSpanKey {
+  const _CodeSpanKey(this.code, this.language, this.base);
+  final String code;
+  final String language;
+  final TextStyle base;
+  @override
+  bool operator ==(Object other) =>
+      other is _CodeSpanKey &&
+      other.code == code &&
+      other.language == language &&
+      other.base == base;
+  @override
+  int get hashCode => Object.hash(code, language, base);
+}
+
+final Map<_CodeSpanKey, TextSpan> _codeSpanMemo = {};
+const int _codeSpanMemoMax = 128;
+
+/// Highlighted span for one code block, memoized (see [_CodeSpanKey]). The
+/// returned span is immutable and may be shared across painters — safe, and it
+/// makes the Phase-1 span-equality check identity-fast for unchanged blocks.
 TextSpan buildCodeSpan(String code, String language, TextStyle base) {
+  final key = _CodeSpanKey(code, language, base);
+  final hit = _codeSpanMemo.remove(key);
+  if (hit != null) {
+    _codeSpanMemo[key] = hit; // reinsert => most-recently-used
+    return hit;
+  }
+  final span = _buildCodeSpanUncached(code, language, base);
+  _codeSpanMemo[key] = span;
+  if (_codeSpanMemo.length > _codeSpanMemoMax) {
+    _codeSpanMemo.remove(_codeSpanMemo.keys.first); // evict least-recently-used
+  }
+  return span;
+}
+
+TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
   final name = canonicalCodeLanguage(language);
   final lang = _langs[name];
   if (lang == null || name == 'plaintext') {
