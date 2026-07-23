@@ -499,6 +499,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _publishOutline();
       _publishActiveBlock();
       _recomputeCounts(); // seed the badge for an opened-but-unedited document
+      // Re-host external image links this document arrived carrying — from an
+      // import (server-side re-host 403s hosts that block its datacenter IP,
+      // e.g. AppFlowy) or a sync. `reHostImages`-gated inside; each _rehostOne
+      // tries the server first, then fetches from THIS client (which the host
+      // does serve), so opening the page converts links the server couldn't.
+      // Best-effort + idempotent: blocks already on a file_id are skipped.
+      _rehostExternalImages();
     });
   }
 
