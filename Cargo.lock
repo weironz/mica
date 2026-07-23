@@ -2081,10 +2081,12 @@ version = "0.12.14"
 dependencies = [
  "anyhow",
  "argon2",
+ "async-trait",
  "axum",
  "base64",
  "chrono",
  "futures-util",
+ "hmac 0.12.1",
  "jsonwebtoken",
  "mica-app-core",
  "mica-core",
@@ -2095,6 +2097,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha1 0.10.6",
  "sha2 0.10.9",
  "sqlx",
  "tokio",
@@ -2154,6 +2157,8 @@ dependencies = [
 name = "mica-infra"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "dotenvy",

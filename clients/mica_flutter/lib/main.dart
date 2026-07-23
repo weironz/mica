@@ -4488,6 +4488,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   session: session,
                   isBusy: _isBusy,
                   onAuthenticate: _authenticate,
+                  onForgotPassword: (email) => _api.requestPasswordReset(email),
                   onCreateWorkspace: _createWorkspace,
                 ),
               ),
@@ -4586,6 +4587,7 @@ class SidePanel extends StatefulWidget {
     required this.session,
     required this.isBusy,
     required this.onAuthenticate,
+    required this.onForgotPassword,
     required this.onCreateWorkspace,
     super.key,
   });
@@ -4593,6 +4595,10 @@ class SidePanel extends StatefulWidget {
   final AuthSession? session;
   final bool isBusy;
   final Future<void> Function(AuthMode mode, AuthFormValue form) onAuthenticate;
+
+  /// Ask the server to email a reset link for [email]. The reset itself happens
+  /// on the emailed web page, never in the app.
+  final Future<void> Function(String email) onForgotPassword;
   final Future<void> Function(String name) onCreateWorkspace;
 
   @override
@@ -4702,8 +4708,60 @@ class _SidePanelState extends State<SidePanel> {
                 : context.l10n.loginActionLogin,
           ),
         ),
+        // Only on the login tab: registering can't have forgotten a password
+        // yet. A reset link is emailed; the reset itself is a web page.
+        if (_mode == AuthMode.login)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: widget.isBusy ? null : _forgotPassword,
+              child: Text(context.l10n.loginForgotPassword),
+            ),
+          ),
       ],
     );
+  }
+
+  Future<void> _forgotPassword() async {
+    final l10n = context.l10n;
+    final email = _email.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.loginForgotEnterEmail)),
+      );
+      return;
+    }
+    try {
+      await widget.onForgotPassword(email);
+      if (!mounted) return;
+      // Deliberately generic — the server won't say whether the address is
+      // registered, and neither do we.
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(l10n.loginForgotSentTitle),
+          content: Text(l10n.loginForgotSentBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(l10n.commonOk),
+            ),
+          ],
+        ),
+      );
+    } on ApiException catch (error) {
+      // A malformed address (400) is worth surfacing; anything else falls back
+      // to the same neutral confirmation.
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.loginForgotSentBody)));
+    }
   }
 
   Widget _workspaceForm(BuildContext context) {

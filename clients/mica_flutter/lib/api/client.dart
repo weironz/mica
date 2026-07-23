@@ -50,6 +50,15 @@ class ApiClient {
     return AuthSession.fromJson(response);
   }
 
+  /// Ask the server to email a password-reset link. No token — the caller is
+  /// locked out, which is the whole point. Always succeeds (the server answers
+  /// 204 whether or not the address is registered, so this is not an
+  /// account-enumeration oracle); the actual reset happens on the emailed
+  /// `/reset-password` web page, not in the app.
+  Future<void> requestPasswordReset(String email) async {
+    await _post('/api/auth/password/forgot', {'email': email});
+  }
+
   /// End a sign-in server-side. Best-effort: the caller is signing out either
   /// way, so a failure here must not strand it — but without this the refresh
   /// token stays live for its full 30 days, and "sign out" would mean nothing

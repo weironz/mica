@@ -94,6 +94,24 @@ services:
       # MICA_REGISTRATION_ENABLED=false in the node's .env to lock this instance
       # to its existing accounts (POST /auth/register then 403s).
       MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"
+      # Public origin used to build the emailed password-reset link
+      # ({base}/reset-password?token=…). Defaults to https://<DOMAIN>.
+      MICA_APP_BASE_URL: "${MICA_APP_BASE_URL:-https://${DOMAIN}}"
+      # Password-reset email delivery. Default "log" writes the reset link to the
+      # server log and sends nothing (the flow still works — the operator reads
+      # the link out of the logs). Set MICA_MAIL_BACKEND=directmail plus the vars
+      # below in the node's .env to send via Aliyun DirectMail (邮件推送):
+      #   MICA_MAIL_FROM            verified sender address (DirectMail AccountName)
+      #   MICA_MAIL_FROM_NAME       optional display name
+      #   MICA_MAIL_ACCESS_KEY_ID / _SECRET   a RAM AccessKey scoped to DirectMail
+      #   MICA_MAIL_REGION          RegionId (default cn-hangzhou)
+      MICA_MAIL_BACKEND: "${MICA_MAIL_BACKEND:-log}"
+      MICA_MAIL_FROM: "${MICA_MAIL_FROM:-}"
+      MICA_MAIL_FROM_NAME: "${MICA_MAIL_FROM_NAME:-}"
+      MICA_MAIL_ACCESS_KEY_ID: "${MICA_MAIL_ACCESS_KEY_ID:-}"
+      MICA_MAIL_ACCESS_KEY_SECRET: "${MICA_MAIL_ACCESS_KEY_SECRET:-}"
+      MICA_MAIL_REGION: "${MICA_MAIL_REGION:-cn-hangzhou}"
+      MICA_MAIL_ENDPOINT: "${MICA_MAIL_ENDPOINT:-}"
     depends_on:
       postgres:
         condition: service_healthy

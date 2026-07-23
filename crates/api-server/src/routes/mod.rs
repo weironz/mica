@@ -12,6 +12,7 @@ mod files;
 mod health;
 mod history;
 mod import;
+mod password_reset;
 mod tokens;
 mod workspaces;
 pub mod ws;
@@ -33,6 +34,14 @@ pub fn share_router() -> Router<AppState> {
   Router::new().route("/s/{token}", get(documents::public_share_page))
 }
 
+/// The password-reset page (`GET/POST /reset-password`), mounted OUTSIDE `/api`
+/// like the share page — the reset token in the form is the only credential, so
+/// it must not sit behind the auth scope-guard. nginx proxies `/reset-password`
+/// to the backend.
+pub fn reset_router() -> Router<AppState> {
+  password_reset::router()
+}
+
 pub fn api_router() -> Router<AppState> {
   Router::new()
     .route("/health", get(health::health))
@@ -46,6 +55,10 @@ pub fn api_router() -> Router<AppState> {
       get(auth::me).patch(auth::update_me).delete(auth::delete_account),
     )
     .route("/auth/password", post(auth::change_password))
+    .route(
+      "/auth/password/forgot",
+      post(password_reset::forgot),
+    )
     .route(
       "/auth/tokens",
       get(tokens::list_tokens).post(tokens::create_token),

@@ -734,6 +734,10 @@ fn is_public(path: &str) -> bool {
     || path.ends_with("/ready")
     || path.ends_with("/auth/login")
     || path.ends_with("/auth/register")
+    // Forgot-password: the caller has no session (that is the whole point). The
+    // email address in the body is all it takes; the reset itself happens on the
+    // server-rendered /reset-password page (mounted outside /api entirely).
+    || path.ends_with("/auth/password/forgot")
     // You refresh precisely BECAUSE the access token is dead — demanding a live
     // one here would be a deadlock, and the endpoint's own credential is the
     // refresh token in its body. The same router-wide `scope_guard` already
@@ -763,7 +767,7 @@ fn is_blob_path(path: &str) -> bool {
   segs.get(i + 2) == Some(&"blob") && (segs.len() == i + 3 || segs.len() == i + 4)
 }
 
-fn normalize_email(email: &str) -> ApiResult<String> {
+pub(crate) fn normalize_email(email: &str) -> ApiResult<String> {
   let email = email.trim().to_ascii_lowercase();
   if email.is_empty() || !email.contains('@') {
     return Err(ApiError::BadRequest("valid email is required".to_string()));
@@ -791,7 +795,7 @@ fn validate_password(password: &str) -> ApiResult<()> {
   Ok(())
 }
 
-fn hash_password(password: &str) -> ApiResult<String> {
+pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
   let salt = SaltString::generate(&mut OsRng);
   Argon2::default()
     .hash_password(password.as_bytes(), &salt)

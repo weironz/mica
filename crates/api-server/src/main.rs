@@ -7,6 +7,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 mod blob_gc;
+mod mail;
 mod rate_limit;
 mod routes;
 
@@ -44,7 +45,9 @@ async fn main() -> anyhow::Result<()> {
   }
 
   let addr = config.http_addr;
-  let state = AppState::new(config, db);
+  // Log by default; Aliyun DirectMail when MICA_MAIL_BACKEND=directmail is set.
+  let mailer = mail::build_mailer();
+  let state = AppState::new(config, db, mailer);
   // Reclaim blobs no page points at any more. Backgrounded and best-effort: a
   // GC that stops is a disk-space problem, never a reason to fail a request.
   // No-op when object storage is not configured — nothing to reclaim.
@@ -83,6 +86,7 @@ fn app_router(state: AppState) -> Router {
     .nest("/api", api)
     .merge(routes::ws_router())
     .merge(routes::share_router())
+    .merge(routes::reset_router())
     .layer(TraceLayer::new_for_http())
     // Throttle the auth endpoints per client IP + cap Argon2 concurrency. Inner
     // to CORS (so a preflight is answered before the limiter sees it); the

@@ -48,6 +48,11 @@ pub struct AppConfig {
   /// with 403 instead of creating accounts. The operator's one switch to run a
   /// public node privately.
   pub registration_enabled: bool,
+  /// Public origin the app is reached at, e.g. `https://mica.example.com` — used
+  /// to build the password-reset link that goes in the email (`{base}/reset-
+  /// password?token=…`). Set `MICA_APP_BASE_URL`; defaults to
+  /// `http://localhost:8080` for local dev. No trailing slash (one is stripped).
+  pub app_base_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +140,14 @@ impl AppConfig {
       })
       .unwrap_or(true);
 
+    // Where the emailed reset link points. Trailing slash trimmed so
+    // `{base}/reset-password` never doubles up.
+    let app_base_url = env::var("MICA_APP_BASE_URL")
+      .ok()
+      .map(|v| v.trim().trim_end_matches('/').to_string())
+      .filter(|v| !v.is_empty())
+      .unwrap_or_else(|| "http://localhost:8080".to_string());
+
     Ok(Self {
       environment,
       http_addr,
@@ -146,6 +159,7 @@ impl AppConfig {
       cors_allowed_origins,
       seed_test_user,
       registration_enabled,
+      app_base_url,
     })
   }
 }

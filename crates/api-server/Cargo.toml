@@ -8,12 +8,17 @@ rust-version.workspace = true
 [dependencies]
 anyhow.workspace = true
 argon2.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 # yrs sync updates are binary; the WS protocol is JSON text, so they ride as
 # base64 (P2-M4). Standard wire-encoding glue.
 base64 = "0.22"
 chrono.workspace = true
 futures-util.workspace = true
+# HMAC-SHA1 for the Aliyun DirectMail RPC request signature (crates/api-server
+# mail.rs). SHA-1 is required by that API's v1 signing scheme — not a security
+# choice of ours.
+hmac.workspace = true
 jsonwebtoken.workspace = true
 mica-app-core = { path = "../app-core" }
 # Feature switch only: turns on mica-markdown's `render` so cloud HTML/PDF export
@@ -28,6 +33,7 @@ rand_core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha1.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["sync"] }

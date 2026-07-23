@@ -163,12 +163,20 @@ fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
 
 /// Per-IP throttled: the credential endpoints. `refresh` is included (a rotating
 /// refresh-token endpoint is an abuse vector) but does NOT hash, so it skips the
-/// Argon2 gate below. WS connects are deliberately NOT here: they are already
-/// token-authenticated and a shared per-IP bucket would throttle a user opening
-/// several documents at once — not worth the false positives for a low-severity
-/// authed path.
+/// Argon2 gate below. The password-reset pair is here too — `forgot` could be
+/// used to spam a victim's inbox or probe timing, and `/reset-password` POST is
+/// a token-guessing surface — but neither is Argon2-gated: `forgot` doesn't
+/// hash, and `/reset-password` only hashes AFTER a valid token spends (an
+/// attacker without one never reaches the hash). WS connects are deliberately
+/// NOT here: they are already token-authenticated and a shared per-IP bucket
+/// would throttle a user opening several documents at once — not worth the false
+/// positives for a low-severity authed path.
 fn is_rate_limited(path: &str) -> bool {
-    spends_argon2(path) || path.ends_with("/auth/refresh")
+    spends_argon2(path)
+        || path.ends_with("/auth/refresh")
+        || path.ends_with("/auth/password/forgot")
+        // The reset page lives outside /api (no /auth segment): match it exactly.
+        || path.ends_with("/reset-password")
 }
 
 /// Endpoints that run an Argon2 hash/verify — the ones the concurrency gate must
@@ -280,12 +288,17 @@ mod tests {
         assert!(is_rate_limited("/api/auth/login"));
         assert!(is_rate_limited("/api/auth/register"));
         assert!(is_rate_limited("/api/auth/refresh"));
+        // Password reset: both throttled, neither Argon2-gated.
+        assert!(is_rate_limited("/api/auth/password/forgot"));
+        assert!(is_rate_limited("/reset-password"));
         assert!(!is_rate_limited("/api/workspaces"));
         assert!(!is_rate_limited("/ws/workspaces/x/documents/y"));
-        // Only login/register hash — refresh must not hold an Argon2 permit.
+        // Only login/register hash — refresh/forgot/reset must not hold an Argon2 permit.
         assert!(spends_argon2("/api/auth/login"));
         assert!(spends_argon2("/api/auth/register"));
         assert!(!spends_argon2("/api/auth/refresh"));
+        assert!(!spends_argon2("/api/auth/password/forgot"));
+        assert!(!spends_argon2("/reset-password"));
     }
 
     #[test]

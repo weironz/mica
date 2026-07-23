@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mica_infra::{AiConfig, AppConfig, S3Config};
+use mica_infra::{AiConfig, AppConfig, Mailer, S3Config};
 use serde::Serialize;
 use sqlx::PgPool;
 use tokio::sync::RwLock;
@@ -27,6 +27,9 @@ pub struct AppState {
   /// Server-side workspace import jobs (the client uploads a ZIP once and
   /// polls progress here).
   pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJob>>>,
+  /// Outbound email (currently just the password-reset link). Defaults to a
+  /// no-op logger; the api-server binary swaps in Aliyun DirectMail from env.
+  pub mailer: Arc<dyn Mailer>,
 }
 
 /// Progress of one server-side workspace import.
@@ -48,7 +51,7 @@ pub enum ImportJobStatus {
 }
 
 impl AppState {
-  pub fn new(config: AppConfig, db: PgPool) -> Self {
+  pub fn new(config: AppConfig, db: PgPool, mailer: Arc<dyn Mailer>) -> Self {
     Self {
       config: Arc::new(config),
       db,
@@ -56,6 +59,7 @@ impl AppState {
       storage: S3Config::from_env().map(Arc::new),
       ai: Arc::new(RwLock::new(AiConfig::from_env())),
       import_jobs: Arc::new(RwLock::new(HashMap::new())),
+      mailer,
     }
   }
 }
