@@ -4,17 +4,28 @@
 > 目标:大文档每次击键只重排"改动块 + 视口带 + caret/IME 块",其余复用缓存/估算,
 > 不破坏 caret / 选区 / IME / scroll-to-block / find。
 
-## 状态一览(2026-07-23,先看这里)
+## 状态一览(2026-07-23,先看这里)——性能目标已闭环 ✅
+
+**目标(大档每击键只做改动块的活)已达成**,走的是**架构干净支持、不变量不破、可离线验证**的
+等效路线,而非原设计的"真·视口虚拟化"(后者被两条架构约束挡住,见下)。三刀叠加后,每击键
+= **O(改动块)真推导 + O(N) 平凡重定位**。
 
 | 项 | 状态 | 出处 |
 |---|---|---|
-| Phase 1:每块 layout 缓存(干掉 dispose-all/rebuild-all) | ✅ 已落地 | da25075,`test/painter_cache_test.dart` |
+| Phase 1:每块 painter 缓存(干掉 dispose-all/rebuild-all,未变块跳过 `layout()`) | ✅ 已落地 | da25075,`test/painter_cache_test.dart` |
 | 代码高亮记忆化(未变代码块不再每击键重新分词) | ✅ 已落地 | 7fe1997,`test/code_span_memo_test.dart` |
-| Phase 2/3:真·视口虚拟化(屏外跳过排版 + 估算高 + 前缀和 + caret 按需强排 + scroll/find 沉降) | ❌ 未做,**且非"照现设计就能做"**——见「两条架构约束」 | 只有剧本(下方 S0–S3) |
-| 交互验证闸门(万级块/滚远块/跨屏选区/真实 IME/巨代码块/基准) | ❌ 未做 | 下方清单 |
+| **Phase 2:整块 layout 复用 + 重定位(未变块跳过 marks/span/高亮/rect 全部推导,只 shiftBy)** | ✅ **已落地** | **b750d88,`test/layout_reuse_test.dart`** |
+| 真·视口虚拟化(屏外**跳过**排版 + 估算高 + 前缀和 + caret 按需强排 + scroll/find 沉降) | ⏸️ **有意不做**(仅万级块/超长档才需要,且要架构级改动——见「两条架构约束」);剧本留档待需 | 下方 S0–S3(参考) |
 
-> **本文档下半部(根因/数据结构/新 layout pass/分期剧本)是原始设计,其中部分假设已被
-> 「实测:两条架构约束」一节修正**——凡与那节冲突处,以那节为准(逐处已就地标注 ⚠️)。
+> **闭环说明**:原设计想靠"屏外跳过排版"省下 O(N) 那部分,但两条架构约束(performLayout 拿不到
+> 滚动偏移 + 编辑器不自管视口)让它做不到,且失败模式是离线测不到的静默几何损坏。Phase 2 改成
+> **整块 layout 复用**:**保住"每个 `_layouts[i]` 都有真 painter+真几何"不变量**,只是"复用而非跳过",
+> 于是既拿到"未变块零推导"的主要收益,又**可被离线 widget 单测(跑真实 layout/paint/hit-test)完整
+> 把关**——不需要那套交互验证闸门(那是给"屏外无 coords"的真虚拟化用的)。剩下 O(N) 的重定位只在
+> **万级块**才可能成为瓶颈;真到那天,再按下方 S0–S3 上"自管视口/paint 期惰性成形"。
+>
+> **本文档下半部(根因/数据结构/新 layout pass/分期剧本)是原始设计与"真虚拟化"路线的参考**,
+> 其中部分假设已被「实测:两条架构约束」修正——凡冲突处以那节为准(逐处已就地标注 ⚠️)。
 
 ## 决策:CodeMirror 式单画布虚拟化,不改 widget-per-block
 
@@ -44,8 +55,10 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
 「两条架构约束」#1:`performLayout` 拿不到视口,layout 侧无法像 paint 那样按可视带跳过。**
 
 ## 数据结构(CodeMirror `HeightOracle` 的最小对应)
-> **状态**:#1(每块 layout 缓存)✅ 已由 Phase 1 实现(指纹改用实际 TextSpan,比原写的
-> "marks hash" 更稳)。#2–#4(dirty 集 / 估算高 / 前缀和)❌ 未做,且受「两条架构约束」制约。
+> **状态**:#1(每块缓存)✅ Phase 1(指纹用实际 TextSpan,比"marks hash"更稳)+ Phase 2(整块
+> layout 缓存 `_layoutCache`)。#2(dirty 集)✅ **由 identity 实现**——controller 只重赋值不原地改
+> text/data,故 `identical` 即"未变"(比"标脏"更省:无需布线,零漏标)。#3–#4(估算高 / 前缀和)
+> **仅"真·视口虚拟化"才需要**,现方案不跳过排版故不需要;真要走那条再实现(见顶部闭环说明)。
 
 1. **每块 layout 缓存**,按 block id 键:`TextPainter`(或 atomic 布局)、`boxHeight`、
    `contentLeft`/`textWidth`,以及**算它时的输入指纹**(text、marks hash、maxWidth、外观 rev、
