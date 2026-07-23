@@ -135,7 +135,7 @@
 
 ## 性能
 
-- **长文档无虚拟化(Phase 1 已落地,余 Phase 2/3)** —— 设计 `docs/editor-virtualization-plan.md`(CodeMirror 式,调研背书)。**Phase 1 ✅ da25075(2026-07-23)**:文本 painter 按 block id 缓存复用(指纹=实际 TextSpan+宽度),干掉 performLayout 逐帧 dispose+重建全部 TextPainter → 每击键只重排被改块。回归 `test/painter_cache_test.dart`。**余下(L)**:Phase 2 屏外块跳过 layout()/估算高、Phase 3 offset→Y 前缀和 + caret 按需强排 + scroll/find 估算跳。
+- **长文档性能(Phase 1 + 代码高亮记忆化已落地;真虚拟化=独立架构项)** —— 设计 `docs/editor-virtualization-plan.md`。**Phase 1 ✅ da25075**:文本 painter 按 block id 缓存复用(指纹=实际 TextSpan+宽度),干掉 performLayout 逐帧 dispose+重建全部 TextPainter → 每击键只重排被改块。**代码高亮记忆化 ✅ 7fe1997**:未变代码块不再每击键重新分词(buildCodeSpan LRU,key 完整)。回归 `test/painter_cache_test.dart` / `test/code_span_memo_test.dart`。**真·视口虚拟化(L,独立架构项)**:实测两条约束——performLayout 拿不到滚动偏移(视口只在 paint 时知)、EditorNode 原地可变(无廉价正确的 dirty 信号);要落地需"编辑器自管视口"或"paint 期惰性成形+估算自愈",ROI 只在万级块/超长档显著,配交互验证专门会话做(剧本在设计文档)。
 - ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
 - **每次 push 重建+重编码+重写整档(写放大)** —— `from_update`→全档 `encode_state`+upsert,成本 O(文档) 而非 O(更新)(`sync.rs`)。(M) `[需后端]`
 - **yrs base 无 squash/GC,无界增长** —— 只裁 stream 不压 base,长寿文档 base 越滚越大(`sync.rs`)。(L) `[需后端]`

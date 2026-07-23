@@ -78,9 +78,29 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
 - **验证**:大档基准(万级块/巨块击键延迟)、caret/选区/scroll-to/find/IME 回归(桌面 integration_test
   + web playwright 截图)。红线:round-trip 不受影响(纯渲染层改动,不碰文档模型)。
 
+## 实测:两条架构约束(动手后确认,2026-07-23)——决定"真虚拟化"是独立架构项
+
+动 Phase 2 前扒了实况,两条硬约束改写了原设想,**必须先读**:
+
+1. **`performLayout` 拿不到滚动偏移。** RenderDocument 被布在**全高**、外层 ScrollView 在 **paint**
+   时才靠 `offset.dy` + `canvas.getLocalClipBounds()` 给出可视带(`render.dart:1512-1516`,
+   `_visTop/_visBottom`)。所以"layout 阶段跳过屏外块"在本架构**做不到**——要么让编辑器**自管视口**
+   (RenderAbstractViewport,大改),要么把成形挪到 **paint 期惰性做** + 估算→测量自愈(有帧内抖动、
+   易进无限 relayout,需极小心)。这不是"一次性安全改动"。
+2. **`EditorNode.text/data` 原地可变**(`model.dart:34-35`;controller 单列表原地改,`controller.dart:46`)。
+   于是**没有廉价且正确的"块变没变"信号**:shadow 比对要逐块深拷贝(贵),而 Phase 1 正是靠**每次重建
+   span**绕开这点。要跳过 span 构建就得给每个 controller 变更点加 **rev 计数**(landmine,漏一个=显示旧内容)。
+
+**结论**:Phase 1 已抓住主导成本(shaping);架构**干净支持**的最高性价比补充是**记忆化代码高亮**
+(未变代码块不再每击键重新分词)——**✅ 已落地 7fe1997**,key=(code,language,base) 完整永不 stale,
+回归 `test/code_span_memo_test.dart`。**"真·视口虚拟化"(自管视口 or paint 期惰性成形)是独立架构项,
+ROI 只在万级块/超长档才显著**,按下方剧本 + 交互验证在专门会话做;非大档场景可先不做。
+
 ## Phase 2/3 实施剧本(新会话直接照做,2026-07-23 定)
 
 > 决策:Phase 2/3 **专开一个会话做**,且必须在**能跑起来的应用上做真实交互验证**才算完。
+> ⚠️ 先读上一节两条架构约束:S0/S1 的"屏外跳过排版"**不能在 `performLayout` 里做**——要落地得先选
+> "自管视口"或"paint 期惰性成形"其一,剧本的 `_ensureLaidOut`/前缀和/估算仍适用,但触发点在 paint/查询期。
 > 理由(实测判断,非泛化谨慎):Phase 1 保住了"每块都排、每个 `_layouts[i]` 都有真 painter"
 > 这条不变量,所以约 80 处 `_layouts[i]` 消费点原样能用;**Phase 2 故意打破它**(屏外块只有
 > 估算高、无成形 painter),于是**任何几何查询都可能拿到没排过的块**——`caretRectFor`(现
