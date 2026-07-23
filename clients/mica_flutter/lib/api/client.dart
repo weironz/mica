@@ -861,6 +861,7 @@ class ApiClient {
     String? workspaceId,
     String? parentViewId,
     String? container,
+    bool reHostImages = true,
   }) async {
     final response = await http.post(
       baseUri.replace(
@@ -875,6 +876,10 @@ class ApiClient {
           // Wrap-vs-spill choice for import-into-existing: auto (default) /
           // spill / wrap. Omitted → server default (auto).
           'container': ?container,
+          // Mirror the "转存网络图片" setting so import re-hosts external image
+          // links the same way pasting does. Sent explicitly (not only when
+          // false) so the server always honours the client's choice.
+          'rehost_external': reHostImages ? 'true' : 'false',
         },
       ),
       headers: {

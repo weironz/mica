@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
 use crate::routes::documents::ensure_workspace_editor;
-use crate::routes::files::store_bytes;
+use crate::routes::files::{fetch_and_store_image_url, store_bytes};
 
 #[derive(Debug, Deserialize)]
 pub struct ImportParams {
@@ -53,6 +53,33 @@ pub struct ImportParams {
   /// container, so this is ignored there.
   #[serde(default)]
   pub container: ContainerMode,
+  /// Re-host external `http(s)` image links into Mica storage during import
+  /// (best-effort: a host this server can't reach keeps its link). Mirrors the
+  /// client's "转存网络图片" toggle — the client passes its setting through.
+  /// Defaults on: import is a one-time "bring this content in" operation, so
+  /// making external images permanent is the expected default.
+  #[serde(default = "default_true")]
+  pub rehost_external: bool,
+}
+
+fn default_true() -> bool {
+  true
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn rehost_external_defaults_on_and_can_be_turned_off() {
+    // Absent → on: import brings external images in unless the caller opts out.
+    let d: ImportParams = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(d.rehost_external, "import re-hosts external images by default");
+    // The client mirrors its "转存网络图片" toggle through this flag.
+    let off: ImportParams =
+      serde_json::from_value(serde_json::json!({ "rehost_external": false })).unwrap();
+    assert!(!off.rehost_external, "the client's toggle can turn it off");
+  }
 }
 
 /// The wrap-vs-spill choice surfaced to the user in the import dialog. Default
@@ -226,6 +253,10 @@ async fn run_import(
   let file_paths: std::collections::HashSet<String> = plan.files.keys().cloned().collect();
   let mut uploaded: std::collections::HashMap<String, (String, String)> =
     std::collections::HashMap::new();
+  // External URLs re-hosted this import, keyed by url, so the same link shared
+  // across pages is fetched once.
+  let mut rehosted: std::collections::HashMap<String, (String, String)> =
+    std::collections::HashMap::new();
   let client = reqwest::Client::new();
 
   for (idx, page) in plan.pages.iter().enumerate() {
@@ -253,24 +284,50 @@ async fn run_import(
 
     for block in &mut payload.blocks {
       // Image refs that resolve inside the archive: upload once, rewire to
-      // Mica's {file_id, name} form. External URLs stay links.
+      // Mica's {file_id, name} form. External http(s) links: re-host into our
+      // storage too (best-effort) when `rehost_external` is on, else stay links.
       if block.kind == "image"
         && let Some(url) = block.data.get("url").and_then(|v| v.as_str()).map(str::to_string)
-        && let Some(path) = resolve_ref(from, &url, &file_paths)
       {
-        let entry = match uploaded.get(&path) {
-          Some(hit) => hit.clone(),
-          None => {
-            let base = path.rsplit('/').next().unwrap_or(&path);
-            let record =
-              store_bytes(state, &client, workspace_id, user_id, base, &plan.files[&path])
-                .await?;
-            let value = (record.id.to_string(), record.original_name.clone());
-            uploaded.insert(path.clone(), value.clone());
-            value
+        if let Some(path) = resolve_ref(from, &url, &file_paths) {
+          let entry = match uploaded.get(&path) {
+            Some(hit) => hit.clone(),
+            None => {
+              let base = path.rsplit('/').next().unwrap_or(&path);
+              let record =
+                store_bytes(state, &client, workspace_id, user_id, base, &plan.files[&path])
+                  .await?;
+              let value = (record.id.to_string(), record.original_name.clone());
+              uploaded.insert(path.clone(), value.clone());
+              value
+            }
+          };
+          block.data = json!({"file_id": entry.0, "name": entry.1});
+        } else if params.rehost_external
+          && (url.starts_with("http://") || url.starts_with("https://"))
+        {
+          // Pull the external image into Mica so it can't rot. Server-side and
+          // best-effort — a host this server can't reach (CN routing to
+          // medium/imgur/…) just keeps its link, exactly as before. The client's
+          // per-image re-host remains the fallback for those.
+          let entry = match rehosted.get(&url) {
+            Some(hit) => Some(hit.clone()),
+            None => match fetch_and_store_image_url(state, workspace_id, user_id, &url).await {
+              Ok(record) => {
+                let value = (record.id.to_string(), record.original_name.clone());
+                rehosted.insert(url.clone(), value.clone());
+                Some(value)
+              }
+              Err(error) => {
+                tracing::warn!(%url, %error, "import: external image re-host failed; keeping link");
+                None
+              }
+            },
+          };
+          if let Some(entry) = entry {
+            block.data = json!({"file_id": entry.0, "name": entry.1});
           }
-        };
-        block.data = json!({"file_id": entry.0, "name": entry.1});
+        }
       }
       // Relative .md links become internal page links.
       if let Some(marks) = block.data.get_mut("marks").and_then(|m| m.as_array_mut()) {

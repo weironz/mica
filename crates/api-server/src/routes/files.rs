@@ -203,9 +203,25 @@ pub async fn import_url(
 ) -> ApiResult<Json<FileResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
-  let storage = storage(&state)?;
+  let file = fetch_and_store_image_url(&state, workspace_id, user_id, payload.url.trim()).await?;
+  let download_url = storage(&state)?.download_url(&file.object_key);
+  Ok(Json(FileResponse { file, download_url }))
+}
 
-  let url = payload.url.trim();
+/// Fetch an external image URL server-side (SSRF-guarded, redirects off, 20 s
+/// timeout) and store it, returning the stored file. Shared by the `import-url`
+/// endpoint and the workspace-import re-host of external image links. Returns an
+/// error (never panics) on an unreachable host — a CN-hosted server routinely
+/// cannot reach medium/imgur/… — so the caller decides whether to keep the link.
+pub(crate) async fn fetch_and_store_image_url(
+  state: &AppState,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  url: &str,
+) -> ApiResult<store::FileRecord> {
+  let storage = storage(state)?;
+
+  let url = url.trim();
   let parsed =
     reqwest::Url::parse(url).map_err(|_| ApiError::BadRequest("url must be http(s)".to_string()))?;
   if !matches!(parsed.scheme(), "http" | "https") {
@@ -327,9 +343,8 @@ pub async fn import_url(
     byte_size,
   )
   .await?;
-  let download_url = storage.download_url(&file.object_key);
 
-  Ok(Json(FileResponse { file, download_url }))
+  Ok(file)
 }
 
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}/blob`

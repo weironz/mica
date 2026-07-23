@@ -1939,6 +1939,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         workspaceId: workspaceId,
         parentViewId: parentViewId,
         container: container,
+        reHostImages: _reHostImages,
       );
       ImportJobStatus job;
       while (true) {

@@ -105,8 +105,13 @@ and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
    the md's own folder first, then the archive root; `./`, `../` chains and
    percent-encoded names all work. Matching files are uploaded **once each**
    straight to S3 (deduped again by sha256 object keys) and the block is
-   rewired to Mica's `{file_id, name}` image form. External URLs stay
-   links.
+   rewired to Mica's `{file_id, name}` image form. **External `http(s)` URLs are
+   re-hosted too** — server-side, best-effort, gated on `rehost_external` (the
+   client mirrors its "转存网络图片" toggle): the server fetches and stores them
+   the same way `files/import-url` does, so imported images can't rot. A host
+   this server can't reach (CN routing to medium/imgur/…) just keeps its link,
+   and the client's per-image re-host stays the fallback for those. Dedup by url
+   within one import, so a link shared across pages is fetched once.
 4. **Takes the body verbatim.** A page's name is a property of the page, not a
    line inside it: the name travels in the file name (and the manifest `title`),
    never welded into the text. So the export writes no `# {name}` and the import
