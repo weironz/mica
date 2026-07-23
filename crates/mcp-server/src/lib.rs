@@ -358,6 +358,42 @@ struct UpdateDocArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EditOp {
+  /// One of: append, replace_all, insert_at, find_replace — same as
+  /// mica_update_document's `mode`.
+  mode: String,
+  /// Markdown to write (append/replace_all/insert_at). Omit for find_replace.
+  #[serde(default)]
+  markdown: Option<String>,
+  /// insert_at: the block id OR heading text to place after.
+  #[serde(default)]
+  anchor: Option<String>,
+  /// find_replace: text to find / its replacement.
+  #[serde(default)]
+  find: Option<String>,
+  #[serde(default)]
+  replace: Option<String>,
+  /// find_replace: require EXACTLY ONE match (a precise single edit).
+  #[serde(default)]
+  unique: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ApplyEditsArgs {
+  workspace_id: String,
+  /// The document's object id (a page's `object_id`).
+  document_id: String,
+  /// The edits to apply IN ORDER — one tool call for a whole burst instead of N.
+  /// Each is like a mica_update_document call; later edits see earlier ones.
+  edits: Vec<EditOp>,
+  /// Optimistic concurrency for the batch START: the seq you last saw (outline /
+  /// prior ack). Checked on the FIRST edit only — later edits ride the seq the
+  /// batch itself advances.
+  #[serde(default)]
+  expected_seq: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct MoveDocArgs {
   workspace_id: String,
   /// The page's VIEW id (from `mica_list_pages`), not its object_id.
@@ -568,6 +604,37 @@ fn write_ack(value: Value) -> Result<CallToolResult, McpError> {
     return tool_result(Ok(value));
   }
   ack.insert("ok".to_string(), json!(true));
+  tool_result(Ok(Value::Object(ack)))
+}
+
+/// Ack for a batch that fully landed: how many edits applied, plus the final
+/// `seq` and `last_block_id` (the end anchor to continue from) — the same
+/// thrifty shape as [`write_ack`], never the document.
+fn batch_ack(applied: usize, last: Option<Value>) -> Result<CallToolResult, McpError> {
+  let mut ack = serde_json::Map::new();
+  ack.insert("ok".to_string(), json!(true));
+  ack.insert("applied".to_string(), json!(applied));
+  if let Some(value) = last {
+    if let Some(seq) = value.pointer("/update/seq").and_then(Value::as_i64) {
+      ack.insert("seq".to_string(), json!(seq));
+    }
+    if let Some(blocks) = value
+      .pointer("/snapshot/payload/blocks")
+      .and_then(Value::as_array)
+      && let Some(root_id) = value
+        .pointer("/snapshot/payload/root_block_id")
+        .and_then(Value::as_str)
+      && let Some(last_block) = blocks
+        .iter()
+        .find(|b| b.get("id").and_then(Value::as_str) == Some(root_id))
+        .and_then(|root| root.get("children"))
+        .and_then(Value::as_array)
+        .and_then(|children| children.last())
+        .and_then(Value::as_str)
+    {
+      ack.insert("last_block_id".to_string(), json!(last_block));
+    }
+  }
   tool_result(Ok(Value::Object(ack)))
 }
 
@@ -839,60 +906,81 @@ impl MicaMcp {
     if let Err(error) = self.ensure_writable() {
       return Ok(tool_error(error));
     }
+    match self
+      .write_markdown(
+        &workspace_id,
+        &document_id,
+        &mode,
+        markdown.as_deref(),
+        anchor,
+        find.as_deref(),
+        replace.as_deref(),
+        unique,
+        expected_seq,
+      )
+      .await
+    {
+      Ok(value) => write_ack(value),
+      Err(error) => Ok(tool_error(error)),
+    }
+  }
+
+  /// The shared markdown-write path behind mica_update_document AND
+  /// mica_apply_edits: latex guard, unique-match pre-check, heading-anchor
+  /// resolution, then the PATCH. Returns the raw API value (for write_ack) or a
+  /// tool error. One seam so a batch applies exactly what a single write does.
+  #[allow(clippy::too_many_arguments)]
+  async fn write_markdown(
+    &self,
+    workspace_id: &str,
+    document_id: &str,
+    mode: &str,
+    markdown: Option<&str>,
+    anchor: Option<String>,
+    find: Option<&str>,
+    replace: Option<&str>,
+    unique: bool,
+    expected_seq: Option<i64>,
+  ) -> Result<Value, McpError> {
     // Every field that carries authored content, not just `markdown`:
     // find_replace writes through `replace`, and a swapped-in formula is
     // mangled by the same under-escaping.
-    for text in [markdown.as_deref(), replace.as_deref()]
-      .into_iter()
-      .flatten()
-    {
-      if let Err(error) = reject_mangled_latex(text) {
-        return Ok(tool_error(error));
-      }
+    for text in [markdown, replace].into_iter().flatten() {
+      reject_mangled_latex(text)?;
     }
 
     // unique find_replace: refuse unless the target occurs EXACTLY ONCE, so a
     // precise single edit never silently rewrites other matches (the Anthropic
     // str_replace discipline). Costs one read; opt-in via unique=true.
-    if mode == "find_replace" && unique
-      && let Some(find) = find.as_deref().filter(|s| !s.is_empty())
+    if mode == "find_replace"
+      && unique
+      && let Some(find) = find.filter(|s| !s.is_empty())
     {
-      match self
+      let v = self
         .get(&format!(
           "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
         ))
-        .await
-      {
-        Ok(v) => {
-          let full = match v {
-            Value::String(s) => s,
-            other => other.to_string(),
-          };
-          let n = full.matches(find).count();
-          if n != 1 {
-            return Ok(tool_error(McpError::invalid_params(
-              format!(
-                "unique find_replace: {find:?} occurs {n} time(s); need exactly 1 — add \
-                 surrounding context to disambiguate, or set unique=false to replace all."
-              ),
-              None,
-            )));
-          }
-        }
-        Err(error) => return Ok(tool_error(error)),
+        .await?;
+      let full = match v {
+        Value::String(s) => s,
+        other => other.to_string(),
+      };
+      let n = full.matches(find).count();
+      if n != 1 {
+        return Err(McpError::invalid_params(
+          format!(
+            "unique find_replace: {find:?} occurs {n} time(s); need exactly 1 — add \
+             surrounding context to disambiguate, or set unique=false to replace all."
+          ),
+          None,
+        ));
       }
     }
 
     // insert_at: let the caller anchor by HEADING TEXT, not just a block id — a
     // heading survives edits above it. Resolve it to the block id insert_at wants.
     let anchor = if mode == "insert_at" {
-      match self
-        .resolve_anchor(&workspace_id, &document_id, anchor)
-        .await
-      {
-        Ok(a) => a,
-        Err(error) => return Ok(tool_error(error)),
-      }
+      self.resolve_anchor(workspace_id, document_id, anchor).await?
     } else {
       anchor
     };
@@ -903,20 +991,16 @@ impl MicaMcp {
         "anchor": anchor,
         "find": find,
         "replace": replace,
-        // Optimistic-concurrency hint; the current API ignores unknown fields,
-        // so this is inert until the server ships the seq check (Tier 1 #4).
+        // Optimistic concurrency (Tier 1 #4): honoured once the API deploy lands;
+        // ignored as an unknown field before that, so this is safe to always send.
         "expected_seq": expected_seq,
     });
-    match self
+    self
       .patch(
         &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
         body,
       )
       .await
-    {
-      Ok(value) => write_ack(value),
-      Err(error) => Ok(tool_error(error)),
-    }
   }
 
   /// insert_at anchor resolution: a `block_…` id passes through unchanged; None
@@ -961,6 +1045,82 @@ impl MicaMcp {
         None,
       )),
     }
+  }
+
+  #[tool(
+    description = "Apply a BATCH of edits to ONE document in a single call — one agent \
+                       turn for a whole burst instead of N round-trips. `edits` run IN ORDER, \
+                       each like mica_update_document (append / insert_at / find_replace / \
+                       replace_all); later edits see the effect of earlier ones. NOT atomic: on \
+                       a failure it stops and reports how many landed, so you can resume from \
+                       there.",
+    annotations(
+      title = "Apply edits (batch)",
+      read_only_hint = false,
+      destructive_hint = true
+    )
+  )]
+  async fn mica_apply_edits(
+    &self,
+    Parameters(ApplyEditsArgs {
+      workspace_id,
+      document_id,
+      edits,
+      expected_seq,
+    }): Parameters<ApplyEditsArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    if edits.is_empty() {
+      return Ok(tool_error(McpError::invalid_params(
+        "edits is empty — pass at least one edit".to_string(),
+        None,
+      )));
+    }
+    let total = edits.len();
+    let mut last: Option<Value> = None;
+    for (i, e) in edits.into_iter().enumerate() {
+      let EditOp {
+        mode,
+        markdown,
+        anchor,
+        find,
+        replace,
+        unique,
+      } = e;
+      // expected_seq guards only the batch START; within the batch the doc's seq
+      // advances with each write, so pinning it per-op would 409 on edit #2.
+      let seq = if i == 0 { expected_seq } else { None };
+      match self
+        .write_markdown(
+          &workspace_id,
+          &document_id,
+          &mode,
+          markdown.as_deref(),
+          anchor,
+          find.as_deref(),
+          replace.as_deref(),
+          unique,
+          seq,
+        )
+        .await
+      {
+        Ok(value) => last = Some(value),
+        Err(error) => {
+          // Partial application: say how many landed and which op failed, as an
+          // isError result the agent can read and resume from.
+          return Ok(tool_error(McpError::internal_error(
+            format!(
+              "applied {i}/{total} edits; edit #{i} ({mode}) failed: {}",
+              error.message
+            ),
+            None,
+          )));
+        }
+      }
+    }
+    batch_ack(total, last)
   }
 
   // Images were the one thing an agent could neither put in nor get out. The
@@ -1581,7 +1741,8 @@ impl ServerHandler for MicaMcp {
          end — safe default); insert_at (place after `anchor`, which is a block id OR a \
          heading's text from the outline); find_replace (swap text; set unique=true for a \
          single precise edit — refused if the text is not unique); replace_all (only when you \
-         truly mean to rewrite the whole page).\n\
+         truly mean to rewrite the whole page). For MANY edits to one doc, mica_apply_edits \
+         runs them all in ONE call (one turn instead of N).\n\
          \n\
          Write acks return `seq` and `last_block_id` (the new end anchor) — chain further edits \
          from those instead of re-reading. For safe concurrent editing, pass the outline/ack \
@@ -2040,7 +2201,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 25, "every tool must be listed");
+    assert_eq!(tools.len(), 26, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

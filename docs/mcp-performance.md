@@ -49,6 +49,7 @@
 
 - Tier 1 #1/#2/#3/#5/#6:MCP 层实现(见 `crates/mcp-server/src/lib.rs`),ship 在 mica-cli,无需发版。
 - Tier 1 #4:**服务端已实现**——`outline` 返回 `seq`(`document_outline` + `DocumentOutlineResponse`),写路径在 `apply_derived_operations` 行锁内比对 `expected_seq` vs `current_seq`,不符回 409(`ApiError::Conflict`);配 DB-gated 回归 `a_stale_expected_seq_is_a_conflict_and_the_current_one_passes`。MCP 侧 outline 描述已提示回传 seq、`expected_seq` 透传。**待一次发版**才在 prod 生效(改动已提交、本地编译+clippy 通过,DB 测试在 CI 跑)。
+- **`apply_edits` 批量工具**(Tier 1 之外新增):一次调用吃一组编辑(append/insert_at/find_replace/replace_all 混搭),按序应用、后者见前者效果。agent 的**串行工具调用从 N 降到 1**——研究里"MCP 批量已删,只能在工具层收往返"的落地。纯 MCP 层循环调现有 PATCH,不发版;非原子(失败停下报"N 中 M 成",可续)。`write_markdown` 抽成 mica_update_document 与它的共用 seam。
 - Tier 2:未做——按延迟敏感度决定是否投入(见上)。
 
 ## 参照
