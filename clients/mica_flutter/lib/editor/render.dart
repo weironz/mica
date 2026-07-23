@@ -275,6 +275,29 @@ class EditorTheme {
 }
 
 /// Per-node layout produced each [RenderDocument.performLayout].
+/// A retained text-pipeline layout for one block, owned by
+/// [RenderDocument._painterCache] and reused across layout passes.
+///
+/// The dominant cost of a layout pass is `TextPainter.layout()` (glyph shaping);
+/// the old pass disposed and re-shaped *every* block on *every* keystroke. Now
+/// each block's painter is kept and reused whenever its render inputs are
+/// unchanged. The fingerprint is the **actual [TextSpan] plus the layout width**:
+/// a span already carries text, marks, and fully-resolved style, so span
+/// equality is a complete, self-correcting input check — no hand-listed field
+/// can be silently missed (the #1 landmine in docs/editor-virtualization-plan.md).
+///
+/// Blocks with inline atoms (a non-null `fold`) are stored for ownership but
+/// never reused: their placeholder geometry depends on async raster readiness.
+/// So [reusable] is true only for plain/code spans, and a reused painter's fold
+/// is always null.
+class _CachedText {
+  _CachedText(this.span, this.layoutWidth, this.painter, this.reusable);
+  final TextSpan span;
+  final double layoutWidth;
+  final TextPainter painter;
+  final bool reusable;
+}
+
 class _NodeLayout {
   _NodeLayout(this.painter);
 
@@ -532,6 +555,21 @@ class RenderDocument extends RenderBox {
   };
 
   final List<_NodeLayout> _layouts = [];
+
+  /// Retained text-pipeline painters, keyed by node id, reused across layout
+  /// passes when a block's rendered span + width is unchanged (see [_CachedText]).
+  /// This is the layout-side of the paint-side viewport cull: it turns the
+  /// old "dispose + re-shape every block every keystroke" into "re-shape only
+  /// the blocks whose inputs actually changed". Ownership: entries here own
+  /// their painters; a text [_NodeLayout] merely references the same object and
+  /// never disposes it (only atomic renderers' painters are per-pass, see
+  /// [performLayout] / [dispose]).
+  final Map<String, _CachedText> _painterCache = {};
+
+  /// Set when the system/web fonts finish loading: reused painters hold shaped
+  /// glyphs that may still be ".notdef" boxes, so the whole cache must re-shape
+  /// once (span-equality alone would wrongly reuse the stale shaping).
+  bool _fontsDirty = false;
 
   /// Per-code-block horizontal scroll offset, keyed by node id. Code blocks do
   /// not wrap; long lines scroll left/right within the block.
@@ -902,7 +940,12 @@ class RenderDocument extends RenderBox {
     super.detach();
   }
 
-  void _onSystemFontsChanged() => markNeedsLayout();
+  void _onSystemFontsChanged() {
+    // Force a full re-shape: cached painters may hold ".notdef" glyphs for a
+    // font that only just became available, and their spans are unchanged.
+    _fontsDirty = true;
+    markNeedsLayout();
+  }
 
   @override
   bool hitTestSelf(Offset position) => true;
@@ -916,13 +959,31 @@ class RenderDocument extends RenderBox {
     final maxWidth = constraints.maxWidth.isFinite
         ? constraints.maxWidth
         : 600.0;
+    if (_fontsDirty) {
+      // A font load invalidates every shaped painter; drop the whole cache so
+      // this pass re-shapes from scratch. Do this before the transient dispose
+      // below so the text painters (still referenced by last pass's _layouts)
+      // are freed exactly once, here.
+      for (final entry in _painterCache.values) {
+        entry.painter.dispose();
+      }
+      _painterCache.clear();
+      _fontsDirty = false;
+    }
+    // Only atomic renderers' painters and table cells are rebuilt every pass, so
+    // only those are disposed here; text-pipeline painters live in _painterCache
+    // and are reused (freed on eviction/prune/dispose, not per pass).
     for (final l in _layouts) {
-      l.painter.dispose();
+      if (l.renderedBy != null) l.painter.dispose();
       for (final cell in l.tableCells) {
         cell.painter.dispose();
       }
     }
     _layouts.clear();
+    // Node ids that reached the text pipeline this pass — anything in
+    // _painterCache not seen here is stale (block deleted or turned atomic) and
+    // is pruned at the end of the pass.
+    final seenTextIds = <String>{};
 
     final sel = _selection;
     final caretKey =
@@ -1085,33 +1146,62 @@ class RenderDocument extends RenderBox {
       }
 
       final codeWrap = isCode && node.data['wrap'] == true;
-      var painter = TextPainter(
-        text: span,
-        textDirection: TextDirection.ltr,
-        textWidthBasis: TextWidthBasis.parent,
-      );
-      if (dims != null) painter.setPlaceholderDimensions(dims);
-      painter.layout(
-        maxWidth: (isCode && !codeWrap) ? double.infinity : textWidth,
-      );
-      if (fold != null) {
-        final boxes = painter.inlinePlaceholderBoxes ?? const <ui.TextBox>[];
-        if (boxes.length == fold.atoms.length) {
-          for (var k = 0; k < boxes.length; k++) {
-            fold.atoms[k].rect = boxes[k].toRect();
+      final layoutWidth = (isCode && !codeWrap) ? double.infinity : textWidth;
+      seenTextIds.add(node.id);
+
+      final cached = _painterCache[node.id];
+      TextPainter painter;
+      if (fold == null &&
+          cached != null &&
+          cached.reusable &&
+          cached.layoutWidth == layoutWidth &&
+          cached.span == span) {
+        // Inputs unchanged (same span, same width) — reuse the already-shaped
+        // painter and skip the expensive layout(). This is the whole point of
+        // the cache: on a keystroke only the edited block's span differs, so
+        // only it re-shapes; every other block takes this branch.
+        painter = cached.painter;
+      } else {
+        painter = TextPainter(
+          text: span,
+          textDirection: TextDirection.ltr,
+          textWidthBasis: TextWidthBasis.parent,
+        );
+        if (dims != null) painter.setPlaceholderDimensions(dims);
+        painter.layout(maxWidth: layoutWidth);
+        if (fold != null) {
+          final boxes = painter.inlinePlaceholderBoxes ?? const <ui.TextBox>[];
+          if (boxes.length == fold.atoms.length) {
+            for (var k = 0; k < boxes.length; k++) {
+              fold.atoms[k].rect = boxes[k].toRect();
+            }
+          } else {
+            // The engine dropped a placeholder (never observed — probed on this
+            // Flutter). A folded painter without its geometry would misplace
+            // every offset in the node; rebuild unfolded instead.
+            fold = null;
+            painter.dispose();
+            span = buildMarkedSpan(node.text, marks, style);
+            painter = TextPainter(
+              text: span,
+              textDirection: TextDirection.ltr,
+              textWidthBasis: TextWidthBasis.parent,
+            )..layout(maxWidth: textWidth);
           }
-        } else {
-          // The engine dropped a placeholder (never observed — probed on this
-          // Flutter). A folded painter without its geometry would misplace
-          // every offset in the node; rebuild unfolded instead.
-          fold = null;
-          painter.dispose();
-          painter = TextPainter(
-            text: buildMarkedSpan(node.text, marks, style),
-            textDirection: TextDirection.ltr,
-            textWidthBasis: TextWidthBasis.parent,
-          )..layout(maxWidth: textWidth);
         }
+        // Own the (re)built painter in the cache, freeing any prior one for this
+        // id. reusable is false for a live fold (its atom rects are tied to this
+        // painter's placeholder boxes); a fold that fell back above is null here
+        // and safely reusable.
+        if (cached != null && !identical(cached.painter, painter)) {
+          cached.painter.dispose();
+        }
+        _painterCache[node.id] = _CachedText(
+          span,
+          layoutWidth,
+          painter,
+          fold == null,
+        );
       }
 
       final layout = _NodeLayout(painter)
@@ -1335,6 +1425,17 @@ class RenderDocument extends RenderBox {
       _layouts.add(layout);
       y += layout.boxHeight;
       prevKind = node.kind;
+    }
+
+    // Evict painters for blocks that no longer went through the text pipeline
+    // (deleted, or now rendered by an atomic renderer) so the cache can't grow
+    // unbounded or leak.
+    if (_painterCache.length > seenTextIds.length) {
+      _painterCache.removeWhere((id, entry) {
+        if (seenTextIds.contains(id)) return false;
+        entry.painter.dispose();
+        return true;
+      });
     }
 
     y += EditorTheme.bottomPad;
@@ -2945,13 +3046,19 @@ class RenderDocument extends RenderBox {
 
   @override
   void dispose() {
+    // Text-pipeline painters are owned by _painterCache; disposing them here too
+    // would double-free (a text _NodeLayout only references the cached painter).
     for (final l in _layouts) {
-      l.painter.dispose();
+      if (l.renderedBy != null) l.painter.dispose();
       for (final cell in l.tableCells) {
         cell.painter.dispose();
       }
     }
     _layouts.clear();
+    for (final entry in _painterCache.values) {
+      entry.painter.dispose();
+    }
+    _painterCache.clear();
     super.dispose();
   }
 }
