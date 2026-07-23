@@ -65,8 +65,13 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
    聚焦/可视巨块整块精确排、其余估算,仅当单块成瓶颈再回来。
 
 ## 分期落地
-- **Phase 1(最大收益、最低风险)**:每块 layout 缓存 + dirty 追踪,**干掉 dispose-all/rebuild-all**,
-  只重算脏块+可视块(其余复用缓存 painter)。这一步就解决"每击键全量重排"的主要卡顿。
+- **Phase 1(最大收益、最低风险)✅ 已落地(da25075,2026-07-23)**:每块 layout 缓存,
+  **干掉 dispose-all/rebuild-all**。实现比原设想更稳:复用"输入指纹"直接取**实际 TextSpan +
+  布局宽度**(span 已含 text/marks/已解析样式,span 相等即输入相等,免手列字段——躲开 1 号
+  雷区)。文本 painter 归 `_painterCache` 所有,只有原子渲染器 painter 逐帧重建;字体加载
+  (`_fontsDirty`)一次性清缓存强制重排;含 fold 的块存而不复用(异步栅格竞态);pass 末按
+  `seenTextIds` 逐出失效条目。回归见 `test/painter_cache_test.dart`。**注:本期只做了缓存复用
+  (跳过未变块的 layout()),尚未做"屏外块跳过排版/估算高"——那是 Phase 2。**
 - **Phase 2(真虚拟化)**:估算高模型 + 屏外块**跳过** `TextPainter`(只用估算),`totalHeight`
   估算→测量自愈。
 - **Phase 3**:offset→Y 前缀和 + caret 按需强排 + scroll/find 估算跳+沉降。
