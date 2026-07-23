@@ -101,6 +101,28 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
   - 前缀和:普通文档一个 `List<double>`(dirty 时重算);块数极大再上 Fenwick。
   - `_ensureLaidOut(i)`:若第 i 块本 pass 未成形,就地按文本管线排它(复用 `_painterCache`),
     写回精确高 + 修正前缀和。**几何查询的唯一合法入口**——"视口外无 coords"翻成"先排它"。
+
+  **S0 第一刀 = 抽 `_shapeTextBlock`(纯重构,行为零变,715 测试当闸)——已勘好边界,照抄即可:**
+  - **抽出体**:`render.dart` 现 **1041(`final style = _appearance.applyTo(`)→ 1423(`if (isCode)` 的收尾 `}`)**,
+    整段文本管线成形逻辑。**1425–1427 的 `_layouts.add / y += / prevKind` 留在循环**,方法只 `return layout;`。
+  - **方法签名**(放 `performLayout` 之后):
+    ```dart
+    _NodeLayout _shapeTextBlock(EditorNode node, double y, double maxWidth, {
+      required String? nodeAlert, required bool isAlertHead,
+      required List<int> numberedCounters,   // 按引用改(ordinal 计数)
+      required bool caretMoved, required DocSelection? sel,
+      required Set<String> seenTextIds,      // 按引用改 + 写 _painterCache
+    }) { ...抽出体... return layout; }
+    ```
+    循环里替换为 `final layout = _shapeTextBlock(node, y, maxWidth, nodeAlert: nodeAlert, isAlertHead: isAlertHead, numberedCounters: numberedCounters, caretMoved: caretMoved, sel: sel, seenTextIds: seenTextIds);`
+  - **两个必须守住的隐形不变量(错一个就静默损坏)**:
+    1. **`quoteAlert` 归属计算(现 1012–1024)必须留在循环、在原子派发之前**——它对**每个**块(含 atomic)更新
+       跨块 callout 分组状态;只把结果 `nodeAlert`/`isAlertHead` 传进方法。
+    2. 方法内 code 水平自动滚动那段用 **`sel.focus.node == _layouts.length`** 判"当前块"(尚未 append,
+       故当前 index == `_layouts.length`)。方法**必须在 `_layouts.add` 之前调用**,该等式才成立——保持现有调用顺序即可。
+  - 方法用到的都是字段(`_appearance`/`_painterCache`/`_codeScroll`/`_inlineAtomRenderers`),无需再传。
+  - 抽完:`flutter test` 全绿(行为不变)即算 S0 第一刀成。之后 S1 只是"给 `_shapeTextBlock` 的调用加跳过条件 +
+    让 `_ensureLaidOut` 调它",是一个小 diff。
 - **S1 翻开关(风险所在,单独一步单独一测轮)**:`performLayout` 只对**可视带(clip ± cull
   slack)∪ dirty ∪ caret/IME 合成块**跑 `TextPainter.layout`,屏外块**只填估算高 + 前缀和,
   完全跳过 painter**。`totalHeight = Σ(有缓存用精确,否则估算)`,`size.height` 据此稳定。
