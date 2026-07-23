@@ -32,6 +32,17 @@ Future<void> _run(File script) async {
   expect(r.exitCode, 0, reason: 'script failed: ${r.stderr}');
 }
 
+/// Poll for [f] up to [timeout] — the hidden launcher runs the cmd DETACHED
+/// (and it ping-sleeps ~3s first), so the marker appears after the call returns.
+Future<bool> _waitForFile(File f, Duration timeout) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (f.existsSync()) return true;
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+  }
+  return f.existsSync();
+}
+
 void main() {
   late Directory dir;
 
@@ -88,6 +99,33 @@ void main() {
     expect(script.readAsStringSync(), contains('title Mica'),
         reason: 'an unlabelled console mid-update reads as something strange '
             'happening to the machine');
+  });
+
+  test('the hidden launcher runs the cmd with a quoted path + style 0', () {
+    final vbs = writeHiddenLauncher(dir, '${dir.path}/apply-update.cmd');
+    final text = vbs.readAsStringSync();
+    // Window style 0 = hidden, False = detached; the cmd path is double-quoted
+    // (`""` → one literal quote) so a space in the path survives.
+    expect(text, contains('.Run '));
+    expect(text, contains(', 0, False'),
+        reason: 'style 0 is what hides the console the user reported');
+    expect(text, contains(r'\apply-update.cmd'),
+        reason: 'forward slashes must be normalised for the quoted cmd token');
+  });
+
+  test('wscript+vbs runs the cmd → installer, no console (the fix)', () async {
+    final marker = '${dir.path}\\ran.txt';
+    final stub = _stubInstaller(dir, marker);
+    final script = writeUpdateScript(dir, stub.path, '${dir.path}\\inno.log');
+    final launcher = writeHiddenLauncher(dir, script.path);
+    // Exactly how the app launches it: wscript (windowless) runs the vbs, which
+    // Shell.Run's the cmd HIDDEN + detached. No visible window at any point.
+    await Process.start('wscript', ['//B', '//Nologo', launcher.path],
+        mode: ProcessStartMode.detached);
+    final ran = await _waitForFile(File(marker), const Duration(seconds: 12));
+    expect(ran, isTrue,
+        reason: 'the vbs→cmd→installer chain did not execute — the hidden '
+            'launcher broke the update');
   });
 
   // The integrity gate that stands between a network download and running an

@@ -126,11 +126,18 @@ Future<void> downloadAndApplyUpdate(
   // /SUPPRESSMSGBOXES is deliberately gone — if Setup still cannot proceed, a
   // visible prompt beats a silent rollback. The log gives us something to read
   // when someone reports "it didn't update".
+  //
+  // Launch the .cmd HIDDEN: `Process.start('cmd', …, detached)` pops a visible
+  // console (the "ping 127.0.0.1" window users reported as weird after an
+  // update). dart:io has no CREATE_NO_WINDOW, so route through a one-line .vbs
+  // run by wscript — wscript is windowless, and `Shell.Run(cmd, 0, …)` runs the
+  // console with window style 0 (hidden). No flash at any point.
   final logPath = '${dir.path}\\inno-install.log';
   final script = writeUpdateScript(dir, setup.path, logPath);
+  final launcher = writeHiddenLauncher(dir, script.path);
   await Process.start(
-    'cmd',
-    ['/c', script.path],
+    'wscript',
+    ['//B', '//Nologo', launcher.path],
     mode: ProcessStartMode.detached,
   );
 
@@ -172,6 +179,24 @@ File writeUpdateScript(Directory dir, String setupPath, String logPath) {
     '/NORESTART "/LOG=${win(logPath)}"\r\n',
   );
   return script;
+}
+
+/// A `.vbs` that runs [cmdPath] with a HIDDEN window (style 0), launched via
+/// wscript (itself windowless) — the one reliable "no console window" path on
+/// Windows, since `dart:io` Process.start exposes no CREATE_NO_WINDOW. This is
+/// what stops the ping-delay + Setup from flashing the console the user saw
+/// after an update. Runs the cmd detached (`False` = don't wait).
+///
+/// A FILE for the same reason [writeUpdateScript] is: we write the bytes, so the
+/// cmd path's quoting is interpreted once by VBScript (`""` is one literal quote)
+/// with no Dart→shell argv round-trip to mangle it.
+File writeHiddenLauncher(Directory dir, String cmdPath) {
+  String win(String p) => p.replaceAll('/', r'\');
+  final vbs = File('${dir.path}\\apply-update.vbs');
+  vbs.writeAsStringSync(
+    'CreateObject("WScript.Shell").Run """${win(cmdPath)}""", 0, False\r\n',
+  );
+  return vbs;
 }
 
 /// Whether the downloaded installer [bytes] match the release's expected [size]
