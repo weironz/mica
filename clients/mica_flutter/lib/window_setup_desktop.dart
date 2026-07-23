@@ -110,16 +110,16 @@ Future<void> initDesktopWindow() async {
     if (pos != null) {
       await windowManager.setBounds(null, position: pos);
     }
-    // Maximized is part of where the window was, and it is the one part the
-    // rect above deliberately does NOT carry: _save refuses to record
-    // maximized geometry, so that un-maximizing has somewhere sane to go. The
-    // cost was that anyone who works maximized got a small window every single
-    // launch, forever.
+    // Always launch maximized. Mica is a full-window editor and users expect it
+    // to open full-screen ("正常应该全屏"); restoring a saved FLOATING rect read as
+    // the window opening at a "random" half/medium size. The saved rect above is
+    // still applied first, so it becomes the un-maximize (restore-down) target —
+    // double-clicking the title bar lands on a sane floating size, not a default.
     //
     // Before show(), not after: the Windows side posts SC_MAXIMIZE rather than
     // resizing inline, so showing first means showing the small window and
     // then watching it snap.
-    if (saved.maximized) await windowManager.maximize();
+    await windowManager.maximize();
     await windowManager.show();
     await windowManager.focus();
   });

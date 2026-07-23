@@ -296,6 +296,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
   Workspace? _selectedWorkspace;
   DocumentView? _selectedView;
+  /// The view id to reopen on the FIRST view-load after a session restore, so the
+  /// app lands on the page it closed on instead of the first page. Consumed once
+  /// (see [_loadSelectedWorkspaceViews]); null on a plain workspace switch.
+  String? _pendingRestoreViewId;
   DocumentBootstrap? _selectedBootstrap;
   String? _selectedMarkdown;
   String? _message;
@@ -773,10 +777,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // freshly-renewed sign-in away.
       final workspaces = await _api.listWorkspaces(session.accessToken);
       if (!mounted) return;
+      // Land on the workspace + page open at last quit, not always the first.
+      final savedWsId = loadPref('lastWorkspaceId');
+      final restoredWs =
+          (savedWsId == null
+              ? null
+              : workspaces.where((w) => w.id == savedWsId).firstOrNull) ??
+          workspaces.firstOrNull;
       setState(() {
         _session = session;
         _workspaces = workspaces;
-        _selectedWorkspace = workspaces.firstOrNull;
+        _selectedWorkspace = restoredWs;
+        // Consumed by the first _loadSelectedWorkspaceViews below to reopen the
+        // last page; a plain workspace switch never sets this.
+        _pendingRestoreViewId = loadPref('lastViewId');
       });
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
@@ -1306,6 +1320,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _selectWorkspace(Workspace workspace) {
+    savePref('lastWorkspaceId', workspace.id);
     return _run(() async {
       setState(() {
         _selectedWorkspace = workspace;
@@ -2080,6 +2095,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       final wasShowingThisView =
           _selectedView?.id == view.id && _selectedBootstrap != null;
+      savePref('lastViewId', view.id);
       setState(() {
         _selectedView = view;
         // Never blank a page that is already on screen. `bootstrap` is null
@@ -3794,8 +3810,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
 
     final views = await _api.listViews(session.accessToken, workspace.id);
+    // On a session restore the open view isn't loaded yet, so fall back to the
+    // last-open view id — consumed once so a later workspace switch opens that
+    // workspace's first page as before.
+    final wantViewId = _selectedView?.id ?? _pendingRestoreViewId;
+    _pendingRestoreViewId = null;
     final selectedView = views
-        .where((view) => view.id == _selectedView?.id)
+        .where((view) => view.id == wantViewId)
         .firstOrNull;
     // Auto-open a DOCUMENT (folders have no content to bootstrap — opening one
     // would 404 on its unbacked object_id).
