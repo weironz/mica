@@ -96,6 +96,21 @@
 - ~~**行内数学未排版**~~ ✅ 2026-07-16:`$…$` 真排进行里(基线对齐、随字号缩放),公式为不可进入的原子(`inline_atoms.dart`,render-architecture.md Decision 4)。
 - **Web IME/光标滚动实况调优** —— Milestone 1 遗留(合成态/游离换行、caret scroll-into-view)。(M)
 - **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
+- 🆕 **集成 AI 升级为「能操作文档的 agent」(候选,已调研背书,2026-07-23)** —— 现
+  `/ai/complete`(`ai.rs`)只是**单次 prompt→Markdown 补全**,无 tools/agent 循环;而
+  mica MCP(`mica-cli mcp`)是给**外部** agent(Claude)的工具面,两者不共享——集成 AI
+  **天然不具备** MCP 能力。候选:把集成 AI 升级成 tool-use agent,能读/写/组织自己的文档。
+  **调研定论**(派子代理扒了 Notion/AFFiNE/AppFlowy/Coda 等 + 框架):① "内置 AI 变
+  agent"是主流路,**Notion 3.0 Agents(2025-09)是标杆**(用户权限内、多步、可回滚);
+  ② "**一套工具对外 MCP + 对内 agent**"机制成熟——**Block `goose`** 自家 agent 就跑在自家
+  内建 MCP 上,Vercel AI SDK / LangChain / OpenAI Agents SDK 都把"MCP 工具装进自家 agent"
+  做成一行 API;**但笔记品类无公开先例**(Notion 同时有 agent + MCP server 但未证实共享注册表)。
+  **架构选型**:后端保留**一套操作层**,`MCP 面`(外部通用、探路、啰嗦 Markdown)和`内置
+  agent 面`(紧凑、预 scoped、认识当前会话)当作它的**两个薄投影**,**不要把 MCP 工具原样复用**。
+  **三个坑(均有引用)**:①MCP 工具为外部通用 agent 设计→太粗太啰嗦、费 token、稀释工具选择
+  (Datadog MCP tool design);②agent 循环比一次性补全**更慢更贵**(多轮+schema 开销);
+  ③鉴权用**用户真实会话身份**(非 MCP 服务账号 scope)+ **写前确认 UX**(Notion Custom
+  Agents 同规)。(L) `[需后端]`
 
 ## 平台覆盖
 
