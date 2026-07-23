@@ -78,9 +78,76 @@ for (final l in _layouts) l.painter.dispose(); _layouts.clear();
 - **验证**:大档基准(万级块/巨块击键延迟)、caret/选区/scroll-to/find/IME 回归(桌面 integration_test
   + web playwright 截图)。红线:round-trip 不受影响(纯渲染层改动,不碰文档模型)。
 
+## Phase 2/3 实施剧本(新会话直接照做,2026-07-23 定)
+
+> 决策:Phase 2/3 **专开一个会话做**,且必须在**能跑起来的应用上做真实交互验证**才算完。
+> 理由(实测判断,非泛化谨慎):Phase 1 保住了"每块都排、每个 `_layouts[i]` 都有真 painter"
+> 这条不变量,所以约 80 处 `_layouts[i]` 消费点原样能用;**Phase 2 故意打破它**(屏外块只有
+> 估算高、无成形 painter),于是**任何几何查询都可能拿到没排过的块**——`caretRectFor`(现
+> `render.dart:2812`)、`positionAt` 命中测试(`2837`)、`_paintSelection`(`2553`)、scroll-to、
+> find、表格/图片热区。**所以 Phase 2 离不开 Phase 3 的"按需强排目标块",两者是一次耦合改动,
+> 落在那 ~80 个点上,不是一处。** 五个正确性雷区全在这一刀里。失败模式是**静默** caret/IME/
+> 滚动几何损坏,离线 widget 单测查得到 `caretRectFor` 的 rect,却**查不到真实 IME 合成 / 滚到
+> 远块的沉降 / 跨屏拖选**——正是雷区所在。离线全绿≠对,那是 `lessons.md` 的"测试真空通过"。
+
+### 分阶段顺序(每步可编译、可验证,再进下一步)
+
+- **S0 基础设施(不翻开关,零几何风险)**:加**估算高模型** + **offset↔Y 前缀和** + **按需
+  强排** `_ensureLaidOut(nodeIndex)`,但 `performLayout` **仍照排全部块**。此时前缀和/估算是
+  **并行计算**,和真实 layout 并存做一致性断言(每块 `估算高` vs `实排高` 记录,debug 下断言
+  偏差在阈内)。离线可测:前缀和 `blockAtY`/`yOfBlock` 往返、`_ensureLaidOut` 幂等。
+  - `estHeight = topGap + ceil(charCount / estCharsPerLine) * lineHeight`,`estCharsPerLine =
+    floor(textWidth / avgCharWidth)`;atomic 用已缓存 intrinsic 高或 per-kind 默认。
+  - 前缀和:普通文档一个 `List<double>`(dirty 时重算);块数极大再上 Fenwick。
+  - `_ensureLaidOut(i)`:若第 i 块本 pass 未成形,就地按文本管线排它(复用 `_painterCache`),
+    写回精确高 + 修正前缀和。**几何查询的唯一合法入口**——"视口外无 coords"翻成"先排它"。
+- **S1 翻开关(风险所在,单独一步单独一测轮)**:`performLayout` 只对**可视带(clip ± cull
+  slack)∪ dirty ∪ caret/IME 合成块**跑 `TextPainter.layout`,屏外块**只填估算高 + 前缀和,
+  完全跳过 painter**。`totalHeight = Σ(有缓存用精确,否则估算)`,`size.height` 据此稳定。
+  估算被测量替换时按 delta 调 `totalHeight`(超小 epsilon 才回流滚动条防抖;高度量化 0.1px)。
+- **S2 消费点审计(和 S1 同一 PR,缺一即静默损坏)**:每个读 `_layouts[i].painter`/几何的入口,
+  前面插 `_ensureLaidOut(i)`。至少覆盖:`caretRectFor`(2812)、`positionAt`(2837)、
+  `_paintSelection`(2553,跨屏选区**只画可视带**,屏外选中块**不算 rect**——选区模型是 offset,
+  见雷区 3)、code 水平自动滚动取 caret x、find 命中跳转、表格/图片/代码工具条热区(`*At(local)`
+  系列)。**paint 侧**已按 `_nodeVisible`(1508)裁剪,天然只碰可视块,基本安全,但确认它读
+  的 boxTop 来自前缀和而非旧全排。
+- **S3 scroll-to / find 沉降**:用前缀和的**估算 Y** 跳过去,到达时可视带排版自愈上下高、滚动
+  自校正;首次跳远允许一次小沉降(已知代价,仍**严格优于** AppFlowy 纯 index 跳)。
+
+### 五雷区 → 落到具体代码(逐条盯)
+
+1. **未排块里的 caret/选区**:`caretRectFor`/`positionAt` 进来先 `_ensureLaidOut(pos.node)`,
+   **绝不**从估算读几何。
+2. **scroll-to/find**:估算 Y 跳 + 到达沉降(S3)。
+3. **跨屏选区**:选区模型是 offset(本就如此),只有**画**要几何且只画可视带 → 屏外选中块
+   **别算 rect**;`_paintSelection` 里屏外块 skip。
+4. **IME/合成**:合成块每帧必须真 painter(标脏 + 合成期"永远排版"),候选窗要精确 caret rect。
+   **唯一绝不能吃估算的块。** 对应 `TextInputClient` 合成路径 + `caretRectFor`。
+5. **单个巨块**:v1 先把聚焦/可视巨块整块精确排、其余估算;单块成瓶颈再子虚拟化。
+
+### 交互验证闸门(这些没过 = 没完,不许发版)
+
+离线 widget 单测(扩 `test/painter_cache_test.dart`:前缀和往返、`_ensureLaidOut` 幂等、屏外块
+删增不崩)是**必要不充分**。**签收必须在跑起来的应用上过下列真实交互**(desktop
+`integration_test/` + web playwright-cli 截图,`justfile` 有 recipe):
+
+- [ ] **万级块大档**:PageDown/滚动到中段/末段,caret 点击落点准、无错位、无空白带。
+- [ ] **滚到远块**:`scrollToBlock`/find 跳到文档 90% 处,沉降后 caret 与目标块对齐(截图比对)。
+- [ ] **跨屏拖选**:从可视首块拖到需滚动才到的块,选区 offset 正确、可视部分高亮对、导出文本对。
+- [ ] **真实 IME 合成**:中文输入法在长档中段边打边选候选,候选窗跟随 caret、合成串不错位
+      (web playwright 模拟 composition 事件 + 桌面手测截图)。
+- [ ] **巨代码块**:单块几千行,块内 caret/滚动/行号 gutter 对齐。
+- [ ] **基准**:万级块档单次击键 layout 耗时(S1 前后对比,记进本文档)。
+
+### 红线
+纯渲染层,**不碰文档模型/CRDT/序列化**,round-trip 不变量零改动。`_painterCache`(Phase 1)
+的所有权/字体失效/fold 不复用/prune 规则**继续适用**,`_ensureLaidOut` 复用它,别另起炉灶。
+
 ## 参考
 - CodeMirror guide(viewport + height 估算 + 视口外无 coords):https://codemirror.net/docs/guide/
 - CodeMirror height map 源码:https://github.com/codemirror/view/blob/main/src/heightmap.ts
 - AppFlowy 列表渲染(反例,widget-per-block 的代价):`appflowy-editor` `page_block_component.dart` / `editor_scroll_controller.dart`
 - ProseMirror 作者"不做 viewporting":https://discuss.prosemirror.net/t/improving-performance-loading-on-scroll/4972
-- 现状代码:`clients/mica_flutter/lib/editor/render.dart`(dispose-all @~919–925;paint 裁剪 `_cullSlack=600`)
+- 现状代码:`clients/mica_flutter/lib/editor/render.dart`(Phase 1 后:`_painterCache` 缓存复用,
+  dispose-all 已去除;paint 裁剪 `_cullSlack=600` @1506、`_nodeVisible` @1508;几何入口
+  `caretRectFor` @2812 / `positionAt` @2837 / `_paintSelection` @2553)
