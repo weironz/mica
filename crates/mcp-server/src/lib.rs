@@ -17,6 +17,8 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 struct MicaMcp {
@@ -24,6 +26,15 @@ struct MicaMcp {
   base: String,
   pat: String,
   read_only: bool,
+  /// Warm read cache: document_id → its full Markdown (Phase 2). An agent working
+  /// a workspace re-reads the same docs (scan → revisit a section); serving those
+  /// from memory is the "like a local dir" win. SAFE because the agent is the
+  /// sole editor during its work — every write through `write_markdown`
+  /// invalidates the doc, so the cache is always coherent with the agent's own
+  /// edits. It does NOT poll for edits made ELSEWHERE (none happen concurrently,
+  /// per design); `refresh: true` on a read forces a refetch if ever needed.
+  /// Shared across clones via Arc so the single stdio process has one cache.
+  cache: Arc<Mutex<HashMap<String, String>>>,
   tool_router: ToolRouter<Self>,
 }
 
@@ -34,8 +45,53 @@ impl MicaMcp {
       base: base.trim_end_matches('/').to_string(),
       pat,
       read_only,
+      cache: Arc::new(Mutex::new(HashMap::new())),
       tool_router: Self::tool_router(),
     }
+  }
+
+  /// Cached full Markdown for a doc, if warm. The guard is dropped before any
+  /// await (we clone out) so it never crosses an async point.
+  fn cache_get(&self, document_id: &str) -> Option<String> {
+    self.cache.lock().ok()?.get(document_id).cloned()
+  }
+  fn cache_put(&self, document_id: &str, markdown: &str) {
+    if let Ok(mut c) = self.cache.lock() {
+      c.insert(document_id.to_string(), markdown.to_string());
+    }
+  }
+  /// Drop a doc's cached copy — called after any write so the next read is fresh.
+  fn cache_invalidate(&self, document_id: &str) {
+    if let Ok(mut c) = self.cache.lock() {
+      c.remove(document_id);
+    }
+  }
+
+  /// A doc's full Markdown — from the warm cache when present (unless `refresh`),
+  /// else fetched from the export endpoint and cached. The one seam both read
+  /// tools share, so caching is uniform.
+  async fn full_markdown(
+    &self,
+    workspace_id: &str,
+    document_id: &str,
+    refresh: bool,
+  ) -> Result<String, McpError> {
+    if !refresh
+      && let Some(cached) = self.cache_get(document_id)
+    {
+      return Ok(cached);
+    }
+    let value = self
+      .get(&format!(
+        "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
+      ))
+      .await?;
+    let full = match value {
+      Value::String(s) => s,
+      other => other.to_string(),
+    };
+    self.cache_put(document_id, &full);
+    Ok(full)
   }
 
   /// Guard every mutating tool: refuse when the server is started read-only.
@@ -162,6 +218,11 @@ struct ReadDocArgs {
   /// precedence over offset/limit. Use `mica_get_outline` to see headings.
   #[serde(default)]
   section: Option<String>,
+  /// Force a fresh fetch, bypassing the warm cache. Rarely needed — the cache is
+  /// invalidated by your own writes; set this only if the page may have been
+  /// edited elsewhere since you last read it.
+  #[serde(default)]
+  refresh: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -778,23 +839,18 @@ impl MicaMcp {
       offset,
       limit,
       section,
+      refresh,
     }): Parameters<ReadDocArgs>,
   ) -> Result<CallToolResult, McpError> {
-    let value = match self
-      .get(&format!(
-        "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
-      ))
+    // Full markdown from the warm cache (or fetched + cached), then sliced — the
+    // window is what saves tokens on a big page; the cache is what makes a
+    // re-read local.
+    let full = match self
+      .full_markdown(&workspace_id, &document_id, refresh)
       .await
     {
-      Ok(value) => value,
+      Ok(full) => full,
       Err(error) => return Ok(tool_error(error)),
-    };
-    // The export endpoint returns bare markdown (a JSON string, or the raw text
-    // when it wasn't valid JSON). Either way, get the markdown, then slice it —
-    // the window is what saves tokens on a big page.
-    let full = match value {
-      Value::String(s) => s,
-      other => other.to_string(),
     };
     let out = window_markdown(&full, offset, limit, section.as_deref());
     Ok(CallToolResult::success(vec![Content::text(out)]))
@@ -824,24 +880,26 @@ impl MicaMcp {
     let outline = mode.as_deref() == Some("outline");
     let mut out = Vec::with_capacity(document_ids.len());
     for id in &document_ids {
-      let path = if outline {
-        format!("/api/workspaces/{workspace_id}/documents/{id}/outline")
-      } else {
-        format!("/api/workspaces/{workspace_id}/documents/{id}/export/markdown")
-      };
       let mut row = serde_json::Map::new();
       row.insert("document_id".to_string(), json!(id));
-      match self.get(&path).await {
-        Ok(v) => {
-          if outline {
-            row.insert("outline".to_string(), v);
-          } else {
-            let md = match v {
-              Value::String(s) => s,
-              other => other.to_string(),
-            };
-            row.insert("markdown".to_string(), json!(md));
-          }
+      // outline stays a direct fetch (cheap, always fresh, carries seq); full
+      // markdown rides the warm cache like the single read.
+      let fetched = if outline {
+        self
+          .get(&format!(
+            "/api/workspaces/{workspace_id}/documents/{id}/outline"
+          ))
+          .await
+          .map(|v| ("outline", v))
+      } else {
+        self
+          .full_markdown(&workspace_id, id, false)
+          .await
+          .map(|md| ("markdown", json!(md)))
+      };
+      match fetched {
+        Ok((key, v)) => {
+          row.insert(key.to_string(), v);
         }
         Err(error) => {
           row.insert("error".to_string(), json!(error.message.to_string()));
@@ -1060,12 +1118,18 @@ impl MicaMcp {
         // ignored as an unknown field before that, so this is safe to always send.
         "expected_seq": expected_seq,
     });
-    self
+    let result = self
       .patch(
         &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
         body,
       )
-      .await
+      .await;
+    // The doc just changed — drop its warm copy so the next read is fresh
+    // (keeps the cache coherent with the agent's own edits).
+    if result.is_ok() {
+      self.cache_invalidate(document_id);
+    }
+    result
   }
 
   /// insert_at anchor resolution: a `block_…` id passes through unchanged; None
@@ -1859,7 +1923,18 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 
 #[cfg(test)]
 mod tests {
-  use super::{reject_mangled_latex, section_markdown, urlencode, window_markdown};
+  use super::{MicaMcp, reject_mangled_latex, section_markdown, urlencode, window_markdown};
+
+  #[test]
+  fn warm_cache_put_get_invalidate() {
+    let m = MicaMcp::new("http://x".into(), "t".into(), false);
+    assert!(m.cache_get("d1").is_none(), "cold cache misses");
+    m.cache_put("d1", "# hi");
+    assert_eq!(m.cache_get("d1").as_deref(), Some("# hi"), "warm hit");
+    // A write invalidates so the next read is fresh.
+    m.cache_invalidate("d1");
+    assert!(m.cache_get("d1").is_none(), "invalidated → miss");
+  }
 
   #[test]
   fn window_no_bounds_returns_full_unchanged() {
