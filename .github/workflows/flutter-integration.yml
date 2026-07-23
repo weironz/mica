@@ -1,0 +1,108 @@
+name: Flutter Integration Tests
+
+# Runs the Flutter Windows integration_test suite that CANNOT run in the plain
+# `flutter test test` job (.github/workflows/ci.yml): every file here drives the
+# real native FFI (flutter_rust_bridge / merman) and/or a real engine, so it
+# needs a Windows desktop runner that builds + launches the actual app —
+# exactly the gap ci.yml's header calls out as "deliberately NOT covered yet".
+#
+# Only the CLIENT-ONLY / OFFLINE files run here. Four files need the WHOLE dev
+# stack up (postgres + rustfs + api-server, demo@mica.dev auto-registered) and
+# are EXCLUDED — standing that up in plain CI is out of scope, and two of them
+# race each other on a debug-connection collision (docs/dev-environment.md ~L137).
+# Excluded, with why:
+#   - cloud_sync_test.dart          needs a live server (http://127.0.0.1:8090)
+#   - migration_sync_test.dart      needs the dev stack (api on :8080)
+#   - offline_image_reconcile_test  needs the dev stack (api on :8080) + rustfs
+#   - page_switch_fidelity_test     needs the dev stack (api on :8080)
+# Better to run the offline set reliably than the full set flakily.
+#
+# The offline files are safe here: they either need no network, deliberately
+# dial a dead socket, or stand up their OWN in-process fake WS server
+# (cloud_sync_integrity / cloud_sync_converge use the real yrs FFI in-process).
+#
+# Files are run SERIALLY, one `flutter test` invocation each, with the app
+# process killed between them. Each Windows integration run launches the real
+# app, and the app is single-instance: a lingering instance makes the next
+# launch fail with "Error waiting for a debug connection" — the race the docs
+# warn about. Serial + kill-between makes that structurally impossible.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# NOTE: GitHub-hosted runners are OUTSIDE CN, so the storage.flutter-io.cn /
+# pub.flutter-io.cn mirrors this repo sets LOCALLY must NOT be set here — the
+# default Google endpoints are correct and fast on the runners.
+
+jobs:
+  integration:
+    name: Flutter integration_test (Windows, offline set)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: clients/mica_flutter
+    steps:
+      - uses: actions/checkout@v5
+
+      # Same Flutter setup as release.yml's windows job.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # The long pole is `flutter test -d windows` compiling the Rust FFI crate
+      # (rust_lib_mica_flutter) via cargokit, same as `flutter build windows`.
+      # rust-cache keeps the third-party deps (yrs, merman, ...) across runs.
+      # The crate declares its own [workspace], so point at it directly — the
+      # same key the release windows job avoids colliding with (different key).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/mica_flutter/rust
+          key: mica-flutter-ffi-itest
+
+      - run: flutter config --enable-windows-desktop
+
+      - run: flutter pub get
+
+      - name: Run offline integration tests (serial, kill between)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          # CLIENT-ONLY / offline files only. Keep in sync with the exclusion
+          # list in this workflow's header when files are added or reclassified.
+          $files = @(
+            'integration_test/frb_document_test.dart',
+            'integration_test/frb_editor_binding_test.dart',
+            'integration_test/frb_roundtrip_test.dart',
+            'integration_test/frb_store_test.dart',
+            'integration_test/frb_sync_test.dart',
+            'integration_test/frb_view_tree_test.dart',
+            'integration_test/frb_zip_test.dart',
+            'integration_test/vault_import_test.dart',
+            'integration_test/cloud_offline_nav_test.dart',
+            'integration_test/cloud_offline_read_test.dart',
+            'integration_test/cloud_sync_converge_test.dart',
+            'integration_test/cloud_sync_integrity_test.dart',
+            'integration_test/gif_animation_test.dart',
+            'integration_test/mermaid_render_test.dart'
+          )
+          $failed = @()
+          foreach ($f in $files) {
+            Write-Host "==> flutter test $f -d windows"
+            flutter test $f -d windows
+            if ($LASTEXITCODE -ne 0) { $failed += $f }
+            # Kill any lingering app instance before the next file: the app is
+            # single-instance, and a stray process makes the next launch fail
+            # with the debug-connection race. Belt-and-suspenders on a fresh
+            # runner, load-bearing when a test leaves the app up.
+            Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::integration tests failed: $($failed -join ', ')"
+            exit 1
+          }
+          Write-Host "All offline integration tests passed"
