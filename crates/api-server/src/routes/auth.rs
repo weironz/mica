@@ -255,6 +255,87 @@ pub async fn change_password(
   Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeleteAccountRequest {
+  /// Current password — deleting an account is irreversible, so it is gated the
+  /// same way `change_password` is.
+  pub password: String,
+}
+
+/// `DELETE /api/auth/me` — permanently delete the caller's account and ALL data
+/// they OWN: every workspace they own (its documents, versions, files, shares,
+/// CRDT base + history all cascade on `workspace_id`), plus their API/refresh
+/// tokens and memberships. The user's right-to-be-forgotten path. Gated on the
+/// current password.
+pub async fn delete_account(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Json(payload): Json<DeleteAccountRequest>,
+) -> ApiResult<StatusCode> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+
+  let user = sqlx::query_as::<_, UserRow>(
+    "SELECT id, email, display_name, password_hash, created_at FROM users WHERE id = $1",
+  )
+  .bind(user_id)
+  .fetch_optional(&state.db)
+  .await?
+  .ok_or(ApiError::Unauthorized)?;
+  verify_password(&payload.password, &user.password_hash)?;
+
+  delete_user_and_owned(&state.db, user_id).await?;
+  Ok(StatusCode::NO_CONTENT)
+}
+
+/// The transactional cascade behind [`delete_account`], separated so a DB test
+/// can exercise it without minting a token. Deletes the user's owned workspaces
+/// (all content cascades on `workspace_id`) and the shares they authored, then
+/// the user row (api_tokens / refresh_tokens / workspace_members cascade on
+/// `user_id`). If the account still authored rows in workspaces owned by OTHERS
+/// (`created_by` / `actor_id` / `uploaded_by` are `ON DELETE RESTRICT`), the
+/// final delete is a FK violation → the whole transaction rolls back and we
+/// return a readable 409 rather than silently stripping a co-owner's document
+/// history. Atomic: either the account and everything it owns is gone, or
+/// nothing is.
+pub async fn delete_user_and_owned(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
+  let mut tx = db.begin().await?;
+  sqlx::query("DELETE FROM workspaces WHERE owner_id = $1")
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+  sqlx::query("DELETE FROM document_shares WHERE created_by = $1")
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+  match sqlx::query("DELETE FROM users WHERE id = $1")
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+  {
+    Ok(_) => {
+      tx.commit().await?;
+      Ok(())
+    }
+    Err(error) => {
+      // tx is dropped here (rolled back) before we return.
+      let is_fk = error
+        .as_database_error()
+        .and_then(|d| d.code())
+        .as_deref()
+        == Some("23503");
+      if is_fk {
+        Err(ApiError::Conflict(
+          "your account still has content in workspaces owned by others; \
+           leave those workspaces first, then delete."
+            .to_string(),
+        ))
+      } else {
+        Err(error.into())
+      }
+    }
+  }
+}
+
 /// A fresh sign-in: its own token family.
 async fn auth_response(state: &AppState, user: UserRow) -> ApiResult<AuthResponse> {
   auth_response_in_family(state, user, Uuid::new_v4()).await
@@ -927,6 +1008,88 @@ mod refresh_pg {
   }
 
   const DAY: i64 = 60 * 60 * 24;
+
+  #[tokio::test]
+  async fn delete_account_removes_the_user_and_everything_they_own() {
+    let Some(db) = pool().await else {
+      return;
+    };
+    let owner = seed_user(&db).await;
+    let bystander = seed_user(&db).await;
+
+    let ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+      .bind(ws)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    let doc = Uuid::new_v4();
+    sqlx::query(
+      "INSERT INTO documents(id,workspace_id,root_block_id,created_by) VALUES($1,$2,'root',$3)",
+    )
+    .bind(doc)
+    .bind(ws)
+    .bind(owner)
+    .execute(&db)
+    .await
+    .unwrap();
+    let other_ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'O',$2)")
+      .bind(other_ws)
+      .bind(bystander)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    delete_user_and_owned(&db, owner)
+      .await
+      .expect("deleting an account that owns only its own data must succeed");
+
+    let count = |sql: &'static str, id: Uuid| {
+      let db = db.clone();
+      async move {
+        sqlx::query_scalar::<_, i64>(sql)
+          .bind(id)
+          .fetch_one(&db)
+          .await
+          .unwrap()
+      }
+    };
+    // The owner, their workspace, and its document (cascade) are all gone.
+    assert_eq!(count("SELECT count(*) FROM users WHERE id=$1", owner).await, 0);
+    assert_eq!(
+      count("SELECT count(*) FROM workspaces WHERE id=$1", ws).await,
+      0
+    );
+    assert_eq!(
+      count("SELECT count(*) FROM documents WHERE id=$1", doc).await,
+      0,
+      "content in an owned workspace must cascade"
+    );
+    // A different user and their workspace are untouched.
+    assert_eq!(
+      count("SELECT count(*) FROM users WHERE id=$1", bystander).await,
+      1,
+      "a bystander's account must survive"
+    );
+    assert_eq!(
+      count("SELECT count(*) FROM workspaces WHERE id=$1", other_ws).await,
+      1
+    );
+
+    // Leave the table as we found it for repeat runs.
+    sqlx::query("DELETE FROM workspaces WHERE owner_id=$1")
+      .bind(bystander)
+      .execute(&db)
+      .await
+      .ok();
+    sqlx::query("DELETE FROM users WHERE id=$1")
+      .bind(bystander)
+      .execute(&db)
+      .await
+      .ok();
+  }
 
   #[tokio::test]
   async fn rotation_hands_back_the_same_family_and_burns_the_old_token() {
