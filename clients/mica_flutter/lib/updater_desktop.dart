@@ -121,83 +121,52 @@ Future<void> downloadAndApplyUpdate(
   // to explain it. (Observed: exit code 5, "Some applications could not be shut
   // down".)
   //
-  // `ping` is the delay: `timeout /t` wants a console this detached process has
-  // no claim on. /CLOSEAPPLICATIONS stays as a backstop for a slow exit, and
-  // /SUPPRESSMSGBOXES is deliberately gone — if Setup still cannot proceed, a
-  // visible prompt beats a silent rollback. The log gives us something to read
-  // when someone reports "it didn't update".
+  // We can't let Setup close us: the app intercepts its own WM_CLOSE
+  // (close-to-tray), so RestartManager (`/CLOSEAPPLICATIONS`) can't close it —
+  // it would hang for 30 s and roll back. So we quit OURSELVES (exit(0) below)
+  // and let Setup WAIT for our PID to vanish before it copies a file. That wait
+  // lives in the installer's `[Code]` (PrepareToInstall → OpenProcess(SYNCHRONIZE)
+  // + WaitForSingleObject on `/MICAWAITPID`); see installer/mica.iss.
   //
-  // Launch the .cmd HIDDEN: `Process.start('cmd', …, detached)` pops a visible
-  // console (the "ping 127.0.0.1" window users reported as weird after an
-  // update). dart:io has no CREATE_NO_WINDOW, so route through a one-line .vbs
-  // run by wscript — wscript is windowless, and `Shell.Run(cmd, 0, …)` runs the
-  // console with window style 0 (hidden). No flash at any point.
+  // Launch Setup DIRECTLY — no cmd, no ping, no vbs. `Setup.exe` is a
+  // GUI-subsystem program, so it opens NO console window; the old "ping
+  // 127.0.0.1" window came entirely from the cmd wrapper. Process.start passes
+  // an argv LIST (Setup speaks the MSVC argv convention, unlike cmd), so a
+  // spaced path needs no hand-quoting. `/SUPPRESSMSGBOXES` stays gone — a visible
+  // prompt beats a silent rollback; the log is there to read when someone
+  // reports "it didn't update".
   final logPath = '${dir.path}\\inno-install.log';
-  final script = writeUpdateScript(dir, setup.path, logPath);
-  final launcher = writeHiddenLauncher(dir, script.path);
   await Process.start(
-    'wscript',
-    ['//B', '//Nologo', launcher.path],
+    setup.path,
+    setupArgs(logPath: logPath, waitPid: pid),
     mode: ProcessStartMode.detached,
   );
 
   // Quit immediately: every millisecond spent here is one Setup may have to
-  // spend prying the files loose.
+  // spend waiting on our PID.
   exit(0);
 }
 
-/// Write the post-exit update script and return it.
+/// The command line the in-app updater hands the Inno installer. A LIST (argv),
+/// not a shell string: `Setup.exe` parses the MSVC argv convention, so a spaced
+/// path needs no hand-quoting and there is no `cmd` round-trip to mangle it
+/// (the bug that once shipped `\"C:\…exe\"` as a literal token and no-op'd the
+/// update — gone entirely now that no shell is involved).
 ///
-/// This is a FILE, not a `cmd /c "…"` one-liner, and that is the whole point.
-/// Dart builds a Windows command line using the MSVC argv convention, which
-/// escapes an embedded `"` as `\"`. `cmd.exe` does not speak that convention —
-/// it takes `\"` literally — so the installer path arrived as
-/// `\"C:\…\Mica-Setup-0.12.10.exe\"`, which is not a path. cmd gave up at that
-/// token and the rest of the `&` chain, Setup included, never ran. The update
-/// silently did nothing while the leading `ping` still flashed a console: the
-/// exact "downloaded, restarted, same old version" report, one layer earlier
-/// than the RestartManager race described above.
-///
-/// A script file has no such round-trip: the quoting is interpreted once, by
-/// cmd, from bytes we wrote. The only argument passed through Dart is the
-/// script's own path, which carries no inner quotes.
-///
-/// Exposed for testing — `updater_script_test.dart` runs the real thing against
-/// a stub installer, which is the only way to catch a quoting bug like this.
-File writeUpdateScript(Directory dir, String setupPath, String logPath) {
-  // Backslashes throughout: the caller joins with '/', and a mixed separator
-  // inside a quoted cmd token is asking for trouble.
-  String win(String p) => p.replaceAll('/', r'\');
-  final script = File('${dir.path}\\apply-update.cmd');
-  script.writeAsStringSync(
-    '@echo off\r\n'
-    // Names the window, so the console that necessarily appears reads as part
-    // of the update the user just asked for rather than as something strange.
-    'title Mica\r\n'
-    'ping 127.0.0.1 -n 4 >nul\r\n'
-    '"${win(setupPath)}" /VERYSILENT /NOCANCEL /CLOSEAPPLICATIONS '
-    '/NORESTART "/LOG=${win(logPath)}"\r\n',
-  );
-  return script;
-}
-
-/// A `.vbs` that runs [cmdPath] with a HIDDEN window (style 0), launched via
-/// wscript (itself windowless) — the one reliable "no console window" path on
-/// Windows, since `dart:io` Process.start exposes no CREATE_NO_WINDOW. This is
-/// what stops the ping-delay + Setup from flashing the console the user saw
-/// after an update. Runs the cmd detached (`False` = don't wait).
-///
-/// A FILE for the same reason [writeUpdateScript] is: we write the bytes, so the
-/// cmd path's quoting is interpreted once by VBScript (`""` is one literal quote)
-/// with no Dart→shell argv round-trip to mangle it.
-File writeHiddenLauncher(Directory dir, String cmdPath) {
-  String win(String p) => p.replaceAll('/', r'\');
-  final vbs = File('${dir.path}\\apply-update.vbs');
-  vbs.writeAsStringSync(
-    'CreateObject("WScript.Shell").Run """${win(cmdPath)}""", 0, False\r\n',
-  );
-  return vbs;
-}
+/// `/MICAWAITPID` is the running app's process id; the installer's `[Code]`
+/// waits for it to exit before copying files (see installer/mica.iss), which is
+/// the native replacement for the old `ping` delay — it waits for the ACTUAL
+/// exit, not a guessed 3 s, and opens no console. Exposed for testing.
+List<String> setupArgs({required String logPath, required int waitPid}) => [
+  '/VERYSILENT',
+  '/NOCANCEL',
+  // Harmless backstop; the /MICAWAITPID wait is the real gate (our close-to-tray
+  // interception defeats RestartManager's graceful close anyway).
+  '/CLOSEAPPLICATIONS',
+  '/NORESTART',
+  '/MICAWAITPID=$waitPid',
+  '/LOG=$logPath',
+];
 
 /// Whether the downloaded installer [bytes] match the release's expected [size]
 /// and [sha256] (lowercase hex). A null field is not checked — an older release
