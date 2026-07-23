@@ -388,6 +388,34 @@ class _NodeLayout {
   Rect? imageBar; // hover toolbar background
   List<Rect> imageButtons = const []; // toolbar buttons (see _imageActions)
   Rect? imageResize; // right-edge resize handle
+
+  // Whole-layout reuse (Phase 2): the text/data *instances* this layout was
+  // shaped from. The controller never mutates a node's text/data in place — it
+  // reassigns a fresh String/Map on any change (verified across lib/editor) — so
+  // `identical` is a correct O(1) "unchanged?" test. A clean block skips all
+  // re-derivation (marks, span, highlight, rects) and only [shiftBy]s to its new
+  // Y. Only text layouts populate these; atomic layouts are rebuilt every pass.
+  String? srcText;
+  Map<String, dynamic>? srcData;
+
+  /// Move a reused layout to a new Y by [dy]. Every geometry field a text layout
+  /// carries is absolute and boxTop-relative (each rect's top is `boxTop + k`),
+  /// so a uniform vertical shift is exact. The painter is content-only (painted
+  /// at [textTop]) and fold atom rects are painter-local — both unaffected.
+  void shiftBy(double dy) {
+    boxTop += dy;
+    textTop += dy;
+    checkbox = checkbox?.shift(Offset(0, dy));
+    langLabel = langLabel?.shift(Offset(0, dy));
+    askAiButton = askAiButton?.shift(Offset(0, dy));
+    copyButton = copyButton?.shift(Offset(0, dy));
+    moreButton = moreButton?.shift(Offset(0, dy));
+    viewCodeTab = viewCodeTab?.shift(Offset(0, dy));
+    viewPreviewTab = viewPreviewTab?.shift(Offset(0, dy));
+    titleRect = titleRect?.shift(Offset(0, dy));
+    collapseButton = collapseButton?.shift(Offset(0, dy));
+    scrollTrack = scrollTrack?.shift(Offset(0, dy));
+  }
 }
 
 /// Toolbar actions for an image, in painted order.
@@ -570,6 +598,17 @@ class RenderDocument extends RenderBox {
   /// glyphs that may still be ".notdef" boxes, so the whole cache must re-shape
   /// once (span-equality alone would wrongly reuse the stale shaping).
   bool _fontsDirty = false;
+
+  /// Whole-layout reuse cache (Phase 2), keyed by node id. On a keystroke only
+  /// the edited block's text/data instance changes; every other text block is
+  /// served from here — skipping marks/span/highlight/rect work entirely, just
+  /// [_NodeLayout.shiftBy] to its new Y. Only text layouts (renderedBy == null)
+  /// live here; their painters are owned by [_painterCache] (this holds the same
+  /// object, never a second painter). Invalidated wholesale when width or
+  /// appearance changes (neither is in the per-block identity check).
+  final Map<String, _NodeLayout> _layoutCache = {};
+  double _lastLayoutMaxWidth = double.nan;
+  EditorAppearance? _lastLayoutAppearance;
 
   /// Per-code-block horizontal scroll offset, keyed by node id. Code blocks do
   /// not wrap; long lines scroll left/right within the block.
@@ -968,7 +1007,17 @@ class RenderDocument extends RenderBox {
         entry.painter.dispose();
       }
       _painterCache.clear();
+      _layoutCache.clear(); // shaped layouts hold the stale glyphs too
       _fontsDirty = false;
+    }
+    if (maxWidth != _lastLayoutMaxWidth || _appearance != _lastLayoutAppearance) {
+      // Width feeds every block's wrapping; appearance feeds every span's style.
+      // Neither is captured by the per-block text/data identity check, so a
+      // change here invalidates the whole reuse cache (painters still ride their
+      // own span-equality check in the slow path below).
+      _layoutCache.clear();
+      _lastLayoutMaxWidth = maxWidth;
+      _lastLayoutAppearance = _appearance;
     }
     // Only atomic renderers' painters and table cells are rebuilt every pass, so
     // only those are disposed here; text-pipeline painters live in _painterCache
@@ -1036,6 +1085,59 @@ class RenderDocument extends RenderBox {
           prevKind = node.kind;
           continue;
         }
+      }
+
+      // Ordinal / indent context (numbered-list counters) is stateful across
+      // blocks, so it MUST run for every text block whether or not the block is
+      // reused — and it must be known *before* the reuse check, since a stale
+      // ordinal (a block above was deleted) has to invalidate a reuse. Hoisted
+      // out of the shaping below; the slow path just reads these.
+      int ordinalCtx = 0;
+      int indentLevelCtx = 0;
+      if (node.isListKind) {
+        final level = node.indent;
+        indentLevelCtx = level;
+        if (numberedCounters.length > level + 1) {
+          numberedCounters.removeRange(level + 1, numberedCounters.length);
+        }
+        if (node.kind == 'numbered_list') {
+          while (numberedCounters.length <= level) {
+            numberedCounters.add(0);
+          }
+          final start = (node.data['start'] as num?)?.toInt();
+          numberedCounters[level] = start ?? (numberedCounters[level] + 1);
+          ordinalCtx = numberedCounters[level];
+        } else if (numberedCounters.length > level) {
+          numberedCounters.removeRange(level, numberedCounters.length);
+        }
+      } else if (node.liLevel == null) {
+        numberedCounters.clear();
+      }
+
+      // Phase 2 fast path: an unchanged block reuses its whole cached layout and
+      // only repositions. Correct because the controller reassigns (never
+      // mutates) text/data, so identity == content, and width/appearance are
+      // globally invalidated above. A code block holding the caret is excluded:
+      // its horizontal auto-scroll depends on the live caret (slow path only).
+      final isCaretHere = sel != null &&
+          sel.isCollapsed &&
+          sel.focus.node == nodeIndex;
+      final reuse = _layoutCache[node.id];
+      if (reuse != null &&
+          identical(reuse.srcText, node.text) &&
+          identical(reuse.srcData, node.data) &&
+          reuse.alert == nodeAlert &&
+          reuse.alertHead == isAlertHead &&
+          reuse.ordinal == ordinalCtx &&
+          reuse.indentLevel == indentLevelCtx &&
+          !(node.isCode && isCaretHere)) {
+        final dy = y - reuse.boxTop;
+        if (dy != 0) reuse.shiftBy(dy);
+        _layouts.add(reuse);
+        seenTextIds.add(node.id); // keep its painter live in _painterCache
+        y += reuse.boxHeight;
+        prevKind = node.kind;
+        continue;
       }
 
       final style = _appearance.applyTo(
@@ -1252,33 +1354,11 @@ class RenderDocument extends RenderBox {
       layout.boxHeight =
           clipH + (isCode ? 2 * EditorTheme.codePadV : alertHeadPad);
 
-      if (node.isListKind) {
-        final level = node.indent;
-        layout.indentLevel = level;
-        // Per-level ordered counters: deeper levels reset when we go back
-        // up; a bullet/todo at a level resets numbering at that level and
-        // below, without touching parent counters.
-        if (numberedCounters.length > level + 1) {
-          numberedCounters.removeRange(level + 1, numberedCounters.length);
-        }
-        if (node.kind == 'numbered_list') {
-          while (numberedCounters.length <= level) {
-            numberedCounters.add(0);
-          }
-          // An imported `data.start` pins the number — a list interrupted
-          // by bullets/code/quotes resumes (`<ol start>` semantics) instead
-          // of restarting at 1.
-          final start = (node.data['start'] as num?)?.toInt();
-          numberedCounters[level] = start ?? (numberedCounters[level] + 1);
-          layout.ordinal = numberedCounters[level];
-        } else if (numberedCounters.length > level) {
-          numberedCounters.removeRange(level, numberedCounters.length);
-        }
-      } else if (node.liLevel == null) {
-        // Container children (`data.li`) live INSIDE an item — they must
-        // not reset the surrounding list's numbering.
-        numberedCounters.clear();
-      }
+      // Ordinal/indent were computed once, up front (hoisted before the reuse
+      // check so a stale ordinal can invalidate a reuse). The counter state was
+      // already advanced there — here we only stamp the result onto the layout.
+      layout.indentLevel = indentLevelCtx;
+      layout.ordinal = ordinalCtx;
       if (node.kind == 'todo') {
         final lh = painter.preferredLineHeight;
         const box = 18.0;
@@ -1422,6 +1502,11 @@ class RenderDocument extends RenderBox {
         }
       }
 
+      // Record the inputs this layout was shaped from so a later pass can reuse
+      // it wholesale (identity == unchanged; see [_NodeLayout.srcText]).
+      layout.srcText = node.text;
+      layout.srcData = node.data;
+      _layoutCache[node.id] = layout;
       _layouts.add(layout);
       y += layout.boxHeight;
       prevKind = node.kind;
@@ -1436,6 +1521,11 @@ class RenderDocument extends RenderBox {
         entry.painter.dispose();
         return true;
       });
+    }
+    // Same eviction for the whole-layout cache (its painters are freed above via
+    // _painterCache — a layout here only references them, never owns a second).
+    if (_layoutCache.length > seenTextIds.length) {
+      _layoutCache.removeWhere((id, _) => !seenTextIds.contains(id));
     }
 
     y += EditorTheme.bottomPad;
@@ -3059,6 +3149,8 @@ class RenderDocument extends RenderBox {
       entry.painter.dispose();
     }
     _painterCache.clear();
+    // Painters were freed via _painterCache; these layouts only referenced them.
+    _layoutCache.clear();
     super.dispose();
   }
 }
