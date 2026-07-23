@@ -169,6 +169,9 @@ Keep the old `mica-prod-postgres` volume until the new one is proven — that
 un-renamed volume IS your rollback (revert the compose edit to fall back). Only
 `docker volume rm` it once `/api/ready` is green and content spot-checks pass.
 
+There's no rush: **PG16 gets upstream support until ~2028** (five-year cycle), so
+this is a deliberate maintenance task, never a casual `image:` tag bump.
+
 ## Behind Traefik (the canonical production stack)
 
 `deploy/docker-compose.yml` — used for mica.cloudcele.com. No host

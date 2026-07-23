@@ -13,8 +13,8 @@ import 'render.dart' show EditorTheme;
 ///
 /// - **Offstage**: [buildOffstage] returns a widget; the pipeline renders it
 ///   far off-screen and captures it post-frame (flutter_math today).
-/// - **Direct**: [produce] returns a future image (JS interop, server render
-///   — mermaid on web later). Return null from both to opt out.
+/// - **Direct**: [produce] returns a future image (JS interop / server render
+///   — e.g. mermaid on web). Return null from both to opt out.
 ///
 /// Failure is silent by design: no image means the block keeps falling
 /// through to its editable source form (the renderer registry's
