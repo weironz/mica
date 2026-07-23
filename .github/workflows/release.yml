@@ -186,27 +186,38 @@ jobs:
           if (-not (Test-Path $exe)) { throw "installed exe not found after 120s: $exe" }
           Write-Host "Installed OK: $exe"
 
-          # The installer's [Run] entry auto-launches Mica under /VERYSILENT (it has
-          # no `skipifsilent` — that is how the updater relaunches). Clear any such
-          # instance so the liveness check owns exactly one known process; the app
-          # has a single-instance guard, so a second launch would just exit.
-          Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 2
+          # Verify the instance the INSTALLER itself launches — do NOT launch our
+          # own. The .iss [Run] entry auto-starts Mica under /VERYSILENT (no
+          # `skipifsilent`; that is how the updater relaunches after an update).
+          # The app holds a single-instance mutex (windows/runner/main.cpp,
+          # `Local\MicaSingleInstance`), so a second launch racing the [Run] one
+          # means whichever grabs the mutex second exits 0 — which was exactly the
+          # flaky "exited within 10s (exit code 0)" this step used to hit (run
+          # 29983180451): [Run] fires only after all files are copied, so it can
+          # lag the `$exe`-exists signal above, and the old fixed 2s sleep let the
+          # two launches interleave either way. Watching the [Run] instance removes
+          # the double-launch entirely AND tests the real production path.
+          #
+          # Poll for that process to appear (it may lag the install-complete signal).
+          $appDeadline = (Get-Date).AddSeconds(60)
+          $app = $null
+          while (-not $app -and (Get-Date) -lt $appDeadline) {
+            $app = Get-Process mica_flutter -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $app) { Start-Sleep -Seconds 1 }
+          }
+          if (-not $app) { throw "installer never launched mica_flutter within 60s of install" }
 
-          $app = Start-Process -FilePath $exe -PassThru
           try {
-            Write-Host "Launched Mica (pid $($app.Id)); waiting 10s to confirm it stays up..."
+            Write-Host "Installer launched Mica (pid $($app.Id)); waiting 10s to confirm it stays up..."
             Start-Sleep -Seconds 10
+            $app.Refresh()
             if ($app.HasExited) {
               throw "Mica exited within 10s (exit code $($app.ExitCode)) - install/launch smoke FAILED"
             }
             Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"
           } finally {
-            # Always tear down the launched app (and any installer-spawned one) so
-            # the step leaves no stray process behind. The installer process
-            # itself may still be lingering (it waits on the app it auto-launched
-            # until that closes), so stop it too.
-            Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+            # Leave no stray process behind: the app, plus the installer if it is
+            # still lingering.
             Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
             if ($inst -and -not $inst.HasExited) { Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue }
           }
