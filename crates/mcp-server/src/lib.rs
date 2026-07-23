@@ -1560,11 +1560,32 @@ impl ServerHandler for MicaMcp {
         version: env!("CARGO_PKG_VERSION").to_string(),
         ..Default::default()
       },
+      // The ONE place an agent reliably reads "how to use this efficiently" — it
+      // is shown at connect, above the per-tool schemas. KEEP IT IN SYNC: when a
+      // tool or a high-value param is added/changed, teach the workflow here, or
+      // the capability ships discoverable-but-unused (optional params get skipped
+      // unless this guide makes the benefit salient). This guide is what makes
+      // range reads / in-place edits / optimistic concurrency actually get used.
       instructions: Some(
-        "Mica note-workspace MCP server. List/read/create/write documents and \
-                 export/import workspaces over the Mica REST API. Workflow: list workspaces \
-                 → list pages → read/outline → create/update. Writes take Markdown; the \
-                 server derives the block ops."
+        "Mica note-workspace MCP. Documents are Markdown — the server derives block ops, so \
+         you write Markdown, not block JSON.\n\
+         \n\
+         Navigate: mica_list_workspaces -> mica_list_pages -> mica_read_document / \
+         mica_get_outline.\n\
+         \n\
+         READ efficiently, do not pull whole pages: mica_read_document takes offset+limit (a \
+         line window) or section (a heading name) to return just a slice. mica_get_outline \
+         returns headings + top-level block ids + the document `seq`, cheaply.\n\
+         \n\
+         EDIT in place, do not rewrite the page. mica_update_document modes: append (after the \
+         end — safe default); insert_at (place after `anchor`, which is a block id OR a \
+         heading's text from the outline); find_replace (swap text; set unique=true for a \
+         single precise edit — refused if the text is not unique); replace_all (only when you \
+         truly mean to rewrite the whole page).\n\
+         \n\
+         Write acks return `seq` and `last_block_id` (the new end anchor) — chain further edits \
+         from those instead of re-reading. For safe concurrent editing, pass the outline/ack \
+         `seq` back as `expected_seq`; a stale write is refused (409) so you re-read first."
           .to_string(),
       ),
       ..Default::default()
