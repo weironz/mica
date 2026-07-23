@@ -14,3 +14,8 @@ serde_json.workspace = true
 # by sharing this one pure builder. markdown does NOT depend on interchange, so
 # no cycle. Default features (no render) keep it lean.
 mica-markdown = { path = "../markdown" }
+
+[dev-dependencies]
+# Property fuzz: the ZIP import pipeline must never panic on malformed bytes
+# (tests/proptest_zip.rs).
+proptest = "1"
