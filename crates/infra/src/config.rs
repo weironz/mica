@@ -42,6 +42,12 @@ pub struct AppConfig {
   /// upserts this account at startup (creating it or resetting its password)
   /// so E2E runs always have known credentials. Hard-ignored in production.
   pub seed_test_user: Option<SeedTestUser>,
+  /// Whether public self-registration (`POST /auth/register`) is open. Default
+  /// true (the existing behaviour). Set `MICA_REGISTRATION_ENABLED=false` to lock
+  /// a self-hosted instance to its current accounts — the endpoint then refuses
+  /// with 403 instead of creating accounts. The operator's one switch to run a
+  /// public node privately.
+  pub registration_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +123,18 @@ impl AppConfig {
       })
     };
 
+    // Open by default; an operator sets it false to keep a public node private.
+    // Anything but an explicit off-value ("false"/"0"/"no"/"off") stays open, so
+    // a typo never silently locks everyone out.
+    let registration_enabled = env::var("MICA_REGISTRATION_ENABLED")
+      .map(|v| {
+        !matches!(
+          v.trim().to_ascii_lowercase().as_str(),
+          "false" | "0" | "no" | "off"
+        )
+      })
+      .unwrap_or(true);
+
     Ok(Self {
       environment,
       http_addr,
@@ -127,6 +145,7 @@ impl AppConfig {
       refresh_token_ttl_seconds,
       cors_allowed_origins,
       seed_test_user,
+      registration_enabled,
     })
   }
 }

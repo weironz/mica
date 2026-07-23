@@ -90,6 +90,10 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
+      # Public self-registration. Defaults open (current behaviour); set
+      # MICA_REGISTRATION_ENABLED=false in the node's .env to lock this instance
+      # to its existing accounts (POST /auth/register then 403s).
+      MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"
     depends_on:
       postgres:
         condition: service_healthy

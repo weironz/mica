@@ -92,6 +92,13 @@ pub async fn register(
   State(state): State<AppState>,
   Json(payload): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
+  // A self-hosted operator can lock the node to its current accounts by setting
+  // MICA_REGISTRATION_ENABLED=false — the public register endpoint then refuses
+  // rather than minting accounts. Login/refresh for existing users is unaffected.
+  if !state.config.registration_enabled {
+    return Err(ApiError::Forbidden);
+  }
+
   let email = normalize_email(&payload.email)?;
   let display_name = normalize_display_name(&payload.display_name)?;
   validate_password(&payload.password)?;
