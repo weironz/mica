@@ -1736,6 +1736,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _api.changePassword(session.accessToken, current, next);
   }
 
+  Future<void> _deleteAccount(String password) async {
+    final session = _requireSession();
+    await _api.deleteAccount(session.accessToken, password);
+    // Account and everything it owned are gone server-side. Reuse _signOut to
+    // tear down the local session and land back on sign-in / the local world;
+    // its fire-and-forget logout harmlessly no-ops (the refresh token cascaded
+    // away with the account).
+    if (mounted) _signOut();
+  }
+
   Future<Map<String, dynamic>> _loadAiSettings() async {
     final session = _requireSession();
     return _api.getAiSettings(session.accessToken);
@@ -4370,6 +4380,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Null, not a no-op: absence is what hides the tab. See onLoadTokens.
       onUpdateProfile: local ? null : _updateProfile,
       onChangePassword: local ? null : _changePassword,
+      onDeleteAccount: local ? null : _deleteAccount,
       connections: _connections,
       onSetActiveConnection: _setActiveConnection,
       onAddServer: _addServer,
@@ -4943,6 +4954,7 @@ class WorkspaceView extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
+    required this.onDeleteAccount,
     required this.connections,
     required this.onSetActiveConnection,
     required this.onAddServer,
@@ -5132,6 +5144,7 @@ class WorkspaceView extends StatefulWidget {
   /// entirely rather than showing controls that do nothing.
   final Future<void> Function(String displayName)? onUpdateProfile;
   final Future<void> Function(String current, String next)? onChangePassword;
+  final Future<void> Function(String password)? onDeleteAccount;
 
   /// `['local', ...servers]` — this device and every configured server, one
   /// list because they are the same kind of choice: which single world the app
@@ -7917,6 +7930,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         userEmail: widget.userEmail,
         onUpdateProfile: widget.onUpdateProfile,
         onChangePassword: widget.onChangePassword,
+        onDeleteAccount: widget.onDeleteAccount,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
         reHostImages: widget.reHostImages,

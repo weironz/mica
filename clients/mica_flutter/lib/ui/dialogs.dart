@@ -220,6 +220,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.userEmail,
     required this.onUpdateProfile,
     required this.onChangePassword,
+    required this.onDeleteAccount,
     required this.appearance,
     required this.pageWidth,
     required this.reHostImages,
@@ -245,6 +246,10 @@ class _SettingsDialog extends StatefulWidget {
   /// change — that silently did nothing.
   final Future<void> Function(String displayName)? onUpdateProfile;
   final Future<void> Function(String current, String next)? onChangePassword;
+
+  /// Null in 本地模式 — no account to delete. Deletes the cloud account and
+  /// every workspace it owns (server cascade); the caller signs out on success.
+  final Future<void> Function(String password)? onDeleteAccount;
 
   /// Null in 本地模式 — AI settings live on the server, so there is nothing to
   /// configure and the tab is absent. Null, not a no-op: same rule as
@@ -521,6 +526,78 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
       if (mounted) setState(() => _accountBusy = false);
+    }
+  }
+
+  Future<void> _deleteAccount() async {
+    // Password re-entry lives in the confirm dialog, not the Account form: it is
+    // asked for once, right next to the irreversible warning, and never sits in
+    // a live field afterwards. A local controller keeps it out of _SettingsDialog
+    // state entirely — it dies with the dialog.
+    final passCtl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final l10n = dialogContext.l10n;
+        return AlertDialog(
+          title: Text(l10n.accountDeleteTitle),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.accountDeleteWarning,
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: passCtl,
+                obscureText: true,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: l10n.accountDeletePasswordLabel,
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(l10n.commonCancel),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(l10n.accountDeleteConfirm),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      passCtl.dispose();
+      return;
+    }
+    final password = passCtl.text;
+    passCtl.dispose();
+    setState(() {
+      _accountBusy = true;
+      _accountMsg = null;
+    });
+    try {
+      await widget.onDeleteAccount!(password);
+      // Success tears down the session (the account is gone) — the parent's
+      // callback signs out, which pops Settings with it. Nothing to show here.
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _accountMsg = error.toString();
+          _accountBusy = false;
+        });
+      }
     }
   }
 
@@ -1171,6 +1248,21 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       Text(
         _accountMsg!,
         style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+      ),
+    ],
+    if (widget.onDeleteAccount != null) ...[
+      const Divider(height: 32),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: _accountBusy ? null : _deleteAccount,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFDC2626),
+            side: const BorderSide(color: Color(0xFFFCA5A5)),
+          ),
+          icon: const Icon(Icons.delete_forever_outlined, size: 16),
+          label: Text(context.l10n.accountDelete),
+        ),
       ),
     ],
   ];
