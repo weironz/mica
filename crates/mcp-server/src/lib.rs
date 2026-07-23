@@ -349,9 +349,10 @@ struct UpdateDocArgs {
   /// (replace every match, the existing behaviour).
   #[serde(default)]
   unique: bool,
-  /// Optimistic concurrency: the `seq` you last read for this doc. If given and
-  /// the server has moved on, the write is refused so you can re-read — no silent
-  /// clobber of a concurrent edit. (Enforced once the API ships the check.)
+  /// Optimistic concurrency: the `seq` from `mica_get_outline` or a prior write
+  /// ack. If given and the doc has changed since, the write is refused (409) so
+  /// you re-read first — no silent clobber of a concurrent edit. Omit for the
+  /// default last-writer-wins.
   #[serde(default)]
   expected_seq: Option<i64>,
 }
@@ -720,9 +721,10 @@ impl MicaMcp {
   }
 
   #[tool(
-    description = "Get a document's outline (headings + block ids in order). Call this \
-                       before an anchored write so you can target a spot instead of rewriting \
-                       the whole page.",
+    description = "Get a document's outline (headings + block ids in order) plus its \
+                       current `seq`. Call this before an anchored write so you can target a \
+                       spot instead of rewriting the whole page — and pass the `seq` back as \
+                       `expected_seq` to make the write conflict-checked.",
     annotations(read_only_hint = true)
   )]
   async fn mica_get_outline(

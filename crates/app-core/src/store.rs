@@ -125,7 +125,7 @@ pub async fn apply_document_operations(
   actor_id: Uuid,
   operations: &[DocumentOperation],
 ) -> ApiResult<AppliedUpdate> {
-  apply_derived_operations(db, workspace_id, document_id, actor_id, |_| {
+  apply_derived_operations(db, workspace_id, document_id, actor_id, None, |_| {
     Ok(operations.to_vec())
   })
   .await
@@ -142,6 +142,7 @@ pub async fn apply_derived_operations<F>(
   workspace_id: Uuid,
   document_id: Uuid,
   actor_id: Uuid,
+  expected_seq: Option<i64>,
   derive: F,
 ) -> ApiResult<AppliedUpdate>
 where
@@ -152,6 +153,18 @@ where
   let locked = lock_document_tx(&mut tx, workspace_id, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
+  // Optimistic concurrency: when the caller pins the seq it last saw (from
+  // mica_get_outline or a prior write ack) and the document has since moved on,
+  // refuse (409) instead of silently clobbering the intervening edit. Checked
+  // inside the FOR UPDATE lock, so the comparison can't race the next writer.
+  if let Some(expected) = expected_seq
+    && locked.current_seq != expected
+  {
+    return Err(ApiError::Conflict(format!(
+      "document changed since seq {expected} (now at seq {}); re-read before writing",
+      locked.current_seq
+    )));
+  }
   let current_snapshot = latest_snapshot_tx(&mut tx, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;

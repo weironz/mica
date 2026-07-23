@@ -1103,6 +1103,9 @@ pub struct DocumentOutlineResponse {
   headings: Vec<OutlineHeading>,
   /// Every top-level block id in document order (finer anchors than headings).
   block_ids: Vec<String>,
+  /// The document's current sequence number. Pass it back as `expected_seq` on a
+  /// write to make the write conflict-checked (409 if the doc changed meanwhile).
+  seq: i64,
 }
 
 /// `GET /api/workspaces/{workspace_id}/documents/{document_id}/outline`
@@ -1122,7 +1125,13 @@ pub async fn document_outline(
   let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  Ok(Json(outline_from_payload(&payload)))
+  // The current seq lets a caller pin the version it read here and pass it back
+  // as `expected_seq` for a conflict-checked write (optimistic concurrency).
+  let seq: i64 = sqlx::query_scalar("SELECT current_seq FROM documents WHERE id = $1")
+    .bind(document_id)
+    .fetch_one(&state.db)
+    .await?;
+  Ok(Json(outline_from_payload(&payload, seq)))
 }
 
 /// Pure: walk the block tree from the root in document order, collecting every
@@ -1130,6 +1139,7 @@ pub async fn document_outline(
 /// without a DB.
 fn outline_from_payload(
   payload: &mica_app_core::documents::DocumentSnapshotPayload,
+  seq: i64,
 ) -> DocumentOutlineResponse {
   let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
     payload.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
@@ -1144,6 +1154,7 @@ fn outline_from_payload(
   DocumentOutlineResponse {
     headings,
     block_ids,
+    seq,
   }
 }
 
@@ -1206,6 +1217,12 @@ pub struct UpdateMarkdownRequest {
   pub find: Option<String>,
   #[serde(default)]
   pub replace: Option<String>,
+  /// Optimistic concurrency: the `seq` the caller last saw (from the outline or a
+  /// prior write ack). When set and the document has moved on, the write is
+  /// refused with 409 instead of clobbering the intervening edit. Absent = the
+  /// existing last-writer-wins behaviour.
+  #[serde(default)]
+  pub expected_seq: Option<i64>,
 }
 
 /// `PATCH /api/workspaces/{workspace_id}/documents/{document_id}/markdown`
@@ -1227,11 +1244,15 @@ pub async fn update_document_markdown(
 
   // Derive the ops from the snapshot INSIDE the write lock (no read-then-apply
   // TOCTOU: an anchor index / delete target can't drift under a concurrent edit).
-  let applied =
-    store::apply_derived_operations(&state.db, workspace_id, document_id, user_id, |payload| {
-      markdown_update_ops(payload, &request, workspace_id)
-    })
-    .await?;
+  let applied = store::apply_derived_operations(
+    &state.db,
+    workspace_id,
+    document_id,
+    user_id,
+    request.expected_seq,
+    |payload| markdown_update_ops(payload, &request, workspace_id),
+  )
+  .await?;
   ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
 
   Ok(Json(DocumentUpdateResponse {
@@ -3463,7 +3484,8 @@ mod tests {
         ),
       ],
     };
-    let out = outline_from_payload(&payload);
+    let out = outline_from_payload(&payload, 7);
+    assert_eq!(out.seq, 7);
     assert_eq!(out.block_ids, ["h1", "p", "h2"]);
     assert_eq!(
       out
@@ -3507,6 +3529,7 @@ mod tests {
       anchor: None,
       find: None,
       replace: None,
+      expected_seq: None,
     }
   }
 
@@ -3613,6 +3636,7 @@ mod tests {
       anchor: None,
       find: Some("existing".into()),
       replace: Some("updated".into()),
+      expected_seq: None,
     };
     let ops = markdown_update_ops(&current, &request, Uuid::new_v4()).unwrap();
     let updated: Vec<(&str, &str)> = ops
@@ -3664,6 +3688,7 @@ mod tests {
       anchor: None,
       find: Some("see ".into()),
       replace: Some(String::new()),
+      expected_seq: None,
     };
     let err = markdown_update_ops(&payload, &request, Uuid::new_v4()).unwrap_err();
     assert!(
@@ -3910,6 +3935,40 @@ mod tests {
       assert!(
         matches!(missing, ApiError::NotFound),
         "an unknown parent must be a 404, got {missing:?}"
+      );
+    }
+
+    /// Optimistic concurrency (MCP item 4): a write pinned to a stale `seq` is
+    /// refused with 409 before any op runs; the current `seq` passes the guard.
+    ///
+    ///   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
+    ///   cargo test -p mica-api-server expected_seq
+    #[tokio::test]
+    async fn a_stale_expected_seq_is_a_conflict_and_the_current_one_passes() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (_view, doc) = seed_document(&db, ws, user, "C", serde_json::json!([])).await;
+
+      // A fresh doc is at seq 0. Pinning a seq the doc never had is a 409, raised
+      // by the guard before the derive closure is ever called.
+      let stale =
+        store::apply_derived_operations(&db, ws, doc, user, Some(1), |_| Ok(Vec::new()))
+          .await
+          .expect_err("a stale expected_seq must be refused");
+      assert!(
+        matches!(stale, ApiError::Conflict(_)),
+        "stale expected_seq must be a 409, got {stale:?}"
+      );
+
+      // The current seq (0) passes the guard: it then fails on empty ops
+      // (BadRequest), which proves the concurrency check did NOT stop it.
+      let passed =
+        store::apply_derived_operations(&db, ws, doc, user, Some(0), |_| Ok(Vec::new()))
+          .await
+          .expect_err("empty ops still error after the guard passes");
+      assert!(
+        matches!(passed, ApiError::BadRequest(_)),
+        "the current seq must pass the guard, got {passed:?}"
       );
     }
 

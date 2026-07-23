@@ -48,7 +48,7 @@
 ## 实现状态
 
 - Tier 1 #1/#2/#3/#5/#6:MCP 层实现(见 `crates/mcp-server/src/lib.rs`),ship 在 mica-cli,无需发版。
-- Tier 1 #4:MCP 侧 `seq`/`expected_seq` 透传已备;**服务端 409 enforcement 待一次发版**(标注,不夜里上线未验证的并发路径)。
+- Tier 1 #4:**服务端已实现**——`outline` 返回 `seq`(`document_outline` + `DocumentOutlineResponse`),写路径在 `apply_derived_operations` 行锁内比对 `expected_seq` vs `current_seq`,不符回 409(`ApiError::Conflict`);配 DB-gated 回归 `a_stale_expected_seq_is_a_conflict_and_the_current_one_passes`。MCP 侧 outline 描述已提示回传 seq、`expected_seq` 透传。**待一次发版**才在 prod 生效(改动已提交、本地编译+clippy 通过,DB 测试在 CI 跑)。
 - Tier 2:未做——按延迟敏感度决定是否投入(见上)。
 
 ## 参照
