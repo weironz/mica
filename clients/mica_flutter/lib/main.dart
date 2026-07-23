@@ -21,6 +21,7 @@ import 'web/yjs_probe.dart';
 import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
+import 'editor/open_url.dart';
 import 'editor/pick_file.dart';
 import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';

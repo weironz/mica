@@ -100,6 +100,7 @@
   "accountDeleteConfirm": "永久删除",
   "aboutLegalese": "云优先的协作式 Markdown 工作区。",
   "aboutTitle": "关于",
+  "aboutSourceCode": "源代码（AGPL-3.0）",
   "tokenCreated": "令牌已创建",
   "tokenCopyNow": "立即复制 —— 密钥不会再次显示。",
   "tokenTitle": "API 令牌",

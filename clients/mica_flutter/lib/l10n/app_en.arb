@@ -166,6 +166,7 @@
   "accountDeleteConfirm": "Delete forever",
   "aboutLegalese": "Cloud-first collaborative Markdown workspace.",
   "aboutTitle": "About",
+  "aboutSourceCode": "Source code (AGPL-3.0)",
   "tokenCreated": "Token created",
   "tokenCopyNow": "Copy it now — the secret is not shown again.",
   "tokenTitle": "API Tokens",

@@ -662,11 +662,23 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       applicationVersion: 'v$kAppVersion',
       applicationIcon: const MicaLogo(size: 40),
       applicationLegalese: context.l10n.aboutLegalese,
-      // Self-update lives here on desktop; hidden where it can't apply (web, and
-      // platforms with no packaged installer).
-      children: updateSupported
-          ? const [SizedBox(height: 20), UpdateChecker()]
-          : null,
+      children: [
+        const SizedBox(height: 16),
+        // AGPL-3.0-or-later §13: anyone interacting with Mica over a network must
+        // be prominently offered the Corresponding Source. Link the public repo;
+        // the version shown above tells them which tag to check out.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => openUrl('https://github.com/weironz/mica'),
+            icon: const Icon(Icons.code, size: 16),
+            label: Text(context.l10n.aboutSourceCode),
+          ),
+        ),
+        // Self-update lives here on desktop; hidden where it can't apply (web, and
+        // platforms with no packaged installer).
+        if (updateSupported) ...const [SizedBox(height: 8), UpdateChecker()],
+      ],
     );
   }
 
