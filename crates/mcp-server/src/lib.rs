@@ -164,6 +164,19 @@ struct ReadDocArgs {
   section: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReadDocumentsArgs {
+  workspace_id: String,
+  /// The document object ids to read (each a page's `object_id` from
+  /// mica_list_pages) — one call reads them all instead of N.
+  document_ids: Vec<String>,
+  /// "full" (default — each doc's whole Markdown) or "outline" (headings + block
+  /// ids + seq, far cheaper). Use "outline" to SCAN structure across many docs
+  /// token-cheaply, then read the few you need in full.
+  #[serde(default)]
+  mode: Option<String>,
+}
+
 /// Return only the requested slice of a document's markdown, with a one-line
 /// header so the model knows what it is looking at (and that there is more).
 /// `section` wins over `offset`/`limit`. Pure — unit-tested below.
@@ -785,6 +798,58 @@ impl MicaMcp {
     };
     let out = window_markdown(&full, offset, limit, section.as_deref());
     Ok(CallToolResult::success(vec![Content::text(out)]))
+  }
+
+  #[tool(
+    description = "Read MANY documents in ONE call — scan a whole workspace fast instead of \
+                       N reads. mode: \"outline\" (headings + block ids + seq per doc — cheap, \
+                       survey structure across docs) or \"full\" (each doc's whole Markdown). \
+                       Per-doc errors report inline; a bad id doesn't fail the batch.",
+    annotations(read_only_hint = true)
+  )]
+  async fn mica_read_documents(
+    &self,
+    Parameters(ReadDocumentsArgs {
+      workspace_id,
+      document_ids,
+      mode,
+    }): Parameters<ReadDocumentsArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if document_ids.is_empty() {
+      return Ok(tool_error(McpError::invalid_params(
+        "document_ids is empty — pass at least one id".to_string(),
+        None,
+      )));
+    }
+    let outline = mode.as_deref() == Some("outline");
+    let mut out = Vec::with_capacity(document_ids.len());
+    for id in &document_ids {
+      let path = if outline {
+        format!("/api/workspaces/{workspace_id}/documents/{id}/outline")
+      } else {
+        format!("/api/workspaces/{workspace_id}/documents/{id}/export/markdown")
+      };
+      let mut row = serde_json::Map::new();
+      row.insert("document_id".to_string(), json!(id));
+      match self.get(&path).await {
+        Ok(v) => {
+          if outline {
+            row.insert("outline".to_string(), v);
+          } else {
+            let md = match v {
+              Value::String(s) => s,
+              other => other.to_string(),
+            };
+            row.insert("markdown".to_string(), json!(md));
+          }
+        }
+        Err(error) => {
+          row.insert("error".to_string(), json!(error.message.to_string()));
+        }
+      }
+      out.push(Value::Object(row));
+    }
+    tool_result(Ok(json!({ "documents": out })))
   }
 
   #[tool(
@@ -1733,9 +1798,12 @@ impl ServerHandler for MicaMcp {
          Navigate: mica_list_workspaces -> mica_list_pages -> mica_read_document / \
          mica_get_outline.\n\
          \n\
-         READ efficiently, do not pull whole pages: mica_read_document takes offset+limit (a \
-         line window) or section (a heading name) to return just a slice. mica_get_outline \
-         returns headings + top-level block ids + the document `seq`, cheaply.\n\
+         READ efficiently, do not pull whole pages: mica_list_pages returns the WHOLE \
+         workspace tree (folders + pages, ids + names) in ONE call. mica_read_document takes \
+         offset+limit (a line window) or section (a heading name) to return just a slice. \
+         mica_get_outline returns headings + block ids + the document `seq`, cheaply. To scan \
+         MANY docs, mica_read_documents reads them all in one call — mode=\"outline\" for a \
+         cheap structure survey, then read in full only the few you need.\n\
          \n\
          EDIT in place, do not rewrite the page. mica_update_document modes: append (after the \
          end — safe default); insert_at (place after `anchor`, which is a block id OR a \
@@ -2201,7 +2269,7 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 26, "every tool must be listed");
+    assert_eq!(tools.len(), 27, "every tool must be listed");
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

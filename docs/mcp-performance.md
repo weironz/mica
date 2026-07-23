@@ -50,7 +50,8 @@
 - Tier 1 #1/#2/#3/#5/#6:MCP 层实现(见 `crates/mcp-server/src/lib.rs`),ship 在 mica-cli,无需发版。
 - Tier 1 #4:**服务端已实现**——`outline` 返回 `seq`(`document_outline` + `DocumentOutlineResponse`),写路径在 `apply_derived_operations` 行锁内比对 `expected_seq` vs `current_seq`,不符回 409(`ApiError::Conflict`);配 DB-gated 回归 `a_stale_expected_seq_is_a_conflict_and_the_current_one_passes`。MCP 侧 outline 描述已提示回传 seq、`expected_seq` 透传。**待一次发版**才在 prod 生效(改动已提交、本地编译+clippy 通过,DB 测试在 CI 跑)。
 - **`apply_edits` 批量工具**(Tier 1 之外新增):一次调用吃一组编辑(append/insert_at/find_replace/replace_all 混搭),按序应用、后者见前者效果。agent 的**串行工具调用从 N 降到 1**——研究里"MCP 批量已删,只能在工具层收往返"的落地。纯 MCP 层循环调现有 PATCH,不发版;非原子(失败停下报"N 中 M 成",可续)。`write_markdown` 抽成 mica_update_document 与它的共用 seam。
-- Tier 2:未做——按延迟敏感度决定是否投入(见上)。
+- **"workspace 当本地目录"(Phase 1,批量读)**:用户澄清 agent 独立干活、人只事后复核(无并发共编)→ 消掉了完整 Tier 2(warm-yrs 异步 flush)最贵的"和并发的人保持一致"那部分(那需要无头 WS 同步客户端 ~2 周),且异步 flush 反而会拖慢"别处观看者"的实时性(写完立即 `broadcast_applied_update` 走 WS 推,现状近实时 ~100–300ms)。真需求是"快速读结构/扫内容 + 省 token,像本地磁盘"。Phase 1 做了 **`mica_read_documents`(一次读多篇,mode=outline 省 token 扫结构 / full 取正文,逐篇错误内联)**;发现 **`mica_list_pages` 本就一次返回整棵树**,故 `read_tree` 冗余、只把描述讲清。Phase 2(warm 进程读缓存,无并发下安全)可选、未做。完整 warm-yrs 异步 flush **不做**(对 agent 是噪音 + 拖慢观看者)。
+- Tier 2(原始 warm-yrs 版):不做——理由见上(agent 瓶颈是模型回合+往返数不是 per-op 延迟;并发共编不会发生)。
 
 ## 参照
 
