@@ -28,6 +28,10 @@ void main() {
       String,
     )? upload,
     List<Map<String, dynamic>>? ops,
+    // Whether the automatic on-open re-host pass runs (production default is
+    // ON). Off by default here so the menu-driven cases can exercise the
+    // MANUAL recovery path in isolation; the one on-open case flips it true.
+    bool reHost = false,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -40,6 +44,14 @@ void main() {
             nodes: nodes,
             version: 0,
             canEdit: true,
+            // The automatic on-open pass (_rehostExternalImages, wired into
+            // initState) runs the SAME server-then-client ladder. When the
+            // client can read the bytes it silently converts the block to a
+            // file_id — so if it were left on, the menu-driven cases would find
+            // no external image to offer the "转存到 Mica 存储" action on, and
+            // the plain-load case would see an unexpected re-host in flight.
+            // Default it OFF to isolate those paths; the on-open case sets it on.
+            reHostImages: reHost,
             onApplyOperations: (batch) async => ops?.addAll(batch),
             onImportImageUrl: import,
             onUploadImage: upload,
@@ -66,9 +78,10 @@ void main() {
       nodes: [
         EditorNode(id: 'i', kind: 'image', text: '', data: {'url': url}),
       ],
-      // Re-hosting only ever fires on paste; a synced/reopened doc never
-      // calls it, so nothing is in flight for this url.
-      import: (_) async => fail('must not re-host on plain load'),
+      // With the on-open pass off (pump default), no re-host is in flight for
+      // this url, so _requestImage must FETCH it rather than wait on a file_id
+      // that will never come. The guard asserts nothing re-hosts here.
+      import: (_) async => fail('must not re-host with the on-open pass off'),
       fetched: fetched,
     );
     await tester.pump(const Duration(milliseconds: 50));
@@ -87,6 +100,32 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 50));
     expect(fetched, contains('f1'));
+  });
+
+  // Opening a doc that arrived carrying an external link (import/sync) must
+  // re-host it with no user action — the on-open pass wired into initState
+  // (a7c93c3). Server-side import 403s hosts that block its datacenter IP, so
+  // the fix is that THIS client, which can read the bytes, does the fetch.
+  testWidgets('opening a doc auto-re-hosts an external image, no user action',
+      (tester) async {
+    final ops = <Map<String, dynamic>>[];
+    await pump(
+      tester,
+      reHost: true, // production default: the on-open pass runs
+      nodes: [
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'url': url}),
+      ],
+      ops: ops,
+      // Server can reach this host — the on-open pass takes the server rung and
+      // never has to fall through to the client.
+      import: (_) async => (fileId: 'f-open', name: 'pic.png'),
+      fetched: <String>[],
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    final updated = ops.lastWhere((o) => o['type'] == 'update_block');
+    expect((updated['data'] as Map)['file_id'], 'f-open',
+        reason: 'the link is converted on open, before any right-click');
+    expect((updated['data'] as Map).containsKey('url'), isFalse);
   });
 
   // The re-host ladder. Server first; when it can't reach the host (routine
