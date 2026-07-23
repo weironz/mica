@@ -138,6 +138,15 @@ check:
     cargo clippy --workspace 2>/dev/null || cargo build --workspace
     cd clients/mica_flutter && {{flutter}} analyze lib
 
+# Rust line coverage, printed as a per-file summary. NOT wired into CI — it's a
+# heavy instrumented rebuild and too flaky to gate on; run it by hand when you
+# want to see where coverage stands. Needs the tool once:
+#   cargo install cargo-llvm-cov
+# Narrow it to one crate with:  just coverage mica-cli
+[doc("Rust line-coverage summary (cargo-llvm-cov; run `cargo install cargo-llvm-cov` first)")]
+coverage package="":
+    cargo llvm-cov {{ if package == "" { "--workspace" } else { "-p " + package } }} --summary-only
+
 # ------------------------------------------------------- local artifacts
 # The four things a release ships. 1+2 are also built by GitHub Actions on a
 # `v*` tag (docs/release.md); these recipes are for building them by hand.

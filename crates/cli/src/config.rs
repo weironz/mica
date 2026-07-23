@@ -61,3 +61,48 @@ pub fn save(config: &Config) -> Result<()> {
   }
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  // The on-disk shape only. `config_path`/`load`/`save` resolve the location
+  // from process-global env (MICA_CONFIG / HOME / …) and read/write the real
+  // user config dir; mutating env is unsafe under edition 2024 and races other
+  // tests, so those are deliberately not exercised here (see the report).
+
+  #[test]
+  fn round_trips_both_fields() {
+    let cfg = Config {
+      server: Some("https://mica.example.com".to_string()),
+      token: Some("secret-token".to_string()),
+    };
+    let json = serde_json::to_string(&cfg).unwrap();
+    let back: Config = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.server.as_deref(), Some("https://mica.example.com"));
+    assert_eq!(back.token.as_deref(), Some("secret-token"));
+  }
+
+  #[test]
+  fn omits_none_fields_when_serializing() {
+    // `skip_serializing_if = "Option::is_none"` → an empty config is `{}`, not
+    // `{"server":null,"token":null}`.
+    let cfg = Config::default();
+    assert_eq!(serde_json::to_string(&cfg).unwrap(), "{}");
+
+    let cfg = Config { server: Some("https://s".to_string()), token: None };
+    assert_eq!(serde_json::to_string(&cfg).unwrap(), r#"{"server":"https://s"}"#);
+  }
+
+  #[test]
+  fn parses_partial_and_empty_json() {
+    // Missing fields default to None (a fresh config with only a server set).
+    let cfg: Config = serde_json::from_str(r#"{"server":"https://s"}"#).unwrap();
+    assert_eq!(cfg.server.as_deref(), Some("https://s"));
+    assert!(cfg.token.is_none());
+
+    // An empty object is a valid, all-None config.
+    let cfg: Config = serde_json::from_str("{}").unwrap();
+    assert!(cfg.server.is_none() && cfg.token.is_none());
+  }
+}
