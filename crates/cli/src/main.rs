@@ -63,6 +63,18 @@ enum Command {
   /// MICA_SERVER/MICA_TOKEN → whatever `auth login` saved), so no token has to
   /// touch the command line or sit in a client config file.
   Mcp(McpArgs),
+  /// Re-host external image links into Mica storage. Downloads each image with
+  /// THIS machine's network (so it works for hosts a CN-hosted server 403s, e.g.
+  /// AppFlowy), stores it, and repoints the block. Safe to re-run — images
+  /// already on a Mica file_id are skipped.
+  RehostImages(RehostImagesArgs),
+}
+
+#[derive(Args)]
+struct RehostImagesArgs {
+  /// Only this workspace id (default: all your workspaces).
+  #[arg(long)]
+  ws: Option<Uuid>,
 }
 
 #[derive(Args)]
@@ -163,7 +175,96 @@ fn run(cli: Cli) -> Result<()> {
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
     Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
+    Command::RehostImages(args) => cmd_rehost_images(&cli, &cfg, args),
   }
+}
+
+/// Sweep documents and pull every external image link into Mica storage, using
+/// this machine's network for the download (the server can't reach hosts like
+/// AppFlowy that block its datacenter IP). Idempotent: blocks already on a
+/// file_id are skipped, so re-running only touches what's still a link.
+fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+  let workspaces: Vec<Uuid> = match args.ws {
+    Some(ws) => vec![ws],
+    None => client.list_workspaces()?.into_iter().map(|w| w.id).collect(),
+  };
+
+  let (mut rehosted, mut failed) = (0usize, 0usize);
+  for ws in workspaces {
+    for view in client.list_views(ws)? {
+      if view.object_type != "document" || view.is_deleted {
+        continue;
+      }
+      let boot = client.document_bootstrap(ws, view.object_id)?;
+      let blocks = boot
+        .get("snapshot")
+        .and_then(|s| s.get("payload"))
+        .and_then(|p| p.get("blocks"))
+        .and_then(|b| b.as_array())
+        .cloned()
+        .unwrap_or_default();
+      for block in &blocks {
+        if block.get("kind").and_then(|k| k.as_str()) != Some("image") {
+          continue;
+        }
+        let Some(data) = block.get("data") else { continue };
+        // Already a Mica file → nothing to do.
+        if data.get("file_id").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
+          continue;
+        }
+        let Some(url) = data
+          .get("url")
+          .and_then(|u| u.as_str())
+          .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        else {
+          continue;
+        };
+        let Some(block_id) = block.get("id").and_then(|i| i.as_str()) else {
+          continue;
+        };
+        let file_name = url_file_name(url);
+        let outcome = client
+          .download_bytes(url)
+          .and_then(|bytes| client.rehost_image(ws, view.object_id, block_id, &file_name, bytes));
+        match outcome {
+          Ok(()) => {
+            rehosted += 1;
+            if !cli.json {
+              println!("  re-hosted [{}] {url}", view.name);
+            }
+          }
+          Err(err) => {
+            failed += 1;
+            if !cli.json {
+              eprintln!("  FAILED   [{}] {url}: {err:#}", view.name);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if cli.json {
+    print_json(&serde_json::json!({ "rehosted": rehosted, "failed": failed }))?;
+  } else {
+    println!("Done: {rehosted} re-hosted, {failed} failed.");
+  }
+  Ok(())
+}
+
+/// Last path segment of a URL as a filename (drops the query), defaulting to
+/// "image" when there is nothing usable — the server derives the mime from it.
+fn url_file_name(url: &str) -> String {
+  url
+    .split('?')
+    .next()
+    .unwrap_or(url)
+    .rsplit('/')
+    .next()
+    .filter(|s| !s.is_empty())
+    .unwrap_or("image")
+    .to_string()
 }
 
 // ---------------------------------------------------------------- auth

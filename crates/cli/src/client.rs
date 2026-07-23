@@ -51,6 +51,21 @@ struct WorkspaceListResponse {
   workspaces: Vec<Workspace>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct View {
+  // `id` (the view id) is in the JSON but unused here — serde ignores it.
+  pub object_id: Uuid,
+  pub object_type: String,
+  pub name: String,
+  #[serde(default)]
+  pub is_deleted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewListResponse {
+  views: Vec<View>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CreatedToken {
   pub id: Uuid,
@@ -142,6 +157,68 @@ impl Client {
       .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/export.zip"))))
       .send()?;
     Ok(Self::ok(resp)?.bytes()?.to_vec())
+  }
+
+  /// Views (folders + document leaves) in a workspace. Trashed views are already
+  /// filtered server-side.
+  pub fn list_views(&self, workspace_id: Uuid) -> Result<Vec<View>> {
+    let resp = self
+      .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/views"))))
+      .send()?;
+    let list: ViewListResponse = Self::ok(resp)?.json()?;
+    Ok(list.views)
+  }
+
+  /// A document's full bootstrap snapshot as raw JSON — the caller navigates
+  /// `["snapshot"]["payload"]["blocks"]` (a flat block list).
+  pub fn document_bootstrap(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+  ) -> Result<serde_json::Value> {
+    let resp = self
+      .authed(self.http.get(self.url(&format!(
+        "/workspaces/{workspace_id}/documents/{document_id}/bootstrap"
+      ))))
+      .send()?;
+    Ok(Self::ok(resp)?.json()?)
+  }
+
+  /// Download a URL's bytes over THIS machine's network (no auth). The whole
+  /// point of CLI re-hosting: the client reaches hosts (AppFlowy, imgur) that a
+  /// CN-hosted server 403s.
+  pub fn download_bytes(&self, url: &str) -> Result<Vec<u8>> {
+    let resp = self
+      .http
+      .get(url)
+      .send()
+      .with_context(|| format!("downloading {url}"))?;
+    Ok(Self::ok(resp)?.bytes()?.to_vec())
+  }
+
+  /// Store already-downloaded image [bytes] into Mica and repoint image
+  /// [block_id] in [document_id] at the new file (the `rehost-image` endpoint).
+  pub fn rehost_image(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    block_id: &str,
+    file_name: &str,
+    bytes: Vec<u8>,
+  ) -> Result<()> {
+    let resp = self
+      .authed(
+        self
+          .http
+          .post(self.url(&format!(
+            "/workspaces/{workspace_id}/documents/{document_id}/rehost-image"
+          )))
+          .query(&[("block_id", block_id), ("file_name", file_name)])
+          .body(bytes),
+      )
+      .send()?;
+    Self::ok(resp)?;
+    Ok(())
   }
 
   pub fn create_token(
