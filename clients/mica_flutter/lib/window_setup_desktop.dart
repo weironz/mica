@@ -7,6 +7,7 @@ import 'dart:io' show exit;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -107,8 +108,16 @@ Future<void> initDesktopWindow() async {
   );
   await windowManager.waitUntilReadyToShow(options, () async {
     final pos = saved.position;
-    if (pos != null) {
+    // A saved position can land off-screen after a monitor/resolution change —
+    // window_manager (like AppFlowy) restores the rect verbatim with no bounds
+    // check. Reapply it only if the title bar would still be grabbable on some
+    // display; otherwise recenter, so the window never opens where it can't be
+    // reached. (Maximize below covers the screen regardless, so this only guards
+    // the floating-restore case.)
+    if (pos != null && await _positionVisible(pos, saved.size ?? _defaultSize)) {
       await windowManager.setBounds(null, position: pos);
+    } else if (pos != null) {
+      await windowManager.center();
     }
     // Restore the last window STATE, the way AppFlowy does: a maximized close
     // reopens maximized; a floating close reopens at the saved rect (set above,
@@ -277,6 +286,25 @@ Future<String?> _askCloseBehavior() async {
   );
   if (choice != null && remember) saveCloseBehavior(choice);
   return choice;
+}
+
+/// Whether a window at [pos] with [size] would have its title bar on a visible
+/// display — the grab handle must be reachable. Any overlap of the top strip
+/// with a display's visible bounds counts. Errs toward "visible" if the displays
+/// can't be read, so a probe failure never discards a good saved position.
+Future<bool> _positionVisible(Offset pos, Size size) async {
+  try {
+    final displays = await screenRetriever.getAllDisplays();
+    final titleBar = Rect.fromLTWH(pos.dx, pos.dy, size.width, 48);
+    for (final d in displays) {
+      final origin = d.visiblePosition ?? Offset.zero;
+      final extent = d.visibleSize ?? d.size;
+      if (titleBar.overlaps(origin & extent)) return true;
+    }
+    return false;
+  } catch (_) {
+    return true;
+  }
 }
 
 ({Size? size, Offset? position, bool maximized}) _loadBounds() {

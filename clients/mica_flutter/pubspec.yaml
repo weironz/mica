@@ -39,6 +39,11 @@ dependencies:
   # WindowListener being "undefined". Pinning to the version actually present
   # fixes it; 0.5.2 has the same API.)
   window_manager: 0.5.2
+  # Already a transitive dep of window_manager (same leanflutter.dev family);
+  # declared directly only to read display bounds, so a saved window position
+  # that fell off-screen after a monitor/resolution change gets recentered
+  # instead of opening where it can't be reached. Platform glue, exemption #2.
+  screen_retriever: 0.2.2
   # Exemption #8 (CLAUDE.md): system tray for "close to tray". window_manager
   # has no tray API at all — its own example app pulls this package in to demo a
   # tray — so the alternative is hand-writing Win32 Shell_NotifyIcon plus a Linux

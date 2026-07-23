@@ -2381,11 +2381,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _localSelectedWorkspace = null;
       return;
     }
-    final selId = _localSelectedWorkspace?.id;
+    // On first load restore the last-selected local workspace (AppFlowy remembers
+    // the active workspace per user); after that keep the current selection.
+    final selId = _localSelectedWorkspace?.id ?? loadPref('lastWorkspaceId:local');
     _localSelectedWorkspace = _localWorkspaces.firstWhere(
       (w) => w.id == selId,
       orElse: () => _localWorkspaces.first,
     );
+  }
+
+  /// The local page to open for the selected workspace: the one last viewed there
+  /// (AppFlowy remembers it per-workspace), else the first openable page. A saved
+  /// id that no longer resolves (deleted) falls through to the first page.
+  DocumentView? _localViewToOpen() {
+    final wsId = _localSelectedWorkspace?.id;
+    final wantId = wsId == null ? null : loadPref('lastViewId:$wsId');
+    final saved = _localViews
+        .where((v) => v.id == wantId && v.objectType != 'folder')
+        .firstOrNull;
+    return saved ?? firstOpenableView(_localViews);
   }
 
   /// The workspace a stored view belongs to (views carry it; DocumentView does
@@ -2450,10 +2464,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (_localViews.isEmpty) {
       await _localCreateDocument(l10n.pageWelcomeName);
     } else {
-      // Open the first document, skipping folders (a folder has no doc to open;
-      // _localSelectView would early-return, leaving the editor blank).
-      final firstDoc = firstOpenableView(_localViews);
-      if (firstDoc != null) await _localSelectView(firstDoc);
+      // Open the page last viewed in this workspace (else the first openable
+      // one), skipping folders (a folder has no doc to open; _localSelectView
+      // would early-return, leaving the editor blank).
+      final toOpen = _localViewToOpen();
+      if (toOpen != null) await _localSelectView(toOpen);
     }
     if (mounted) setState(() => _localReady = true);
   }
@@ -2479,14 +2494,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localSelectWorkspace(Workspace workspace) async {
+    savePref('lastWorkspaceId:local', workspace.id);
     setState(() {
       _localSelectedWorkspace = workspace;
       _reloadLocalViews();
       _localSelectedView = null;
       _localBootstrap = null;
     });
-    final firstDoc = firstOpenableView(_localViews);
-    if (firstDoc != null) await _localSelectView(firstDoc);
+    final toOpen = _localViewToOpen();
+    if (toOpen != null) await _localSelectView(toOpen);
   }
 
   Future<void> _localRenameWorkspace(Workspace workspace, String name) async {
@@ -2644,6 +2660,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _localSelectView(DocumentView view) async {
     if (view.objectType == 'folder') return; // a folder has no document to open
+    // Per-workspace last view (AppFlowy model), same key scheme as the cloud path.
+    savePref('lastViewId:${_workspaceIdOfView(view.id)}', view.id);
     final DocData? data;
     try {
       data = _local.openDoc(view.objectId);
