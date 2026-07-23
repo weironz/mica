@@ -641,3 +641,149 @@ fn prune_empty_dirs(dir: &Path) -> Result<bool> {
   }
   Ok(empty)
 }
+
+// -------------------------------------------------------------------- tests
+//
+// Only the pure, network-free logic is covered here: filename/slug derivation,
+// zip-entry path sanitization, workspace directory naming, and the mirror
+// reconcile that the backup sidecar relies on. The REST `Client` methods need a
+// live server and are deliberately out of scope.
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn url_file_name_variants() {
+    // Normal path → last segment.
+    assert_eq!(url_file_name("https://example.com/a/b/photo.png"), "photo.png");
+    // Query string is dropped (the server derives the mime from the name).
+    assert_eq!(url_file_name("https://example.com/a/photo.png?v=123&x=y"), "photo.png");
+    // Query directly after the segment.
+    assert_eq!(url_file_name("https://example.com/img?token=abc"), "img");
+    // Trailing slash → nothing usable → default.
+    assert_eq!(url_file_name("https://example.com/"), "image");
+    // No slash at all in the (query-stripped) string → the whole thing.
+    assert_eq!(url_file_name("noslash"), "noslash");
+    // Empty input → default.
+    assert_eq!(url_file_name(""), "image");
+    // Only a query → default.
+    assert_eq!(url_file_name("?foo=bar"), "image");
+  }
+
+  #[test]
+  fn slugify_basics() {
+    assert_eq!(slugify("My Notes"), "my-notes");
+    // Runs of non-alphanumerics collapse to a single dash, none leading/trailing.
+    assert_eq!(slugify("  Hello,  World!! "), "hello-world");
+    assert_eq!(slugify("already-slug"), "already-slug");
+    // Non-ASCII is dropped (ascii_alphanumeric only).
+    assert_eq!(slugify("笔记 Notes"), "notes");
+    // Nothing usable → empty (caller falls back to an id).
+    assert_eq!(slugify("你好"), "");
+    assert_eq!(slugify(""), "");
+  }
+
+  #[test]
+  fn sanitize_rel_blocks_traversal() {
+    use std::path::Component;
+    // `..`, absolute prefixes, and the root are all stripped — the result can
+    // only ever contain Normal components, so it stays inside the target dir.
+    for input in ["../../etc/passwd", "/etc/passwd", "a/../../b", "./a/b"] {
+      let out = sanitize_rel(input);
+      assert!(
+        out.components().all(|c| matches!(c, Component::Normal(_))),
+        "sanitize_rel({input:?}) leaked a non-Normal component: {out:?}"
+      );
+    }
+    // A clean relative path is preserved.
+    assert_eq!(sanitize_rel("pages/note.md"), PathBuf::from("pages").join("note.md"));
+    // The dangerous parts are dropped but the safe tail survives.
+    assert_eq!(sanitize_rel("../../etc/passwd"), PathBuf::from("etc").join("passwd"));
+  }
+
+  fn ws(name: &str, id: Uuid) -> client::Workspace {
+    client::Workspace {
+      id,
+      name: name.to_string(),
+      owner_id: Uuid::nil(),
+      role: "owner".to_string(),
+      created_at: String::new(),
+      updated_at: String::new(),
+    }
+  }
+
+  #[test]
+  fn workspace_dir_naming() {
+    let id = Uuid::parse_str("0123456789abcdef0123456789abcdef").unwrap();
+    // Unique slug → clean, no id suffix.
+    let counts: HashMap<String, usize> = [("my-notes".to_string(), 1)].into_iter().collect();
+    assert_eq!(workspace_dir(&ws("My Notes", id), &counts), "my-notes");
+
+    // Two workspaces collide on the same slug → disambiguate with 8 hex chars.
+    let counts: HashMap<String, usize> = [("notes".to_string(), 2)].into_iter().collect();
+    assert_eq!(workspace_dir(&ws("Notes", id), &counts), "notes-01234567");
+
+    // Empty/unslugifiable name → `workspace-<8hex>`.
+    let counts: HashMap<String, usize> = HashMap::new();
+    assert_eq!(workspace_dir(&ws("你好", id), &counts), "workspace-01234567");
+  }
+
+  /// A unique scratch directory under the OS temp dir (no env mutation, no
+  /// collision with parallel tests).
+  fn scratch(tag: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mica-cli-test-{tag}-{}-{n}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    dir
+  }
+
+  #[test]
+  fn mirror_writes_updates_and_prunes() {
+    let out = scratch("mirror");
+
+    // First mirror: two files, both written.
+    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
+    desired.insert(PathBuf::from("a.md"), b"alpha".to_vec());
+    desired.insert(Path::new("sub").join("b.md"), b"bravo".to_vec());
+    let stats = mirror(&out, &desired, true).unwrap();
+    assert_eq!((stats.total, stats.written, stats.pruned), (2, 2, 0));
+    assert_eq!(fs::read(out.join("a.md")).unwrap(), b"alpha");
+
+    // Re-mirror identical content: nothing rewritten (minimal diff for restic).
+    let stats = mirror(&out, &desired, true).unwrap();
+    assert_eq!((stats.written, stats.pruned), (0, 0));
+
+    // Change one file, drop the other: one written, the stale file + its now-empty
+    // dir pruned.
+    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
+    desired.insert(PathBuf::from("a.md"), b"alpha-2".to_vec());
+    let stats = mirror(&out, &desired, true).unwrap();
+    assert_eq!((stats.total, stats.written, stats.pruned), (1, 1, 1));
+    assert_eq!(fs::read(out.join("a.md")).unwrap(), b"alpha-2");
+    assert!(!out.join("sub").join("b.md").exists());
+    assert!(!out.join("sub").exists(), "empty dir should be pruned");
+
+    let _ = fs::remove_dir_all(&out);
+  }
+
+  #[test]
+  fn mirror_no_prune_keeps_stale_files() {
+    let out = scratch("noprune");
+
+    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
+    desired.insert(PathBuf::from("keep.md"), b"x".to_vec());
+    desired.insert(PathBuf::from("gone.md"), b"y".to_vec());
+    mirror(&out, &desired, true).unwrap();
+
+    // Drop gone.md but disable pruning → it survives on disk, count stays 0.
+    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
+    desired.insert(PathBuf::from("keep.md"), b"x".to_vec());
+    let stats = mirror(&out, &desired, false).unwrap();
+    assert_eq!(stats.pruned, 0);
+    assert!(out.join("gone.md").exists(), "no_prune must keep stale files");
+
+    let _ = fs::remove_dir_all(&out);
+  }
+}

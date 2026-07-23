@@ -93,7 +93,7 @@ jobs:
       # side. No setup-node needed; on a bare self-hosted runner without node
       # the test fails loudly rather than skipping.
       - name: Test (incl. app-core + infra + api-server, Postgres-backed)
-        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server
+        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server -p mica-cli
 
       # Separate invocation: `store` is a non-default feature, and features do
       # not apply across a multi-package `-p` list. Without this the 24 local
