@@ -296,10 +296,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
   Workspace? _selectedWorkspace;
   DocumentView? _selectedView;
-  /// The view id to reopen on the FIRST view-load after a session restore, so the
-  /// app lands on the page it closed on instead of the first page. Consumed once
-  /// (see [_loadSelectedWorkspaceViews]); null on a plain workspace switch.
-  String? _pendingRestoreViewId;
   DocumentBootstrap? _selectedBootstrap;
   String? _selectedMarkdown;
   String? _message;
@@ -788,9 +784,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _session = session;
         _workspaces = workspaces;
         _selectedWorkspace = restoredWs;
-        // Consumed by the first _loadSelectedWorkspaceViews below to reopen the
-        // last page; a plain workspace switch never sets this.
-        _pendingRestoreViewId = loadPref('lastViewId');
       });
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
@@ -2095,7 +2088,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       final wasShowingThisView =
           _selectedView?.id == view.id && _selectedBootstrap != null;
-      savePref('lastViewId', view.id);
+      // Per-workspace last view (AppFlowy model): switching back to a workspace
+      // reopens the page you left there.
+      final wsId = _selectedWorkspace?.id;
+      if (wsId != null) savePref('lastViewId:$wsId', view.id);
       setState(() {
         _selectedView = view;
         // Never blank a page that is already on screen. `bootstrap` is null
@@ -3810,11 +3806,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
 
     final views = await _api.listViews(session.accessToken, workspace.id);
-    // On a session restore the open view isn't loaded yet, so fall back to the
-    // last-open view id — consumed once so a later workspace switch opens that
-    // workspace's first page as before.
-    final wantViewId = _selectedView?.id ?? _pendingRestoreViewId;
-    _pendingRestoreViewId = null;
+    // Reopen the page last viewed IN THIS workspace (AppFlowy remembers the last
+    // view per-workspace). On a restore or a workspace switch `_selectedView` is
+    // null, so fall back to the per-workspace saved id; a deleted/absent id just
+    // falls through to firstOpenableView below.
+    final wantViewId =
+        _selectedView?.id ?? loadPref('lastViewId:${workspace.id}');
     final selectedView = views
         .where((view) => view.id == wantViewId)
         .firstOrNull;

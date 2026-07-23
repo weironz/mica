@@ -110,16 +110,19 @@ Future<void> initDesktopWindow() async {
     if (pos != null) {
       await windowManager.setBounds(null, position: pos);
     }
-    // Always launch maximized. Mica is a full-window editor and users expect it
-    // to open full-screen ("正常应该全屏"); restoring a saved FLOATING rect read as
-    // the window opening at a "random" half/medium size. The saved rect above is
-    // still applied first, so it becomes the un-maximize (restore-down) target —
-    // double-clicking the title bar lands on a sane floating size, not a default.
+    // Restore the last window STATE, the way AppFlowy does: a maximized close
+    // reopens maximized; a floating close reopens at the saved rect (set above,
+    // so it's also the un-maximize/restore-down target). The one addition over a
+    // literal AppFlowy match is defaulting to maximized when there is NO saved
+    // floating geometry (first run) — the app is a full-window editor and users
+    // expect "正常应该全屏", not a medium default window.
     //
     // Before show(), not after: the Windows side posts SC_MAXIMIZE rather than
     // resizing inline, so showing first means showing the small window and
     // then watching it snap.
-    await windowManager.maximize();
+    if (saved.maximized || saved.size == null) {
+      await windowManager.maximize();
+    }
     await windowManager.show();
     await windowManager.focus();
   });
