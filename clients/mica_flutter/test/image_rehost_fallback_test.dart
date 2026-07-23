@@ -40,6 +40,14 @@ void main() {
             nodes: nodes,
             version: 0,
             canEdit: true,
+            // These cases exercise the MANUAL, menu-driven recovery path in
+            // isolation. The automatic on-open pass (_rehostExternalImages,
+            // wired into initState) runs the SAME server-then-client ladder, so
+            // when the client can read the bytes it would silently convert the
+            // block to a file_id before the right-click ever happens — leaving
+            // no external image to offer the "转存到 Mica 存储" action on. Turn
+            // it off so the block stays on its url until the user acts.
+            reHostImages: false,
             onApplyOperations: (batch) async => ops?.addAll(batch),
             onImportImageUrl: import,
             onUploadImage: upload,
