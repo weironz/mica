@@ -36,6 +36,16 @@ v1 RPC 签名 HMAC-SHA1),复用 `reqwest`,只加了 `sha1`/`hmac` 两个小 crat
 1. 开通**邮件推送 DirectMail**。
 2. **验证发信域名**:控制台加一个发信域名(如 `mail.cloudcele.com`,`cloudcele.com` 你已拥有,
    不用另买),按提示在 DNS 加 SPF/DKIM/(可选 MX、_dmarc)记录,等验证通过。
+
+   > **发信域名是纯 DNS 身份,不是网站。** DirectMail 是**出站**服务:api 容器往
+   > `dm.aliyuncs.com` 打 HTTPS,真正投递是阿里云做的。所以 `mail.cloudcele.com`
+   > **不需要 A 记录指向我们的服务器,也不需要任何 Traefik 规则**——它只靠 TXT/DKIM/
+   > (可选 MX 指向阿里云退信服务器)这些记录被收件方和阿里云**查 DNS**验证,没人会来连
+   > 我们的机器。要加的记录值以控制台「添加发信域名」页展示的为准,复制进 cloudcele.com
+   > 的解析即可。
+   >
+   > 唯一需要入站可达的是**重置链接的域名** `mica.cloudcele.com`(现有,已 Traefik → web →
+   > nginx,`/reset-password` 转发规则已加),与发信域名是两回事。
 3. 建一个**发信地址**(如 `noreply@mail.cloudcele.com`)。
 4. 建一个 **RAM 用户 + AccessKey**,授权 DirectMail(`AliyunDirectMailFullAccess` 或更细的发信权限),
    记下 AccessKeyId / AccessKeySecret。
