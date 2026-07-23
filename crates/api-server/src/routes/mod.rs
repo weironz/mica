@@ -187,6 +187,11 @@ pub fn api_router() -> Router<AppState> {
       patch(documents::update_document_markdown),
     )
     .route(
+      "/workspaces/{workspace_id}/documents/{document_id}/rehost-image",
+      // Body is raw image bytes (≤ the 25 MB upload cap); lift the default 2 MB.
+      post(documents::rehost_image).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
+    )
+    .route(
       "/workspaces/{workspace_id}/documents/{document_id}/export.zip",
       get(documents::export_document_zip),
     )

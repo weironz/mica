@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::{
   Json,
+  body::Bytes,
   extract::{Path, Query, State},
   http::{HeaderMap, header},
   response::{IntoResponse, Response},
@@ -1251,6 +1252,84 @@ pub async fn update_document_markdown(
     user_id,
     request.expected_seq,
     |payload| markdown_update_ops(payload, &request, workspace_id),
+  )
+  .await?;
+  ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
+
+  Ok(Json(DocumentUpdateResponse {
+    document: applied.document,
+    snapshot: applied.snapshot,
+    update: applied.update,
+  }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RehostImageParams {
+  /// The image block whose external `url` is replaced by the stored file.
+  block_id: String,
+  /// Original filename (with extension) — sets the stored file's name + mime.
+  file_name: String,
+}
+
+/// `POST /api/workspaces/{ws}/documents/{doc}/rehost-image?block_id=…&file_name=…`
+/// — body is the raw image bytes.
+///
+/// The single write-back endpoint for re-hosting an external image into Mica.
+/// The CALLER fetches the bytes (only it can — a CN-hosted server 403s hosts
+/// like AppFlowy that block its datacenter IP) and POSTs them here; we store
+/// them (sha256-dedup, like any upload) and point the image block at the new
+/// `file_id` with ONE targeted `UpdateBlock` op — never a whole-doc rewrite, so
+/// unsupported/foreign blocks elsewhere in the doc are left untouched. Shared by
+/// the `mica-cli rehost-images` sweep and any future client "re-host all" action.
+pub async fn rehost_image(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+  Query(params): Query<RehostImageParams>,
+  body: Bytes,
+) -> ApiResult<Json<DocumentUpdateResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+
+  let client = reqwest::Client::new();
+  let file = crate::routes::files::store_bytes(
+    &state,
+    &client,
+    workspace_id,
+    user_id,
+    &params.file_name,
+    &body,
+  )
+  .await?;
+  let file_id = file.id.to_string();
+  let name = file.original_name.clone();
+  let block_id = params.block_id;
+
+  let applied = store::apply_derived_operations(
+    &state.db,
+    workspace_id,
+    document_id,
+    user_id,
+    None,
+    |payload| {
+      // Only touch the named block, and only if it is still an image — never
+      // clobber a different block that a concurrent edit may have put here.
+      let block = payload
+        .blocks
+        .iter()
+        .find(|b| b.id == block_id)
+        .ok_or_else(|| format!("block {block_id} not found"))?;
+      if block.kind != "image" {
+        return Err(format!("block {block_id} is not an image"));
+      }
+      Ok(vec![DocumentOperation::UpdateBlock {
+        block_id: block_id.clone(),
+        kind: None,
+        text: None,
+        data: Some(serde_json::json!({ "file_id": file_id.clone(), "name": name.clone() })),
+      }])
+    },
   )
   .await?;
   ws::broadcast_applied_update(&state.hub, &applied, Uuid::nil(), None);
