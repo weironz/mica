@@ -581,6 +581,21 @@ class ApiClient {
     }, token: token);
   }
 
+  /// Permanently delete the signed-in account and every workspace it owns.
+  /// Gated by the current password server-side; throws [ApiException] on a wrong
+  /// password (401) or when content in others' workspaces blocks it (409).
+  Future<void> deleteAccount(String token, String password) async {
+    final response = await http.delete(
+      _apiUri('/api/auth/me'),
+      headers: {
+        'authorization': 'Bearer $token',
+        'content-type': 'application/json',
+      },
+      body: jsonEncode({'password': password}),
+    );
+    _decode(response);
+  }
+
   Future<Map<String, dynamic>> getAiSettings(String token) async {
     return _get('/api/ai/settings', token);
   }
