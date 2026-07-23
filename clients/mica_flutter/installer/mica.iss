@@ -47,7 +47,15 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; No `skipifsilent`: the in-app updater installs with /VERYSILENT and relies on
 ; this step to relaunch Mica afterwards. In an interactive install it is still
 ; the usual "launch now" checkbox.
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall
+;
+; `Check: not CmdLineParamExists('/SKIPRUN')` lets a caller suppress JUST this
+; auto-launch while keeping the silent install — the CI installer smoke-test
+; passes /SKIPRUN so IT becomes the sole launcher of the installed app. Without
+; that, the installer auto-launches one instance AND the test launched a second,
+; and the app's single-instance mutex (windows/runner/main.cpp) made whichever
+; lost the race exit 0 — a flaky "exited within 10s" failure. The updater never
+; passes /SKIPRUN, so its relaunch is unchanged. (Pattern: ShareX's /NORUN.)
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall; Check: not CmdLineParamExists('/SKIPRUN')
 
 [Code]
 { The in-app updater launches this Setup with /MICAWAITPID=<pid> and then exits
@@ -69,6 +77,22 @@ function WaitForSingleObject(hHandle: THandle; dwMilliseconds: DWORD): DWORD;
   external 'WaitForSingleObject@kernel32.dll stdcall';
 function CloseHandle(hObject: THandle): BOOL;
   external 'CloseHandle@kernel32.dll stdcall';
+
+{ True if Setup was invoked with the exact switch `Value` (e.g. '/SKIPRUN').
+  Used by the [Run] Check to let CI suppress the post-install auto-launch — the
+  canonical Inno idiom (see ShareX's /NORUN). }
+function CmdLineParamExists(const Value: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), Value) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
 
 function MicaWaitPid(): DWORD;
 var

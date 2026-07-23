@@ -172,8 +172,13 @@ jobs:
           # so the exe existing IS the "install finished" signal, independent of
           # when (or whether) the installer process returns. Hard timeout guards
           # a run that is genuinely stuck.
+          # /SKIPRUN suppresses the installer's [Run] auto-launch (mica.iss gates
+          # it on `not CmdLineParamExists('/SKIPRUN')`) so THIS step is the sole
+          # launcher of the app — the single-instance mutex can never be contended
+          # and the old "exited 0" race is structurally impossible. The updater
+          # never passes it, so production's silent relaunch is unchanged.
           $inst = Start-Process -FilePath $setup `
-            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installDir" `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SKIPRUN',"/DIR=$installDir" `
             -PassThru
           $exe = Join-Path $installDir 'mica_flutter.exe'
           $deadline = (Get-Date).AddSeconds(120)
@@ -186,39 +191,27 @@ jobs:
           if (-not (Test-Path $exe)) { throw "installed exe not found after 120s: $exe" }
           Write-Host "Installed OK: $exe"
 
-          # Verify the instance the INSTALLER itself launches — do NOT launch our
-          # own. The .iss [Run] entry auto-starts Mica under /VERYSILENT (no
-          # `skipifsilent`; that is how the updater relaunches after an update).
-          # The app holds a single-instance mutex (windows/runner/main.cpp,
-          # `Local\MicaSingleInstance`), so a second launch racing the [Run] one
-          # means whichever grabs the mutex second exits 0 — which was exactly the
-          # flaky "exited within 10s (exit code 0)" this step used to hit (run
-          # 29983180451): [Run] fires only after all files are copied, so it can
-          # lag the `$exe`-exists signal above, and the old fixed 2s sleep let the
-          # two launches interleave either way. Watching the [Run] instance removes
-          # the double-launch entirely AND tests the real production path.
-          #
-          # Poll for that process to appear (it may lag the install-complete signal).
-          $appDeadline = (Get-Date).AddSeconds(60)
-          $app = $null
-          while (-not $app -and (Get-Date) -lt $appDeadline) {
-            $app = Get-Process mica_flutter -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $app) { Start-Sleep -Seconds 1 }
-          }
-          if (-not $app) { throw "installer never launched mica_flutter within 60s of install" }
-
+          # We are the ONLY launcher (installer ran with /SKIPRUN), so there is no
+          # second instance and the single-instance mutex is never contended — the
+          # flaky "exited within 10s (exit code 0)" race is gone by construction.
+          # A launch that dies is now a REAL signal: a missing/mismatched DLL makes
+          # the Windows loader kill the process immediately (STATUS_DLL_NOT_FOUND =
+          # 0xC0000135), which is exactly the broken-build regression this smoke
+          # test exists to catch. Log the exit code in hex so that is legible
+          # rather than a mysterious 0.
+          $app = Start-Process -FilePath $exe -PassThru
           try {
-            Write-Host "Installer launched Mica (pid $($app.Id)); waiting 10s to confirm it stays up..."
+            Write-Host "Launched Mica (pid $($app.Id)); waiting 10s to confirm it stays up..."
             Start-Sleep -Seconds 10
             $app.Refresh()
             if ($app.HasExited) {
-              throw "Mica exited within 10s (exit code $($app.ExitCode)) - install/launch smoke FAILED"
+              throw "Mica exited within 10s (exit code 0x$('{0:X8}' -f $app.ExitCode)) - install/launch smoke FAILED"
             }
             Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"
           } finally {
             # Leave no stray process behind: the app, plus the installer if it is
             # still lingering.
-            Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
             if ($inst -and -not $inst.HasExited) { Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue }
           }
 
