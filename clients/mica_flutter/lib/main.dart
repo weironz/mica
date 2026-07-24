@@ -963,6 +963,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // fallback (refetch workspaces/roles) AND drain every other cloud doc's
       // un-pushed offline outbox, not just this active one.
       onServerConnected: _onCloudOnline,
+      onSyncPhase: (phase) {
+        if (mounted) setState(() => _syncPhase = phase);
+      },
       // Desktop's durable outbox is the append-log (persistence); web / no store
       // keeps the in-memory queue + prefs crash-recovery (C1).
       restoreUnacked: persistence == null ? _loadUnacked(unackedKey) : null,
@@ -4259,12 +4262,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// passed straight through. Capability rule (P3 §2.3): a world without a
   /// feature passes the same stub the old shell passed — P3c turns these into
   /// nullable props that hide the UI.
+  /// The current cloud doc's sync phase, driving the quiet header badge. Only
+  /// meaningful while a cloud session is live (gated in _unifiedWorkspaceView).
+  SyncPhase _syncPhase = SyncPhase.offline;
+
   Widget _unifiedWorkspaceView(AuthSession? session) {
     final local = _activeIsLocal;
     return WorkspaceView(
       session: session,
       entries: _workspaceEntries,
       activeOrigin: _activeOrigin,
+      // Cloud-only: the badge is meaningless for a local world or with no live
+      // cloud session, so it's simply absent there.
+      syncPhase: (local || _sync == null) ? null : _syncPhase,
       selectedRef: _selectedEntry?.ref,
       onSelectEntry: _selectEntry,
       onRenameEntry: _renameEntry,
@@ -4944,8 +4954,52 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
   }
 }
 
+/// The quiet sync-status affordance in the doc header. Calibrated minimal (see
+/// sync_status.dart + the SiYuan/AFFiNE research): NOTHING when synced, a faint
+/// slow spinner while syncing, a muted cloud-off glyph when offline. It earns
+/// attention only when edits are not yet safely on the server — easy to miss
+/// when healthy, by design.
+class _SyncBadge extends StatelessWidget {
+  const _SyncBadge(this.phase);
+
+  final SyncPhase phase;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (phase) {
+      case SyncPhase.synced:
+        return const SizedBox.shrink();
+      case SyncPhase.syncing:
+        return const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 6),
+          child: SizedBox(
+            width: 13,
+            height: 13,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.6,
+              color: EditorTheme.faint,
+            ),
+          ),
+        );
+      case SyncPhase.offline:
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Tooltip(
+            message: context.l10n.syncOffline,
+            child: const Icon(
+              Icons.cloud_off_outlined,
+              size: 15,
+              color: EditorTheme.muted,
+            ),
+          ),
+        );
+    }
+  }
+}
+
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
+    this.syncPhase,
     required this.session,
     required this.entries,
     required this.activeOrigin,
@@ -5057,6 +5111,9 @@ class WorkspaceView extends StatefulWidget {
     super.key,
   });
 
+  /// The live cloud sync phase for the open doc, or null when it doesn't apply
+  /// (local world / no cloud session) — then no badge is drawn.
+  final SyncPhase? syncPhase;
   final AuthSession? session;
 
   /// The unified workspace list (P3c): local + cloud entries, grouped by
@@ -7011,13 +7068,22 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       views: widget.views,
                       current: widget.selectedView!,
                       onSelect: widget.onSelectView,
-                      trailing: _PropertiesToggle(
-                        active: _showProperties,
-                        hasProperties:
-                            bootstrap.rootFrontMatter.trim().isNotEmpty,
-                        onTap: () => setState(
-                          () => _showProperties = !_showProperties,
-                        ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Quiet sync status (nothing when synced) sits just
+                          // left of the properties toggle, SiYuan-style top-right.
+                          if (widget.syncPhase != null)
+                            _SyncBadge(widget.syncPhase!),
+                          _PropertiesToggle(
+                            active: _showProperties,
+                            hasProperties:
+                                bootstrap.rootFrontMatter.trim().isNotEmpty,
+                            onTap: () => setState(
+                              () => _showProperties = !_showProperties,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

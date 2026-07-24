@@ -441,6 +441,7 @@
   "pageFormatImage": "Image",
   "snackSessionExpired": "Your session expired. Please sign in again.",
   "snackCloudSyncPaused": "Cloud sync is paused; recent edits may not be saved to the cloud yet. Retry or refresh the page.",
+  "syncOffline": "Offline · edits are saved locally and will sync when you reconnect.",
   "snackDismiss": "Dismiss",
   "snackLocalStoreOpenFailed": "Failed to open local storage: {error}",
   "@snackLocalStoreOpenFailed": {

@@ -299,6 +299,7 @@
   "pageFormatImage": "图片",
   "snackSessionExpired": "会话已过期，请重新登录",
   "snackCloudSyncPaused": "云同步已暂停，最近的编辑可能还没保存到云端。请重试或刷新页面。",
+  "syncOffline": "离线 · 编辑已存本地，联网后自动同步。",
   "snackDismiss": "忽略",
   "snackLocalStoreOpenFailed": "本地存储打开失败：{error}",
   "snackKeepOneLocalWorkspace": "至少保留一个本地工作区。",
