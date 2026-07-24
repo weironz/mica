@@ -19,7 +19,7 @@ resolver = "2"
 # Internal libs (mica-core/app-core/markdown/infra) keep their own 0.1.0 — their
 # version isn't user-visible. Keep in sync with pubspec.yaml + main.dart's
 # kAppVersion on release (see docs/release.md).
-version = "0.12.18"
+version = "0.12.19"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.85"
