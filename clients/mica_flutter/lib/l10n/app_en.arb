@@ -451,14 +451,6 @@
     }
   },
   "snackKeepOneLocalWorkspace": "Keep at least one local workspace.",
-  "snackImageRehostFailed": "The image couldn't be saved to storage; the original link was kept (the image will be lost if the link breaks). {error}",
-  "@snackImageRehostFailed": {
-    "placeholders": {
-      "error": {
-        "type": "String"
-      }
-    }
-  },
   "aiNotSignedIn": "Not signed in.",
   "exportFailed": "Export failed: {error}",
   "@exportFailed": {

@@ -3494,7 +3494,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return null;
-    final l10n = context.l10n;
     try {
       final file = await _api.importImageUrl(
         session.accessToken,
@@ -3502,16 +3501,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         url,
       );
       return (fileId: file.id, name: file.name);
-    } catch (error) {
-      // Re-hosting is best-effort — the editor falls back to the original url
-      // and the image still renders (this client can usually reach hosts the
-      // SERVER cannot: a CN-hosted server has no route to medium/imgur/…).
-      // So this is a heads-up that the link can rot, not a failure; the raw
-      // ApiError ("bad request: could not fetch the image url") read like the
-      // paste had broken.
-      if (mounted) {
-        setState(() => _message = l10n.snackImageRehostFailed('$error'));
-      }
+    } catch (_) {
+      // Server-side re-host is only the FIRST of two attempts: [_rehostOne] then
+      // fetches the bytes from THIS client and uploads them, and this client
+      // routinely reaches hosts a CN-hosted server cannot (AppFlowy/medium/imgur
+      // 403 the datacenter IP but return 200 here). A failure at this stage is
+      // therefore not user-facing — raising a banner here flashed a scary
+      // "image couldn't be saved" even when the client fallback then succeeded,
+      // and on every silent on-open pass. Stay quiet: a genuine both-attempts
+      // failure is reported by the explicit "re-host" menu action's own toast.
       return null;
     }
   }

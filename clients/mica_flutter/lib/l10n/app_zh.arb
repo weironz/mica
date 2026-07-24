@@ -302,7 +302,6 @@
   "snackDismiss": "忽略",
   "snackLocalStoreOpenFailed": "本地存储打开失败：{error}",
   "snackKeepOneLocalWorkspace": "至少保留一个本地工作区。",
-  "snackImageRehostFailed": "图片未能转存到本地存储，已保留原始链接（链接失效后图片会丢失）。{error}",
   "aiNotSignedIn": "尚未登录。",
   "exportFailed": "导出失败：{error}",
   "exportEmptyContent": "导出返回了空内容",
