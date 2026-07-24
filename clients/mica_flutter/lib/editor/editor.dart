@@ -2823,8 +2823,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
       try {
         await _decodeInto(fileId, bytes);
-      } catch (_) {
+      } catch (e, st) {
         if (!mounted) return;
+        // Do NOT swallow silently: a decode failure here shows a blank image
+        // block with zero signal — that swallow cost hours to diagnose once.
+        // Surface it so a reproduction pins the real cause from the console.
+        debugPrint('mica: image decode failed for "$fileId": $e\n$st');
         _imageLoading.remove(fileId);
         setState(() => _imageErrors.add(fileId));
       }

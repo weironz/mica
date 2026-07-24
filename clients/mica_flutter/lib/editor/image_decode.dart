@@ -1,5 +1,6 @@
-import 'dart:typed_data';
 import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
 
 /// Decode [bytes] into a codec whose pixels are capped at [capPx] wide.
 ///
@@ -20,12 +21,24 @@ import 'dart:ui' as ui;
 /// never disposes the descriptor; this mirrors that exactly. The descriptor is
 /// reclaimed by GC. See `test/image_decode_test.dart`, which pins each variant.
 Future<ui.Codec> decodeCapped(Uint8List bytes, int capPx) async {
-  final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-  final descriptor = await ui.ImageDescriptor.encoded(buffer);
-  final codec = await descriptor.instantiateCodec(
-    targetWidth: descriptor.width > capPx ? capPx : null,
-  );
-  // Buffer only — NOT the descriptor (see above).
-  buffer.dispose();
-  return codec;
+  try {
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    final codec = await descriptor.instantiateCodec(
+      targetWidth: descriptor.width > capPx ? capPx : null,
+    );
+    // Buffer only — NOT the descriptor (see above).
+    buffer.dispose();
+    return codec;
+  } catch (e) {
+    // The ImageDescriptor path (ImmutableBuffer + ImageDescriptor.encoded +
+    // instantiateCodec) has web/CanvasKit-specific failure modes that turn a
+    // perfectly decodable image into a silent broken placeholder (the caller's
+    // catch used to swallow this entirely — cost hours to find). Fall back to
+    // the higher-level decoder, which takes a different path in the engine, so
+    // the image still shows. Loses only the pixel cap (bounded by the fetch);
+    // a rare fallback is far better than a blank block.
+    debugPrint('mica: decodeCapped fell back to instantiateImageCodec — $e');
+    return ui.instantiateImageCodec(bytes);
+  }
 }
