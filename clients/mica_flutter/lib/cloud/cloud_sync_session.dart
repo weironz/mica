@@ -27,10 +27,12 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'cloud_doc_store.dart';
 import 'sync_doc_replica.dart';
+import 'sync_status.dart';
 import 'sync_replica_io.dart' if (dart.library.html) 'sync_replica_web.dart';
 
 export 'cloud_doc_store.dart';
 export 'sync_doc_replica.dart' show DocOp, SyncDocReplica;
+export 'sync_status.dart';
 
 /// A local CRDT diff awaiting the server's ack. Tagged with a client id the
 /// server echoes in `sync.ack` so an ack matches its specific diff even across
@@ -51,6 +53,7 @@ class CloudSyncSession {
     required this.onRemoteBlocks,
     this.onFault,
     this.onServerConnected,
+    this.onSyncPhase,
     this.restoreUnacked,
     this.onPersistUnacked,
     this.persistence,
@@ -84,6 +87,11 @@ class CloudSyncSession {
   /// fallback (refetch the authoritative workspace list once reachable again);
   /// P4-2 gave web one too, wired to `_recoverOnlineNav`.
   final void Function()? onServerConnected;
+
+  /// Fired when the derived sync phase changes (synced / syncing / offline) —
+  /// drives the quiet status icon. Fires only on a real transition, not every
+  /// frame. Null → the UI opts out. Pure derivation lives in [deriveSyncPhase].
+  final void Function(SyncPhase phase)? onSyncPhase;
 
   /// Unacked diffs (raw update bytes) restored from local persistence at
   /// startup, so a crash / hard close doesn't lose edits the server never acked
@@ -313,6 +321,10 @@ class CloudSyncSession {
     }
     // A valid frame means the link is live — reset the reconnect backoff.
     _reconnectAttempts = 0;
+    if (!_online) {
+      _online = true;
+      _updateSyncPhase(); // offline → online (synced or syncing per outbox)
+    }
     // First contact with the server this session → surface "we are online" once
     // (lets the offline-nav fallback refetch the authoritative nav).
     if (!_sawServerFrame) {
@@ -438,13 +450,17 @@ class CloudSyncSession {
                 // any ack — else a permanent rejection of a low clock would loop
                 // forever while higher clocks keep acking.
                 _pushRejects = 0;
+                _updateSyncPhase(); // outbox drained a step → maybe now synced
               }
             }
           }
         } else if (ackId is String) {
           final before = _unacked.length;
           _unacked.removeWhere((p) => p.id == ackId);
-          if (_unacked.length != before) _persistSoon();
+          if (_unacked.length != before) {
+            _persistSoon();
+            _updateSyncPhase(); // outbox drained → maybe now synced
+          }
         }
         if (rid != null && rid > _cursor) {
           _cursor = rid;
@@ -601,6 +617,7 @@ class CloudSyncSession {
     final diff = doc.encodeDiffSince(sv);
     if (diff.isEmpty) return;
     _enqueue(diff);
+    _updateSyncPhase(); // a local edit → at least one unsynced diff now
   }
 
   /// Persist a local diff to the outbox and send it if we're connected.
@@ -715,6 +732,27 @@ class CloudSyncSession {
     store.compact();
   }
 
+  /// True once a frame proves the socket is delivering; false when it drops.
+  /// Feeds the sync-phase signal — distinct from [_ready] (about bootstrap) and
+  /// the latch-once [_sawServerFrame].
+  bool _online = false;
+  SyncPhase? _lastSyncPhase;
+
+  /// Recompute the derived sync phase and fire [onSyncPhase] only on a real
+  /// change. `pending` is a boolean (outbox non-empty), never a count — no
+  /// comparable product surfaces a number.
+  void _updateSyncPhase() {
+    final cb = onSyncPhase;
+    if (cb == null) return;
+    final pending = persistence != null
+        ? persistence!.outboxAfter(persistence!.cursor().pushedClock).isNotEmpty
+        : _unacked.isNotEmpty;
+    final phase = deriveSyncPhase(online: _online, pending: pending);
+    if (phase == _lastSyncPhase) return;
+    _lastSyncPhase = phase;
+    cb(phase);
+  }
+
   void _send(Map<String, dynamic> message) {
     try {
       _channel?.sink.add(jsonEncode(message));
@@ -728,6 +766,8 @@ class CloudSyncSession {
 
   void _onDone() {
     _channel = null;
+    _online = false;
+    _updateSyncPhase(); // link down → offline
     // Socket dropped (server close / network loss). Edits keep flowing into
     // [_doc] + [_unacked]; auto-reconnect resumes and resends what's unacked.
     _scheduleReconnect();
