@@ -133,6 +133,17 @@ class CloudSyncSession {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
 
+  /// Heartbeat. Without it, a half-open TCP (pulled cable / dropped Wi-Fi) never
+  /// fires a WS close, so `_onDone` never runs and we'd wrongly stay "online".
+  /// We ping on a timer and watch for frame silence: no inbound frame (not even
+  /// the server's `pong`) within [_staleMs] means the link is dead → flip
+  /// offline + tear the zombie socket down so reconnect takes over. Every
+  /// inbound frame refreshes [_lastFrameMs].
+  Timer? _heartbeatTimer;
+  int _lastFrameMs = 0;
+  static const int _pingEveryMs = 8000;
+  static const int _staleMs = 20000;
+
   /// Completes when the session first becomes ready (cold bootstrap done). Lets
   /// headless callers (e.g. the §6 migrator) await a usable replica.
   final Completer<void> _readyCompleter = Completer<void>();
@@ -249,6 +260,14 @@ class CloudSyncSession {
       onDone: _onDone,
       cancelOnError: false,
     );
+    // Fresh socket: seed the frame clock so the watchdog can't fire before the
+    // first frame, and start the heartbeat (ping + frame-silence check).
+    _lastFrameMs = DateTime.now().millisecondsSinceEpoch;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(
+      const Duration(milliseconds: _pingEveryMs),
+      (_) => _heartbeat(),
+    );
     if (_doc == null) {
       // Cold start: fetch the CRDT base (the server also auto-sends a
       // `document.bootstrap` op snapshot first, which we ignore). Any recovered
@@ -319,8 +338,10 @@ class CloudSyncSession {
     } catch (_) {
       return;
     }
-    // A valid frame means the link is live — reset the reconnect backoff.
+    // A valid frame means the link is live — reset the reconnect backoff and
+    // refresh the heartbeat clock (a `pong` counts, keeping an idle link alive).
     _reconnectAttempts = 0;
+    _lastFrameMs = DateTime.now().millisecondsSinceEpoch;
     if (!_online) {
       _online = true;
       _updateSyncPhase(); // offline → online (synced or syncing per outbox)
@@ -753,6 +774,22 @@ class CloudSyncSession {
     cb(phase);
   }
 
+  /// One heartbeat tick: if the link has gone silent past [_staleMs] (a dead
+  /// half-open socket no close event will surface), flip offline now and close
+  /// the zombie so reconnect + re-sync take over; otherwise ping to keep an
+  /// idle-but-healthy link answering (its `pong` refreshes [_lastFrameMs]).
+  void _heartbeat() {
+    if (_disposed || _channel == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_online && now - _lastFrameMs > _staleMs) {
+      _online = false;
+      _updateSyncPhase();
+      _channel?.sink.close();
+      return;
+    }
+    _send({'type': 'ping'});
+  }
+
   void _send(Map<String, dynamic> message) {
     try {
       _channel?.sink.add(jsonEncode(message));
@@ -766,6 +803,8 @@ class CloudSyncSession {
 
   void _onDone() {
     _channel = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _online = false;
     _updateSyncPhase(); // link down → offline
     // Socket dropped (server close / network loss). Edits keep flowing into
@@ -825,6 +864,7 @@ class CloudSyncSession {
     _compactNow(); // hard-close: fold base+logs so the store reopens fastest
     _disposed = true;
     _reconnectTimer?.cancel();
+    _heartbeatTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
