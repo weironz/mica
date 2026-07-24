@@ -325,3 +325,19 @@ CI 加 `flutter build web --release` 关卡。
   解法:`flutter build windows --release` 覆盖装到 installed 目录再测。
 - PowerShell 的 `Set-Content -Encoding UTF8` 会给 `prefs.json` 加 **BOM**,
   Dart 的 `jsonDecode` 直接失败 → 设置静默落回默认值。用 `printf` 之类写无 BOM 的。
+
+### CI 缓存:先量命中率,别信"加了缓存就快"
+
+- **`sccache` 加在 tag 触发的 release job 上 = 命中率恒 0%,纯开销。** GitHub
+  Actions 的 cache **按 git-ref 隔离**:release workflow 只在 `refs/tags/v*` 上跑,
+  每个 tag 是独立 ref,存的缓存另一个 tag 读不到(只能读默认分支 main 的缓存,而
+  release job 从不在 main 上跑 → main 永远没有这份缓存)。实测 v0.12.18(理应"热")
+  windows job:`Compile requests 413 / Cache hits 0 / Cache misses 326 / hit rate 0.00%`。
+  加了三次发版(0.12.16 无→685s、0.12.17 冷→664s、0.12.18 "热"→755s),热那次反而最慢。
+- **就算命中也救不了:量 job 里到底谁慢。** windows job 的长杆是
+  `flutter build windows`(495s / 66%),那是 Dart/C++,`sccache`(只包 rustc)碰不到;
+  能缓存的 Rust FFI 只是一小片。**唯一像样的未缓存 Rust 是 `images(api)` 的 Docker 编译
+  (415s),但它和 windows 并行、不在关键路径,省了也不减发版墙钟。**
+- 结论:**缓存要落在"频繁 + 在关键路径 + 缓存能持久"的地方。** CI-on-main 已挂
+  `Swatinem/rust-cache` 且总耗时才 ~3min(main 分支缓存能持久),那才是对的。发版慢的
+  真杠杆是 Flutter 构建(更大 runner 或接受它),不是 Rust 缓存。v0.12.18 撤掉 sccache。

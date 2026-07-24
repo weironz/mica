@@ -77,21 +77,13 @@ jobs:
   windows:
     needs: draft
     runs-on: windows-latest
-    # sccache caches individual Rust compilation units in the GitHub Actions cache,
-    # so unchanged LOCAL crates (mica-core / mica-markdown / the FFI crate) are
-    # reused across runs — rust-cache alone drops those (by design it only keeps
-    # third-party deps), so they recompiled in RELEASE every run. That FFI compile
-    # inside `flutter build windows` is this job's long pole (~490s) and the whole
-    # release's critical path. The release profile has no LTO (Cargo defaults), so
-    # per-unit caching is fully effective. First run is a cold cache (no speedup);
-    # the win lands from the second release on. Free on this public repo.
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      # sccache cannot cache incremental artifacts; without this it silently
-      # passes through and caches nothing. Set explicitly so the win never hinges
-      # on rust-cache's side-effect of exporting the same value.
-      CARGO_INCREMENTAL: "0"
+    # NOTE: sccache was tried here and removed (v0.12.18) — measured 0% hit rate.
+    # The GitHub Actions cache is scoped per git-ref and this job only runs on tag
+    # pushes, so each release starts from an empty cache and never reuses the
+    # previous release's units. Even with hits it could only cache the Rust FFI
+    # slice; the job's long pole is `flutter build windows` (Dart/C++), which no
+    # Rust cache touches. rust-cache (below) stays: low overhead, and it at least
+    # keeps third-party deps. See docs/lessons.md.
     defaults:
       run:
         working-directory: clients/mica_flutter
@@ -102,14 +94,6 @@ jobs:
         with:
           channel: stable
           cache: true
-
-      # Installs sccache and points it at the GHA cache backend (honoured via the
-      # SCCACHE_GHA_ENABLED + RUSTC_WRAPPER env above). cargokit invokes `cargo`
-      # for the FFI build, and cargo honours RUSTC_WRAPPER, so the FFI compile is
-      # transparently cached. CARGO_INCREMENTAL=0 (set in the job env above) is
-      # required — sccache and incremental compilation are mutually exclusive.
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Resolve version
         id: ver
@@ -147,14 +131,6 @@ jobs:
       - run: flutter pub get
 
       - run: flutter build windows --release
-
-      # Cache effectiveness for this run: on the FIRST release after sccache lands
-      # expect ~all misses (cold cache); on later releases the hit rate shows how
-      # much of the FFI compile was reused. A run of 0 requests would mean cargokit
-      # never saw RUSTC_WRAPPER — a red flag the wiring broke.
-      - name: sccache stats
-        run: sccache --show-stats
-        shell: pwsh
 
       - name: Install Inno Setup
         shell: pwsh
