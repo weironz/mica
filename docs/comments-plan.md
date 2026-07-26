@@ -4,6 +4,38 @@
 > Notion、Confluence、Automerge、Lexical 后定稿。答复 roadmap「评论/建议未建 … marks 模型本
 > 为 range 锚点预留」。**这是设计与计划,落地留新会话。**
 
+## 落地进度(2026-07-26)——服务端 + 渲染 + API 已闭环,剩面板 UI
+
+| 层 | 状态 | 出处 |
+|---|---|---|
+| 数据表(`comment_threads` / `comments`) | ✅ | migration `0014_comments.sql` |
+| yrs sticky 锚点原语(`sticky_for_range` / `resolve_range` / `is_empty`) | ✅ 8 单测 | `mica-core/doc.rs`、`tests/comment_anchor.rs`(2672201) |
+| store 层 CRUD + `load_doc` | ✅ | `app-core/comments.rs`(354f946) |
+| 5 个端点(建/列/回复/resolve/删,gated on `commenter`) | ✅ | `api-server/routes/comments.rs`(354f946) |
+| **Postgres 集成测试(8 项,CI 真跑)** | ✅ **CI 绿** | `app-core/tests/comments_pg.rs`(736639c) |
+| 客户端 API 层(DTO + 5 方法) | ✅ 6 单测 | `api/models.dart`、`api/client.dart`(af03743) |
+| **渲染期高亮(纯 paint,不影响布局)** | ✅ 5 widget 测 | `render.dart` `commentHighlights`(08f221d) |
+| **评论面板 UI + 选区→"添加评论"入口 + main.dart 接线** | ❌ **未做** | 见下「剩余 turnkey」 |
+| 建议(suggest mode) | ⏸️ 有意不做(独立立项,见文末) | — |
+
+**两个实测修正了本文档的原设计假设**(照原文写会埋 bug):
+1. **orphan 不能只判 `None`**。原文写"任一端解成 None → orphaned";实测 **yrs 保留 tombstone**,
+   删掉锚定文字后两端**仍能解析**、只是范围**塌缩成零长**。故加 `CommentRange::is_empty()`,
+   **"解不出"与"塌缩"必须同等视为 orphan**——只信 None 会漏掉最常见的删除情形。
+2. **表名用复数**(`comment_threads`/`comments`)贴仓库惯例,原文写的是单数。
+
+### 剩余 turnkey(面板 UI,观感需真机对齐)
+1. **接线**:`main.dart` 里 `_api.listComments(token, ws, doc)` → 存 state → 过滤
+   `isHighlightable` → 映射成 `CommentHighlight`(`blockId/startOffset/endOffset/active`)→
+   一路传到 `editor.dart` 的 `DocumentSurface(commentHighlights: …)`(参数已就位)。
+   文档切换/远端更新后重新 list(锚点由服务端按当前正文解析,客户端**永不自己存 offset**)。
+2. **入口**:选中文字 → 现有右键菜单/格式栏加「添加评论」→ 取 `(blockId, startOffset,
+   endOffset, 选中文本)` 调 `createCommentThread`。⚠️ **offset 必须是 UTF-16**(与
+   `render.dart` 一致);跨块选区服务端已支持。
+3. **面板**:列 thread(quote 预览 + 回复)、回复、resolve/re-open、删除;**orphaned 的
+   thread 不画高亮、只在面板里按 `quote` 显示**(`isOrphaned` 已封装好)。
+4. 锚不上时服务端返 400 `cannot anchor that range`(过期选区)——UI 要给个温和提示。
+
 ## 决策速览
 - **评论锚点 = yrs sticky index(`StickyIndex` + `Assoc`),存在独立的 Postgres 评论表**,
   文档正文/markdown **一个字不动** → round-trip 红线保住。marks 模型**只**复用于渲染期的
