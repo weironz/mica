@@ -36,7 +36,7 @@ use crate::store::latest_snapshot_tx;
 /// `catch_unwind` structurally cannot, and in release it is plain UB. That needs
 /// an upstream fix; this only closes the recoverable unwinding-panic class. The
 /// server's panic strategy is `unwind` (no `panic = "abort"`), so this works.
-fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
+pub(crate) fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MicaDoc::from_update(bytes)))
         .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while decoding an update".into())))
 }

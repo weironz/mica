@@ -2512,7 +2512,7 @@ async fn fetch_document_view(
   .map_err(ApiError::from)
 }
 
-async fn ensure_document_in_workspace(
+pub(crate) async fn ensure_document_in_workspace(
   db: &PgPool,
   workspace_id: Uuid,
   document_id: Uuid,

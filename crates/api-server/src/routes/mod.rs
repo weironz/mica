@@ -7,6 +7,7 @@ use mica_app_core::AppState;
 mod ai;
 mod ai_ws;
 pub mod auth;
+mod comments;
 mod documents;
 mod files;
 mod health;
@@ -190,6 +191,25 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/documents/{document_id}/rehost-image",
       // Body is raw image bytes (≤ the 25 MB upload cap); lift the default 2 MB.
       post(documents::rehost_image).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
+    )
+    // Comments (docs/comments-plan.md). Anchored to the text by yrs sticky index
+    // and stored BESIDE the document, so its Markdown — and the round-trip
+    // invariant — stay untouched. Writes need the `commenter` role.
+    .route(
+      "/workspaces/{workspace_id}/documents/{document_id}/comments",
+      get(comments::list).post(comments::create),
+    )
+    .route(
+      "/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}",
+      axum::routing::delete(comments::delete),
+    )
+    .route(
+      "/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/reply",
+      post(comments::reply),
+    )
+    .route(
+      "/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/resolve",
+      post(comments::resolve),
     )
     .route(
       "/workspaces/{workspace_id}/documents/{document_id}/export.zip",

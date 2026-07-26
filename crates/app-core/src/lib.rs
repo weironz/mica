@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+pub mod comments;
 pub mod documents;
 pub mod rooms;
 pub mod store;
