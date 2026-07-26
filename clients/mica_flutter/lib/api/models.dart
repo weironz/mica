@@ -351,6 +351,124 @@ class Backlink {
   final String title;
 }
 
+/// Where a comment sits in the document RIGHT NOW, resolved by the server from a
+/// yrs sticky index. UTF-16 offsets, so they index Dart strings directly.
+///
+/// Null on a [CommentThread] means ORPHANED: the anchored text is gone, so the
+/// thread is shown against its `quote` and NO highlight is drawn — never guess a
+/// position (docs/comments-plan.md).
+class CommentAnchorRange {
+  const CommentAnchorRange({
+    required this.startBlock,
+    required this.startOffset,
+    required this.endBlock,
+    required this.endOffset,
+  });
+
+  factory CommentAnchorRange.fromJson(Map<String, dynamic> json) {
+    return CommentAnchorRange(
+      startBlock: json['start_block'] as String,
+      startOffset: (json['start_offset'] as num).toInt(),
+      endBlock: json['end_block'] as String,
+      endOffset: (json['end_offset'] as num).toInt(),
+    );
+  }
+
+  final String startBlock;
+  final int startOffset;
+  final String endBlock;
+  final int endOffset;
+
+  /// True when the range stays inside one block — the only case the editor can
+  /// highlight with a single-block run today.
+  bool get isSingleBlock => startBlock == endBlock;
+}
+
+/// One message in a comment thread. `body` is Markdown, like the document itself.
+class CommentEntry {
+  const CommentEntry({
+    required this.id,
+    required this.authorId,
+    required this.body,
+    required this.createdAt,
+    this.editedAt,
+  });
+
+  factory CommentEntry.fromJson(Map<String, dynamic> json) {
+    return CommentEntry(
+      id: json['id'] as String,
+      authorId: json['author_id'] as String,
+      body: json['body'] as String,
+      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      editedAt: DateTime.tryParse(json['edited_at'] as String? ?? '')?.toLocal(),
+    );
+  }
+
+  final String id;
+  final String authorId;
+  final String body;
+  final DateTime? createdAt;
+  final DateTime? editedAt;
+}
+
+/// A comment thread: an anchored range plus its messages.
+class CommentThread {
+  const CommentThread({
+    required this.id,
+    required this.status,
+    required this.quote,
+    required this.createdBy,
+    required this.comments,
+    this.anchor,
+    this.createdAt,
+    this.resolvedBy,
+    this.resolvedAt,
+  });
+
+  factory CommentThread.fromJson(Map<String, dynamic> json) {
+    final anchor = json['anchor'];
+    return CommentThread(
+      id: json['id'] as String,
+      status: json['status'] as String? ?? 'open',
+      quote: json['quote'] as String? ?? '',
+      createdBy: json['created_by'] as String? ?? '',
+      anchor: anchor is Map<String, dynamic>
+          ? CommentAnchorRange.fromJson(anchor)
+          : null,
+      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      resolvedBy: json['resolved_by'] as String?,
+      resolvedAt: DateTime.tryParse(json['resolved_at'] as String? ?? '')?.toLocal(),
+      comments: ((json['comments'] as List<dynamic>?) ?? const [])
+          .map((c) => CommentEntry.fromJson(c as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  final String id;
+
+  /// `open` | `resolved` | `orphaned` — the server derives `orphaned` from the
+  /// anchor on every listing, so it never drifts from the text.
+  final String status;
+
+  /// The anchored text as it read when the thread was created. The only thing
+  /// left to show once a thread is orphaned.
+  final String quote;
+  final String createdBy;
+  final CommentAnchorRange? anchor;
+  final DateTime? createdAt;
+  final String? resolvedBy;
+  final DateTime? resolvedAt;
+  final List<CommentEntry> comments;
+
+  bool get isResolved => status == 'resolved';
+
+  /// The anchored text is gone: show the discussion, draw no highlight.
+  bool get isOrphaned => status == 'orphaned' || anchor == null;
+
+  /// Only unresolved, still-anchored threads get a highlight on the canvas.
+  bool get isHighlightable => !isResolved && !isOrphaned;
+}
+
 /// A named, restorable checkpoint of a document (the server's version history).
 /// One entry in a document's yrs-native version timeline. `label` is null for an
 /// AUTO snapshot (captured on a cadence); set for a named user checkpoint.

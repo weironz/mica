@@ -572,6 +572,101 @@ class ApiClient {
         .toList();
   }
 
+  // ── Comments (docs/comments-plan.md) ───────────────────────────────────────
+  // Anchors are yrs sticky indexes the SERVER owns: the client sends the range it
+  // selected and gets back offsets resolved against the live document. It never
+  // stores an offset itself — that is the whole point (an offset goes stale the
+  // moment anyone types ahead of it).
+
+  /// Threads on a document, each with its replies and a freshly resolved anchor
+  /// (null anchor = orphaned).
+  Future<List<CommentThread>> listComments(
+    String token,
+    String workspaceId,
+    String documentId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/documents/$documentId/comments',
+      token,
+    );
+    final items = (response['threads'] as List<dynamic>?) ?? const [];
+    return items
+        .map((item) => CommentThread.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Start a thread on the selected range. `quote` is the selected text — the
+  /// server keeps it so an orphaned thread can still show what it was about.
+  /// Throws when the range can no longer be anchored (a stale selection).
+  Future<CommentThread> createCommentThread(
+    String token,
+    String workspaceId,
+    String documentId, {
+    required String startBlock,
+    required int startOffset,
+    required String endBlock,
+    required int endOffset,
+    required String quote,
+    required String body,
+  }) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/documents/$documentId/comments',
+      {
+        'start_block': startBlock,
+        'start_offset': startOffset,
+        'end_block': endBlock,
+        'end_offset': endOffset,
+        'quote': quote,
+        'body': body,
+      },
+      token: token,
+    );
+    return CommentThread.fromJson(response);
+  }
+
+  Future<CommentEntry> replyToComment(
+    String token,
+    String workspaceId,
+    String documentId,
+    String threadId,
+    String body,
+  ) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/documents/$documentId/comments/$threadId/reply',
+      {'body': body},
+      token: token,
+    );
+    return CommentEntry.fromJson(response);
+  }
+
+  /// Resolve / re-open. The anchor is kept either way, so a resolved thread can
+  /// be shown (and highlighted) again.
+  Future<void> setCommentResolved(
+    String token,
+    String workspaceId,
+    String documentId,
+    String threadId,
+    bool resolved,
+  ) async {
+    await _post(
+      '/api/workspaces/$workspaceId/documents/$documentId/comments/$threadId/resolve',
+      {'resolved': resolved},
+      token: token,
+    );
+  }
+
+  Future<void> deleteCommentThread(
+    String token,
+    String workspaceId,
+    String documentId,
+    String threadId,
+  ) async {
+    await _delete(
+      '/api/workspaces/$workspaceId/documents/$documentId/comments/$threadId',
+      token,
+    );
+  }
+
   Future<User> updateMe(String token, String displayName) async {
     final response = await _patch('/api/auth/me', {
       'display_name': displayName,
