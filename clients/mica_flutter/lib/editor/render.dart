@@ -66,6 +66,11 @@ class EditorTheme {
   /// Inline `code` span pill — a soft neutral chip behind the mono text (drawn
   /// in _paintInlineCode). Translucent so a text selection tints through it.
   static const Color inlineCodeBg = Color(0x1A64748B);
+  /// Comment wash behind anchored text — amber, the convention everywhere from
+  /// Google Docs to AFFiNE, and distinct from the blue selection so a selected
+  /// comment still reads as selected. `active` is the focused thread.
+  static const Color commentHighlight = Color(0x33F59E0B);
+  static const Color commentHighlightActive = Color(0x59F59E0B);
   static const Color quoteBar = Color(0xFFCBD5E1);
   static const Color dropLine = Color(0xFF2563EB);
 
@@ -526,6 +531,16 @@ class RenderDocument extends RenderBox {
   set remoteCursors(List<RemoteCursor> value) {
     if (listEquals(_remoteCursors, value)) return;
     _remoteCursors = value;
+    markNeedsPaint();
+  }
+
+  /// Comment highlights. Repaint only — NEVER markNeedsLayout: a comment lives
+  /// outside the document (Postgres, not the CRDT), so it must not be able to
+  /// move a single glyph. That is what keeps the Markdown round-trip untouched.
+  List<CommentHighlight> _commentHighlights = const [];
+  set commentHighlights(List<CommentHighlight> value) {
+    if (listEquals(_commentHighlights, value)) return;
+    _commentHighlights = value;
     markNeedsPaint();
   }
 
@@ -1608,6 +1623,9 @@ class RenderDocument extends RenderBox {
     // behind a code block's fill.
     _paintBlockBackgrounds(canvas, offset);
     _paintInlineCode(canvas, offset);
+    // Under the selection: a selection over a commented range must still read as
+    // selected, so the comment wash goes first.
+    _paintCommentHighlights(canvas, offset);
     _paintSelection(canvas, offset);
     for (var i = 0; i < _layouts.length; i++) {
       if (!_nodeVisible(_layouts[i])) continue;
@@ -2640,6 +2658,53 @@ class RenderDocument extends RenderBox {
     }
   }
 
+  /// Wash the anchored range of every comment thread.
+  ///
+  /// Paint-only by design: the ranges arrive already resolved by the server (yrs
+  /// sticky index → current UTF-16 offsets), so this maps them onto the block's
+  /// painter and draws — it never measures, never lays out, and so can never move
+  /// a glyph. Offsets are clamped against the live text because the document can
+  /// have changed since the list was fetched; a stale range shrinks or disappears
+  /// instead of throwing or painting somewhere wrong.
+  void _paintCommentHighlights(Canvas canvas, Offset offset) {
+    if (_commentHighlights.isEmpty) return;
+    for (final h in _commentHighlights) {
+      for (var i = 0; i < _layouts.length; i++) {
+        final l = _layouts[i];
+        if (l.nodeId != h.blockId) continue;
+        // Same viewport cull as every other layer, and atomic/renderer-claimed
+        // blocks have no text runs to wash.
+        if (!_nodeVisible(l) ||
+            EditorNode.isAtomicKind(l.kind) ||
+            l.renderedBy != null) {
+          break;
+        }
+        final textLen = i < _nodes.length ? _nodes[i].text.length : 0;
+        final from = h.startOffset.clamp(0, textLen);
+        final to = h.endOffset.clamp(from, textLen);
+        if (to <= from) break; // nothing left of the range → draw nothing
+        final pFrom = l.fold?.docToPainter(from) ?? from;
+        final pTo = l.fold?.docToPainter(to, ceilInsideAtom: true) ?? to;
+        final boxes = l.painter.getBoxesForSelection(
+          TextSelection(baseOffset: pFrom, extentOffset: pTo),
+          boxHeightStyle: ui.BoxHeightStyle.max,
+        );
+        final scroll = l.kind == 'code_block'
+            ? (_codeScroll[l.nodeId] ?? 0)
+            : 0.0;
+        final origin = offset + Offset(l.contentLeft - scroll, l.textTop);
+        final paint = Paint()
+          ..color = h.active
+              ? EditorTheme.commentHighlightActive
+              : EditorTheme.commentHighlight;
+        for (final box in boxes) {
+          canvas.drawRect(box.toRect().shift(origin), paint);
+        }
+        break; // one layout per block id
+      }
+    }
+  }
+
   void _paintSelection(Canvas canvas, Offset offset) {
     final sel = _selection;
     if (sel == null || sel.isCollapsed) return;
@@ -3165,6 +3230,19 @@ typedef RemoteCursor = ({
   String label,
 });
 
+/// A comment's anchored range to wash behind the text, already resolved by the
+/// server into UTF-16 offsets against the CURRENT text (docs/comments-plan.md).
+///
+/// Keyed by block id, not node index: comments are anchored to blocks, and an
+/// index shifts the moment a block above is inserted or removed.
+typedef CommentHighlight = ({
+  String blockId,
+  int startOffset,
+  int endOffset,
+  /// The thread the user is focused on — drawn stronger than the rest.
+  bool active,
+});
+
 class DocumentSurface extends LeafRenderObjectWidget {
   const DocumentSurface({
     required this.nodes,
@@ -3180,6 +3258,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.previewBaselines = const {},
     this.onRequestPreview,
     this.remoteCursors = const [],
+    this.commentHighlights = const [],
     super.key,
   });
 
@@ -3196,6 +3275,9 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final void Function(String fileId)? onRequestImage;
   final void Function(String key)? onImagePainted;
   final List<RemoteCursor> remoteCursors;
+
+  /// Anchored comment ranges to wash behind the text (server-resolved offsets).
+  final List<CommentHighlight> commentHighlights;
 
   /// Rasterized formulas keyed by LaTeX source (captured by the editor via
   /// an offstage flutter_math_fork widget at device pixel ratio).
@@ -3224,6 +3306,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
         ..previewImages = previewImages
         ..previewBaselines = previewBaselines
         ..remoteCursors = remoteCursors
+        ..commentHighlights = commentHighlights
         ..images = images;
 
   @override
@@ -3241,6 +3324,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..previewImages = previewImages
       ..previewBaselines = previewBaselines
       ..remoteCursors = remoteCursors
+      ..commentHighlights = commentHighlights
       ..images = images;
   }
 }
