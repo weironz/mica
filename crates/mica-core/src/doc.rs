@@ -25,8 +25,9 @@ use yrs::types::{Attrs, GetString};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    Any, Array, ArrayPrelim, ArrayRef, ClientID, Doc, Map, MapPrelim, MapRef, OffsetKind, Options,
-    Out, ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, TransactionMut, Update,
+    Any, Array, ArrayPrelim, ArrayRef, Assoc, ClientID, Doc, IndexedSequence, Map, MapPrelim,
+    MapRef, OffsetKind, Options, Out, ReadTxn, StateVector, StickyIndex, Text, TextPrelim, TextRef,
+    Transact, TransactionMut, Update,
 };
 
 use crate::block::Block;
@@ -424,6 +425,101 @@ fn get_children<T: ReadTxn>(txn: &T, bm: &MapRef) -> Option<ArrayRef> {
 
 fn get_text<T: ReadTxn>(txn: &T, bm: &MapRef) -> Option<TextRef> {
     bm.get(txn, "text")?.cast().ok()
+}
+
+/// A comment's anchor as stored: a (block id, `StickyIndex` bytes) pair per end.
+///
+/// Sticky indexes, NOT offsets. An offset is only correct against the version it
+/// was taken from — any concurrent insert before it slides the highlight onto the
+/// wrong words, silently. These bytes are `StickyIndex::encode_v1`, the exact
+/// representation Yjs documents for "comments and cursors" and the one
+/// BlockSuite/AFFiNE anchors comments with. Stored in Postgres, never in the
+/// document, so the Markdown round-trip is untouched (docs/comments-plan.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentAnchor {
+    pub start_block: String,
+    pub start_sticky: Vec<u8>,
+    pub end_block: String,
+    pub end_sticky: Vec<u8>,
+}
+
+/// An anchor resolved against the document as it is NOW: UTF-16 offsets the
+/// editor highlights directly (the doc runs `OffsetKind::Utf16`, so these are the
+/// same indices Dart strings use).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentRange {
+    pub start_block: String,
+    pub start_offset: u32,
+    pub end_block: String,
+    pub end_offset: u32,
+}
+
+impl CommentRange {
+    /// True when the anchored text no longer exists — the two ends met because
+    /// its characters were deleted.
+    ///
+    /// Needed because a deleted range does not necessarily fail to resolve: yrs
+    /// keeps tombstones, so both sticky indexes can still map to a position and
+    /// the range simply collapses to zero length. Either way the thread is an
+    /// orphan (show it against its quote, draw no highlight), so callers must
+    /// treat "unresolvable" and "empty" the same.
+    pub fn is_empty(&self) -> bool {
+        self.start_block == self.end_block && self.start_offset >= self.end_offset
+    }
+}
+
+impl MicaDoc {
+    /// Build the sticky anchor for a range the user just selected.
+    ///
+    /// `Assoc::After` on the start and `Assoc::Before` on the end make the
+    /// highlight HUG the selection: text typed immediately outside the range is
+    /// not swallowed into the comment, while text typed inside it stays covered.
+    ///
+    /// None when a block id is unknown or an offset is past the end of its block
+    /// — better no anchor than one that resolves somewhere the user never chose.
+    pub fn sticky_for_range(
+        &self,
+        start_block: &str,
+        start_offset: u32,
+        end_block: &str,
+        end_offset: u32,
+    ) -> Option<CommentAnchor> {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let txn = self.doc.transact();
+        let start_bm = get_block_map(&txn, &blocks_map, start_block)?;
+        let end_bm = get_block_map(&txn, &blocks_map, end_block)?;
+        let start_text = get_text(&txn, &start_bm)?;
+        let end_text = get_text(&txn, &end_bm)?;
+        if start_offset > start_text.len(&txn) || end_offset > end_text.len(&txn) {
+            return None;
+        }
+        let start = start_text.sticky_index(&txn, start_offset, Assoc::After)?;
+        let end = end_text.sticky_index(&txn, end_offset, Assoc::Before)?;
+        Some(CommentAnchor {
+            start_block: start_block.to_string(),
+            start_sticky: start.encode_v1(),
+            end_block: end_block.to_string(),
+            end_sticky: end.encode_v1(),
+        })
+    }
+
+    /// Resolve a stored anchor against the current document.
+    ///
+    /// None means the anchored text is gone (deleted block, deleted range, or
+    /// bytes that no longer decode): the caller marks the thread `orphaned` and
+    /// shows it against its saved quote. Never guess a position — a wrong
+    /// highlight is worse than none.
+    pub fn resolve_range(&self, anchor: &CommentAnchor) -> Option<CommentRange> {
+        let txn = self.doc.transact();
+        let start = StickyIndex::decode_v1(&anchor.start_sticky).ok()?;
+        let end = StickyIndex::decode_v1(&anchor.end_sticky).ok()?;
+        Some(CommentRange {
+            start_block: anchor.start_block.clone(),
+            start_offset: start.get_offset(&txn)?.index,
+            end_block: anchor.end_block.clone(),
+            end_offset: end.get_offset(&txn)?.index,
+        })
+    }
 }
 
 fn out_string(out: Out) -> Option<String> {
