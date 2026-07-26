@@ -332,7 +332,7 @@ pub(crate) async fn fetch_and_store_image_url(
     )));
   }
 
-  let original_name = safe_file_name(&url_file_name(url, ext.as_deref()));
+  let original_name = name_with_ext(&url_file_name(url, ext.as_deref()), ext.as_deref());
   let file = store::insert_file(
     &state.db,
     workspace_id,
@@ -446,7 +446,10 @@ pub(crate) async fn store_bytes(
   let byte_size = bytes.len() as i64;
   validate_byte_size(byte_size, storage.max_upload_bytes)?;
 
-  let ext = file_extension(file_name);
+  // The name is the first guess at the type; the BYTES are the authority when it
+  // gives nothing usable (an extension-less name used to land as
+  // `application/octet-stream`, which no browser renders as an image).
+  let ext = file_extension(file_name).or_else(|| sniff_image_ext(bytes).map(str::to_string));
   let mime = ext
     .as_deref()
     .and_then(ext_to_mime)
@@ -482,7 +485,7 @@ pub(crate) async fn store_bytes(
     workspace_id,
     user_id,
     &object_key,
-    &safe_file_name(file_name),
+    &name_with_ext(file_name, ext.as_deref()),
     &mime,
     byte_size,
   )
@@ -570,16 +573,57 @@ fn ext_to_mime(ext: &str) -> Option<&'static str> {
 
 /// Derive a display filename from a URL's last path segment (falling back to
 /// `image.<ext>`).
+///
+/// Tests "does it have a USABLE extension", not "does it contain a dot": an
+/// AppFlowy blob url ends in `<base64>=.` — it contains a dot but the dot is
+/// bare, so taking it verbatim produced names like `0QYX…X2M.` with no
+/// extension at all (and an extension-less object key). Keep the stem and
+/// append the real extension instead.
 fn url_file_name(url: &str, ext: Option<&str>) -> String {
   let path = url.split(['?', '#']).next().unwrap_or(url);
   let base = path.rsplit('/').next().unwrap_or("");
-  if base.contains('.') && !base.is_empty() {
-    base.to_string()
-  } else {
-    match ext {
-      Some(ext) => format!("image.{ext}"),
-      None => "image".to_string(),
-    }
+  if file_extension(base).is_some() {
+    return base.to_string();
+  }
+  let stem = base.trim_end_matches('.');
+  match (stem.is_empty(), ext) {
+    (false, Some(ext)) => format!("{stem}.{ext}"),
+    (false, None) => stem.to_string(),
+    (true, Some(ext)) => format!("image.{ext}"),
+    (true, None) => "image".to_string(),
+  }
+}
+
+/// The image type [bytes] actually is, by magic number — the authority when a
+/// name/url can't be trusted for it. A url whose last segment carries no
+/// extension otherwise lands as `application/octet-stream`, which browsers
+/// refuse to render as an image.
+fn sniff_image_ext(bytes: &[u8]) -> Option<&'static str> {
+  match bytes {
+    [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, ..] => Some("png"),
+    [0xff, 0xd8, 0xff, ..] => Some("jpg"),
+    [b'G', b'I', b'F', b'8', ..] => Some("gif"),
+    [b'B', b'M', ..] => Some("bmp"),
+    // RIFF....WEBP
+    [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("webp"),
+    // ....ftypavif
+    [_, _, _, _, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f', ..] => Some("avif"),
+    _ if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") => Some("svg"),
+    _ => None,
+  }
+}
+
+/// A display name that always carries a usable extension: sanitize, then append
+/// [ext] when the name itself has none. Without this an image shows up in
+/// exports/downloads as an extension-less blob even though we know its type.
+fn name_with_ext(name: &str, ext: Option<&str>) -> String {
+  let safe = safe_file_name(name);
+  if file_extension(&safe).is_some() {
+    return safe;
+  }
+  match ext {
+    Some(ext) => format!("{}.{ext}", safe.trim_end_matches('.')),
+    None => safe,
   }
 }
 
@@ -614,9 +658,11 @@ fn safe_file_name(name: &str) -> String {
       prev_underscore = true;
     }
   }
-  // Drop underscores hugging the extension dot, then trim the ends.
+  // Drop underscores hugging the extension dot, then trim the ends. Trailing
+  // dots go too: a name ending in `.` (AppFlowy's `<base64>=.`) is an
+  // extension-less name wearing an extension's clothes.
   let tidy = out.replace("_.", ".").replace("._", ".");
-  let trimmed = tidy.trim_matches('_').to_string();
+  let trimmed = tidy.trim_matches('_').trim_end_matches('.').to_string();
   if trimmed.is_empty() {
     "file".to_string()
   } else {
@@ -656,6 +702,51 @@ mod tests {
     assert_eq!(safe_file_name("photos/我的照片.png"), "我的照片.png");
     assert_eq!(safe_file_name("我的照片 v2.png"), "我的照片_v2.png");
     assert_eq!(safe_file_name("  "), "file");
+    // A bare trailing dot is not an extension — it must not survive (it shipped
+    // names like `0QYX…X2M.` from AppFlowy's `<base64>=.` urls).
+    assert_eq!(safe_file_name("0QYXMbZ8=."), "0QYXMbZ8");
+    assert_eq!(safe_file_name("...."), "file");
+  }
+
+  #[test]
+  fn url_file_name_requires_a_usable_extension_not_just_a_dot() {
+    // Normal url → last segment verbatim.
+    assert_eq!(url_file_name("https://e.com/a/photo.png", Some("png")), "photo.png");
+    // THE BUG: AppFlowy's blob url ends in `<base64>=.` — contains a dot, but
+    // the dot is bare. The stem is kept and the real extension appended.
+    assert_eq!(
+      url_file_name("https://beta.appflowy.cloud/v1/blob/x/0QYXMbZ8=.", Some("png")),
+      "0QYXMbZ8=.png"
+    );
+    // No extension at all in the segment → same treatment.
+    assert_eq!(url_file_name("https://e.com/a/0QYXMbZ8", Some("png")), "0QYXMbZ8.png");
+    // Nothing usable → the generic name.
+    assert_eq!(url_file_name("https://e.com/", Some("png")), "image.png");
+    assert_eq!(url_file_name("https://e.com/", None), "image");
+  }
+
+  #[test]
+  fn name_with_ext_guarantees_an_extension() {
+    // Already has one → untouched (beyond sanitizing).
+    assert_eq!(name_with_ext("我的照片.png", Some("png")), "我的照片.png");
+    // Missing/bare-dot → the known extension is appended, no double dot.
+    assert_eq!(name_with_ext("0QYXMbZ8=.", Some("png")), "0QYXMbZ8.png");
+    assert_eq!(name_with_ext("noext", Some("jpg")), "noext.jpg");
+    // Unknown type → left as-is rather than inventing an extension.
+    assert_eq!(name_with_ext("noext", None), "noext");
+  }
+
+  #[test]
+  fn sniff_image_ext_reads_magic_numbers() {
+    assert_eq!(sniff_image_ext(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+    assert_eq!(sniff_image_ext(b"\xff\xd8\xffrest"), Some("jpg"));
+    assert_eq!(sniff_image_ext(b"GIF89a"), Some("gif"));
+    assert_eq!(sniff_image_ext(b"RIFF____WEBPrest"), Some("webp"));
+    assert_eq!(sniff_image_ext(b"____ftypavif"), Some("avif"));
+    assert_eq!(sniff_image_ext(b"<svg xmlns="), Some("svg"));
+    // Not an image → no guess (the caller then keeps octet-stream).
+    assert_eq!(sniff_image_ext(b"just text"), None);
+    assert_eq!(sniff_image_ext(b""), None);
   }
 
   #[test]

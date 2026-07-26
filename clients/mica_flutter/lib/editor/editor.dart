@@ -12,6 +12,7 @@ import 'highlight.dart';
 import 'markdown.dart';
 import 'marks.dart';
 import 'clipboard_copy.dart';
+import 'file_names.dart';
 import 'image_actions.dart';
 import 'image_animator.dart';
 import 'image_decode.dart';
@@ -1526,7 +1527,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final path = Uri.tryParse(url)?.path ?? '';
     final seg = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
     final name = Uri.decodeComponent(seg);
-    return name.contains('.') ? name : 'image.png';
+    if (hasUsableFileExt(name)) return name;
+    // No USABLE extension — an AppFlowy blob url ends in `<base64>=.`, which
+    // contains a dot but no extension, and taking it verbatim uploaded an
+    // extension-less file whose name displayed as `0QYX…X2M.`. Keep the stem so
+    // the name still says something, and give it one; the server re-derives the
+    // real type from the bytes.
+    final stem = name.replaceAll(RegExp(r'\.+$'), '');
+    return stem.isEmpty ? 'image.png' : '$stem.png';
   }
 
   // ---------------------------------------------------------------------------
@@ -6134,7 +6142,11 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: SelectableText(
-                  widget.link,
+                  // Decoded for a HUMAN: a Chinese file name is percent-escaped
+                  // in the url (it must be, to fetch), so showing it raw read as
+                  // `%E8%A7%A3%E9%94%81…` — the name looked lost. Copy below
+                  // still yields the raw, always-valid url.
+                  readableUrl(widget.link),
                   maxLines: 3,
                   style: const TextStyle(fontFamily: kMonoFont, fontSize: 12),
                 ),
