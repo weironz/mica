@@ -419,6 +419,22 @@
   "recycleRefresh": "Refresh",
   "recycleEmpty": "Recycle bin is empty",
   "recycleEmptyDetail": "Deleted pages appear here and can be restored.",
+  "folderCount": "{count, plural, =1{1 folder} other{{count} folders}}",
+  "@folderCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "recycleSubtree": "contains {items}",
+  "@recycleSubtree": {
+    "placeholders": {
+      "items": {
+        "type": "String"
+      }
+    }
+  },
   "recycleRestore": "Restore",
   "recycleDeleteForever": "Delete forever",
   "recyclePurgeConfirmTitle": "Permanently delete \"{name}\"?",

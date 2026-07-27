@@ -2963,7 +2963,15 @@ class _RecycleBinDialog extends StatefulWidget {
     required this.onRestore,
     required this.onPurge,
     required this.canEdit,
+    required this.liveViews,
+    required this.relativeStrings,
   });
+
+  /// The workspace's live tree, used only to name where a restore will land.
+  final List<DocumentView> liveViews;
+
+  /// Localized relative-time wording for the deletion time.
+  final RelativeTimeStrings relativeStrings;
 
   final Future<List<DocumentView>> Function() onLoad;
   final Future<void> Function(DocumentView view) onRestore;
@@ -2983,7 +2991,7 @@ class _RecycleBinDialog extends StatefulWidget {
 class _RecycleBinDialogState extends State<_RecycleBinDialog> {
   bool _loading = true;
   String? _error;
-  List<DocumentView> _roots = const [];
+  List<TrashEntry> _entries = const [];
 
   @override
   void initState() {
@@ -2998,15 +3006,12 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
     });
     try {
       final all = await widget.onLoad();
-      final ids = {for (final v in all) v.id};
-      // Show only subtree roots: a deleted page whose parent is not itself in
-      // the bin (children come back with their parent on restore).
-      final roots = all
-          .where((v) => v.parentViewId == null || !ids.contains(v.parentViewId))
-          .toList();
+      // Roots only, plus what each restore will actually bring back — see
+      // `buildTrashEntries`.
+      final entries = buildTrashEntries(deleted: all, live: widget.liveViews);
       if (!mounted) return;
       setState(() {
-        _roots = roots;
+        _entries = entries;
         _loading = false;
       });
     } catch (error) {
@@ -3016,6 +3021,54 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
         _loading = false;
       });
     }
+  }
+
+  /// A folder must LOOK like a folder. Every row used to wear the same page
+  /// glyph, so a deleted folder — the one case where restore reaches past the row
+  /// you clicked — was indistinguishable from a single page.
+  Widget _trashLeading(DocumentView view) {
+    final emoji = view.icon?.trim();
+    if (emoji != null && emoji.isNotEmpty) {
+      return SizedBox(
+        width: 18,
+        child: Center(child: Text(emoji, style: const TextStyle(fontSize: 15))),
+      );
+    }
+    return Icon(
+      view.isFolder ? Icons.folder_outlined : Icons.description_outlined,
+      size: 18,
+      color: EditorTheme.muted,
+    );
+  }
+
+  /// Where it came from · what comes back with it · when it was deleted.
+  ///
+  /// Each part is dropped when it isn't known rather than filled with a
+  /// placeholder: the local world carries no `icon` and no deletion timestamp
+  /// (they never reach `DocumentView` through `_viewFromData`), and a top-level
+  /// page has no path. An empty subtree says nothing rather than 「含 0 个页面」.
+  Widget? _trashSubtitle(BuildContext context, TrashEntry entry) {
+    final l10n = context.l10n;
+    final counts = <String>[
+      if (entry.folders > 0) l10n.folderCount(entry.folders),
+      if (entry.pages > 0) l10n.pageCount(entry.pages),
+    ];
+    // `delete_view` stamps `updated_at = now()` when trashing, so for a deleted
+    // row this IS the deletion time. Null in the local world.
+    final deletedAt = entry.view.updatedAt;
+    final parts = <String>[
+      if (entry.path.isNotEmpty) entry.path,
+      if (counts.isNotEmpty)
+        l10n.recycleSubtree(counts.join(l10n.importListSeparator)),
+      if (deletedAt != null) relativeMeta(deletedAt, widget.relativeStrings),
+    ];
+    if (parts.isEmpty) return null;
+    return Text(
+      parts.join('  ·  '),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(fontSize: 12, color: EditorTheme.faint),
+    );
   }
 
   /// Permanent delete is the only irreversible action in this dialog, and it
@@ -3068,7 +3121,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
     if (_error != null) {
       return Center(child: ErrorBanner(_error!));
     }
-    if (_roots.isEmpty) {
+    if (_entries.isEmpty) {
       return EmptyState(
         icon: Icons.delete_outline,
         title: context.l10n.recycleEmpty,
@@ -3076,14 +3129,16 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
       );
     }
     return ListView.separated(
-      itemCount: _roots.length,
+      itemCount: _entries.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, i) {
-        final view = _roots[i];
+        final entry = _entries[i];
+        final view = entry.view;
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-          leading: const Icon(Icons.description_outlined, size: 18),
+          leading: _trashLeading(view),
           title: Text(view.name, overflow: TextOverflow.ellipsis),
+          subtitle: _trashSubtitle(context, entry),
           trailing: !widget.canEdit
               ? null
               : Row(

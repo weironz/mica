@@ -280,6 +280,8 @@
   "recycleRefresh": "刷新",
   "recycleEmpty": "回收站是空的",
   "recycleEmptyDetail": "删除的页面会出现在这里,可以恢复。",
+  "folderCount": "{count} 个文件夹",
+  "recycleSubtree": "含 {items}",
   "recycleRestore": "恢复",
   "recycleDeleteForever": "永久删除",
   "recyclePurgeConfirmTitle": "永久删除「{name}」?",

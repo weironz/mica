@@ -29,10 +29,11 @@ import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
 import 'ui/destructive_confirm.dart';
 import 'ui/emoji_picker.dart';
-import 'ui/home_data.dart' show countPages;
+import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/status_kit.dart';
+import 'ui/trash_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'cjk_fonts.dart';
 import 'prefs.dart';
@@ -8655,6 +8656,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onRestore: widget.onRestoreView,
         onPurge: widget.onPurgeView,
         canEdit: matchesEditRole(widget.selectedWorkspace?.role),
+        // The live tree, so a row can say where restoring puts it back.
+        liveViews: widget.views,
+        relativeStrings: RelativeTimeStrings(
+          justNow: context.l10n.homeJustNow,
+          minutesAgo: context.l10n.homeMinutesAgo,
+          hoursAgo: context.l10n.homeHoursAgo,
+          yesterday: context.l10n.homeYesterday,
+          daysAgo: context.l10n.homeDaysAgo,
+        ),
       ),
     );
   }
