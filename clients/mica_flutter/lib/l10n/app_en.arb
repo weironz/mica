@@ -19,6 +19,8 @@
   "trayShow": "Show Mica",
   "trayExit": "Exit",
   "newPage": "New page",
+  "sidebarPagesLabel": "Pages",
+  "sidebarMoreActions": "More actions",
   "newFolder": "New folder",
   "search": "Search…",
   "commonCancel": "Cancel",

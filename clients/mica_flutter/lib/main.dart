@@ -6210,48 +6210,97 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ],
               const SizedBox(height: 12),
               _searchBox(context),
-              // Slim, label-free action strip above the tree — the tree itself
-              // is the section, it doesn't need a name.
-              const SizedBox(height: 8),
+              // Section label + actions (design 03). The old row was four equal
+              // icons, which read as a toolbar competing with the tree below it.
+              // Now the tree gets a quiet label and only its PRIMARY action —
+              // new page — stays visible; refresh / recycle bin / new folder
+              // move into the overflow. Nothing is removed: they are one click
+              // deeper, not gone.
+              const SizedBox(height: 10),
               Row(
-                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  IconButton(
-                    tooltip: context.l10n.recycleRefresh,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onRefresh,
-                    icon: const Icon(Icons.refresh, size: 20),
-                  ),
-                  if (canEdit) ...[
-                    IconButton(
-                      tooltip: context.l10n.recycleBinTitle,
-                      visualDensity: VisualDensity.compact,
-                      onPressed: _openRecycleBin,
-                      icon: const Icon(Icons.delete_outline, size: 20),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Text(
+                      context.l10n.sidebarPagesLabel,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w500,
+                        color: EditorTheme.faint,
+                      ),
                     ),
-                    // Two separate quick actions (not a menu): a new page and a
-                    // new folder. Both create relative to the located sidebar
-                    // node (see _createLocated) — inside a focused folder, or
-                    // beside a focused page.
+                  ),
+                  const Spacer(),
+                  if (canEdit)
                     IconButton(
                       tooltip: context.l10n.newPage,
                       visualDensity: VisualDensity.compact,
+                      // Creates relative to the located sidebar node (see
+                      // _createLocated) — inside a focused folder, or beside a
+                      // focused page.
                       onPressed: () => _createLocated(folder: false),
-                      icon: const Icon(Icons.note_add_outlined, size: 20),
+                      icon: const Icon(Icons.add, size: 18),
                     ),
-                    IconButton(
-                      tooltip: context.l10n.newFolder,
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _createLocated(folder: true),
-                      icon: const Icon(
-                        Icons.create_new_folder_outlined,
-                        size: 20,
+                  PopupMenuButton<String>(
+                    tooltip: context.l10n.sidebarMoreActions,
+                    icon: const Icon(
+                      Icons.more_horiz,
+                      size: 18,
+                      color: EditorTheme.muted,
+                    ),
+                    padding: EdgeInsets.zero,
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'refresh':
+                          widget.onRefresh();
+                        case 'recycle':
+                          _openRecycleBin();
+                        case 'newFolder':
+                          _createLocated(folder: true);
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: 'refresh',
+                        child: Row(
+                          children: [
+                            const Icon(Icons.refresh, size: 18),
+                            const SizedBox(width: 10),
+                            Text(context.l10n.recycleRefresh),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                      if (canEdit) ...[
+                        PopupMenuItem(
+                          value: 'newFolder',
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.create_new_folder_outlined,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 10),
+                              Text(context.l10n.newFolder),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'recycle',
+                          child: Row(
+                            children: [
+                              const Icon(Icons.delete_outline, size: 18),
+                              const SizedBox(width: 10),
+                              Text(context.l10n.recycleBinTitle),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
               Expanded(child: _pageTree(context, canEdit)),
               const Divider(height: 24),
               // AI entry points exist only when the feature is enabled in

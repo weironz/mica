@@ -1147,17 +1147,33 @@ class _DocumentListItemState extends State<DocumentListItem> {
                           )
                         : const SizedBox.shrink(),
                   ),
-                  Icon(
-                    w._isFolder
-                        ? (w.isCollapsed
-                              ? Icons.folder_outlined
-                              : Icons.folder_open_outlined)
-                        : Icons.description_outlined,
-                    size: 18,
-                    color: w.isSelected
-                        ? const Color(0xFF2563EB)
-                        : const Color(0xFF64748B),
-                  ),
+                  // A user-set emoji replaces the kind glyph; without one the
+                  // glyph still says folder-vs-page, so a tree with no icons set
+                  // reads exactly as before. Sized to the same 18px box so rows
+                  // never shift when an icon is added or cleared.
+                  if (w.view.icon != null)
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: Center(
+                        child: Text(
+                          w.view.icon!,
+                          style: const TextStyle(fontSize: 15, height: 1.1),
+                        ),
+                      ),
+                    )
+                  else
+                    Icon(
+                      w._isFolder
+                          ? (w.isCollapsed
+                                ? Icons.folder_outlined
+                                : Icons.folder_open_outlined)
+                          : Icons.description_outlined,
+                      size: 18,
+                      color: w.isSelected
+                          ? const Color(0xFF2563EB)
+                          : const Color(0xFF64748B),
+                    ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: (w.isRenaming && _renameCtrl != null)

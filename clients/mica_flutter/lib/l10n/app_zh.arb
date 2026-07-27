@@ -14,6 +14,8 @@
   "trayExit": "退出",
   "newPage": "新建页面",
   "newFolder": "新建文件夹",
+  "sidebarPagesLabel": "页面",
+  "sidebarMoreActions": "更多操作",
   "search": "搜索…",
   "commonCancel": "取消",
   "commonSave": "保存",
