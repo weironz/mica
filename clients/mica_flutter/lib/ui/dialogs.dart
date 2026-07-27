@@ -2803,6 +2803,82 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
   String _displayName(DocVersion v) =>
       v.isAuto ? context.l10n.versionAutoSnapshot : v.label!.trim();
 
+  /// One timeline row, card-shaped (design 08): active = accent border + wash,
+  /// which at this width reads far better than Material's tinted-title `selected`.
+  Widget _versionRow(BuildContext context, DocVersion v) {
+    final selected = v.id == _selectedId;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: selected ? const Color(0xFFF5F9FF) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: _busy ? null : () => _select(v),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selected ? const Color(0xFFBFDBFE) : Colors.transparent,
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Icon(
+                  v.isAuto ? Icons.schedule : Icons.bookmark,
+                  size: 16,
+                  color: selected ? const Color(0xFF2563EB) : EditorTheme.faint,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        v.isAuto ? _stamp(v) : _displayName(v),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: v.isAuto
+                              ? FontWeight.w400
+                              : FontWeight.w600,
+                          color: selected
+                              ? const Color(0xFF2563EB)
+                              : EditorTheme.text,
+                        ),
+                      ),
+                      ?_rowSubtitle(v),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A version's timestamp in the design-08 relative form: `15:08` today,
+  /// 「昨天 22:03」 yesterday, a bare date further back.
+  ///
+  /// Falls back to the raw string when the stamp does not parse — showing the
+  /// unhelpful original beats inventing a date, and beats a blank where a time
+  /// belongs.
+  String _stamp(DocVersion v) {
+    final when = versionTime(v);
+    if (when == null) return v.createdAt;
+    final l10n = context.l10n;
+    final s = versionStamp(when);
+    return switch (s.day) {
+      VersionDay.today => s.time,
+      VersionDay.yesterday => l10n.versionYesterdayAt(s.time),
+      VersionDay.earlier => l10n.versionDateShort(s.month, s.dayOfMonth),
+    };
+  }
+
   /// Who saved this version, or null when that can't be said usefully.
   ///
   /// Deliberately quiet: an unknown id renders nothing rather than a placeholder
@@ -2820,7 +2896,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
   /// named checkpoint (whose title is its label, not its time), or both.
   Widget? _rowSubtitle(DocVersion v) {
     final author = _authorName(v);
-    final time = v.isAuto ? null : _formatTime(v.createdAt);
+    final time = v.isAuto ? null : _stamp(v);
     final parts = [if (time != null) time, if (author != null) author];
     if (parts.isEmpty) return null;
     return Text(
@@ -3038,30 +3114,33 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
               ? Center(
                   child: Text(l10n.versionEmpty, textAlign: TextAlign.center),
                 )
-              : ListView.builder(
-                  itemCount: _versions.length,
-                  itemBuilder: (context, i) {
-                    final v = _versions[i];
-                    final selected = v.id == _selectedId;
-                    return ListTile(
-                      dense: true,
-                      selected: selected,
-                      leading: Icon(
-                        v.isAuto ? Icons.schedule : Icons.bookmark,
-                        size: 18,
+              : ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  children: [
+                    // 今天 / 更早 (design 08). A flat list of bare timestamps
+                    // gave no sense of when you were looking at.
+                    for (final section in groupVersions(_versions)) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: 6,
+                          top: 10,
+                          bottom: 4,
+                        ),
+                        child: Text(
+                          section.day == VersionDay.today
+                              ? context.l10n.versionGroupToday
+                              : context.l10n.versionGroupEarlier,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.6,
+                            color: EditorTheme.faint,
+                          ),
+                        ),
                       ),
-                      title: Text(
-                        v.isAuto ? _formatTime(v.createdAt) : _displayName(v),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: v.isAuto
-                            ? null
-                            : const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: _rowSubtitle(v),
-                      onTap: _busy ? null : () => _select(v),
-                    );
-                  },
+                      for (final v in section.items) _versionRow(context, v),
+                    ],
+                  ],
                 ),
         ),
         const Divider(height: 1),
@@ -3084,15 +3163,6 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
       ],
     );
   }
-}
-
-/// `2026-07-16T14:04:05Z` → `2026-07-16 22:04`, in local time. No intl dep for
-/// one label: parse, localize, pad.
-String _formatTime(String iso) {
-  final dt = DateTime.tryParse(iso)?.toLocal();
-  if (dt == null) return iso;
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
 }
 
 class _RecycleBinDialog extends StatefulWidget {

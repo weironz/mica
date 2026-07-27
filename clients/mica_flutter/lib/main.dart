@@ -35,6 +35,7 @@ import 'ui/overview_pane.dart';
 import 'ui/search_data.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
+import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'cjk_fonts.dart';
 import 'prefs.dart';

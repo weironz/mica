@@ -411,6 +411,27 @@
   "versionDiffAdded": "Added",
   "versionDiffChanged": "Changed",
   "versionDiffRemoved": "Removed",
+  "versionGroupToday": "Today",
+  "versionGroupEarlier": "Earlier",
+  "versionYesterdayAt": "Yesterday {time}",
+  "@versionYesterdayAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "versionDateShort": "{month}/{day}",
+  "@versionDateShort": {
+    "placeholders": {
+      "month": {
+        "type": "int"
+      },
+      "day": {
+        "type": "int"
+      }
+    }
+  },
   "versionAutoSnapshot": "Auto-save",
   "versionNameHint": "Give this version a name, e.g. \"Before revision\"",
   "versionHistoryTitle": "Version history",
