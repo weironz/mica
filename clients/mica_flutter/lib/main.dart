@@ -26,6 +26,7 @@ import 'editor/pick_file.dart';
 import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';
 import 'ui/autoscroll.dart';
+import 'ui/comment_panel.dart';
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -956,6 +957,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _applyCloudBlocks(documentId);
         // Now online for this doc: drain any images inserted offline (§7.1).
         unawaited(_reconcilePendingUploads(documentId));
+        // Comments are anchored into this document's CRDT, so they can only be
+        // resolved once it is bootstrapped.
+        unawaited(_loadComments(documentId));
       },
       onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
       onFault: (reason, count) => _onCloudSyncFault(documentId, reason, count),
@@ -4266,6 +4270,173 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// meaningful while a cloud session is live (gated in _unifiedWorkspaceView).
   SyncPhase _syncPhase = SyncPhase.offline;
 
+  /// Comment threads on the open cloud document, as the server resolved them
+  /// (each carries offsets against the CURRENT text, or a null anchor when
+  /// orphaned). Re-fetched on open — never cached across documents, and never
+  /// re-derived locally: the anchor lives in the CRDT and only the server reads
+  /// it (docs/comments-plan.md).
+  List<CommentThread> _commentThreads = const [];
+
+  /// Ranges for render.dart to wash: unresolved, still-anchored threads only.
+  /// A resolved or orphaned thread must not paint over the text.
+  List<CommentHighlight> get _commentHighlights => [
+    for (final t in _commentThreads)
+      if (t.isHighlightable && t.anchor != null)
+        (
+          blockId: t.anchor!.startBlock,
+          startOffset: t.anchor!.startOffset,
+          endOffset: t.anchor!.endOffset,
+          active: false,
+        ),
+  ];
+
+  /// Load (or clear) the open document's comments. Additive by design: if this
+  /// fails the document still opens — comments are never allowed to be the reason
+  /// someone cannot read their page.
+  Future<void> _loadComments(String documentId) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null || _activeIsLocal) {
+      if (mounted) setState(() => _commentThreads = const []);
+      return;
+    }
+    try {
+      final threads = await _api.listComments(
+        session.accessToken,
+        workspace.id,
+        documentId,
+      );
+      if (!mounted || _selectedBootstrap?.document.id != documentId) return;
+      setState(() => _commentThreads = threads);
+    } catch (_) {
+      if (mounted) setState(() => _commentThreads = const []);
+    }
+  }
+
+  /// Re-fetch after any mutation, so the server stays the single source of truth
+  /// for anchors and orphan status.
+  Future<void> _refreshComments() async {
+    final documentId = _selectedBootstrap?.document.id;
+    if (documentId != null) await _loadComments(documentId);
+  }
+
+  Future<void> _addComment(
+    String startBlock,
+    int startOffset,
+    String endBlock,
+    int endOffset,
+    String quote,
+  ) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    final documentId = _selectedBootstrap?.document.id;
+    if (session == null || workspace == null || documentId == null) return;
+    final body = await _promptCommentBody();
+    if (body == null || body.trim().isEmpty) return;
+    try {
+      await _api.createCommentThread(
+        session.accessToken,
+        workspace.id,
+        documentId,
+        startBlock: startBlock,
+        startOffset: startOffset,
+        endBlock: endBlock,
+        endOffset: endOffset,
+        quote: quote,
+        body: body.trim(),
+      );
+      await _refreshComments();
+    } catch (error) {
+      // The one expected failure: the selection no longer exists (someone edited
+      // it away between selecting and submitting). Say that, not the raw error.
+      if (!mounted) return;
+      final stale = error.toString().contains('cannot anchor');
+      setState(
+        () => _message = stale
+            ? context.l10n.commentAnchorLost
+            : error.toString(),
+      );
+    }
+  }
+
+  /// A small composer for the first comment on a range.
+  Future<String?> _promptCommentBody() async {
+    final controller = TextEditingController();
+    final l10n = context.l10n;
+    final body = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.commentAdd),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 6,
+          decoration: InputDecoration(
+            hintText: l10n.commentPlaceholder,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(l10n.commentPost),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return body;
+  }
+
+  Future<void> _replyToComment(String threadId, String body) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    final documentId = _selectedBootstrap?.document.id;
+    if (session == null || workspace == null || documentId == null) return;
+    await _api.replyToComment(
+      session.accessToken,
+      workspace.id,
+      documentId,
+      threadId,
+      body,
+    );
+    await _refreshComments();
+  }
+
+  Future<void> _setCommentResolved(String threadId, bool resolved) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    final documentId = _selectedBootstrap?.document.id;
+    if (session == null || workspace == null || documentId == null) return;
+    await _api.setCommentResolved(
+      session.accessToken,
+      workspace.id,
+      documentId,
+      threadId,
+      resolved,
+    );
+    await _refreshComments();
+  }
+
+  Future<void> _deleteCommentThread(String threadId) async {
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    final documentId = _selectedBootstrap?.document.id;
+    if (session == null || workspace == null || documentId == null) return;
+    await _api.deleteCommentThread(
+      session.accessToken,
+      workspace.id,
+      documentId,
+      threadId,
+    );
+    await _refreshComments();
+  }
+
   Widget _unifiedWorkspaceView(AuthSession? session) {
     final local = _activeIsLocal;
     return WorkspaceView(
@@ -4275,6 +4446,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Cloud-only: the badge is meaningless for a local world or with no live
       // cloud session, so it's simply absent there.
       syncPhase: (local || _sync == null) ? null : _syncPhase,
+      // Comments are a cloud feature (they live in Postgres beside the document),
+      // so the local world gets none and shows no entry point.
+      commentThreads: local ? const [] : _commentThreads,
+      commentHighlights: local ? const [] : _commentHighlights,
+      onAddComment: (local || session == null) ? null : _addComment,
+      onReplyComment: _replyToComment,
+      onSetCommentResolved: _setCommentResolved,
+      onDeleteCommentThread: _deleteCommentThread,
       selectedRef: _selectedEntry?.ref,
       onSelectEntry: _selectEntry,
       onRenameEntry: _renameEntry,
@@ -4954,6 +5133,49 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
   }
 }
 
+/// The comments entry in the doc header: an outline bubble, with the count of
+/// still-open threads when there are any. Quiet when the document has none.
+class _CommentsButton extends StatelessWidget {
+  const _CommentsButton({required this.openCount, required this.onTap});
+
+  final int openCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: context.l10n.commentsTitle,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.chat_bubble_outline,
+                size: 15,
+                color: EditorTheme.muted,
+              ),
+              if (openCount > 0) ...[
+                const SizedBox(width: 3),
+                Text(
+                  '$openCount',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: EditorTheme.muted,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// The quiet sync-status affordance in the doc header. Calibrated minimal (see
 /// sync_status.dart + the SiYuan/AFFiNE research): NOTHING when synced, a faint
 /// slow spinner while syncing, a muted cloud-off glyph when offline. It earns
@@ -5000,6 +5222,12 @@ class _SyncBadge extends StatelessWidget {
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     this.syncPhase,
+    this.commentThreads = const [],
+    this.commentHighlights = const [],
+    this.onAddComment,
+    required this.onReplyComment,
+    required this.onSetCommentResolved,
+    required this.onDeleteCommentThread,
     required this.session,
     required this.entries,
     required this.activeOrigin,
@@ -5114,6 +5342,27 @@ class WorkspaceView extends StatefulWidget {
   /// The live cloud sync phase for the open doc, or null when it doesn't apply
   /// (local world / no cloud session) — then no badge is drawn.
   final SyncPhase? syncPhase;
+
+  /// Comment threads on the open document (server-resolved anchors).
+  final List<CommentThread> commentThreads;
+
+  /// The subset render.dart washes behind the text (unresolved + still anchored).
+  final List<CommentHighlight> commentHighlights;
+
+  /// Start a thread on a range. Null → commenting unavailable (local world, or no
+  /// session), which also hides the editor's "add comment" entry.
+  final Future<void> Function(
+    String startBlock,
+    int startOffset,
+    String endBlock,
+    int endOffset,
+    String quote,
+  )?
+  onAddComment;
+  final Future<void> Function(String threadId, String body) onReplyComment;
+  final Future<void> Function(String threadId, bool resolved)
+  onSetCommentResolved;
+  final Future<void> Function(String threadId) onDeleteCommentThread;
   final AuthSession? session;
 
   /// The unified workspace list (P3c): local + cloud entries, grouped by
@@ -5369,6 +5618,45 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // toggle next to the breadcrumb, so a page with many properties never pushes
   // the body down until you ask for it.
   bool _showProperties = false;
+
+  /// Open the comments panel for this document.
+  ///
+  /// Wrapped in a StatefulBuilder so a reply/resolve/delete inside the dialog
+  /// re-reads `widget.commentThreads` after the host refetches — the server stays
+  /// the single source of truth for anchors and orphan status, and the panel just
+  /// shows whatever it last returned.
+  Future<void> _openCommentPanel() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, refresh) => AlertDialog(
+          title: Text(dialogContext.l10n.commentsTitle),
+          content: CommentPanel(
+            threads: widget.commentThreads,
+            currentUserId: widget.session?.user.id,
+            onReply: (id, body) async {
+              await widget.onReplyComment(id, body);
+              refresh(() {});
+            },
+            onSetResolved: (id, resolved) async {
+              await widget.onSetCommentResolved(id, resolved);
+              refresh(() {});
+            },
+            onDelete: (id) async {
+              await widget.onDeleteCommentThread(id);
+              refresh(() {});
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(dialogContext.l10n.commonClose),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
   // default). The tree opens collapsed and remembers what the user expanded;
   // navigating to / creating a nested page reveals its ancestors.
@@ -7075,6 +7363,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           // left of the properties toggle, SiYuan-style top-right.
                           if (widget.syncPhase != null)
                             _SyncBadge(widget.syncPhase!),
+                          // Comments entry: only for cloud documents, and only
+                          // shows a count when something is actually open.
+                          if (widget.onAddComment != null)
+                            _CommentsButton(
+                              openCount: widget.commentThreads
+                                  .where((t) => !t.isResolved)
+                                  .length,
+                              onTap: _openCommentPanel,
+                            ),
                           _PropertiesToggle(
                             active: _showProperties,
                             hasProperties:
@@ -7310,6 +7607,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     version: bootstrap.snapshot.versionSeq,
                     canEdit: canEdit,
                     onSelectionChanged: widget.onCursorChanged,
+                    commentHighlights: widget.commentHighlights,
+                    onAddComment: widget.onAddComment,
                     remoteCursors: [
                       for (final p in widget.presence)
                         if (p.hasCursor)

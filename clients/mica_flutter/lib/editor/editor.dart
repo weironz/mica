@@ -31,7 +31,7 @@ import '../l10n/locale_controller.dart';
 export 'controller.dart' show DocOp, ApplyOps;
 export 'markdown.dart' show markdownToBlocks, BlockSpec;
 export 'model.dart' show EditorNode;
-export 'render.dart' show EditorAppearance, EditorTheme;
+export 'render.dart' show EditorAppearance, EditorTheme, CommentHighlight;
 
 /// The in-house editor: one editing surface for the whole document.
 ///
@@ -191,6 +191,8 @@ class MicaEditor extends StatefulWidget {
     this.onOpFault,
     this.onSelectionChanged,
     this.remoteCursors = const [],
+    this.commentHighlights = const [],
+    this.onAddComment,
     this.onAiStream,
     this.onUploadImage,
     this.onImportImageUrl,
@@ -234,6 +236,23 @@ class MicaEditor extends StatefulWidget {
 
   /// Other collaborators' carets to paint on the canvas (awareness).
   final List<RemoteCursor> remoteCursors;
+
+  /// Anchored comment ranges to wash behind the text. Resolved by the SERVER
+  /// against the current text (yrs sticky index → UTF-16 offsets); the editor only
+  /// draws them, and drawing can never move a glyph (see render.dart).
+  final List<CommentHighlight> commentHighlights;
+
+  /// Start a comment thread on a range: the anchor (block ids + UTF-16 offsets,
+  /// which the server turns into a sticky index) plus the selected text as a
+  /// quote snapshot. Null hides the "add comment" entry entirely.
+  final Future<void> Function(
+    String startBlock,
+    int startOffset,
+    String endBlock,
+    int endOffset,
+    String quote,
+  )?
+  onAddComment;
 
   /// Streams Markdown from a prompt for the in-editor "Ask AI" command (deltas
   /// shown live). When null, the AI slash entry is hidden.
@@ -4892,6 +4911,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!insideSelection && !canEdit) return; // read-only + nothing to copy
     final choice = await _showSmallMenu(globalPosition, [
       if (insideSelection) ('copy', context.l10n.commonCopy),
+      // Commenting is not editing: a `commenter` may do this on a document they
+      // cannot change, so it is gated on the callback (which the host supplies
+      // only when the role allows it), never on canEdit.
+      if (insideSelection && widget.onAddComment != null)
+        ('comment', context.l10n.commentAdd),
       if (insideSelection && canEdit) ('cut', context.l10n.editorCut),
       if (canEdit) ('paste', context.l10n.editorPaste),
       if (canEdit) ('pastePlain', context.l10n.shortcutsPastePlain),
@@ -4900,6 +4924,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     switch (choice) {
       case 'copy':
         _copySelection();
+      case 'comment':
+        await _addCommentOnSelection();
       case 'cut':
         _cutSelection();
       case 'paste':
@@ -4909,6 +4935,41 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _focus.requestFocus();
         await _pastePlainText();
     }
+  }
+
+  /// Hand the host the anchor for the current ranged selection so it can open a
+  /// comment thread on it.
+  ///
+  /// The offsets are UTF-16 — the same units the renderer and the server's sticky
+  /// index speak, so no conversion can drift. `quote` is only a snapshot for the
+  /// panel and the orphan fallback; it never participates in anchoring.
+  Future<void> _addCommentOnSelection() async {
+    final add = widget.onAddComment;
+    final sel = _controller.selection;
+    if (add == null || sel == null || sel.isCollapsed) return;
+    final nodes = _controller.nodes;
+    final s = sel.start;
+    final e = sel.end;
+    if (s.node >= nodes.length || e.node >= nodes.length) return;
+    final buf = StringBuffer();
+    for (var i = s.node; i <= e.node && i < nodes.length; i++) {
+      final text = nodes[i].text;
+      final from = i == s.node ? s.offset.clamp(0, text.length) : 0;
+      final to = i == e.node ? e.offset.clamp(0, text.length) : text.length;
+      if (to > from) buf.write(text.substring(from, to));
+      if (i != e.node) buf.write('\n');
+    }
+    var quote = buf.toString();
+    // A quote is a preview, not the document — keep a runaway selection from
+    // shipping the whole page into a database column.
+    if (quote.length > 300) quote = '${quote.substring(0, 300)}…';
+    await add(
+      nodes[s.node].id,
+      s.offset,
+      nodes[e.node].id,
+      e.offset,
+      quote,
+    );
   }
 
   Future<void> _showImageMenu(int node, Offset globalPosition) async {
@@ -5560,6 +5621,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   onRequestImage: _requestImage,
                   onImagePainted: _onImagePainted,
                   remoteCursors: widget.remoteCursors,
+                  commentHighlights: widget.commentHighlights,
                 ),
                 // Far off-screen: painted (capturable) but never visible.
                 Positioned(
