@@ -213,6 +213,9 @@
       }
     }
   },
+  "searchHintSelect": "select",
+  "searchHintOpen": "open",
+  "searchHintInPage": "find in page",
   "searchTitleMatch": "Title match",
   "accountSaved": "Saved",
   "accountPasswordTooShort": "New password must be at least 8 characters",

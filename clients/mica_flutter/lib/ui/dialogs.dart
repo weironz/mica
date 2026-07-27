@@ -4,6 +4,36 @@
 part of '../main.dart';
 
 /// Workspace search: type to find pages by title or body text; click to open.
+/// A keyboard-cap chip: mono glyph on a pale slab.
+///
+/// `kMonoFont`, not `'monospace'` — that family name does not resolve on web (see
+/// `model.dart`), which is exactly where a key hint would silently fall back to a
+/// proportional font and stop reading as a key.
+class _KeyCap extends StatelessWidget {
+  const _KeyCap(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 11,
+          fontFamily: kMonoFont,
+          color: EditorTheme.faint,
+        ),
+      ),
+    );
+  }
+}
+
 /// Fixed row height in the search result list.
 ///
 /// Fixed so the keyboard selection can be scrolled into view by arithmetic
@@ -129,7 +159,8 @@ class _SearchDialogState extends State<_SearchDialog> {
     return AlertDialog(
       title: Text(context.l10n.searchTitle),
       content: SizedBox(
-        width: 480,
+        // 600 (design 06); the result area's height is unchanged.
+        width: 600,
         height: 420,
         child: Column(
           children: [
@@ -165,6 +196,9 @@ class _SearchDialogState extends State<_SearchDialog> {
                   decoration: InputDecoration(
                     hintText: context.l10n.searchHint,
                     prefixIcon: const Icon(Icons.search),
+                    // Spinner while a query is in flight, otherwise the `esc`
+                    // hint: one slot, because both answer the same question —
+                    // what is this field doing right now.
                     suffixIcon: _loading
                         ? const Padding(
                             padding: EdgeInsets.all(12),
@@ -174,7 +208,10 @@ class _SearchDialogState extends State<_SearchDialog> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                           )
-                        : null,
+                        : const Padding(
+                            padding: EdgeInsets.only(right: 10),
+                            child: _KeyCap('esc'),
+                          ),
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -182,6 +219,49 @@ class _SearchDialogState extends State<_SearchDialog> {
             ),
             const SizedBox(height: 12),
             Expanded(child: _buildResults(context)),
+            // Only with results on screen: advertising ↑↓/↵ over an empty list
+            // would promise keys that do nothing.
+            if (_results.isNotEmpty) ...[
+              const Divider(height: 17),
+              Row(
+                children: [
+                  const _KeyCap('↑'),
+                  const SizedBox(width: 4),
+                  const _KeyCap('↓'),
+                  const SizedBox(width: 6),
+                  Text(
+                    context.l10n.searchHintSelect,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: EditorTheme.faint,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const _KeyCap('↵'),
+                  const SizedBox(width: 6),
+                  Text(
+                    context.l10n.searchHintOpen,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: EditorTheme.faint,
+                    ),
+                  ),
+                  const Spacer(),
+                  // In-page find, NOT 「全局搜索 ⌘⇧F」: that is the shortcut that
+                  // opened this very dialog (self-referential), and Ctrl is the
+                  // right glyph for a Windows-first product.
+                  Text(
+                    context.l10n.searchHintInPage,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: EditorTheme.faint,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const _KeyCap('Ctrl+F'),
+                ],
+              ),
+            ],
           ],
         ),
       ),
