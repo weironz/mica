@@ -28,6 +28,7 @@ import 'widgets/mica_logo.dart';
 import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
 import 'ui/emoji_picker.dart';
+import 'ui/home_pane.dart';
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -2178,6 +2179,34 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               .toList(),
         };
       });
+    });
+  }
+
+  /// Open a page the home screen listed. Home carries ids (it spans workspaces),
+  /// so the view object is looked up here; a stale id — the page was deleted
+  /// between render and tap — is simply ignored rather than guessed at.
+  void _openViewFromHome(String viewId, {required bool local}) {
+    final candidates = local
+        ? _localViews
+        : _viewsByWorkspace.values.expand((views) => views);
+    for (final view in candidates) {
+      if (view.id != viewId) continue;
+      unawaited(local ? _localSelectView(view) : _selectView(view));
+      return;
+    }
+  }
+
+  /// Close the open page so home shows again (the sidebar's Home row). Keeps the
+  /// workspace selection — home is a view of the world, not a way out of it.
+  void _closeOpenPage({required bool local}) {
+    setState(() {
+      if (local) {
+        _localSelectedView = null;
+      } else {
+        _selectedView = null;
+        _selectedBootstrap = null;
+        _selectedMarkdown = null;
+      }
     });
   }
 
@@ -4577,6 +4606,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // than accept a change it would silently drop, the local world simply does
       // not offer the entry (see DocumentListItem.onSetIcon).
       onSetViewIcon: local ? null : _promptSetViewIcon,
+      // Home spans every workspace of the ACTIVE world (local and cloud stay
+      // separate — see the world switcher), so only the shell can build it. The
+      // local world keeps one flat view list rather than a per-workspace map, so
+      // it contributes just its selected workspace.
+      homePane: buildHomePane(
+        context,
+        userName: local
+            ? context.l10n.worldLocalName
+            : ((session?.user.displayName.trim().isNotEmpty ?? false)
+                  ? session!.user.displayName
+                  : (session?.user.email ?? '')),
+        viewsByWorkspace: local
+            ? {
+                if (_localSelectedWorkspace != null)
+                  _localSelectedWorkspace!.id: _localViews,
+              }
+            : _viewsByWorkspace,
+        workspaceNames: {
+          for (final w in (local ? _localWorkspaces : _workspaces))
+            w.id: w.name,
+        },
+        onCreatePage: () => unawaited(
+          local
+              ? _localCreateDocument(context.l10n.newPage)
+              : _createDocument(context.l10n.newPage),
+        ),
+        onOpenView: (viewId) => _openViewFromHome(viewId, local: local),
+      ),
+      onOpenHome: () => _closeOpenPage(local: local),
       onDeleteView: local ? _localDeleteView : _deleteView,
       onCloneView: local ? _localCloneView : _cloneView,
       onUpdateRootBlockText: local
@@ -5188,6 +5246,53 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
 
 /// The comments entry in the doc header: an outline bubble, with the count of
 /// still-open threads when there are any. Quiet when the document has none.
+/// The sidebar's Home row. Its own widget so the pane's build method stays a list
+/// of parts rather than another nested block of decoration.
+class _HomeNavRow extends StatelessWidget {
+  const _HomeNavRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFEFF6FF) : null,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.home_outlined,
+              size: 18,
+              color: selected ? EditorTheme.caret : EditorTheme.muted,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: selected ? const Color(0xFF1D4ED8) : EditorTheme.text,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CommentsButton extends StatelessWidget {
   const _CommentsButton({required this.openCount, required this.onTap});
 
@@ -5323,6 +5428,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onSelectView,
     required this.onRenameView,
     this.onSetViewIcon,
+    this.homePane,
+    this.onOpenHome,
     required this.onDeleteView,
     required this.onCloneView,
     required this.onUpdateRootBlockText,
@@ -5508,6 +5615,14 @@ class WorkspaceView extends StatefulWidget {
   /// Opens the emoji picker for a view and persists the choice. Null where icons
   /// cannot be stored (the local world), which hides the menu entry entirely.
   final Future<void> Function(DocumentView view)? onSetViewIcon;
+
+  /// The home pane, shown whenever no page is open. Built by the host (see
+  /// `ui/home_pane.dart`) because it spans every workspace, which this view —
+  /// scoped to one workspace — does not have.
+  final Widget? homePane;
+
+  /// Closes the open page so home shows again. Null hides the sidebar entry.
+  final VoidCallback? onOpenHome;
   final Future<void> Function(DocumentView view) onDeleteView;
 
   /// Duplicate a view's subtree in place (cloud or local). Always provided —
@@ -6267,6 +6382,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ErrorBanner(widget.message!),
               ],
               const SizedBox(height: 12),
+              // Home (design 03): a cross-workspace entry point, above the
+              // per-workspace tree because it is not scoped to one workspace.
+              // Highlighted while it IS the current view, i.e. no page is open.
+              if (widget.onOpenHome != null)
+                _HomeNavRow(
+                  label: context.l10n.navHome,
+                  selected: widget.selectedBootstrap == null,
+                  onTap: widget.onOpenHome!,
+                ),
+              if (widget.onOpenHome != null) const SizedBox(height: 8),
               _searchBox(context),
               // Section label + actions (design 03). The old row was four equal
               // icons, which read as a toolbar competing with the tree below it.
@@ -7212,11 +7337,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
     final bootstrap = widget.selectedBootstrap;
     if (bootstrap == null) {
-      return EmptyState(
-        icon: Icons.description_outlined,
-        title: context.l10n.editorSelectPageTitle,
-        detail: context.l10n.editorSelectPageDetail,
-      );
+      // Nothing open → HOME (design 03). This used to be a "pick a page" empty
+      // state, which told the user to do something instead of helping them do
+      // it; home offers the create action and the recent pages right there.
+      // Falls back to the old copy only if the host supplies no home pane.
+      return widget.homePane ??
+          EmptyState(
+            icon: Icons.description_outlined,
+            title: context.l10n.editorSelectPageTitle,
+            detail: context.l10n.editorSelectPageDetail,
+          );
     }
 
     final canEdit = matchesEditRole(workspace.role);
