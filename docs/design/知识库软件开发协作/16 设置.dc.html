@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  a { color: #2563EB; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ::selection { background: rgba(37,99,235,0.20); }
+  .mica-scroll::-webkit-scrollbar { width: 10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;background:#F8FAFC;color:#24292F;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <!-- ============ SETTINGS NAV (260px) ============ -->
+  <div style="width:260px;flex:none;background:#FFFFFF;border-right:1px solid #EEF1F5;display:flex;flex-direction:column;padding:20px 12px;">
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 8px 16px;">
+      <span style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;color:#475569;border-radius:8px;cursor:pointer;background:#F1F5F9;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      </span>
+      <span style="font-size:18px;font-weight:700;letter-spacing:-0.3px;">设置</span>
+    </div>
+
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+      <div style="padding:10px 8px 4px;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;">{{ g.label }}</div>
+      <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4">
+        <div style="{{ it.style }}">
+          <span style="width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;">{{ it.icon }}</span>
+          <span style="flex:1;font-size:14px;font-weight:{{ it.weight }};">{{ it.name }}</span>
+        </div>
+      </sc-for>
+    </sc-for>
+  </div>
+
+  <!-- ============ SETTINGS CONTENT ============ -->
+  <div class="mica-scroll" style="flex:1;min-width:0;overflow-y:auto;">
+    <div style="max-width:720px;margin:0 auto;padding:44px 48px 96px;">
+
+      <h1 style="font-size:26px;font-weight:700;letter-spacing:-0.5px;margin:0 0 4px;">账户与工作区</h1>
+      <p style="font-size:14px;color:#64748B;margin:0 0 36px;">管理你的个人资料、当前工作区的成员与同步设置。</p>
+
+      <!-- Profile -->
+      <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;margin-bottom:14px;">个人资料</div>
+      <div style="background:#fff;border:1px solid #EEF1F5;border-radius:12px;padding:24px;margin-bottom:36px;">
+        <div style="display:flex;align-items:center;gap:18px;margin-bottom:24px;">
+          <span style="width:64px;height:64px;flex:none;border-radius:50%;background:#E2E8F0;color:#334155;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:600;">林</span>
+          <div style="flex:1;">
+            <div style="font-size:17px;font-weight:600;">林深</div>
+            <div style="font-size:13px;color:#64748B;">lin@mica.dev</div>
+          </div>
+          <button style="height:38px;padding:0 16px;border:1px solid #E2E8F0;background:#fff;border-radius:9px;font-size:14px;font-weight:500;color:#334155;cursor:pointer;font-family:inherit;">更换头像</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;color:#334155;margin-bottom:6px;">显示名称</label>
+            <input value="林深" style="width:100%;height:42px;padding:0 12px;border:1px solid #E2E8F0;border-radius:9px;font-size:14px;color:#24292F;outline:none;font-family:inherit;"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;color:#334155;margin-bottom:6px;">邮箱</label>
+            <input value="lin@mica.dev" style="width:100%;height:42px;padding:0 12px;border:1px solid #E2E8F0;border-radius:9px;font-size:14px;color:#9AA4AF;outline:none;font-family:inherit;background:#F8FAFC;"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- Members -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;">工作区成员 · 我的工作区</div>
+        <button style="display:flex;align-items:center;gap:6px;height:34px;padding:0 12px;border:none;background:#2563EB;color:#fff;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>邀请成员
+        </button>
+      </div>
+      <div style="background:#fff;border:1px solid #EEF1F5;border-radius:12px;overflow:hidden;margin-bottom:36px;">
+        <sc-for list="{{ members }}" as="m" hint-placeholder-count="3">
+          <div style="{{ m.rowStyle }}">
+            <span style="width:38px;height:38px;flex:none;border-radius:50%;color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;background:{{ m.color }};">{{ m.initial }}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:14px;font-weight:500;">{{ m.name }}</div>
+              <div style="font-size:12.5px;color:#9AA4AF;">{{ m.email }}</div>
+            </div>
+            <span style="{{ m.badgeStyle }}">{{ m.role }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Sync -->
+      <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;margin-bottom:14px;">同步与存储</div>
+      <div style="background:#fff;border:1px solid #EEF1F5;border-radius:12px;overflow:hidden;margin-bottom:36px;">
+        <sc-for list="{{ toggles }}" as="t" hint-placeholder-count="3">
+          <div style="{{ t.rowStyle }}">
+            <div style="flex:1;">
+              <div style="font-size:14.5px;font-weight:500;">{{ t.name }}</div>
+              <div style="font-size:12.5px;color:#9AA4AF;margin-top:2px;">{{ t.desc }}</div>
+            </div>
+            <span style="{{ t.trackStyle }}"><span style="{{ t.knobStyle }}"></span></span>
+          </div>
+        </sc-for>
+        <div style="display:flex;align-items:center;gap:14px;padding:18px 20px;">
+          <div style="flex:1;">
+            <div style="font-size:14.5px;font-weight:500;">本地缓存</div>
+            <div style="font-size:12.5px;color:#9AA4AF;margin-top:2px;">设备上已缓存 248 个页面 · 34.2 MB</div>
+          </div>
+          <button style="height:36px;padding:0 14px;border:1px solid #FCA5A5;background:#fff;color:#DC2626;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;">清除缓存</button>
+        </div>
+      </div>
+
+      <!-- Password -->
+      <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;margin-bottom:14px;">密码</div>
+      <div style="background:#fff;border:1px solid #EEF1F5;border-radius:12px;padding:24px;margin-bottom:36px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;color:#334155;margin-bottom:6px;">当前密码</label>
+            <input type="password" value="password" style="width:100%;height:42px;padding:0 12px;border:1px solid #E2E8F0;border-radius:9px;font-size:14px;color:#24292F;outline:none;font-family:inherit;"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;color:#334155;margin-bottom:6px;">新密码（至少 8 个字符）</label>
+            <input type="password" value="password" style="width:100%;height:42px;padding:0 12px;border:1px solid #E2E8F0;border-radius:9px;font-size:14px;color:#24292F;outline:none;font-family:inherit;"/>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;">
+          <button style="height:38px;padding:0 16px;border:1px solid #DBEAFE;background:#EFF6FF;color:#2563EB;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">修改密码</button>
+          <span style="font-size:12.5px;color:#9AA4AF;">修改后所有设备（含这台）都需要重新登录。</span>
+        </div>
+      </div>
+
+      <!-- Danger -->
+      <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#DC2626;margin-bottom:14px;">危险区域</div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+      <div style="background:#fff;border:1px solid #FECACA;border-radius:12px;padding:20px;display:flex;align-items:center;gap:14px;">
+        <div style="flex:1;">
+          <div style="font-size:14.5px;font-weight:500;">删除工作区</div>
+          <div style="font-size:12.5px;color:#9AA4AF;margin-top:2px;">永久删除「我的工作区」及其所有页面,此操作不可撤销。</div>
+        </div>
+        <button style="height:38px;padding:0 16px;border:none;background:#DC2626;color:#fff;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">删除</button>
+      </div>
+      <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:12px;padding:20px;display:flex;align-items:center;gap:14px;">
+        <div style="flex:1;">
+          <div style="font-size:14.5px;font-weight:500;color:#B91C1C;">删除账号</div>
+          <div style="font-size:12.5px;color:#7F1D1D;margin-top:2px;line-height:1.6;">永久删除你的账号，以及你拥有的所有工作区——包括其中所有页面、图片和历史记录，对所有人生效。需输入密码确认。</div>
+        </div>
+        <button style="height:38px;padding:0 16px;border:none;background:#DC2626;color:#fff;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">删除账号</button>
+      </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  renderVals() {
+    const ic = (svg) => React.createElement('span', { dangerouslySetInnerHTML: { __html: svg } });
+    const s = (stroke) => `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.9">`;
+    const navRow = (active) => `display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:8px;margin-bottom:2px;cursor:pointer;color:${active?'#2563EB':'#334155'};${active?'background:#EFF6FF;':''}`;
+
+    const groups = [
+      { label: '账户', items: [
+        { name: '个人资料', active: true, svg: s('#2563EB')+'<circle cx="12" cy="8" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>' },
+        { name: '外观与主题', svg: s('#64748B')+'<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/></svg>' },
+        { name: '通知', svg: s('#64748B')+'<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>' },
+      ]},
+      { label: '工作区', items: [
+        { name: '成员与权限', svg: s('#64748B')+'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>' },
+        { name: '同步与存储', svg: s('#64748B')+'<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>' },
+        { name: '导入与导出', svg: s('#64748B')+'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' },
+        { name: '版本历史', svg: s('#64748B')+'<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 3"/></svg>' },
+      ]},
+      { label: '其他', items: [
+        { name: '关于 Mica', svg: s('#64748B')+'<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>' },
+      ]},
+    ].map(g => ({ label: g.label, items: g.items.map(it => ({
+      name: it.name, icon: ic(it.svg), style: navRow(it.active), weight: it.active ? 600 : 400,
+    }))}));
+
+    const members = [
+      { name: '林深 (你)', email: 'lin@mica.dev', initial: '林', color: '#2563EB', role: '所有者', owner: true },
+      { name: '周舟', email: 'zhou@mica.dev', initial: '周', color: '#16A34A', role: '可编辑' },
+      { name: 'Alex Chen', email: 'alex@mica.dev', initial: 'A', color: '#DB2777', role: '可评论' },
+    ].map((m, i) => ({
+      ...m,
+      rowStyle: `display:flex;align-items:center;gap:14px;padding:14px 20px;${i>0?'border-top:1px solid #F1F5F9;':''}`,
+      badgeStyle: m.owner
+        ? 'font-size:12px;font-weight:600;color:#2563EB;background:#EFF6FF;padding:5px 11px;border-radius:20px;'
+        : 'font-size:12px;font-weight:500;color:#64748B;background:#F1F5F9;padding:5px 11px;border-radius:20px;cursor:pointer;',
+    }));
+
+    const track = (on) => `width:42px;height:24px;flex:none;border-radius:20px;position:relative;transition:background .18s;background:${on?'#2563EB':'#CBD5E1'};`;
+    const knob = (on) => `position:absolute;top:3px;left:${on?'21px':'3px'};width:18px;height:18px;border-radius:50%;background:#fff;transition:left .18s;box-shadow:0 1px 2px rgba(0,0,0,0.2);`;
+    const toggles = [
+      { name: '自动同步', desc: '联网时自动上传本地改动', on: true },
+      { name: '仅 Wi-Fi 下同步', desc: '避免使用移动数据', on: false },
+      { name: '离线可用', desc: '把整个工作区缓存到本设备', on: true },
+    ].map((t, i) => ({
+      ...t,
+      rowStyle: `display:flex;align-items:center;gap:14px;padding:18px 20px;${i>0?'border-top:1px solid #F1F5F9;':''}`,
+      trackStyle: track(t.on), knobStyle: knob(t.on),
+    }));
+
+    return { groups, members, toggles };
+  }
+}
+</script>
+</body>
+</html>

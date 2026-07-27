@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; color:#24292F; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  .mica-scroll::-webkit-scrollbar { width:10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background:#E2E8F0; border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+  .lang-row:hover { background:#F1F5F9; }
+  .cb-icon:hover { background:#E2E8F0; }
+  .kw { color:#7C3AED; } .str { color:#16A34A; } .fn { color:#2563EB; } .cm { color:#9AA4AF; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;background:#fff;overflow:hidden;border:1px solid #E5E9F0;">
+  <div style="width:280px;flex:none;background:#FAFBFC;border-right:1px solid #EEF1F5;"></div>
+
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:8px;padding:0 24px;border-bottom:1px solid #F1F5F9;">
+      <span style="font-size:13.5px;color:#9AA4AF;">产品思考</span><span style="color:#CBD5E1;">/</span>
+      <span style="font-size:13.5px;font-weight:500;color:#334155;">技术方案 · 同步引擎</span>
+    </div>
+
+    <div class="mica-scroll" style="flex:1;min-height:0;overflow-y:auto;">
+      <div style="max-width:720px;margin:0 auto;padding:48px 40px 120px;">
+        <h1 style="font-size:34px;font-weight:700;letter-spacing:-0.5px;margin:0 0 24px;">同步引擎</h1>
+
+        <p style="font-size:16px;line-height:1.75;margin:0 0 20px;">核心是一个 CRDT 合并函数,离线改动进入 outbox,联网后按因果序回放:</p>
+
+        <!-- Code block with language menu open -->
+        <div style="position:relative;background:#F1F5F9;border-radius:10px;padding:16px 18px;margin:0 0 12px;">
+          <pre class="mono" style="margin:0;font-size:13.5px;line-height:1.7;color:#24292F;white-space:pre;overflow-x:auto;"><span class="kw">Future</span>&lt;<span class="fn">void</span>&gt; <span class="fn">flushOutbox</span>() <span class="kw">async</span> {
+  <span class="kw">final</span> ops = outbox.<span class="fn">drain</span>();
+  <span class="cm">// 按因果序回放,冲突交给 CRDT 合并</span>
+  <span class="kw">for</span> (<span class="kw">final</span> op <span class="kw">in</span> ops) {
+    <span class="kw">await</span> doc.<span class="fn">apply</span>(op);
+  }
+}</pre>
+
+          <!-- Bottom-right toolbar -->
+          <div style="position:absolute;right:12px;bottom:10px;display:flex;align-items:center;gap:4px;">
+            <div style="display:flex;align-items:center;gap:3px;height:26px;padding:0 9px;border-radius:6px;background:#fff;border:1px solid #E2E8F0;font-size:12px;color:#475569;cursor:pointer;box-shadow:0 0 0 2px rgba(37,99,235,0.18);">dart <span style="color:#9AA4AF;">▾</span></div>
+            <span class="cb-icon" title="自动换行" style="width:26px;height:26px;border-radius:6px;background:#fff;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;color:#64748B;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 0 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="8" y2="18"/></svg></span>
+            <span class="cb-icon" title="复制" style="width:26px;height:26px;border-radius:6px;background:#fff;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;color:#64748B;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          </div>
+
+          <!-- Language menu popover -->
+          <div style="position:absolute;right:12px;bottom:44px;width:200px;background:#fff;border:1px solid #E5E9F0;border-radius:11px;box-shadow:0 16px 40px -10px rgba(15,23,42,0.28);padding:6px;z-index:20;">
+            <div style="display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;margin-bottom:4px;border:1px solid #E2E8F0;border-radius:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span style="font-size:13px;color:#9AA4AF;">筛选语言…</span>
+            </div>
+            <div class="mica-scroll" style="max-height:236px;overflow-y:auto;">
+              <sc-for list="{{ langs }}" as="l" hint-placeholder-count="8">
+                <div class="lang-row" style="{{ l.rowStyle }}">
+                  <span style="width:16px;flex:none;display:flex;justify-content:center;">{{ l.tick }}</span>
+                  <span style="flex:1;font-size:13.5px;color:{{ l.color }};font-weight:{{ l.weight }};">{{ l.name }}</span>
+                  <sc-if value="{{ l.isAuto }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;color:#9AA4AF;">自动检测</span></sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <p style="font-size:16px;line-height:1.75;margin:24px 0 20px;">回放顺序如下图:</p>
+
+        <!-- Mermaid block with code/preview tabs -->
+        <div style="position:relative;background:{{ mmBg }};border-radius:10px;padding:16px 18px;min-height:150px;">
+          <sc-if value="{{ showCode }}" hint-placeholder-val="{{ false }}">
+            <pre class="mono" style="margin:0;font-size:13.5px;line-height:1.7;color:#24292F;white-space:pre;">graph LR
+  A[本地改动] --&gt; B[Outbox]
+  B --&gt; C{联网?}
+  C --&gt;|是| D[回放 · CRDT 合并]
+  C --&gt;|否| B</pre>
+          </sc-if>
+          <sc-if value="{{ showPreview }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:22px 8px;flex-wrap:wrap;">
+              <span style="padding:10px 16px;border:1.5px solid #334155;border-radius:8px;font-size:13px;font-weight:500;background:#fff;">本地改动</span>
+              <span style="color:#64748B;">→</span>
+              <span style="padding:10px 16px;border:1.5px solid #334155;border-radius:8px;font-size:13px;font-weight:500;background:#fff;">Outbox</span>
+              <span style="color:#64748B;">→</span>
+              <span style="padding:10px 18px;border:1.5px solid #2563EB;border-radius:10px;transform:rotate(0deg);font-size:13px;font-weight:500;background:#EFF6FF;color:#2563EB;">联网?</span>
+              <span style="color:#64748B;">→</span>
+              <span style="padding:10px 16px;border:1.5px solid #16A34A;border-radius:8px;font-size:13px;font-weight:500;background:#F0FDF4;color:#16A34A;">回放 · CRDT 合并</span>
+            </div>
+          </sc-if>
+
+          <!-- Toolbar: view tabs + lang -->
+          <div style="position:absolute;right:12px;bottom:10px;display:flex;align-items:center;gap:6px;">
+            <div style="display:flex;background:#fff;border:1px solid #E2E8F0;border-radius:7px;overflow:hidden;">
+              <span onClick="{{ toCode }}" style="{{ codeTab }}">代码</span>
+              <span onClick="{{ toPreview }}" style="{{ previewTab }}">预览</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:3px;height:26px;padding:0 9px;border-radius:6px;background:#fff;border:1px solid #E2E8F0;font-size:12px;color:#475569;">mermaid <span style="color:#9AA4AF;">▾</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { view: 'preview' };
+  renderVals() {
+    const ic = (svg) => React.createElement('span', { dangerouslySetInnerHTML: { __html: svg } });
+    const tick = ic('<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>');
+    const list = ['auto','bash','c','cpp','css','dart','go','html','java','javascript','json','kotlin','markdown','mermaid','python','rust','sql','swift','typescript','yaml'];
+    const active = 'dart';
+    const langs = list.map(name => ({
+      name, isAuto: name==='auto',
+      tick: name===active ? tick : '',
+      color: name===active ? '#2563EB' : (name==='auto' ? '#475569' : '#334155'),
+      weight: name==='auto' ? 600 : 400,
+      rowStyle: `display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;cursor:pointer;${name===active?'background:#EFF6FF;':''}${name==='auto'?'border-bottom:1px solid #F1F5F9;margin-bottom:2px;padding-bottom:9px;':''}`,
+    }));
+
+    const view = this.state.view;
+    const vt = (on) => `padding:5px 12px;font-size:12px;font-weight:500;cursor:pointer;${on?'background:#2563EB;color:#fff;':'color:#64748B;'}`;
+    return {
+      langs,
+      showCode: view==='code', showPreview: view==='preview',
+      mmBg: view==='code' ? '#F1F5F9' : '#FBFCFE',
+      codeTab: vt(view==='code'), previewTab: vt(view==='preview'),
+      toCode: () => this.setState({view:'code'}),
+      toPreview: () => this.setState({view:'preview'}),
+    };
+  }
+}
+</script>
+</body>
+</html>

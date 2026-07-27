@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; color:#24292F; }
+  ::selection { background: rgba(37,99,235,0.20); }
+  .mica-scroll::-webkit-scrollbar { width:10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background:#E2E8F0; border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+  @keyframes micablink { 0%,45%{opacity:1} 55%,100%{opacity:0.15} }
+  @keyframes micaflag { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-1px)} }
+  .rc-bar { animation: micablink 1.1s steps(1) infinite; }
+  .own-caret { animation: micablink 1.05s steps(1) infinite; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;background:#fff;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <div style="width:280px;flex:none;background:#FAFBFC;border-right:1px solid #EEF1F5;"></div>
+
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+
+    <!-- Toolbar with presence -->
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:8px;padding:0 24px;border-bottom:1px solid #F1F5F9;">
+      <span style="font-size:13.5px;color:#9AA4AF;">产品思考</span>
+      <span style="color:#CBD5E1;">/</span>
+      <span style="font-size:13.5px;font-weight:500;color:#334155;">产品阅读笔记 · 第 12 周</span>
+      <span style="flex:1;"></span>
+
+      <!-- Presence bar -->
+      <div style="display:flex;align-items:center;gap:8px;margin-right:12px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:#16A34A;flex:none;"></span>
+        <div style="display:flex;">
+          <sc-for list="{{ presence }}" as="p" hint-placeholder-count="2">
+            <span title="{{ p.name }}" style="{{ p.avatarStyle }}">{{ p.initial }}</span>
+          </sc-for>
+        </div>
+        <span style="font-size:13px;color:#64748B;">{{ editingLabel }}</span>
+      </div>
+
+      <button style="height:32px;padding:0 12px;border:1px solid #E2E8F0;background:#fff;border-radius:8px;font-size:13px;font-weight:500;color:#334155;cursor:pointer;font-family:inherit;">分享</button>
+    </div>
+
+    <!-- Document with remote cursors -->
+    <div class="mica-scroll" style="flex:1;min-height:0;overflow-y:auto;">
+      <div style="max-width:720px;margin:0 auto;padding:56px 40px 120px;">
+        <div style="font-size:40px;margin-bottom:16px;">📗</div>
+        <h1 style="font-size:36px;font-weight:700;letter-spacing:-0.6px;margin:0 0 8px;">产品阅读笔记 · 第 12 周</h1>
+        <div style="font-family:'Roboto Mono',monospace;font-size:12.5px;color:#9AA4AF;margin-bottom:32px;">更新于 刚刚 · 3 人在线</div>
+
+        <p style="font-size:16px;line-height:1.9;margin:0 0 16px;">这一周主要在读关于「工具类产品的留存」的几篇文章。核心结论是:留存不是靠功能堆出来的<span style="position:relative;display:inline-block;width:0;"><span class="rc-bar" style="position:absolute;left:0;top:-2px;width:2px;height:22px;background:#16A34A;border-radius:1px;"></span><span style="position:absolute;left:0;top:-22px;white-space:nowrap;font-size:11px;font-weight:600;color:#fff;background:#16A34A;padding:2px 6px;border-radius:3px;border-bottom-left-radius:0;animation:micaflag 2.4s ease-in-out infinite;">周舟</span></span>,而是靠让用户越用越省事。</p>
+
+        <h2 style="font-size:24px;font-weight:700;letter-spacing:-0.3px;margin:24px 0 10px;">一、习惯回路比新功能更重要</h2>
+
+        <p style="font-size:16px;line-height:1.9;margin:0 0 16px;">真正让人留下来的产品,都有一个稳定的「触发 → 行动 → 奖励 → 投入」回路<span style="position:relative;display:inline-block;width:0;"><span class="rc-bar" style="position:absolute;left:0;top:-2px;width:2px;height:22px;background:#DB2777;border-radius:1px;animation-delay:.4s;"></span><span style="position:absolute;left:0;top:-22px;white-space:nowrap;font-size:11px;font-weight:600;color:#fff;background:#DB2777;padding:2px 6px;border-radius:3px;border-bottom-left-radius:0;animation:micaflag 2.4s ease-in-out .5s infinite;">Alex</span></span>。对笔记类工具来说,投入就是积累的内容本身。</p>
+
+        <ul style="font-size:16px;line-height:1.9;margin:0 0 16px;padding-left:24px;">
+          <li>触发要低摩擦:一个全局快捷键就能开始写。</li>
+          <li>奖励要即时:写完立刻能搜到、能被复用<span style="position:relative;display:inline-block;width:0;"><span class="own-caret" style="position:absolute;left:0;top:-2px;width:2px;height:22px;background:#2563EB;border-radius:1px;"></span></span>。</li>
+        </ul>
+
+        <blockquote style="margin:16px 0;padding-left:16px;border-left:3px solid #CBD5E1;color:#57606A;font-size:16px;line-height:1.65;">好的工具是隐形的。当用户不再意识到自己在用工具时,留存才真正开始。</blockquote>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  renderVals() {
+    const palette = ['#16A34A', '#DB2777', '#D97706', '#0891B2'];
+    const others = [
+      { name: '周舟', initial: '周' },
+      { name: 'Alex Chen', initial: 'A' },
+    ];
+    const presence = others.map((p, i) => ({
+      ...p,
+      avatarStyle: `width:26px;height:26px;border-radius:50%;border:2px solid #fff;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;background:${palette[i % palette.length]};${i>0?'margin-left:-8px;':''}`,
+    }));
+    return { presence, editingLabel: `${others.length} 人正在编辑` };
+  }
+}
+</script>
+</body>
+</html>

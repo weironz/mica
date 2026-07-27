@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  a { color: #2563EB; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ::selection { background: rgba(37,99,235,0.20); }
+  .mica-field:focus-within { border-color: #2563EB !important; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+  .mica-srv:hover { background: #F8FAFC; }
+  .mica-srv:hover .mica-srv-actions { opacity: 1 !important; }
+  .mica-srv-actions span:hover { background: #F1F5F9; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;background:#FFFFFF;color:#24292F;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <!-- ============ LEFT: brand panel ============ -->
+  <div style="width:560px;flex:none;background:#0F172A;color:#F8FAFC;display:flex;flex-direction:column;justify-content:space-between;padding:56px 52px;position:relative;overflow:hidden;">
+    <div style="position:absolute;top:-120px;right:-120px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle at center, rgba(37,99,235,0.30), transparent 70%);"></div>
+
+    <div style="display:flex;align-items:center;gap:10px;position:relative;">
+      <svg width="30" height="30" viewBox="0 0 24 24" style="flex:none;">
+        <path d="M12 12.36 L22.56 16.32 L12 20.28 L1.44 16.32 Z" fill="#93C5FD"/>
+        <path d="M12 8.4 L22.56 12.36 L12 16.32 L1.44 12.36 Z" fill="#3B82F6"/>
+        <path d="M12 4.44 L22.56 8.4 L12 12.36 L1.44 8.4 Z" fill="#60A5FA"/>
+      </svg>
+      <span style="font-size:24px;font-weight:700;letter-spacing:-0.3px;">Mica</span>
+    </div>
+
+    <div style="position:relative;">
+      <h1 style="font-size:40px;line-height:1.2;font-weight:700;letter-spacing:-0.8px;margin:0 0 20px;">本地优先的<br/>协作知识库</h1>
+      <p style="font-size:16px;line-height:1.7;color:#9AA4AF;margin:0 0 36px;max-width:400px;">块编辑器、实时协作、离线可用。你的内容先存在设备上,联网后自动同步——不联网也能写。</p>
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <sc-for list="{{ features }}" as="f" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="width:32px;height:32px;flex:none;border-radius:8px;background:rgba(59,130,246,0.15);display:flex;align-items:center;justify-content:center;">{{ f.icon }}</span>
+            <span style="font-size:14px;color:#CBD5E1;">{{ f.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="position:relative;font-family:'Roboto Mono',monospace;font-size:12px;color:#475569;letter-spacing:0.5px;">CRDT SYNC · OFFLINE-FIRST · v0.5.0</div>
+  </div>
+
+  <!-- ============ RIGHT: auth form ============ -->
+  <div style="flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:48px;">
+    <div style="width:100%;max-width:400px;">
+
+      <!-- Mode segmented control -->
+      <div style="display:flex;gap:4px;padding:4px;background:#F1F5F9;border-radius:11px;margin-bottom:28px;">
+        <button onClick="{{ pickCloud }}" style="{{ cloudTabStyle }}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+          云端账户
+        </button>
+        <button onClick="{{ pickLocal }}" style="{{ localTabStyle }}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="20" x2="16" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>
+          本地模式
+        </button>
+      </div>
+
+      <!-- ===== CLOUD ===== -->
+      <sc-if value="{{ isCloud }}" hint-placeholder-val="{{ true }}">
+
+      <!-- Server connection (prerequisite, on top) -->
+      <div style="position:relative;margin-bottom:24px;">
+      <div onClick="{{ toggleServers }}" style="display:flex;align-items:center;gap:11px;padding:12px 14px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:11px;cursor:pointer;">
+        <span style="width:32px;height:32px;flex:none;border-radius:8px;background:#DCFCE7;color:#16A34A;display:flex;align-items:center;justify-content:center;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        </span>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#16A34A;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#22C55E;flex:none;"></span>已连接到服务器
+          </div>
+          <div title="mica.internal.corp.example.com:8443" style="font-family:'Roboto Mono',monospace;font-size:12.5px;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">mica.internal.corp.example.com:8443</div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" style="flex:none;transform:{{ chevronTransform }};transition:transform .18s;"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+
+      <!-- Server management popover -->
+      <sc-if value="{{ serversOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;top:calc(100% + 8px);left:0;right:0;z-index:20;background:#fff;border:1px solid #E5E9F0;border-radius:12px;box-shadow:0 12px 32px -8px rgba(15,23,42,0.18);overflow:hidden;">
+        <div style="padding:10px 14px 8px;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;">服务器</div>
+        <sc-for list="{{ servers }}" as="sv" hint-placeholder-count="2">
+          <div class="mica-srv" style="{{ sv.rowStyle }}">
+            <span style="width:18px;flex:none;display:flex;justify-content:center;">{{ sv.tick }}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13.5px;font-weight:500;color:#24292F;">{{ sv.name }}</div>
+              <div title="{{ sv.url }}" style="font-family:'Roboto Mono',monospace;font-size:11.5px;color:#9AA4AF;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ sv.url }}</div>
+            </div>
+            <div class="mica-srv-actions" style="display:flex;gap:2px;flex:none;opacity:0;transition:opacity .12s;">
+              <span title="编辑" style="width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#64748B;cursor:pointer;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
+              </span>
+              <span title="删除" style="width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#DC2626;cursor:pointer;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </span>
+            </div>
+          </div>
+        </sc-for>
+        <div style="border-top:1px solid #F1F5F9;">
+          <div class="mica-srv" style="display:flex;align-items:center;gap:9px;padding:11px 14px;cursor:pointer;color:#2563EB;">
+            <span style="width:18px;flex:none;display:flex;justify-content:center;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </span>
+            <span style="font-size:13.5px;font-weight:600;">添加服务器</span>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+      </div>
+
+      <div style="margin-bottom:32px;">
+        <h2 style="font-size:28px;font-weight:700;letter-spacing:-0.5px;margin:0 0 8px;">登录到 Mica</h2>
+        <p style="font-size:15px;color:#64748B;margin:0;">还没有账户?<a href="#" style="margin-left:4px;">创建一个</a></p>
+      </div>
+
+      <!-- Email/password (primary) -->
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;color:#334155;margin-bottom:6px;">邮箱</label>
+          <div class="mica-field" style="display:flex;align-items:center;gap:10px;height:46px;padding:0 14px;border:1px solid #E2E8F0;border-radius:10px;transition:box-shadow .15s,border-color .15s;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></svg>
+            <input value="lin@mica.dev" style="flex:1;border:none;outline:none;background:transparent;font-size:15px;color:#24292F;font-family:inherit;"/>
+          </div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+            <label style="font-size:13px;font-weight:500;color:#334155;">密码</label>
+            <a href="#" style="font-size:13px;">忘记密码?</a>
+          </div>
+          <div class="mica-field" style="display:flex;align-items:center;gap:10px;height:46px;padding:0 14px;border:1px solid #E2E8F0;border-radius:10px;transition:box-shadow .15s,border-color .15s;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <input type="password" value="password123" style="flex:1;border:none;outline:none;background:transparent;font-size:15px;color:#24292F;font-family:inherit;"/>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2" style="cursor:pointer;"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+        </div>
+
+        <button style="width:100%;height:48px;border:none;background:#2563EB;color:#fff;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;margin-top:4px;">登录</button>
+      </div>
+
+      <!-- SSO (secondary) -->
+      <div style="display:flex;align-items:center;gap:12px;margin:24px 0;">
+        <div style="flex:1;height:1px;background:#E5E9F0;"></div>
+        <span style="font-size:12px;color:#9AA4AF;">或使用第三方账户</span>
+        <div style="flex:1;height:1px;background:#E5E9F0;"></div>
+      </div>
+
+      <div style="display:flex;gap:10px;">
+        <button style="flex:1;display:flex;align-items:center;justify-content:center;gap:8px;height:44px;border:1px solid #E2E8F0;background:#fff;border-radius:10px;font-size:14px;font-weight:500;color:#24292F;cursor:pointer;font-family:inherit;">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06L5.84 9.9C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+          Google
+        </button>
+        <button style="flex:1;display:flex;align-items:center;justify-content:center;gap:8px;height:44px;border:1px solid #E2E8F0;background:#fff;border-radius:10px;font-size:14px;font-weight:500;color:#24292F;cursor:pointer;font-family:inherit;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="#24292F"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.11-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.8 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+          GitHub
+        </button>
+      </div>
+
+      </sc-if>
+
+      <!-- ===== LOCAL ===== -->
+      <sc-if value="{{ isLocal }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-bottom:28px;">
+        <h2 style="font-size:28px;font-weight:700;letter-spacing:-0.5px;margin:0 0 8px;">在此设备上使用</h2>
+        <p style="font-size:15px;color:#64748B;margin:0;line-height:1.6;">无需账户,内容仅保存在这台设备上。随时可以登录以启用云同步与协作。</p>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px;">
+        <sc-for list="{{ localPoints }}" as="p" hint-placeholder-count="3">
+          <div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:#F8FAFC;border:1px solid #EEF1F5;border-radius:11px;">
+            <span style="width:34px;height:34px;flex:none;border-radius:9px;background:#EFF6FF;color:#2563EB;display:flex;align-items:center;justify-content:center;">{{ p.icon }}</span>
+            <div style="flex:1;">
+              <div style="font-size:14px;font-weight:600;color:#334155;">{{ p.title }}</div>
+              <div style="font-size:12.5px;color:#9AA4AF;margin-top:2px;line-height:1.5;">{{ p.desc }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <button style="width:100%;height:48px;border:none;background:#2563EB;color:#fff;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;">开始使用</button>
+
+      <div style="margin-top:20px;text-align:center;font-size:13px;color:#9AA4AF;">
+        想在多设备间同步?<a href="#" style="margin-left:4px;font-weight:500;" onClick="{{ pickCloud }}">改用云端账户</a>
+      </div>
+      </sc-if>
+
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;mode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;cloud&quot;,&quot;local&quot;],&quot;default&quot;:&quot;cloud&quot;,&quot;tsType&quot;:&quot;'cloud' | 'local'&quot;}}">
+class Component extends DCLogic {
+  state = { mode: this.props.mode || 'cloud', serversOpen: false };
+  renderVals() {
+    const ic = (svg) => React.createElement('span', { dangerouslySetInnerHTML: { __html: svg } });
+    const mode = this.state.mode;
+    const serversOpen = this.state.serversOpen;
+    const toggleServers = () => this.setState(s => ({ serversOpen: !s.serversOpen }));
+    const tick = ic('<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg>');
+    const servers = [
+      { name: '公司内网', url: 'mica.internal.corp.example.com:8443', active: true },
+      { name: 'Mica 云', url: 'app.mica.dev' },
+      { name: '家庭 NAS', url: 'mica.local:8443' },
+    ].map(sv => ({
+      ...sv,
+      tick: sv.active ? tick : '',
+      rowStyle: `display:flex;align-items:center;gap:9px;padding:9px 14px;cursor:pointer;${sv.active?'background:#F5F9FF;':''}`,
+    }));
+    const isCloud = mode === 'cloud', isLocal = mode === 'local';
+    const tab = (active) => `flex:1;display:flex;align-items:center;justify-content:center;gap:7px;height:38px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s;${active?'background:#fff;color:#2563EB;box-shadow:0 1px 3px rgba(15,23,42,0.08);':'background:transparent;color:#64748B;'}`;
+    const localPoints = [
+      { title: '完全离线可用', desc: '不需要网络,打开就能写', icon: ic('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14 0"/><path d="M8.5 16.05a6 6 0 0 1 7 0"/><line x1="12" y1="20" x2="12.01" y2="20"/><line x1="2" y1="2" x2="22" y2="22"/></svg>') },
+      { title: '数据存在本机', desc: '内容只保存在这台设备,不上传', icon: ic('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="20" x2="16" y2="20"/></svg>') },
+      { title: '随时可升级', desc: '之后登录即可把本地内容同步到云端', icon: ic('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><polyline points="9 15 12 12 15 15"/><line x1="12" y1="12" x2="12" y2="18"/></svg>') },
+    ];
+    const pickCloud = () => this.setState({ mode: 'cloud' });
+    const pickLocal = () => this.setState({ mode: 'local' });
+    const features = [
+      { text: '离线也能写,联网自动同步', icon: ic('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>') },
+      { text: '实时协作,多人同时编辑', icon: ic('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>') },
+      { text: '块编辑器 · 代码 · 数学公式', icon: ic('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>') },
+    ];
+    return { features, isCloud, isLocal, pickCloud, pickLocal, localPoints,
+      serversOpen, toggleServers, servers, chevronTransform: serversOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+      cloudTabStyle: tab(isCloud), localTabStyle: tab(isLocal) };
+  }
+}
+</script>
+</body>
+</html>

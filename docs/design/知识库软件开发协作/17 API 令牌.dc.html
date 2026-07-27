@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body { font-family:"Roboto","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC",sans-serif; color:#24292F; }
+  a { color:#2563EB; text-decoration:none; } a:hover { text-decoration:underline; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  .row:hover { background:#F8FAFC; }
+  .row .acts { opacity:0; transition:opacity .12s; }
+  .row:hover .acts { opacity:1; }
+  .btn:hover { background:#F1F5F9; }
+  .danger:hover { background:#FEF2F2 !important; color:#B91C1C !important; border-color:#FECACA !important; }
+</style>
+</helmet>
+
+<div style="width:1440px;min-height:900px;background:#EEF2F7;display:flex;flex-direction:column;gap:36px;padding:48px 60px 64px;">
+
+  <div style="display:flex;align-items:baseline;gap:12px;">
+    <span style="font-size:20px;font-weight:700;letter-spacing:-0.3px;">API 令牌</span>
+    <span style="font-size:13px;color:#9AA4AF;">设置 · 账户 —— 给 API、CLI 和定时备份用的长期令牌</span>
+  </div>
+
+  <div style="display:flex;gap:32px;align-items:flex-start;flex-wrap:wrap;">
+
+    <div style="width:660px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:28px;">
+      <div style="font-size:13px;color:#57606A;line-height:1.75;margin-bottom:22px;">用于 API、CLI 和定时备份的长期令牌。密钥只显示一次 —— 请当场复制。默认只读。</div>
+
+      <!-- 一次性密钥 -->
+      <div style="border:1.5px solid #BBF7D0;background:#F0FDF4;border-radius:13px;padding:16px 18px;margin-bottom:24px;">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>
+          <span style="font-size:14px;font-weight:700;color:#065F46;">令牌已创建</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:12px;color:#047857;">立即复制 —— 密钥不会再次显示</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #D1FAE5;border-radius:10px;padding:11px 13px;">
+          <span class="mono" style="flex:1;min-width:0;font-size:13px;color:#24292F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">mica_pat_7Rd2xK9vQe4mZbT1sN8yLh3wC6jF0aUp</span>
+          <span class="btn" style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:6px 11px;cursor:pointer;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>复制
+          </span>
+        </div>
+      </div>
+
+      <!-- 列表 -->
+      <div class="mono" style="font-size:11px;letter-spacing:1.4px;color:#9AA4AF;margin-bottom:10px;">已有令牌</div>
+      <div style="border:1px solid #EEF1F5;border-radius:13px;overflow:hidden;margin-bottom:24px;">
+        <sc-for list="{{ tokens }}" as="t" hint-placeholder-count="3">
+          <div class="row" style="{{ t.rowStyle }}">
+            <span style="width:32px;height:32px;flex:none;border-radius:9px;background:#F4F4F6;display:flex;align-items:center;justify-content:center;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><circle cx="8" cy="15" r="4"/><line x1="10.8" y1="12.2" x2="20" y2="3"/><line x1="17" y1="6" x2="19" y2="8"/></svg>
+            </span>
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:14px;font-weight:500;{{ t.nameStyle }}">{{ t.name }}</span>
+                <span style="{{ t.scopeStyle }}">{{ t.scope }}</span>
+              </div>
+              <div style="font-size:12px;color:#9AA4AF;margin-top:3px;">{{ t.meta }}</div>
+            </div>
+            <div class="acts" style="flex:none;">
+              <span class="danger" style="font-size:12.5px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:6px 12px;cursor:pointer;transition:all .12s;">吊销</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- 新建 -->
+      <div class="mono" style="font-size:11px;letter-spacing:1.4px;color:#9AA4AF;margin-bottom:12px;">创建令牌</div>
+      <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:14px;">
+        <div style="flex:1;">
+          <div style="font-size:13px;color:#57606A;margin-bottom:6px;">名称</div>
+          <div style="border:1px solid #E5E9F0;border-radius:8px;padding:9px 12px;font-size:14px;color:#9AA4AF;">例如 backup</div>
+        </div>
+        <div style="width:150px;">
+          <div style="font-size:13px;color:#57606A;margin-bottom:6px;">有效期（天）</div>
+          <div style="display:flex;align-items:center;border:1px solid #E5E9F0;border-radius:8px;padding:9px 12px;font-size:14px;">
+            <span style="flex:1;">90</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.4"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+        <span onClick="{{ toggleWrite }}" style="{{ writeTrack }}"><span style="{{ writeKnob }}"></span></span>
+        <div style="flex:1;">
+          <div style="font-size:13.5px;font-weight:500;">写入权限</div>
+          <div style="font-size:12px;color:#9AA4AF;margin-top:2px;">默认只读。开启后该令牌可创建和修改页面。</div>
+        </div>
+      </div>
+      <span style="display:inline-block;font-size:13.5px;font-weight:600;color:#fff;background:#2563EB;border-radius:8px;padding:9px 18px;cursor:pointer;">创建令牌</span>
+    </div>
+
+    <!-- 空态 + 吊销确认 -->
+    <div style="display:flex;flex-direction:column;gap:22px;width:420px;">
+      <div style="background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:28px;">
+        <div class="mono" style="font-size:11px;letter-spacing:1.4px;color:#9AA4AF;margin-bottom:14px;">已有令牌</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:9px;padding:38px 20px;background:#FCFDFE;border:1px dashed #E5E9F0;border-radius:13px;">
+          <span style="width:44px;height:44px;border-radius:12px;background:#F4F4F6;display:flex;align-items:center;justify-content:center;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="1.9"><circle cx="8" cy="15" r="4"/><line x1="10.8" y1="12.2" x2="20" y2="3"/><line x1="17" y1="6" x2="19" y2="8"/></svg>
+          </span>
+          <div style="font-size:13.5px;font-weight:600;">还没有令牌</div>
+          <div style="font-size:12.5px;color:#9AA4AF;text-align:center;line-height:1.7;">创建一个只读令牌，就能用 CLI 定时备份这台服务器上的全部内容。</div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:24px;">
+        <div style="font-size:16px;font-weight:700;margin-bottom:8px;">吊销「backup」？</div>
+        <div style="font-size:13px;color:#57606A;line-height:1.75;margin-bottom:18px;">使用这个令牌的脚本会立刻开始失败（返回 401）。此操作不可撤销，但可以再创建一个新令牌。</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <span style="font-size:13.5px;color:#57606A;padding:9px 14px;cursor:pointer;">取消</span>
+          <span style="font-size:13.5px;font-weight:600;color:#fff;background:#DC2626;border-radius:8px;padding:9px 16px;cursor:pointer;">吊销</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { write: false };
+  renderVals() {
+    const on = this.state.write;
+    const rows = [
+      { name:'backup', scope:'只读', meta:'最近使用 2 小时前 · 过期 2026-10-24' },
+      { name:'mcp-claude', scope:'读写', write:true, meta:'最近使用 昨天 · 永不过期' },
+      { name:'(未命名)', scope:'只读', unnamed:true, meta:'从未使用 · 已过期 2026-06-30', expired:true },
+    ];
+    return {
+      writeTrack: `width:36px;height:20px;border-radius:11px;flex:none;cursor:pointer;display:flex;align-items:center;padding:2px;background:${on ? '#2563EB' : '#D8DEE7'};justify-content:${on ? 'flex-end' : 'flex-start'};`,
+      writeKnob: 'width:16px;height:16px;border-radius:50%;background:#fff;display:block;',
+      toggleWrite: () => this.setState({ write: !on }),
+      tokens: rows.map((t, i) => ({
+        name: t.name, scope: t.scope, meta: t.meta,
+        rowStyle: `display:flex;align-items:center;gap:12px;padding:14px 16px;${i ? 'border-top:1px solid #F1F5F9;' : ''}${t.expired ? 'opacity:0.62;' : ''}`,
+        nameStyle: t.unnamed ? 'color:#9AA4AF;font-style:italic;' : '',
+        scopeStyle: `font-size:11px;border-radius:5px;padding:2px 7px;${t.write ? 'color:#B45309;background:#FEF3C7;' : 'color:#57606A;background:#F4F4F6;'}`,
+      })),
+    };
+  }
+}
+</script>
+</body>
+</html>

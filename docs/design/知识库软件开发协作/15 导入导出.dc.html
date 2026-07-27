@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body { font-family:"Roboto","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC",sans-serif; color:#24292F; }
+  a { color:#2563EB; text-decoration:none; } a:hover { text-decoration:underline; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  .btn:hover { background:#F1F5F9; }
+  .drop:hover { border-color:#93B4F5 !important; background:#F8FBFF !important; }
+  @keyframes stripe { to { background-position: 28px 0; } }
+  .bar { background-image:repeating-linear-gradient(115deg,rgba(255,255,255,0.28) 0 8px,transparent 8px 16px); animation:stripe 1s linear infinite; }
+</style>
+</helmet>
+
+<div style="width:1440px;min-height:900px;background:#EEF2F7;display:flex;flex-direction:column;gap:36px;padding:48px 60px 64px;">
+
+  <div style="display:flex;align-items:baseline;gap:12px;">
+    <span style="font-size:20px;font-weight:700;letter-spacing:-0.3px;">导入与导出</span>
+    <span style="font-size:13px;color:#9AA4AF;">设置 · 数据 —— 从 Mica 或 Notion 的 ZIP 导入，整库导出</span>
+  </div>
+
+  <div style="display:flex;gap:32px;align-items:flex-start;flex-wrap:wrap;">
+
+    <!-- 数据页 -->
+    <div style="width:640px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:28px;">
+      <div class="mono" style="font-size:11px;letter-spacing:1.4px;color:#9AA4AF;margin-bottom:14px;">导入</div>
+      <div style="font-size:13px;color:#57606A;line-height:1.75;margin-bottom:16px;">从 ZIP 导入工作区 —— Mica 导出或 Notion「Markdown &amp; CSV」导出。页面树、排序和图片都会被重建。</div>
+
+      <div class="drop" style="display:flex;flex-direction:column;align-items:center;gap:10px;border:1.5px dashed #DBE3EF;border-radius:14px;padding:34px 24px;background:#FCFDFE;cursor:pointer;transition:all .14s;margin-bottom:14px;">
+        <span style="width:46px;height:46px;border-radius:13px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 9 12 4 17 9"/><line x1="12" y1="4" x2="12" y2="16"/></svg>
+        </span>
+        <div style="font-size:14px;font-weight:600;">把 .zip 或 .md 拖到这里</div>
+        <div style="font-size:12.5px;color:#9AA4AF;">或 <span style="color:#2563EB;font-weight:500;">选择文件</span> · <span style="color:#2563EB;font-weight:500;">选择文件夹</span></div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 2px 18px;">
+        <span style="{{ folderTrack }}" onClick="{{ toggleFolder }}"><span style="{{ folderKnob }}"></span></span>
+        <div style="flex:1;">
+          <div style="font-size:13.5px;font-weight:500;">作为一个文件夹导入</div>
+          <div style="font-size:12px;color:#9AA4AF;margin-top:2px;">关闭：文件夹里的内容直接放入目标位置。开启：内容保留在一个文件夹里。</div>
+        </div>
+      </div>
+
+      <div style="height:1px;background:#F1F5F9;margin-bottom:22px;"></div>
+
+      <div class="mono" style="font-size:11px;letter-spacing:1.4px;color:#9AA4AF;margin-bottom:14px;">导出</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;gap:12px;border:1px solid #EEF1F5;border-radius:12px;padding:14px 16px;">
+          <span style="font-size:18px;">🗂️</span>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:500;">导出全部工作区</div>
+            <div style="font-size:12px;color:#9AA4AF;margin-top:2px;">4 个工作区 · 397 个页面 · 约 128 MB</div>
+          </div>
+          <span class="btn" style="font-size:13px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:8px 14px;cursor:pointer;">导出 ZIP</span>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:8px;padding:2px 2px 0;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.2" style="flex:none;margin-top:3px;"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11"/><line x1="12" y1="8" x2="12" y2="8"/></svg>
+          <span style="font-size:12.5px;color:#9AA4AF;line-height:1.7;">单个页面可从页面菜单（▾）导出为 Markdown、HTML 或 PDF；导出不含回收站内容与编辑历史。</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态 -->
+    <div style="display:flex;flex-direction:column;gap:22px;width:480px;">
+
+      <div style="background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:22px 24px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <span style="width:30px;height:30px;border-radius:9px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;font-size:15px;">📦</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;">正在导入 notion-export.zip</div>
+            <div style="font-size:12px;color:#9AA4AF;margin-top:2px;">重建页面树 · 第 42 / 96 篇</div>
+          </div>
+          <span class="mono" style="font-size:12.5px;color:#2563EB;font-weight:500;">44%</span>
+        </div>
+        <div style="height:6px;border-radius:4px;background:#EEF2F7;overflow:hidden;">
+          <div class="bar" style="width:44%;height:100%;background:#2563EB;border-radius:4px;"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+          <span style="font-size:12.5px;color:#9AA4AF;flex:1;">可以继续用，导入在后台进行。</span>
+          <span class="btn" style="font-size:12.5px;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:6px 12px;cursor:pointer;">取消导入</span>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:22px 24px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <span style="width:30px;height:30px;border-radius:9px;background:#ECFDF5;display:flex;align-items:center;justify-content:center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>
+          </span>
+          <span style="font-size:14px;font-weight:600;flex:1;">已导入 96 篇笔记、12 个文件夹</span>
+        </div>
+        <div style="font-size:12.5px;color:#57606A;line-height:1.75;margin-bottom:14px;">3 个文件被跳过（不是 Markdown）。图片已转存到 Mica 存储；指向 Notion 的内部链接已尽力改写为页面链接。</div>
+        <div style="display:flex;gap:8px;">
+          <span style="font-size:13px;font-weight:600;color:#fff;background:#2563EB;border-radius:8px;padding:8px 14px;cursor:pointer;">打开工作区</span>
+          <span class="btn" style="font-size:13px;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:8px 14px;cursor:pointer;">查看跳过的 3 个文件</span>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #FECACA;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:22px 24px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+          <span style="width:30px;height:30px;border-radius:9px;background:#FEF2F2;display:flex;align-items:center;justify-content:center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12" y2="17"/></svg>
+          </span>
+          <span style="font-size:14px;font-weight:600;flex:1;">导入失败：没找到 Markdown 文件</span>
+        </div>
+        <div style="font-size:12.5px;color:#57606A;line-height:1.75;margin-bottom:14px;">这个 ZIP 里没有 .md 文件。若是从 Notion 导出，请选「Markdown &amp; CSV」而不是「HTML」。</div>
+        <div style="display:flex;gap:8px;">
+          <span style="font-size:13px;font-weight:600;color:#fff;background:#2563EB;border-radius:8px;padding:8px 14px;cursor:pointer;">重新选择文件</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { asFolder: true };
+  renderVals() {
+    const on = this.state.asFolder;
+    return {
+      folderTrack: `width:36px;height:20px;border-radius:11px;flex:none;cursor:pointer;display:flex;align-items:center;padding:2px;background:${on ? '#2563EB' : '#D8DEE7'};justify-content:${on ? 'flex-end' : 'flex-start'};`,
+      folderKnob: 'width:16px;height:16px;border-radius:50%;background:#fff;display:block;',
+      toggleFolder: () => this.setState({ asFolder: !on }),
+    };
+  }
+}
+</script>
+</body>
+</html>

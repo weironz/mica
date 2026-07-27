@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; color:#24292F; }
+  @keyframes micaspin2 { to { transform: rotate(360deg); } }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;position:relative;background:#F8FAFC;overflow:hidden;border:1px solid #E5E9F0;">
+  <div style="position:absolute;inset:0;display:flex;">
+    <div style="width:280px;background:#FFFFFF;border-right:1px solid #EEF1F5;"></div>
+    <div style="flex:1;background:#fff;"></div>
+  </div>
+  <div style="position:absolute;inset:0;background:rgba(15,23,42,0.34);"></div>
+
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:480px;background:#fff;border-radius:16px;box-shadow:0 24px 60px -12px rgba(15,23,42,0.4);overflow:hidden;">
+
+    <!-- Direction switch -->
+    <div style="display:flex;gap:4px;margin:16px 16px 0;padding:4px;background:#F1F5F9;border-radius:11px;">
+      <button onClick="{{ pickCloud }}" style="{{ cloudTab }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 13V3M8 7l4-4 4 4"/><path d="M20 17a4 4 0 0 0-3-6.9"/><path d="M4 17a4 4 0 0 1 3-6.9"/></svg>上云
+      </button>
+      <button onClick="{{ pickLocal }}" style="{{ localTab }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="20" x2="16" y2="20"/></svg>转为本地
+      </button>
+    </div>
+
+    <div style="padding:28px 28px 24px;">
+      <!-- Icon + title -->
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;">
+        <span style="width:56px;height:56px;border-radius:14px;background:{{ iconBg }};color:{{ iconColor }};display:flex;align-items:center;justify-content:center;margin-bottom:16px;">{{ bigIcon }}</span>
+        <div style="font-size:19px;font-weight:700;letter-spacing:-0.3px;margin-bottom:8px;">{{ title }}</div>
+        <div style="font-size:14px;line-height:1.65;color:#64748B;max-width:360px;">{{ body }}</div>
+      </div>
+
+      <!-- Flow visual -->
+      <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:24px 0 8px;">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+          <span style="width:44px;height:44px;border-radius:11px;background:#F1F5F9;display:flex;align-items:center;justify-content:center;">{{ fromIcon }}</span>
+          <span style="font-size:11.5px;color:#9AA4AF;">{{ fromLabel }}</span>
+        </div>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+          <span style="width:44px;height:44px;border-radius:11px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;">{{ toIcon }}</span>
+          <span style="font-size:11.5px;color:#2563EB;font-weight:500;">{{ toLabel }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:16px 24px;border-top:1px solid #F1F5F9;background:#FBFCFE;">
+      <sc-if value="{{ isConfirm }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button style="height:42px;padding:0 18px;border:1px solid #E2E8F0;background:#fff;border-radius:10px;font-size:14px;font-weight:500;color:#334155;cursor:pointer;font-family:inherit;">取消</button>
+          <button onClick="{{ start }}" style="height:42px;padding:0 22px;border:none;background:#2563EB;color:#fff;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">{{ confirmLabel }}</button>
+        </div>
+      </sc-if>
+      <sc-if value="{{ isRunning }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;color:#64748B;font-size:14px;">
+          <span style="width:16px;height:16px;border:2px solid #E2E8F0;border-top-color:#2563EB;border-radius:50%;animation:micaspin2 .7s linear infinite;"></span>{{ runningLabel }}
+        </div>
+      </sc-if>
+      <sc-if value="{{ isDone }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;justify-content:flex-end;">
+          <button onClick="{{ reset }}" style="height:42px;padding:0 22px;border:none;background:#16A34A;color:#fff;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">完成</button>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { dir: 'cloud', stage: 'confirm' };
+  renderVals() {
+    const ic = (svg) => React.createElement('span', { dangerouslySetInnerHTML: { __html: svg } });
+    const cloudSvg = (c,s=20)=>ic(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.9"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>`);
+    const deviceSvg = (c,s=20)=>ic(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.9"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="20" x2="16" y2="20"/></svg>`);
+
+    const dir = this.state.dir, stage = this.state.stage;
+    const toCloud = dir === 'cloud';
+    const tab = (on) => `flex:1;display:flex;align-items:center;justify-content:center;gap:7px;height:36px;border:none;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;${on?'background:#fff;color:#2563EB;box-shadow:0 1px 3px rgba(15,23,42,0.08);':'background:transparent;color:#64748B;'}`;
+
+    const doneTitle = toCloud ? '上云完成' : '转为本地工作区';
+    const confirmTitle = toCloud ? '上传到云端' : '转为本地工作区';
+    const confirmBody = toCloud
+      ? '把「草稿本」复制到云端账号,之后可多设备同步与协作。本地原件将保留为独立副本。'
+      : '把「我的工作区」复制为一个新的本地工作区?本地副本仅存于此设备,不再与云端同步。';
+    const doneBody = toCloud
+      ? '「草稿本」已复制到云端。本地原件现在是独立副本,两边互不影响。'
+      : '已在本设备创建「我的工作区」的本地副本。';
+
+    return {
+      cloudTab: tab(toCloud), localTab: tab(!toCloud),
+      pickCloud: () => this.setState({ dir:'cloud', stage:'confirm' }),
+      pickLocal: () => this.setState({ dir:'local', stage:'confirm' }),
+      start: () => { this.setState({ stage:'running' }); setTimeout(()=>this.setState({stage:'done'}), 1400); },
+      reset: () => this.setState({ stage:'confirm' }),
+      isConfirm: stage==='confirm', isRunning: stage==='running', isDone: stage==='done',
+      title: stage==='done' ? doneTitle : confirmTitle,
+      body: stage==='done' ? doneBody : confirmBody,
+      confirmLabel: toCloud ? '上传到云端' : '创建本地副本',
+      runningLabel: toCloud ? '正在上传到云端…' : '正在创建本地副本…',
+      bigIcon: stage==='done'
+        ? ic('<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>')
+        : (toCloud ? cloudSvg('#2563EB',26) : deviceSvg('#2563EB',26)),
+      iconBg: stage==='done' ? '#DCFCE7' : '#EFF6FF',
+      iconColor: stage==='done' ? '#16A34A' : '#2563EB',
+      fromIcon: toCloud ? deviceSvg('#64748B') : cloudSvg('#64748B'),
+      toIcon: toCloud ? cloudSvg('#2563EB') : deviceSvg('#2563EB'),
+      fromLabel: toCloud ? '本地设备' : '云端',
+      toLabel: toCloud ? '云端' : '本地设备',
+    };
+  }
+}
+</script>
+</body>
+</html>

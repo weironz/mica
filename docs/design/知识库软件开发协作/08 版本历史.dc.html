@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  ::selection { background: rgba(37,99,235,0.20); }
+  .mica-scroll::-webkit-scrollbar { width: 10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+  .ins { background:#DCFCE7; }
+  .del { background:#FEE2E2; text-decoration:line-through; color:#B91C1C; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;flex-direction:column;background:#F8FAFC;color:#24292F;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <!-- Top bar -->
+  <div style="height:56px;flex:none;background:#fff;border-bottom:1px solid #EEF1F5;display:flex;align-items:center;gap:12px;padding:0 20px;">
+    <span style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;color:#475569;border-radius:8px;cursor:pointer;background:#F1F5F9;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+    </span>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="1.9"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 3"/></svg>
+    <span style="font-size:15px;font-weight:600;">版本历史</span>
+    <span style="font-size:14px;color:#9AA4AF;">· 产品阅读笔记 · 第 12 周</span>
+    <span style="flex:1;"></span>
+    <span style="display:flex;align-items:center;gap:6px;font-size:13px;color:#64748B;margin-right:8px;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+      正在预览 14:32 的版本
+    </span>
+    <button style="height:36px;padding:0 14px;border:1px solid #E2E8F0;background:#fff;border-radius:9px;font-size:14px;font-weight:500;color:#334155;cursor:pointer;font-family:inherit;">复制此版本</button>
+    <button style="height:36px;padding:0 16px;border:none;background:#2563EB;color:#fff;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">恢复到此版本</button>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex;">
+
+    <!-- Document preview -->
+    <div class="mica-scroll" style="flex:1;min-width:0;overflow-y:auto;padding:40px;">
+      <div style="max-width:760px;margin:0 auto;background:#fff;border:1px solid #EEF1F5;border-radius:12px;padding:44px 52px;">
+        <h1 style="font-size:28px;font-weight:700;letter-spacing:-0.4px;margin:0 0 20px;">产品阅读笔记 · 第 12 周</h1>
+        <p style="margin:0 0 12px;font-size:16px;line-height:1.7;">这一周主要在读关于「工具类产品的留存」的几篇文章,把值得反复看的观点整理在下面。核心结论:<span class="ins">留存不是靠功能堆出来的,而是靠让用户越用越省事</span>。</p>
+        <h2 style="margin:26px 0 8px;font-size:22px;font-weight:700;">一、习惯回路比新功能更重要</h2>
+        <p style="margin:0 0 12px;font-size:16px;line-height:1.7;">真正让人留下来的产品,都有一个稳定的<span class="del">「触发-行动-奖励」三段式</span><span class="ins">「触发 → 行动 → 奖励 → 投入」回路</span>。对笔记类工具来说,投入就是积累的内容本身。</p>
+        <ul style="margin:0 0 12px;padding-left:24px;font-size:16px;line-height:1.7;">
+          <li>触发要低摩擦:一个全局快捷键就能开始写。</li>
+          <li class="ins">奖励要即时:写完立刻能搜到、能被复用。</li>
+        </ul>
+        <blockquote style="margin:16px 0;padding-left:16px;border-left:3px solid #CBD5E1;color:#57606A;font-size:16px;line-height:1.6;">好的工具是隐形的。当用户不再意识到自己在「用工具」时,留存才真正开始。</blockquote>
+      </div>
+    </div>
+
+    <!-- Version timeline -->
+    <div class="mica-scroll" style="width:340px;flex:none;background:#fff;border-left:1px solid #EEF1F5;overflow-y:auto;padding:20px 16px;">
+      <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;padding:0 6px 14px;">今天</div>
+      <sc-for list="{{ today }}" as="v" hint-placeholder-count="4">
+        <div style="{{ v.cardStyle }}">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <span style="font-size:14px;font-weight:600;color:{{ v.timeColor }};">{{ v.time }}</span>
+            <sc-if value="{{ v.current }}" hint-placeholder-val="{{ false }}">
+              <span style="font-size:11px;font-weight:600;color:#2563EB;background:#EFF6FF;padding:2px 8px;border-radius:10px;">当前</span>
+            </sc-if>
+            <span style="flex:1;"></span>
+            <span style="font-size:12px;color:#9AA4AF;">{{ v.count }} 处改动</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:22px;height:22px;flex:none;border-radius:50%;color:#fff;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;background:{{ v.color }};">{{ v.initial }}</span>
+            <span style="font-size:13px;color:#64748B;">{{ v.author }}</span>
+          </div>
+        </div>
+      </sc-for>
+
+      <div style="font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;padding:18px 6px 14px;">更早</div>
+      <sc-for list="{{ earlier }}" as="v" hint-placeholder-count="3">
+        <div style="{{ v.cardStyle }}">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <span style="font-size:14px;font-weight:600;color:#334155;">{{ v.time }}</span>
+            <span style="flex:1;"></span>
+            <span style="font-size:12px;color:#9AA4AF;">{{ v.count }} 处改动</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:22px;height:22px;flex:none;border-radius:50%;color:#fff;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;background:{{ v.color }};">{{ v.initial }}</span>
+            <span style="font-size:13px;color:#64748B;">{{ v.author }}</span>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  renderVals() {
+    const card = (active) => `padding:12px 14px;border-radius:10px;margin-bottom:6px;cursor:pointer;border:1px solid ${active?'#BFDBFE':'transparent'};background:${active?'#F5F9FF':'transparent'};`;
+    const mk = (v) => ({ ...v, cardStyle: card(v.active), timeColor: v.active ? '#2563EB' : '#334155' });
+    const today = [
+      { time: '15:08', author: '林深', initial: '林', color: '#2563EB', count: 6, current: true },
+      { time: '14:32', author: '周舟', initial: '周', color: '#16A34A', count: 12, active: true },
+      { time: '11:47', author: '林深', initial: '林', color: '#2563EB', count: 3 },
+      { time: '09:15', author: 'Alex Chen', initial: 'A', color: '#DB2777', count: 8 },
+    ].map(mk);
+    const earlier = [
+      { time: '昨天 22:03', author: '林深', initial: '林', color: '#2563EB', count: 21 },
+      { time: '昨天 16:40', author: '周舟', initial: '周', color: '#16A34A', count: 5 },
+      { time: '7 月 14 日', author: '林深', initial: '林', color: '#2563EB', count: 14 },
+    ].map(mk);
+    return { today, earlier };
+  }
+}
+</script>
+</body>
+</html>

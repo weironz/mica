@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; color:#24292F; }
+  ::selection { background: rgba(37,99,235,0.20); }
+  .mica-scroll::-webkit-scrollbar { width:10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background:#E2E8F0; border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+  .res-row:hover { background:#F8FAFC; }
+  mark { background:#FEF08A; color:inherit; border-radius:2px; padding:0 1px; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;position:relative;background:#F8FAFC;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <!-- Dimmed shell backdrop -->
+  <div style="position:absolute;inset:0;display:flex;">
+    <div style="width:280px;background:#FFFFFF;border-right:1px solid #EEF1F5;"></div>
+    <div style="flex:1;background:#fff;display:flex;flex-direction:column;">
+      <div style="height:52px;border-bottom:1px solid #F1F5F9;"></div>
+      <div style="flex:1;padding:56px 0;">
+        <div style="max-width:720px;margin:0 auto;padding:0 40px;">
+          <div style="width:60%;height:34px;background:#F1F5F9;border-radius:6px;margin-bottom:20px;"></div>
+          <div style="width:90%;height:14px;background:#F1F5F9;border-radius:4px;margin-bottom:12px;"></div>
+          <div style="width:80%;height:14px;background:#F1F5F9;border-radius:4px;margin-bottom:12px;"></div>
+          <div style="width:85%;height:14px;background:#F1F5F9;border-radius:4px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="position:absolute;inset:0;background:rgba(15,23,42,0.34);backdrop-filter:blur(1px);"></div>
+
+  <!-- Search modal -->
+  <div style="position:absolute;top:96px;left:50%;transform:translateX(-50%);width:600px;background:#fff;border-radius:16px;box-shadow:0 24px 60px -12px rgba(15,23,42,0.4);overflow:hidden;">
+
+    <!-- Input -->
+    <div style="display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid #F1F5F9;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" style="flex:none;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input value="{{ query }}" onInput="{{ onInput }}" autofocus placeholder="搜索标题和内容…" style="flex:1;border:none;outline:none;font-size:17px;color:#24292F;font-family:inherit;background:transparent;"/>
+      <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
+        <span style="width:16px;height:16px;flex:none;border:2px solid #E2E8F0;border-top-color:#2563EB;border-radius:50%;animation:micaspin .7s linear infinite;"></span>
+      </sc-if>
+      <span style="flex:none;font-family:'Roboto Mono',monospace;font-size:11px;color:#9AA4AF;background:#F1F5F9;padding:3px 8px;border-radius:6px;">esc</span>
+    </div>
+
+    <!-- Results -->
+    <div class="mica-scroll" style="height:404px;overflow-y:auto;">
+
+      <sc-if value="{{ showEmptyPrompt }}" hint-placeholder-val="{{ false }}">
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#9AA4AF;padding:40px;">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="1.6"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <div style="font-size:16px;font-weight:600;color:#334155;margin-top:14px;">搜索此工作区</div>
+          <div style="font-size:13.5px;margin-top:4px;">按标题或内容查找页面</div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ showNoMatch }}" hint-placeholder-val="{{ false }}">
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#9AA4AF;padding:40px;">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="1.6"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          <div style="font-size:16px;font-weight:600;color:#334155;margin-top:14px;">没有匹配结果</div>
+          <div style="font-size:13.5px;margin-top:4px;">未找到与「{{ query }}」相关的内容</div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ showResults }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:8px 8px 4px 8px;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#9AA4AF;padding-left:16px;">{{ resultCount }} 个结果</div>
+        <sc-for list="{{ results }}" as="r" hint-placeholder-count="5">
+          <div class="res-row" style="{{ r.rowStyle }}">
+            <span style="width:34px;height:34px;flex:none;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;font-size:16px;">{{ r.emoji }}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:14.5px;font-weight:600;color:#24292F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.name }}</span>
+                <sc-if value="{{ r.titleMatch }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:none;font-size:11px;font-weight:500;color:#2563EB;background:#EFF6FF;padding:1px 7px;border-radius:10px;">标题匹配</span>
+                </sc-if>
+              </div>
+              <div style="font-size:12.5px;color:#9AA4AF;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.snippetNode }}</div>
+              <div style="font-size:11px;color:#9AA4AF;margin-top:3px;">{{ r.path }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </sc-if>
+
+    </div>
+
+    <!-- Footer hints -->
+    <div style="display:flex;align-items:center;gap:16px;padding:10px 18px;border-top:1px solid #F1F5F9;background:#FBFCFE;font-size:12px;color:#9AA4AF;">
+      <span style="display:flex;align-items:center;gap:5px;"><span style="font-family:'Roboto Mono',monospace;background:#F1F5F9;padding:2px 6px;border-radius:5px;">↑↓</span>选择</span>
+      <span style="display:flex;align-items:center;gap:5px;"><span style="font-family:'Roboto Mono',monospace;background:#F1F5F9;padding:2px 6px;border-radius:5px;">↵</span>打开</span>
+      <span style="flex:1;"></span>
+      <span style="display:flex;align-items:center;gap:6px;">全局搜索 <span style="font-family:'Roboto Mono',monospace;background:#F1F5F9;padding:2px 6px;border-radius:5px;">⌘⇧F</span></span>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { query: '产品', loading: false };
+  componentDidMount() {
+    const s = document.createElement('style');
+    s.textContent = '@keyframes micaspin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
+  renderVals() {
+    const q = this.state.query;
+    const onInput = (e) => this.setState({ query: e.target.value });
+
+    const ALL = [
+      { name:'产品阅读笔记 · 第 12 周', emoji:'📄', titleMatch:true, snippet:'这一周主要在读关于「工具类产品的留存」的几篇文章…', path:'产品思考' },
+      { name:'留存密码', emoji:'📄', titleMatch:false, snippet:'真正让人留下来的产品,都有一个稳定的触发→行动→奖励→投入回路。', path:'产品思考' },
+      { name:'竞品拆解 · Heptabase', emoji:'📄', titleMatch:false, snippet:'白板 + 卡片的产品形态,和 Mica 的块编辑器路线差异…', path:'产品思考' },
+      { name:'周四速记', emoji:'📝', titleMatch:false, snippet:'今天和团队过了下一版产品规划,重点是同步的稳定性。', path:'日常随笔' },
+      { name:'《上瘾》读书笔记', emoji:'📖', titleMatch:false, snippet:'钩子模型:触发、行动、多变的奖励、投入——这是产品设计的核心。', path:'读书 · 摘抄' },
+      { name:'本周待办', emoji:'✅', titleMatch:false, snippet:'完成搜索对话框设计;梳理工作区迁移流程。', path:'日常随笔' },
+    ];
+    const query = q.trim();
+    const results = query === '' ? [] : ALL.filter(r =>
+      r.name.includes(query) || r.snippet.includes(query)
+    );
+
+    const hl = (text) => {
+      if (!query) return text;
+      const parts = text.split(query);
+      if (parts.length === 1) return text;
+      const out = [];
+      parts.forEach((p, i) => {
+        if (i > 0) out.push(React.createElement('mark', { key: 'm'+i }, query));
+        out.push(p);
+      });
+      return React.createElement(React.Fragment, null, ...out);
+    };
+
+    const rows = results.map((r, i) => ({
+      ...r,
+      snippetNode: hl(r.snippet),
+      rowStyle: `display:flex;align-items:flex-start;gap:12px;padding:11px 16px;cursor:pointer;${i===0?'background:#EFF6FF;':''}`,
+    }));
+
+    return {
+      query: q, onInput, loading: this.state.loading,
+      results: rows, resultCount: rows.length,
+      showEmptyPrompt: query === '',
+      showNoMatch: query !== '' && rows.length === 0,
+      showResults: rows.length > 0,
+    };
+  }
+}
+</script>
+</body>
+</html>

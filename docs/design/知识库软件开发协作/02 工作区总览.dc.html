@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body { font-family:"Roboto","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC",sans-serif; color:#24292F; }
+  a { color:#2563EB; text-decoration:none; } a:hover { text-decoration:underline; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  .mica-scroll::-webkit-scrollbar { width:10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background:#E2E8F0; border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+  .navrow:hover { background:#F1F5F9; }
+  .tree-row:hover { background:#F1F5F9; }
+  .card:hover { border-color:#C7D2FE !important; box-shadow:0 8px 24px -12px rgba(37,99,235,0.28); }
+  .row:hover { background:#F8FAFC; }
+  .leader:hover .lname { color:#2563EB; }
+  .ghead .gtools { opacity:0; transition:opacity .12s; }
+  .ghead:hover .gtools { opacity:1; }
+  .gbtn:hover { background:#F1F5F9; color:#2563EB !important; }
+  .styopt:hover { border-color:#C7D2FE !important; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;background:#F8FAFC;overflow:hidden;">
+
+  <!-- SIDEBAR -->
+  <div style="width:280px;flex:none;background:#FFFFFF;display:flex;flex-direction:column;padding:16px;border-right:1px solid #EEF1F5;">
+    <div class="navrow" style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:14px;font-weight:600;color:#57606A;cursor:pointer;margin-bottom:8px;">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="1.9"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span>首页</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#F4F4F6;border-radius:8px;color:#57606A;font-size:13.5px;margin-bottom:16px;cursor:text;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      搜索全部…<span style="flex:1;"></span><span class="mono" style="font-size:11px;color:#9AA4AF;">⌘⇧F</span>
+    </div>
+    <div style="height:1px;background:#F1F5F9;margin:0 -4px 14px;"></div>
+
+    <div style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;">
+      <span class="mono" style="font-size:10.5px;letter-spacing:1.5px;color:#9AA4AF;flex:1;">工作区</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.2" style="cursor:pointer;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>
+    <div class="mica-scroll" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:1px;">
+      <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+        <div onClick="{{ g.toggle }}" class="tree-row" style="display:flex;align-items:center;gap:6px;min-height:28px;padding:0 8px;border-radius:8px;cursor:pointer;margin-top:4px;">
+          <span style="width:12px;flex:none;text-align:center;color:#9AA4AF;font-size:9px;">{{ g.caret }}</span>
+          <span class="mono" style="flex:1;font-size:11px;letter-spacing:1px;color:#9AA4AF;">{{ g.name }}</span>
+          <span class="mono" style="font-size:11px;color:#CBD5E1;">{{ g.count }}</span>
+        </div>
+        <sc-for list="{{ g.rows }}" as="w" hint-placeholder-count="2">
+          <div onClick="{{ w.open_ }}" class="tree-row" style="{{ w.rowStyle }}">
+            <span style="font-size:15px;">{{ w.emoji }}</span>
+            <span style="flex:1;font-size:13.5px;">{{ w.name }}</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.4"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          </div>
+        </sc-for>
+      </sc-for>
+    </div>
+
+    <span style="flex:1;"></span>
+    <div style="height:1px;background:#F1F5F9;margin:12px 0;"></div>
+    <div class="navrow" style="display:flex;align-items:center;gap:10px;padding:6px;border-radius:8px;cursor:pointer;">
+      <span style="width:32px;height:32px;flex:none;border-radius:50%;background:#E2E8F0;color:#334155;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;">林</span>
+      <div style="flex:1;min-width:0;"><div style="font-size:13.5px;font-weight:600;">林深</div><div style="font-size:12px;color:#57606A;">lin@mica.dev</div></div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANE -->
+  <div class="mica-scroll" style="flex:1;min-width:0;background:#fff;overflow-y:auto;">
+    <div style="max-width:1060px;margin:0 auto;padding:44px 44px 96px;">
+
+      <sc-if value="{{ isBook }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:26px;">
+        <span onClick="{{ goOverview }}" class="row" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#57606A;border-radius:7px;padding:5px 9px 5px 6px;cursor:pointer;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+          工作区
+        </span>
+        <span style="font-size:13px;color:#CBD5E1;">/</span>
+        <span style="font-size:13px;color:#57606A;font-weight:500;">{{ book.name }}</span>
+      </div>
+
+      <div style="display:flex;align-items:flex-start;gap:18px;margin-bottom:8px;">
+        <span style="width:60px;height:60px;flex:none;border-radius:14px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;font-size:30px;">{{ book.emoji }}</span>
+        <div style="flex:1;min-width:0;padding-top:2px;">
+          <h1 style="font-size:28px;font-weight:700;letter-spacing:-0.6px;margin:0 0 8px;">{{ book.name }}</h1>
+          <div style="display:flex;align-items:center;gap:18px;">
+            <span style="font-size:13.5px;color:#57606A;"><span style="font-weight:600;color:#24292F;">{{ book.count }}</span></span>
+            <span style="font-size:13.5px;color:#57606A;"><span style="font-weight:600;color:#24292F;">{{ book.words }}</span> 字</span>
+            <span style="font-size:13.5px;color:#9AA4AF;">{{ book.desc }}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex:none;">
+          <span class="row" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:9px;padding:8px 13px;cursor:pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新建页面
+          </span>
+          <span class="row" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:9px;padding:8px 13px;cursor:pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11"/><line x1="12" y1="8" x2="12" y2="8"/></svg>设置
+          </span>
+        </div>
+      </div>
+
+      <div style="height:1px;background:#F1F5F9;margin:26px 0 18px;"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2"><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/></svg>
+        <span style="font-size:13px;font-weight:600;color:#57606A;">目录</span>
+      </div>
+      <div style="display:flex;flex-direction:column;">
+        <sc-for list="{{ book.tree }}" as="n" hint-placeholder-count="5">
+          <div class="row leader" style="{{ n.rowStyle }}">
+            <span style="width:14px;flex:none;text-align:center;color:#9AA4AF;font-size:9px;">{{ n.caret }}</span>
+            <span style="font-size:14px;flex:none;">{{ n.emoji }}</span>
+            <span class="lname" style="font-size:13.5px;color:#334155;flex:none;{{ n.nameStyle }}">{{ n.name }}</span>
+            <span style="flex:1;min-width:24px;border-bottom:1px dashed #E5E9F0;margin:0 10px 5px;"></span>
+            <span class="mono" style="font-size:11.5px;color:#9AA4AF;flex:none;">{{ n.time }}</span>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:28px;">
+        <h1 style="font-size:26px;font-weight:700;letter-spacing:-0.5px;margin:0;">工作区</h1>
+        <span style="font-size:13px;color:#9AA4AF;padding-bottom:4px;">4 个工作区 · 397 个页面</span>
+      </div>
+
+      <!-- 常用 -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <span style="font-size:13px;font-weight:600;color:#57606A;">常用</span>
+        <span style="flex:1;"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:36px;">
+        <sc-for list="{{ pinned }}" as="p" hint-placeholder-count="3">
+          <div class="card" style="display:flex;align-items:center;gap:12px;border:1px solid #EEF1F5;border-radius:12px;padding:14px 16px;cursor:pointer;transition:box-shadow .14s,border-color .14s;">
+            <span style="font-size:20px;">{{ p.emoji }}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:14px;font-weight:600;">{{ p.name }}</div>
+              <div style="font-size:12px;color:#9AA4AF;margin-top:1px;">{{ p.meta }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- tabs + view toggle -->
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:18px;position:relative;">
+        <span style="font-size:13px;font-weight:600;color:#57606A;">全部工作区</span>
+        <span style="flex:1;"></span>
+        <span onClick="{{ toggleMenu }}" class="row" style="display:inline-flex;align-items:center;gap:4px;border:1px solid #E5E9F0;border-radius:9px;padding:6px 9px;cursor:pointer;color:#57606A;margin-right:2px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="6 9 12 15 18 9"/></svg>
+        </span>
+        <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;top:38px;right:78px;z-index:5;background:#fff;border:1px solid #E5E9F0;border-radius:11px;box-shadow:0 18px 40px -22px rgba(15,23,42,0.45);padding:5px;width:150px;">
+          <div class="row" style="display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;font-size:13.5px;cursor:pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><path d="M4 19V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v12"/><path d="M4 19a2 2 0 0 0 2 2h12"/></svg>
+            新建工作区
+          </div>
+          <div class="row" style="display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;font-size:13.5px;cursor:pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><path d="M4 6h6l2 3h8v10a1 1 0 0 1-1 1H4z"/></svg>
+            新建分组
+          </div>
+        </div>
+        </sc-if>
+        <div style="display:flex;gap:2px;border:1px solid #E5E9F0;border-radius:9px;padding:2px;">
+          <span onClick="{{ showCards }}" title="卡片" style="{{ cardsBtnStyle }}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+          </span>
+          <span onClick="{{ showTree }}" title="目录树" style="{{ treeBtnStyle }}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/></svg>
+          </span>
+        </div>
+      </div>
+
+      <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+      <div class="ghead" style="display:flex;align-items:center;gap:7px;margin:0 0 12px;position:relative;min-height:30px;">
+        <span onClick="{{ g.toggle }}" style="display:flex;align-items:center;gap:7px;cursor:pointer;">
+          <span style="width:12px;flex:none;text-align:center;color:#9AA4AF;font-size:9px;">{{ g.caret }}</span>
+          <span style="font-size:14px;font-weight:700;letter-spacing:-0.2px;">{{ g.name }}</span>
+          <span class="mono" style="font-size:11.5px;color:#9AA4AF;">{{ g.count }}</span>
+        </span>
+        <span style="flex:1;"></span>
+        <div class="gtools" style="display:flex;align-items:center;gap:2px;color:#9AA4AF;">
+          <span class="gbtn" title="在此分组新建工作区" style="display:flex;align-items:center;justify-content:center;width:28px;height:26px;border-radius:7px;cursor:pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </span>
+          <span onClick="{{ g.moveUp }}" class="gbtn" title="上移分组" style="{{ g.upStyle }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="18 15 12 9 6 15"/></svg>
+          </span>
+          <span onClick="{{ g.moveDown }}" class="gbtn" title="下移分组" style="{{ g.downStyle }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+          <span onClick="{{ g.toggleStyle }}" class="gbtn" title="样式设置" style="display:flex;align-items:center;justify-content:center;width:28px;height:26px;border-radius:7px;cursor:pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="10" x2="9" y2="20"/></svg>
+          </span>
+          <span onClick="{{ g.askDelete }}" class="gbtn" title="删除分组" style="{{ g.delStyle }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </span>
+        </div>
+
+        <sc-if value="{{ g.styleOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;top:34px;right:0;z-index:6;width:300px;background:#fff;border:1px solid #E5E9F0;border-radius:13px;box-shadow:0 22px 50px -26px rgba(15,23,42,0.5);padding:16px;">
+          <div style="font-size:13.5px;font-weight:700;margin-bottom:12px;">样式设置</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+            <div onClick="{{ g.setCards }}" class="styopt" style="{{ g.optCards }}">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+              <span style="font-size:12.5px;font-weight:600;">卡片</span>
+            </div>
+            <div onClick="{{ g.setList }}" class="styopt" style="{{ g.optList }}">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.3"/><circle cx="4" cy="12" r="1.3"/><circle cx="4" cy="18" r="1.3"/></svg>
+              <span style="font-size:12.5px;font-weight:600;">列表</span>
+            </div>
+          </div>
+          <div class="mono" style="font-size:10.5px;letter-spacing:1px;color:#9AA4AF;margin-bottom:8px;">卡片样式</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+            <div onClick="{{ g.setSimple }}" class="styopt" style="{{ g.optSimple }}"><span style="font-size:12px;font-weight:600;">简洁</span></div>
+            <div onClick="{{ g.setBasic }}" class="styopt" style="{{ g.optBasic }}"><span style="font-size:12px;font-weight:600;">基础</span></div>
+            <div onClick="{{ g.setDetail }}" class="styopt" style="{{ g.optDetail }}"><span style="font-size:12px;font-weight:600;">详情</span></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 0;">
+            <span style="flex:1;font-size:13px;color:#334155;">显示工作区描述</span>
+            <span onClick="{{ g.toggleDesc }}" style="{{ g.descTrack }}"><span style="{{ g.descKnob }}"></span></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 0;">
+            <span style="flex:1;font-size:13px;color:#334155;">显示文档更新时间</span>
+            <span onClick="{{ g.toggleTime }}" style="{{ g.timeTrack }}"><span style="{{ g.timeKnob }}"></span></span>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ g.confirmOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;top:34px;right:0;z-index:7;width:290px;background:#fff;border:1px solid #E5E9F0;border-radius:13px;box-shadow:0 22px 50px -26px rgba(15,23,42,0.5);padding:16px;">
+          <div style="font-size:13.5px;font-weight:700;margin-bottom:6px;">删除分组「{{ g.name }}」？</div>
+          <div style="font-size:12.5px;color:#57606A;line-height:1.65;margin-bottom:14px;">分组内的工作区不会被删除，会移到「未分组」。</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <span onClick="{{ g.cancelDelete }}" style="font-size:13px;color:#57606A;padding:7px 12px;cursor:pointer;">取消</span>
+            <span onClick="{{ g.doDelete }}" style="font-size:13px;font-weight:600;color:#fff;background:#DC2626;border-radius:8px;padding:7px 14px;cursor:pointer;">删除分组</span>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+
+      <sc-if value="{{ g.isCards }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:30px;">
+        <sc-for list="{{ g.books }}" as="b" hint-placeholder-count="2">
+          <div onClick="{{ b.open_ }}" draggable="true" onDragStart="{{ b.onDragStart }}" onDragEnter="{{ b.onDragEnter }}" onDragOver="{{ allowDrop }}" onDragEnd="{{ onDragEnd }}" onDrop="{{ onDragEnd }}" class="card" style="border:1px solid #EEF1F5;border-radius:14px;padding:20px;cursor:pointer;transition:box-shadow .14s,border-color .14s;display:flex;flex-direction:column;{{ b.dragStyle }}">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+              <span title="拖动排序" style="cursor:grab;display:flex;color:#CBD5E1;margin-left:-6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+              </span>
+              <span style="font-size:20px;">{{ b.emoji }}</span>
+              <span style="font-size:16px;font-weight:700;letter-spacing:-0.2px;">{{ b.name }}</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.4"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+              <span style="flex:1;"></span>
+              <span class="mono" style="font-size:11.5px;color:#9AA4AF;">{{ b.count }}</span>
+            </div>
+            <div style="font-size:12.5px;color:#9AA4AF;margin-bottom:14px;{{ b.descStyle }}">{{ b.desc }}</div>
+            <div style="display:flex;flex-direction:column;">
+              <sc-for list="{{ b.docs }}" as="d" hint-placeholder-count="3">
+                <div class="row" style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:7px;">
+                  <span style="width:4px;height:4px;border-radius:50%;background:#CBD5E1;flex:none;"></span>
+                  <span style="flex:1;min-width:0;font-size:13.5px;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ d.name }}</span>
+                  <span class="mono" style="font-size:11.5px;color:#9AA4AF;flex:none;">{{ d.time }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+
+        <div style="border:1px dashed #DBE3EF;border-radius:14px;min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#9AA4AF;cursor:pointer;">
+          <span style="width:36px;height:36px;border-radius:10px;background:#F4F4F6;display:flex;align-items:center;justify-content:center;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </span>
+          <span style="font-size:13px;font-weight:600;">在此分组新建</span>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ g.isList }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;gap:26px;margin-bottom:30px;">
+        <sc-for list="{{ g.books }}" as="b" hint-placeholder-count="2">
+          <div>
+            <div onClick="{{ b.open_ }}" style="display:flex;align-items:center;gap:10px;padding:0 2px 10px;border-bottom:1px solid #F1F5F9;margin-bottom:6px;cursor:pointer;">
+              <span style="font-size:18px;">{{ b.emoji }}</span>
+              <span style="font-size:15px;font-weight:700;">{{ b.name }}</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.4"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+              <span style="flex:1;"></span>
+              <span class="mono" style="font-size:11.5px;color:#9AA4AF;">{{ b.count }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;">
+              <sc-for list="{{ b.tree }}" as="n" hint-placeholder-count="5">
+                <div class="row leader" style="{{ n.rowStyle }}">
+                  <span style="width:14px;flex:none;text-align:center;color:#9AA4AF;font-size:9px;">{{ n.caret }}</span>
+                  <span style="font-size:14px;flex:none;">{{ n.emoji }}</span>
+                  <span class="lname" style="font-size:13.5px;color:#334155;flex:none;{{ n.nameStyle }}">{{ n.name }}</span>
+                  <span style="flex:1;min-width:24px;border-bottom:1px dashed #E5E9F0;margin:0 10px 5px;"></span>
+                  <span class="mono" style="font-size:11.5px;color:#9AA4AF;flex:none;">{{ n.time }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+      </sc-for>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = {
+    view: 'cards', wsId: 'product', menuOpen: false,
+    collapsed: {},
+    groupIds: ['work', 'life'],
+    order: { work: ['product', 'infra'], life: ['reading', 'personal'], loose: [] },
+    styles: {},
+    styleOpen: null, confirmId: null,
+    dragFrom: null, dragGroup: null,
+  };
+
+  styleOf(gid) {
+    return { mode: this.state.view === 'tree' ? 'list' : 'cards', card: 'detail', desc: true, time: true, ...(this.state.styles[gid] || {}) };
+  }
+
+  setStyle(gid, patch) {
+    this.setState({ styles: { ...this.state.styles, [gid]: { ...this.styleOf(gid), ...patch } } });
+  }
+
+  moveGroup(gid, delta) {
+    const ids = [...this.state.groupIds];
+    const i = ids.indexOf(gid);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    ids.splice(j, 0, ids.splice(i, 1)[0]);
+    this.setState({ groupIds: ids });
+  }
+
+  deleteGroup(gid) {
+    if (gid === 'loose') return;
+    const ids = this.state.groupIds.filter(x => x !== gid);
+    const loose = [...(this.state.order.loose || []), ...(this.state.order[gid] || [])];
+    this.setState({ groupIds: ids, order: { ...this.state.order, loose }, confirmId: null });
+  }
+
+  move(gid, from, to) {
+    if (from == null || from === to || gid !== this.state.dragGroup) return;
+    const ids = [...this.state.order[gid]];
+    const [item] = ids.splice(from, 1);
+    ids.splice(to, 0, item);
+    this.setState({ order: { ...this.state.order, [gid]: ids }, dragFrom: to });
+  }
+
+  renderVals() {
+    const view = this.state.view;
+    const btn = (on) => `display:flex;align-items:center;justify-content:center;width:32px;height:28px;border-radius:7px;cursor:pointer;color:${on ? '#2563EB' : '#9AA4AF'};${on ? 'background:#EFF6FF;' : ''}`;
+
+    const pinned = [
+      { emoji:'📗', name:'产品思考', meta:'2 小时前打开' },
+      { emoji:'📘', name:'基础设施', meta:'昨天打开' },
+      { emoji:'📖', name:'读书 · 摘抄', meta:'3 天前打开' },
+    ];
+
+    const raw = [
+      { id:'product', emoji:'📗', name:'产品思考', desc:'产品复盘、竞品与留存实验', count:'248 页', words:'18,209', tree:[
+        { name:'留存', kids:[
+          { name:'产品阅读笔记 · 第 12 周', time:'2 小时前' },
+          { name:'留存密码', time:'3 天前' },
+        ]},
+        { name:'竞品拆解 · Heptabase', time:'昨天' },
+        { name:'2026 Q3 迭代复盘', time:'上周' },
+      ]},
+      { id:'reading', emoji:'📖', name:'读书 · 摘抄', desc:'读完即摘，按书分册', count:'53 页', words:'6,480', tree:[
+        { name:'《上瘾》读书笔记', time:'6 天前' },
+        { name:'《认知觉醒》摘抄', time:'上周' },
+        { name:'待读清单', time:'2026-06-28' },
+      ]},
+      { id:'infra', emoji:'📘', name:'基础设施', desc:'部署、备份与运维手册', count:'96 页', words:'12,730', tree:[
+        { name:'部署', kids:[
+          { name:'单机 Docker 部署', time:'昨天' },
+          { name:'备份与恢复演练', time:'上周' },
+        ]},
+        { name:'服务器清单', time:'2026-07-02' },
+      ]},
+      { id:'personal', emoji:'📙', name:'个人笔记', desc:'随手记与日常', count:'12 页', words:'1,904', tree:[
+        { name:'无标题', time:'刚刚', untitled:true },
+        { name:'年度计划', time:'2026-01-04' },
+      ]},
+    ];
+
+    const byId = Object.fromEntries(raw.map(b => [b.id, b]));
+    const buildBook = (b, gid, pos, st) => {
+      st = st || { card:'detail', desc:true, time:true };
+      const docs = [];
+      const tree = [];
+      b.tree.forEach(n => {
+        if (n.kids) {
+          tree.push({ emoji:'📁', name:n.name, caret:'▾', time:'', nameStyle:'font-weight:600;', rowStyle:'display:flex;align-items:center;padding:7px 8px;border-radius:7px;cursor:pointer;' });
+          n.kids.forEach(k => {
+            tree.push({ emoji:'📄', name:k.name, caret:'', time:k.time, nameStyle:'', rowStyle:'display:flex;align-items:center;padding:7px 8px 7px 30px;border-radius:7px;cursor:pointer;' });
+            docs.push({ name:k.name, time:k.time });
+          });
+        } else {
+          tree.push({ emoji:'📄', name:n.name, caret:'', time:n.time, nameStyle:n.untitled ? 'color:#9AA4AF;font-style:italic;' : '', rowStyle:'display:flex;align-items:center;padding:7px 8px;border-radius:7px;cursor:pointer;' });
+          docs.push({ name:n.name, time:n.time });
+        }
+      });
+      const dragging = this.state.dragGroup === gid && this.state.dragFrom === pos;
+      return {
+        id:b.id, emoji:b.emoji, name:b.name, count:b.count, words:b.words, tree,
+        desc: st.desc ? b.desc : '',
+        descStyle: st.desc && st.card !== 'simple' ? '' : 'display:none;',
+        docs: st.card === 'simple' ? [] : docs.slice(0, 3).map(d => ({ ...d, time: st.time ? d.time : '' })),
+        open_: () => this.setState({ view: 'book', bookName: b.name, wsId: b.id }),
+        dragStyle: dragging ? 'opacity:0.4;border-color:#2563EB !important;' : '',
+        onDragStart: (e) => { if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; this.setState({ dragFrom: pos, dragGroup: gid }); },
+        onDragEnter: (e) => { e.preventDefault(); this.move(gid, this.state.dragFrom, pos); },
+      };
+    };
+
+    const names = { work:'工作', life:'个人', loose:'未分组' };
+    const seg = (on) => `display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;height:${on ? 62 : 62}px;border:1.5px solid ${on ? '#2563EB' : '#E5E9F0'};border-radius:10px;cursor:pointer;color:${on ? '#2563EB' : '#57606A'};${on ? 'background:#F5F9FF;' : ''}`;
+    const chip = (on) => `display:flex;align-items:center;justify-content:center;height:34px;border:1.5px solid ${on ? '#2563EB' : '#E5E9F0'};border-radius:9px;cursor:pointer;color:${on ? '#2563EB' : '#57606A'};${on ? 'background:#F5F9FF;' : ''}`;
+    const track = (on) => `width:36px;height:20px;border-radius:11px;flex:none;cursor:pointer;display:flex;align-items:center;padding:2px;background:${on ? '#2563EB' : '#D8DEE7'};justify-content:${on ? 'flex-end' : 'flex-start'};`;
+    const knob = 'width:16px;height:16px;border-radius:50%;background:#fff;display:block;';
+    const dim = (on) => `display:flex;align-items:center;justify-content:center;width:28px;height:26px;border-radius:7px;cursor:pointer;${on ? '' : 'opacity:0.3;pointer-events:none;'}`;
+
+    const visibleGroups = this.state.groupIds.filter(id => id !== 'loose' || (this.state.order.loose || []).length);
+    const groups = visibleGroups.concat((this.state.order.loose || []).length ? ['loose'] : []).filter((v, i, a) => a.indexOf(v) === i).map((gid, gi, arr) => {
+      const g = { id: gid, name: names[gid] || gid };
+      const st = this.styleOf(gid);
+      const open = !this.state.collapsed[gid];
+      const ids = this.state.order[gid] || [];
+      const books = ids.map(id => byId[id]).filter(Boolean).map((b, pos) => buildBook(b, gid, pos, st));
+      return {
+        id:gid, name:g.name, count:`${ids.length}`,
+        caret: open ? '▾' : '▸',
+        toggle: () => this.setState({ collapsed: { ...this.state.collapsed, [gid]: open } }),
+        isCards: open && st.mode === 'cards',
+        isList: open && st.mode === 'list',
+        upStyle: dim(gid !== 'loose' && gi > 0),
+        downStyle: dim(gid !== 'loose' && gi < arr.length - 1 && arr[gi + 1] !== 'loose'),
+        delStyle: dim(gid !== 'loose'),
+        moveUp: (e) => { e.stopPropagation(); this.moveGroup(gid, -1); },
+        moveDown: (e) => { e.stopPropagation(); this.moveGroup(gid, 1); },
+        styleOpen: this.state.styleOpen === gid,
+        toggleStyle: (e) => { e.stopPropagation(); this.setState({ styleOpen: this.state.styleOpen === gid ? null : gid, confirmId: null }); },
+        confirmOpen: this.state.confirmId === gid,
+        askDelete: (e) => { e.stopPropagation(); this.setState({ confirmId: gid, styleOpen: null }); },
+        cancelDelete: (e) => { e.stopPropagation(); this.setState({ confirmId: null }); },
+        doDelete: (e) => { e.stopPropagation(); this.deleteGroup(gid); },
+        optCards: seg(st.mode === 'cards'), optList: seg(st.mode === 'list'),
+        setCards: () => this.setStyle(gid, { mode:'cards' }),
+        setList: () => this.setStyle(gid, { mode:'list' }),
+        optSimple: chip(st.card === 'simple'), optBasic: chip(st.card === 'basic'), optDetail: chip(st.card === 'detail'),
+        setSimple: () => this.setStyle(gid, { card:'simple' }),
+        setBasic: () => this.setStyle(gid, { card:'basic' }),
+        setDetail: () => this.setStyle(gid, { card:'detail' }),
+        descTrack: track(st.desc), descKnob: knob, toggleDesc: () => this.setStyle(gid, { desc: !st.desc }),
+        timeTrack: track(st.time), timeKnob: knob, toggleTime: () => this.setStyle(gid, { time: !st.time }),
+        books: open ? books : [],
+        rows: open ? books.map(b => ({
+          emoji:b.emoji, name:b.name, open_:b.open_,
+          rowStyle: `display:flex;align-items:center;gap:8px;min-height:32px;padding:0 8px 0 18px;border-radius:8px;cursor:pointer;color:${this.state.view === 'book' && this.state.wsId === b.id ? '#1D4ED8' : '#334155'};${this.state.view === 'book' && this.state.wsId === b.id ? 'background:#EFF6FF;font-weight:600;' : ''}`,
+        })) : [],
+      };
+    });
+
+    const allBooks = groups.flatMap(g => g.books);
+    const book = allBooks.find(b => b.name === this.state.bookName) || buildBook(raw[0], 'work', 0);
+
+    return {
+      pinned, groups, book,
+      menuOpen: this.state.menuOpen,
+      toggleMenu: () => this.setState({ menuOpen: !this.state.menuOpen }),
+      allowDrop: (e) => e.preventDefault(),
+      onDragEnd: () => this.setState({ dragFrom: null, dragGroup: null }),
+      isOverview: view !== 'book',
+      isBook: view === 'book',
+      goOverview: () => this.setState({ view: 'cards' }),
+      isCards: view === 'cards',
+      isTree: view === 'tree',
+      showCards: () => this.setState({ view: 'cards', styles: {}, styleOpen: null }),
+      showTree: () => this.setState({ view: 'tree', styles: {}, styleOpen: null }),
+      cardsBtnStyle: btn(view === 'cards'),
+      treeBtnStyle: btn(view === 'tree'),
+    };
+  }
+}
+</script>
+</body>
+</html>

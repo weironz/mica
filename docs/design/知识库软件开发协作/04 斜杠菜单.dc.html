@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; color:#24292F; }
+  ::selection { background: rgba(37,99,235,0.20); }
+  .mica-scroll::-webkit-scrollbar { width:10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background:#E2E8F0; border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+  .slash-row:hover { background:#F1F5F9; }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;background:#fff;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <!-- Slim sidebar suggestion -->
+  <div style="width:280px;flex:none;background:#FAFBFC;border-right:1px solid #EEF1F5;"></div>
+
+  <!-- Editor -->
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:8px;padding:0 24px;border-bottom:1px solid #F1F5F9;">
+      <span style="font-size:13.5px;color:#9AA4AF;">产品思考</span>
+      <span style="color:#CBD5E1;">/</span>
+      <span style="font-size:13.5px;font-weight:500;color:#334155;">产品阅读笔记 · 第 12 周</span>
+    </div>
+
+    <div class="mica-scroll" style="flex:1;min-height:0;overflow-y:auto;">
+      <div style="max-width:720px;margin:0 auto;padding:56px 40px 120px;position:relative;">
+        <div style="font-size:40px;margin-bottom:16px;">📗</div>
+        <h1 style="font-size:36px;font-weight:700;letter-spacing:-0.6px;margin:0 0 8px;">产品阅读笔记 · 第 12 周</h1>
+        <div style="font-family:'Roboto Mono',monospace;font-size:12.5px;color:#9AA4AF;margin-bottom:32px;">更新于 2 小时前 · 林深</div>
+
+        <p style="font-size:16px;line-height:1.75;margin:0 0 14px;">这一周主要在读关于「工具类产品的留存」的几篇文章,把值得反复看的观点整理在下面。</p>
+
+        <!-- Active block with slash -->
+        <div style="position:relative;margin:0 0 14px;">
+          <div style="display:flex;align-items:center;font-size:16px;line-height:1.75;color:#24292F;">
+            <span>/</span><input value="{{ query }}" onInput="{{ onInput }}" autofocus placeholder="筛选…" style="border:none;outline:none;font-size:16px;font-family:inherit;color:#24292F;background:transparent;caret-color:#2563EB;min-width:120px;"/>
+          </div>
+
+          <!-- Slash menu popover -->
+          <div style="position:absolute;top:32px;left:0;width:300px;background:#fff;border:1px solid #E5E9F0;border-radius:12px;box-shadow:0 16px 40px -10px rgba(15,23,42,0.28);padding:6px;z-index:20;">
+            <sc-if value="{{ hasItems }}" hint-placeholder-val="{{ true }}">
+              <div class="mica-scroll" style="max-height:344px;overflow-y:auto;">
+                <sc-for list="{{ items }}" as="it" hint-placeholder-count="8">
+                  <div class="slash-row" style="{{ it.rowStyle }}">
+                    <span style="width:32px;height:32px;flex:none;border-radius:7px;border:1px solid #EEF1F5;background:{{ it.iconBg }};display:flex;align-items:center;justify-content:center;">{{ it.icon }}</span>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:14px;font-weight:500;color:{{ it.titleColor }};">{{ it.label }}</div>
+                      <div style="font-size:11.5px;color:#9AA4AF;">{{ it.hint }}</div>
+                    </div>
+                    <sc-if value="{{ it.selected }}" hint-placeholder-val="{{ false }}">
+                      <span style="flex:none;font-family:'Roboto Mono',monospace;font-size:10.5px;color:#9AA4AF;background:#F1F5F9;padding:2px 6px;border-radius:5px;">↵</span>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ empty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:20px;text-align:center;font-size:13px;color:#9AA4AF;">没有匹配的块类型</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <p style="font-size:16px;line-height:1.75;margin:44px 0 0;color:#9AA4AF;">输入「/」呼出插入菜单,或直接开始写…</p>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;aiEnabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;功能&quot;}}">
+class Component extends DCLogic {
+  state = { query: '', selected: 0, aiEnabled: true };
+  renderVals() {
+    const ic = (svg) => React.createElement('span', { dangerouslySetInnerHTML: { __html: svg } });
+    const S = (inner, stroke='#475569') => ic(`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.9">${inner}</svg>`);
+
+    const ai = { label:'Ask AI', kind:'__ai__', hint:'用 AI 生成内容', ai:true,
+      icon: ic('<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.9"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>') };
+    const base = [
+      { label:'Text', kind:'paragraph', hint:'纯文本段落', icon:S('<line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/>') },
+      { label:'Heading 1', kind:'h1', hint:'大标题', icon:S('<path d="M4 6v12M12 6v12M4 12h8"/><path d="M17 10l2-1v9" stroke-width="1.6"/>') },
+      { label:'Heading 2', kind:'h2', hint:'中标题', icon:S('<path d="M4 6v12M11 6v12M4 12h7"/><path d="M16 10c2 0 3 1 3 2.5S17 15 16 18h4" stroke-width="1.6"/>') },
+      { label:'Heading 3', kind:'h3', hint:'小标题', icon:S('<path d="M4 6v12M11 6v12M4 12h7"/><path d="M16 9.5c2 0 3 .8 3 2s-1 1.7-2 1.7c1 0 2.2.5 2.2 1.9S17.8 18.5 16 18.2" stroke-width="1.6"/>') },
+      { label:'Bulleted list', kind:'bulleted_list', hint:'无序列表', icon:S('<circle cx="5" cy="7" r="1.4" fill="#475569"/><circle cx="5" cy="12" r="1.4" fill="#475569"/><circle cx="5" cy="17" r="1.4" fill="#475569"/><line x1="10" y1="7" x2="20" y2="7"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="17" x2="20" y2="17"/>') },
+      { label:'Numbered list', kind:'numbered_list', hint:'有序列表', icon:S('<line x1="10" y1="7" x2="20" y2="7"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="17" x2="20" y2="17"/><text x="3" y="9" font-size="7" fill="#475569" stroke="none">1</text><text x="3" y="14.5" font-size="7" fill="#475569" stroke="none">2</text><text x="3" y="20" font-size="7" fill="#475569" stroke="none">3</text>') },
+      { label:'To-do', kind:'todo', hint:'可勾选待办', icon:S('<rect x="3" y="5" width="7" height="7" rx="1.6"/><path d="M4.5 8.5l1.5 1.5 2.5-3" stroke-width="1.6"/><line x1="13" y1="8.5" x2="20" y2="8.5"/><line x1="13" y1="16" x2="20" y2="16"/><rect x="3" y="13" width="7" height="7" rx="1.6"/>') },
+      { label:'Quote', kind:'quote', hint:'引用块', icon:S('<path d="M7 7c-2 0-3 1.6-3 3.5S5.5 14 7 14c0 2-1 3-3 3M17 7c-2 0-3 1.6-3 3.5S15.5 14 17 14c0 2-1 3-3 3"/>') },
+      { label:'Code', kind:'code_block', hint:'代码块 · 语言高亮', icon:S('<polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/>') },
+      { label:'Math formula', kind:'math_block', hint:'LaTeX 公式', stroke:'#7C3AED', icon:S('<path d="M5 5h9M8 5c0 6-1 14-3 14M14 10l6 8M20 10l-6 8"/>', '#7C3AED') },
+      { label:'Table', kind:'table', hint:'表格', icon:S('<rect x="3" y="4" width="18" height="16" rx="1.5"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="10" y1="4" x2="10" y2="20"/>') },
+      { label:'Divider', kind:'divider', hint:'分割线', icon:S('<line x1="4" y1="12" x2="20" y2="12"/>') },
+      { label:'Image', kind:'image', hint:'插入图片', icon:S('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5-5-8 8"/>') },
+    ];
+    const aiEnabled = this.props.aiEnabled ?? true;
+    const all = aiEnabled ? [ai, ...base] : base;
+
+    const q = this.state.query.trim().toLowerCase();
+    const filtered = q === '' ? all : all.filter(o => o.label.toLowerCase().includes(q));
+    const sel = Math.min(this.state.selected, Math.max(0, filtered.length - 1));
+
+    const items = filtered.map((o, i) => ({
+      ...o,
+      selected: i === sel,
+      rowStyle: `display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:8px;cursor:pointer;${i===sel?'background:#EFF6FF;':''}`,
+      iconBg: o.ai || o.stroke ? '#F5F3FF' : '#F8FAFC',
+      titleColor: o.ai ? '#7C3AED' : '#24292F',
+    }));
+
+    return {
+      query: this.state.query,
+      onInput: (e) => this.setState({ query: e.target.value, selected: 0 }),
+      items, hasItems: items.length > 0, empty: items.length === 0,
+    };
+  }
+}
+</script>
+</body>
+</html>

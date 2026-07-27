@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body { font-family:"Roboto","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC",sans-serif; color:#24292F; }
+  a { color:#2563EB; text-decoration:none; } a:hover { text-decoration:underline; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  .mica-scroll::-webkit-scrollbar { width:10px; }
+  .mica-scroll::-webkit-scrollbar-thumb { background:#E2E8F0; border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+  .row { transition:background .12s; }
+  .row:hover { background:#F8FAFC; }
+  .row .acts { opacity:0; transition:opacity .12s; }
+  .row:hover .acts { opacity:1; }
+  .btn:hover { background:#F1F5F9; }
+  .danger:hover { background:#FEF2F2 !important; color:#B91C1C !important; border-color:#FECACA !important; }
+</style>
+</helmet>
+
+<div style="width:1440px;min-height:900px;background:#EEF2F7;display:flex;flex-direction:column;align-items:center;gap:40px;padding:48px 40px 64px;">
+
+  <div style="width:100%;max-width:1160px;display:flex;align-items:baseline;gap:12px;">
+    <span style="font-size:20px;font-weight:700;letter-spacing:-0.3px;">回收站</span>
+    <span style="font-size:13px;color:#9AA4AF;">删除的页面在这里恢复；永久删除后无法找回</span>
+  </div>
+
+  <!-- 有内容 -->
+  <div style="width:840px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);overflow:hidden;">
+    <div style="display:flex;align-items:center;gap:10px;padding:18px 22px;border-bottom:1px solid #F1F5F9;">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      <span style="font-size:16px;font-weight:700;">回收站</span>
+      <span class="mono" style="font-size:12px;color:#9AA4AF;">4</span>
+      <span style="flex:1;"></span>
+      <span class="btn" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:7px 12px;cursor:pointer;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"/></svg>刷新
+      </span>
+      <span class="btn" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;cursor:pointer;color:#9AA4AF;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </span>
+    </div>
+
+    <div class="mica-scroll" style="max-height:430px;overflow-y:auto;padding:8px;">
+      <sc-for list="{{ items }}" as="it" hint-placeholder-count="4">
+        <div class="row" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;">
+          <span style="font-size:18px;flex:none;">{{ it.emoji }}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:500;{{ it.nameStyle }}">{{ it.name }}</div>
+            <div style="font-size:12px;color:#9AA4AF;margin-top:2px;">{{ it.where }}</div>
+          </div>
+          <span class="mono" style="font-size:12px;color:#9AA4AF;flex:none;">{{ it.when }}</span>
+          <div class="acts" style="display:flex;gap:6px;flex:none;margin-left:6px;">
+            <span class="btn" style="font-size:12.5px;font-weight:500;color:#2563EB;border:1px solid #DBEAFE;background:#EFF6FF;border-radius:8px;padding:6px 12px;cursor:pointer;">恢复</span>
+            <span class="danger" style="font-size:12.5px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:6px 12px;cursor:pointer;transition:all .12s;">永久删除</span>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 22px;border-top:1px solid #F1F5F9;background:#FCFDFE;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11"/><line x1="12" y1="8" x2="12" y2="8"/></svg>
+      <span style="font-size:12px;color:#9AA4AF;flex:1;">回收站里的页面仍占用空间，其图片也不会被回收。</span>
+      <span class="danger" style="font-size:12.5px;font-weight:500;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:6px 12px;cursor:pointer;transition:all .12s;">清空回收站</span>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:32px;align-items:flex-start;">
+    <!-- 空态 -->
+    <div style="width:520px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:10px;padding:18px 22px;border-bottom:1px solid #F1F5F9;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#57606A" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <span style="font-size:16px;font-weight:700;">回收站</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:64px 40px 68px;">
+        <span style="width:54px;height:54px;border-radius:15px;background:#F4F4F6;display:flex;align-items:center;justify-content:center;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="1.8"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </span>
+        <div style="font-size:14px;font-weight:600;margin-top:4px;">回收站是空的</div>
+        <div style="font-size:13px;color:#9AA4AF;text-align:center;line-height:1.7;">删除的页面会出现在这里，可以恢复。</div>
+      </div>
+    </div>
+
+    <!-- 永久删除确认 -->
+    <div style="width:420px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:24px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="width:34px;height:34px;border-radius:10px;background:#FEF2F2;display:flex;align-items:center;justify-content:center;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2.2"><path d="M12 9v5"/><path d="M12 17.5v.5"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        </span>
+        <span style="font-size:16px;font-weight:700;">永久删除「留存密码」？</span>
+      </div>
+      <div style="font-size:13px;color:#57606A;line-height:1.75;margin-bottom:18px;">这个页面、它的版本历史和所有评论都会被立即删除，无法恢复。页面里的图片如未被其他页面引用，也会在下次回收时清理。</div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <span style="font-size:13.5px;color:#57606A;padding:9px 14px;cursor:pointer;">取消</span>
+        <span style="font-size:13.5px;font-weight:600;color:#fff;background:#DC2626;border-radius:8px;padding:9px 16px;cursor:pointer;">永久删除</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  renderVals() {
+    const rows = [
+      { emoji:'📄', name:'留存密码', where:'产品思考 / 留存', when:'2 小时前' },
+      { emoji:'📄', name:'无标题', where:'个人笔记', when:'昨天', untitled:true },
+      { emoji:'📁', name:'2025 归档', where:'产品思考', when:'3 天前', sub:'含 12 个页面' },
+      { emoji:'📄', name:'CKA 考题示例', where:'基础设施 / 部署', when:'上周' },
+    ];
+    return {
+      items: rows.map(r => ({
+        emoji: r.emoji,
+        name: r.name,
+        where: r.sub ? `${r.where} · ${r.sub}` : r.where,
+        when: r.when,
+        nameStyle: r.untitled ? 'color:#9AA4AF;font-style:italic;' : '',
+      })),
+    };
+  }
+}
+</script>
+</body>
+</html>

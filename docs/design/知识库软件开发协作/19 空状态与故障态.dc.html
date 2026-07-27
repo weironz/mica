@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body { font-family:"Roboto","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC",sans-serif; color:#24292F; }
+  a { color:#2563EB; text-decoration:none; } a:hover { text-decoration:underline; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  .btn:hover { background:#F1F5F9; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .spin { animation:spin 1.6s linear infinite; transform-origin:50% 50%; }
+</style>
+</helmet>
+
+<div style="width:1440px;min-height:900px;background:#EEF2F7;display:flex;flex-direction:column;gap:34px;padding:48px 60px 72px;">
+
+  <div style="display:flex;align-items:baseline;gap:12px;">
+    <span style="font-size:20px;font-weight:700;letter-spacing:-0.3px;">空状态与故障态</span>
+    <span style="font-size:13px;color:#9AA4AF;">每一条都说清楚「发生了什么」和「下一步做什么」，不写「出错了」</span>
+  </div>
+
+  <!-- 空状态 -->
+  <div class="mono" style="font-size:11px;letter-spacing:1.6px;color:#9AA4AF;">空状态</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;">
+    <sc-for list="{{ empties }}" as="e" hint-placeholder-count="6">
+      <div style="background:#fff;border:1px solid #E5E9F0;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid #F1F5F9;background:#FCFDFE;">
+          <span class="mono" style="font-size:10.5px;letter-spacing:1.2px;color:#9AA4AF;">{{ e.where }}</span>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:40px 26px 42px;">
+          <span style="width:46px;height:46px;border-radius:13px;background:#F4F4F6;display:flex;align-items:center;justify-content:center;">{{ e.icon }}</span>
+          <div style="font-size:14px;font-weight:600;margin-top:2px;text-align:center;">{{ e.title }}</div>
+          <div style="font-size:12.5px;color:#9AA4AF;text-align:center;line-height:1.75;">{{ e.body }}</div>
+          <span style="{{ e.actionStyle }}">{{ e.action }}</span>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- 故障态 -->
+  <div class="mono" style="font-size:11px;letter-spacing:1.6px;color:#9AA4AF;margin-top:8px;">故障与降级</div>
+  <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;">
+
+    <!-- 本地文档损坏 -->
+    <div style="width:440px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:24px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="width:34px;height:34px;border-radius:10px;background:#FEF3C7;display:flex;align-items:center;justify-content:center;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="2.2"><path d="M12 9v5"/><path d="M12 17.5v.5"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        </span>
+        <span style="font-size:16px;font-weight:700;">打开此页面失败</span>
+      </div>
+      <div style="font-size:13px;color:#57606A;line-height:1.75;margin-bottom:18px;">这个页面的本地副本似乎已损坏。可以恢复到上一个自动检查点，或打开版本历史找回更早的内容。你的其他页面不受影响。</div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <span class="btn" style="font-size:13.5px;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:9px 14px;cursor:pointer;">版本历史</span>
+        <span style="font-size:13.5px;font-weight:600;color:#fff;background:#2563EB;border-radius:8px;padding:9px 16px;cursor:pointer;">恢复检查点</span>
+      </div>
+    </div>
+
+    <!-- 更新失败 -->
+    <div style="width:440px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;box-shadow:0 30px 70px -45px rgba(15,23,42,0.45);padding:24px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="width:34px;height:34px;border-radius:10px;background:#FEF2F2;display:flex;align-items:center;justify-content:center;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-6.2-8.6"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12" y2="17"/></svg>
+        </span>
+        <span style="font-size:16px;font-weight:700;">更新已中止</span>
+      </div>
+      <div style="font-size:13px;color:#57606A;line-height:1.75;margin-bottom:18px;">下载的安装包未通过完整性校验，已删除，不会运行。当前版本 v0.12.18 仍可正常使用，可稍后重试或从发布页手动下载。</div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <span class="btn" style="font-size:13.5px;color:#57606A;border:1px solid #E5E9F0;border-radius:8px;padding:9px 14px;cursor:pointer;">打开发布页</span>
+        <span style="font-size:13.5px;font-weight:600;color:#fff;background:#2563EB;border-radius:8px;padding:9px 16px;cursor:pointer;">重试</span>
+      </div>
+    </div>
+
+    <!-- 提示条 -->
+    <div style="width:420px;display:flex;flex-direction:column;gap:12px;">
+      <div style="display:flex;align-items:center;gap:11px;background:#0F172A;color:#fff;border-radius:11px;padding:13px 16px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FCA5A5" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12" y2="17"/></svg>
+        <span style="font-size:13px;flex:1;line-height:1.5;">会话已过期，请重新登录</span>
+        <span style="font-size:12.5px;color:#93C5FD;cursor:pointer;">去登录</span>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:11px;background:#0F172A;color:#fff;border-radius:11px;padding:13px 16px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FCD34D" stroke-width="2.2" style="flex:none;margin-top:1px;"><path d="M12 9v4"/><path d="M12 16.5v.5"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        <span style="font-size:13px;flex:1;line-height:1.6;">云同步已暂停，最近的编辑可能还没保存到云端</span>
+        <span style="font-size:12.5px;color:#93C5FD;cursor:pointer;flex:none;">重试</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:11px;background:#0F172A;color:#fff;border-radius:11px;padding:13px 16px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="2"><path d="M18 16.5A4.5 4.5 0 0 0 16 8h-1.3A7 7 0 0 0 6 6.3"/><path d="M4.5 9.5A4.5 4.5 0 0 0 7 18h9"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+        <span style="font-size:13px;flex:1;line-height:1.5;">离线 · 编辑已存本地，联网后自动同步</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:11px;background:#0F172A;color:#fff;border-radius:11px;padding:13px 16px;">
+        <svg class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+        <span style="font-size:13px;flex:1;line-height:1.5;">正在重连服务器…</span>
+        <span style="font-size:12.5px;color:#93C5FD;cursor:pointer;">忽略</span>
+      </div>
+      <div style="font-size:12.5px;color:#9AA4AF;line-height:1.8;padding:2px;">提示条固定右下角。可自愈的（离线、重连中）不带按钮也不自动消失；需要人做决定的（会话过期、同步暂停）带一个动作。</div>
+    </div>
+
+    <!-- 搜索失败 -->
+    <div style="width:440px;background:#fff;border:1px solid #E5E9F0;border-radius:16px;padding:26px 24px;">
+      <div style="display:flex;align-items:center;gap:9px;border:1px solid #E5E9F0;border-radius:9px;padding:9px 12px;margin-bottom:20px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span style="font-size:13.5px;color:#24292F;flex:1;">留存回路</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:9px;padding:14px 10px 8px;">
+        <span style="width:44px;height:44px;border-radius:12px;background:#FEF2F2;display:flex;align-items:center;justify-content:center;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2"><path d="M18 16.5A4.5 4.5 0 0 0 16 8h-1.3A7 7 0 0 0 6 6.3"/><path d="M4.5 9.5A4.5 4.5 0 0 0 7 18h9"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+        </span>
+        <div style="font-size:14px;font-weight:600;">搜索失败</div>
+        <div style="font-size:12.5px;color:#9AA4AF;text-align:center;line-height:1.75;">连不上服务器。本地已缓存的页面仍可从侧栏打开。</div>
+        <span style="font-size:13px;font-weight:600;color:#2563EB;border:1px solid #DBEAFE;background:#EFF6FF;border-radius:8px;padding:7px 14px;cursor:pointer;margin-top:4px;">重试</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  renderVals() {
+    const ic = (svg) => React.createElement('span', { style:{ display:'flex' }, dangerouslySetInnerHTML: { __html: svg } });
+    const s = (d, w) => `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#9AA4AF" stroke-width="${w || 1.9}">${d}</svg>`;
+    const link = 'font-size:13px;font-weight:600;color:#2563EB;border:1px solid #DBEAFE;background:#EFF6FF;border-radius:8px;padding:7px 14px;cursor:pointer;margin-top:4px;';
+    const none = 'display:none;';
+
+    const rows = [
+      { where:'侧栏 · 页面树', icon:s('<path d="M4 6h6l2 3h8v10a1 1 0 0 1-1 1H4z"/>'),
+        title:'暂无页面', body:'新建页面开始写作。', action:'新建页面' },
+      { where:'编辑区 · 未选中', icon:s('<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/>'),
+        title:'选择页面', body:'从左边的文档树里打开一个页面开始编辑。', action:'' },
+      { where:'搜索', icon:s('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>', 2),
+        title:'没有找到「回路模型」', body:'换个词试试，或检查是否在正确的工作区里搜索。', action:'' },
+      { where:'评论面板', icon:s('<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>'),
+        title:'还没有评论', body:'选中正文里的一段文字，右键选择「添加评论」。', action:'' },
+      { where:'版本历史', icon:s('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>'),
+        title:'还没有版本', body:'点右上角「保存检查点」把当前状态存下来，之后随时可以回到这一刻。', action:'保存检查点' },
+      { where:'大纲', icon:s('<line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="17" y2="18"/><circle cx="4" cy="6" r="1.3"/><circle cx="4" cy="12" r="1.3"/><circle cx="4" cy="18" r="1.3"/>'),
+        title:'本页还没有标题', body:'用 Ctrl+Alt+1 加一个标题，大纲就会出现在这里。', action:'' },
+    ];
+
+    return {
+      empties: rows.map(r => ({
+        where: r.where,
+        icon: ic(r.icon),
+        title: r.title,
+        body: r.body,
+        action: r.action,
+        actionStyle: r.action ? link : none,
+      })),
+    };
+  }
+}
+</script>
+</body>
+</html>

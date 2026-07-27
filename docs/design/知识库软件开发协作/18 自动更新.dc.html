@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Roboto", "Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", sans-serif; color:#24292F; }
+  .mono { font-family:"Roboto Mono", monospace; }
+  @keyframes micaspin3 { to { transform: rotate(360deg); } }
+  @keyframes micabar { 0%{width:8%} 100%{width:64%} }
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;display:flex;align-items:center;justify-content:center;background:#F8FAFC;overflow:hidden;border:1px solid #E5E9F0;">
+
+  <div style="width:560px;">
+    <!-- About header -->
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;">
+      <svg width="44" height="44" viewBox="0 0 24 24" style="flex:none;"><path d="M12 12.36 L22.56 16.32 L12 20.28 L1.44 16.32 Z" fill="#93C5FD"/><path d="M12 8.4 L22.56 12.36 L12 16.32 L1.44 12.36 Z" fill="#3B82F6"/><path d="M12 4.44 L22.56 8.4 L12 12.36 L1.44 8.4 Z" fill="#1D4ED8"/></svg>
+      <div>
+        <div style="font-size:22px;font-weight:700;letter-spacing:-0.3px;">Mica</div>
+        <div class="mono" style="font-size:12.5px;color:#9AA4AF;">当前版本 v0.5.0 · Windows</div>
+      </div>
+    </div>
+
+    <!-- Updater card -->
+    <div style="background:#fff;border:1px solid #EEF1F5;border-radius:14px;padding:22px;min-height:96px;display:flex;align-items:center;">
+
+      <sc-if value="{{ isIdle }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:14px;width:100%;">
+          <span style="flex:1;font-size:14.5px;color:#334155;">让 Mica 保持最新版本。</span>
+          <button onClick="{{ check }}" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;border:1px solid #E2E8F0;background:#fff;border-radius:9px;font-size:14px;font-weight:500;color:#334155;cursor:pointer;font-family:inherit;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="1.9"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>检查更新
+          </button>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isChecking }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:12px;width:100%;color:#64748B;font-size:14.5px;">
+          <span style="width:18px;height:18px;border:2px solid #E2E8F0;border-top-color:#2563EB;border-radius:50%;animation:micaspin3 .7s linear infinite;"></span>正在检查更新…
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isUpToDate }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;gap:12px;width:100%;">
+          <span style="width:34px;height:34px;flex:none;border-radius:50%;background:#DCFCE7;color:#16A34A;display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <span style="flex:1;font-size:14.5px;color:#334155;">已是最新版本 (v0.5.0)</span>
+          <button onClick="{{ toAvailable }}" style="height:38px;padding:0 14px;border:none;background:transparent;color:#2563EB;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;">重新检查</button>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isAvailable }}" hint-placeholder-val="{{ false }}">
+        <div style="width:100%;">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+            <span style="width:34px;height:34px;flex:none;border-radius:50%;background:#EFF6FF;color:#2563EB;display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><rect x="4" y="18" width="16" height="3" rx="1"/></svg></span>
+            <div style="flex:1;"><div style="font-size:15px;font-weight:600;">更新到 v0.6.0</div><div style="font-size:12.5px;color:#9AA4AF;">将下载安装包,然后自动关闭并重启 Mica 完成更新。</div></div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button onClick="{{ toIdle }}" style="height:38px;padding:0 16px;border:1px solid #E2E8F0;background:#fff;border-radius:9px;font-size:14px;font-weight:500;color:#334155;cursor:pointer;font-family:inherit;">稍后</button>
+            <button onClick="{{ download }}" style="height:38px;padding:0 18px;border:none;background:#2563EB;color:#fff;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">下载并更新</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isDownloading }}" hint-placeholder-val="{{ false }}">
+        <div style="width:100%;">
+          <div style="font-size:14.5px;color:#334155;margin-bottom:10px;">下载中 {{ pct }}%…</div>
+          <div style="height:6px;background:#F1F5F9;border-radius:3px;overflow:hidden;"><div style="height:100%;background:#2563EB;border-radius:3px;animation:micabar 2.4s ease-out forwards;"></div></div>
+        </div>
+      </sc-if>
+    </div>
+
+    <p class="mono" style="font-size:12px;color:#9AA4AF;text-align:center;margin-top:16px;">自动更新仅在 Windows 安装版可用</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { stage: 'upToDate', pct: 42 };
+  renderVals() {
+    const s = this.state.stage;
+    const go = (st, ms, next) => { this.setState({ stage: st }); if (next) setTimeout(()=>this.setState({stage:next}), ms); };
+    return {
+      isIdle: s==='idle', isChecking: s==='checking', isUpToDate: s==='upToDate',
+      isAvailable: s==='available', isDownloading: s==='downloading', pct: this.state.pct,
+      check: () => go('checking', 1200, 'available'),
+      toAvailable: () => go('checking', 1000, 'available'),
+      toIdle: () => this.setState({ stage:'idle' }),
+      download: () => this.setState({ stage:'downloading' }),
+    };
+  }
+}
+</script>
+</body>
+</html>
