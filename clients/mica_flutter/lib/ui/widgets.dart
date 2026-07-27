@@ -1452,15 +1452,6 @@ class _PresenceBar extends StatelessWidget {
 
   final List<PresenceUser> presence;
 
-  static const List<Color> _palette = [
-    Color(0xFF2563EB),
-    Color(0xFF16A34A),
-    Color(0xFFDB2777),
-    Color(0xFFD97706),
-    Color(0xFF7C3AED),
-    Color(0xFF0891B2),
-  ];
-
   @override
   Widget build(BuildContext context) {
     // Solo → nothing (the caller also skips rendering the row); an "Only you"
@@ -1481,7 +1472,13 @@ class _PresenceBar extends StatelessWidget {
               message: presence[i].name,
               child: CircleAvatar(
                 radius: 12,
-                backgroundColor: _palette[i % _palette.length],
+                // The connection's own colour, so this avatar and that
+                // person's remote caret flag are the same — which is what
+                // `kPresencePalette`'s doc comment promises. This used to
+                // index a COPY of the palette by list position, so the two
+                // disagreed, and a lone collaborator was always blue here
+                // while their caret was whatever the hash picked.
+                backgroundColor: presence[i].color,
                 child: Text(
                   _initial(presence[i].name),
                   style: const TextStyle(fontSize: 11, color: Colors.white),
