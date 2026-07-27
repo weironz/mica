@@ -220,6 +220,7 @@
   "dataImportDescription": "从 ZIP 导入工作区 —— Mica 导出或 Notion「Markdown & CSV」导出。页面树、排序和图片都会被重建。",
   "dataImportZoneHint": "选择 Mica 导出的 ZIP,或 Notion 的「Markdown & CSV」导出包",
   "dataImportButton": "导入工作区(ZIP)",
+  "dataExportAllMeta": "{workspaces} 个工作区 · {pages} 个页面 · 图片约 {size}",
   "dataExportAllButton": "导出全部工作区(ZIP)",
   "localCorruptTitle": "打开此页面失败",
   "localCorruptBody": "这个页面的本地副本似乎已损坏。可以恢复到上一个自动检查点,或打开版本历史找回更早的内容。",

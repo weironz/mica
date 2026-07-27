@@ -483,6 +483,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.onAppearanceChanged,
     required this.onImportWorkspace,
     this.onExportAllWorkspaces,
+    this.onLoadExportStats,
   });
 
   final String userName;
@@ -540,6 +541,12 @@ class _SettingsDialog extends StatefulWidget {
   /// to). Null hides the button rather than offering a dead control.
   final Future<void> Function()? onExportAllWorkspaces;
 
+  /// Counts for the whole-account export. Null where there is nothing to
+  /// describe (本地模式 has no cross-workspace export), and a failure just leaves
+  /// the meta line absent — a number nobody can act on is not worth an error.
+  final Future<({int workspaces, int pages, int imageBytes})> Function()?
+  onLoadExportStats;
+
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
 }
@@ -581,6 +588,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   List<Map<String, dynamic>>? _tokens;
   bool _tokensLoaded = false;
   bool _tokenBusy = false;
+  ({int workspaces, int pages, int imageBytes})? _exportStats;
+  bool _exportStatsAsked = false;
   bool _tokenWrite = false;
   final _tokenName = TextEditingController();
 
@@ -619,6 +628,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   void initState() {
     super.initState();
     _load();
+    // Prefetch the export numbers rather than waiting for the Data tab to be
+    // opened: it is one aggregate query, and asking on first paint of that tab
+    // would render the export row without its meta line and then reflow under
+    // the user.
+    _ensureExportStats();
   }
 
   void _applyAppearance() {
@@ -1685,6 +1699,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
+  /// Ask for the export numbers once, the first time this tab is built. Failure
+  /// leaves the meta line absent rather than surfacing an error — a count nobody
+  /// can act on is not worth interrupting the screen for.
+  void _ensureExportStats() {
+    final load = widget.onLoadExportStats;
+    if (load == null || _exportStatsAsked) return;
+    _exportStatsAsked = true;
+    load()
+        .then((st) {
+          if (mounted) setState(() => _exportStats = st);
+        })
+        .catchError((_) {});
+  }
+
   List<Widget> _dataSection(BuildContext context) => [
     MicaEyebrow(context.l10n.settingsData, icon: Icons.import_export),
     const SizedBox(height: 12),
@@ -1720,9 +1748,35 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                context.l10n.dataExportAllButton,
-                style: const TextStyle(fontSize: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    context.l10n.dataExportAllButton,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  // Shown only once the numbers are in. Images are called images
+                  // rather than "download size": the archive is a zip, Markdown
+                  // compresses hard and images do not, so quoting a total here
+                  // would be wrong by an amount that depends on the user's own
+                  // content.
+                  if (_exportStats case final st?)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        context.l10n.dataExportAllMeta(
+                          st.workspaces,
+                          st.pages,
+                          formatBytes(st.imageBytes),
+                        ),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: EditorTheme.faint,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 10),

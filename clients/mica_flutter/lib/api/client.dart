@@ -493,6 +493,24 @@ class ApiClient {
     await _delete('/api/workspaces/$workspaceId/trash/$viewId', token);
   }
 
+  /// What "export everything" would contain: workspace count, page count, and
+  /// the bytes of images still referenced.
+  ///
+  /// Three numbers rather than one total, because only these can be stated
+  /// honestly — the archive is a zip, Markdown compresses hard and images do
+  /// not, so a single预估 total would be wrong by an amount that depends on the
+  /// user's own content.
+  Future<({int workspaces, int pages, int imageBytes})> exportAllStats(
+    String token,
+  ) async {
+    final r = await _get('/api/workspaces/export/stats', token);
+    return (
+      workspaces: (r['workspaces'] as num?)?.toInt() ?? 0,
+      pages: (r['pages'] as num?)?.toInt() ?? 0,
+      imageBytes: (r['image_bytes'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// Empty the whole recycle bin. Returns how many views were removed, which is
   /// what the confirmation afterwards reports.
   ///

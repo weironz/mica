@@ -317,6 +317,20 @@
   "dataImportDescription": "Import a workspace from a ZIP — a Mica export or a Notion \"Markdown & CSV\" export. The page tree, ordering and images are rebuilt.",
   "dataImportZoneHint": "Choose a Mica export ZIP, or a Notion \"Markdown & CSV\" export",
   "dataImportButton": "Import workspace (ZIP)",
+  "dataExportAllMeta": "{workspaces} workspaces · {pages} pages · ~{size} of images",
+  "@dataExportAllMeta": {
+    "placeholders": {
+      "workspaces": {
+        "type": "int"
+      },
+      "pages": {
+        "type": "int"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
   "dataExportAllButton": "Export all workspaces (ZIP)",
   "localCorruptTitle": "Couldn't open this page",
   "localCorruptBody": "This page's local copy appears to be corrupt. You can restore it to the last automatic checkpoint, or open version history to recover earlier content.",

@@ -1734,6 +1734,71 @@ pub async fn export_workspace_zip(
 /// switcher (position) order, each under its own `<name>/` subdir, plus a
 /// top-level `workspaces.json` manifest. Each subdir is byte-identical to that
 /// workspace's own `export.zip`, so re-importing a subdir round-trips.
+/// What "export everything" is about to hand you.
+///
+/// Three separate numbers rather than one total size, because only one of them
+/// can be stated honestly. The archive is a zip: Markdown compresses hard and
+/// images do not, so a single "约 X MB" derived from raw bytes would be wrong by
+/// a lot for a text-heavy account and roughly right for an image-heavy one — a
+/// number whose error depends on the user's content is worse than no number.
+/// Images dominate real archives and their bytes are exact, so that is the one
+/// size reported, labelled as images rather than as the download.
+#[derive(Debug, Serialize)]
+pub struct ExportStatsResponse {
+  workspaces: i64,
+  pages: i64,
+  image_bytes: i64,
+}
+
+/// Counts for the whole-account export, over exactly the workspaces
+/// [`export_all_workspaces_zip`] would walk.
+pub async fn export_all_stats(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> ApiResult<Json<ExportStatsResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+
+  // One statement over the same membership join the export uses, so the numbers
+  // describe the archive that would actually be produced. Pages match the
+  // `page_count` definition (no folders, no trash); image bytes count only blobs
+  // still referenced by a live document — an unreferenced one is waiting for the
+  // GC sweep and will not be in the archive.
+  let row = sqlx::query_as::<_, (i64, i64, i64)>(
+    r#"
+      WITH mine AS (
+        SELECT w.id
+        FROM workspaces w
+        INNER JOIN workspace_members wm ON wm.workspace_id = w.id
+        WHERE wm.user_id = $1
+      )
+      SELECT
+        (SELECT count(*) FROM mine)::bigint,
+        (
+          SELECT count(*)
+          FROM views v
+          WHERE v.workspace_id IN (SELECT id FROM mine)
+            AND v.is_deleted = false
+            AND v.object_type::text = 'document'
+        )::bigint,
+        (
+          SELECT coalesce(sum(f.byte_size), 0)
+          FROM files f
+          WHERE f.workspace_id IN (SELECT id FROM mine)
+            AND f.unreferenced_since IS NULL
+        )::bigint
+    "#,
+  )
+  .bind(user_id)
+  .fetch_one(&state.db)
+  .await?;
+
+  Ok(Json(ExportStatsResponse {
+    workspaces: row.0,
+    pages: row.1,
+    image_bytes: row.2,
+  }))
+}
+
 pub async fn export_all_workspaces_zip(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -4469,6 +4534,72 @@ mod tests {
       assert_eq!(hits.len(), 1, "body searchable after eager base: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
+    }
+
+    /// The export stats must describe the archive that would actually be
+    /// produced: the same workspaces, the same page definition, and only blobs
+    /// that are still referenced (an unreferenced one is waiting for the GC sweep
+    /// and will not be in the zip).
+    #[tokio::test]
+    async fn export_stats_counts_what_the_archive_would_contain() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      seed_document(&db, ws, user, "页 A", serde_json::json!([])).await;
+      let (trashed, _) =
+        seed_document(&db, ws, user, "扔掉的", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(trashed)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      // One live blob and one already swept out of use.
+      for (key, size, unref) in [
+        ("k-live", 1000i64, false),
+        ("k-dead", 9_000_000i64, true),
+      ] {
+        sqlx::query(
+          "INSERT INTO files(id, workspace_id, uploaded_by, object_key, mime_type,            byte_size, unreferenced_since)            VALUES($1,$2,$3,$4,'image/png',$5, CASE WHEN $6 THEN now() ELSE NULL END)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(ws)
+        .bind(user)
+        .bind(format!("{key}-{}", Uuid::new_v4()))
+        .bind(size)
+        .bind(unref)
+        .execute(&db)
+        .await
+        .unwrap();
+      }
+
+      let row = sqlx::query_as::<_, (i64, i64, i64)>(
+        r#"
+          WITH mine AS (
+            SELECT w.id FROM workspaces w
+            INNER JOIN workspace_members wm ON wm.workspace_id = w.id
+            WHERE wm.user_id = $1
+          )
+          SELECT
+            (SELECT count(*) FROM mine)::bigint,
+            (SELECT count(*) FROM views v
+             WHERE v.workspace_id IN (SELECT id FROM mine)
+               AND v.is_deleted = false AND v.object_type::text = 'document')::bigint,
+            (SELECT coalesce(sum(f.byte_size), 0) FROM files f
+             WHERE f.workspace_id IN (SELECT id FROM mine)
+               AND f.unreferenced_since IS NULL)::bigint
+        "#,
+      )
+      .bind(user)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+
+      assert_eq!(row.0, 1, "one workspace for this user");
+      assert_eq!(row.1, 1, "the trashed page is not in the archive");
+      assert_eq!(
+        row.2, 1000,
+        "an unreferenced blob is awaiting GC and must not be counted"
+      );
     }
 
     /// The workspace list's page count must mean the same thing the client's

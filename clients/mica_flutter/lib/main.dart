@@ -29,6 +29,7 @@ import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
 import 'ui/destructive_confirm.dart';
 import 'ui/emoji_picker.dart';
+import 'ui/format_bytes.dart';
 import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
@@ -1558,6 +1559,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
       });
     });
+  }
+
+  /// Counts for the whole-account export, shown under the export row.
+  Future<({int workspaces, int pages, int imageBytes})>
+  _exportAllStats() async {
+    final session = _requireSession();
+    return _api.exportAllStats(session.accessToken);
   }
 
   Future<void> _purgeView(DocumentView view) {
@@ -4921,6 +4929,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? (_) async => Uint8List(0)
           : _exportWorkspaceZip,
       onExportAllWorkspaces: local ? null : _exportAllWorkspaces,
+      // Cloud only: 本地模式 has no cross-workspace export to describe.
+      onLoadExportStats: local ? null : _exportAllStats,
       onImportWorkspaceZip: local
           ? (_, _, {bool notion = false}) async {}
           : _importWorkspaceZip,
@@ -5681,6 +5691,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onImportMarkdown,
     required this.onExportWorkspaceZip,
     this.onExportAllWorkspaces,
+    this.onLoadExportStats,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
     required this.onExportMarkdown,
@@ -5944,6 +5955,10 @@ class WorkspaceView extends StatefulWidget {
   /// Null in 本地模式 — cloud-only "export every workspace this account owns"
   /// (`GET /api/workspaces/export.zip`). Null hides the Settings button.
   final Future<void> Function()? onExportAllWorkspaces;
+
+  /// Counts describing the whole-account export. Null in 本地模式.
+  final Future<({int workspaces, int pages, int imageBytes})> Function()?
+  onLoadExportStats;
 
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
@@ -8920,6 +8935,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
+        onLoadExportStats: widget.onLoadExportStats,
         onExportAllWorkspaces: widget.onExportAllWorkspaces == null
             ? null
             : () async {
