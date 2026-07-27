@@ -1,0 +1,16 @@
+<!-- The Mica mark: three stacked rhombus "sheets" — mica the layered mineral, and
+     the editor's stacked blocks.
+
+     MIRRORS lib/widgets/mica_logo.dart. Keep the two in sync; the geometry below
+     is that painter's formula evaluated for a 32x32 box:
+       cx = w/2 = 16      hw = w*0.44 = 14.08     hh = h*0.20 = 6.4
+       gap = h*0.165 = 5.28                       baseCy = h/2 + gap = 21.28
+       layer i (bottom to top) sits at cy = baseCy - i*gap
+     A duplicate definition is unavoidable here: the tab icon has to exist before
+     Flutter boots, so it cannot come from the painter. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Bottom sheet first, so the upper ones overlap it (same order as the painter). -->
+  <path d="M16 14.88 L30.08 21.28 L16 27.68 L1.92 21.28 Z" fill="#93C5FD"/>
+  <path d="M16 9.6 L30.08 16 L16 22.4 L1.92 16 Z" fill="#3B82F6"/>
+  <path d="M16 4.32 L30.08 10.72 L16 17.12 L1.92 10.72 Z" fill="#1D4ED8"/>
+</svg>

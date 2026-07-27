@@ -7,6 +7,13 @@
     <meta name="description" content="Mica Flutter client">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Mica</title>
+    <!-- Tab icon. SVG only, on purpose: it is the same mark the app draws in its
+         sidebar (web/favicon.svg mirrors lib/widgets/mica_logo.dart), it stays
+         crisp at any DPI, and every browser that can run a Flutter web build
+         supports it. There was no icon of any kind here before, so the tab showed
+         the browser's generic globe. -->
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <meta name="theme-color" content="#1D4ED8">
     <!-- P2-M4 web→yjs: the browser-side CRDT engine (yjs), wire-compatible with
          the Rust yrs core/server. Loaded before Flutter so js_interop can use it. -->
     <script src="yjs_bundle.js"></script>
