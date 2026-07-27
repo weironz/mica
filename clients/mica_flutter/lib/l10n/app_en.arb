@@ -505,6 +505,19 @@
   "loginForgotEnterEmail": "Enter your email above first.",
   "loginForgotSentTitle": "Check your email",
   "loginForgotSentBody": "If that email is registered, we've sent a link to reset your password. It expires in one hour.",
+  "signInTagline": "A local-first\ncollaborative wiki",
+  "signInPitch": "Block editor, real-time collaboration. Edits merge through CRDTs, so your devices never overwrite each other.",
+  "signInFeatureOffline": "Write offline on desktop; syncs when you reconnect",
+  "signInFeatureCollab": "Real-time collaboration — see each other's cursors",
+  "signInFeatureEditor": "Block editor · code highlighting · math · tables",
+  "signInBadge": "CRDT SYNC · OFFLINE-FIRST · v{version}",
+  "@signInBadge": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
   "loginEmptyDetail": "Sign in to open your workspace.",
   "workspaceTitle": "Workspace",
   "workspaceNameLabel": "Workspace name",

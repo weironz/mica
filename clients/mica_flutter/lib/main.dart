@@ -35,6 +35,7 @@ import 'ui/overview_pane.dart';
 import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
+import 'ui/sign_in_hero.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
 import 'ui/version_data.dart';
@@ -4975,10 +4976,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               ),
               const VerticalDivider(width: 1),
               Expanded(
-                child: EmptyState(
-                  icon: Icons.description_outlined,
-                  title: 'Mica',
-                  detail: context.l10n.loginEmptyDetail,
+                // Design 01's brand half. It replaces an EmptyState that said
+                // only 「登录后即可打开你的工作区」 — true, and it told a
+                // first-time visitor nothing about what they were signing in to.
+                child: SignInHero(
+                  strings: SignInHeroStrings(
+                    tagline: context.l10n.signInTagline,
+                    pitch: context.l10n.signInPitch,
+                    features: [
+                      // The offline line is qualified with 「桌面端」 on purpose:
+                      // this screen only ever renders on web (see the guard
+                      // above — `_local.available` is false there), so an
+                      // unqualified "works offline" would promise the one thing
+                      // that cannot be true where it is being read.
+                      context.l10n.signInFeatureOffline,
+                      context.l10n.signInFeatureCollab,
+                      context.l10n.signInFeatureEditor,
+                    ],
+                    badge: context.l10n.signInBadge(kAppVersion),
+                  ),
                 ),
               ),
             ],
