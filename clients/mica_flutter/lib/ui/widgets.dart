@@ -1737,12 +1737,13 @@ class _UpdateCheckerState extends State<UpdateChecker> {
 /// AppFlowy-style breadcrumb: the current page's folder path, each ancestor
 /// segment clickable to jump there. A [trailing] widget (the properties toggle)
 /// sits at the end. `part of main.dart`, so it shares its imports / `context.l10n`.
-class _PageBreadcrumb extends StatelessWidget {
+class _PageBreadcrumb extends StatefulWidget {
   const _PageBreadcrumb({
     required this.views,
     required this.current,
     required this.onSelect,
     required this.trailing,
+    this.onRename,
   });
 
   final List<DocumentView> views;
@@ -1750,13 +1751,62 @@ class _PageBreadcrumb extends StatelessWidget {
   final Future<void> Function(DocumentView view) onSelect;
   final Widget trailing;
 
+  /// Rename the page from the breadcrumb tail (AppFlowy does this). Null when the
+  /// page cannot be renamed — a viewer's read-only workspace — and then the tail
+  /// stays plain text rather than offering an edit that would 403.
+  final Future<void> Function(DocumentView view, String name)? onRename;
+
+  @override
+  State<_PageBreadcrumb> createState() => _PageBreadcrumbState();
+}
+
+class _PageBreadcrumbState extends State<_PageBreadcrumb> {
+  final MenuController _renameMenu = MenuController();
+  final TextEditingController _renameField = TextEditingController();
+  final FocusNode _renameFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _renameField.dispose();
+    _renameFocus.dispose();
+    super.dispose();
+  }
+
+  void _openRename() {
+    // Seed with the live name every time: the page may have been renamed from the
+    // sidebar since this widget was built.
+    _renameField.text = widget.current.name;
+    _renameField.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _renameField.text.length,
+    );
+    _renameMenu.open();
+    // The menu takes focus as it opens; asking for it on the next frame is what
+    // lands the caret in the field instead of on the menu surface.
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _renameFocus.requestFocus(),
+    );
+  }
+
+  Future<void> _submitRename() async {
+    final rename = widget.onRename;
+    // `renamedTo` decides whether there is anything to save at all: blank means
+    // "changed my mind" (the server rejects empty names) and unchanged must not
+    // send a write, since closing the popover commits.
+    final next = renamedTo(_renameField.text, widget.current.name);
+    if (_renameMenu.isOpen) _renameMenu.close();
+    if (rename == null || next == null) return;
+    await rename(widget.current, next);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final views = widget.views;
     final byId = {for (final v in views) v.id: v};
     // Walk parent links up from the current page; `seen` guards a cyclic tree.
     final chain = <DocumentView>[];
     final seen = <String>{};
-    DocumentView? v = current;
+    DocumentView? v = widget.current;
     while (v != null && seen.add(v.id)) {
       chain.add(v);
       final pid = v.parentViewId;
@@ -1788,7 +1838,7 @@ class _PageBreadcrumb extends StatelessWidget {
             ),
           ),
         ),
-        trailing,
+        widget.trailing,
       ],
     );
   }
@@ -1804,19 +1854,92 @@ class _PageBreadcrumb extends StatelessWidget {
         fontSize: 12,
       ),
     );
-    // The current page (tail) is not a link — you're already on it.
+    // The tail is not a link — you are already on it — but it IS where the page
+    // gets renamed, the way AppFlowy does it.
     if (isLast) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: text,
+      if (widget.onRename == null) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: text,
+        );
+      }
+      return MenuAnchor(
+        controller: _renameMenu,
+        style: const MenuStyle(
+          padding: WidgetStatePropertyAll(EdgeInsets.all(8)),
+        ),
+        menuChildren: [_renamePopover(context)],
+        builder: (context, controller, child) => InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _openRename,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+            child: text,
+          ),
+        ),
       );
     }
     return InkWell(
-      onTap: () => onSelect(v),
+      onTap: () => widget.onSelect(v),
       borderRadius: BorderRadius.circular(4),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
         child: text,
+      ),
+    );
+  }
+}
+
+/// The rename popover: page glyph + a field, anchored under the breadcrumb tail.
+extension _PageBreadcrumbPopover on _PageBreadcrumbState {
+  Widget _renamePopover(BuildContext context) {
+    return SizedBox(
+      width: 260,
+      child: Row(
+        children: [
+          Container(
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              color: EditorTheme.codeBg,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            alignment: Alignment.center,
+            child: (widget.current.icon?.trim().isNotEmpty ?? false)
+                ? Text(
+                    widget.current.icon!.trim(),
+                    style: const TextStyle(fontSize: 14),
+                  )
+                : Icon(
+                    widget.current.objectType == 'folder'
+                        ? Icons.folder_outlined
+                        : Icons.description_outlined,
+                    size: 15,
+                    color: EditorTheme.muted,
+                  ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _renameField,
+              focusNode: _renameFocus,
+              style: const TextStyle(fontSize: 14),
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
+              ),
+              // Enter commits. Losing focus commits too, so clicking away saves
+              // rather than silently discarding what was typed — the same
+              // blur-commits rule the sidebar's inline rename uses.
+              onSubmitted: (_) => _submitRename(),
+              onTapOutside: (_) => _submitRename(),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -33,6 +33,7 @@ import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/panel_kit.dart';
+import 'ui/rename.dart';
 import 'ui/search_data.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
@@ -7574,10 +7575,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitleSaveTimer?.cancel();
     _pageTitleSaveTimer = Timer(const Duration(milliseconds: 700), () {
       final bootstrap = widget.selectedBootstrap;
-      final title = _pageTitle.text.trim();
-      if (bootstrap == null || title.isEmpty || title == bootstrap.view.name) {
-        return;
-      }
+      if (bootstrap == null) return;
+      final title = renamedTo(_pageTitle.text, bootstrap.view.name);
+      if (title == null) return;
 
       widget.onRenameView(bootstrap.view, title);
     });
@@ -7859,6 +7859,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       views: widget.views,
                       current: widget.selectedView!,
                       onSelect: widget.onSelectView,
+                      // Renaming from the breadcrumb tail (AppFlowy does this).
+                      // Gated on the editor role: a viewer's rename would 403,
+                      // and an edit affordance that cannot succeed is worse than
+                      // none — same rule as everywhere else here.
+                      onRename: canEdit ? widget.onRenameView : null,
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -8585,11 +8590,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   Future<void> _commitRename(DocumentView view, String name) async {
-    final trimmed = name.trim();
     if (_renamingViewId != null) setState(() => _renamingViewId = null);
-    // Empty or unchanged → keep the current name (server rejects empty names).
-    if (trimmed.isEmpty || trimmed == view.name) return;
-    await widget.onRenameView(view, trimmed);
+    // Empty or unchanged → keep the current name; see [renamedTo].
+    final next = renamedTo(name, view.name);
+    if (next == null) return;
+    await widget.onRenameView(view, next);
   }
 
   /// Create a page/folder via [create], then drop its new sidebar row straight
