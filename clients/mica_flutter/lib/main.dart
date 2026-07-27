@@ -29,7 +29,9 @@ import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/home_pane.dart';
+import 'ui/overview_pane.dart';
 import 'ui/status_kit.dart';
+import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -2192,10 +2194,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         : _viewsByWorkspace.values.expand((views) => views);
     for (final view in candidates) {
       if (view.id != viewId) continue;
+      // A FOLDER is not a document — opening it as one did nothing at all, which
+      // is what the home screen's directory list used to do. Show its contents.
+      if (view.isFolder) {
+        setState(() => _overviewFolderId = view.id);
+        return;
+      }
       unawaited(local ? _localSelectView(view) : _selectView(view));
       return;
     }
   }
+
+  /// The folder whose contents the overview is showing. Non-null takes precedence
+  /// over home; opening a document clears it (see [_selectView] callers).
+  String? _overviewFolderId;
+  WorkspaceOverviewMode _overviewMode = WorkspaceOverviewMode.cards;
 
   /// Close the open page so home shows again (the sidebar's Home row). Keeps the
   /// workspace selection — home is a view of the world, not a way out of it.
@@ -4635,7 +4648,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ),
         onOpenView: (viewId) => _openViewFromHome(viewId, local: local),
       ),
-      onOpenHome: () => _closeOpenPage(local: local),
+      onOpenHome: () {
+        setState(() => _overviewFolderId = null);
+        _closeOpenPage(local: local);
+      },
+      // Only built while a folder is being browsed — otherwise home shows.
+      overviewPane: _overviewFolderId == null
+          ? null
+          : buildOverviewPane(
+              context,
+              views: local
+                  ? _localViews
+                  : (_viewsByWorkspace[_selectedWorkspace?.id] ?? const []),
+              folderId: _overviewFolderId,
+              mode: _overviewMode,
+              onModeChanged: (mode) => setState(() => _overviewMode = mode),
+              onOpen: (pageId) => _openViewFromHome(pageId, local: local),
+              onEnterFolder: (id) => setState(() => _overviewFolderId = id),
+              onCreatePage: () => unawaited(
+                local
+                    ? _localCreateDocument(context.l10n.newPage)
+                    : _createDocument(context.l10n.newPage),
+              ),
+            ),
       onDeleteView: local ? _localDeleteView : _deleteView,
       onCloneView: local ? _localCloneView : _cloneView,
       onUpdateRootBlockText: local
@@ -5430,6 +5465,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onRenameView,
     this.onSetViewIcon,
     this.homePane,
+    this.overviewPane,
     this.onOpenHome,
     required this.onDeleteView,
     required this.onCloneView,
@@ -5621,6 +5657,10 @@ class WorkspaceView extends StatefulWidget {
   /// `ui/home_pane.dart`) because it spans every workspace, which this view —
   /// scoped to one workspace — does not have.
   final Widget? homePane;
+
+  /// The folder-contents overview, non-null only while a folder is being browsed.
+  /// Takes precedence over [homePane] — you asked to look inside something.
+  final Widget? overviewPane;
 
   /// Closes the open page so home shows again. Null hides the sidebar entry.
   final VoidCallback? onOpenHome;
@@ -7353,7 +7393,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // state, which told the user to do something instead of helping them do
       // it; home offers the create action and the recent pages right there.
       // Falls back to the old copy only if the host supplies no home pane.
-      return widget.homePane ??
+      return widget.overviewPane ??
+          widget.homePane ??
           EmptyState(
             icon: Icons.description_outlined,
             title: context.l10n.editorSelectPageTitle,
