@@ -267,6 +267,10 @@
     }
   },
   "tokenRevokeConfirmBody": "Scripts using this token will start failing immediately (401). This can't be undone, but you can create a new token.",
+  "settingsGroupGeneral": "General",
+  "settingsGroupAccount": "Account",
+  "settingsGroupWorkspace": "Workspace",
+  "settingsGroupOther": "Other",
   "settingsAppearance": "Appearance",
   "settingsResetPageWidth": "Reset to default width",
   "settingsPageWidth": "Page width",

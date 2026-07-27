@@ -347,7 +347,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       '${_preset.provider}|${_baseUrl.text.trim()}|${_model.text.trim()}|'
       '${_apiKey.text.trim()}';
 
-  int _tab = 0; // 0 Appearance, 1 AI provider, 2 Account
+  /// Index into the built tab list. Not persisted, so reordering the list is
+  /// safe — 0 is whatever comes first (外观).
+  int _tab = 0;
 
   /// Gates the WHOLE dialog (build: `_loading ? spinner : the tabs`), but the
   /// only thing it ever waits for is [_load]'s AI-settings fetch. So it starts
@@ -753,6 +755,51 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             child: Text(context.l10n.commonDone),
           ),
         ],
+      ),
+    );
+  }
+
+  /// One settings nav row. Active = accent wash + accent ink + 600, rather than
+  /// Material's `selected` (a tinted title only), which at 180px read as barely
+  /// distinguishable from its neighbours.
+  Widget _navRow(BuildContext context, int i, String title, IconData icon) {
+    final active = _tab == i;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      child: Material(
+        color: active ? const Color(0xFFEFF6FF) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => setState(() => _tab = i),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  size: 18,
+                  color: active ? const Color(0xFF2563EB) : EditorTheme.muted,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                      color: active
+                          ? const Color(0xFF2563EB)
+                          : EditorTheme.text,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1564,51 +1611,64 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     //
     // No `onSave` per tab any more: there is no Save button to feed. Each
     // section commits its own changes as they are made.
-    final tabs = <({String title, IconData icon, List<Widget> section})>[
-      (
-        title: context.l10n.settingsAppearance,
-        icon: Icons.tune,
-        section: _appearanceSection(context),
-      ),
-      // AI settings live on the server — 本地模式 has none to configure.
-      if (widget.onLoadAiSettings != null)
-        (
-          title: context.l10n.settingsAiProvider,
-          icon: Icons.auto_awesome,
-          section: _aiSection(context),
-        ),
-      // 本地模式 has no account — same reason API Tokens below is absent there.
-      if (widget.onUpdateProfile != null)
-        (
-          title: context.l10n.settingsAccount,
-          icon: Icons.person_outline,
-          section: _accountSection(context),
-        ),
-      if (widget.onLoadTokens != null)
-        (
-          title: context.l10n.tokenTitle,
-          icon: Icons.key_outlined,
-          section: _tokensSection(context),
-        ),
-      (
-        title: context.l10n.settingsData,
-        icon: Icons.import_export,
-        section: _dataSection(context),
-      ),
-      (
-        title: context.l10n.settingsShortcuts,
-        icon: Icons.keyboard_outlined,
-        section: _shortcutsSection(context),
-      ),
-      // Web has no filesystem to capture into, so the tab is simply absent
-      // there rather than offering a switch that cannot do anything.
-      if (diagnosticsSupported)
-        (
-          title: context.l10n.settingsDiagnostics,
-          icon: Icons.bug_report_outlined,
-          section: _diagnosticsSection(context),
-        ),
-    ];
+    // Grouped (design 16). Seven flat rows read as one undifferentiated list;
+    // the groups are what make it scannable. Order is by group so the labels can
+    // be emitted inline, and a group whose every row is absent prints no label —
+    // in 本地模式 the whole 账户 group disappears, which is the same
+    // null-means-absent rule the tabs themselves already follow.
+    final tabs =
+        <({String group, String title, IconData icon, List<Widget> section})>[
+          (
+            group: context.l10n.settingsGroupGeneral,
+            title: context.l10n.settingsAppearance,
+            icon: Icons.tune,
+            section: _appearanceSection(context),
+          ),
+          (
+            group: context.l10n.settingsGroupGeneral,
+            title: context.l10n.settingsShortcuts,
+            icon: Icons.keyboard_outlined,
+            section: _shortcutsSection(context),
+          ),
+          // 本地模式 has no account — same reason API Tokens below is absent there.
+          if (widget.onUpdateProfile != null)
+            (
+              group: context.l10n.settingsGroupAccount,
+              title: context.l10n.settingsAccount,
+              icon: Icons.person_outline,
+              section: _accountSection(context),
+            ),
+          if (widget.onLoadTokens != null)
+            (
+              group: context.l10n.settingsGroupAccount,
+              title: context.l10n.tokenTitle,
+              icon: Icons.key_outlined,
+              section: _tokensSection(context),
+            ),
+          (
+            group: context.l10n.settingsGroupWorkspace,
+            title: context.l10n.settingsData,
+            icon: Icons.import_export,
+            section: _dataSection(context),
+          ),
+          // AI settings live on the server — 本地模式 has none to configure.
+          if (widget.onLoadAiSettings != null)
+            (
+              group: context.l10n.settingsGroupOther,
+              title: context.l10n.settingsAiProvider,
+              icon: Icons.auto_awesome,
+              section: _aiSection(context),
+            ),
+          // Web has no filesystem to capture into, so the tab is simply absent
+          // there rather than offering a switch that cannot do anything.
+          if (diagnosticsSupported)
+            (
+              group: context.l10n.settingsGroupOther,
+              title: context.l10n.settingsDiagnostics,
+              icon: Icons.bug_report_outlined,
+              section: _diagnosticsSection(context),
+            ),
+        ];
     final titles = [for (final t in tabs) t.title];
     final icons = [for (final t in tabs) t.icon];
     final sections = [for (final t in tabs) t.section];
@@ -1634,14 +1694,27 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                     child: ListView(
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       children: [
-                        for (var i = 0; i < titles.length; i++)
-                          ListTile(
-                            dense: true,
-                            selected: _tab == i,
-                            leading: Icon(icons[i], size: 20),
-                            title: Text(titles[i]),
-                            onTap: () => setState(() => _tab = i),
-                          ),
+                        for (var i = 0; i < titles.length; i++) ...[
+                          if (i == 0 || tabs[i].group != tabs[i - 1].group)
+                            Padding(
+                              padding: EdgeInsets.only(
+                                left: 16,
+                                right: 8,
+                                top: i == 0 ? 4 : 14,
+                                bottom: 4,
+                              ),
+                              child: Text(
+                                tabs[i].group.toUpperCase(),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.6,
+                                  color: EditorTheme.faint,
+                                ),
+                              ),
+                            ),
+                          _navRow(context, i, titles[i], icons[i]),
+                        ],
                         const Divider(height: 1),
                         // About isn't a content tab — it pops the version dialog.
                         ListTile(
