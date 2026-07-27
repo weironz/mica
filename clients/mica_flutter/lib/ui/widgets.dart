@@ -802,6 +802,7 @@ class DocumentListItem extends StatefulWidget {
     this.onTransferCopy,
     required this.onClone,
     required this.onRename,
+    this.onSetIcon,
     required this.onRenameSubmit,
     required this.onRenameCancel,
     required this.onDelete,
@@ -845,6 +846,11 @@ class DocumentListItem extends StatefulWidget {
   /// cloud and local workspaces, unlike the transfer pair above.
   final VoidCallback onClone;
   final VoidCallback onRename;
+
+  /// Opens the emoji picker for this row. Null in worlds where icons can't be
+  /// persisted (the local store has no icon column), and then the menu entry is
+  /// simply absent rather than present-but-dead.
+  final VoidCallback? onSetIcon;
 
   /// Commit the inline-edited name (Enter or blur); cancel on Esc.
   final ValueChanged<String> onRenameSubmit;
@@ -992,6 +998,17 @@ class _DocumentListItemState extends State<DocumentListItem> {
             label: context.l10n.commonRename,
           ),
         ),
+        // Set/clear the page emoji. Sits next to rename because it is the same
+        // kind of act — naming the thing — and the picker itself carries the
+        // "remove icon" affordance, so no second menu entry is needed.
+        if (widget.onSetIcon != null)
+          PopupMenuItem(
+            value: 'setIcon',
+            child: _MenuRow(
+              icon: Icons.emoji_emotions_outlined,
+              label: context.l10n.rowSetIcon,
+            ),
+          ),
         // Duplicate in place — works for pages AND folders (a folder copies its
         // whole subtree), and in cloud AND local workspaces (unlike transfer,
         // which is cloud-only), so it's always present.
@@ -1077,6 +1094,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
         widget.onCreateChildFolder();
       case 'rename':
         widget.onRename();
+      case 'setIcon':
+        widget.onSetIcon?.call();
       case 'duplicate':
         widget.onClone();
       case 'toggle':

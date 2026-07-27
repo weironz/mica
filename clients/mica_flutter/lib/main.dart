@@ -27,6 +27,7 @@ import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';
 import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
+import 'ui/emoji_picker.dart';
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -2129,6 +2130,54 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Reaching the server means we're back online — restore the real nav if we
       // had fallen back to the offline mirror.
       if (reachedServer) _recoverOnlineNav();
+    });
+  }
+
+  /// Pick an emoji for [view] and persist it.
+  ///
+  /// The picker's three-way result carries all the way to the server: dismissing
+  /// (null) leaves the icon untouched, `''` clears it, an emoji sets it — which is
+  /// why a plain rename can never wipe someone's icon by omission.
+  Future<void> _promptSetViewIcon(DocumentView view) async {
+    final l10n = context.l10n;
+    final picked = await showEmojiPicker(
+      context,
+      current: view.icon,
+      strings: EmojiPickerStrings(
+        title: l10n.iconPickerTitle,
+        searchHint: l10n.iconPickerSearch,
+        removeIcon: l10n.iconPickerRemove,
+        noResultsTitle: l10n.iconPickerNoResultTitle,
+        noResultsBody: l10n.iconPickerNoResultBody,
+        categorySmileys: l10n.iconCategorySmileys,
+        categoryPeople: l10n.iconCategoryPeople,
+        categoryNature: l10n.iconCategoryNature,
+        categoryFood: l10n.iconCategoryFood,
+        categoryObjects: l10n.iconCategoryObjects,
+        categorySymbols: l10n.iconCategorySymbols,
+        categoryFlags: l10n.iconCategoryFlags,
+      ),
+    );
+    if (picked == null || !mounted) return; // dismissed → change nothing
+    await _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final updated = await _api.updateView(
+        session.accessToken,
+        workspace.id,
+        view.id,
+        view.name,
+        icon: picked,
+      );
+      setState(() {
+        final views = _viewsByWorkspace[workspace.id] ?? const [];
+        _viewsByWorkspace = {
+          ..._viewsByWorkspace,
+          workspace.id: views
+              .map((item) => item.id == updated.id ? updated : item)
+              .toList(),
+        };
+      });
     });
   }
 
@@ -4524,6 +4573,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onPurgeView: local ? _localPurgeView : _purgeView,
       onSelectView: local ? _localSelectView : _selectView,
       onRenameView: local ? _localRenameView : _renameView,
+      // Cloud-only: the local store's view record has no icon column, so rather
+      // than accept a change it would silently drop, the local world simply does
+      // not offer the entry (see DocumentListItem.onSetIcon).
+      onSetViewIcon: local ? null : _promptSetViewIcon,
       onDeleteView: local ? _localDeleteView : _deleteView,
       onCloneView: local ? _localCloneView : _cloneView,
       onUpdateRootBlockText: local
@@ -5269,6 +5322,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onPurgeView,
     required this.onSelectView,
     required this.onRenameView,
+    this.onSetViewIcon,
     required this.onDeleteView,
     required this.onCloneView,
     required this.onUpdateRootBlockText,
@@ -5450,6 +5504,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(DocumentView view) onPurgeView;
   final Future<void> Function(DocumentView view) onSelectView;
   final Future<void> Function(DocumentView view, String name) onRenameView;
+
+  /// Opens the emoji picker for a view and persists the choice. Null where icons
+  /// cannot be stored (the local world), which hides the menu entry entirely.
+  final Future<void> Function(DocumentView view)? onSetViewIcon;
   final Future<void> Function(DocumentView view) onDeleteView;
 
   /// Duplicate a view's subtree in place (cloud or local). Always provided —
@@ -6772,6 +6830,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               : () => widget.onTransfer!(item.view, true),
           onClone: () => widget.onCloneView(item.view),
           onRename: () => _promptRenameView(item.view),
+          onSetIcon: widget.onSetViewIcon == null
+              ? null
+              : () => widget.onSetViewIcon!(item.view),
           onRenameSubmit: (name) => _commitRename(item.view, name),
           onRenameCancel: _cancelRename,
           onDelete: () => widget.onDeleteView(item.view),
