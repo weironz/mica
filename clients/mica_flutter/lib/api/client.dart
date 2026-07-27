@@ -1013,6 +1013,19 @@ class ApiClient {
     return body['job_id'] as String;
   }
 
+  /// Ask a running import to stop at its next page boundary.
+  ///
+  /// Does **not** roll back: pages already written stay, and the returned job
+  /// says how many. Idempotent — a finished job is unaffected.
+  Future<ImportJobStatus> cancelImportJob(String token, String jobId) async {
+    final r = await _post(
+      '/api/import/jobs/$jobId/cancel',
+      const {},
+      token: token,
+    );
+    return ImportJobStatus.fromJson(r);
+  }
+
   Future<ImportJobStatus> importJobStatus(String token, String jobId) async {
     final response = await _get('/api/import/jobs/$jobId', token);
     return ImportJobStatus.fromJson(response);

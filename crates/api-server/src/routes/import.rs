@@ -70,6 +70,83 @@ fn default_true() -> bool {
 mod tests {
   use super::*;
 
+  fn running_job() -> ImportJob {
+    ImportJob {
+      status: ImportJobStatus::Running,
+      total: 10,
+      done: 3,
+      workspace_id: None,
+      error: None,
+      skipped: Vec::new(),
+      skipped_total: 0,
+      cancel_requested: false,
+    }
+  }
+
+  /// A cancelled run returns `Ok` — it stopped cleanly — so the FLAG has to
+  /// decide the final status. If the result alone decided, a stopped import
+  /// would report "done" and claim the archive is fully in.
+  #[test]
+  fn a_cancelled_run_is_not_reported_as_done() {
+    let mut job = running_job();
+    job.cancel_requested = true;
+
+    let result: ApiResult<()> = Ok(());
+    match result {
+      Ok(()) if job.cancel_requested => job.status = ImportJobStatus::Cancelled,
+      Ok(()) => job.status = ImportJobStatus::Done,
+      Err(_) => job.status = ImportJobStatus::Error,
+    }
+
+    assert_eq!(job.status, ImportJobStatus::Cancelled);
+    assert_eq!(job.done, 3, "the pages that landed are still reported");
+  }
+
+  #[test]
+  fn an_untouched_run_still_completes_normally() {
+    let mut job = running_job();
+
+    let result: ApiResult<()> = Ok(());
+    match result {
+      Ok(()) if job.cancel_requested => job.status = ImportJobStatus::Cancelled,
+      Ok(()) => job.status = ImportJobStatus::Done,
+      Err(_) => job.status = ImportJobStatus::Error,
+    }
+
+    assert_eq!(job.status, ImportJobStatus::Done);
+  }
+
+  /// Cancelling only means something while the job is running: a finished import
+  /// cannot be un-done by pressing cancel afterwards, and saying otherwise would
+  /// promise a rollback that does not exist.
+  #[test]
+  fn cancelling_a_finished_job_changes_nothing() {
+    for finished in [ImportJobStatus::Done, ImportJobStatus::Error] {
+      let mut job = running_job();
+      job.status = finished;
+
+      if matches!(job.status, ImportJobStatus::Running) {
+        job.cancel_requested = true;
+      }
+
+      assert!(!job.cancel_requested, "{finished:?} must not accept a cancel");
+      assert_eq!(job.status, finished, "status unchanged");
+    }
+  }
+
+  /// Cancel is idempotent — the client may well send it twice while polling.
+  #[test]
+  fn cancelling_twice_is_the_same_as_once() {
+    let mut job = running_job();
+    for _ in 0..2 {
+      if matches!(job.status, ImportJobStatus::Running) {
+        job.cancel_requested = true;
+      }
+    }
+    assert!(job.cancel_requested);
+    assert_eq!(job.status, ImportJobStatus::Running, "cancel does not itself end the job");
+  }
+
   /// The skipped set is "what the archive carried that no page pointed at" —
   /// `plan.files` minus whatever got uploaded. Assets upload lazily, so that
   /// difference is exactly the silent drop the user could not otherwise see.
@@ -209,6 +286,7 @@ pub async fn start_import(
       error: None,
       skipped: Vec::new(),
       skipped_total: 0,
+      cancel_requested: false,
     },
   );
 
@@ -217,6 +295,10 @@ pub async fn start_import(
     let mut jobs = state.import_jobs.write().await;
     if let Some(job) = jobs.get_mut(&job_id) {
       match result {
+        // A cancelled run returns Ok — it stopped cleanly — so the flag, not the
+        // result, decides the final status. Reporting "done" for an import the
+        // user stopped halfway would claim their archive is fully in.
+        Ok(()) if job.cancel_requested => job.status = ImportJobStatus::Cancelled,
         Ok(()) => job.status = ImportJobStatus::Done,
         Err(e) => {
           job.status = ImportJobStatus::Error;
@@ -227,6 +309,29 @@ pub async fn start_import(
   });
 
   Ok(Json(ImportStartResponse { job_id }))
+}
+
+/// `POST /api/import/jobs/{job_id}/cancel` — ask a running import to stop.
+///
+/// Sets a flag the import loop reads at its next page boundary; it does not abort
+/// the task. Returns the job so the caller sees the state it is in, including how
+/// many pages already landed.
+///
+/// Unzipping and planning happen before the loop starts and are not interruptible
+/// — a cancel during those seconds takes effect when the first page is reached.
+/// Idempotent: cancelling a finished job changes nothing.
+pub async fn cancel_import_job(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(job_id): Path<Uuid>,
+) -> ApiResult<Json<ImportJob>> {
+  user_id_from_headers(&state, &headers).await?;
+  let mut jobs = state.import_jobs.write().await;
+  let job = jobs.get_mut(&job_id).ok_or(ApiError::NotFound)?;
+  if matches!(job.status, ImportJobStatus::Running) {
+    job.cancel_requested = true;
+  }
+  Ok(Json(job.clone()))
 }
 
 /// `GET /api/import/jobs/{job_id}`
@@ -331,6 +436,19 @@ async fn run_import(
   let client = reqwest::Client::new();
 
   for (idx, page) in plan.pages.iter().enumerate() {
+    // Stop between pages when asked. Checked HERE rather than by aborting the
+    // task, so we never stop with a document created but its content half
+    // written. `done` already reflects the pages that landed, and nothing is
+    // rolled back — see `ImportJob::cancel_requested`.
+    if state
+      .import_jobs
+      .read()
+      .await
+      .get(&job_id)
+      .is_some_and(|j| j.cancel_requested)
+    {
+      return Ok(());
+    }
     // A folder is a pure container: just a view, no document/snapshot, no
     // markdown/asset processing (F2 round-trip — folders survive export→import).
     if page.is_folder {

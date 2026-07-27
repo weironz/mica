@@ -329,6 +329,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// the job status. Null when no import is in flight — [_isBusy] alone can't
   /// carry this, since it's true for every operation and says nothing about size.
   ({int done, int total})? _importProgress;
+
+  /// The running import's job id, so the progress row can ask it to stop. Null
+  /// whenever no import is in flight.
+  String? _importJobId;
   // True while the cloud nav was rebuilt from the on-device mirror because the
   // server was unreachable (P1c). Roles are forced read-only until the server is
   // reached again; [_recoverOnlineNav] then refetches the authoritative nav.
@@ -1561,6 +1565,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Ask the running import to stop. It halts at the next page boundary and
+  /// keeps what it already wrote — see the server's `cancel_requested`.
+  Future<void> _cancelImport() async {
+    final jobId = _importJobId;
+    final session = _session;
+    if (jobId == null || session == null) return;
+    try {
+      await _api.cancelImportJob(session.accessToken, jobId);
+    } catch (_) {
+      // The poll loop is what reports the outcome; a failed cancel just means
+      // the import keeps going, which the progress row already shows.
+    }
+  }
+
   /// The archive entries no imported page referenced.
   ///
   /// The server caps the list, so when the total exceeds what it sent, say so
@@ -2081,6 +2099,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         container: container,
         reHostImages: _reHostImages,
       );
+      if (mounted) setState(() => _importJobId = jobId);
       ImportJobStatus job;
       while (true) {
         job = await _api.importJobStatus(session.accessToken, jobId);
@@ -2095,6 +2114,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
       if (job.status == 'error') {
         throw ApiException(job.error ?? l10n.importJobFailed);
+      }
+      // Stopped on request. Say how much did land — the import is NOT rolled
+      // back, and treating this like a no-op would leave the user believing
+      // their workspace is untouched when it now holds part of the archive.
+      if (job.status == 'cancelled') {
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(l10n.importCancelled(job.done))),
+          );
+        }
+        final workspaces = await _api.listWorkspaces(session.accessToken);
+        if (mounted) setState(() => _workspaces = workspaces);
+        return;
       }
       final workspaces = await _api.listWorkspaces(session.accessToken);
       if (mounted) setState(() => _workspaces = workspaces);
@@ -2129,7 +2161,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         );
       }
     }).whenComplete(() {
-      if (mounted) setState(() => _importProgress = null);
+      if (mounted) {
+        setState(() {
+          _importProgress = null;
+          _importJobId = null;
+        });
+      }
     });
   }
 
@@ -4813,6 +4850,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       presence: local ? const [] : _presence,
       message: _message,
       importProgress: _importProgress,
+      // Only offer it while an import is actually in flight.
+      onCancelImport: _importJobId == null ? null : _cancelImport,
       onSelectWorkspace: local ? _localSelectWorkspace : _selectWorkspace,
       onCreateWorkspace: local ? _localCreateWorkspace : _createWorkspace,
       onRenameWorkspace: local ? _localRenameWorkspace : _renameWorkspace,
@@ -5697,6 +5736,7 @@ class WorkspaceView extends StatefulWidget {
     required this.presence,
     required this.message,
     this.importProgress,
+    this.onCancelImport,
     required this.onSelectWorkspace,
     required this.onCreateWorkspace,
     required this.onRenameWorkspace,
@@ -5882,6 +5922,9 @@ class WorkspaceView extends StatefulWidget {
   /// flight. Optional so the local world (which imports synchronously) simply
   /// doesn't pass it.
   final ({int done, int total})? importProgress;
+
+  /// Stop the running import. Null when none is running.
+  final Future<void> Function()? onCancelImport;
   final Future<void> Function(Workspace workspace) onSelectWorkspace;
   final Future<void> Function(String name) onCreateWorkspace;
   final Future<void> Function(Workspace workspace, String name)
@@ -6734,6 +6777,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   done: p.done,
                   total: p.total,
                 ),
+                if (widget.onCancelImport case final cancel?)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: cancel,
+                      child: Text(context.l10n.importCancel),
+                    ),
+                  ),
               ],
               const SizedBox(height: 12),
               // Section label + actions (design 03). The old row was four equal

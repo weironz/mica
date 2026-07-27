@@ -433,6 +433,8 @@
   "importNotesCount": "{count, plural, other{{count} 篇笔记}}",
   "importFoldersCount": "{count, plural, other{{count} 个文件夹}}",
   "importListSeparator": "、",
+  "importCancel": "取消导入",
+  "importCancelled": "已停止导入,已导入 {count} 篇保留在工作区里",
   "importDone": "已导入 {items}",
   "importViewSkipped": "查看",
   "importSkippedTitle": "{count} 个文件没有导入",

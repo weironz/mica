@@ -62,6 +62,22 @@ pub struct ImportJob {
   /// showing 50 when 4000 were dropped would be worse than showing none.
   #[serde(default)]
   pub skipped_total: usize,
+
+  /// Someone asked this import to stop.
+  ///
+  /// The loop checks it at each PAGE boundary rather than being aborted outright:
+  /// killing the task mid-page could leave a document created but empty, or a
+  /// view pointing at nothing. One page later is a state the importer already
+  /// knows how to be in.
+  ///
+  /// Cancelling does **not** roll back. Pages already written stay, and the job
+  /// reports how many — undoing an import into an EXISTING workspace would mean
+  /// deleting rows the user may already have opened and edited, and a partial
+  /// import you can see and delete yourself is safer than one that deletes
+  /// things for you. A cancelled import into a NEW workspace leaves that
+  /// workspace, which the user can drop in one action.
+  #[serde(default)]
+  pub cancel_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -70,6 +86,9 @@ pub enum ImportJobStatus {
   Running,
   Done,
   Error,
+  /// Stopped on request, at a page boundary. Whatever had already been imported
+  /// stays — see [`ImportJob::cancel_requested`].
+  Cancelled,
 }
 
 impl AppState {

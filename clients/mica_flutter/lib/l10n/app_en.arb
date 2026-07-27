@@ -741,6 +741,15 @@
     }
   },
   "importListSeparator": ", ",
+  "importCancel": "Cancel import",
+  "importCancelled": "{count, plural, =1{Import stopped; the 1 page already imported was kept} other{Import stopped; the {count} pages already imported were kept}}",
+  "@importCancelled": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "importDone": "Imported {items}",
   "@importDone": {
     "placeholders": {

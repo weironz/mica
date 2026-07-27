@@ -162,6 +162,10 @@ pub fn api_router() -> Router<AppState> {
     )
     .route("/import/jobs/{job_id}", get(import::import_job))
     .route(
+      "/import/jobs/{job_id}/cancel",
+      post(import::cancel_import_job),
+    )
+    .route(
       "/workspaces/{workspace_id}/documents",
       post(documents::create_document),
     )
