@@ -256,15 +256,21 @@ class ApiClient {
     return DocumentBootstrap.fromJson(response);
   }
 
+  /// Rename a view, and optionally set its emoji.
+  ///
+  /// [icon] is three-way, matching the server: omit it to leave the current icon
+  /// alone (so a plain rename can never wipe an emoji), pass `''` to clear it,
+  /// pass an emoji to set it.
   Future<DocumentView> updateView(
     String token,
     String workspaceId,
     String viewId,
-    String name,
-  ) async {
+    String name, {
+    String? icon,
+  }) async {
     final response = await _patch(
       '/api/workspaces/$workspaceId/views/$viewId',
-      {'name': name},
+      {'name': name, 'icon': ?icon},
       token: token,
     );
     return DocumentView.fromJson(response['view'] as Map<String, dynamic>);

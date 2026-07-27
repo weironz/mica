@@ -40,6 +40,13 @@ pub struct CreateFolderRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateViewRequest {
   name: String,
+  /// The page/folder emoji. Three-way on purpose, because a rename must never be
+  /// able to wipe an icon by omission:
+  /// - absent (`null`) → leave the current icon alone
+  /// - `""`            → clear it
+  /// - `"📗"`          → set it
+  #[serde(default)]
+  icon: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -670,10 +677,25 @@ pub async fn update_view(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   let name = normalize_view_name(&payload.name)?;
+  // An emoji is one grapheme; anything longer is either a mistake or someone
+  // trying to stuff a label in here. Bound it rather than letting the tree render
+  // arbitrary text where an icon goes.
+  if let Some(icon) = payload.icon.as_deref() {
+    if icon.chars().count() > 8 {
+      return Err(ApiError::BadRequest("icon is too long".into()));
+    }
+  }
   let view = sqlx::query_as::<_, View>(
     r#"
       UPDATE views
-      SET name = $1, updated_at = now()
+      SET name = $1,
+          -- NULL = leave alone, '' = clear, otherwise set (see UpdateViewRequest)
+          icon = CASE
+                   WHEN $4::text IS NULL THEN icon
+                   WHEN $4 = '' THEN NULL
+                   ELSE $4
+                 END,
+          updated_at = now()
       WHERE id = $2 AND workspace_id = $3 AND is_deleted = false
       RETURNING
         id,
@@ -693,6 +715,7 @@ pub async fn update_view(
   .bind(name)
   .bind(view_id)
   .bind(workspace_id)
+  .bind(payload.icon.as_deref())
   .fetch_optional(&state.db)
   .await?
   .ok_or(ApiError::NotFound)?;

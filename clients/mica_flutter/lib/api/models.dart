@@ -729,9 +729,12 @@ class DocumentView {
     required this.objectType,
     required this.name,
     required this.position,
+    this.icon,
+    this.updatedAt,
   });
 
   factory DocumentView.fromJson(Map<String, dynamic> json) {
+    final icon = (json['icon'] as String?)?.trim();
     return DocumentView(
       id: json['id'] as String,
       parentViewId: json['parent_view_id'] as String?,
@@ -739,6 +742,13 @@ class DocumentView {
       objectType: json['object_type'] as String,
       name: json['name'] as String,
       position: json['position'] as String,
+      // The server has always sent these (views.icon / views.updated_at); the
+      // client simply never read them. They are what the sidebar's emoji and the
+      // home screen's "recently edited" ordering are built from.
+      icon: (icon == null || icon.isEmpty) ? null : icon,
+      updatedAt: DateTime.tryParse(
+        json['updated_at'] as String? ?? '',
+      )?.toLocal(),
     );
   }
 
@@ -748,6 +758,16 @@ class DocumentView {
   final String objectType;
   final String name;
   final String position;
+
+  /// The user-chosen emoji, or null for none — then the UI falls back to a
+  /// kind-based glyph, so a folder looks like a folder without anyone setting one.
+  final String? icon;
+
+  /// Server-side last-modified. Optional because the offline page-tree mirror and
+  /// the local world build views without one.
+  final DateTime? updatedAt;
+
+  bool get isFolder => objectType == 'folder';
 }
 
 /// Rebuild the cloud workspace list + per-workspace views from an on-device
