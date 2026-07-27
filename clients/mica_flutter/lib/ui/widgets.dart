@@ -25,6 +25,7 @@ class _WorkspaceSelector extends StatefulWidget {
     required this.cloudEmail,
     required this.onSignIn,
     required this.onSelect,
+    this.activeMeta,
     required this.onRename,
     required this.onDelete,
     required this.onExport,
@@ -51,6 +52,11 @@ class _WorkspaceSelector extends StatefulWidget {
   final VoidCallback? onSignIn;
   final Future<void> Function(WorkspaceEntry entry) onSelect;
   final void Function(WorkspaceEntry entry) onRename;
+
+  /// The quiet second line under the workspace name — e.g. "248 个页面 · 云端".
+  /// Formatted by the host (it owns the page counts and the world labels); null
+  /// renders a single-line trigger, which is what "no workspace selected" wants.
+  final String? activeMeta;
   final void Function(WorkspaceEntry entry) onDelete;
   final void Function(WorkspaceEntry entry) onExport;
   final VoidCallback onCreate;
@@ -153,40 +159,74 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         final label =
             _selectedEntry?.workspace.name ??
             context.l10n.workspaceRowSelectWorkspace;
+        // Two-line trigger (design 03/12): name over a quiet meta line. The old
+        // single line left the switcher saying nothing about the workspace beyond
+        // its name — not how big it is, not which world it lives in.
+        //
+        // The design puts a per-workspace EMOJI in the tile; `Workspace` has no
+        // icon column (only views do), so the tile carries the world glyph
+        // instead. Adding one is a schema change, not a paint job.
         return SizedBox(
           width: double.infinity,
-          child: OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              alignment: Alignment.centerLeft,
-              side: const BorderSide(color: Color(0xFFCBD5E1)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            onPressed: () =>
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () =>
                 controller.isOpen ? controller.close() : controller.open(),
-            child: Row(
-              children: [
-                // World-aware icon so the collapsed switcher shows which world
-                // you're in (cloud vs this device).
-                Icon(
-                  widget.activeIsLocal
-                      ? Icons.computer_outlined
-                      : Icons.cloud_outlined,
-                  size: 20,
-                  color: const Color(0xFF475569),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Color(0xFF0F172A)),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      widget.activeIsLocal
+                          ? Icons.computer_outlined
+                          : Icons.cloud_outlined,
+                      size: 17,
+                      color: EditorTheme.caret,
+                    ),
                   ),
-                ),
-                const Icon(Icons.arrow_drop_down, color: Color(0xFF475569)),
-              ],
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          label,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: EditorTheme.text,
+                          ),
+                        ),
+                        if (widget.activeMeta != null)
+                          Text(
+                            widget.activeMeta!,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: EditorTheme.faint,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.unfold_more,
+                    size: 16,
+                    color: EditorTheme.faint,
+                  ),
+                ],
+              ),
             ),
           ),
         );

@@ -28,6 +28,7 @@ import 'widgets/mica_logo.dart';
 import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
 import 'ui/emoji_picker.dart';
+import 'ui/home_data.dart' show countPages;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/status_kit.dart';
@@ -6407,6 +6408,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     child: _WorkspaceSelector(
                       entries: widget.entries,
                       activeIsLocal: widget.activeIsLocal,
+                      // Counts PAGES, not rows: a switcher that says "12 个页面"
+                      // while four of them are folders is lying in a way the user
+                      // can check against the tree right below it.
+                      //
+                      // The second half names the WORLD, not the host. Using
+                      // `cloudOriginLabel` here shipped "802 个页面 ·
+                      // mica.cloudcele...." — a truncated hostname that fills the
+                      // line and says nothing. The design's own meta reads
+                      // "已同步"/"云端": which world this is, not which server.
+                      activeMeta: widget.selectedWorkspace == null
+                          ? null
+                          : '${context.l10n.pageCount(countPages(widget.views))}'
+                                ' · '
+                                '${widget.activeIsLocal ? context.l10n.worldLocalName : context.l10n.worldCloudLabel}',
                       selectedRef: widget.selectedRef,
                       cloudEmail: widget.session?.user.email,
                       onSignIn: widget.onSignIn,
