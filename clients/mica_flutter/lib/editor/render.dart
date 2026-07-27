@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 
 import '../cjk_fonts.dart';
 import '../l10n/locale_controller.dart';
+import 'chrome_layout.dart';
 import 'highlight.dart';
 import 'marks.dart';
 import 'model.dart';
@@ -1625,12 +1626,20 @@ class RenderDocument extends RenderBox {
   bool _nodeVisible(_NodeLayout l) =>
       l.boxTop + l.boxHeight >= _visTop && l.boxTop <= _visBottom;
 
+  /// Paint-time clip rect, set at the top of [paint]. `Rect.zero` before the first
+  /// paint — nothing that reads it can run earlier than that.
+  Rect _clipBounds = Rect.zero;
+
   @override
   void paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
     final clip = canvas.getLocalClipBounds();
     _visTop = clip.top - offset.dy - _cullSlack;
     _visBottom = clip.bottom - offset.dy + _cullSlack;
+    // The EXACT clip, no cull slack: floating chrome (hover tooltips) has to be
+    // placed inside what the user can actually see, and the culling bounds are
+    // deliberately 600px generous in both directions.
+    _clipBounds = clip;
     // Block backgrounds first, so the selection highlight (next) is not hidden
     // behind a code block's fill.
     _paintBlockBackgrounds(canvas, offset);
@@ -2280,17 +2289,21 @@ class RenderDocument extends RenderBox {
     )..layout();
     const padH = 6.0;
     const padV = 3.0;
-    final w = tp.width + padH * 2;
-    final h = tp.height + padV * 2;
-    var left = anchor.center.dx - w / 2;
-    left = left.clamp(4.0, size.width - w - 4);
-    final top = anchor.top - h - 4;
-    final bg = Rect.fromLTWH(left, top, w, h);
+    // Where it goes is [tooltipRect]'s job: above when there's room, flipped below
+    // when the anchor is against the top of the viewport. This used to be
+    // `anchor.top - h - 4` with no clamp, which drew the bubble off-screen for a
+    // code block scrolled to the top — the highlight appeared and the tooltip
+    // never did.
+    final bg = tooltipRect(
+      anchor: anchor,
+      bubble: Size(tp.width + padH * 2, tp.height + padV * 2),
+      visible: _clipBounds,
+    );
     canvas.drawRRect(
       RRect.fromRectAndRadius(bg, const Radius.circular(4)),
       Paint()..color = const Color(0xFF0F172A),
     );
-    tp.paint(canvas, Offset(left + padH, top + padV));
+    tp.paint(canvas, Offset(bg.left + padH, bg.top + padV));
     tp.dispose();
   }
 
