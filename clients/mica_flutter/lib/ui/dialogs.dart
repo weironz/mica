@@ -363,7 +363,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   bool _tokenBusy = false;
   bool _tokenWrite = false;
   final _tokenName = TextEditingController();
-  final _tokenExpiry = TextEditingController();
+
+  /// Chosen token lifetime in days; null = never expires.
+  ///
+  /// Was a free-text numeric field parsed with `int.tryParse`, so any
+  /// non-number silently became null — you typed a lifetime, agreed to it,
+  /// and were handed a token that never expires. A closed set of choices
+  /// removes the failure instead of validating against it.
+  int? _tokenExpiryDays;
   String? _tokensError;
   String? _error;
 
@@ -506,7 +513,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _curPass.dispose();
     _newPass.dispose();
     _tokenName.dispose();
-    _tokenExpiry.dispose();
     super.dispose();
   }
 
@@ -751,6 +757,45 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     );
   }
 
+  /// Whether this token's `expires_at` is already in the past.
+  ///
+  /// An unparseable or absent value reads as NOT expired: guessing "expired"
+  /// would dim a live token and invite someone to revoke a key their backups
+  /// still depend on.
+  bool _tokenExpired(dynamic expiresAt) {
+    if (expiresAt == null) return false;
+    final at = DateTime.tryParse(expiresAt.toString());
+    if (at == null) return false;
+    return at.isBefore(DateTime.now());
+  }
+
+  /// Read-only vs read-write, as a badge.
+  ///
+  /// The meta line used to print the server's own scope list — `read` /
+  /// `read, write` — straight at the user: English, comma-joined, and in a
+  /// Chinese UI. What a person needs from it is one bit, and write access is the
+  /// half worth colouring.
+  Widget _scopeBadge(BuildContext context, dynamic scopes) {
+    final list =
+        (scopes as List<dynamic>?)?.map((e) => '$e').toList() ?? const [];
+    final canWrite = list.contains('write');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        color: canWrite ? const Color(0xFFFEF3C7) : const Color(0xFFF4F4F6),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        canWrite ? context.l10n.tokenScopeWrite : context.l10n.tokenScopeRead,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: canWrite ? const Color(0xFFB45309) : EditorTheme.muted,
+        ),
+      ),
+    );
+  }
+
   /// Not static: a null timestamp means "no expiry", and that word has to be
   /// localized — it shipped as the English literal `never`, so the Chinese UI
   /// read 「过期 never」 while `tokenNever` sat unused behind the input hint.
@@ -845,16 +890,32 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           Text(context.l10n.tokenWriteAccess),
           const Spacer(),
           SizedBox(
-            width: 140,
-            child: TextField(
-              controller: _tokenExpiry,
-              keyboardType: TextInputType.number,
+            width: 160,
+            child: DropdownButtonFormField<int?>(
+              initialValue: _tokenExpiryDays,
+              isDense: true,
               decoration: InputDecoration(
                 labelText: context.l10n.tokenExpires,
-                hintText: context.l10n.tokenNever,
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
+              // `never` stays first and stays the default: it is what shipped,
+              // and quietly starting to expire tokens people already treat as
+              // permanent would break their cron jobs on a timer.
+              items: [
+                DropdownMenuItem(
+                  value: null,
+                  child: Text(context.l10n.tokenNever),
+                ),
+                for (final d in const [30, 90, 365])
+                  DropdownMenuItem(
+                    value: d,
+                    child: Text(context.l10n.tokenExpiryDays(d)),
+                  ),
+              ],
+              onChanged: _tokenBusy
+                  ? null
+                  : (v) => setState(() => _tokenExpiryDays = v),
             ),
           ),
         ],
@@ -883,10 +944,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                     final scopes = _tokenWrite
                         ? <String>['read', 'write']
                         : <String>['read'];
-                    final days = int.tryParse(_tokenExpiry.text.trim());
+                    final days = _tokenExpiryDays;
                     final created = await onCreate(name, scopes, days);
                     _tokenName.clear();
-                    _tokenExpiry.clear();
+
                     if (mounted) {
                       setState(() {
                         _tokenWrite = false;
@@ -919,48 +980,62 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           child: Center(child: CircularProgressIndicator()),
         )
       else if (_tokens!.isEmpty)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-            context.l10n.tokenNone,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
-          ),
+        // A title with no body and no next step was the shipped state. No action
+        // button: the next step is the form directly above this, so a button
+        // would just point at itself.
+        EmptyState(
+          icon: Icons.key_outlined,
+          title: context.l10n.tokenNone,
+          detail: context.l10n.tokenEmptyBody,
         )
       else
         for (final t in _tokens!)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(t['name'] as String? ?? context.l10n.tokenUnnamed),
-            subtitle: Text(
-              context.l10n.tokenMeta(
-                (t['scopes'] as List<dynamic>?)?.join(', ') ?? '',
-                _shortTime(t['last_used_at']),
-                _shortTime(t['expires_at']),
+          Opacity(
+            // An expired token still lists (you may want to revoke it), but it
+            // can't do anything — reading as live is the misleading part.
+            opacity: _tokenExpired(t['expires_at']) ? 0.62 : 1,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      t['name'] as String? ?? context.l10n.tokenUnnamed,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _scopeBadge(context, t['scopes']),
+                ],
               ),
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete_outline, size: 20),
-              tooltip: context.l10n.tokenRevoke,
-              onPressed: _tokenBusy
-                  ? null
-                  : () async {
-                      final label =
-                          t['name'] as String? ?? context.l10n.tokenUnnamed;
-                      if (!await _confirmRevoke(label)) return;
-                      setState(() => _tokenBusy = true);
-                      try {
-                        await onRevoke(t['id'] as String);
-                        await refresh();
-                      } catch (e) {
-                        if (mounted)
-                          setState(() => _tokensError = e.toString());
-                      } finally {
-                        if (mounted) setState(() => _tokenBusy = false);
-                      }
-                    },
+              subtitle: Text(
+                context.l10n.tokenMeta(
+                  _shortTime(t['last_used_at']),
+                  _shortTime(t['expires_at']),
+                ),
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline, size: 20),
+                tooltip: context.l10n.tokenRevoke,
+                onPressed: _tokenBusy
+                    ? null
+                    : () async {
+                        final label =
+                            t['name'] as String? ?? context.l10n.tokenUnnamed;
+                        if (!await _confirmRevoke(label)) return;
+                        setState(() => _tokenBusy = true);
+                        try {
+                          await onRevoke(t['id'] as String);
+                          await refresh();
+                        } catch (e) {
+                          if (mounted)
+                            setState(() => _tokensError = e.toString());
+                        } finally {
+                          if (mounted) setState(() => _tokenBusy = false);
+                        }
+                      },
+              ),
             ),
           ),
     ];

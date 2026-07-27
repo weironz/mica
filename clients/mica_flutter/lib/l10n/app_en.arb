@@ -235,12 +235,9 @@
   "tokenNameRequired": "Name is required",
   "tokenNone": "No tokens yet.",
   "tokenUnnamed": "(unnamed)",
-  "tokenMeta": "{scopes}  ·  used {used}  ·  expires {expires}",
+  "tokenMeta": "used {used}  ·  expires {expires}",
   "@tokenMeta": {
     "placeholders": {
-      "scopes": {
-        "type": "String"
-      },
       "used": {
         "type": "String"
       },
@@ -249,6 +246,17 @@
       }
     }
   },
+  "tokenEmptyBody": "Create a read-only token and the CLI can back up everything in this cloud workspace on a schedule.",
+  "tokenExpiryDays": "{count, plural, =1{1 day} other{{count} days}}",
+  "@tokenExpiryDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "tokenScopeRead": "Read-only",
+  "tokenScopeWrite": "Read-write",
   "tokenRevoke": "Revoke",
   "tokenRevokeConfirmTitle": "Revoke \"{name}\"?",
   "@tokenRevokeConfirmTitle": {
