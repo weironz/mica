@@ -88,6 +88,16 @@ pub struct ViewListResponse {
   views: Vec<View>,
 }
 
+/// What emptying the recycle bin actually removed.
+///
+/// Counts rather than a view list: the list is empty by construction afterwards,
+/// and the numbers are what the client needs in order to confirm what it just did.
+#[derive(Debug, Serialize)]
+pub struct PurgeTrashResponse {
+  views_deleted: i64,
+  documents_deleted: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DocumentCreateResponse {
   document: DocumentRecord,
@@ -901,6 +911,67 @@ pub async fn purge_view(
   let views = fetch_deleted_workspace_views(&state.db, workspace_id).await?;
 
   Ok(Json(ViewListResponse { views }))
+}
+
+/// Empty the whole recycle bin: every trashed view in the workspace, plus the
+/// documents they back.
+///
+/// One statement rather than a loop over subtree roots. No recursive CTE is
+/// needed either: trashing a folder marks its entire subtree `is_deleted`
+/// (`delete_view` cascades), so "every row with is_deleted = true" already *is*
+/// the closure — and doing it in a single statement means a caller cannot end up
+/// with half a bin emptied.
+///
+/// Idempotent by nature: an already-empty bin returns zeros rather than 404. The
+/// single-view [`purge_view`] does 404 on a miss, but there the id came from a row
+/// the user clicked; here the request is "make it empty", which an empty bin
+/// already satisfies.
+pub async fn purge_workspace_trash(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Json<PurgeTrashResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+
+  let (views_deleted, documents_deleted) =
+    empty_workspace_trash(&state.db, workspace_id).await?;
+
+  Ok(Json(PurgeTrashResponse {
+    views_deleted,
+    documents_deleted,
+  }))
+}
+
+/// Delete every trashed view in the workspace and the documents they back.
+/// Returns `(views_deleted, documents_deleted)`.
+///
+/// Split out of the handler so a test can reach it: the handler needs auth
+/// headers, which a DB-level test has no way to construct.
+async fn empty_workspace_trash(db: &PgPool, workspace_id: Uuid) -> ApiResult<(i64, i64)> {
+  let row = sqlx::query_as::<_, (i64, i64)>(
+    r#"
+      WITH deleted_views AS (
+        DELETE FROM views
+        WHERE workspace_id = $1 AND is_deleted = true
+        RETURNING object_id, object_type
+      ),
+      purged_docs AS (
+        DELETE FROM documents
+        WHERE id IN (
+          SELECT object_id FROM deleted_views WHERE object_type::text = 'document'
+        )
+        RETURNING id
+      )
+      SELECT
+        (SELECT count(*) FROM deleted_views)::bigint,
+        (SELECT count(*) FROM purged_docs)::bigint
+    "#,
+  )
+  .bind(workspace_id)
+  .fetch_one(db)
+  .await?;
+  Ok((row.0, row.1))
 }
 
 pub async fn move_view(
@@ -4398,6 +4469,87 @@ mod tests {
       assert_eq!(hits.len(), 1, "body searchable after eager base: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
+    }
+
+    /// Emptying the bin must take every trashed row and leave every live one.
+    ///
+    /// The interesting part is what it does NOT touch: a workspace where some
+    /// pages are trashed and some are not is the normal case, and an over-broad
+    /// `DELETE` here would take the live ones with it. Also pins that a folder's
+    /// trashed children go too (they carry `is_deleted` from the cascade, so one
+    /// flat statement is the whole closure) and that a second call is a no-op
+    /// rather than an error.
+    #[tokio::test]
+    async fn emptying_trash_takes_only_trashed_rows() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let (live_view, live_doc) =
+        seed_document(&db, ws, user, "留着的页", serde_json::json!([])).await;
+      let (trashed_view, trashed_doc) =
+        seed_document(&db, ws, user, "扔掉的页", serde_json::json!([])).await;
+      set_content_text(&db, trashed_doc, "扔掉的内容").await;
+
+      // A second workspace must be untouched — the statement is scoped by id.
+      let (other_ws, other_user) = seed_workspace(&db).await;
+      let (other_view, _) =
+        seed_document(&db, other_ws, other_user, "别人的页", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(other_view)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(trashed_view)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let (views_deleted, docs_deleted) = empty_workspace_trash(&db, ws).await.unwrap();
+      assert_eq!(views_deleted, 1, "exactly the one trashed view");
+      assert_eq!(docs_deleted, 1, "and the document behind it");
+
+      async fn count(db: &PgPool, sql: &'static str, id: Uuid) -> i64 {
+        sqlx::query_scalar(sql).bind(id).fetch_one(db).await.unwrap()
+      }
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM views WHERE id=$1", trashed_view).await,
+        0
+      );
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM documents WHERE id=$1", trashed_doc).await,
+        0
+      );
+      assert_eq!(
+        count(
+          &db,
+          "SELECT count(*) FROM document_yrs_base WHERE document_id=$1",
+          trashed_doc
+        )
+        .await,
+        0,
+        "CRDT content left behind"
+      );
+      // The live page and the other workspace's trash are both still there.
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM views WHERE id=$1", live_view).await,
+        1,
+        "a live page was deleted by emptying the bin"
+      );
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM documents WHERE id=$1", live_doc).await,
+        1
+      );
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM views WHERE id=$1", other_view).await,
+        1,
+        "another workspace's trash was emptied too"
+      );
+
+      // Idempotent: "make it empty" is already satisfied.
+      let (again_views, again_docs) = empty_workspace_trash(&db, ws).await.unwrap();
+      assert_eq!((again_views, again_docs), (0, 0));
     }
 
     /// Permanent delete (`purge_view_subtree`) must erase the document AND every

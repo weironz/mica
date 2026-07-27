@@ -144,7 +144,9 @@ pub fn api_router() -> Router<AppState> {
     )
     .route(
       "/workspaces/{workspace_id}/trash",
-      get(documents::list_trash),
+      // DELETE on the collection empties the bin; DELETE on a member (next
+      // route) purges one subtree.
+      get(documents::list_trash).delete(documents::purge_workspace_trash),
     )
     .route(
       "/workspaces/{workspace_id}/trash/{view_id}",

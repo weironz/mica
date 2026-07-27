@@ -471,6 +471,23 @@
   },
   "recycleRestore": "Restore",
   "recycleDeleteForever": "Delete forever",
+  "recycleEmptyAll": "Empty recycle bin",
+  "recycleEmptyAllConfirmTitle": "Permanently delete all {count} items in the bin?",
+  "@recycleEmptyAllConfirmTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "recycleEmptiedAll": "{count, plural, =1{1 item permanently deleted} other{{count} items permanently deleted}}",
+  "@recycleEmptiedAll": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "recyclePurgeConfirmTitle": "Permanently delete \"{name}\"?",
   "@recyclePurgeConfirmTitle": {
     "placeholders": {

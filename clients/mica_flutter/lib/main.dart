@@ -1566,6 +1566,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Empty the cloud workspace's recycle bin; returns how many views went.
+  ///
+  /// Not wrapped in [_run]: the recycle-bin dialog owns this failure (it shows the
+  /// error in its own body and stays open), and routing it through the app-wide
+  /// banner would report it behind the dialog the user is looking at.
+  Future<int> _purgeAllTrash() async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    return _api.purgeWorkspaceTrash(session.accessToken, workspace.id);
+  }
+
   // ---------------------------------------------------------------------------
   // AI
   // ---------------------------------------------------------------------------
@@ -4734,6 +4745,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onLoadTrash: local ? _localLoadTrash : _loadTrash,
       onRestoreView: local ? _localRestoreView : _restoreView,
       onPurgeView: local ? _localPurgeView : _purgeView,
+      // Cloud only: the on-device store has no bulk purge, so the button is
+      // absent rather than broken in 本地模式.
+      onPurgeAllTrash: local ? null : _purgeAllTrash,
       onSelectView: local ? _localSelectView : _selectView,
       onRenameView: local ? _localRenameView : _renameView,
       // Cloud-only: the local store's view record has no icon column, so rather
@@ -5591,6 +5605,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onLoadTrash,
     required this.onRestoreView,
     required this.onPurgeView,
+    this.onPurgeAllTrash,
     required this.onSelectView,
     required this.onRenameView,
     this.onSetViewIcon,
@@ -5780,6 +5795,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<List<DocumentView>> Function() onLoadTrash;
   final Future<void> Function(DocumentView view) onRestoreView;
   final Future<void> Function(DocumentView view) onPurgeView;
+
+  /// Empty the whole bin, returning how many views went. Null where no bulk purge
+  /// exists (本地模式).
+  final Future<int> Function()? onPurgeAllTrash;
   final Future<void> Function(DocumentView view) onSelectView;
   final Future<void> Function(DocumentView view, String name) onRenameView;
 
@@ -8658,6 +8677,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onLoad: widget.onLoadTrash,
         onRestore: widget.onRestoreView,
         onPurge: widget.onPurgeView,
+        onPurgeAll: widget.onPurgeAllTrash,
         canEdit: matchesEditRole(widget.selectedWorkspace?.role),
         // The live tree, so a row can say where restoring puts it back.
         liveViews: widget.views,

@@ -3295,7 +3295,14 @@ class _RecycleBinDialog extends StatefulWidget {
     required this.canEdit,
     required this.liveViews,
     required this.relativeStrings,
+    this.onPurgeAll,
   });
+
+  /// Empty the whole bin, returning how many views went. **Null in 本地模式**:
+  /// the on-device store has no bulk purge, and a button that cannot work is
+  /// worse than no button — same null-means-absent rule as everything else here.
+  /// Local users still purge one row at a time.
+  final Future<int> Function()? onPurgeAll;
 
   /// The workspace's live tree, used only to name where a restore will land.
   final List<DocumentView> liveViews;
@@ -3418,6 +3425,33 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
     );
   }
 
+  /// Empty the bin, behind the same gate as a single permanent delete — this one
+  /// is every row at once, so the confirmation names the count.
+  Future<void> _confirmPurgeAll() async {
+    final purgeAll = widget.onPurgeAll;
+    if (purgeAll == null) return;
+    final l10n = context.l10n;
+    final ok = await showDestructiveConfirm(
+      context,
+      title: l10n.recycleEmptyAllConfirmTitle(_entries.length),
+      body: l10n.recyclePurgeConfirmBody,
+      confirmLabel: l10n.recycleEmptyAll,
+      cancelLabel: l10n.commonCancel,
+    );
+    if (!ok) return;
+    try {
+      final removed = await purgeAll();
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text(context.l10n.recycleEmptiedAll(removed))),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+    await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -3436,6 +3470,13 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
       ),
       content: SizedBox(width: 420, height: 360, child: _buildBody(context)),
       actions: [
+        // Only with something to empty, and only where a bulk purge exists.
+        if (widget.onPurgeAll != null && widget.canEdit && _entries.isNotEmpty)
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: kDestructiveRed),
+            onPressed: _confirmPurgeAll,
+            child: Text(context.l10n.recycleEmptyAll),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: Text(context.l10n.commonClose),

@@ -14,7 +14,8 @@ import 'models.dart';
 /// `https://cloud.example.com:443/…` — valid, but noise in a url people copy
 /// and paste around. Non-default ports (a dev server on :8080) are kept.
 String apiOrigin(Uri base) {
-  final isDefault = (base.scheme == 'https' && base.port == 443) ||
+  final isDefault =
+      (base.scheme == 'https' && base.port == 443) ||
       (base.scheme == 'http' && base.port == 80);
   return isDefault
       ? '${base.scheme}://${base.host}'
@@ -393,11 +394,9 @@ class ApiClient {
     String documentId,
     String versionId,
   ) async {
-    await _post(
-      '/api/workspaces/$workspaceId/documents/$documentId/restore',
-      {'version_id': versionId},
-      token: token,
-    );
+    await _post('/api/workspaces/$workspaceId/documents/$documentId/restore', {
+      'version_id': versionId,
+    }, token: token);
   }
 
   /// A document's public-share status: whether it has an active link, and the
@@ -457,16 +456,13 @@ class ApiClient {
     required bool removeSource,
     required bool dryRun,
   }) async {
-    final response = await _post(
-      '/api/workspaces/$workspaceId/views/$viewId/transfer',
-      {
-        'dest_workspace_id': destWorkspaceId,
-        'parent_view_id': parentViewId,
-        'remove_source': removeSource,
-        'dry_run': dryRun,
-      },
-      token: token,
-    );
+    final response =
+        await _post('/api/workspaces/$workspaceId/views/$viewId/transfer', {
+          'dest_workspace_id': destWorkspaceId,
+          'parent_view_id': parentViewId,
+          'remove_source': removeSource,
+          'dry_run': dryRun,
+        }, token: token);
     return TransferReport.fromJson(response);
   }
 
@@ -483,11 +479,7 @@ class ApiClient {
   }) async {
     final response = await _post(
       '/api/workspaces/$workspaceId/views/$viewId/clone',
-      {
-        'name': name,
-        'parent_view_id': parentViewId,
-        'dry_run': dryRun,
-      },
+      {'name': name, 'parent_view_id': parentViewId, 'dry_run': dryRun},
       token: token,
     );
     return CloneReport.fromJson(response);
@@ -499,6 +491,16 @@ class ApiClient {
     String viewId,
   ) async {
     await _delete('/api/workspaces/$workspaceId/trash/$viewId', token);
+  }
+
+  /// Empty the whole recycle bin. Returns how many views were removed, which is
+  /// what the confirmation afterwards reports.
+  ///
+  /// DELETE on the collection, where the member form purges a single subtree. An
+  /// already-empty bin is success (0), not a 404 — the request is "make it empty".
+  Future<int> purgeWorkspaceTrash(String token, String workspaceId) async {
+    final response = await _delete('/api/workspaces/$workspaceId/trash', token);
+    return (response['views_deleted'] as num?)?.toInt() ?? 0;
   }
 
   Future<String> aiComplete(
