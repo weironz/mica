@@ -1594,6 +1594,36 @@ class RenderDocument extends RenderBox {
   static const double _imagePlaceholderH = 180;
   static const double _imageGap = 6;
 
+  /// The style a table cell's text is drawn with.
+  ///
+  /// One definition, because FOUR places need it: the painter, the inline editor's
+  /// overlay field, and two throwaway painters that measure the cell to place the
+  /// caret and the drag selection. Each had written out
+  /// `const TextStyle(fontSize: 15, height: 1.4)` — which drops **two** things the
+  /// painter applies.
+  ///
+  /// * `fontWeight`. A header cell paints at w600; the overlay field inherited the
+  ///   default, so clicking into the first row visibly un-bolded it.
+  /// * [EditorAppearance.applyTo] — the user's font scale, font family and the CJK
+  ///   fallback chain. Without it, clicking into any cell snapped its text back to
+  ///   15px for anyone who had changed the editor font size, and the two measuring
+  ///   painters mis-measured by the same amount, putting the caret in the wrong
+  ///   place.
+  static TextStyle tableCellStyle(
+    EditorAppearance appearance, {
+    required bool isHeader,
+  }) {
+    return appearance.applyTo(
+      TextStyle(
+        color: EditorTheme.text,
+        fontSize: 15,
+        height: 1.4,
+        fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
+      ),
+      isCode: false,
+    );
+  }
+
   /// A table cell's display span. Cells store raw inline-Markdown source
   /// (`` `code` ``, `**bold**`, …); painting shows the rendered form while the
   /// overlay editor keeps showing the source (Typora-style). Parse failures

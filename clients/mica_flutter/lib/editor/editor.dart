@@ -362,6 +362,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   TextEditingValue _lastSentIme = TextEditingValue.empty;
 
   Timer? _blink;
+
   /// Caret blink phase, ridden STRAIGHT into the render object (see
   /// RenderDocument.caretBlink) — a blink used to setState-rebuild the whole
   /// editor, and updateRenderObject's unconditional `nodes=` then relayouted
@@ -2580,6 +2581,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// Edit a table cell inline: a borderless field placed exactly over the cell
   /// (so it reads as the cell itself, no nested box). Commits on Enter/tap-out;
   /// Tab / Shift+Tab move to the next / previous cell.
+  /// The style a table cell's text shows in, header row included.
+  ///
+  /// Must equal what the painter uses, or the text visibly changes the moment you
+  /// click into a cell and the measuring painters put the caret in the wrong
+  /// place — hence the single definition in [RenderDocument.tableCellStyle].
+  TextStyle _cellStyle(int node, int row) {
+    var isHeader = false;
+    if (node >= 0 && node < _controller.nodes.length) {
+      final table = TableData.fromBlock(_controller.nodes[node].data);
+      isHeader = table.header && row == 0;
+    }
+    return RenderDocument.tableCellStyle(widget.appearance, isHeader: isHeader);
+  }
+
   void _openCellEditor(int node, int row, int col) {
     _closeCellEditor();
     final r = _render;
@@ -2677,7 +2692,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         // own copy also writes a text/html flavor, which is what carries the
         // marks across a mica→mica paste). Write both flavors here too, from the
         // selected cell markdown; cut then deletes the run.
-        if ((key == LogicalKeyboardKey.keyC || key == LogicalKeyboardKey.keyX) &&
+        if ((key == LogicalKeyboardKey.keyC ||
+                key == LogicalKeyboardKey.keyX) &&
             !sel.isCollapsed) {
           final selectedMd = sel.textInside(controller.text);
           final parsed = parseInline(selectedMd);
@@ -2801,7 +2817,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   keyboardType: TextInputType.multiline,
                   textInputAction: TextInputAction.newline,
                   cursorColor: const Color(0xFF2563EB),
-                  style: const TextStyle(fontSize: 15, height: 1.4),
+                  style: _cellStyle(node, row),
                   decoration: const InputDecoration(
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
@@ -3357,7 +3373,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (singleText) ...[
-                    markBtn(Icons.format_bold, 'bold', context.l10n.shortcutsBold),
+                    markBtn(
+                      Icons.format_bold,
+                      'bold',
+                      context.l10n.shortcutsBold,
+                    ),
                     markBtn(
                       Icons.format_italic,
                       'italic',
@@ -3373,7 +3393,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       context.l10n.pageFormatCodeBlock,
                     ),
                   if (singleText) ...[
-                    markBtn(Icons.code, 'code', context.l10n.shortcutsInlineCode),
+                    markBtn(
+                      Icons.code,
+                      'code',
+                      context.l10n.shortcutsInlineCode,
+                    ),
                     markBtn(
                       Icons.strikethrough_s,
                       'strike',
@@ -3409,7 +3433,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       context.l10n.slashTodo,
                       data: {'checked': false},
                     ),
-                    blockBtn(Icons.format_quote, 'quote', context.l10n.pageFormatQuote),
+                    blockBtn(
+                      Icons.format_quote,
+                      'quote',
+                      context.l10n.pageFormatQuote,
+                    ),
                   ],
                 ],
               ),
@@ -3714,7 +3742,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(context.l10n.linkEdit, style: const TextStyle(fontSize: 15)),
+        title: Text(
+          context.l10n.linkEdit,
+          style: const TextStyle(fontSize: 15),
+        ),
         titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
         contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         actionsPadding: const EdgeInsets.fromLTRB(16, 4, 12, 8),
@@ -4017,7 +4048,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           text: buildMarkedSpan(
             controller.text,
             controller.marks,
-            const TextStyle(fontSize: 15, height: 1.4),
+            _cellStyle(node, row),
           ),
           textDirection: TextDirection.ltr,
         )..layout(
@@ -4091,7 +4122,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       text: buildMarkedSpan(
         ac.ctl.text,
         ac.ctl.marks,
-        const TextStyle(fontSize: 15, height: 1.4),
+        _cellStyle(ac.node, ac.row),
       ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: (rect.width - padH * 2).clamp(1.0, double.infinity));
@@ -4543,7 +4574,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            p.title.isEmpty ? context.l10n.editorUntitled : p.title,
+                            p.title.isEmpty
+                                ? context.l10n.editorUntitled
+                                : p.title,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontSize: 14,
@@ -4974,13 +5007,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // A quote is a preview, not the document — keep a runaway selection from
     // shipping the whole page into a database column.
     if (quote.length > 300) quote = '${quote.substring(0, 300)}…';
-    await add(
-      nodes[s.node].id,
-      s.offset,
-      nodes[e.node].id,
-      e.offset,
-      quote,
-    );
+    await add(nodes[s.node].id, s.offset, nodes[e.node].id, e.offset, quote);
   }
 
   Future<void> _showImageMenu(int node, Offset globalPosition) async {
@@ -5055,7 +5082,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             value: 'paste',
             child: Text(context.l10n.imagePasteReplace),
           ),
-        PopupMenuItem(value: 'download', child: Text(context.l10n.imageDownload)),
+        PopupMenuItem(
+          value: 'download',
+          child: Text(context.l10n.imageDownload),
+        ),
         PopupMenuItem(value: 'delete', child: Text(context.l10n.commonDelete)),
       ],
     );
@@ -5505,7 +5535,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     bool autoStart = true,
   }) async {
     final stream = widget.onAiStream;
-    if (stream == null || nodeIndex < 0 || nodeIndex >= _controller.nodes.length) {
+    if (stream == null ||
+        nodeIndex < 0 ||
+        nodeIndex >= _controller.nodes.length) {
       return;
     }
     final code = _controller.nodes[nodeIndex].text;
@@ -5881,8 +5913,12 @@ const List<_SlashOption> _slashOptions = [
   // Callouts (GFM alerts) reuse the quote block, tagged with `data.alert`.
   _SlashOption('Note', Icons.info_outline, 'quote', {'alert': 'note'}),
   _SlashOption('Tip', Icons.lightbulb_outline, 'quote', {'alert': 'tip'}),
-  _SlashOption('Important', Icons.campaign_outlined, 'quote', {'alert': 'important'}),
-  _SlashOption('Warning', Icons.warning_amber_outlined, 'quote', {'alert': 'warning'}),
+  _SlashOption('Important', Icons.campaign_outlined, 'quote', {
+    'alert': 'important',
+  }),
+  _SlashOption('Warning', Icons.warning_amber_outlined, 'quote', {
+    'alert': 'warning',
+  }),
   _SlashOption('Caution', Icons.report_outlined, 'quote', {'alert': 'caution'}),
   _SlashOption('Code', Icons.code, 'code_block'),
   _SlashOption('Math formula', Icons.functions, 'math_block'),

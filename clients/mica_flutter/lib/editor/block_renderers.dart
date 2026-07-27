@@ -103,8 +103,10 @@ class MathBlockRenderer extends AtomicBlockRenderer {
     const dpr = EditorTheme.mathPixelRatio;
     var w = img.width / dpr;
     var h = img.height / dpr;
-    final avail =
-        (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
+    final avail = (maxWidth - EditorTheme.gutter - 24).clamp(
+      40.0,
+      double.infinity,
+    );
     if (w > avail) {
       h *= avail / w;
       w = avail;
@@ -113,7 +115,8 @@ class MathBlockRenderer extends AtomicBlockRenderer {
       ..kind = 'math_block'
       ..nodeId = node.id
       ..boxLeft = EditorTheme.gutter
-      ..contentLeft = EditorTheme.gutter +
+      ..contentLeft =
+          EditorTheme.gutter +
           ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
       ..mathImage = img
       ..mathSize = Size(w, h)
@@ -133,8 +136,12 @@ class MathBlockRenderer extends AtomicBlockRenderer {
   ) {
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop - 6,
-            host.size.width - l.boxLeft, l.boxHeight + 12),
+        Rect.fromLTWH(
+          offset.dx + l.boxLeft,
+          offset.dy + l.boxTop - 6,
+          host.size.width - l.boxLeft,
+          l.boxHeight + 12,
+        ),
         const Radius.circular(6),
       ),
       Paint()..color = const Color(0xFFF5F3FF),
@@ -151,8 +158,12 @@ class MathBlockRenderer extends AtomicBlockRenderer {
   ) {
     final img = l.mathImage;
     if (img == null) return;
-    final dst = Rect.fromLTWH(offset.dx + l.contentLeft, offset.dy + l.textTop,
-        l.mathSize.width, l.mathSize.height);
+    final dst = Rect.fromLTWH(
+      offset.dx + l.contentLeft,
+      offset.dy + l.textTop,
+      l.mathSize.width,
+      l.mathSize.height,
+    );
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
@@ -217,12 +228,13 @@ class ImageRenderer extends AtomicBlockRenderer {
       h = RenderDocument._imagePlaceholderH;
     }
 
-    final left = EditorTheme.gutter +
+    final left =
+        EditorTheme.gutter +
         switch (align) {
-      1 => (maxW - w) / 2,
-      2 => maxW - w,
-      _ => 0.0,
-    };
+          1 => (maxW - w) / 2,
+          2 => maxW - w,
+          _ => 0.0,
+        };
 
     // Hover toolbar (top-right inside the image) + right-edge resize handle.
     const btn = 26.0, pad = 4.0;
@@ -280,7 +292,8 @@ class ImageRenderer extends AtomicBlockRenderer {
     // doc depends on a link that can rot. Only this case is marked — storage
     // is the norm (re-hosting is automatic), and badging every image would be
     // noise that trains you to ignore the badge.
-    final external = node.data['file_id'] == null &&
+    final external =
+        node.data['file_id'] == null &&
         (node.data['url'] as String?)?.startsWith('http') == true;
     if (decoded != null) {
       // Tell the host this picture is still on the canvas — that is what keeps
@@ -336,7 +349,8 @@ class ImageRenderer extends AtomicBlockRenderer {
             maxLines: 1,
             ellipsis: '…',
           )..layout(maxWidth: r.width - 16));
-    final blockH = glyph.height + (capPainter == null ? 0 : capPainter.height + 4);
+    final blockH =
+        glyph.height + (capPainter == null ? 0 : capPainter.height + 4);
     final top = r.center.dy - blockH / 2;
     glyph.paint(canvas, Offset(r.center.dx - glyph.width / 2, top));
     capPainter?.paint(
@@ -432,7 +446,10 @@ class ImageRenderer extends AtomicBlockRenderer {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      glyph.paint(canvas, rect.center - Offset(glyph.width / 2, glyph.height / 2));
+      glyph.paint(
+        canvas,
+        rect.center - Offset(glyph.width / 2, glyph.height / 2),
+      );
       glyph.dispose();
     }
   }
@@ -470,8 +487,10 @@ class TableRenderer extends AtomicBlockRenderer {
     final fullW = (maxWidth - EditorTheme.gutter).clamp(60.0, double.infinity);
     // The table spans a fraction of the content width (dragging its right
     // edge adjusts it); columns share that span by weight.
-    final availW = (fullW * table.tableWidth.clamp(0.15, 1.0))
-        .clamp(60.0, fullW);
+    final availW = (fullW * table.tableWidth.clamp(0.15, 1.0)).clamp(
+      60.0,
+      fullW,
+    );
 
     const padH = 10.0;
     const padV = 9.0;
@@ -487,14 +506,9 @@ class TableRenderer extends AtomicBlockRenderer {
           TextPainter(
             text: RenderDocument.cellDisplaySpan(
               c < table.rows[r].length ? table.rows[r][c] : '',
-              host._appearance.applyTo(
-                TextStyle(
-                  color: EditorTheme.text,
-                  fontSize: 15,
-                  height: 1.4,
-                  fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
-                ),
-                isCode: false,
+              RenderDocument.tableCellStyle(
+                host._appearance,
+                isHeader: isHeader,
               ),
             ),
             textAlign: alignAt(c),
@@ -513,8 +527,7 @@ class TableRenderer extends AtomicBlockRenderer {
       for (var c = 0; c < cols; c++)
         c < table.widths.length ? table.widths[c] : 1.0,
     ];
-    final autoFit =
-        weights.every((w) => (w - weights.first).abs() < 1e-6);
+    final autoFit = weights.every((w) => (w - weights.first).abs() < 1e-6);
     if (autoFit) {
       for (var c = 0; c < cols; c++) {
         var natural = 0.0;
@@ -543,7 +556,9 @@ class TableRenderer extends AtomicBlockRenderer {
       }
       if (deficit > 0) {
         final flexSum = colW.fold<double>(
-            0, (a, w) => a + (w > floor ? w - floor : 0));
+          0,
+          (a, w) => a + (w > floor ? w - floor : 0),
+        );
         if (flexSum > 0) {
           for (var c = 0; c < colW.length; c++) {
             if (colW[c] > floor) {
@@ -573,14 +588,16 @@ class TableRenderer extends AtomicBlockRenderer {
         rowH = rowH > tp.height + padV * 2 ? rowH : tp.height + padV * 2;
       }
       for (var c = 0; c < cols; c++) {
-        cells.add(_TableCell(
-          Rect.fromLTWH(colEdges[c], yy, colW[c], rowH),
-          grid[r][c],
-          isHeader,
-          r,
-          c,
-          Offset(colEdges[c] + padH, yy + padV),
-        ));
+        cells.add(
+          _TableCell(
+            Rect.fromLTWH(colEdges[c], yy, colW[c], rowH),
+            grid[r][c],
+            isHeader,
+            r,
+            c,
+            Offset(colEdges[c] + padH, yy + padV),
+          ),
+        );
       }
       rowHandles.add(Rect.fromLTWH(x0, yy, 10, rowH));
       yy += rowH;
@@ -600,39 +617,60 @@ class TableRenderer extends AtomicBlockRenderer {
         (rect: Rect.fromLTWH(colEdges[c] - 6, gridTop, 12, gridHeight), col: c),
     ];
 
-    final layout = _NodeLayout(
-      TextPainter(text: const TextSpan(text: ''), textDirection: TextDirection.ltr)
-        ..layout(),
-    )
-      ..kind = 'table'
-      ..boxLeft = EditorTheme.gutter
-      ..nodeId = node.id
-      ..contentLeft = 0
-      ..boxTop = top
-      ..textTop = gridTop
-      ..textHeight = gridHeight
-      ..boxHeight = RenderDocument._tTopGutter + gridHeight + RenderDocument._tBottomBar
-      ..tableCells = cells
-      ..tableTop = gridTop
-      ..tableHeight = gridHeight
-      ..tableHeader = table.header
-      ..rowHandles = rowHandles
-      ..colHandles = colHandles
-      ..colBorders = colBorders
-      // The add-column strip sits just past the table's right edge (clamped
-      // inside the content area when the table is full-width).
-      ..addColBar = Rect.fromLTWH(
-        (colEdges.last + 2).clamp(0.0, maxWidth - RenderDocument._tEdge),
-        gridTop,
-        RenderDocument._tEdge,
-        gridHeight,
-      )
-      ..addRowBar = Rect.fromLTWH(x0, gridBottom, availW, RenderDocument._tBottomBar)
-      ..tableHandle = Rect.fromLTWH(x0, top, 16, RenderDocument._tTopGutter)
-      ..tableDelete = Rect.fromLTWH(maxWidth - 18, top, 18, RenderDocument._tTopGutter)
-      // The grid alone (no top gutter / bottom bar) — the selection highlight
-      // hugs this so it lands exactly between the top and bottom grid lines.
-      ..tableGridRect = Rect.fromLTWH(x0, gridTop, colEdges.last - x0, gridHeight);
+    final layout =
+        _NodeLayout(
+            TextPainter(
+              text: const TextSpan(text: ''),
+              textDirection: TextDirection.ltr,
+            )..layout(),
+          )
+          ..kind = 'table'
+          ..boxLeft = EditorTheme.gutter
+          ..nodeId = node.id
+          ..contentLeft = 0
+          ..boxTop = top
+          ..textTop = gridTop
+          ..textHeight = gridHeight
+          ..boxHeight =
+              RenderDocument._tTopGutter +
+              gridHeight +
+              RenderDocument._tBottomBar
+          ..tableCells = cells
+          ..tableTop = gridTop
+          ..tableHeight = gridHeight
+          ..tableHeader = table.header
+          ..rowHandles = rowHandles
+          ..colHandles = colHandles
+          ..colBorders = colBorders
+          // The add-column strip sits just past the table's right edge (clamped
+          // inside the content area when the table is full-width).
+          ..addColBar = Rect.fromLTWH(
+            (colEdges.last + 2).clamp(0.0, maxWidth - RenderDocument._tEdge),
+            gridTop,
+            RenderDocument._tEdge,
+            gridHeight,
+          )
+          ..addRowBar = Rect.fromLTWH(
+            x0,
+            gridBottom,
+            availW,
+            RenderDocument._tBottomBar,
+          )
+          ..tableHandle = Rect.fromLTWH(x0, top, 16, RenderDocument._tTopGutter)
+          ..tableDelete = Rect.fromLTWH(
+            maxWidth - 18,
+            top,
+            18,
+            RenderDocument._tTopGutter,
+          )
+          // The grid alone (no top gutter / bottom bar) — the selection highlight
+          // hugs this so it lands exactly between the top and bottom grid lines.
+          ..tableGridRect = Rect.fromLTWH(
+            x0,
+            gridTop,
+            colEdges.last - x0,
+            gridHeight,
+          );
     return layout;
   }
 
@@ -771,8 +809,10 @@ class TableRenderer extends AtomicBlockRenderer {
     // column / last row (or already on the strip itself).
     final cols = l.colHandles.length;
     final rows = l.rowHandles.length;
-    if (th != null && (th.onAddCol || th.col == cols - 1)) plusBar(l.addColBar, true);
-    if (th != null && (th.onAddRow || th.row == rows - 1)) plusBar(l.addRowBar, false);
+    if (th != null && (th.onAddCol || th.col == cols - 1))
+      plusBar(l.addColBar, true);
+    if (th != null && (th.onAddRow || th.row == rows - 1))
+      plusBar(l.addRowBar, false);
 
     void cornerIcon(Rect? rect, IconData icon, Color color) {
       if (rect == null) return;
@@ -836,8 +876,10 @@ class MermaidRenderer extends AtomicBlockRenderer {
       host._previewPan.remove(node.id);
       return null;
     }
-    final avail =
-        (maxWidth - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
+    final avail = (maxWidth - EditorTheme.gutter - 24).clamp(
+      40.0,
+      double.infinity,
+    );
     final img = host._previewImages['mermaid']?[node.text];
     if (img == null) {
       host.onRequestPreview?.call('mermaid', node.text, avail);
@@ -858,16 +900,17 @@ class MermaidRenderer extends AtomicBlockRenderer {
     // kinds, whose clicks take the block path). Empty text → offset 0 →
     // the caret lands in the block → next layout declines → source form.
     return _NodeLayout(
-      TextPainter(
-        text: const TextSpan(text: ''),
-        textDirection: TextDirection.ltr,
-      )..layout(),
-    )
+        TextPainter(
+          text: const TextSpan(text: ''),
+          textDirection: TextDirection.ltr,
+        )..layout(),
+      )
       ..kind = 'code_block'
       ..nodeId = node.id
       ..langText = 'mermaid'
       ..boxLeft = EditorTheme.gutter
-      ..contentLeft = EditorTheme.gutter +
+      ..contentLeft =
+          EditorTheme.gutter +
           ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
       ..mathImage = img
       ..mathSize = Size(wz, hz)
@@ -881,7 +924,11 @@ class MermaidRenderer extends AtomicBlockRenderer {
       // Preview (the default) leads, code follows.
       ..viewCodeTab = Rect.fromLTWH(maxWidth - 8 - 44, y + h + 4 - 26, 44, 20)
       ..viewPreviewTab = Rect.fromLTWH(
-          maxWidth - 8 - 44 - 2 - 56, y + h + 4 - 26, 56, 20);
+        maxWidth - 8 - 44 - 2 - 56,
+        y + h + 4 - 26,
+        56,
+        20,
+      );
   }
 
   @override
@@ -898,8 +945,12 @@ class MermaidRenderer extends AtomicBlockRenderer {
     // chrome disappears and the picture sits directly on the page. The block
     // rect is a fixed viewport — the (possibly zoomed) picture centers in it
     // and clips to it, so zoom never moves surrounding content.
-    final viewport = Rect.fromLTWH(offset.dx + l.boxLeft, offset.dy + l.boxTop,
-        host.size.width - l.boxLeft, l.boxHeight);
+    final viewport = Rect.fromLTWH(
+      offset.dx + l.boxLeft,
+      offset.dy + l.boxTop,
+      host.size.width - l.boxLeft,
+      l.boxHeight,
+    );
     final pan = host._previewPan[l.nodeId] ?? Offset.zero;
     final dst = Rect.fromCenter(
       center: viewport.center + pan,
