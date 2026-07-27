@@ -2302,7 +2302,15 @@ class _VersionHistoryDialog extends StatefulWidget {
     required this.onLoadContent,
     this.onLoadImageBytes,
     this.onResolveImageUrls,
+    this.authorNames = const {},
   });
+
+  /// User id → display name, for [DocVersion.createdBy].
+  ///
+  /// Empty is the normal case and means "don't show an author column": local
+  /// history has no user ids at all, and in a one-person workspace a column
+  /// repeating your own name down every row is noise, not information.
+  final Map<String, String> authorNames;
 
   final Future<List<DocVersion>> Function() onList;
   final Future<void> Function(String name) onCreate;
@@ -2508,6 +2516,33 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
   /// snapshots (label null) read as "Auto-save" and lean on the timestamp.
   String _displayName(DocVersion v) =>
       v.isAuto ? context.l10n.versionAutoSnapshot : v.label!.trim();
+
+  /// Who saved this version, or null when that can't be said usefully.
+  ///
+  /// Deliberately quiet: an unknown id renders nothing rather than a placeholder
+  /// like 「未知用户」 — a row that admits it doesn't know who did this is worse
+  /// than a row that doesn't raise the question. Ids go stale legitimately (a
+  /// member who left is no longer in the map).
+  String? _authorName(DocVersion v) {
+    final id = v.createdBy;
+    if (id == null) return null;
+    final name = widget.authorNames[id]?.trim();
+    return (name == null || name.isEmpty) ? null : name;
+  }
+
+  /// The second line: an author when there is one to name, the timestamp for a
+  /// named checkpoint (whose title is its label, not its time), or both.
+  Widget? _rowSubtitle(DocVersion v) {
+    final author = _authorName(v);
+    final time = v.isAuto ? null : _formatTime(v.createdAt);
+    final parts = [if (time != null) time, if (author != null) author];
+    if (parts.isEmpty) return null;
+    return Text(
+      parts.join('  ·  '),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
 
   Future<void> _restore(DocVersion version) async {
     final l10n = context.l10n;
@@ -2737,9 +2772,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
                             ? null
                             : const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      subtitle: v.isAuto
-                          ? null
-                          : Text(_formatTime(v.createdAt)),
+                      subtitle: _rowSubtitle(v),
                       onTap: _busy ? null : () => _select(v),
                     );
                   },

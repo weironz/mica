@@ -133,7 +133,11 @@ class AuthSession {
   /// separate state that could drift from it.
   DateTime? get expiresAt => jwtExpiry(accessToken);
 
-  AuthSession copyWith({String? accessToken, String? refreshToken, User? user}) {
+  AuthSession copyWith({
+    String? accessToken,
+    String? refreshToken,
+    User? user,
+  }) {
     return AuthSession(
       accessToken: accessToken ?? this.accessToken,
       refreshToken: refreshToken ?? this.refreshToken,
@@ -156,10 +160,8 @@ class AuthSession {
 /// living in the test file — a copy stays green while the shipped code drifts,
 /// which is exactly how the first attempt at this fix passed its tests while
 /// changing the wrong screen entirely.
-({String name, String? email, bool canSignOut, bool canSignIn}) accountIdentity({
-  required bool local,
-  required User? user,
-}) {
+({String name, String? email, bool canSignOut, bool canSignIn})
+accountIdentity({required bool local, required User? user}) {
   if (local) {
     // No sign-out (you are not signed in HERE) and no sign-in (there is no
     // server in this world to sign in to — that is a choice made in Settings).
@@ -399,8 +401,12 @@ class CommentEntry {
       id: json['id'] as String,
       authorId: json['author_id'] as String,
       body: json['body'] as String,
-      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
-      editedAt: DateTime.tryParse(json['edited_at'] as String? ?? '')?.toLocal(),
+      createdAt: DateTime.tryParse(
+        json['created_at'] as String? ?? '',
+      )?.toLocal(),
+      editedAt: DateTime.tryParse(
+        json['edited_at'] as String? ?? '',
+      )?.toLocal(),
     );
   }
 
@@ -435,9 +441,13 @@ class CommentThread {
       anchor: anchor is Map<String, dynamic>
           ? CommentAnchorRange.fromJson(anchor)
           : null,
-      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      createdAt: DateTime.tryParse(
+        json['created_at'] as String? ?? '',
+      )?.toLocal(),
       resolvedBy: json['resolved_by'] as String?,
-      resolvedAt: DateTime.tryParse(json['resolved_at'] as String? ?? '')?.toLocal(),
+      resolvedAt: DateTime.tryParse(
+        json['resolved_at'] as String? ?? '',
+      )?.toLocal(),
       comments: ((json['comments'] as List<dynamic>?) ?? const [])
           .map((c) => CommentEntry.fromJson(c as Map<String, dynamic>))
           .toList(),
@@ -477,6 +487,7 @@ class DocVersion {
     required this.id,
     required this.label,
     required this.createdAt,
+    this.createdBy,
   });
 
   factory DocVersion.fromJson(Map<String, dynamic> json) {
@@ -484,12 +495,20 @@ class DocVersion {
       id: json['id'] as String,
       label: json['label'] as String?,
       createdAt: json['created_at'] as String? ?? '',
+      createdBy: json['created_by'] as String?,
     );
   }
 
   final String id;
   final String? label;
   final String createdAt;
+
+  /// Who saved it, as a user id — resolved to a name against the workspace's
+  /// members. The server has been sending this all along (`YrsVersionMeta`); the
+  /// client parsed the row and dropped the field, so a shared document's history
+  /// could not tell you who rolled what back. Null for local-only history and
+  /// for rows written before the column existed.
+  final String? createdBy;
 
   /// An auto snapshot has no user-given name (shown by timestamp instead).
   bool get isAuto => label == null || label!.trim().isEmpty;

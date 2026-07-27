@@ -3814,8 +3814,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ),
         onLoadImageBytes: _loadEditorImageBytes,
         onResolveImageUrls: _resolveEditorImageUrls,
+        authorNames: _versionAuthorNames(wsId),
       ),
     );
+  }
+
+  /// User id → display name for the version timeline, or empty when naming
+  /// authors would add nothing: a one-person workspace would just repeat your own
+  /// name down every row.
+  Map<String, String> _versionAuthorNames(String workspaceId) {
+    final members = _membersByWorkspace[workspaceId] ?? const [];
+    if (members.length < 2) return const {};
+    return {
+      for (final m in members)
+        if (m.displayName.trim().isNotEmpty) m.userId: m.displayName.trim(),
+    };
   }
 
   /// Open the public-share dialog for the selected cloud page. The share URL is
