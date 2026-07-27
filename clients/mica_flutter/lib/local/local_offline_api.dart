@@ -11,6 +11,7 @@
 // `flutter build web` step remains the backstop for members added outside the
 // interface.) The record typedefs used to be duplicated per-variant — a second
 // drift surface — and live only here now.
+import 'cache_stats.dart';
 import 'dart:typed_data';
 
 import '../cloud/cloud_doc_store.dart';
@@ -41,7 +42,12 @@ typedef ViewData = ({
 /// One local workspace, as plain data. [role] is the user's membership role,
 /// mirrored from the server so an offline start knows whether editing is allowed
 /// (P2d); local workspaces are the user's own (owner).
-typedef WorkspaceData = ({String id, String name, String position, String role});
+typedef WorkspaceData = ({
+  String id,
+  String name,
+  String position,
+  String role,
+});
 
 /// A mirrored page tree read back from the store for one `origin` (a server
 /// URL) — workspaces + views, for offline navigation (P2 option C, P1c).
@@ -73,6 +79,15 @@ abstract interface class LocalOfflineApi {
   void deleteWorkspace(String id);
   void forgetOrigin(String origin);
   List<ViewData> listViews({String origin});
+
+  /// What the on-device store is holding, split into re-downloadable mirrors and
+  /// local-only originals. See `cache_stats.dart` for why the split matters.
+  ///
+  /// [mirroredOrigins] are the server URLs whose page trees have been mirrored;
+  /// the store keys rows by origin but cannot enumerate them, and the caller
+  /// already holds that list — passing it in beats adding an FFI entry point for
+  /// a read-only number.
+  Future<LocalCacheStats> cacheStats({required List<String> mirroredOrigins});
   void saveView(ViewData v, {String origin});
   void mirrorCloudPageTree(
     String serverUrl,

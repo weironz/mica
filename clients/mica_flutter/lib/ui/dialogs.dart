@@ -484,6 +484,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.onImportWorkspace,
     this.onExportAllWorkspaces,
     this.onLoadExportStats,
+    this.onLoadCacheStats,
   });
 
   final String userName;
@@ -547,6 +548,9 @@ class _SettingsDialog extends StatefulWidget {
   final Future<({int workspaces, int pages, int imageBytes})> Function()?
   onLoadExportStats;
 
+  /// What the on-device store holds. Null on web (there is no on-device store).
+  final Future<LocalCacheStats> Function()? onLoadCacheStats;
+
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
 }
@@ -590,6 +594,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   bool _tokenBusy = false;
   ({int workspaces, int pages, int imageBytes})? _exportStats;
   bool _exportStatsAsked = false;
+  LocalCacheStats? _cacheStats;
+  bool _cacheStatsAsked = false;
   bool _tokenWrite = false;
   final _tokenName = TextEditingController();
 
@@ -633,6 +639,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // would render the export row without its meta line and then reflow under
     // the user.
     _ensureExportStats();
+    _ensureCacheStats();
   }
 
   void _applyAppearance() {
@@ -1699,6 +1706,18 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
+  /// Ask for the on-device numbers once.
+  void _ensureCacheStats() {
+    final load = widget.onLoadCacheStats;
+    if (load == null || _cacheStatsAsked) return;
+    _cacheStatsAsked = true;
+    load()
+        .then((st) {
+          if (mounted) setState(() => _cacheStats = st);
+        })
+        .catchError((_) {});
+  }
+
   /// Ask for the export numbers once, the first time this tab is built. Failure
   /// leaves the meta line absent rather than surfacing an error — a count nobody
   /// can act on is not worth interrupting the screen for.
@@ -1787,6 +1806,34 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           ],
         ),
       ),
+    ],
+    if (_cacheStats case final c?) ...[
+      const SizedBox(height: 18),
+      MicaEyebrow(context.l10n.cacheTitle),
+      const SizedBox(height: 10),
+      // Two lines, never one total. The store holds re-downloadable mirrors AND
+      // pages that exist nowhere else; a single "已缓存 X" would invite someone
+      // to reclaim the only copy of something. Each line is only drawn when it
+      // has content, so a cloud-only user never sees a 「本地独有 0」 row.
+      if (c.mirroredPages > 0 || c.mirroredBytes > 0)
+        Text(
+          context.l10n.cacheMirrored(
+            c.mirroredPages,
+            formatBytes(c.mirroredBytes),
+          ),
+          style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
+        ),
+      if (c.localOnlyPages > 0 || c.localOnlyBytes > 0)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            context.l10n.cacheLocalOnly(
+              c.localOnlyPages,
+              formatBytes(c.localOnlyBytes),
+            ),
+            style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
+          ),
+        ),
     ],
     const SizedBox(height: 14),
     Row(

@@ -14,6 +14,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'cache_stats.dart';
+
 import '../cloud/cloud_doc_store.dart';
 import '../prefs.dart';
 import 'local_offline_api.dart';
@@ -47,8 +49,11 @@ class LocalOffline implements LocalOfflineApi {
   bool hasBlob(String fileId) => false;
   String? blobFileUri(String fileId) => null;
 
-  String? exportDocHtml(String docId, String title, {int contentWidth = 1160}) =>
-      null;
+  String? exportDocHtml(
+    String docId,
+    String title, {
+    int contentWidth = 1160,
+  }) => null;
 
   /// Web has no local pages, so nothing to export (the caller only reaches
   /// this in 本地模式, which doesn't exist on web).
@@ -64,8 +69,9 @@ class LocalOffline implements LocalOfflineApi {
   /// build routes PDF through the browser's own print, not this path.)
   Future<Uint8List?> htmlToPdf(String html) async => null;
 
-  List<({String id, String? label, int createdAt})> listDocVersions(String docId) =>
-      const [];
+  List<({String id, String? label, int createdAt})> listDocVersions(
+    String docId,
+  ) => const [];
 
   ({String id, String? label, int createdAt})? createDocVersion(
     String docId,
@@ -95,6 +101,18 @@ class LocalOffline implements LocalOfflineApi {
   void forgetOrigin(String origin) {}
 
   List<ViewData> listViews({String origin = 'local'}) => const [];
+
+  /// Web has no on-device store at all, so there is nothing cached and nothing
+  /// local-only — all zeros rather than a thrown "unsupported".
+  @override
+  Future<LocalCacheStats> cacheStats({
+    required List<String> mirroredOrigins,
+  }) async => (
+    mirroredPages: 0,
+    mirroredBytes: 0,
+    localOnlyPages: 0,
+    localOnlyBytes: 0,
+  );
 
   void saveView(ViewData v, {String origin = 'local'}) {}
 
@@ -143,7 +161,8 @@ class LocalOffline implements LocalOfflineApi {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       return (
         workspaces: [
-          for (final w in (m['workspaces'] as List).cast<Map<String, dynamic>>())
+          for (final w
+              in (m['workspaces'] as List).cast<Map<String, dynamic>>())
             (
               id: w['id'] as String,
               name: w['name'] as String,
@@ -217,7 +236,7 @@ class LocalOffline implements LocalOfflineApi {
   bool deleteLocalWorkspace(String id) => false;
 
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})
-      newDoc() => throw UnsupportedError('local offline is not available on web');
+  newDoc() => throw UnsupportedError('local offline is not available on web');
 
   DocData? openDoc(String docId) => null;
 
@@ -227,8 +246,11 @@ class LocalOffline implements LocalOfflineApi {
     List<({String path, List<int> bytes})> entries,
     String workspaceId, {
     String? parentViewId,
-  }) async =>
-      (docs: 0, folders: 0, errors: const ['local offline is not available on web']);
+  }) async => (
+    docs: 0,
+    folders: 0,
+    errors: const ['local offline is not available on web'],
+  );
 
   void flush() {}
 }

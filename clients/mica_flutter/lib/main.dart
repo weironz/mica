@@ -41,6 +41,7 @@ import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
 import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
+import 'local/cache_stats.dart' show LocalCacheStats;
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -5048,6 +5049,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onExportAllWorkspaces: local ? null : _exportAllWorkspaces,
       // Cloud only: 本地模式 has no cross-workspace export to describe.
       onLoadExportStats: local ? null : _exportAllStats,
+      // Desktop only: web has no on-device store to measure.
+      onLoadCacheStats: _local.available
+          ? () => _local.cacheStats(mirroredOrigins: _servers)
+          : null,
       onImportWorkspaceZip: local
           ? (_, _, {bool notion = false}) async {}
           : _importWorkspaceZip,
@@ -5810,6 +5815,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportWorkspaceZip,
     this.onExportAllWorkspaces,
     this.onLoadExportStats,
+    this.onLoadCacheStats,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
     required this.onExportMarkdown,
@@ -6080,6 +6086,9 @@ class WorkspaceView extends StatefulWidget {
   /// Counts describing the whole-account export. Null in 本地模式.
   final Future<({int workspaces, int pages, int imageBytes})> Function()?
   onLoadExportStats;
+
+  /// What the on-device store holds. Null on web.
+  final Future<LocalCacheStats> Function()? onLoadCacheStats;
 
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
@@ -9065,6 +9074,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onAppearanceChanged: widget.onAppearanceChanged,
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
         onLoadExportStats: widget.onLoadExportStats,
+        onLoadCacheStats: widget.onLoadCacheStats,
         onExportAllWorkspaces: widget.onExportAllWorkspaces == null
             ? null
             : () async {

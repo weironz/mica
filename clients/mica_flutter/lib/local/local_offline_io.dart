@@ -6,6 +6,7 @@
 // web) can drive a fully local workspace without statically importing the native
 // FFI. The web build gets `local_offline_web.dart` instead, where everything is
 // unavailable.
+import 'cache_stats.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -136,15 +137,12 @@ class LocalOffline implements LocalOfflineApi {
     for (var i = 0; i < ids.length; i++) {
       final w = byId[ids[i]];
       if (w == null) continue;
-      saveWorkspace(
-        (
-          id: w.id,
-          name: w.name,
-          position: ((i + 1) * 10).toString().padLeft(10, '0'),
-          role: w.role,
-        ),
-        origin: origin,
-      );
+      saveWorkspace((
+        id: w.id,
+        name: w.name,
+        position: ((i + 1) * 10).toString().padLeft(10, '0'),
+        role: w.role,
+      ), origin: origin);
     }
   }
 
@@ -265,8 +263,8 @@ class LocalOffline implements LocalOfflineApi {
     if (store == null) return null;
     final doc = store.loadDoc(docId: docId);
     if (doc == null) return null;
-    final blocks =
-        (jsonDecode(doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+    final blocks = (jsonDecode(doc.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
     return (rootBlockId: doc.rootBlockId(), blocks: blocks);
   }
 
@@ -426,7 +424,7 @@ class LocalOffline implements LocalOfflineApi {
 
   /// Create a new empty document, make it active, and return its ids + blocks.
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})
-      newDoc() {
+  newDoc() {
     final store = _store!;
     final docId = _id('doc');
     final rootId = _id('root');
@@ -518,7 +516,10 @@ class LocalOffline implements LocalOfflineApi {
       final parentView = ensureFolder(parentRel);
       final docId = _id('doc');
       final viewId = _id('view');
-      store.saveDoc(docId: docId, doc: MicaDocument.fromMarkdown(markdown: ''));
+      store.saveDoc(
+        docId: docId,
+        doc: MicaDocument.fromMarkdown(markdown: ''),
+      );
       saveView((
         id: viewId,
         workspaceId: workspaceId,
@@ -618,6 +619,62 @@ class LocalOffline implements LocalOfflineApi {
   // path keeps its own UUID file ids; local and cloud documents are separate
   // universes today, so the two id schemes never collide.
 
+  /// Measure the on-device store, splitting re-downloadable mirrors from
+  /// local-only originals.
+  ///
+  /// Pages come from the store's own `origin` column ("local" vs a server URL);
+  /// bytes come from walking `blobs/` once and classifying each file by its id
+  /// shape (`cache_stats.dart`). Deliberately no FFI: everything needed is
+  /// already either a Dart-side file or an existing query, and adding a Rust
+  /// entry point would mean regenerating bindings for a read-only number.
+  ///
+  /// A blob whose file cannot be stat'd is skipped rather than failing the whole
+  /// figure — a size that is slightly low beats a settings pane that shows an
+  /// error where a number belongs.
+  @override
+  Future<LocalCacheStats> cacheStats({
+    required List<String> mirroredOrigins,
+  }) async {
+    // Folders are not pages and trashed rows are not either — the same definition
+    // the rest of the app counts by. `listViews` includes trashed rows, so that
+    // has to be said explicitly here.
+    bool isPage(ViewData v) => v.objectType != 'folder' && !v.trashed;
+
+    final localOnlyPages = listViews(origin: 'local').where(isPage).length;
+    var mirroredPages = 0;
+    for (final origin in mirroredOrigins) {
+      mirroredPages += listViews(origin: origin).where(isPage).length;
+    }
+
+    var mirroredBytes = 0;
+    var localOnlyBytes = 0;
+    final dir = Directory(_blobsDir());
+    if (dir.existsSync()) {
+      for (final entity in dir.listSync(followLinks: false)) {
+        if (entity is! File) continue;
+        final id = entity.uri.pathSegments.last;
+        int size;
+        try {
+          size = entity.lengthSync();
+        } catch (_) {
+          continue; // unreadable: skip rather than fail the whole number
+        }
+        if (isCloudMirrorBlobId(id)) {
+          mirroredBytes += size;
+        } else {
+          localOnlyBytes += size;
+        }
+      }
+    }
+
+    return (
+      mirroredPages: mirroredPages,
+      mirroredBytes: mirroredBytes,
+      localOnlyPages: localOnlyPages,
+      localOnlyBytes: localOnlyBytes,
+    );
+  }
+
   String _blobsDir() => '${_localDir()}/blobs';
   String _blobPath(String fileId) => '${_blobsDir()}/$fileId';
 
@@ -669,7 +726,9 @@ class LocalOffline implements LocalOfflineApi {
 
   /// A local page's version timeline (newest first): auto snapshots + named
   /// checkpoints. `createdAt` is unix millis. Empty if the store isn't open.
-  List<({String id, String? label, int createdAt})> listDocVersions(String docId) {
+  List<({String id, String? label, int createdAt})> listDocVersions(
+    String docId,
+  ) {
     final store = _store;
     if (store == null) return const [];
     return store
@@ -687,7 +746,9 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store;
     if (store == null) return null;
     final v = store.createLocalVersion(docId: docId, label: label);
-    return v == null ? null : (id: v.id, label: v.label, createdAt: v.createdAt);
+    return v == null
+        ? null
+        : (id: v.id, label: v.label, createdAt: v.createdAt);
   }
 
   /// A version's content (blocks in tree order + root id) for a READ-ONLY
@@ -712,7 +773,8 @@ class LocalOffline implements LocalOfflineApi {
   bool restoreDocVersion(String docId, String versionId) {
     final store = _store;
     if (store == null) return false;
-    return store.restoreLocalVersion(docId: docId, versionId: versionId) != null;
+    return store.restoreLocalVersion(docId: docId, versionId: versionId) !=
+        null;
   }
 
   /// Export a LOCAL page as a self-contained HTML document, through the same
@@ -730,8 +792,8 @@ class LocalOffline implements LocalOfflineApi {
     if (_active?.docId == docId) _active!.flush();
     final doc = store.loadDoc(docId: docId);
     if (doc == null) return null;
-    final blocks =
-        (jsonDecode(doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+    final blocks = (jsonDecode(doc.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
     final srcs = <String, String>{};
     for (final block in blocks) {
       if (block['type'] != 'image') continue;
@@ -740,7 +802,8 @@ class LocalOffline implements LocalOfflineApi {
       if (fileId == null || srcs.containsKey(fileId)) continue;
       final bytes = loadBlob(fileId);
       if (bytes == null) continue;
-      srcs[fileId] = 'data:${_sniffImageMime(bytes)};base64,${base64Encode(bytes)}';
+      srcs[fileId] =
+          'data:${_sniffImageMime(bytes)};base64,${base64Encode(bytes)}';
     }
     return doc.exportHtml(
       title: title,
@@ -831,7 +894,11 @@ class LocalOffline implements LocalOfflineApi {
         final bytes = loadBlob(fileId);
         if (bytes == null) continue;
         images.add(
-          FolderExportImage(fileId: fileId, name: name ?? 'image', bytes: bytes),
+          FolderExportImage(
+            fileId: fileId,
+            name: name ?? 'image',
+            bytes: bytes,
+          ),
         );
       }
     }

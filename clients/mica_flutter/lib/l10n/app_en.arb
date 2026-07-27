@@ -331,6 +331,29 @@
       }
     }
   },
+  "cacheTitle": "On this device",
+  "cacheMirrored": "Cloud mirror: {pages} pages · {size} of images (re-downloadable)",
+  "@cacheMirrored": {
+    "placeholders": {
+      "pages": {
+        "type": "int"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "cacheLocalOnly": "Local only: {pages} pages · {size} of images (no other copy)",
+  "@cacheLocalOnly": {
+    "placeholders": {
+      "pages": {
+        "type": "int"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
   "dataExportAllButton": "Export all workspaces (ZIP)",
   "localCorruptTitle": "Couldn't open this page",
   "localCorruptBody": "This page's local copy appears to be corrupt. You can restore it to the last automatic checkpoint, or open version history to recover earlier content.",
