@@ -402,7 +402,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                         size: 18,
                         color: selected
                             ? const Color(0xFF2563EB)
-                            : const Color(0xFF94A3B8),
+                            : EditorTheme.faint,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -710,7 +710,7 @@ class BlockListItem extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(_iconFor(kind), color: const Color(0xFF64748B)),
+            Icon(_iconFor(kind), color: EditorTheme.muted),
             const SizedBox(width: 12),
             Expanded(child: _contentFor(context, kind)),
             IconButton(
@@ -780,7 +780,7 @@ class BlockListItem extends StatelessWidget {
         return DecoratedBox(
           decoration: const BoxDecoration(
             border: Border(
-              left: BorderSide(color: Color(0xFF94A3B8), width: 3),
+              left: BorderSide(color: EditorTheme.faint, width: 3),
             ),
           ),
           child: Padding(
@@ -1233,7 +1233,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                       size: 18,
                       color: w.isSelected
                           ? const Color(0xFF2563EB)
-                          : const Color(0xFF64748B),
+                          : EditorTheme.muted,
                     ),
                   const SizedBox(width: 6),
                   Expanded(
@@ -1679,7 +1679,7 @@ class _UpdateCheckerState extends State<UpdateChecker> {
             const SizedBox(height: 6),
             Text(
               context.l10n.updateWillRestart,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              style: const TextStyle(fontSize: 12, color: EditorTheme.muted),
             ),
           ],
         );

@@ -435,7 +435,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           child: Text(
             '${w.round()} px',
             textAlign: TextAlign.right,
-            style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+            style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
           ),
         ),
         IconButton(
@@ -472,7 +472,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           child: Text(
             display,
             textAlign: TextAlign.right,
-            style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+            style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
           ),
         ),
       ],
@@ -581,7 +581,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             children: [
               Text(
                 l10n.accountDeleteWarning,
-                style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+                style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -866,7 +866,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         context.l10n.tokenDescription,
         style: Theme.of(
           context,
-        ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+        ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
       ),
       const SizedBox(height: 16),
       TextField(
@@ -1195,7 +1195,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         context.l10n.closeWindowHeader,
         style: const TextStyle(
           fontWeight: FontWeight.w600,
-          color: Color(0xFF64748B),
+          color: EditorTheme.muted,
         ),
       ),
       // RadioGroup, not per-tile groupValue/onChanged — those were deprecated
@@ -1315,7 +1315,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       context.l10n.aiKeyHelp,
       style: Theme.of(
         context,
-      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+      ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
     ),
     if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
   ];
@@ -1332,7 +1332,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       widget.userEmail,
       style: Theme.of(
         context,
-      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+      ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
     ),
     const SizedBox(height: 12),
     TextField(
@@ -1385,7 +1385,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 10),
       Text(
         _accountMsg!,
-        style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+        style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
       ),
     ],
     if (widget.onDeleteAccount != null) ...[
@@ -1415,7 +1415,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     Text(
       context.l10n.dataImportDescription,
-      style: const TextStyle(color: Color(0xFF64748B)),
+      style: const TextStyle(color: EditorTheme.muted),
     ),
     const SizedBox(height: 12),
     Align(
@@ -1443,7 +1443,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       context.l10n.dataExportTip,
       style: Theme.of(
         context,
-      ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
+      ).textTheme.bodySmall?.copyWith(color: EditorTheme.faint),
     ),
   ];
 
@@ -1505,7 +1505,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         t,
         style: const TextStyle(
           fontWeight: FontWeight.w600,
-          color: Color(0xFF64748B),
+          color: EditorTheme.muted,
         ),
       ),
     );
@@ -1549,7 +1549,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         context.l10n.shortcutsNote,
         style: Theme.of(
           context,
-        ).textTheme.bodySmall?.copyWith(color: const Color(0xFF94A3B8)),
+        ).textTheme.bodySmall?.copyWith(color: EditorTheme.faint),
       ),
     ];
   }
@@ -1898,7 +1898,7 @@ class _AiDialogState extends State<_AiDialog> {
                   ] else if (_done)
                     Text(
                       context.l10n.aiDoneReview,
-                      style: const TextStyle(color: Color(0xFF64748B)),
+                      style: const TextStyle(color: EditorTheme.muted),
                     ),
                 ],
               ),
@@ -2291,7 +2291,7 @@ class _TransferDialogState extends State<_TransferDialog> {
                     const SizedBox(height: 10),
                     _TransferNotice(
                       icon: Icons.info_outline,
-                      color: const Color(0xFF64748B),
+                      color: EditorTheme.muted,
                       text: l10n.transferVersionNotice,
                     ),
                   ],

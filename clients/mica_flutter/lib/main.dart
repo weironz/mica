@@ -5357,14 +5357,14 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
         children: [
           Row(
             children: [
-              const Icon(Icons.link, size: 16, color: Color(0xFF64748B)),
+              const Icon(Icons.link, size: 16, color: EditorTheme.muted),
               const SizedBox(width: 6),
               Text(
                 context.l10n.backlinksHeading(_links.length),
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF64748B),
+                  color: EditorTheme.muted,
                 ),
               ),
             ],
@@ -6736,17 +6736,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             Icon(
               Icons.search,
               size: 18,
-              color: enabled
-                  ? const Color(0xFF64748B)
-                  : const Color(0xFFCBD5E1),
+              color: enabled ? EditorTheme.muted : const Color(0xFFCBD5E1),
             ),
             const SizedBox(width: 8),
             Text(
               context.l10n.search,
               style: TextStyle(
-                color: enabled
-                    ? const Color(0xFF64748B)
-                    : const Color(0xFFCBD5E1),
+                color: enabled ? EditorTheme.muted : const Color(0xFFCBD5E1),
               ),
             ),
           ],
@@ -6878,13 +6874,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 12,
-                          color: Color(0xFF64748B),
+                          color: EditorTheme.muted,
                         ),
                       ),
                   ],
                 ),
               ),
-              const Icon(Icons.more_vert, size: 18, color: Color(0xFF94A3B8)),
+              const Icon(Icons.more_vert, size: 18, color: EditorTheme.faint),
             ],
           ),
         ),
@@ -6972,7 +6968,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               icon: const Icon(
                 Icons.delete_outline,
                 size: 16,
-                color: Color(0xFF94A3B8),
+                color: EditorTheme.faint,
               ),
             ),
         ],
@@ -8353,7 +8349,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       if (members.isEmpty)
                         Text(
                           l10n.workspaceNoMembers,
-                          style: const TextStyle(color: Color(0xFF94A3B8)),
+                          style: const TextStyle(color: EditorTheme.faint),
                         )
                       else
                         for (final member in members)
