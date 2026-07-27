@@ -468,6 +468,9 @@ class _SettingsDialog extends StatefulWidget {
     required this.userName,
     required this.userEmail,
     required this.onUpdateProfile,
+    required this.currentAvatarUrl,
+    required this.onChangeAvatar,
+    required this.onRemoveAvatar,
     required this.onChangePassword,
     required this.onDeleteAccount,
     required this.appearance,
@@ -496,6 +499,15 @@ class _SettingsDialog extends StatefulWidget {
   /// controls — a Display name you could type into, a Save button, a password
   /// change — that silently did nothing.
   final Future<void> Function(String displayName)? onUpdateProfile;
+
+  /// Reads the signed-in user's picture URL at build time (null = none). A
+  /// getter rather than a value because this dialog is a route and never sees
+  /// the parent rebuild that follows an upload.
+  final String? Function() currentAvatarUrl;
+
+  /// Null in 本地模式 — no account, so no picture to change.
+  final Future<void> Function()? onChangeAvatar;
+  final Future<void> Function()? onRemoveAvatar;
   final Future<void> Function(String current, String next)? onChangePassword;
 
   /// Null in 本地模式 — no account to delete. Deletes the cloud account and
@@ -755,6 +767,29 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _newPass.dispose();
     _tokenName.dispose();
     super.dispose();
+  }
+
+  /// Pick and upload a new picture. A dismissed picker is not an error and
+  /// says nothing; only a failed upload gets a message.
+  Future<void> _changeAvatar() => _runAvatarAction(widget.onChangeAvatar!);
+
+  Future<void> _removeAvatar() => _runAvatarAction(widget.onRemoveAvatar!);
+
+  Future<void> _runAvatarAction(Future<void> Function() action) async {
+    setState(() {
+      _accountBusy = true;
+      _accountMsg = null;
+    });
+    try {
+      await action();
+      // setState with no assignment on purpose: the picture is read through
+      // widget.currentAvatarUrl(), so rebuilding IS the update.
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (mounted) setState(() => _accountMsg = error.toString());
+    } finally {
+      if (mounted) setState(() => _accountBusy = false);
+    }
   }
 
   Future<void> _saveProfile() async {
@@ -1628,14 +1663,65 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   List<Widget> _accountSection(BuildContext context) => [
     MicaEyebrow(context.l10n.settingsAccount, icon: Icons.person_outline),
-    const SizedBox(height: 4),
-    Text(
-      widget.userEmail,
-      style: Theme.of(
-        context,
-      ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
-    ),
-    const SizedBox(height: 12),
+    const SizedBox(height: 10),
+    if (widget.onChangeAvatar != null) ...[
+      Row(
+        children: [
+          UserAvatar(
+            url: widget.currentAvatarUrl(),
+            radius: 28,
+            fallback: widget.userName.isNotEmpty
+                ? widget.userName.substring(0, 1).toUpperCase()
+                : '?',
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.userEmail,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _accountBusy ? null : _changeAvatar,
+                      icon: const Icon(Icons.photo_camera_outlined, size: 16),
+                      label: Text(context.l10n.accountChangeAvatar),
+                    ),
+                    // Only offered when there is something to remove — a
+                    // greyed-out button here would be one more control that
+                    // cannot say why it is dead.
+                    if (widget.currentAvatarUrl() != null &&
+                        widget.onRemoveAvatar != null)
+                      TextButton(
+                        onPressed: _accountBusy ? null : _removeAvatar,
+                        child: Text(context.l10n.accountRemoveAvatar),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+    ] else ...[
+      const SizedBox(height: 4),
+      Text(
+        widget.userEmail,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
+      ),
+      const SizedBox(height: 12),
+    ],
     TextField(
       controller: _name,
       enabled: !_accountBusy,

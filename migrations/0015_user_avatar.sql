@@ -1,0 +1,16 @@
+-- Profile pictures.
+--
+-- The storage key, not a `files(id)`. An avatar is deliberately NOT a workspace
+-- file, and reusing that table would have been wrong in three ways at once:
+--
+--   * the blob GC's reference set is "file_id appearing in a document block"
+--     (blob_gc::referenced_file_ids), so an avatar would be swept as garbage a
+--     few days after upload;
+--   * `files.workspace_id` cascades, so deleting or leaving the workspace you
+--     happened to upload from would take your face with it;
+--   * uploading requires workspace EDITOR, which a viewer-only account is not.
+--
+-- Objects live under `avatars/{user_id}/{sha256}.{ext}` and are read through
+-- `GET /api/users/{user_id}/avatar`, which redirects the way `files/…/blob`
+-- does. NULL = no avatar, which is the default and stays the common case.
+ALTER TABLE users ADD COLUMN avatar_key text;

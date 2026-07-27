@@ -700,6 +700,35 @@ class ApiClient {
     return User.fromJson(response['user'] as Map<String, dynamic>);
   }
 
+  /// Replace the signed-in user's profile picture; returns the new
+  /// `avatar_version` the UI needs to stop showing the old one.
+  ///
+  /// The bytes go up as the raw body with the image's own Content-Type — there
+  /// is exactly one part, so multipart would only add a wrapper for the server
+  /// to unwrap.
+  Future<String?> setAvatar(
+    String token,
+    Uint8List bytes,
+    String mimeType,
+  ) async {
+    final response = await http.put(
+      _apiUri('/api/auth/me/avatar'),
+      headers: {'content-type': mimeType, 'authorization': 'Bearer $token'},
+      body: bytes,
+    );
+    final body = _decode(response);
+    return body['avatar_version'] as String?;
+  }
+
+  /// Remove the profile picture, going back to the initial-letter circle.
+  Future<void> removeAvatar(String token) async {
+    final response = await http.delete(
+      _apiUri('/api/auth/me/avatar'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    _decode(response);
+  }
+
   Future<void> changePassword(
     String token,
     String currentPassword,

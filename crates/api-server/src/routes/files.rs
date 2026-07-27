@@ -354,7 +354,8 @@ pub(crate) async fn fetch_and_store_image_url(
 /// to a freshly-signed storage URL on every request, so the link itself never
 /// goes stale. Unauthenticated (the `file_id` UUID is the capability), so copied
 /// Markdown images keep displaying in other apps. Used for copy/export.
-/// Kept public by `auth::is_blob_path`; `tests/blob_public.rs` guards it.
+/// Kept public by `auth::is_blob_path`; `auth`'s own `image_blob_link_is_public`
+/// test guards it.
 ///
 /// The optional trailing filename is COSMETIC — it is ignored entirely (the
 /// file_id alone resolves the bytes). It exists because a url ending in `/blob`
@@ -425,7 +426,7 @@ pub async fn delete_file(
   Ok(Json(json!({ "deleted": true })))
 }
 
-fn storage(state: &AppState) -> ApiResult<Arc<S3Config>> {
+pub(crate) fn storage(state: &AppState) -> ApiResult<Arc<S3Config>> {
   state.storage.clone().ok_or_else(|| {
     ApiError::Unavailable("file storage is not configured on this server".to_string())
   })
@@ -545,7 +546,7 @@ fn file_extension(file_name: &str) -> Option<String> {
   Some(ext.to_ascii_lowercase())
 }
 
-fn mime_to_ext(mime: &str) -> Option<&'static str> {
+pub(crate) fn mime_to_ext(mime: &str) -> Option<&'static str> {
   match mime {
     "image/png" => Some("png"),
     "image/jpeg" => Some("jpg"),

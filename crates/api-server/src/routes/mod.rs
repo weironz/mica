@@ -7,6 +7,7 @@ use mica_app_core::AppState;
 mod ai;
 mod ai_ws;
 pub mod auth;
+mod avatar;
 mod comments;
 mod documents;
 mod files;
@@ -55,6 +56,16 @@ pub fn api_router() -> Router<AppState> {
       "/auth/me",
       get(auth::me).patch(auth::update_me).delete(auth::delete_account),
     )
+    .route(
+      "/auth/me/avatar",
+      // 4 MB cap enforced in the handler; the layer only has to stop axum's 2 MB
+      // default from rejecting a legitimate photo before the handler can say so.
+      axum::routing::put(avatar::put_avatar)
+        .delete(avatar::delete_avatar)
+        .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+    )
+    // Public by design (see avatar.rs): an <img> cannot carry a bearer token.
+    .route("/users/{user_id}/avatar", get(avatar::get_avatar))
     .route("/auth/password", post(auth::change_password))
     .route(
       "/auth/password/forgot",

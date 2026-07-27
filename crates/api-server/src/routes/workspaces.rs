@@ -84,6 +84,17 @@ pub struct WorkspaceMember {
   display_name: String,
   role: String,
   joined_at: DateTime<Utc>,
+  /// Serialized as `avatar_version` through the ONE implementation of that
+  /// derivation (avatar.rs) — deriving it a second time in SQL would be two
+  /// definitions of the same token, free to drift the day the key layout moves.
+  /// Non-null when this member has a picture; the client builds the URL from
+  /// `user_id`. Sent here so the member list does not fire a request per member
+  /// that 404s for everyone who has not set one.
+  #[serde(
+    rename = "avatar_version",
+    serialize_with = "crate::routes::avatar::serialize_version"
+  )]
+  avatar_key: Option<String>,
 }
 
 /// Zero-padded numeric position: lexical order == numeric order.
@@ -512,7 +523,8 @@ async fn fetch_workspace_members(
         u.email,
         u.display_name,
         wm.role::text AS role,
-        wm.joined_at
+        wm.joined_at,
+        u.avatar_key
       FROM workspace_members wm
       INNER JOIN users u ON u.id = wm.user_id
       WHERE wm.workspace_id = $1
@@ -537,7 +549,8 @@ async fn fetch_workspace_member(
         u.email,
         u.display_name,
         wm.role::text AS role,
-        wm.joined_at
+        wm.joined_at,
+        u.avatar_key
       FROM workspace_members wm
       INNER JOIN users u ON u.id = wm.user_id
       WHERE wm.workspace_id = $1 AND wm.user_id = $2

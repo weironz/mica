@@ -613,6 +613,7 @@ class WorkspaceListItem extends StatelessWidget {
 class MemberListItem extends StatelessWidget {
   const MemberListItem({
     required this.member,
+    required this.avatarUrl,
     required this.canManage,
     required this.canRemove,
     required this.onRoleChanged,
@@ -621,6 +622,10 @@ class MemberListItem extends StatelessWidget {
   });
 
   final WorkspaceMember member;
+
+  /// Null when this member has no picture — the row falls back to their initial.
+  final String? avatarUrl;
+
   final bool canManage;
   final bool canRemove;
   final Future<void> Function(WorkspaceRole role) onRoleChanged;
@@ -638,7 +643,17 @@ class MemberListItem extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            const CircleAvatar(child: Icon(Icons.person)),
+            UserAvatar(
+              url: avatarUrl,
+              radius: 20,
+              // The generic person glyph read as "we know nothing about this
+              // account". Their own initial is both more informative and the
+              // same fallback the sidebar uses, so one person looks like one
+              // person everywhere.
+              fallback: member.displayName.isNotEmpty
+                  ? member.displayName.substring(0, 1).toUpperCase()
+                  : '?',
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

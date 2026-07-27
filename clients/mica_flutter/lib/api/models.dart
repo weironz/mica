@@ -221,6 +221,7 @@ class User {
     required this.id,
     required this.email,
     required this.displayName,
+    this.avatarVersion,
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
@@ -228,6 +229,7 @@ class User {
       id: json['id'] as String,
       email: json['email'] as String,
       displayName: json['display_name'] as String,
+      avatarVersion: json['avatar_version'] as String?,
     );
   }
 
@@ -235,10 +237,24 @@ class User {
   final String email;
   final String displayName;
 
+  /// Null means no profile picture. Not a URL — see `ui/avatar_url.dart` for why
+  /// the address is composed in one place instead of being sent per payload.
+  final String? avatarVersion;
+
+  User withAvatarVersion(String? version) => User(
+    id: id,
+    email: email,
+    displayName: displayName,
+    avatarVersion: version,
+  );
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'email': email,
     'display_name': displayName,
+    // Persisted with the session so a restart draws the picture on the first
+    // frame instead of popping it in after /me returns.
+    if (avatarVersion != null) 'avatar_version': avatarVersion,
   };
 }
 
@@ -308,6 +324,7 @@ class WorkspaceMember {
     required this.email,
     required this.displayName,
     required this.role,
+    this.avatarVersion,
   });
 
   factory WorkspaceMember.fromJson(Map<String, dynamic> json) {
@@ -316,6 +333,7 @@ class WorkspaceMember {
       email: json['email'] as String,
       displayName: json['display_name'] as String,
       role: json['role'] as String,
+      avatarVersion: json['avatar_version'] as String?,
     );
   }
 
@@ -323,6 +341,9 @@ class WorkspaceMember {
   final String email;
   final String displayName;
   final String role;
+
+  /// Null means this member has no picture — the row draws their initial.
+  final String? avatarVersion;
 }
 
 class SearchResult {

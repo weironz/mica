@@ -221,6 +221,8 @@
   "accountPasswordTooShort": "New password must be at least 8 characters",
   "accountPasswordChanged": "Password changed. All devices (including this one) need to sign in again.",
   "accountDisplayName": "Display name",
+  "accountChangeAvatar": "Change picture",
+  "accountRemoveAvatar": "Remove",
   "accountSaveName": "Save name",
   "accountCurrentPassword": "Current password",
   "accountNewPassword": "New password (min 8 chars)",

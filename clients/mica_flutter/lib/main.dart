@@ -25,7 +25,9 @@ import 'editor/open_url.dart';
 import 'editor/pick_file.dart';
 import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';
+import 'editor/pick_image.dart';
 import 'ui/autoscroll.dart';
+import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/destructive_confirm.dart';
 import 'ui/emoji_picker.dart';
@@ -39,6 +41,7 @@ import 'ui/search_data.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
+import 'ui/user_avatar.dart';
 import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart' show LocalCacheStats;
@@ -1888,6 +1891,38 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       setState(() => _session = updated);
       _persistSession(updated); // keep the saved display name fresh for restart
     }
+  }
+
+  /// Pick a picture and make it this account's avatar. Returns without a word
+  /// if the picker was dismissed — cancelling is not an error.
+  Future<void> _changeAvatar() async {
+    final session = _requireSession();
+    final picked = await pickImage();
+    if (picked == null) return;
+    final version = await _api.setAvatar(
+      session.accessToken,
+      picked.bytes,
+      picked.mime,
+    );
+    _applyAvatarVersion(session, version);
+  }
+
+  Future<void> _removeAvatar() async {
+    final session = _requireSession();
+    await _api.removeAvatar(session.accessToken);
+    _applyAvatarVersion(session, null);
+  }
+
+  /// Same copyWith discipline as _updateProfile: rebuilding the session here
+  /// would drop the refresh token, and changing your picture would cost you the
+  /// ability to renew.
+  void _applyAvatarVersion(AuthSession session, String? version) {
+    if (!mounted) return;
+    final updated = session.copyWith(
+      user: session.user.withAvatarVersion(version),
+    );
+    setState(() => _session = updated);
+    _persistSession(updated);
   }
 
   Future<void> _changePassword(String current, String next) async {
@@ -4789,6 +4824,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final local = _activeIsLocal;
     return WorkspaceView(
       session: session,
+      // Avatar URLs are composed from this (ui/avatar_url.dart); the account
+      // tile and the member list both live under this widget.
+      apiBase: _api.baseUri,
+      onChangeAvatar: local ? null : _changeAvatar,
+      onRemoveAvatar: local ? null : _removeAvatar,
       entries: _workspaceEntries,
       activeOrigin: _activeOrigin,
       // Cloud-only: the badge is meaningless for a local world or with no live
@@ -5707,6 +5747,9 @@ class _SyncBadge extends StatelessWidget {
 
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
+    required this.apiBase,
+    required this.onChangeAvatar,
+    required this.onRemoveAvatar,
     this.syncPhase,
     this.commentThreads = const [],
     this.commentHighlights = const [],
@@ -5859,6 +5902,15 @@ class WorkspaceView extends StatefulWidget {
   onSetCommentResolved;
   final Future<void> Function(String threadId) onDeleteCommentThread;
   final AuthSession? session;
+
+  /// Where this world's server lives — the base every avatar URL resolves
+  /// against. Not derivable down here: the local world and each connected
+  /// server have different ones.
+  final Uri apiBase;
+
+  /// Null in 本地模式, where there is no account to have a picture.
+  final Future<void> Function()? onChangeAvatar;
+  final Future<void> Function()? onRemoveAvatar;
 
   /// The unified workspace list (P3c): local + cloud entries, grouped by
   /// origin in the switcher. Row actions dispatch on the ROW's entry.
@@ -6982,6 +7034,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// whose contents it changes: the workspace dropdown (which then had to list
   /// both worlds side by side), and Settings (whose Account / API Tokens / AI
   /// tabs belong to whichever server the switcher was pointing at).
+  /// The signed-in user's picture, or null when there is none (and in 本地模式,
+  /// which has no account at all).
+  String? _myAvatarUrl() {
+    final user = widget.session?.user;
+    if (user == null) return null;
+    return avatarUrl(
+      base: widget.apiBase,
+      userId: user.id,
+      version: user.avatarVersion,
+    );
+  }
+
   Widget _accountTile(BuildContext context) {
     final id = accountIdentity(
       local: widget.activeIsLocal,
@@ -7033,18 +7097,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: const Color(0xFFE2E8F0),
-                child: Text(
-                  initial,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF334155),
-                  ),
-                ),
-              ),
+              UserAvatar(url: _myAvatarUrl(), fallback: initial),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -8554,6 +8607,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             padding: const EdgeInsets.only(bottom: 8),
                             child: MemberListItem(
                               member: member,
+                              avatarUrl: avatarUrl(
+                                base: widget.apiBase,
+                                userId: member.userId,
+                                version: member.avatarVersion,
+                              ),
                               canManage: canManage,
                               canRemove: member.role != 'owner',
                               onRoleChanged: (role) async {
@@ -9059,6 +9117,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         userName: widget.userName,
         userEmail: widget.userEmail,
         onUpdateProfile: widget.onUpdateProfile,
+        // A getter, not a value: the dialog is a route, so it does not rebuild
+        // when the session upstream changes. Reading through it after an upload
+        // is what makes the new picture appear without reopening Settings.
+        currentAvatarUrl: _myAvatarUrl,
+        onChangeAvatar: widget.onChangeAvatar,
+        onRemoveAvatar: widget.onRemoveAvatar,
         onChangePassword: widget.onChangePassword,
         onDeleteAccount: widget.onDeleteAccount,
         appearance: widget.appearance,

@@ -71,6 +71,10 @@ pub struct UserResponse {
   email: String,
   display_name: String,
   created_at: DateTime<Utc>,
+  /// Changes when the picture does; None means no picture. The client builds the
+  /// URL from the user id — sending a URL from here as well would be two
+  /// representations of one address, and only one of them could be right.
+  avatar_version: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -80,6 +84,7 @@ struct UserRow {
   display_name: String,
   password_hash: String,
   created_at: DateTime<Utc>,
+  avatar_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,7 +114,7 @@ pub async fn register(
     r#"
       INSERT INTO users (email, display_name, password_hash)
       VALUES ($1, $2, $3)
-      RETURNING id, email, display_name, password_hash, created_at
+      RETURNING id, email, display_name, password_hash, created_at, avatar_key
     "#,
   )
   .bind(email)
@@ -130,7 +135,7 @@ pub async fn login(
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at
+      SELECT id, email, display_name, password_hash, created_at, avatar_key
       FROM users
       WHERE email = $1
     "#,
@@ -150,7 +155,7 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at
+      SELECT id, email, display_name, password_hash, created_at, avatar_key
       FROM users
       WHERE id = $1
     "#,
@@ -184,7 +189,7 @@ pub async fn update_me(
       UPDATE users
       SET display_name = $1, updated_at = now()
       WHERE id = $2
-      RETURNING id, email, display_name, password_hash, created_at
+      RETURNING id, email, display_name, password_hash, created_at, avatar_key
     "#,
   )
   .bind(display_name)
@@ -220,7 +225,7 @@ pub async fn change_password(
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at
+      SELECT id, email, display_name, password_hash, created_at, avatar_key
       FROM users
       WHERE id = $1
     "#,
@@ -275,7 +280,7 @@ pub async fn delete_account(
   let user_id = user_id_from_headers(&state, &headers).await?;
 
   let user = sqlx::query_as::<_, UserRow>(
-    "SELECT id, email, display_name, password_hash, created_at FROM users WHERE id = $1",
+    "SELECT id, email, display_name, password_hash, created_at, avatar_key FROM users WHERE id = $1",
   )
   .bind(user_id)
   .fetch_optional(&state.db)
@@ -499,7 +504,7 @@ pub async fn refresh(
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at
+      SELECT id, email, display_name, password_hash, created_at, avatar_key
       FROM users
       WHERE id = $1
     "#,
@@ -748,7 +753,20 @@ fn is_public(path: &str) -> bool {
     // for someone who left the app closed. The refresh token in the body is the
     // credential.
     || path.ends_with("/auth/logout")
+    // A profile picture has to load from an <img> tag, which cannot carry a
+    // bearer token — see avatar.rs. Pinned by tests/avatar_public.rs for the
+    // same reason the blob path is.
+    || is_avatar_path(path)
     || is_blob_path(path)
+}
+
+/// `/users/{user_id}/avatar` — the profile-picture read route.
+fn is_avatar_path(path: &str) -> bool {
+  let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+  let Some(i) = segs.iter().position(|s| *s == "users") else {
+    return false;
+  };
+  segs.get(i + 2) == Some(&"avatar") && segs.len() == i + 3
 }
 
 /// `…/files/{file_id}/blob` (+ an optional cosmetic filename segment) — the
@@ -757,7 +775,7 @@ fn is_public(path: &str) -> bool {
 /// in Typora / a browser (files::blob). This router-wide `scope_guard` shipped
 /// with PATs (a46db0a) and silently 401'd it for a month, quietly breaking the
 /// copy-portability the endpoint exists for — hence the explicit test in
-/// tests/blob_public.rs.
+/// the `image_blob_link_is_public` test below.
 fn is_blob_path(path: &str) -> bool {
   let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
   let Some(i) = segs.iter().position(|s| *s == "files") else {
@@ -851,6 +869,7 @@ impl From<UserRow> for UserResponse {
       email: user.email,
       display_name: user.display_name,
       created_at: user.created_at,
+      avatar_version: user.avatar_key.as_deref().map(crate::routes::avatar::avatar_version),
     }
   }
 }
@@ -902,6 +921,27 @@ mod tests {
     assert!(!is_public(&format!("{WS}/files/{FID}/blob/a/b")));
     // And the word "blob" elsewhere doesn't open a door.
     assert!(!is_public(&format!("{WS}/documents/{FID}/blob")));
+  }
+
+  // A profile picture is loaded by an <img> tag, which cannot carry a bearer
+  // token — the web client's token lives in localStorage. Guarded here for the
+  // same reason as the blob link: nothing in the app would notice the 401,
+  // because a missing avatar looks exactly like an account that never set one.
+  #[test]
+  fn avatar_read_route_is_public() {
+    const UID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
+    assert!(is_public(&format!("/api/users/{UID}/avatar")));
+  }
+
+  #[test]
+  fn changing_your_own_avatar_stays_authenticated() {
+    const UID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
+    // Writing is not reading: the upload/removal endpoint must not ride along.
+    assert!(!is_public("/api/auth/me/avatar"));
+    // Nothing else under /users opens up, and the word alone is not a door.
+    assert!(!is_public(&format!("/api/users/{UID}")));
+    assert!(!is_public(&format!("/api/users/{UID}/avatar/raw")));
+    assert!(!is_public(&format!("/api/documents/{UID}/avatar")));
   }
 
   #[test]
