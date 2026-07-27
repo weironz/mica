@@ -11,7 +11,11 @@ class _SearchDialog extends StatefulWidget {
     this.initialQuery,
   });
 
-  final Future<List<SearchResult>> Function(String query) onSearch;
+  /// Null when the active world has no workspace search at all (本地模式), which
+  /// is not the same thing as a search that finds nothing. It used to be wired
+  /// to a stub returning `const []`, so every local query answered 「没有找到与
+  /// 「x」匹配的内容」 — the app stating as fact that the page isn't there.
+  final Future<List<SearchResult>> Function(String query)? onSearch;
   final void Function(String viewId) onOpen;
 
   /// Pre-filled query, run immediately on open — e.g. clicking a page-property
@@ -54,6 +58,8 @@ class _SearchDialogState extends State<_SearchDialog> {
   }
 
   Future<void> _run(String value) async {
+    final search = widget.onSearch;
+    if (search == null) return; // no search in this world; see [_buildResults]
     final query = value.trim();
     if (query.isEmpty) {
       setState(() {
@@ -64,7 +70,7 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
     setState(() => _loading = true);
     try {
-      final results = await widget.onSearch(query);
+      final results = await search(query);
       if (!mounted || _query.text.trim() != query) return;
       setState(() {
         _results = results;
@@ -97,7 +103,11 @@ class _SearchDialogState extends State<_SearchDialog> {
           children: [
             TextField(
               controller: _query,
-              autofocus: true,
+              // Nothing to type into when there is no search behind it: an
+              // enabled field that eats your keystrokes and answers "no results"
+              // is worse than one that is visibly unavailable.
+              enabled: widget.onSearch != null,
+              autofocus: widget.onSearch != null,
               onChanged: _onChanged,
               decoration: InputDecoration(
                 hintText: context.l10n.searchHint,
@@ -130,6 +140,16 @@ class _SearchDialogState extends State<_SearchDialog> {
   }
 
   Widget _buildResults(BuildContext context) {
+    // Say the true thing: this world has no workspace search yet, and point at
+    // the tool that does work here (in-page find). The old stub claimed instead
+    // that the workspace contains no such page.
+    if (widget.onSearch == null) {
+      return EmptyState(
+        icon: Icons.search_off,
+        title: context.l10n.searchLocalUnsupportedTitle,
+        detail: context.l10n.searchLocalUnsupportedDetail,
+      );
+    }
     if (_query.text.trim().isEmpty) {
       return EmptyState(
         icon: Icons.search,
@@ -301,7 +321,6 @@ class _SettingsDialog extends StatefulWidget {
   /// (`GET /api/workspaces/export.zip`, every workspace this account belongs
   /// to). Null hides the button rather than offering a dead control.
   final Future<void> Function()? onExportAllWorkspaces;
-
 
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
@@ -512,9 +531,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   Future<void> _changeAccountPassword() async {
     final l10n = context.l10n;
     if (_newPass.text.length < 8) {
-      setState(
-        () => _accountMsg = l10n.accountPasswordTooShort,
-      );
+      setState(() => _accountMsg = l10n.accountPasswordTooShort);
       return;
     }
     setState(() {
@@ -853,7 +870,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               : () async {
                   final name = _tokenName.text.trim();
                   if (name.isEmpty) {
-                    setState(() => _tokensError = context.l10n.tokenNameRequired);
+                    setState(
+                      () => _tokensError = context.l10n.tokenNameRequired,
+                    );
                     return;
                   }
                   setState(() {
@@ -1963,7 +1982,9 @@ class _ShareDialogState extends State<_ShareDialog> {
             : _error != null
             ? SizedBox(
                 height: 80,
-                child: Center(child: Text(context.l10n.shareLoadFailed(_error!))),
+                child: Center(
+                  child: Text(context.l10n.shareLoadFailed(_error!)),
+                ),
               )
             : Column(
                 mainAxisSize: MainAxisSize.min,
@@ -2117,7 +2138,9 @@ class _TransferDialogState extends State<_TransferDialog> {
     final l10n = context.l10n;
     final report = _preview;
     return AlertDialog(
-      title: Text(widget.copy ? l10n.transferCopyTitle : l10n.transferMoveTitle),
+      title: Text(
+        widget.copy ? l10n.transferCopyTitle : l10n.transferMoveTitle,
+      ),
       content: SizedBox(
         width: 440,
         child: widget.destinations.isEmpty
@@ -2137,7 +2160,10 @@ class _TransferDialogState extends State<_TransferDialog> {
                         .map(
                           (d) => DropdownMenuItem(
                             value: d.id,
-                            child: Text(d.name, overflow: TextOverflow.ellipsis),
+                            child: Text(
+                              d.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         )
                         .toList(),
@@ -2198,7 +2224,10 @@ class _TransferDialogState extends State<_TransferDialog> {
                     const SizedBox(height: 12),
                     Text(
                       _error!,
-                      style: const TextStyle(color: Color(0xFFB42318), fontSize: 13),
+                      style: const TextStyle(
+                        color: Color(0xFFB42318),
+                        fontSize: 13,
+                      ),
                     ),
                   ],
                 ],
@@ -2397,7 +2426,10 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     final childIds =
         ((byId[content.rootBlockId]?['children'] as List?) ?? const [])
             .cast<String>();
-    return [for (final id in childIds) if (byId[id] != null) byId[id]!];
+    return [
+      for (final id in childIds)
+        if (byId[id] != null) byId[id]!,
+    ];
   }
 
   EditorNode _toNode(Map<String, dynamic> b, String? diff) => EditorNode(
@@ -2483,7 +2515,9 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(context.l10n.versionRestoreConfirmTitle),
-        content: Text(context.l10n.versionRestoreConfirmBody(_displayName(version))),
+        content: Text(
+          context.l10n.versionRestoreConfirmBody(_displayName(version)),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2518,9 +2552,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: InputDecoration(
-            hintText: context.l10n.versionNameHint,
-          ),
+          decoration: InputDecoration(hintText: context.l10n.versionNameHint),
           onSubmitted: (v) => Navigator.pop(context, v),
         ),
         actions: [
@@ -2592,8 +2624,9 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 6),
-            color: Theme.of(context).colorScheme.surfaceContainerHighest
-                .withValues(alpha: 0.4),
+            color: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
             child: Row(
               children: [
                 _legendDot(const Color(0xFF22C55E), l10n.versionDiffAdded),
@@ -2615,7 +2648,10 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
       Container(
         width: 10,
         height: 10,
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(2),
+        ),
       ),
       const SizedBox(width: 5),
       Text(label, style: const TextStyle(fontSize: 12)),
@@ -2745,11 +2781,19 @@ class _RecycleBinDialog extends StatefulWidget {
     required this.onLoad,
     required this.onRestore,
     required this.onPurge,
+    required this.canEdit,
   });
 
   final Future<List<DocumentView>> Function() onLoad;
   final Future<void> Function(DocumentView view) onRestore;
   final Future<void> Function(DocumentView view) onPurge;
+
+  /// Both restore and purge are gated on the editor role server-side
+  /// (`ensure_workspace_editor`). The buttons were drawn regardless, so a viewer
+  /// could press either and collect a 403 — the same dead-control shape the
+  /// null-means-absent rule elsewhere in this file exists to prevent. The list
+  /// itself stays visible: knowing what was deleted is useful read-only.
+  final bool canEdit;
 
   @override
   State<_RecycleBinDialog> createState() => _RecycleBinDialogState();
@@ -2859,29 +2903,31 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 4),
           leading: const Icon(Icons.description_outlined, size: 18),
           title: Text(view.name, overflow: TextOverflow.ellipsis),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                tooltip: context.l10n.recycleRestore,
-                icon: const Icon(Icons.restore, size: 20),
-                onPressed: () async {
-                  await widget.onRestore(view);
-                  await _refresh();
-                },
-              ),
-              IconButton(
-                tooltip: context.l10n.recycleDeleteForever,
-                color: const Color(0xFFDC2626),
-                icon: const Icon(Icons.delete_forever, size: 20),
-                onPressed: () async {
-                  if (!await _confirmPurge(view)) return;
-                  await widget.onPurge(view);
-                  await _refresh();
-                },
-              ),
-            ],
-          ),
+          trailing: !widget.canEdit
+              ? null
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: context.l10n.recycleRestore,
+                      icon: const Icon(Icons.restore, size: 20),
+                      onPressed: () async {
+                        await widget.onRestore(view);
+                        await _refresh();
+                      },
+                    ),
+                    IconButton(
+                      tooltip: context.l10n.recycleDeleteForever,
+                      color: const Color(0xFFDC2626),
+                      icon: const Icon(Icons.delete_forever, size: 20),
+                      onPressed: () async {
+                        if (!await _confirmPurge(view)) return;
+                        await widget.onPurge(view);
+                        await _refresh();
+                      },
+                    ),
+                  ],
+                ),
         );
       },
     );

@@ -135,7 +135,10 @@ const int kPageWidthDivisions = 10;
       // MICA_CLOUD_URL) and start local. Such a user re-adds their server once
       // — better than shipping someone's address to everyone to avoid it.
       return kDefaultCloudUrl.isEmpty
-          ? (cloudOrigin: savedUrl.isEmpty ? '' : onlineUrl, activeOrigin: 'local')
+          ? (
+              cloudOrigin: savedUrl.isEmpty ? '' : onlineUrl,
+              activeOrigin: 'local',
+            )
           : (cloudOrigin: kDefaultCloudUrl, activeOrigin: kDefaultCloudUrl);
     case 'online':
     case 'self': // legacy self-hosted → same thing, keep its URL
@@ -155,38 +158,43 @@ void main() {
   // asserts they match), so they live inside the callback. Every fault sink here
   // routes to the diagnostics crash log, which is deliberately NOT gated by the
   // "诊断" toggle (a crash can't be armed for in advance) and is a no-op on web.
-  runZonedGuarded(() async {
-    WidgetsFlutterBinding.ensureInitialized();
-    // Framework errors (build/layout/paint/gesture): log then keep the default
-    // console dump so nothing that worked before is lost.
-    final priorOnError = FlutterError.onError;
-    FlutterError.onError = (details) {
-      logCrash('FlutterError: ${details.exceptionAsString()}\n${details.stack}');
-      priorOnError?.call(details);
-    };
-    // Errors the engine dispatches outside the zone (some platform callbacks).
-    // Return false → still propagate to the zone/default handler (console).
-    WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
-      logCrash('PlatformError: $error\n$stack');
-      return false;
-    };
-    // Desktop: restore window size/position + enforce a min size before the first
-    // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
-    await initDesktopWindow();
-    // Seed the UI language from the persisted choice (prefs are file/localStorage
-    // backed and loaded synchronously) before the first frame renders.
-    loadPersistedLocale();
-    // Suppress the browser's native right-click menu so the editor can show its
-    // own (e.g. image actions) on web.
-    if (kIsWeb) BrowserContextMenu.disableContextMenu();
-    // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
-    registerYjsSelfTest();
-    _warmUpFonts();
-    runApp(const MicaApp());
-  }, (error, stack) {
-    // Last-resort net for uncaught async errors anywhere in the zone.
-    logCrash('Uncaught: $error\n$stack');
-  });
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      // Framework errors (build/layout/paint/gesture): log then keep the default
+      // console dump so nothing that worked before is lost.
+      final priorOnError = FlutterError.onError;
+      FlutterError.onError = (details) {
+        logCrash(
+          'FlutterError: ${details.exceptionAsString()}\n${details.stack}',
+        );
+        priorOnError?.call(details);
+      };
+      // Errors the engine dispatches outside the zone (some platform callbacks).
+      // Return false → still propagate to the zone/default handler (console).
+      WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+        logCrash('PlatformError: $error\n$stack');
+        return false;
+      };
+      // Desktop: restore window size/position + enforce a min size before the first
+      // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
+      await initDesktopWindow();
+      // Seed the UI language from the persisted choice (prefs are file/localStorage
+      // backed and loaded synchronously) before the first frame renders.
+      loadPersistedLocale();
+      // Suppress the browser's native right-click menu so the editor can show its
+      // own (e.g. image actions) on web.
+      if (kIsWeb) BrowserContextMenu.disableContextMenu();
+      // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
+      registerYjsSelfTest();
+      _warmUpFonts();
+      runApp(const MicaApp());
+    },
+    (error, stack) {
+      // Last-resort net for uncaught async errors anywhere in the zone.
+      logCrash('Uncaught: $error\n$stack');
+    },
+  );
 }
 
 /// Flutter Web doesn't bundle CJK fonts — the engine downloads a Noto fallback
@@ -309,6 +317,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String? _selectedMarkdown;
   String? _message;
   bool _isBusy = false;
+
   /// Pages finished / pages planned for a running cloud import, straight from
   /// the job status. Null when no import is in flight — [_isBusy] alone can't
   /// carry this, since it's true for every operation and says nothing about size.
@@ -601,8 +610,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // Clamp a stored value into the discrete-step range; absent → the readable
     // default. The editor still caps the *render* at the window width, so a wide
     // saved value on a small window simply fills it.
-    _pageWidth = (double.tryParse(loadPref('pageWidth') ?? '') ?? kPageWidthDefault)
-        .clamp(kPageWidthMin, kPageWidthMax);
+    _pageWidth =
+        (double.tryParse(loadPref('pageWidth') ?? '') ?? kPageWidthDefault)
+            .clamp(kPageWidthMin, kPageWidthMax);
     _reHostImages = loadPref('reHostImages') != 'false';
     _showFormatBar = loadPref('showFormatBar') == 'true';
     _showPageTitle = loadPref('showPageTitle') != 'false';
@@ -1122,7 +1132,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         leading: const Icon(Icons.cloud_off_outlined),
         actions: [
           TextButton(onPressed: _retryCloudSync, child: Text(l10n.commonRetry)),
-          TextButton(onPressed: _clearSyncBanner, child: Text(l10n.snackDismiss)),
+          TextButton(
+            onPressed: _clearSyncBanner,
+            child: Text(l10n.snackDismiss),
+          ),
         ],
       ),
     );
@@ -2007,7 +2020,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // indistinguishable from one that quietly did nothing.
       if (mounted && job.done > 0) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(l10n.importDone(l10n.importNotesCount(job.done)))),
+          SnackBar(
+            content: Text(l10n.importDone(l10n.importNotesCount(job.done))),
+          ),
         );
       }
     }).whenComplete(() {
@@ -2534,7 +2549,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     // On first load restore the last-selected local workspace (AppFlowy remembers
     // the active workspace per user); after that keep the current selection.
-    final selId = _localSelectedWorkspace?.id ?? loadPref('lastWorkspaceId:local');
+    final selId =
+        _localSelectedWorkspace?.id ?? loadPref('lastWorkspaceId:local');
     _localSelectedWorkspace = _localWorkspaces.firstWhere(
       (w) => w.id == selId,
       orElse: () => _localWorkspaces.first,
@@ -2625,7 +2641,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<void> _localCreateWorkspace(String name) async {
-    final title = name.trim().isEmpty ? context.l10n.workspaceDefaultName : name.trim();
+    final title = name.trim().isEmpty
+        ? context.l10n.workspaceDefaultName
+        : name.trim();
     // Rust mints the id and the position, by the same step-of-ten rule the
     // view tree uses.
     final id = _local.createLocalWorkspace(title);
@@ -2748,7 +2766,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String name, {
     String? parentViewId,
   }) async {
-    final title = name.trim().isEmpty ? context.l10n.folderNewDefault : name.trim();
+    final title = name.trim().isEmpty
+        ? context.l10n.folderNewDefault
+        : name.trim();
     // A folder has no document; object_id is an unused placeholder.
     final viewId = _local.createView(
       workspaceId: _localSelectedWorkspace?.id ?? 'local',
@@ -2899,9 +2919,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         DocVersion(
           id: v.id,
           label: v.label,
-          createdAt: DateTime.fromMillisecondsSinceEpoch(v.createdAt)
-              .toUtc()
-              .toIso8601String(),
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            v.createdAt,
+          ).toUtc().toIso8601String(),
         );
     await showDialog<void>(
       context: context,
@@ -3050,7 +3070,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // before. Delete BEFORE landing in the local copy, while the cloud API/
     // session context is still the active one.
     final canDeleteCloud =
-        matchesManageRole(entry.role) && entry.origin == _api.baseUri.toString();
+        matchesManageRole(entry.role) &&
+        entry.origin == _api.baseUri.toString();
     if (canDeleteCloud && mounted) {
       final delete = await showDialog<bool>(
         context: context,
@@ -3287,7 +3308,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 TextField(
                   controller: pass,
                   obscureText: true,
-                  decoration: InputDecoration(labelText: l10n.loginPasswordLabel),
+                  decoration: InputDecoration(
+                    labelText: l10n.loginPasswordLabel,
+                  ),
                 ),
               ],
             ),
@@ -3306,7 +3329,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   password: pass.text,
                 ),
               )),
-              child: Text(migrate ? l10n.worldMigrateAction : l10n.loginActionLogin),
+              child: Text(
+                migrate ? l10n.worldMigrateAction : l10n.loginActionLogin,
+              ),
             ),
           ],
         ),
@@ -3742,8 +3767,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       builder: (context) => _VersionHistoryDialog(
         onList: () =>
             _api.listVersions(_requireSession().accessToken, wsId, docId),
-        onCreate: (name) =>
-            _api.createVersion(_requireSession().accessToken, wsId, docId, name),
+        onCreate: (name) => _api.createVersion(
+          _requireSession().accessToken,
+          wsId,
+          docId,
+          name,
+        ),
         onRestore: (versionId) => _api.restoreVersion(
           _requireSession().accessToken,
           wsId,
@@ -4165,7 +4194,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           store.dispose();
           continue;
         }
-        await _drainDocOutbox(t.workspaceId, t.docId, store, session.accessToken, clientId);
+        await _drainDocOutbox(
+          t.workspaceId,
+          t.docId,
+          store,
+          session.accessToken,
+          clientId,
+        );
       }
     } finally {
       _sweepingOutboxes = false;
@@ -4794,7 +4829,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         });
         _savePrefs();
       },
-      onSearch: local ? (_) async => const <SearchResult>[] : _searchWorkspace,
+      // Null, not a stub returning `const []`: 本地模式 genuinely has no
+      // workspace search (no index on device), and a stub made the dialog
+      // answer 「没有找到匹配的内容」 to every local query.
+      onSearch: local ? null : _searchWorkspace,
       onOpenSearchResult: local ? (_) async {} : _openViewById,
       // Cloud only: null in 本地模式 hides the backlinks panel entirely.
       onLoadBacklinks: local ? null : _loadBacklinks,
@@ -4827,9 +4865,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? _localImportVaultTree
           : _importTreeIntoWorkspace,
       onExportMarkdown: local ? () async {} : _exportSelectedMarkdown,
-      onAddMember: local ? (_, _) async {} : _addWorkspaceMember,
-      onUpdateMember: local ? (_, _) async {} : _updateWorkspaceMember,
-      onRemoveMember: local ? (_) async {} : _removeWorkspaceMember,
+      // Null, not a no-op: a local workspace has no members at all. The no-op
+      // form still rendered and still accepted an email, because local entries
+      // carry role 'owner' so canManage was true — you could invite someone and
+      // nothing whatsoever happened.
+      onAddMember: local ? null : _addWorkspaceMember,
+      onUpdateMember: local ? null : _updateWorkspaceMember,
+      onRemoveMember: local ? null : _removeWorkspaceMember,
       onRestoreCheckpoint: local ? _localRollbackDoc : null,
       // Cloud-only: version history lives server-side (local has no history).
       // Both worlds now have real version history — local via the on-device
@@ -5015,7 +5057,10 @@ class _SidePanelState extends State<SidePanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(context.l10n.settingsAccount, style: Theme.of(context).textTheme.titleLarge),
+        Text(
+          context.l10n.settingsAccount,
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
         const SizedBox(height: 16),
         SegmentedButton<AuthMode>(
           segments: [
@@ -5103,9 +5148,9 @@ class _SidePanelState extends State<SidePanel> {
     final l10n = context.l10n;
     final email = _email.text.trim();
     if (email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.loginForgotEnterEmail)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.loginForgotEnterEmail)));
       return;
     }
     try {
@@ -5147,7 +5192,10 @@ class _SidePanelState extends State<SidePanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(context.l10n.workspaceTitle, style: Theme.of(context).textTheme.titleLarge),
+        Text(
+          context.l10n.workspaceTitle,
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
         const SizedBox(height: 4),
         Text(
           session.user.email,
@@ -5266,11 +5314,7 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.link,
-                size: 16,
-                color: Color(0xFF64748B),
-              ),
+              const Icon(Icons.link, size: 16, color: Color(0xFF64748B)),
               const SizedBox(width: 6),
               Text(
                 context.l10n.backlinksHeading(_links.length),
@@ -5288,10 +5332,7 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
               onTap: () => widget.onOpen(link.viewId),
               borderRadius: BorderRadius.circular(6),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 4,
-                  vertical: 6,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
                 child: Row(
                   children: [
                     const Icon(
@@ -5551,7 +5592,7 @@ class WorkspaceView extends StatefulWidget {
     required this.aiEnabled,
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
-    required this.onSearch,
+    this.onSearch,
     required this.onOpenSearchResult,
     this.onLoadBacklinks,
     required this.onExportPageZip,
@@ -5564,9 +5605,9 @@ class WorkspaceView extends StatefulWidget {
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
     required this.onExportMarkdown,
-    required this.onAddMember,
-    required this.onUpdateMember,
-    required this.onRemoveMember,
+    this.onAddMember,
+    this.onUpdateMember,
+    this.onRemoveMember,
     this.onRestoreCheckpoint,
     this.onVersionHistory,
     this.onShare,
@@ -5643,8 +5684,7 @@ class WorkspaceView extends StatefulWidget {
 
   /// Persist a new order for the connected world's workspaces (full list in
   /// the intended order) — see the switcher's move up/down.
-  final Future<void> Function(List<WorkspaceEntry> ordered)
-  onReorderWorkspaces;
+  final Future<void> Function(List<WorkspaceEntry> ordered) onReorderWorkspaces;
 
   /// Display label for the cloud section header ("Mica Cloud" or the host).
   final String cloudOriginLabel;
@@ -5797,7 +5837,10 @@ class WorkspaceView extends StatefulWidget {
   final void Function(bool value) onAiEnabledChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
-  final Future<List<SearchResult>> Function(String query) onSearch;
+
+  /// Null when the active world has no workspace search (本地模式). See the
+  /// honest empty state in `_SearchDialog._buildResults`.
+  final Future<List<SearchResult>> Function(String query)? onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
 
   /// Load the cloud pages that link TO a view (reverse references), for the
@@ -5824,17 +5867,23 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   onImportWorkspaceTreeInto;
   final Future<void> Function() onExportMarkdown;
-  final Future<void> Function(String email, WorkspaceRole role) onAddMember;
-  final Future<void> Function(WorkspaceMember member, WorkspaceRole role)
+
+  /// All three are null in 本地模式, where membership does not exist. Absent
+  /// rather than inert: see the member section in
+  /// [_WorkspaceViewState._openWorkspaceSettingsDialog].
+  final Future<void> Function(String email, WorkspaceRole role)? onAddMember;
+  final Future<void> Function(WorkspaceMember member, WorkspaceRole role)?
   onUpdateMember;
-  final Future<void> Function(WorkspaceMember member) onRemoveMember;
+  final Future<void> Function(WorkspaceMember member)? onRemoveMember;
 
   /// Restore the open document to its last on-device checkpoint (local mode
   /// only — null elsewhere, which hides the menu item).
   final Future<void> Function()? onRestoreCheckpoint;
+
   /// Opens the cloud document's version history (null for local workspaces,
   /// which have no server-side history).
   final Future<void> Function()? onVersionHistory;
+
   /// Opens the share dialog (public link) — cloud-only.
   final Future<void> Function()? onShare;
 
@@ -5918,6 +5967,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       ),
     );
   }
+
   // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
   // default). The tree opens collapsed and remembers what the user expanded;
   // navigating to / creating a nested page reveals its ancestors.
@@ -6164,7 +6214,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _treeScroll.dispose();
     // Only clear the exit-flush slot if it still points at ours (a remounting
     // sibling may have already claimed it).
-    if (identical(_activeEditorFlush, _boundExitFlush)) _activeEditorFlush = null;
+    if (identical(_activeEditorFlush, _boundExitFlush))
+      _activeEditorFlush = null;
     super.dispose();
   }
 
@@ -6722,15 +6773,27 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _addServerRow(),
           const Divider(height: 8),
         ],
-        _menuAction(Icons.settings_outlined, context.l10n.settingsTitle, _openSettings),
+        _menuAction(
+          Icons.settings_outlined,
+          context.l10n.settingsTitle,
+          _openSettings,
+        ),
         // Signing in stays a top-level action, not a per-row one: you sign in
         // to the world you are in. In 本地模式 there is neither — and now the
         // reason is one line above it (pick a world first) instead of a comment
         // pointing somewhere else.
         if (id.canSignOut)
-          _menuAction(Icons.logout, context.l10n.commonSignOut, widget.onSignOut)
+          _menuAction(
+            Icons.logout,
+            context.l10n.commonSignOut,
+            widget.onSignOut,
+          )
         else if (id.canSignIn && widget.onSignIn != null)
-          _menuAction(Icons.login, context.l10n.workspaceRowSignInCloud, widget.onSignIn!),
+          _menuAction(
+            Icons.login,
+            context.l10n.workspaceRowSignInCloud,
+            widget.onSignIn!,
+          ),
       ],
       builder: (context, controller, child) => InkWell(
         onTap: () => controller.isOpen ? controller.close() : controller.open(),
@@ -6835,7 +6898,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        local ? context.l10n.worldLocalName : (Uri.tryParse(origin)?.host ?? origin),
+                        local
+                            ? context.l10n.worldLocalName
+                            : (Uri.tryParse(origin)?.host ?? origin),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: selected
@@ -7016,7 +7081,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // The single highlighted row = the located node (last-tapped folder/page),
     // falling back to the open doc. So a focused folder highlights just like the
     // open page, and the two never light up at once.
-    final activeId = _rootFocused ? null : (_focusedNavId ?? widget.selectedView?.id);
+    final activeId = _rootFocused
+        ? null
+        : (_focusedNavId ?? widget.selectedView?.id);
     // Tapping the tree's blank area (below/around the rows) deselects the
     // located node so the top New buttons create at the root. Rows keep their
     // own tap handlers (they win the gesture arena); only taps that miss a row
@@ -7025,69 +7092,75 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       behavior: HitTestBehavior.opaque,
       onTap: _focusRoot,
       child: ListView(
-      key: _treeListKey,
-      controller: _treeScroll,
-      children: _visibleDocumentTree().map((item) {
-        final row = DocumentListItem(
-          key: ValueKey(item.view.id),
-          view: item.view,
-          depth: item.depth,
-          hasChildren: item.hasChildren,
-          revealToggle: _navHovered,
-          isCollapsed: !_expandedViewIds.contains(item.view.id),
-          isSelected: item.view.id == activeId,
-          canEdit: canEdit,
-          isRenaming: item.view.id == _renamingViewId,
-          onToggle: () => _toggleViewExpand(item.view),
-          onPressed: () => _navigateToView(item.view),
-          onCreateChild: () {
-            setState(
-              () => _expandForChildOf(item.view.id),
-            ); // reveal the new child
-            _createThenRename(
-              () => widget.onCreateChildDocument(item.view, kUntitledPage),
+        key: _treeListKey,
+        controller: _treeScroll,
+        children: _visibleDocumentTree().map((item) {
+          final row = DocumentListItem(
+            key: ValueKey(item.view.id),
+            view: item.view,
+            depth: item.depth,
+            hasChildren: item.hasChildren,
+            revealToggle: _navHovered,
+            isCollapsed: !_expandedViewIds.contains(item.view.id),
+            isSelected: item.view.id == activeId,
+            canEdit: canEdit,
+            isRenaming: item.view.id == _renamingViewId,
+            onToggle: () => _toggleViewExpand(item.view),
+            onPressed: () => _navigateToView(item.view),
+            onCreateChild: () {
+              setState(
+                () => _expandForChildOf(item.view.id),
+              ); // reveal the new child
+              _createThenRename(
+                () => widget.onCreateChildDocument(item.view, kUntitledPage),
+              );
+            },
+            onCreateChildFolder: () {
+              setState(() => _expandForChildOf(item.view.id));
+              _createThenRename(
+                () => widget.onCreateChildFolder(
+                  item.view,
+                  context.l10n.folderNewDefault,
+                ),
+              );
+            },
+            onExportFolder: widget.onExportFolderZip == null
+                ? null
+                : () => _exportFolderFile(item.view),
+            // Import md / images / a nested folder UNDER this folder — both worlds
+            // (server validates parent_view_id; local prefixes the tree).
+            onImportFilesIntoFolder: item.view.objectType == 'folder'
+                ? () => _importFilesIntoFolder(item.view)
+                : null,
+            onImportFolderIntoFolder: item.view.objectType == 'folder'
+                ? () => _importFolderIntoFolder(item.view)
+                : null,
+            // Cross-workspace move/copy — cloud-only (onTransfer is null in a
+            // local workspace, which hides both entries). Works for pages and
+            // folders alike; the folder carries its subtree server-side.
+            onTransferMove: widget.onTransfer == null
+                ? null
+                : () => widget.onTransfer!(item.view, false),
+            onTransferCopy: widget.onTransfer == null
+                ? null
+                : () => widget.onTransfer!(item.view, true),
+            onClone: () => widget.onCloneView(item.view),
+            onRename: () => _promptRenameView(item.view),
+            onSetIcon: widget.onSetViewIcon == null
+                ? null
+                : () => widget.onSetViewIcon!(item.view),
+            onRenameSubmit: (name) => _commitRename(item.view, name),
+            onRenameCancel: _cancelRename,
+            onDelete: () => widget.onDeleteView(item.view),
+          );
+          if (!canEdit) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: row,
             );
-          },
-          onCreateChildFolder: () {
-            setState(() => _expandForChildOf(item.view.id));
-            _createThenRename(
-              () => widget.onCreateChildFolder(item.view, context.l10n.folderNewDefault),
-            );
-          },
-          onExportFolder: widget.onExportFolderZip == null
-              ? null
-              : () => _exportFolderFile(item.view),
-          // Import md / images / a nested folder UNDER this folder — both worlds
-          // (server validates parent_view_id; local prefixes the tree).
-          onImportFilesIntoFolder: item.view.objectType == 'folder'
-              ? () => _importFilesIntoFolder(item.view)
-              : null,
-          onImportFolderIntoFolder: item.view.objectType == 'folder'
-              ? () => _importFolderIntoFolder(item.view)
-              : null,
-          // Cross-workspace move/copy — cloud-only (onTransfer is null in a
-          // local workspace, which hides both entries). Works for pages and
-          // folders alike; the folder carries its subtree server-side.
-          onTransferMove: widget.onTransfer == null
-              ? null
-              : () => widget.onTransfer!(item.view, false),
-          onTransferCopy: widget.onTransfer == null
-              ? null
-              : () => widget.onTransfer!(item.view, true),
-          onClone: () => widget.onCloneView(item.view),
-          onRename: () => _promptRenameView(item.view),
-          onSetIcon: widget.onSetViewIcon == null
-              ? null
-              : () => widget.onSetViewIcon!(item.view),
-          onRenameSubmit: (name) => _commitRename(item.view, name),
-          onRenameCancel: _cancelRename,
-          onDelete: () => widget.onDeleteView(item.view),
-        );
-        if (!canEdit) {
-          return Padding(padding: const EdgeInsets.only(bottom: 8), child: row);
-        }
-        return _draggableTreeRow(item.view, row);
-      }).toList(),
+          }
+          return _draggableTreeRow(item.view, row);
+        }).toList(),
       ),
     );
   }
@@ -7194,8 +7267,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         return;
       }
       final pos = _treeScroll.position;
-      final next = (pos.pixels + _autoScrollVelocity)
-          .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+      final next = (pos.pixels + _autoScrollVelocity).clamp(
+        pos.minScrollExtent,
+        pos.maxScrollExtent,
+      );
       if (next == pos.pixels) {
         return; // already at an end — keep the timer for when the pointer moves
       }
@@ -7661,7 +7736,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         context.l10n.pageFormatDivider,
                         () => h.insert('divider'),
                       ),
-                      btn(Icons.grid_on, context.l10n.pageFormatTable, () => h.insert('table')),
+                      btn(
+                        Icons.grid_on,
+                        context.l10n.pageFormatTable,
+                        () => h.insert('table'),
+                      ),
                       btn(
                         Icons.image_outlined,
                         context.l10n.pageFormatImage,
@@ -7736,8 +7815,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             ),
                           _PropertiesToggle(
                             active: _showProperties,
-                            hasProperties:
-                                bootstrap.rootFrontMatter.trim().isNotEmpty,
+                            hasProperties: bootstrap.rootFrontMatter
+                                .trim()
+                                .isNotEmpty,
                             onTap: () => setState(
                               () => _showProperties = !_showProperties,
                             ),
@@ -7831,7 +7911,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             child: ListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.picture_as_pdf_outlined),
+                              leading: const Icon(
+                                Icons.picture_as_pdf_outlined,
+                              ),
                               title: Text(context.l10n.rowExportPdf),
                             ),
                           ),
@@ -7933,21 +8015,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     // mention the word in their body (M2).
                     onOpenTag: (v) => _openSearch('#$v'),
                     onCommit: (fm) {
-                    final data = Map<String, dynamic>.from(bootstrap.rootData);
-                    if (fm.isEmpty) {
-                      data.remove('front_matter');
-                    } else {
-                      data['front_matter'] = fm;
-                    }
-                    return widget.onApplyOperations([
-                      {
-                        'type': 'update_block',
-                        'block_id': bootstrap.document.rootBlockId,
-                        'data': data,
-                      },
-                    ]);
-                  },
-                ),
+                      final data = Map<String, dynamic>.from(
+                        bootstrap.rootData,
+                      );
+                      if (fm.isEmpty) {
+                        data.remove('front_matter');
+                      } else {
+                        data['front_matter'] = fm;
+                      }
+                      return widget.onApplyOperations([
+                        {
+                          'type': 'update_block',
+                          'block_id': bootstrap.document.rootBlockId,
+                          'data': data,
+                        },
+                      ]);
+                    },
+                  ),
                 Padding(
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
@@ -8160,7 +8244,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setLocal) {
           final ws = widget.selectedWorkspace ?? workspace;
-          final canManage = matchesManageRole(ws.role);
+          // The role check alone was not enough: local entries are minted as
+          // 'owner', so it said yes in a world with no membership API.
+          final canManage =
+              matchesManageRole(ws.role) && widget.onAddMember != null;
           final members = widget.members;
           return AlertDialog(
             title: Text(l10n.workspaceSettings),
@@ -8196,44 +8283,54 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       ),
                     ),
                     const SizedBox(height: 22),
-                    Row(
-                      children: [
-                        const Icon(Icons.group, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          l10n.workspaceMembers,
-                          style: Theme.of(dialogContext).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    if (canManage) ...[
-                      _addMemberForm(setLocal),
-                      const SizedBox(height: 14),
-                    ],
-                    if (members.isEmpty)
-                      Text(
-                        l10n.workspaceNoMembers,
-                        style: const TextStyle(color: Color(0xFF94A3B8)),
+                    if (widget.onAddMember == null)
+                      EmptyState(
+                        icon: Icons.group_outlined,
+                        title: l10n.workspaceMembersLocalTitle,
+                        detail: l10n.workspaceMembersLocalDetail,
                       )
-                    else
-                      for (final member in members)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: MemberListItem(
-                            member: member,
-                            canManage: canManage,
-                            canRemove: member.role != 'owner',
-                            onRoleChanged: (role) async {
-                              await widget.onUpdateMember(member, role);
-                              setLocal(() {});
-                            },
-                            onRemove: () async {
-                              await widget.onRemoveMember(member);
-                              setLocal(() {});
-                            },
+                    else ...[
+                      Row(
+                        children: [
+                          const Icon(Icons.group, size: 18),
+                          const SizedBox(width: 8),
+                          Text(
+                            l10n.workspaceMembers,
+                            style: Theme.of(
+                              dialogContext,
+                            ).textTheme.titleMedium,
                           ),
-                        ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (canManage) ...[
+                        _addMemberForm(setLocal),
+                        const SizedBox(height: 14),
+                      ],
+                      if (members.isEmpty)
+                        Text(
+                          l10n.workspaceNoMembers,
+                          style: const TextStyle(color: Color(0xFF94A3B8)),
+                        )
+                      else
+                        for (final member in members)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: MemberListItem(
+                              member: member,
+                              canManage: canManage,
+                              canRemove: member.role != 'owner',
+                              onRoleChanged: (role) async {
+                                await widget.onUpdateMember!(member, role);
+                                setLocal(() {});
+                              },
+                              onRemove: () async {
+                                await widget.onRemoveMember!(member);
+                                setLocal(() {});
+                              },
+                            ),
+                          ),
+                    ],
                   ],
                 ),
               ),
@@ -8286,7 +8383,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         const SizedBox(height: 10),
         FilledButton.icon(
           onPressed: () async {
-            await widget.onAddMember(_memberEmail.text, _memberRole);
+            // Non-null: this form only renders when canManage, which requires it.
+            await widget.onAddMember!(_memberEmail.text, _memberRole);
             _memberEmail.clear();
             setLocal(() {});
           },
@@ -8517,6 +8615,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onLoad: widget.onLoadTrash,
         onRestore: widget.onRestoreView,
         onPurge: widget.onPurgeView,
+        canEdit: matchesEditRole(widget.selectedWorkspace?.role),
       ),
     );
   }

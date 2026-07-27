@@ -525,7 +525,11 @@ class MicaProgressRow extends StatelessWidget {
 // bare overlay.
 
 class _AccentButton extends StatelessWidget {
-  const _AccentButton({required this.label, required this.onPressed, super.key});
+  const _AccentButton({
+    required this.label,
+    required this.onPressed,
+    super.key,
+  });
 
   final String label;
   final VoidCallback onPressed;

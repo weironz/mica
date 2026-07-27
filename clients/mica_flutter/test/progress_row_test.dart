@@ -24,10 +24,8 @@ void main() {
     );
   }
 
-  LinearProgressIndicator bar(WidgetTester tester) =>
-      tester.widget<LinearProgressIndicator>(
-        find.byType(LinearProgressIndicator),
-      );
+  LinearProgressIndicator bar(WidgetTester tester) => tester
+      .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator));
 
   testWidgets('reports a real fraction, not an indeterminate spinner', (
     tester,
