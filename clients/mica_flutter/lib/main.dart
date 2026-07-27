@@ -6342,6 +6342,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ],
               ),
               const SizedBox(height: 14),
+              // Home + search sit ABOVE the workspace switcher (design 03), and
+              // that order is the meaning: both span every workspace, so putting
+              // them under a workspace picker would imply they are scoped to the
+              // one you happen to have selected. Home is highlighted while it IS
+              // the current view, i.e. no page is open.
+              if (widget.onOpenHome != null) ...[
+                _HomeNavRow(
+                  label: context.l10n.navHome,
+                  selected: widget.selectedBootstrap == null,
+                  onTap: widget.onOpenHome!,
+                ),
+                const SizedBox(height: 8),
+              ],
+              _searchBox(context),
+              const SizedBox(height: 14),
+              const Divider(height: 1, color: Color(0xFFF1F5F9)),
+              const SizedBox(height: 14),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -6382,17 +6399,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ErrorBanner(widget.message!),
               ],
               const SizedBox(height: 12),
-              // Home (design 03): a cross-workspace entry point, above the
-              // per-workspace tree because it is not scoped to one workspace.
-              // Highlighted while it IS the current view, i.e. no page is open.
-              if (widget.onOpenHome != null)
-                _HomeNavRow(
-                  label: context.l10n.navHome,
-                  selected: widget.selectedBootstrap == null,
-                  onTap: widget.onOpenHome!,
-                ),
-              if (widget.onOpenHome != null) const SizedBox(height: 8),
-              _searchBox(context),
               // Section label + actions (design 03). The old row was four equal
               // icons, which read as a toolbar competing with the tree below it.
               // Now the tree gets a quiet label and only its PRIMARY action —
