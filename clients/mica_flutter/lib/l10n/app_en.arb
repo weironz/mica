@@ -190,7 +190,8 @@
   "searchEmptyTitle": "Search this workspace",
   "searchEmptyDetail": "Find pages by title or content.",
   "searchNoMatches": "No matches",
-  "searchFailed": "Search failed — check your connection and try again.",
+  "searchFailedTitle": "Search failed",
+  "searchFailed": "Can't reach the server. Check your connection and try again.",
   "searchNothingFound": "Nothing found for \"{query}\".",
   "@searchNothingFound": {
     "placeholders": {
@@ -244,6 +245,15 @@
     }
   },
   "tokenRevoke": "Revoke",
+  "tokenRevokeConfirmTitle": "Revoke \"{name}\"?",
+  "@tokenRevokeConfirmTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "tokenRevokeConfirmBody": "Scripts using this token will start failing immediately (401). This can't be undone, but you can create a new token.",
   "settingsAppearance": "Appearance",
   "settingsResetPageWidth": "Reset to default width",
   "settingsPageWidth": "Page width",
@@ -394,6 +404,15 @@
   "recycleEmptyDetail": "Deleted pages appear here and can be restored.",
   "recycleRestore": "Restore",
   "recycleDeleteForever": "Delete forever",
+  "recyclePurgeConfirmTitle": "Permanently delete \"{name}\"?",
+  "@recyclePurgeConfirmTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "recyclePurgeConfirmBody": "It and all of its child pages, their version history and their comments are deleted immediately. This can't be undone.",
   "loginActionLogin": "Login",
   "loginActionRegister": "Register",
   "loginEmailLabel": "Email",
@@ -797,6 +816,20 @@
   "transferNoDestinations": "No other workspace to transfer to. Create another cloud workspace first.",
   "transferPreview": "Will copy {docs} documents, {folders} folders, {images} images",
   "@transferPreview": {
+    "placeholders": {
+      "docs": {
+        "type": "int"
+      },
+      "folders": {
+        "type": "int"
+      },
+      "images": {
+        "type": "int"
+      }
+    }
+  },
+  "transferMovePreview": "Will move {docs} documents, {folders} folders, {images} images",
+  "@transferMovePreview": {
     "placeholders": {
       "docs": {
         "type": "int"

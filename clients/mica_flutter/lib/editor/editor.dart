@@ -4575,9 +4575,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   List<_SlashOption> _filteredSlash() {
     final q = _slashQuery.toLowerCase();
     if (q.isEmpty) return _slashMenu;
-    return _slashMenu
-        .where((o) => _slashLabel(o).toLowerCase().contains(q))
-        .toList();
+    // Match the localized label AND the built-in English label AND the kind.
+    // Localized-only was a real dead end: in the Chinese UI `/code`, `/table`,
+    // `/h1` matched nothing, and no-match closes the session (see
+    // [_refreshSlash]) — so every English mnemonic silently dismissed the menu
+    // instead of finding its block. `kind` is included for `/h1`, `/code_block`,
+    // `/todo`, which is what muscle memory actually types.
+    return _slashMenu.where((o) {
+      return _slashLabel(o).toLowerCase().contains(q) ||
+          o.label.toLowerCase().contains(q) ||
+          o.kind.toLowerCase().contains(q) ||
+          // Callouts all share kind 'quote'; their alert type is the useful
+          // token (`/warning`, `/tip`).
+          ((o.data['alert'] as String?)?.toLowerCase().contains(q) ?? false);
+    }).toList();
   }
 
   /// The localized label for a slash-menu option, resolved from its kind

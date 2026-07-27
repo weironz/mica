@@ -27,6 +27,7 @@ import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';
 import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
+import 'ui/destructive_confirm.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/home_data.dart' show countPages;
 import 'ui/home_pane.dart';

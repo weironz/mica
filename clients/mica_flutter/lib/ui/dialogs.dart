@@ -138,12 +138,23 @@ class _SearchDialogState extends State<_SearchDialog> {
       );
     }
     if (!_loading && _results.isEmpty) {
+      // A failure is not an empty result set. Both used to render under the
+      // title 「无匹配结果」, which told the user their workspace has no such
+      // page when in fact the request never reached the server — and it hid
+      // the one useful next step (retry). Separate icon, title and action.
+      if (_failed) {
+        return EmptyState(
+          icon: Icons.cloud_off,
+          title: context.l10n.searchFailedTitle,
+          detail: context.l10n.searchFailed,
+          actionLabel: context.l10n.commonRetry,
+          onAction: () => _run(_query.text),
+        );
+      }
       return EmptyState(
         icon: Icons.search_off,
         title: context.l10n.searchNoMatches,
-        detail: _failed
-            ? context.l10n.searchFailed
-            : context.l10n.searchNothingFound(_lastQuery),
+        detail: context.l10n.searchNothingFound(_lastQuery),
       );
     }
     return ListView.separated(
@@ -723,10 +734,28 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     );
   }
 
-  static String _shortTime(dynamic value) {
-    if (value == null) return 'never';
+  /// Not static: a null timestamp means "no expiry", and that word has to be
+  /// localized — it shipped as the English literal `never`, so the Chinese UI
+  /// read 「过期 never」 while `tokenNever` sat unused behind the input hint.
+  String _shortTime(dynamic value) {
+    if (value == null) return context.l10n.tokenNever;
     final s = value.toString();
     return s.length >= 10 ? s.substring(0, 10) : s;
+  }
+
+  /// Revocation takes effect on the server the instant it returns: every cron
+  /// job, script and CLI holding this token starts getting 401s. It used to
+  /// fire straight off the icon button, so one mis-click silently broke someone
+  /// else's backup with no way to put the secret back.
+  Future<bool> _confirmRevoke(String label) {
+    final l10n = context.l10n;
+    return showDestructiveConfirm(
+      context,
+      title: l10n.tokenRevokeConfirmTitle(label),
+      body: l10n.tokenRevokeConfirmBody,
+      confirmLabel: l10n.tokenRevoke,
+      cancelLabel: l10n.commonCancel,
+    );
   }
 
   List<Widget> _tokensSection(BuildContext context) {
@@ -899,6 +928,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               onPressed: _tokenBusy
                   ? null
                   : () async {
+                      final label =
+                          t['name'] as String? ?? context.l10n.tokenUnnamed;
+                      if (!await _confirmRevoke(label)) return;
                       setState(() => _tokenBusy = true);
                       try {
                         await onRevoke(t['id'] as String);
@@ -2125,11 +2157,20 @@ class _TransferDialogState extends State<_TransferDialog> {
                     )
                   else if (report != null) ...[
                     Text(
-                      l10n.transferPreview(
-                        report.documents,
-                        report.folders,
-                        report.images,
-                      ),
+                      // One preview string was shared by both modes, so a move
+                      // confirmed itself with 「将复制 …」 — the exact opposite
+                      // of what the button was about to do to the source.
+                      widget.copy
+                          ? l10n.transferPreview(
+                              report.documents,
+                              report.folders,
+                              report.images,
+                            )
+                          : l10n.transferMovePreview(
+                              report.documents,
+                              report.folders,
+                              report.images,
+                            ),
                       style: const TextStyle(fontSize: 14),
                     ),
                     if (report.danglingLinks.isNotEmpty) ...[
@@ -2752,6 +2793,23 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
     }
   }
 
+  /// Permanent delete is the only irreversible action in this dialog, and it
+  /// reaches far wider than the row you clicked: the server drops the whole
+  /// subtree's views *and* their backing `documents` rows (`purge_view_subtree`
+  /// in `routes/documents.rs`), which cascades version history and comments
+  /// away with them. It used to fire straight off the icon button, so one
+  /// mis-click next to 「恢复」 destroyed a subtree with nothing to undo it.
+  Future<bool> _confirmPurge(DocumentView view) {
+    final l10n = context.l10n;
+    return showDestructiveConfirm(
+      context,
+      title: l10n.recyclePurgeConfirmTitle(view.name),
+      body: l10n.recyclePurgeConfirmBody,
+      confirmLabel: l10n.recycleDeleteForever,
+      cancelLabel: l10n.commonCancel,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -2817,6 +2875,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
                 color: const Color(0xFFDC2626),
                 icon: const Icon(Icons.delete_forever, size: 20),
                 onPressed: () async {
+                  if (!await _confirmPurge(view)) return;
                   await widget.onPurge(view);
                   await _refresh();
                 },
