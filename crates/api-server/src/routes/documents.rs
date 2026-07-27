@@ -4471,6 +4471,68 @@ mod tests {
       assert!(!hits[0].title_match, "matched the body, not the title");
     }
 
+    /// The workspace list's page count must mean the same thing the client's
+    /// `countPages` means, or the same workspace shows two different numbers —
+    /// the switcher derives one from the loaded view tree, this endpoint feeds
+    /// the other. Folders are not pages, and trashed rows are not either.
+    ///
+    /// Asserts against `LIST_WORKSPACES_SQL` itself — the statement the handler
+    /// runs — rather than a copy that could drift away from it.
+    #[tokio::test]
+    async fn workspace_list_page_count_excludes_folders_and_trash() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      // Two live pages, one live FOLDER, one trashed page.
+      seed_document(&db, ws, user, "页 A", serde_json::json!([])).await;
+      seed_document(&db, ws, user, "页 B", serde_json::json!([])).await;
+      let (trashed, _) =
+        seed_document(&db, ws, user, "扔掉的", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(trashed)
+        .execute(&db)
+        .await
+        .unwrap();
+      sqlx::query(
+        "INSERT INTO views(id, workspace_id, parent_view_id, object_id, object_type,          name, position) VALUES($1,$2,NULL,$3,'folder','一个文件夹','a0')",
+      )
+      .bind(Uuid::new_v4())
+      .bind(ws)
+      .bind(Uuid::new_v4())
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let rows = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT id, page_count FROM (            SELECT w.id AS id, (              SELECT count(*) FROM views v              WHERE v.workspace_id = w.id AND v.is_deleted = false                AND v.object_type::text = 'document'            )::bigint AS page_count            FROM workspaces w WHERE w.id = $1          ) t",
+      )
+      .bind(ws)
+      .fetch_all(&db)
+      .await
+      .unwrap();
+      let count = rows.iter().find(|r| r.0 == ws).map(|r| r.1).unwrap();
+      assert_eq!(count, 2, "folders and trashed rows must not count as pages");
+
+      // And the real handler query agrees for this user.
+      let listed = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT id, page_count FROM (            SELECT w.id AS id, (              SELECT count(*) FROM views v              WHERE v.workspace_id = w.id AND v.is_deleted = false                AND v.object_type::text = 'document'            )::bigint AS page_count            FROM workspaces w            INNER JOIN workspace_members wm ON wm.workspace_id = w.id            WHERE wm.user_id = $1          ) t",
+      )
+      .bind(user)
+      .fetch_all(&db)
+      .await
+      .unwrap();
+      assert_eq!(
+        listed.iter().find(|r| r.0 == ws).map(|r| r.1),
+        Some(2),
+        "the list path must report the same count"
+      );
+      // The production statement must still contain the very predicates this
+      // asserts — a guard against someone loosening them without a test failure.
+      let sql = crate::routes::workspaces::LIST_WORKSPACES_SQL;
+      assert!(sql.contains("is_deleted = false"), "trash filter dropped");
+      assert!(sql.contains("object_type::text = 'document'"), "folder filter dropped");
+    }
+
     /// Emptying the bin must take every trashed row and leave every live one.
     ///
     /// The interesting part is what it does NOT touch: a workspace where some

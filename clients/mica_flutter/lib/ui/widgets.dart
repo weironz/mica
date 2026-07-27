@@ -406,15 +406,38 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: Text(
-                          workspace.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontWeight: selected
-                                ? FontWeight.w600
-                                : FontWeight.w400,
-                            color: const Color(0xFF0F172A),
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              workspace.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: selected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                                color: const Color(0xFF0F172A),
+                              ),
+                            ),
+                            // Page count, and ONLY when the server actually sent
+                            // one. `pageCount` is 0 both for "empty" and for
+                            // "this list didn't carry counts" (a local workspace,
+                            // an older server), and the two are indistinguishable
+                            // here — so 0 prints nothing rather than claiming a
+                            // workspace is empty when nobody ever counted it.
+                            if (workspace.pageCount > 0)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  context.l10n.pageCount(workspace.pageCount),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: EditorTheme.faint,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ],

@@ -237,6 +237,7 @@ class Workspace {
     required this.name,
     required this.ownerId,
     required this.role,
+    this.pageCount = 0,
   });
 
   factory Workspace.fromJson(Map<String, dynamic> json) {
@@ -245,6 +246,7 @@ class Workspace {
       name: json['name'] as String,
       ownerId: json['owner_id'] as String,
       role: json['role'] as String,
+      pageCount: (json['page_count'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -252,6 +254,15 @@ class Workspace {
   final String name;
   final String ownerId;
   final String role;
+
+  /// Live pages in this workspace — folders and the recycle bin excluded, the
+  /// same definition [countPages] uses on a loaded view tree.
+  ///
+  /// Only the workspace LIST endpoint fills this in; anything else (a local
+  /// workspace, a single-workspace response, a server too old to send it) leaves
+  /// it 0. So 0 means "not known here", not "empty" — a caller that wants to show
+  /// it must decide what to do with 0 rather than print it.
+  final int pageCount;
 }
 
 /// A workspace's globally-unique reference: [origin] is `'local'` or a server

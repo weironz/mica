@@ -61,6 +61,20 @@ pub struct Workspace {
   role: String,
   created_at: DateTime<Utc>,
   updated_at: DateTime<Utc>,
+
+  /// Live pages in this workspace — folders excluded, recycle bin excluded.
+  ///
+  /// Same definition the client's `countPages` uses, deliberately: the sidebar
+  /// switcher already shows a count for the OPEN workspace derived from its
+  /// loaded view tree, and a list endpoint answering with a different number for
+  /// the same workspace would be worse than answering with none. Folders are not
+  /// pages (a tree of 12 rows where 4 are folders must not claim 12 pages — the
+  /// user can count them), and trashed rows are not either.
+  ///
+  /// Only populated by [`list`]; the single-workspace handlers leave it 0 because
+  /// nothing reads it there.
+  #[serde(default)]
+  page_count: i64,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -120,27 +134,39 @@ pub async fn reorder(
   Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-pub async fn list(
-  State(state): State<AppState>,
-  headers: HeaderMap,
-) -> ApiResult<Json<WorkspaceListResponse>> {
-  let user_id = user_id_from_headers(&state, &headers).await?;
-
-  let workspaces = sqlx::query_as::<_, Workspace>(
-    r#"
+/// The workspace list query, shared with its test so what gets asserted is the
+/// statement production runs — not a second copy of it that can drift.
+pub(crate) const LIST_WORKSPACES_SQL: &str = r#"
       SELECT
         w.id,
         w.name,
         w.owner_id,
         wm.role::text AS role,
         w.created_at,
-        w.updated_at
+        w.updated_at,
+        -- Correlated rather than a GROUP BY: a workspace with no pages still has
+        -- to come back (as 0), and a join would have to be a LEFT JOIN with a
+        -- COALESCE to say the same thing.
+        (
+          SELECT count(*)
+          FROM views v
+          WHERE v.workspace_id = w.id
+            AND v.is_deleted = false
+            AND v.object_type::text = 'document'
+        )::bigint AS page_count
       FROM workspaces w
       INNER JOIN workspace_members wm ON wm.workspace_id = w.id
       WHERE wm.user_id = $1
       ORDER BY wm.position ASC, w.created_at ASC
-    "#,
-  )
+"#;
+
+pub async fn list(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> ApiResult<Json<WorkspaceListResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+
+  let workspaces = sqlx::query_as::<_, Workspace>(LIST_WORKSPACES_SQL)
   .bind(user_id)
   .fetch_all(&state.db)
   .await?;
