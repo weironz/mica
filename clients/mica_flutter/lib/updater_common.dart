@@ -5,6 +5,24 @@ library;
 /// GitHub repo that publishes the releases (owner/name).
 const String kUpdateRepo = 'weironz/mica';
 
+/// The downloaded installer failed its size/sha256 check and was deleted unrun.
+///
+/// A distinct *type*, not a message, because the UI has to tell this apart from
+/// the other three ways an update can fail (GitHub API non-200, download
+/// non-200, unsupported platform). Telling someone their installer may have been
+/// tampered with when the real problem was a dropped connection is worse than
+/// saying nothing specific — and matching on the message text instead would let
+/// a reworded arb string silently reclassify it.
+class UpdateIntegrityException implements Exception {
+  const UpdateIntegrityException(this.message);
+
+  /// Already-localized sentence, kept for logs and as a last-resort fallback.
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// A newer release worth offering the user.
 class UpdateInfo {
   const UpdateInfo({

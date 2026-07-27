@@ -379,112 +379,112 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
       SizedBox(
         width: 320,
         child: Row(
-        children: [
-          Expanded(
-            child: InkWell(
-              onTap: () {
-                _menu.close();
-                widget.onSelect(entry);
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      selected
-                          ? Icons.check
-                          : entry.isLocal
-                          ? Icons.computer_outlined
-                          : Icons.cloud_outlined,
-                      size: 18,
-                      color: selected
-                          ? const Color(0xFF2563EB)
-                          : const Color(0xFF94A3B8),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        workspace.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          color: const Color(0xFF0F172A),
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: () {
+                  _menu.close();
+                  widget.onSelect(entry);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        selected
+                            ? Icons.check
+                            : entry.isLocal
+                            ? Icons.computer_outlined
+                            : Icons.cloud_outlined,
+                        size: 18,
+                        color: selected
+                            ? const Color(0xFF2563EB)
+                            : const Color(0xFF94A3B8),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          workspace.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                            color: const Color(0xFF0F172A),
+                          ),
                         ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            MenuAnchor(
+              menuChildren: [
+                _wsAction(
+                  Icons.edit_outlined,
+                  context.l10n.commonRename,
+                  () => widget.onRename(entry),
+                ),
+                _wsAction(
+                  Icons.folder_zip_outlined,
+                  context.l10n.workspaceRowExportZip,
+                  () => widget.onExport(entry),
+                ),
+                // One Import entry; the native picker can't mix files and
+                // folders, so the choice lives in a submenu.
+                SubmenuButton(
+                  leadingIcon: const Icon(
+                    Icons.download_outlined,
+                    size: 18,
+                    color: Color(0xFF475569),
+                  ),
+                  menuChildren: [
+                    _wsAction(
+                      Icons.upload_file_outlined,
+                      context.l10n.workspaceRowImportFiles,
+                      () => widget.onImportFilesInto(entry),
+                    ),
+                    _wsAction(
+                      Icons.drive_folder_upload_outlined,
+                      context.l10n.workspaceRowImportFolder,
+                      () => widget.onImportFolderInto(entry),
                     ),
                   ],
+                  child: Text(context.l10n.commonImport),
                 ),
+                if (entry.isLocal && widget.onMigrate != null)
+                  _wsAction(
+                    Icons.cloud_upload_outlined,
+                    context.l10n.workspaceRowMigrate,
+                    () => widget.onMigrate!(entry),
+                  ),
+                if (!entry.isLocal && widget.onDetach != null)
+                  _wsAction(
+                    Icons.computer_outlined,
+                    context.l10n.workspaceRowDetach,
+                    () => widget.onDetach!(entry),
+                  ),
+                _wsAction(
+                  Icons.delete_outline,
+                  context.l10n.commonDelete,
+                  () => widget.onDelete(entry),
+                  color: const Color(0xFFDC2626),
+                ),
+              ],
+              builder: (context, controller, child) => IconButton(
+                tooltip: context.l10n.workspaceRowMenu,
+                icon: const Icon(Icons.more_horiz, size: 18),
+                onPressed: () =>
+                    controller.isOpen ? controller.close() : controller.open(),
               ),
             ),
-          ),
-          MenuAnchor(
-            menuChildren: [
-              _wsAction(
-                Icons.edit_outlined,
-                context.l10n.commonRename,
-                () => widget.onRename(entry),
-              ),
-              _wsAction(
-                Icons.folder_zip_outlined,
-                context.l10n.workspaceRowExportZip,
-                () => widget.onExport(entry),
-              ),
-              // One Import entry; the native picker can't mix files and
-              // folders, so the choice lives in a submenu.
-              SubmenuButton(
-                leadingIcon: const Icon(
-                  Icons.download_outlined,
-                  size: 18,
-                  color: Color(0xFF475569),
-                ),
-                menuChildren: [
-                  _wsAction(
-                    Icons.upload_file_outlined,
-                    context.l10n.workspaceRowImportFiles,
-                    () => widget.onImportFilesInto(entry),
-                  ),
-                  _wsAction(
-                    Icons.drive_folder_upload_outlined,
-                    context.l10n.workspaceRowImportFolder,
-                    () => widget.onImportFolderInto(entry),
-                  ),
-                ],
-                child: Text(context.l10n.commonImport),
-              ),
-              if (entry.isLocal && widget.onMigrate != null)
-                _wsAction(
-                  Icons.cloud_upload_outlined,
-                  context.l10n.workspaceRowMigrate,
-                  () => widget.onMigrate!(entry),
-                ),
-              if (!entry.isLocal && widget.onDetach != null)
-                _wsAction(
-                  Icons.computer_outlined,
-                  context.l10n.workspaceRowDetach,
-                  () => widget.onDetach!(entry),
-                ),
-              _wsAction(
-                Icons.delete_outline,
-                context.l10n.commonDelete,
-                () => widget.onDelete(entry),
-                color: const Color(0xFFDC2626),
-              ),
-            ],
-            builder: (context, controller, child) => IconButton(
-              tooltip: context.l10n.workspaceRowMenu,
-              icon: const Icon(Icons.more_horiz, size: 18),
-              onPressed: () =>
-                  controller.isOpen ? controller.close() : controller.open(),
-            ),
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
+            const SizedBox(width: 4),
+          ],
+        ),
       ),
     );
   }
@@ -740,7 +740,9 @@ class BlockListItem extends StatelessWidget {
   }
 
   Widget _contentFor(BuildContext context, DocumentBlockKind kind) {
-    final text = block.text.isEmpty ? context.l10n.widgetEmptyBlock : block.text;
+    final text = block.text.isEmpty
+        ? context.l10n.widgetEmptyBlock
+        : block.text;
     switch (kind) {
       case DocumentBlockKind.heading:
         return SelectableText(
@@ -1522,10 +1524,15 @@ class _UpdateCheckerState extends State<UpdateChecker> {
   double _progress = 0;
   String? _error;
 
+  /// True only when the download's size/sha256 did not match, as opposed to any
+  /// other update failure. Drives the one case that gets a full failure card.
+  bool _integrityFailed = false;
+
   Future<void> _check() async {
     setState(() {
       _stage = _UpdateStage.checking;
       _error = null;
+      _integrityFailed = false;
     });
     try {
       final info = await checkForUpdate(kAppVersion);
@@ -1581,6 +1588,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
       setState(() {
         _stage = _UpdateStage.error;
         _error = e.toString();
+        // One failure *shape*, four bodies. Only a genuine digest mismatch earns
+        // the "aborted" card: a network hiccup that reads "the installer failed
+        // its integrity check" is worse than a vague message.
+        _integrityFailed = e is UpdateIntegrityException;
       });
     }
   }
@@ -1621,7 +1632,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
             const SizedBox(width: 8),
             Text(context.l10n.updateUpToDate(kAppVersion)),
             const Spacer(),
-            TextButton(onPressed: _check, child: Text(context.l10n.updateRecheck)),
+            TextButton(
+              onPressed: _check,
+              child: Text(context.l10n.updateRecheck),
+            ),
           ],
         );
       case _UpdateStage.available:
@@ -1670,6 +1684,23 @@ class _UpdateCheckerState extends State<UpdateChecker> {
           ],
         );
       case _UpdateStage.error:
+        // The integrity gate deleted a file it refused to run. That deserves the
+        // full card (design 19 「更新已中止」): what happened, what is *not*
+        // affected — this install still works — and two real ways forward. Every
+        // other update failure stays the plain retry row below: same shape would
+        // imply the same cause.
+        if (_integrityFailed) {
+          return MicaFailureCard(
+            icon: Icons.gpp_maybe_outlined,
+            title: context.l10n.updaterAbortedTitle,
+            body: context.l10n.updaterAbortedBody(kAppVersion),
+            secondaryLabel: context.l10n.updaterOpenReleases,
+            onSecondary: () =>
+                openUrl('https://github.com/$kUpdateRepo/releases'),
+            primaryLabel: context.l10n.commonRetry,
+            onPrimary: _check,
+          );
+        }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1692,7 +1723,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
-              child: TextButton(onPressed: _check, child: Text(context.l10n.commonRetry)),
+              child: TextButton(
+                onPressed: _check,
+                child: Text(context.l10n.commonRetry),
+              ),
             ),
           ],
         );
@@ -1742,8 +1776,11 @@ class _PageBreadcrumb extends StatelessWidget {
                   if (i > 0)
                     const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 3),
-                      child: Icon(Icons.chevron_right,
-                          size: 14, color: EditorTheme.faint),
+                      child: Icon(
+                        Icons.chevron_right,
+                        size: 14,
+                        color: EditorTheme.faint,
+                      ),
                     ),
                   _crumb(path[i], isLast: i == path.length - 1),
                 ],

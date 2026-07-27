@@ -82,7 +82,9 @@ Future<void> downloadAndApplyUpdate(
 
   final client = http.Client();
   try {
-    final resp = await client.send(http.Request('GET', Uri.parse(info.downloadUrl)));
+    final resp = await client.send(
+      http.Request('GET', Uri.parse(info.downloadUrl)),
+    );
     if (resp.statusCode != 200) {
       throw Exception(l10nNoContext.updaterDownloadFailed(resp.statusCode));
     }
@@ -104,7 +106,9 @@ Future<void> downloadAndApplyUpdate(
     final bytes = await setup.readAsBytes();
     if (!installerMatches(bytes, size: info.size, sha256: info.sha256)) {
       await _discard(setup);
-      throw Exception(l10nNoContext.updaterIntegrityFailed);
+      // Typed so the UI can show the "aborted, and here is why that's fine" card
+      // for *this* case only, and keep a plain retry for network failures.
+      throw UpdateIntegrityException(l10nNoContext.updaterIntegrityFailed);
     }
   } finally {
     client.close();
