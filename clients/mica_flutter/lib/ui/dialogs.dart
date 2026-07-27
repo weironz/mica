@@ -862,31 +862,81 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(context.l10n.tokenCreated),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(context.l10n.tokenCopyNow),
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: SelectableText(
-                token,
-                style: const TextStyle(fontSize: 13),
-              ),
+        content: SizedBox(
+          width: 420,
+          // Green, and only here: this is the one moment the secret exists in the
+          // UI, and the panel has to look different from every other grey box so
+          // 「立即复制」 is not read as boilerplate.
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0FDF4),
+              border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
+              borderRadius: BorderRadius.circular(14),
             ),
-          ],
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.check_circle_outline,
+                      size: 16,
+                      color: Color(0xFF047857),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        context.l10n.tokenCopyNow,
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          height: 1.5,
+                          color: Color(0xFF047857),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 11),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: const Color(0xFFD1FAE5)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  // Monospace via kMonoFont, not 'monospace': that family name
+                  // does not resolve on web (model.dart). Selectable so the
+                  // secret can still be taken by hand if the clipboard is
+                  // locked down.
+                  child: SelectableText(
+                    token,
+                    maxLines: 1,
+                    style: const TextStyle(fontSize: 13, fontFamily: kMonoFont),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
         actions: [
           TextButton.icon(
             icon: const Icon(Icons.copy, size: 18),
             label: Text(context.l10n.commonCopy),
-            onPressed: () => Clipboard.setData(ClipboardData(text: token)),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: token));
+              if (!ctx.mounted) return;
+              // Confirm the copy happened: the secret is unrecoverable, so
+              // "did that work?" is a question worth answering.
+              ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(
+                SnackBar(content: Text(context.l10n.tokenCopied)),
+              );
+            },
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -1040,12 +1090,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     }
 
     return [
-      _sectionTitle(
-        context,
-        Icons.key_outlined,
-        context.l10n.tokenTitle,
-        const Color(0xFF2563EB),
-      ),
+      MicaEyebrow(context.l10n.tokenTitle, icon: Icons.key_outlined),
       const SizedBox(height: 4),
       Text(
         context.l10n.tokenDescription,
@@ -1271,28 +1316,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     }
   }
 
-  Widget _sectionTitle(
-    BuildContext context,
-    IconData icon,
-    String label,
-    Color color,
-  ) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(width: 8),
-        Text(label, style: Theme.of(context).textTheme.titleMedium),
-      ],
-    );
-  }
-
   List<Widget> _appearanceSection(BuildContext context) => [
-    _sectionTitle(
-      context,
-      Icons.tune,
-      context.l10n.settingsAppearance,
-      const Color(0xFF2563EB),
-    ),
+    MicaEyebrow(context.l10n.settingsAppearance, icon: Icons.tune),
     const SizedBox(height: 12),
     Row(
       children: [
@@ -1423,12 +1448,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   List<Widget> _aiSection(BuildContext context) => [
-    _sectionTitle(
-      context,
-      Icons.auto_awesome,
-      context.l10n.settingsAiProvider,
-      const Color(0xFF7C3AED),
-    ),
+    MicaEyebrow(context.l10n.settingsAiProvider, icon: Icons.auto_awesome),
     SwitchListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
@@ -1506,12 +1526,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   List<Widget> _accountSection(BuildContext context) => [
-    _sectionTitle(
-      context,
-      Icons.person_outline,
-      context.l10n.settingsAccount,
-      const Color(0xFF2563EB),
-    ),
+    MicaEyebrow(context.l10n.settingsAccount, icon: Icons.person_outline),
     const SizedBox(height: 4),
     Text(
       widget.userEmail,
@@ -1591,44 +1606,71 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   ];
 
   List<Widget> _dataSection(BuildContext context) => [
-    _sectionTitle(
-      context,
-      Icons.import_export,
-      context.l10n.settingsData,
-      const Color(0xFF0EA5E9),
-    ),
+    MicaEyebrow(context.l10n.settingsData, icon: Icons.import_export),
     const SizedBox(height: 12),
     Text(
       context.l10n.dataImportDescription,
-      style: const TextStyle(color: EditorTheme.muted),
-    ),
-    const SizedBox(height: 12),
-    Align(
-      alignment: Alignment.centerLeft,
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: [
-          OutlinedButton.icon(
-            onPressed: () => widget.onImportWorkspace(),
-            icon: const Icon(Icons.upload_file_outlined, size: 18),
-            label: Text(context.l10n.dataImportButton),
-          ),
-          if (widget.onExportAllWorkspaces != null)
-            OutlinedButton.icon(
-              onPressed: () => widget.onExportAllWorkspaces!(),
-              icon: const Icon(Icons.download_outlined, size: 18),
-              label: Text(context.l10n.dataExportAllButton),
-            ),
-        ],
+      style: const TextStyle(
+        color: EditorTheme.muted,
+        fontSize: 12.5,
+        height: 1.6,
       ),
     ),
-    const SizedBox(height: 16),
-    Text(
-      context.l10n.dataExportTip,
-      style: Theme.of(
-        context,
-      ).textTheme.bodySmall?.copyWith(color: EditorTheme.faint),
+    const SizedBox(height: 14),
+    // A CLICK zone, not a drop zone: the app accepts no drops (see MicaPickZone),
+    // so the copy says 「选择…」 and there is no 「拖到这里」 anywhere.
+    MicaPickZone(
+      icon: Icons.upload_file_outlined,
+      title: context.l10n.dataImportButton,
+      subtitle: context.l10n.dataImportZoneHint,
+      onTap: () => widget.onImportWorkspace(),
+    ),
+    if (widget.onExportAllWorkspaces != null) ...[
+      const SizedBox(height: 18),
+      MicaEyebrow(context.l10n.commonExport),
+      const SizedBox(height: 10),
+      // One bordered row rather than a loose button, so export reads as its own
+      // thing and not as a second import action.
+      Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFEEF1F5)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                context.l10n.dataExportAllButton,
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+            const SizedBox(width: 10),
+            OutlinedButton(
+              onPressed: () => widget.onExportAllWorkspaces!(),
+              child: Text(context.l10n.commonExport),
+            ),
+          ],
+        ),
+      ),
+    ],
+    const SizedBox(height: 14),
+    Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.info_outline, size: 14, color: EditorTheme.faint),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            context.l10n.dataExportTip,
+            style: const TextStyle(
+              fontSize: 12.5,
+              height: 1.6,
+              color: EditorTheme.faint,
+            ),
+          ),
+        ),
+      ],
     ),
   ];
 

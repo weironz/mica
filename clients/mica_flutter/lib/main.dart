@@ -32,6 +32,7 @@ import 'ui/emoji_picker.dart';
 import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
+import 'ui/panel_kit.dart';
 import 'ui/search_data.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
