@@ -66,6 +66,7 @@ class EditorTheme {
   /// Inline `code` span pill — a soft neutral chip behind the mono text (drawn
   /// in _paintInlineCode). Translucent so a text selection tints through it.
   static const Color inlineCodeBg = Color(0x1A64748B);
+
   /// Comment wash behind anchored text — amber, the convention everywhere from
   /// Google Docs to AFFiNE, and distinct from the blue selection so a selected
   /// comment still reads as selected. `active` is the focused thread.
@@ -86,7 +87,8 @@ class EditorTheme {
   };
   static Color alertAccent(String type) =>
       alertAccents[type] ?? alertAccents['note']!;
-  static Color alertTint(String type) => alertAccent(type).withValues(alpha: 0.06);
+  static Color alertTint(String type) =>
+      alertAccent(type).withValues(alpha: 0.06);
 
   /// Reserved header strip above a callout's first block — holds the type
   /// icon + label. Mirrors how code reserves [codePadV].
@@ -345,6 +347,7 @@ class _NodeLayout {
     final t = langText.isEmpty ? 'text' : langText;
     return t;
   }
+
   String footnoteLabel = ''; // `[label]` gutter marker (kind == 'footnote_def')
   String nodeId = '';
   bool codeWrap = false; // whether this code block wraps
@@ -984,6 +987,10 @@ class RenderDocument extends RenderBox {
     // ready at first paint stay as ".notdef" boxes until an interaction.
     PaintingBinding.instance.systemFonts.addListener(_onSystemFontsChanged);
     _caretBlink.addListener(_onCaretBlink);
+    // Code-block chrome reads its labels straight from `l10nNoContext` at paint
+    // time, so switching language has to repaint — otherwise the toolbar keeps
+    // the old language until something else happens to dirty it.
+    localeController.addListener(_onLocaleChanged);
     _onCaretBlink(); // resync a blink that fired while detached
   }
 
@@ -991,8 +998,13 @@ class RenderDocument extends RenderBox {
   void detach() {
     PaintingBinding.instance.systemFonts.removeListener(_onSystemFontsChanged);
     _caretBlink.removeListener(_onCaretBlink);
+    localeController.removeListener(_onLocaleChanged);
     super.detach();
   }
+
+  /// Paint-only: no geometry depends on these labels (the code-block toolbar is
+  /// laid out from fixed rects, and the fold bar's text is centred in one).
+  void _onLocaleChanged() => markNeedsPaint();
 
   void _onSystemFontsChanged() {
     // Force a full re-shape: cached painters may hold ".notdef" glyphs for a
@@ -1025,7 +1037,8 @@ class RenderDocument extends RenderBox {
       _layoutCache.clear(); // shaped layouts hold the stale glyphs too
       _fontsDirty = false;
     }
-    if (maxWidth != _lastLayoutMaxWidth || _appearance != _lastLayoutAppearance) {
+    if (maxWidth != _lastLayoutMaxWidth ||
+        _appearance != _lastLayoutAppearance) {
       // Width feeds every block's wrapping; appearance feeds every span's style.
       // Neither is captured by the per-block text/data identity check, so a
       // change here invalidates the whole reuse cache (painters still ride their
@@ -1134,9 +1147,8 @@ class RenderDocument extends RenderBox {
       // mutates) text/data, so identity == content, and width/appearance are
       // globally invalidated above. A code block holding the caret is excluded:
       // its horizontal auto-scroll depends on the live caret (slow path only).
-      final isCaretHere = sel != null &&
-          sel.isCollapsed &&
-          sel.focus.node == nodeIndex;
+      final isCaretHere =
+          sel != null && sel.isCollapsed && sel.focus.node == nodeIndex;
       final reuse = _layoutCache[node.id];
       if (reuse != null &&
           identical(reuse.srcText, node.text) &&
@@ -2056,7 +2068,15 @@ class RenderDocument extends RenderBox {
   /// The fold/expand affordance strip (centered) for a foldable code block.
   void _paintFoldBar(Canvas canvas, Offset offset, _NodeLayout l) {
     final r = l.collapseButton!.shift(offset);
-    final label = l.codeCollapsed ? '⌄  Expand' : '⌃  Collapse';
+    // `l10nNoContext`, not a string pushed in through DocumentSurface: a
+    // RenderBox has no BuildContext, and threading a strings bundle through
+    // the widget + every construction site would be a lot of plumbing for six
+    // labels. A locale change repaints via the [localeController] listener in
+    // [attach]. The arrows stay literal — they are glyphs, not words.
+    final s = l10nNoContext;
+    final label = l.codeCollapsed
+        ? '⌄  ${s.codeMenuExpand}'
+        : '⌃  ${s.codeMenuCollapse}';
     final tp = TextPainter(
       text: TextSpan(
         text: label,
@@ -2128,7 +2148,7 @@ class RenderDocument extends RenderBox {
         Icons.auto_awesome,
         hovered: _hoverIcon == _CodeIcon.askAi,
         active: false,
-        tooltip: 'Ask AI',
+        tooltip: l10nNoContext.aiAskTitle,
       );
     }
 
@@ -2140,7 +2160,7 @@ class RenderDocument extends RenderBox {
         Icons.content_copy,
         hovered: _hoverIcon == _CodeIcon.copy,
         active: false,
-        tooltip: 'Copy',
+        tooltip: l10nNoContext.commonCopy,
       );
     }
 
@@ -2152,7 +2172,7 @@ class RenderDocument extends RenderBox {
         Icons.more_horiz,
         hovered: _hoverIcon == _CodeIcon.more,
         active: false,
-        tooltip: 'More',
+        tooltip: l10nNoContext.sidebarMoreActions,
       );
     }
 
@@ -2193,13 +2213,17 @@ class RenderDocument extends RenderBox {
       tp.dispose();
     }
 
+    // The second argument is the DRAWN label; the fourth compares the internal
+    // view key. They used to be the same literal ('code'/'preview'), which is why
+    // localizing this needed care — the keys must stay English.
+    final s = l10nNoContext;
     tab(
       l.viewPreviewTab,
-      'preview',
+      s.codeViewPreview,
       _CodeIcon.viewPreview,
       active == 'preview',
     );
-    tab(l.viewCodeTab, 'code', _CodeIcon.viewCode, active == 'code');
+    tab(l.viewCodeTab, s.codeViewSource, _CodeIcon.viewCode, active == 'code');
   }
 
   void _paintIconButton(
@@ -3239,6 +3263,7 @@ typedef CommentHighlight = ({
   String blockId,
   int startOffset,
   int endOffset,
+
   /// The thread the user is focused on — drawn stronger than the rest.
   bool active,
 });

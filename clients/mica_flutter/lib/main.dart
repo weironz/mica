@@ -2972,6 +2972,33 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (kIsWeb || !entry.isLocal) return;
     final localWs = entry.workspace;
     final l10n = context.l10n;
+    // Ask BEFORE starting. This creates a cloud workspace, uploads every page
+    // and every image blob, then opens a sync session — minutes of work and many
+    // requests, and it ends by asking whether to delete the local original. One
+    // click on a menu item used to begin all of that with no confirmation at all;
+    // the only feedback was the app-wide busy spinner.
+    //
+    // Not `showDestructiveConfirm`: nothing is destroyed here (the local store is
+    // read-only throughout), so a red button would misdescribe it. What warrants
+    // the stop is the size and the one-way-ness.
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.worldMigrateConfirmTitle),
+        content: Text(l10n.worldMigrateConfirmBody(localWs.name)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.worldMigrateConfirmAction),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
     var session = _session;
     if (session == null) {
       final creds = await _promptCloudAuth(migrateWorkspace: localWs.name);

@@ -572,6 +572,16 @@
       }
     }
   },
+  "worldMigrateConfirmTitle": "Upload this workspace to the cloud?",
+  "worldMigrateConfirmBody": "This creates a new workspace in your cloud account and copies every page and image from \"{name}\" into it, which can take a few minutes for a large workspace. The local original is read-only throughout and is never modified; once the copy finishes you choose whether to keep or delete it.",
+  "@worldMigrateConfirmBody": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "worldMigrateConfirmAction": "Upload to cloud",
   "worldMigrateDoneTitle": "Upload complete",
   "worldMigrateDoneBody": "\"{name}\" has been copied to the cloud. The local original is now an independent copy that no longer syncs with the cloud — keeping it will leave two same-named workspaces whose contents diverge.",
   "@worldMigrateDoneBody": {
@@ -703,6 +713,8 @@
   "codeMenuHideLineNumbers": "Hide line numbers",
   "codeMenuAddTitle": "Add title",
   "codeMenuRemoveTitle": "Remove title",
+  "codeViewSource": "code",
+  "codeViewPreview": "preview",
   "codeMenuCollapse": "Collapse",
   "codeMenuExpand": "Expand",
   "codeMenuDelete": "Delete code block",
