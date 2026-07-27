@@ -84,7 +84,22 @@ Widget buildHomePane(
 /// the device clock rather than anything server-side.
 String _greeting(AppLocalizations l10n, String userName, DateTime clock) {
   final hour = clock.hour;
-  if (hour >= 5 && hour < 12) return l10n.homeGreetingMorning(userName);
-  if (hour >= 12 && hour < 18) return l10n.homeGreetingAfternoon(userName);
-  return l10n.homeGreetingEvening(userName);
+  // No name to greet is a real state, not an edge case: the local world has no
+  // account at all. Passing the world's own label in its place produced
+  // 「下午好，本地模式」 — greeting the user by the name of a mode — and passing an
+  // empty string left a dangling 「下午好，」. Both need the nameless wording.
+  final named = userName.trim().isNotEmpty;
+  if (hour >= 5 && hour < 12) {
+    return named
+        ? l10n.homeGreetingMorning(userName)
+        : l10n.homeGreetingMorningPlain;
+  }
+  if (hour >= 12 && hour < 18) {
+    return named
+        ? l10n.homeGreetingAfternoon(userName)
+        : l10n.homeGreetingAfternoonPlain;
+  }
+  return named
+      ? l10n.homeGreetingEvening(userName)
+      : l10n.homeGreetingEveningPlain;
 }
