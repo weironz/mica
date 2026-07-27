@@ -1307,11 +1307,22 @@ class _MenuRow extends StatelessWidget {
   }
 }
 
+/// The app's empty state. A thin adapter over [MicaEmptyState] so all ~11 call
+/// sites moved to the design-19 standard at once, without touching each one.
+///
+/// What changed by delegating: the old body used #64748B (a slate the design
+/// system bans), a 40px bare icon and a `titleLarge` heading — visually a
+/// different family from the spec's 46px tile + 14/600 title + 12.5 body. And it
+/// had no way to offer an ACTION, which is half the rule: an empty state must say
+/// what happened AND give one next step. Callers that have a next step can now
+/// pass one; the rest render exactly as before, just on-spec.
 class EmptyState extends StatelessWidget {
   const EmptyState({
     required this.icon,
     required this.title,
     required this.detail,
+    this.actionLabel,
+    this.onAction,
     super.key,
   });
 
@@ -1319,26 +1330,22 @@ class EmptyState extends StatelessWidget {
   final String title;
   final String detail;
 
+  /// Both or neither — enforced by [MicaEmptyState]: a label with no callback is
+  /// a dead button, a callback with no label is invisible.
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
   @override
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 360),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 40, color: const Color(0xFF64748B)),
-            const SizedBox(height: 12),
-            Text(title, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 6),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
-            ),
-          ],
+        child: MicaEmptyState(
+          icon: icon,
+          title: title,
+          body: detail,
+          actionLabel: actionLabel,
+          onAction: onAction,
         ),
       ),
     );

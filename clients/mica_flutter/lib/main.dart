@@ -29,6 +29,7 @@ import 'ui/autoscroll.dart';
 import 'ui/comment_panel.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/home_pane.dart';
+import 'ui/status_kit.dart';
 import 'cjk_fonts.dart';
 import 'prefs.dart';
 import 'updater.dart';
@@ -6895,6 +6896,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         icon: Icons.note_add,
         title: context.l10n.sidebarNoPagesTitle,
         detail: context.l10n.sidebarNoPagesDetail,
+        // The rule's other half (design 19): an empty tree should offer the way
+        // OUT of being empty, not just describe it. Offered only when the user
+        // may actually create — a dead button is worse than none.
+        actionLabel: canEdit ? context.l10n.newPage : null,
+        onAction: canEdit ? () => _createLocated(folder: false) : null,
       );
     }
 
