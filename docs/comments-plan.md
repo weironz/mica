@@ -15,7 +15,7 @@
 | **Postgres 集成测试(8 项,CI 真跑)** | ✅ **CI 绿** | `app-core/tests/comments_pg.rs`(736639c) |
 | 客户端 API 层(DTO + 5 方法) | ✅ 6 单测 | `api/models.dart`、`api/client.dart`(af03743) |
 | **渲染期高亮(纯 paint,不影响布局)** | ✅ 5 widget 测 | `render.dart` `commentHighlights`(08f221d) |
-| **评论面板 UI + 选区→"添加评论"入口 + main.dart 接线** | ❌ **未做** | 见下「剩余 turnkey」 |
+| **评论面板 + 选区→「添加评论」入口 + main.dart 接线** | ✅ 9 widget 测(**观感待真机**) | `ui/comment_panel.dart`、`editor.dart` 右键项、`main.dart`(f3bf181) |
 | 建议(suggest mode) | ⏸️ 有意不做(独立立项,见文末) | — |
 
 **两个实测修正了本文档的原设计假设**(照原文写会埋 bug):
@@ -24,17 +24,24 @@
    **"解不出"与"塌缩"必须同等视为 orphan**——只信 None 会漏掉最常见的删除情形。
 2. **表名用复数**(`comment_threads`/`comments`)贴仓库惯例,原文写的是单数。
 
-### 剩余 turnkey(面板 UI,观感需真机对齐)
-1. **接线**:`main.dart` 里 `_api.listComments(token, ws, doc)` → 存 state → 过滤
-   `isHighlightable` → 映射成 `CommentHighlight`(`blockId/startOffset/endOffset/active`)→
-   一路传到 `editor.dart` 的 `DocumentSurface(commentHighlights: …)`(参数已就位)。
-   文档切换/远端更新后重新 list(锚点由服务端按当前正文解析,客户端**永不自己存 offset**)。
-2. **入口**:选中文字 → 现有右键菜单/格式栏加「添加评论」→ 取 `(blockId, startOffset,
-   endOffset, 选中文本)` 调 `createCommentThread`。⚠️ **offset 必须是 UTF-16**(与
-   `render.dart` 一致);跨块选区服务端已支持。
-3. **面板**:列 thread(quote 预览 + 回复)、回复、resolve/re-open、删除;**orphaned 的
-   thread 不画高亮、只在面板里按 `quote` 显示**(`isOrphaned` 已封装好)。
-4. 锚不上时服务端返 400 `cannot anchor that range`(过期选区)——UI 要给个温和提示。
+### Phase 1 已闭环(f3bf181)——四步都落地
+1. **接线**:`onReady` 里 `listComments` → `_commentThreads` → 过滤 `isHighlightable` →
+   `CommentHighlight` → `MicaEditor`/`DocumentSurface`。**任何变更后重新拉取**(服务端是
+   锚点与 orphan 的唯一真相源);加载失败只是没有评论,**文档照常打开**。
+2. **入口**:右键菜单选区内加「添加评论」,offset 用 **UTF-16**(与渲染器/服务端同单位),
+   跨块直接支持;**只由 `onAddComment != null` 决定,不看 `canEdit`**(commenter 能评论
+   不能改正文)。quote 截 300 字。
+3. **面板**(`ui/comment_panel.dart`):列 thread、回复、resolve/重新打开、删除;
+   orphaned **照样可读**(删除线 + 说明),未解决排前;面板**从不算位置**。
+4. 锚不上 → 按 400 提示「这段选区已不在文档中」,不抛原始错误。
+
+### ⚠️ 待真机确认(唯一剩项)
+观感/摆位没在跑起来的应用里看过(`just app` 或发版后即可):
+- [ ] 面板是 **Dialog** 形态、宽 380 —— 够不够用?要不要改成常驻侧栏?
+- [ ] 面包屑右上的评论图标 + 未解决计数 位置是否合适(与同步徽标、ⓘ 并排)
+- [ ] 琥珀色高亮在正文里的浓度(`commentHighlight` = `0x33F59E0B`)
+- [ ] 选中文字 → 右键 → 「添加评论」→ 输入 → 高亮出现 这条链路手感
+- [ ] 跨块选区的高亮(当前只画锚点起始块的 range,跨块视觉待看)
 
 ## 决策速览
 - **评论锚点 = yrs sticky index(`StickyIndex` + `Assoc`),存在独立的 Postgres 评论表**,
