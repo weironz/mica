@@ -216,7 +216,12 @@ async fn run_import(
       .await
       .map_err(|e| ApiError::Internal(e.to_string()))?;
   if plan.pages.is_empty() {
-    return Err(ApiError::BadRequest(
+    // Coded, not merely messaged: this is the one import rejection the user can
+    // actually act on (re-export from Notion as "Markdown & CSV" rather than
+    // "HTML"), so the client has to recognise it and say so in their language
+    // instead of echoing this English sentence into a red banner.
+    return Err(ApiError::BadRequestCode(
+      "import_no_markdown",
       "no markdown pages found in the archive".to_string(),
     ));
   }

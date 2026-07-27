@@ -1066,7 +1066,11 @@ class ApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final message =
           body['message'] as String? ?? 'HTTP ${response.statusCode}';
-      throw ApiException(message, statusCode: response.statusCode);
+      throw ApiException(
+        message,
+        statusCode: response.statusCode,
+        code: body['code'] as String?,
+      );
     }
     return body;
   }

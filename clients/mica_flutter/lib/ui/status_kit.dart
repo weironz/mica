@@ -460,6 +460,64 @@ class MicaStatusToastHost extends StatelessWidget {
   }
 }
 
+// ── Progress ─────────────────────────────────────────────────────────────────
+
+/// A *determinate* progress row for long work whose size the server reports.
+///
+/// Determinate is the whole point. An indeterminate spinner and a wedged job
+/// look exactly alike, and the one thing someone waiting on a 96-page import
+/// wants to know is whether it is still moving. The import job had been
+/// reporting `done`/`total` all along — the client parsed both and then dropped
+/// them, leaving a bare spinner turning for minutes.
+///
+/// A caller with no real total should render nothing here rather than a bar that
+/// pretends to know; hence the assert instead of a quiet fallback to
+/// indeterminate.
+class MicaProgressRow extends StatelessWidget {
+  MicaProgressRow({
+    required this.label,
+    required this.done,
+    required this.total,
+    super.key,
+  }) : assert(total > 0, 'a determinate bar needs a real total');
+
+  /// Already-localized description, counts included — wording lives in the arb
+  /// files, this file stays layout (see the library doc).
+  final String label;
+
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    // Clamped because `done > total` is reachable: the planner counts pages and
+    // the worker can emit extra units, and a bar overshooting its track reads as
+    // a rendering bug rather than as progress.
+    final fraction = (done / total).clamp(0.0, 1.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontSize: _bodySize, color: EditorTheme.muted),
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: SizedBox(
+            height: 6,
+            child: LinearProgressIndicator(
+              value: fraction,
+              backgroundColor: const Color(0xFFEEF1F5),
+              valueColor: const AlwaysStoppedAnimation(EditorTheme.caret),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Buttons ──────────────────────────────────────────────────────────────────
 // Hand-rolled rather than Material's: the design's paddings and 8px radius are
 // specific, and Material's defaults (44px min height, ripple, letter-spacing)

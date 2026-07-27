@@ -12,6 +12,15 @@ pub enum ApiError {
   #[error("bad request: {0}")]
   BadRequest(String),
 
+  /// A 400 whose *reason* the client has to act on, not merely display.
+  /// [`Self::BadRequest`] serializes as the generic code `bad_request`, so the
+  /// only thing telling "the archive has no Markdown in it" apart from any other
+  /// rejection was its English message — and the client then showed that message
+  /// to the user verbatim, untranslated. The first field is the stable machine
+  /// code; the second is still the human-readable message for logs.
+  #[error("bad request: {1}")]
+  BadRequestCode(&'static str, String),
+
   #[error("unauthorized")]
   Unauthorized,
 
@@ -47,6 +56,7 @@ impl IntoResponse for ApiError {
   fn into_response(self) -> Response {
     let (status, code) = match &self {
       Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+      Self::BadRequestCode(code, _) => (StatusCode::BAD_REQUEST, *code),
       Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
       Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
       Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),

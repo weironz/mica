@@ -54,6 +54,9 @@
 - **六个真 bug**(commit `cb95342`,根因详见该提交信息):回收站永久删除 / 令牌吊销补
   不可逆确认(抽出 `destructive_confirm.dart`,5 测)、搜索失败不再顶着「无匹配结果」
   标题、`'never'` 硬编码、移动却说「将复制」、slash 菜单英文助记符全死
+- **15 导入进度 + 云端导入的失败/成功**:`MicaProgressRow`(进 `status_kit.dart`,4 测)。
+  失败文案走**服务端 code** 而不是匹配英文 message —— `ApiError::BadRequestCode` 新
+  variant + `ApiException.code`,理由见下面「一条要守住的边界」
 
 ## 故意不做(及理由)
 
@@ -83,26 +86,40 @@
 (`GET /api/workspaces` 不返回计数)、版本作者(服务端**已经**返回 `created_by`,客户端
 把它丢了 —— 这项只差客户端解析)。
 
+## 一条要守住的边界:失败文案按 code 走,不按 message 匹配
+
+云端导入失败原本把服务端的英文句子(`no markdown pages found in the archive`)直接塞进
+红条给用户看。`ApiException` 自己的文档注释早就写着「服务端的 *message* 不是应该给人看
+的东西」,但当时只有 `statusCode` 可用,而 400 又区分不出具体原因。
+
+**不要用匹配 message 文本来补这个洞**——那是双表示(`docs/lessons.md` 的红线):服务端
+改一句措辞,客户端就静默地不再翻译,而且没有任何测试会红。做法是服务端给具体 code:
+
+- `ApiError::BadRequestCode(&'static str, String)`(`crates/infra/src/error.rs`)——
+  仍是 400,`message` 不变(老客户端无感),但错误体的 `code` 从通用 `bad_request`
+  变成具体的 `import_no_markdown`。
+- `ApiException.code`(`api/models.dart`)+ 中央 `_decode` 解析一次。
+- `_apiMessage(error)` 只对**用户能采取行动**的 code 给译文,其余一律回落到原始 message
+  —— 含糊的「出错了」比难看但真实的句子更糟,给没搞清楚的失败编友好文案就是在撒谎。
+
+加新 variant 时 `cargo check` 会点出所有穷尽 match(这次抓到了 `ws.rs:error_code`
+这处我原本不知道的),这是把它做成 enum variant 而不是加个可选字段的收益。
+
 ## 待做,按价值排(高→低)
 
-1. **15 导入进度**:`job.total`/`job.done` 服务端已返回、`ImportJobStatus` 已解析,客户端
-   直接丢弃,只显示一个转圈。性价比最高的一项。
-2. **15 云端导入失败/成功**:失败显示未翻译的服务端英文字面量
-   (`no markdown pages found in the archive`),而 `importNoMarkdown` 只接了本地路径;
-   云端导入成功**完全没有提示**。
-3. **死控件三处**:本地模式搜索框可用但 `onSearch` 返回 `const []` → 永远显示「没有匹配」
+1. **死控件三处**:本地模式搜索框可用但 `onSearch` 返回 `const []` → 永远显示「没有匹配」
    (在撒谎);本地模式成员邀请表单是 no-op 却因本地条目 `role:'owner'` 而可用;
    回收站对 viewer 画出恢复/删除按钮而服务端会拒。
-4. **18 `MicaFailureCard` 首个真实调用点**:完整性校验失败正是它的存在理由,现在零调用点。
+2. **18 `MicaFailureCard` 首个真实调用点**:完整性校验失败正是它的存在理由,现在零调用点。
    注意四类更新失败要一个**形状**四种正文,别都收敛成「更新已中止」——网络抖动读成
    「安装包被篡改」比含糊消息更糟。
-5. **13 上云缺前置确认**:一次菜单点击就开始多分钟、多请求、半途失败会留下**半填充的
+3. **13 上云缺前置确认**:一次菜单点击就开始多分钟、多请求、半途失败会留下**半填充的
    云端工作区**的操作,现在只有 `_isBusy` 转圈,失败是 `ErrorBanner` 里一个原始异常串。
-6. **render.dart 六处硬编码英文**:`'⌄ Expand'`/`'⌃ Collapse'`(2059)、`'Ask AI'`(2131)、
+4. **render.dart 六处硬编码英文**:`'⌄ Expand'`/`'⌃ Collapse'`(2059)、`'Ask AI'`(2131)、
    `'Copy'`(2143)、`'More'`(2155)、mermaid `'code'`/`'preview'`(2198/2202)。
    `codeMenuCollapse`/`codeMenuExpand` 已在 arb 里且**零引用**。`RenderDocument` 没有
    `BuildContext`,得经 `DocumentSurface`/`EditorAppearance` push 进去。
-7. 各屏视觉重构(卡片化、色板扫一遍、16 的 nav 分组、17 的 scope badge / 过期行淡化 /
+5. 各屏视觉重构(卡片化、色板扫一遍、16 的 nav 分组、17 的 scope badge / 过期行淡化 /
    下拉式有效期、09 的行信息补全、06 的键盘上下选中)。
 
 ## 测试现状

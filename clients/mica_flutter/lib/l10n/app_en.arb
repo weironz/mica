@@ -635,6 +635,18 @@
     }
   },
   "importNoMarkdown": "No Markdown files found",
+  "importNoMarkdownHint": "Import failed: the archive contains no Markdown files. If you exported from Notion, choose \"Markdown & CSV\" rather than \"HTML\".",
+  "importProgress": "Importing {done} / {total}",
+  "@importProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
   "importFailed": "Import failed: {error}",
   "@importFailed": {
     "placeholders": {

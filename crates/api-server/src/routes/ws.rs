@@ -531,6 +531,9 @@ fn error_message(ack_id: Option<&str>, code: &str, message: &str) -> String {
 fn error_code(error: &ApiError) -> &'static str {
   match error {
     ApiError::BadRequest(_) => "invalid_operation",
+    // Already carries a specific code; hand it through rather than flattening it
+    // back to the generic one.
+    ApiError::BadRequestCode(code, _) => code,
     ApiError::Unauthorized => "unauthorized",
     ApiError::Forbidden => "permission_denied",
     ApiError::NotFound => "not_found",

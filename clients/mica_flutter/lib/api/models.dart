@@ -958,9 +958,20 @@ class DocumentSnapshot {
 }
 
 class ApiException implements Exception {
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(this.message, {this.statusCode, this.code});
 
   final String message;
+
+  /// The server's machine-readable error code (the `code` field of the error
+  /// body), when the failure came from a response. This is the only honest way
+  /// to react to a *specific* failure: [message] is English server prose, and
+  /// matching on its text means the server can silently break the client by
+  /// rewording a sentence.
+  ///
+  /// Mostly the generic HTTP category (`bad_request`, `forbidden`, …); a few
+  /// cases the user can actually act on carry a specific one, e.g.
+  /// `import_no_markdown`.
+  final String? code;
 
   /// The HTTP status, when the failure came from a response. Null for the
   /// hand-thrown cases (no server involved).

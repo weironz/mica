@@ -309,6 +309,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String? _selectedMarkdown;
   String? _message;
   bool _isBusy = false;
+  /// Pages finished / pages planned for a running cloud import, straight from
+  /// the job status. Null when no import is in flight — [_isBusy] alone can't
+  /// carry this, since it's true for every operation and says nothing about size.
+  ({int done, int total})? _importProgress;
   // True while the cloud nav was rebuilt from the on-device mirror because the
   // server was unreachable (P1c). Roles are forced read-only until the server is
   // reached again; [_recoverOnlineNav] then refetches the authoritative nav.
@@ -821,6 +825,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// What to actually show a person for a failed request.
+  ///
+  /// The server's `message` is English prose meant for logs — `ApiException`'s
+  /// own doc says as much — so a failure the user can *act on* is matched by its
+  /// machine [ApiException.code] and answered in their language. Matching on the
+  /// message text instead would be a second representation of the same fact: the
+  /// server could reword a sentence and silently un-translate the client.
+  ///
+  /// Everything else still falls through to the raw message. A vague 「出错了」
+  /// would be worse than an ugly true sentence, and inventing friendly copy for
+  /// failures we haven't characterised is how you end up lying.
+  String _apiMessage(ApiException error) {
+    return switch (error.code) {
+      'import_no_markdown' => context.l10n.importNoMarkdownHint,
+      _ => error.toString(),
+    };
+  }
+
   Future<void> _run(Future<void> Function() action) async {
     setState(() {
       _isBusy = true;
@@ -843,7 +865,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (error.isUnauthorized && _session != null) {
         _endExpiredSession();
       } else {
-        setState(() => _message = error.toString());
+        setState(() => _message = _apiMessage(error));
       }
     } catch (error) {
       setState(() {
@@ -1959,6 +1981,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ImportJobStatus job;
       while (true) {
         job = await _api.importJobStatus(session.accessToken, jobId);
+        // The server has been reporting done/total all along and the client
+        // parsed both, then dropped them on the floor — a 96-page import showed
+        // one indeterminate spinner for minutes with no sign it was moving.
+        if (mounted && job.total > 0) {
+          setState(() => _importProgress = (done: job.done, total: job.total));
+        }
         if (job.status != 'running') break;
         await Future<void>.delayed(const Duration(milliseconds: 600));
       }
@@ -1974,6 +2002,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           break;
         }
       }
+      // The local import path has always confirmed itself with a snackbar; the
+      // cloud path said nothing at all, so a successful import was
+      // indistinguishable from one that quietly did nothing.
+      if (mounted && job.done > 0) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(l10n.importDone(l10n.importNotesCount(job.done)))),
+        );
+      }
+    }).whenComplete(() {
+      if (mounted) setState(() => _importProgress = null);
     });
   }
 
@@ -4596,6 +4634,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       selectedMarkdown: local ? null : _selectedMarkdown,
       presence: local ? const [] : _presence,
       message: _message,
+      importProgress: _importProgress,
       onSelectWorkspace: local ? _localSelectWorkspace : _selectWorkspace,
       onCreateWorkspace: local ? _localCreateWorkspace : _createWorkspace,
       onRenameWorkspace: local ? _localRenameWorkspace : _renameWorkspace,
@@ -5450,6 +5489,7 @@ class WorkspaceView extends StatefulWidget {
     required this.selectedMarkdown,
     required this.presence,
     required this.message,
+    this.importProgress,
     required this.onSelectWorkspace,
     required this.onCreateWorkspace,
     required this.onRenameWorkspace,
@@ -5629,6 +5669,11 @@ class WorkspaceView extends StatefulWidget {
   final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
+
+  /// Pages finished / planned for a running import, or null when none is in
+  /// flight. Optional so the local world (which imports synchronously) simply
+  /// doesn't pass it.
+  final ({int done, int total})? importProgress;
   final Future<void> Function(Workspace workspace) onSelectWorkspace;
   final Future<void> Function(String name) onCreateWorkspace;
   final Future<void> Function(Workspace workspace, String name)
@@ -6454,6 +6499,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               if (widget.message != null) ...[
                 const SizedBox(height: 12),
                 ErrorBanner(widget.message!),
+              ],
+              if (widget.importProgress case final p?) ...[
+                const SizedBox(height: 12),
+                MicaProgressRow(
+                  label: context.l10n.importProgress(p.done, p.total),
+                  done: p.done,
+                  total: p.total,
+                ),
               ],
               const SizedBox(height: 12),
               // Section label + actions (design 03). The old row was four equal
