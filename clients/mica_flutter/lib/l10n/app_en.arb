@@ -205,6 +205,14 @@
       }
     }
   },
+  "searchResultCount": "{count, plural, =1{1 result} other{{count} results}}",
+  "@searchResultCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "searchTitleMatch": "Title match",
   "accountSaved": "Saved",
   "accountPasswordTooShort": "New password must be at least 8 characters",

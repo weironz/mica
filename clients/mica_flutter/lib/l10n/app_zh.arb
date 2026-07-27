@@ -139,6 +139,7 @@
   "searchFailedTitle": "搜索失败",
   "searchFailed": "连不上服务器,请检查网络后重试。",
   "searchNothingFound": "没有找到与“{query}”匹配的内容。",
+  "searchResultCount": "{count} 个结果",
   "searchTitleMatch": "标题匹配",
   "accountSaved": "已保存",
   "accountPasswordTooShort": "新密码至少需要 8 个字符",

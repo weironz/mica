@@ -4,6 +4,27 @@
 part of '../main.dart';
 
 /// Workspace search: type to find pages by title or body text; click to open.
+/// Fixed row height in the search result list.
+///
+/// Fixed so the keyboard selection can be scrolled into view by arithmetic
+/// (`index * extent`) rather than hanging a GlobalKey off every row.
+const double _searchRowHeight = 64;
+
+/// Move the search result selection by [delta] rows.
+///
+/// A real Intent rather than a `CallbackShortcuts` binding, because of where the
+/// key events go. `CallbackShortcuts` is a `Focus.onKeyEvent`, and those run from
+/// the INNERMOST focused node outwards — the focused node here is inside the
+/// TextField, whose `DefaultTextEditingShortcuts` map ArrowUp/ArrowDown to
+/// move-caret-to-start/end and consume them. `Shortcuts` placed BETWEEN the
+/// TextField and the app is nearer than the default map, so it wins the lookup;
+/// the intent then resolves against the [Actions] wrapper below.
+class _SearchMoveIntent extends Intent {
+  const _SearchMoveIntent(this.delta);
+
+  final int delta;
+}
+
 class _SearchDialog extends StatefulWidget {
   const _SearchDialog({
     required this.onSearch,
@@ -34,6 +55,11 @@ class _SearchDialogState extends State<_SearchDialog> {
   List<SearchResult> _results = const [];
   String _lastQuery = '';
 
+  /// Keyboard-highlighted row, -1 when none. Separate from "hovered": the whole
+  /// point is to be able to pick a result without touching the mouse.
+  int _selected = -1;
+  final _listScroll = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -49,6 +75,7 @@ class _SearchDialogState extends State<_SearchDialog> {
   void dispose() {
     _debounce?.cancel();
     _query.dispose();
+    _listScroll.dispose();
     super.dispose();
   }
 
@@ -65,6 +92,7 @@ class _SearchDialogState extends State<_SearchDialog> {
       setState(() {
         _results = const [];
         _loading = false;
+        _selected = -1;
       });
       return;
     }
@@ -77,6 +105,9 @@ class _SearchDialogState extends State<_SearchDialog> {
         _lastQuery = query;
         _loading = false;
         _failed = false;
+        // Preselect the top hit: ↵ should open the obvious answer without an
+        // extra ↓ first. -1 when the query found nothing.
+        _selected = results.isEmpty ? -1 : 0;
       });
     } catch (_) {
       // Surface the failure — a swallowed error reads as "no results" and
@@ -87,6 +118,7 @@ class _SearchDialogState extends State<_SearchDialog> {
           _failed = true;
           _results = const [];
           _lastQuery = query;
+          _selected = -1;
         });
       }
     }
@@ -101,28 +133,51 @@ class _SearchDialogState extends State<_SearchDialog> {
         height: 420,
         child: Column(
           children: [
-            TextField(
-              controller: _query,
-              // Nothing to type into when there is no search behind it: an
-              // enabled field that eats your keystrokes and answers "no results"
-              // is worse than one that is visibly unavailable.
-              enabled: widget.onSearch != null,
-              autofocus: widget.onSearch != null,
-              onChanged: _onChanged,
-              decoration: InputDecoration(
-                hintText: context.l10n.searchHint,
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _loading
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : null,
-                border: const OutlineInputBorder(),
+            Shortcuts(
+              shortcuts: const {
+                SingleActivator(LogicalKeyboardKey.arrowDown):
+                    _SearchMoveIntent(1),
+                SingleActivator(LogicalKeyboardKey.arrowUp): _SearchMoveIntent(
+                  -1,
+                ),
+              },
+              child: Actions(
+                actions: {
+                  _SearchMoveIntent: CallbackAction<_SearchMoveIntent>(
+                    onInvoke: (intent) {
+                      _move(intent.delta);
+                      return null;
+                    },
+                  ),
+                },
+                child: TextField(
+                  controller: _query,
+                  // Nothing to type into when there is no search behind it: an
+                  // enabled field that eats your keystrokes and answers "no results"
+                  // is worse than one that is visibly unavailable.
+                  enabled: widget.onSearch != null,
+                  autofocus: widget.onSearch != null,
+                  onChanged: _onChanged,
+                  // ↵ opens the highlighted row. Not a Shortcuts binding: Enter in a
+                  // single-line field already means "submit", and hijacking it higher
+                  // up would also swallow IME confirmation.
+                  onSubmitted: (_) => _openSelected(),
+                  decoration: InputDecoration(
+                    hintText: context.l10n.searchHint,
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _loading
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : null,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -136,6 +191,63 @@ class _SearchDialogState extends State<_SearchDialog> {
           child: Text(context.l10n.commonClose),
         ),
       ],
+    );
+  }
+
+  /// Move the keyboard selection and keep it on screen.
+  void _move(int delta) {
+    final next = moveSelection(
+      current: _selected,
+      count: _results.length,
+      delta: delta,
+    );
+    if (next == _selected) return;
+    setState(() => _selected = next);
+    if (next < 0 || !_listScroll.hasClients) return;
+    // Rows are a fixed height here, so the offset is computable — no need for a
+    // per-row GlobalKey just to scroll.
+    const rowExtent = _searchRowHeight;
+    final target = next * rowExtent;
+    final top = _listScroll.offset;
+    final bottom = top + _listScroll.position.viewportDimension - rowExtent;
+    if (target < top) {
+      _listScroll.jumpTo(target);
+    } else if (target > bottom) {
+      _listScroll.jumpTo(
+        (target - _listScroll.position.viewportDimension + rowExtent).clamp(
+          0.0,
+          _listScroll.position.maxScrollExtent,
+        ),
+      );
+    }
+  }
+
+  /// Open the keyboard-selected result, if there is one.
+  void _openSelected() {
+    if (_selected < 0 || _selected >= _results.length) return;
+    widget.onOpen(_results[_selected].viewId);
+  }
+
+  /// The snippet with query matches tinted.
+  ///
+  /// Case-insensitive to match the server's `ILIKE` — see [highlightRuns]; a
+  /// case-sensitive version would return real hits with nothing marked in them.
+  Widget _snippet(BuildContext context, String text) {
+    final runs = highlightRuns(text, _lastQuery);
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final r in runs)
+            TextSpan(
+              text: r.text,
+              style: r.hit
+                  ? const TextStyle(backgroundColor: Color(0xFFFEF08A))
+                  : null,
+            ),
+        ],
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
     );
   }
 
@@ -177,25 +289,51 @@ class _SearchDialogState extends State<_SearchDialog> {
         detail: context.l10n.searchNothingFound(_lastQuery),
       );
     }
-    return ListView.separated(
-      itemCount: _results.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, i) {
-        final result = _results[i];
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-          leading: const Icon(Icons.description_outlined, size: 18),
-          title: Text(result.name, overflow: TextOverflow.ellipsis),
-          subtitle: result.snippet.isEmpty
-              ? (result.titleMatch ? Text(context.l10n.searchTitleMatch) : null)
-              : Text(
-                  result.snippet,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+    return Column(
+      children: [
+        // How many hits, so a long list doesn't have to be counted by eye.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 6),
+            child: Text(
+              context.l10n.searchResultCount(_results.length),
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.6,
+                color: EditorTheme.faint,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            controller: _listScroll,
+            // Fixed extent so [_move] can scroll the selection into view by
+            // arithmetic instead of hanging a GlobalKey off every row.
+            itemExtent: _searchRowHeight,
+            itemCount: _results.length,
+            itemBuilder: (context, i) {
+              final result = _results[i];
+              return Container(
+                color: i == _selected ? const Color(0xFFEFF6FF) : null,
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                  leading: const Icon(Icons.description_outlined, size: 18),
+                  title: Text(result.name, overflow: TextOverflow.ellipsis),
+                  subtitle: result.snippet.isEmpty
+                      ? (result.titleMatch
+                            ? Text(context.l10n.searchTitleMatch)
+                            : null)
+                      : _snippet(context, result.snippet),
+                  onTap: () => widget.onOpen(result.viewId),
                 ),
-          onTap: () => widget.onOpen(result.viewId),
-        );
-      },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
