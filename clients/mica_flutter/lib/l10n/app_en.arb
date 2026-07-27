@@ -749,6 +749,24 @@
       }
     }
   },
+  "importViewSkipped": "View",
+  "importSkippedTitle": "{count, plural, =1{1 file was not imported} other{{count} files were not imported}}",
+  "@importSkippedTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "importSkippedBody": "These were in the archive, but no imported page referenced them, so they were left out.",
+  "importSkippedTruncated": "and {count} more not listed",
+  "@importSkippedTruncated": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "importSkippedSuffix": " ({count} skipped)",
   "@importSkippedSuffix": {
     "placeholders": {

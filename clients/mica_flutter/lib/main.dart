@@ -1561,6 +1561,71 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// The archive entries no imported page referenced.
+  ///
+  /// The server caps the list, so when the total exceeds what it sent, say so
+  /// rather than letting the user count the rows and conclude the rest were fine.
+  void _showSkippedFiles(ImportJobStatus job) {
+    final l10n = context.l10n;
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.importSkippedTitle(job.skippedTotal)),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.importSkippedBody,
+                style: const TextStyle(fontSize: 12.5, height: 1.6),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final path in job.skipped)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          path,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontFamily: kMonoFont,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (job.skippedTotal > job.skipped.length)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    l10n.importSkippedTruncated(
+                      job.skippedTotal - job.skipped.length,
+                    ),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: EditorTheme.faint,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.commonClose),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Counts for the whole-account export, shown under the export row.
   Future<({int workspaces, int pages, int imageBytes})>
   _exportAllStats() async {
@@ -2044,9 +2109,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // cloud path said nothing at all, so a successful import was
       // indistinguishable from one that quietly did nothing.
       if (mounted && job.done > 0) {
+        final skipped = job.skippedTotal;
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
-            content: Text(l10n.importDone(l10n.importNotesCount(job.done))),
+            content: Text(
+              l10n.importDone(l10n.importNotesCount(job.done)) +
+                  (skipped > 0 ? l10n.importSkippedSuffix(skipped) : ''),
+            ),
+            // Only when something was actually dropped, and only when the server
+            // sent the paths: "3 skipped" with no way to see which three is a
+            // notification the user can do nothing with.
+            action: (skipped > 0 && job.skipped.isNotEmpty)
+                ? SnackBarAction(
+                    label: l10n.importViewSkipped,
+                    onPressed: () => _showSkippedFiles(job),
+                  )
+                : null,
           ),
         );
       }

@@ -41,6 +41,27 @@ pub struct ImportJob {
   pub done: usize,
   pub workspace_id: Option<Uuid>,
   pub error: Option<String>,
+
+  /// Archive entries that came in but never made it into the workspace: files
+  /// no imported page references.
+  ///
+  /// Non-Markdown entries are uploaded lazily — only when a page actually links
+  /// to them — so an archive routinely carries assets nothing points at (an
+  /// export's leftovers, a Notion `.csv` beside a database page, a stray
+  /// screenshot). Those are dropped silently today; the count is what lets the
+  /// user tell "imported everything" apart from "imported most of it".
+  ///
+  /// Paths, not counts, so the client can show *which* — and capped when the
+  /// list is absurd (see the collection site) rather than shipping a
+  /// ten-thousand-entry array through a polling endpoint.
+  #[serde(default)]
+  pub skipped: Vec<String>,
+
+  /// How many were skipped in total. [`skipped`] is capped, so a pathological
+  /// archive still reports an honest count even when the list is truncated —
+  /// showing 50 when 4000 were dropped would be worse than showing none.
+  #[serde(default)]
+  pub skipped_total: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

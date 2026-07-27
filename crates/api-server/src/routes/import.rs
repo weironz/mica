@@ -70,6 +70,70 @@ fn default_true() -> bool {
 mod tests {
   use super::*;
 
+  /// The skipped set is "what the archive carried that no page pointed at" —
+  /// `plan.files` minus whatever got uploaded. Assets upload lazily, so that
+  /// difference is exactly the silent drop the user could not otherwise see.
+  #[test]
+  fn skipped_is_planned_files_minus_uploaded_sorted() {
+    let file_paths: std::collections::HashSet<String> =
+      ["a/img.png", "b/leftover.csv", "c/used.png", "z/last.png"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut uploaded: std::collections::HashMap<String, (String, String)> =
+      std::collections::HashMap::new();
+    uploaded.insert("c/used.png".into(), ("id".into(), "url".into()));
+
+    let mut skipped: Vec<String> = file_paths
+      .iter()
+      .filter(|p| !uploaded.contains_key(*p))
+      .cloned()
+      .collect();
+    skipped.sort();
+
+    // Sorted, because this rides a polling endpoint: HashSet order would
+    // reshuffle the list between two polls of the same finished job.
+    assert_eq!(skipped, ["a/img.png", "b/leftover.csv", "z/last.png"]);
+    assert!(
+      !skipped.iter().any(|p| p == "c/used.png"),
+      "a referenced asset was imported, not skipped"
+    );
+  }
+
+  /// A pathological archive must not ship thousands of paths on every poll — but
+  /// the COUNT has to stay honest, or "50 skipped" hides that 4000 were dropped.
+  #[test]
+  fn skipped_list_is_capped_while_the_total_stays_true() {
+    const MAX_LISTED: usize = 50;
+    let mut skipped: Vec<String> = (0..4000).map(|i| format!("junk/{i:04}.bin")).collect();
+    skipped.sort();
+    let total = skipped.len();
+    skipped.truncate(MAX_LISTED);
+
+    assert_eq!(skipped.len(), MAX_LISTED);
+    assert_eq!(total, 4000, "the reported total is the real one");
+    assert_eq!(skipped[0], "junk/0000.bin", "truncation keeps the head, sorted");
+  }
+
+  /// An archive whose assets were all used reports nothing — not an empty-ish
+  /// "0 skipped" line the UI would then have to special-case.
+  #[test]
+  fn nothing_skipped_when_every_asset_was_referenced() {
+    let file_paths: std::collections::HashSet<String> =
+      ["only.png"].iter().map(|s| s.to_string()).collect();
+    let mut uploaded: std::collections::HashMap<String, (String, String)> =
+      std::collections::HashMap::new();
+    uploaded.insert("only.png".into(), ("id".into(), "url".into()));
+
+    let skipped: Vec<String> = file_paths
+      .iter()
+      .filter(|p| !uploaded.contains_key(*p))
+      .cloned()
+      .collect();
+
+    assert!(skipped.is_empty());
+  }
+
   #[test]
   fn rehost_external_defaults_on_and_can_be_turned_off() {
     // Absent → on: import brings external images in unless the caller opts out.
@@ -143,6 +207,8 @@ pub async fn start_import(
       done: 0,
       workspace_id: params.workspace_id,
       error: None,
+      skipped: Vec::new(),
+      skipped_total: 0,
     },
   );
 
@@ -366,6 +432,34 @@ async fn run_import(
     let mut jobs = state.import_jobs.write().await;
     if let Some(job) = jobs.get_mut(&job_id) {
       job.done = idx + 1;
+    }
+  }
+
+  // Whatever came in the archive that no page ended up pointing at. `uploaded` is
+  // filled only when a page actually references an entry (assets are uploaded
+  // lazily), so the difference IS the set that silently didn't make it — an
+  // export's leftovers, a Notion `.csv` next to a database page, a stray
+  // screenshot. Without this the user cannot tell "imported everything" apart
+  // from "imported most of it".
+  {
+    // Sorted so the list is stable between polls of the status endpoint;
+    // HashSet iteration order would reshuffle it on every request.
+    let mut skipped: Vec<String> = file_paths
+      .iter()
+      .filter(|p| !uploaded.contains_key(*p))
+      .cloned()
+      .collect();
+    skipped.sort();
+    // Capped: this rides a polling endpoint, and a pathological archive (a
+    // node_modules dump) would otherwise ship thousands of paths on every poll.
+    // The client shows a count, so a truncated list still tells the truth about
+    // how many — see `skipped_total`.
+    const MAX_LISTED: usize = 50;
+    let mut jobs = state.import_jobs.write().await;
+    if let Some(job) = jobs.get_mut(&job_id) {
+      job.skipped_total = skipped.len();
+      skipped.truncate(MAX_LISTED);
+      job.skipped = skipped;
     }
   }
   Ok(())

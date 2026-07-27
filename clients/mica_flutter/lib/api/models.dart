@@ -57,6 +57,8 @@ class ImportJobStatus {
     required this.done,
     this.workspaceId,
     this.error,
+    this.skipped = const [],
+    this.skippedTotal = 0,
   });
 
   factory ImportJobStatus.fromJson(Map<String, dynamic> json) {
@@ -66,6 +68,8 @@ class ImportJobStatus {
       done: (json['done'] as num?)?.toInt() ?? 0,
       workspaceId: json['workspace_id'] as String?,
       error: json['error'] as String?,
+      skipped: (json['skipped'] as List<dynamic>?)?.cast<String>() ?? const [],
+      skippedTotal: (json['skipped_total'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -74,6 +78,13 @@ class ImportJobStatus {
   final int done;
   final String? workspaceId;
   final String? error;
+
+  /// Archive entries no imported page referenced — the assets that silently did
+  /// not make it. Capped by the server; [skippedTotal] is the real count.
+  final List<String> skipped;
+
+  /// How many were skipped in total, which can exceed `skipped.length`.
+  final int skippedTotal;
 }
 
 class UploadedFile {
