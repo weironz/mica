@@ -1972,6 +1972,48 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ),
       );
 
+  /// The sign-in screen AS THE SCREEN — not the route.
+  ///
+  /// Reached whenever the world in effect is a server and there is no session:
+  /// on web that is the only state there is, and on desktop it is what you land
+  /// in after signing out or after switching to a server you have not signed in
+  /// to. No onClose, because nothing is behind it; the world picker's 本地模式 row
+  /// is the way out on desktop, and web has no local world to go to.
+  Widget _signInGate(BuildContext context) {
+    final l10n = context.l10n;
+    final desktop = _local.available;
+    return Scaffold(
+      body: SafeArea(
+        child: SignInScreen(
+          // Desktop CAN write offline; web cannot, so the feature line differs.
+          hero: _signInHero(context, offlineIsReal: desktop),
+          aboveForm: desktop
+              ? WorldPicker(
+                  origins: _servers,
+                  active: _activeOrigin,
+                  strings: WorldPickerStrings(
+                    heading: l10n.worldPickerHeading,
+                    localName: l10n.worldLocalName,
+                    localSubtitle: l10n.worldPickerLocalSubtitle,
+                    addServer: l10n.serverAddTitle,
+                    removeServer: l10n.commonDelete,
+                  ),
+                  onSelect: _setActiveConnection,
+                  onAdd: promptAddServer,
+                  onRemove: confirmRemoveServer,
+                )
+              : null,
+          form: AuthFormCard(
+            strings: _authFormStrings(context),
+            isBusy: _isBusy,
+            onSubmit: _authenticate,
+            onForgotPassword: _forgotPassword,
+          ),
+        ),
+      ),
+    );
+  }
+
   AuthFormStrings _authFormStrings(BuildContext context, {String? title}) =>
       AuthFormStrings(
         title: title ?? context.l10n.signInTitle,
@@ -5278,27 +5320,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _session;
     // Web has no local world: it stays gated on sign-in, as before (P3c §2.6).
     if (!_local.available && session == null) {
-      return Scaffold(
-        body: SafeArea(
-          // Same screen the desktop sign-in route builds — one composition, so
-          // the two platforms cannot drift apart again. No onClose: on web there
-          // is nothing behind this screen to go back to.
-          child: SignInScreen(
-            hero: _signInHero(context, offlineIsReal: false),
-            form: AuthFormCard(
-              strings: _authFormStrings(context),
-              isBusy: _isBusy,
-              onSubmit: _authenticate,
-              onForgotPassword: _forgotPassword,
-            ),
-          ),
-        ),
-      );
+      return _signInGate(context);
     }
     // Desktop: the local store backs local workspaces AND the cloud mirrors —
     // wait for it before the shell renders (fast: one SQLite open + list).
     if (_local.available && !_localReady) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    // Desktop pointing at a SERVER with no session. The shell used to render
+    // anyway: empty workspace picker, empty page tree, nothing clickable — a
+    // whole screen that does nothing, whose only way out was 「登录云端…」 buried
+    // in the account menu. Nothing on screen said so. Show the same gate web
+    // shows; 本地模式 sits in its world picker, so this is not a dead end.
+    if (_local.available && _activeOrigin != kLocalOrigin && session == null) {
+      return _signInGate(context);
     }
     return Scaffold(body: SafeArea(child: _unifiedWorkspaceView(session)));
   }
