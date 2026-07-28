@@ -144,7 +144,10 @@ class MathBlockRenderer extends AtomicBlockRenderer {
         ),
         const Radius.circular(6),
       ),
-      Paint()..color = const Color(0xFFF5F3FF),
+      Paint()
+        ..color = host._appearance.tokens.dark
+            ? host._appearance.tokens.surface.raised
+            : const Color(0xFFF5F3FF),
     );
   }
 
@@ -303,7 +306,7 @@ class ImageRenderer extends AtomicBlockRenderer {
       canvas.clipRRect(rr);
       // Matte the image onto white first, so a transparent (alpha) PNG's
       // see-through areas read as the page background — not black.
-      canvas.drawRect(r, Paint()..color = const Color(0xFFFFFFFF));
+      canvas.drawRect(r, Paint()..color = host._appearance.tokens.surface.base);
       paintImage(
         canvas: canvas,
         rect: r,
@@ -689,10 +692,10 @@ class TableRenderer extends AtomicBlockRenderer {
     int index,
   ) {
     final border = Paint()
-      ..color = const Color(0xFFCBD5E1)
+      ..color = host._appearance.tokens.border.strong
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
-    final headerBg = Paint()..color = const Color(0xFFF1F5F9);
+    final headerBg = Paint()..color = host._appearance.tokens.surface.sunken;
     final editing = host._editingCell;
     for (final cell in l.tableCells) {
       final r = cell.rect.shift(offset);
@@ -752,14 +755,20 @@ class TableRenderer extends AtomicBlockRenderer {
         final r = b.first.rect.shift(offset);
         canvas.drawRect(
           Rect.fromLTWH(r.center.dx - 1, r.top, 2, r.height),
-          Paint()..color = const Color(0x802563EB),
+          Paint()
+            ..color = host._appearance.tokens.accent.primary.withValues(
+              alpha: 0.5,
+            ),
         );
       }
     }
 
     // Row / column drag grips: a single soft rounded pill centered on the edge
     // line — shown only for the row/column the pointer is over.
-    final gripPaint = Paint()..color = const Color(0xFFC2CAD6);
+    final gripPaint = Paint()
+      ..color = host._appearance.tokens.dark
+          ? host._appearance.tokens.border.strong
+          : const Color(0xFFC2CAD6);
     if (th?.row != null && th!.row! < l.rowHandles.length) {
       final r = l.rowHandles[th.row!].shift(offset);
       final len = (r.height * 0.5).clamp(12.0, 18.0);
@@ -796,7 +805,10 @@ class TableRenderer extends AtomicBlockRenderer {
       final r = rect.shift(offset);
       canvas.drawRRect(
         RRect.fromRectAndRadius(r.deflate(2), const Radius.circular(4)),
-        Paint()..color = const Color(0x14000000),
+        Paint()
+          ..color = host._appearance.tokens.dark
+              ? const Color(0x14FFFFFF)
+              : const Color(0x14000000),
       );
       final tp = TextPainter(
         text: TextSpan(

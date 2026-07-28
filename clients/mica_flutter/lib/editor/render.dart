@@ -82,41 +82,13 @@ class EditorAppearance {
 /// place; per-kind styling only changes inline typography, never block chrome
 /// (see docs/editor.md).
 class EditorTheme {
-  // A soft near-black (GitHub's ink) rather than a hard, cool slate-900 — reads
-  // as calmer/warmer ink on the page while keeping ~13:1 contrast.
-  static const Color text = Color(0xFF24292F);
-  static const Color muted = Color(0xFF57606A);
-  static const Color faint = Color(0xFF9AA4AF);
-  static const Color caret = Color(0xFF2563EB);
-  static const Color selection = Color(0x332563EB);
-  static const Color codeBg = Color(0xFFF4F4F6);
-
-  /// Inline `code` span pill — a soft neutral chip behind the mono text (drawn
-  /// in _paintInlineCode). Translucent so a text selection tints through it.
-  static const Color inlineCodeBg = Color(0x1A64748B);
-
-  /// Comment wash behind anchored text — amber, the convention everywhere from
-  /// Google Docs to AFFiNE, and distinct from the blue selection so a selected
-  /// comment still reads as selected. `active` is the focused thread.
-  static const Color commentHighlight = Color(0x33F59E0B);
-  static const Color commentHighlightActive = Color(0x59F59E0B);
-  static const Color quoteBar = Color(0xFFCBD5E1);
-  static const Color dropLine = Color(0xFF2563EB);
-
-  /// GFM callout (alert) accent per type — the left bar + title ink. Matches
-  /// GitHub's alert palette; the same 5 types the markdown engine round-trips.
-  /// A tinted wash of this sits behind the block (see [alertTint]).
-  static const Map<String, Color> alertAccents = {
-    'note': Color(0xFF0969DA),
-    'tip': Color(0xFF1A7F37),
-    'important': Color(0xFF8250DF),
-    'warning': Color(0xFF9A6700),
-    'caution': Color(0xFFCF222E),
-  };
-  static Color alertAccent(String type) =>
-      alertAccents[type] ?? alertAccents['note']!;
-  static Color alertTint(String type) =>
-      alertAccent(type).withValues(alpha: 0.06);
+  // The colours that used to live here are gone. Every one of them is a role on
+  // MicaTokens now (`text.*`, `editor.*`, `accent.*`), read through
+  // `_appearance.tokens` so it can differ between the light and dark palettes —
+  // which a `static const` cannot. Keeping a second, frozen copy here would be
+  // exactly the double representation that lets the canvas and the chrome drift
+  // apart. What stays below is geometry and raster settings: those really are
+  // constant, and no palette changes them.
 
   /// Reserved header strip above a callout's first block — holds the type
   /// icon + label. Mirrors how code reserves [codePadV].
@@ -1833,13 +1805,13 @@ class RenderDocument extends RenderBox {
         ..color = const Color(0x1A000000)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
     );
-    canvas.drawRRect(rr, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawRRect(rr, Paint()..color = _appearance.tokens.surface.overlay);
     canvas.drawRRect(
       rr,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = const Color(0xFFE2E8F0),
+        ..color = _appearance.tokens.border.normal,
     );
     canvas.drawImageRect(
       img,
@@ -2128,10 +2100,10 @@ class RenderDocument extends RenderBox {
       final tp = TextPainter(
         text: TextSpan(
           text: '$lineNo',
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 11,
             height: 1.0,
-            color: Color(0xFF94A3B8),
+            color: _appearance.tokens.text.faint,
             fontFamily: kMonoFont,
           ),
         ),
@@ -2209,8 +2181,8 @@ class RenderDocument extends RenderBox {
         RRect.fromRectAndRadius(r, const Radius.circular(5)),
         Paint()
           ..color = _hoverIcon == _CodeIcon.lang
-              ? const Color(0xFFCBD5E1)
-              : const Color(0xFFE2E8F0),
+              ? _appearance.tokens.border.strong
+              : _appearance.tokens.border.normal,
       );
       final marker = TextPainter(
         text: TextSpan(
@@ -2277,10 +2249,12 @@ class RenderDocument extends RenderBox {
         RRect.fromRectAndRadius(r, const Radius.circular(5)),
         Paint()
           ..color = isActive
-              ? const Color(0xFF1E293B)
+              ? (_appearance.tokens.dark
+                    ? _appearance.tokens.surface.hover
+                    : const Color(0xFF1E293B))
               : (_hoverIcon == icon
-                    ? const Color(0xFFCBD5E1)
-                    : const Color(0xFFE2E8F0)),
+                    ? _appearance.tokens.border.strong
+                    : _appearance.tokens.border.normal),
       );
       final tp = TextPainter(
         text: TextSpan(
@@ -2333,7 +2307,7 @@ class RenderDocument extends RenderBox {
     if (hovered) {
       canvas.drawRRect(
         RRect.fromRectAndRadius(rect, const Radius.circular(5)),
-        Paint()..color = const Color(0xFFCBD5E1),
+        Paint()..color = _appearance.tokens.border.strong,
       );
     }
     final color = active
@@ -2390,7 +2364,10 @@ class RenderDocument extends RenderBox {
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(bg, const Radius.circular(4)),
-      Paint()..color = const Color(0xFF0F172A),
+      Paint()
+        ..color = (_appearance.tokens.dark
+            ? _appearance.tokens.surface.hover
+            : const Color(0xFF0F172A)),
     );
     tp.paint(canvas, Offset(bg.left + padH, bg.top + padV));
     tp.dispose();
@@ -2528,7 +2505,10 @@ class RenderDocument extends RenderBox {
       final radius = Radius.circular(track.height / 2);
       canvas.drawRRect(
         RRect.fromRectAndRadius(r, radius),
-        Paint()..color = const Color(0x14000000),
+        Paint()
+          ..color = (_appearance.tokens.dark
+              ? const Color(0x14FFFFFF)
+              : const Color(0x14000000)),
       );
       final t = _thumb(l);
       canvas.drawRRect(
@@ -2536,7 +2516,7 @@ class RenderDocument extends RenderBox {
           Rect.fromLTWH(offset.dx + t.left, r.top, t.width, track.height),
           radius,
         ),
-        Paint()..color = const Color(0xFF94A3B8),
+        Paint()..color = _appearance.tokens.text.faint,
       );
     }
   }
@@ -2662,7 +2642,7 @@ class RenderDocument extends RenderBox {
             canvas.drawPath(
               tick,
               Paint()
-                ..color = const Color(0xFFFFFFFF)
+                ..color = _appearance.tokens.accent.onPrimary
                 ..style = PaintingStyle.stroke
                 ..strokeWidth = 2
                 ..strokeJoin = StrokeJoin.round
@@ -2738,7 +2718,7 @@ class RenderDocument extends RenderBox {
             // Same blue marks.dart underlines link text with (_linkColor).
             canvas.drawRect(
               Rect.fromLTWH(box.left, box.bottom - 1, box.width, 1),
-              Paint()..color = const Color(0xFF2563EB),
+              Paint()..color = _appearance.tokens.accent.primary,
             );
           }
           a.renderer.paint(this, canvas, box, a.source);

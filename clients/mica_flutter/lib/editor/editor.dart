@@ -688,7 +688,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return IgnorePointer(
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: const Color(0xF2F8FAFC), // slate-50, near-opaque
+          color: MicaTheme.of(
+            context,
+          ).surface.raised.withValues(alpha: 0.95), // slate-50, near-opaque
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: const Color(0x14000000)),
         ),
@@ -696,10 +698,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           child: Text(
             context.l10n.editorWordCount(_counts.words, _counts.chars),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               height: 1.0,
-              color: Color(0xFF64748B), // slate-500
+              color: MicaTheme.of(context).text.muted, // slate-500
             ),
           ),
         ),
@@ -722,13 +724,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-          color: const Color(0xFF475569),
+          color: MicaTheme.of(context).text.muted,
         );
     // Row 1: find field + match count + prev/next/close.
     final findRow = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.search, size: 16, color: Color(0xFF64748B)),
+        Icon(Icons.search, size: 16, color: MicaTheme.of(context).text.muted),
         const SizedBox(width: 6),
         SizedBox(
           width: 170,
@@ -752,7 +754,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: Text(
             label,
             textAlign: TextAlign.right,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+            style: TextStyle(
+              fontSize: 12,
+              color: MicaTheme.of(context).text.faint,
+            ),
           ),
         ),
         iconBtn(
@@ -805,7 +810,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return Material(
       elevation: 4,
       borderRadius: BorderRadius.circular(8),
-      color: Colors.white,
+      color: MicaTheme.of(context).surface.overlay,
       child: CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
           const SingleActivator(LogicalKeyboardKey.escape): _closeFind,
@@ -835,7 +840,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 22, minHeight: 30),
-                color: const Color(0xFF475569),
+                color: MicaTheme.of(context).text.muted,
               ),
               Column(
                 mainAxisSize: MainAxisSize.min,
@@ -2821,7 +2826,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   // does NOT commit. Commit is click-away / Esc / Tab / arrows.
                   keyboardType: TextInputType.multiline,
                   textInputAction: TextInputAction.newline,
-                  cursorColor: const Color(0xFF2563EB),
+                  cursorColor: MicaTheme.of(context).editor.caret,
                   style: _cellStyle(node, row),
                   decoration: const InputDecoration(
                     isDense: true,
@@ -3303,7 +3308,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           _ => context.l10n.pageFormatHeading3,
         },
         style: active
-            ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
+            ? IconButton.styleFrom(
+                backgroundColor: MicaTheme.of(context).border.normal,
+              )
             : null,
         icon: Text(
           'T$level',
@@ -3334,7 +3341,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               ? context.l10n.editorHeadingN(currentLevel)
               : context.l10n.editorMoreHeadings,
           style: activeDeep
-              ? IconButton.styleFrom(backgroundColor: const Color(0xFFE2E8F0))
+              ? IconButton.styleFrom(
+                  backgroundColor: MicaTheme.of(context).border.normal,
+                )
               : null,
           icon: Icon(
             Icons.expand_more,
@@ -3648,11 +3657,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 15, color: const Color(0xFF475569)),
+              Icon(icon, size: 15, color: MicaTheme.of(context).text.muted),
               const SizedBox(width: 6),
               Text(
                 label,
-                style: const TextStyle(fontSize: 13, color: Color(0xFF0F172A)),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: MicaTheme.of(context).text.primary,
+                ),
               ),
             ],
           ),
@@ -3690,7 +3702,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     Container(
                       width: 1,
                       height: 18,
-                      color: const Color(0xFFE2E8F0),
+                      color: MicaTheme.of(context).border.normal,
                     ),
                     action(
                       Icons.edit_outlined,
@@ -3700,7 +3712,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     Container(
                       width: 1,
                       height: 18,
-                      color: const Color(0xFFE2E8F0),
+                      color: MicaTheme.of(context).border.normal,
                     ),
                     action(
                       Icons.link_off,
@@ -3983,7 +3995,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Widget _codeMenuRow(IconData icon, String label, {bool danger = false}) {
-    final color = danger ? const Color(0xFFDC2626) : null;
+    final color = danger ? MicaTheme.of(context).status.danger : null;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -4568,17 +4580,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 return InkWell(
                   onTap: () => _applyPageLink(p),
                   child: Container(
-                    color: active ? const Color(0x142563EB) : null,
+                    color: active
+                        ? MicaTheme.of(
+                            context,
+                          ).accent.primary.withValues(alpha: 0.08)
+                        : null,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
                     ),
                     child: Row(
                       children: [
-                        const Icon(
+                        Icon(
                           Icons.description_outlined,
                           size: 18,
-                          color: Color(0xFF475569),
+                          color: MicaTheme.of(context).text.muted,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -4587,9 +4603,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                                 ? context.l10n.editorUntitled
                                 : p.title,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF0F172A),
+                              color: MicaTheme.of(context).text.primary,
                             ),
                           ),
                         ),
@@ -5605,20 +5621,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 return InkWell(
                   onTap: () => _applySlash(o),
                   child: Container(
-                    color: active ? const Color(0x142563EB) : null,
+                    color: active
+                        ? MicaTheme.of(
+                            context,
+                          ).accent.primary.withValues(alpha: 0.08)
+                        : null,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
                     ),
                     child: Row(
                       children: [
-                        Icon(o.icon, size: 18, color: const Color(0xFF475569)),
+                        Icon(
+                          o.icon,
+                          size: 18,
+                          color: MicaTheme.of(context).text.muted,
+                        ),
                         const SizedBox(width: 10),
                         Text(
                           _slashLabel(o),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 14,
-                            color: Color(0xFF0F172A),
+                            color: MicaTheme.of(context).text.primary,
                           ),
                         ),
                       ],
@@ -5807,7 +5831,11 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.auto_awesome, size: 20, color: Color(0xFF7C3AED)),
+          Icon(
+            Icons.auto_awesome,
+            size: 20,
+            color: MicaTheme.of(context).editor.alertAccents['important']!,
+          ),
           const SizedBox(width: 8),
           Text(context.l10n.aiAskTitle),
         ],
@@ -5836,9 +5864,11 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFC),
+                  color: MicaTheme.of(context).surface.raised,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  border: Border.all(
+                    color: MicaTheme.of(context).border.normal,
+                  ),
                 ),
                 child: SingleChildScrollView(
                   controller: _scroll,
@@ -5868,13 +5898,15 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0x14DC2626),
+                  color: MicaTheme.of(
+                    context,
+                  ).status.danger.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   _error!,
-                  style: const TextStyle(
-                    color: Color(0xFFB91C1C),
+                  style: TextStyle(
+                    color: MicaTheme.of(context).status.danger,
                     fontSize: 13,
                   ),
                 ),
@@ -6127,9 +6159,9 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                           ? Center(
                               child: Text(
                                 context.l10n.searchNoMatches,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
-                                  color: Color(0xFF94A3B8),
+                                  color: MicaTheme.of(context).text.faint,
                                 ),
                               ),
                             )
@@ -6141,7 +6173,9 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                                 onTap: () => _pick(items[i]),
                                 child: Container(
                                   color: i == active
-                                      ? const Color(0x142563EB)
+                                      ? MicaTheme.of(
+                                          context,
+                                        ).accent.primary.withValues(alpha: 0.08)
                                       : null,
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 10,
@@ -6157,10 +6191,12 @@ class _LanguagePickerState extends State<_LanguagePicker> {
                                       SizedBox(
                                         width: 20,
                                         child: items[i] == widget.current
-                                            ? const Icon(
+                                            ? Icon(
                                                 Icons.check,
                                                 size: 14,
-                                                color: Color(0xFF2563EB),
+                                                color: MicaTheme.of(
+                                                  context,
+                                                ).accent.primary,
                                               )
                                             : null,
                                       ),
