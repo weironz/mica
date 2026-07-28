@@ -101,4 +101,51 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('a recoverable action still asks, but without the red', (
+    tester,
+  ) async {
+    // Clearing the re-downloadable cache costs offline access until you
+    // reconnect — nothing more. Spending the same red on it would leave the red
+    // meaning "some action", and the gate in front of the truly irreversible
+    // ones would stop reading as a warning at all.
+    var answered = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                answered = await showDestructiveConfirm(
+                  context,
+                  title: '清理云端镜像?',
+                  body: '重新联网会再次缓存。本地独有的内容不动。',
+                  confirmLabel: '清理',
+                  cancelLabel: '取消',
+                  destructive: false,
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final confirm = tester.widget<FilledButton>(
+      find.ancestor(of: find.text('清理'), matching: find.byType(FilledButton)),
+    );
+    expect(
+      confirm.style?.backgroundColor?.resolve(const <WidgetState>{}),
+      isNot(kDestructiveRed),
+    );
+
+    // Still a gate: the action must not run on its own.
+    expect(answered, isFalse);
+    await tester.tap(find.text('清理'));
+    await tester.pumpAndSettle();
+    expect(answered, isTrue);
+  });
 }

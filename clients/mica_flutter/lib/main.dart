@@ -5117,6 +5117,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onLoadCacheStats: _local.available
           ? () => _local.cacheStats(mirroredOrigins: _servers)
           : null,
+      onClearMirrorCache: _local.available
+          ? () => _local.clearMirrorCache(mirroredOrigins: _servers)
+          : null,
       onImportWorkspaceZip: local
           ? (_, _, {bool notion = false}) async {}
           : _importWorkspaceZip,
@@ -5883,6 +5886,7 @@ class WorkspaceView extends StatefulWidget {
     this.onExportAllWorkspaces,
     this.onLoadExportStats,
     this.onLoadCacheStats,
+    this.onClearMirrorCache,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
     required this.onExportMarkdown,
@@ -6167,6 +6171,10 @@ class WorkspaceView extends StatefulWidget {
 
   /// What the on-device store holds. Null on web.
   final Future<LocalCacheStats> Function()? onLoadCacheStats;
+
+  /// Drop the re-downloadable half of it; reports what is left, so the panel can
+  /// show the result without waiting on a rebuild it never receives.
+  final Future<LocalCacheStats> Function()? onClearMirrorCache;
 
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
   onImportWorkspaceZip;
@@ -9165,6 +9173,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
         onLoadExportStats: widget.onLoadExportStats,
         onLoadCacheStats: widget.onLoadCacheStats,
+        onClearMirrorCache: widget.onClearMirrorCache,
         onExportAllWorkspaces: widget.onExportAllWorkspaces == null
             ? null
             : () async {

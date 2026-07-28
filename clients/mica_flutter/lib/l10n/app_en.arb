@@ -333,6 +333,18 @@
       }
     }
   },
+  "cacheClearButton": "Clear",
+  "cacheClearConfirmTitle": "Clear the cloud mirror?",
+  "cacheClearConfirmBody": "Cloud pages and images on this device are deleted and cached again next time you connect. Local-only content is untouched. Until then, these pages cannot be opened offline.",
+  "cacheClearConfirm": "Clear",
+  "cacheCleared": "Freed {size}",
+  "@cacheCleared": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
   "cacheTitle": "On this device",
   "cacheMirrored": "Cloud mirror: {pages} pages · {size} of images (re-downloadable)",
   "@cacheMirrored": {

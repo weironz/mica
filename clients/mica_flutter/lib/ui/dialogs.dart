@@ -488,6 +488,7 @@ class _SettingsDialog extends StatefulWidget {
     this.onExportAllWorkspaces,
     this.onLoadExportStats,
     this.onLoadCacheStats,
+    this.onClearMirrorCache,
   });
 
   final String userName;
@@ -564,6 +565,9 @@ class _SettingsDialog extends StatefulWidget {
   /// What the on-device store holds. Null on web (there is no on-device store).
   final Future<LocalCacheStats> Function()? onLoadCacheStats;
 
+  /// Reclaim the mirrored half. Returns the numbers that hold afterwards.
+  final Future<LocalCacheStats> Function()? onClearMirrorCache;
+
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
 }
@@ -612,6 +616,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// current by what each action reports back.
   String? _avatarUrl;
   LocalCacheStats? _cacheStats;
+  bool _cacheBusy = false;
   bool _cacheStatsAsked = false;
   bool _tokenWrite = false;
   final _tokenName = TextEditingController();
@@ -1795,6 +1800,38 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
   ];
 
+  /// Drop the mirrored half of the on-device store, after saying what that costs.
+  Future<void> _clearMirrorCache() async {
+    final l10n = context.l10n;
+    final before = _cacheStats;
+    final ok = await showDestructiveConfirm(
+      context,
+      title: l10n.cacheClearConfirmTitle,
+      body: l10n.cacheClearConfirmBody,
+      confirmLabel: l10n.cacheClearConfirm,
+      cancelLabel: l10n.commonCancel,
+      // Recoverable: reconnecting re-caches all of it. See destructive_confirm.
+      destructive: false,
+    );
+    if (!ok || !mounted) return;
+    setState(() => _cacheBusy = true);
+    try {
+      final after = await widget.onClearMirrorCache!();
+      if (!mounted) return;
+      final freed = (before?.mirroredBytes ?? 0) - after.mirroredBytes;
+      setState(() {
+        _cacheStats = after;
+        // The freed figure is measured, not assumed: a blob that could not be
+        // unlinked is still counted in `after`, so this never overstates.
+        _accountMsg = l10n.cacheCleared(formatBytes(freed));
+      });
+    } catch (error) {
+      if (mounted) setState(() => _accountMsg = error.toString());
+    } finally {
+      if (mounted) setState(() => _cacheBusy = false);
+    }
+  }
+
   /// Ask for the on-device numbers once.
   void _ensureCacheStats() {
     final load = widget.onLoadCacheStats;
@@ -1905,12 +1942,30 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // to reclaim the only copy of something. Each line is only drawn when it
       // has content, so a cloud-only user never sees a 「本地独有 0」 row.
       if (c.mirroredPages > 0 || c.mirroredBytes > 0)
-        Text(
-          context.l10n.cacheMirrored(
-            c.mirroredPages,
-            formatBytes(c.mirroredBytes),
-          ),
-          style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                context.l10n.cacheMirrored(
+                  c.mirroredPages,
+                  formatBytes(c.mirroredBytes),
+                ),
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: EditorTheme.muted,
+                ),
+              ),
+            ),
+            // Offered on the mirror line only. The local-only line below has no
+            // button and never will: there is nowhere to re-download it from, so
+            // a "reclaim" control there would be a delete button wearing the
+            // wrong word.
+            if (widget.onClearMirrorCache != null)
+              TextButton(
+                onPressed: _cacheBusy ? null : _clearMirrorCache,
+                child: Text(context.l10n.cacheClearButton),
+              ),
+          ],
         ),
       if (c.localOnlyPages > 0 || c.localOnlyBytes > 0)
         Padding(

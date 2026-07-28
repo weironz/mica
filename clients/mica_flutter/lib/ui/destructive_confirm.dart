@@ -17,12 +17,20 @@ const Color kDestructiveRed = Color(0xFFDC2626);
 /// Deliberately not localized here: the caller passes finished strings, the same
 /// contract `status_kit.dart` uses, so this library stays independent of the
 /// generated `AppLocalizations`.
+///
+/// [destructive] false keeps the gate but drops the red. Some actions need to be
+/// confirmed without being irreversible — clearing the re-downloadable half of
+/// the on-device cache costs you offline access until you reconnect, and nothing
+/// else. Painting that the same colour as "purge the recycle bin" would spend the
+/// red on something recoverable, and the red only means anything while it is
+/// reserved for what it says.
 Future<bool> showDestructiveConfirm(
   BuildContext context, {
   required String title,
   required String body,
   required String confirmLabel,
   required String cancelLabel,
+  bool destructive = true,
 }) async {
   final confirmed = await showDialog<bool>(
     context: context,
@@ -35,7 +43,9 @@ Future<bool> showDestructiveConfirm(
           child: Text(cancelLabel),
         ),
         FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: kDestructiveRed),
+          style: destructive
+              ? FilledButton.styleFrom(backgroundColor: kDestructiveRed)
+              : null,
           onPressed: () => Navigator.pop(context, true),
           child: Text(confirmLabel),
         ),

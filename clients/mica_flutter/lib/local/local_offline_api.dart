@@ -88,6 +88,13 @@ abstract interface class LocalOfflineApi {
   /// already holds that list — passing it in beats adding an FFI entry point for
   /// a read-only number.
   Future<LocalCacheStats> cacheStats({required List<String> mirroredOrigins});
+
+  /// Delete the re-downloadable half of the on-device store and report what is
+  /// left. Pages and images belonging to local-only workspaces are never touched
+  /// — see `cache_stats.dart` for how the two are told apart.
+  Future<LocalCacheStats> clearMirrorCache({
+    required List<String> mirroredOrigins,
+  });
   void saveView(ViewData v, {String origin});
   void mirrorCloudPageTree(
     String serverUrl,

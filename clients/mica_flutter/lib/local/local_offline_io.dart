@@ -675,6 +675,37 @@ class LocalOffline implements LocalOfflineApi {
     );
   }
 
+  /// Drop every mirrored page and image, keep everything local-only, and return
+  /// the numbers that hold afterwards.
+  ///
+  /// Two independent guards, because getting this wrong deletes originals:
+  /// `forgetOrigin` refuses `'local'` outright, and a blob is only unlinked when
+  /// `isCloudMirrorBlobId` positively recognises a server file id — an id of any
+  /// unexpected shape is kept, since a needless re-download is not in the same
+  /// class of mistake as a lost original.
+  Future<LocalCacheStats> clearMirrorCache({
+    required List<String> mirroredOrigins,
+  }) async {
+    for (final origin in mirroredOrigins) {
+      forgetOrigin(origin);
+    }
+    final dir = Directory(_blobsDir());
+    if (dir.existsSync()) {
+      for (final entity in dir.listSync(followLinks: false)) {
+        if (entity is! File) continue;
+        if (!isCloudMirrorBlobId(entity.uri.pathSegments.last)) continue;
+        try {
+          entity.deleteSync();
+        } catch (_) {
+          // A file we cannot unlink stays counted by the stats below, so the
+          // number the user sees afterwards stays true rather than optimistic.
+        }
+      }
+    }
+    flush();
+    return cacheStats(mirroredOrigins: mirroredOrigins);
+  }
+
   String _blobsDir() => '${_localDir()}/blobs';
   String _blobPath(String fileId) => '${_blobsDir()}/$fileId';
 

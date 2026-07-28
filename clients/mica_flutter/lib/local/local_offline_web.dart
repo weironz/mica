@@ -114,6 +114,12 @@ class LocalOffline implements LocalOfflineApi {
     localOnlyBytes: 0,
   );
 
+  /// Nothing on-device to clear on web; the numbers were already all zero.
+  @override
+  Future<LocalCacheStats> clearMirrorCache({
+    required List<String> mirroredOrigins,
+  }) => cacheStats(mirroredOrigins: mirroredOrigins);
+
   void saveView(ViewData v, {String origin = 'local'}) {}
 
   /// P4-2: mirror the cloud page tree into localStorage (clean replace per
