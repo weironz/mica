@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../cjk_fonts.dart';
+import '../ui/theme_tokens.dart';
 import '../l10n/locale_controller.dart';
 import 'chrome_layout.dart';
 import 'highlight.dart';
@@ -18,10 +19,24 @@ part 'inline_atoms.dart';
 /// User-adjustable editor appearance (document font). Page width is applied by
 /// the surrounding page layout, not here.
 class EditorAppearance {
-  const EditorAppearance({this.fontScale = 1.0, this.fontFamily});
+  const EditorAppearance({
+    this.fontScale = 1.0,
+    this.fontFamily,
+    this.tokens = MicaTokens.light,
+  });
 
   /// Multiplier applied to every block's font size (0.85–1.4 typically).
   final double fontScale;
+
+  /// The palette this canvas paints with.
+  ///
+  /// It rides on the appearance because the canvas is a RenderBox: it has no
+  /// widget context to inherit a theme from, and the appearance is the seam that
+  /// already exists for exactly this kind of setting (font scale, family). The
+  /// alternative — a mutable global that the app assigns on theme change — would
+  /// paint from hidden state that nothing knows to repaint on, and would make two
+  /// windows or two tests sharing a process fight over one palette.
+  final MicaTokens tokens;
 
   /// Optional font family override for prose (code blocks keep monospace).
   final String? fontFamily;
@@ -154,52 +169,52 @@ class EditorTheme {
   /// the left, copy button on the right).
   static const double codeToolbar = 26;
 
-  static TextStyle styleFor(EditorNode node) {
+  static TextStyle styleFor(EditorNode node, MicaTokens tokens) {
     switch (node.kind) {
       case 'heading':
         switch (node.headingLevel) {
           case 1:
-            return const TextStyle(
-              color: text,
+            return TextStyle(
+              color: tokens.text.primary,
               fontSize: 30,
               height: 1.3,
               fontWeight: FontWeight.w700,
               letterSpacing: -0.5,
             );
           case 2:
-            return const TextStyle(
-              color: text,
+            return TextStyle(
+              color: tokens.text.primary,
               fontSize: 24,
               height: 1.35,
               fontWeight: FontWeight.w700,
               letterSpacing: -0.3,
             );
           case 3:
-            return const TextStyle(
-              color: text,
+            return TextStyle(
+              color: tokens.text.primary,
               fontSize: 20,
               height: 1.4,
               fontWeight: FontWeight.w600,
               letterSpacing: -0.2,
             );
           case 4:
-            return const TextStyle(
-              color: text,
+            return TextStyle(
+              color: tokens.text.primary,
               fontSize: 18,
               height: 1.45,
               fontWeight: FontWeight.w600,
               letterSpacing: -0.1,
             );
           case 5:
-            return const TextStyle(
-              color: text,
+            return TextStyle(
+              color: tokens.text.primary,
               fontSize: 16,
               height: 1.5,
               fontWeight: FontWeight.w600,
             );
           default: // H6 — smallest; a muted ink keeps it distinct from body.
-            return const TextStyle(
-              color: muted,
+            return TextStyle(
+              color: tokens.text.muted,
               fontSize: 15,
               height: 1.5,
               fontWeight: FontWeight.w600,
@@ -210,20 +225,20 @@ class EditorTheme {
         // (Notion/GitHub style). Baking italic into the base style meant an
         // italic *mark* had nothing to toggle — you could never un-italic quoted
         // text — so emphasis is left entirely to marks (marks-over-plain-text).
-        return const TextStyle(color: muted, fontSize: 16, height: 1.6);
+        return TextStyle(color: tokens.text.muted, fontSize: 16, height: 1.6);
       case 'footnote_def':
         // Small muted body, mirroring quote — the `[label]` marker is painted
         // in the gutter (see _paintNode), so the text itself stays plain.
-        return const TextStyle(color: muted, fontSize: 13, height: 1.5);
+        return TextStyle(color: tokens.text.muted, fontSize: 13, height: 1.5);
       case 'code_block':
-        return const TextStyle(
-          color: text,
+        return TextStyle(
+          color: tokens.text.primary,
           fontSize: 14,
           height: 1.5,
           fontFamily: kMonoFont,
         );
       case 'math_block':
-        return const TextStyle(
+        return TextStyle(
           color: Color(0xFF7C3AED),
           fontSize: 15,
           height: 1.6,
@@ -232,16 +247,24 @@ class EditorTheme {
         );
       case 'todo':
         if (node.todoChecked) {
-          return const TextStyle(
-            color: faint,
+          return TextStyle(
+            color: tokens.text.faint,
             fontSize: 16,
             height: 1.65,
             decoration: TextDecoration.lineThrough,
           );
         }
-        return const TextStyle(color: text, fontSize: 16, height: 1.65);
+        return TextStyle(
+          color: tokens.text.primary,
+          fontSize: 16,
+          height: 1.65,
+        );
       default:
-        return const TextStyle(color: text, fontSize: 16, height: 1.65);
+        return TextStyle(
+          color: tokens.text.primary,
+          fontSize: 16,
+          height: 1.65,
+        );
     }
   }
 
@@ -1169,7 +1192,7 @@ class RenderDocument extends RenderBox {
       }
 
       final style = _appearance.applyTo(
-        EditorTheme.styleFor(node),
+        EditorTheme.styleFor(node, _appearance.tokens),
         isCode: node.isCode,
       );
       // Item-child blocks (`data.li`) align under the owning item's text;
@@ -1480,7 +1503,10 @@ class RenderDocument extends RenderBox {
         final marker = TextPainter(
           text: TextSpan(
             text: '${layout.langChipText}  ▾',
-            style: const TextStyle(fontSize: 11, color: EditorTheme.muted),
+            style: TextStyle(
+              fontSize: 11,
+              color: _appearance.tokens.text.muted,
+            ),
           ),
           textDirection: TextDirection.ltr,
         )..layout();
@@ -1615,7 +1641,7 @@ class RenderDocument extends RenderBox {
   }) {
     return appearance.applyTo(
       TextStyle(
-        color: EditorTheme.text,
+        color: appearance.tokens.text.primary,
         fontSize: 15,
         height: 1.4,
         fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
@@ -1850,12 +1876,15 @@ class RenderDocument extends RenderBox {
     // lines. The highlight lands between the grid's top and bottom lines.
     if (l.kind == 'table' && l.tableGridRect != null) {
       final box = l.tableGridRect!.shift(offset);
-      canvas.drawRect(box, Paint()..color = EditorTheme.selection);
+      canvas.drawRect(
+        box,
+        Paint()..color = _appearance.tokens.editor.selection,
+      );
       if (border) {
         canvas.drawRect(
           box,
           Paint()
-            ..color = EditorTheme.caret
+            ..color = _appearance.tokens.editor.caret
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2,
         );
@@ -1873,12 +1902,15 @@ class RenderDocument extends RenderBox {
         canvas.drawRRect(
           rr,
           Paint()
-            ..color = EditorTheme.caret
+            ..color = _appearance.tokens.editor.caret
             ..style = PaintingStyle.stroke
             ..strokeWidth = 3,
         );
       } else {
-        canvas.drawRRect(rr, Paint()..color = EditorTheme.selection);
+        canvas.drawRRect(
+          rr,
+          Paint()..color = _appearance.tokens.editor.selection,
+        );
       }
       return;
     }
@@ -1894,12 +1926,12 @@ class RenderDocument extends RenderBox {
       box.inflate(border ? 2 : 0),
       const Radius.circular(6),
     );
-    canvas.drawRRect(rr, Paint()..color = EditorTheme.selection);
+    canvas.drawRRect(rr, Paint()..color = _appearance.tokens.editor.selection);
     if (border) {
       canvas.drawRRect(
         rr,
         Paint()
-          ..color = EditorTheme.caret
+          ..color = _appearance.tokens.editor.caret
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2,
       );
@@ -1932,7 +1964,7 @@ class RenderDocument extends RenderBox {
             ),
             const Radius.circular(6),
           ),
-          Paint()..color = EditorTheme.codeBg,
+          Paint()..color = _appearance.tokens.editor.codeBg,
         );
       }
       final prev = i > 0 ? _layouts[i - 1] : null;
@@ -1951,7 +1983,7 @@ class RenderDocument extends RenderBox {
             (size.width - l.boxLeft).clamp(0.0, double.infinity),
             l.boxHeight + (l.boxTop - top),
           ),
-          Paint()..color = EditorTheme.alertTint(l.alert!),
+          Paint()..color = _alertTint(l.alert!),
         );
       }
       // Blockquote bars: one per nesting depth, on any quoted block kind.
@@ -1959,8 +1991,8 @@ class RenderDocument extends RenderBox {
       // between blocks (a `qbreak` starts a fresh group). A callout colors its
       // bar by type instead of the neutral quote gray.
       final barColor = l.alert != null
-          ? EditorTheme.alertAccent(l.alert!)
-          : EditorTheme.quoteBar;
+          ? _alertAccent(l.alert!)
+          : _appearance.tokens.editor.quoteBar;
       for (var k = 0; k < l.quoteDepth; k++) {
         var top = l.boxTop;
         if (!l.quoteBreak &&
@@ -1993,7 +2025,7 @@ class RenderDocument extends RenderBox {
     final hover = _hoverBlock;
     if (hover != null && hover < _layouts.length) {
       final r = _handleRectFor(hover).shift(offset);
-      final paint = Paint()..color = EditorTheme.faint;
+      final paint = Paint()..color = _appearance.tokens.text.faint;
       for (var row = 0; row < 3; row++) {
         for (var col = 0; col < 2; col++) {
           canvas.drawCircle(
@@ -2017,7 +2049,7 @@ class RenderDocument extends RenderBox {
           size.width - EditorTheme.gutter,
           2.5,
         ),
-        Paint()..color = EditorTheme.dropLine,
+        Paint()..color = _appearance.tokens.editor.dropLine,
       );
     }
   }
@@ -2027,7 +2059,7 @@ class RenderDocument extends RenderBox {
   /// the head block's text. Reuses the quote pipeline's chrome — no new block.
   void _paintAlertTitle(Canvas canvas, Offset offset, _NodeLayout l) {
     final type = l.alert!;
-    final accent = EditorTheme.alertAccent(type);
+    final accent = _alertAccent(type);
     final left = offset.dx + l.contentLeft;
     final top = offset.dy + l.boxTop + 3;
     const iconSize = 15.0;
@@ -2119,9 +2151,9 @@ class RenderDocument extends RenderBox {
     final tp = TextPainter(
       text: TextSpan(
         text: label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 12,
-          color: EditorTheme.muted,
+          color: _appearance.tokens.text.muted,
           fontWeight: FontWeight.w500,
         ),
       ),
@@ -2141,7 +2173,7 @@ class RenderDocument extends RenderBox {
     final tp = TextPainter(
       text: TextSpan(
         text: l.codeTitle,
-        style: const TextStyle(fontSize: 12, color: EditorTheme.muted),
+        style: TextStyle(fontSize: 12, color: _appearance.tokens.text.muted),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
@@ -2171,7 +2203,7 @@ class RenderDocument extends RenderBox {
       final marker = TextPainter(
         text: TextSpan(
           text: '${l.langChipText}  ▾',
-          style: const TextStyle(fontSize: 11, color: EditorTheme.muted),
+          style: TextStyle(fontSize: 11, color: _appearance.tokens.text.muted),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
@@ -2243,7 +2275,9 @@ class RenderDocument extends RenderBox {
           text: text,
           style: TextStyle(
             fontSize: 11,
-            color: isActive ? const Color(0xFFF8FAFC) : EditorTheme.muted,
+            color: isActive
+                ? const Color(0xFFF8FAFC)
+                : _appearance.tokens.text.muted,
           ),
         ),
         textDirection: TextDirection.ltr,
@@ -2265,6 +2299,17 @@ class RenderDocument extends RenderBox {
     tab(l.viewCodeTab, s.codeViewSource, _CodeIcon.viewCode, active == 'code');
   }
 
+  /// Alert accent/tint from the live palette.
+  ///
+  /// Instance methods, not statics on EditorTheme: the accent now depends on the
+  /// palette, and a static could only ever answer for one of them.
+  Color _alertAccent(String type) {
+    final accents = _appearance.tokens.editor.alertAccents;
+    return accents[type] ?? accents['note']!;
+  }
+
+  Color _alertTint(String type) => _alertAccent(type).withValues(alpha: 0.06);
+
   void _paintIconButton(
     Canvas canvas,
     Rect rect,
@@ -2280,8 +2325,10 @@ class RenderDocument extends RenderBox {
       );
     }
     final color = active
-        ? EditorTheme.caret
-        : (hovered ? EditorTheme.text : EditorTheme.muted);
+        ? _appearance.tokens.editor.caret
+        : (hovered
+              ? _appearance.tokens.text.primary
+              : _appearance.tokens.text.muted);
     final glyph = TextPainter(
       text: TextSpan(
         text: String.fromCharCode(icon.codePoint),
@@ -2535,20 +2582,24 @@ class RenderDocument extends RenderBox {
         final c = origin + Offset(-14, l.painter.preferredLineHeight * 0.5);
         switch (l.indentLevel % 3) {
           case 0: // ● filled
-            canvas.drawCircle(c, 2.6, Paint()..color = EditorTheme.text);
+            canvas.drawCircle(
+              c,
+              2.6,
+              Paint()..color = _appearance.tokens.text.primary,
+            );
           case 1: // ○ hollow
             canvas.drawCircle(
               c,
               2.6,
               Paint()
-                ..color = EditorTheme.text
+                ..color = _appearance.tokens.text.primary
                 ..style = PaintingStyle.stroke
                 ..strokeWidth = 1.2,
             );
           default: // ▪ square
             canvas.drawRect(
               Rect.fromCenter(center: c, width: 4.6, height: 4.6),
-              Paint()..color = EditorTheme.text,
+              Paint()..color = _appearance.tokens.text.primary,
             );
         }
       case 'numbered_list':
@@ -2556,7 +2607,7 @@ class RenderDocument extends RenderBox {
           text: TextSpan(
             text: '${l.ordinal}.',
             style: TextStyle(
-              color: EditorTheme.text,
+              color: _appearance.tokens.text.primary,
               fontSize: 16 * _appearance.fontScale,
               height: 1.5,
             ),
@@ -2572,7 +2623,7 @@ class RenderDocument extends RenderBox {
           text: TextSpan(
             text: '[${l.footnoteLabel}]',
             style: TextStyle(
-              color: EditorTheme.muted,
+              color: _appearance.tokens.text.muted,
               fontSize: 12 * _appearance.fontScale,
               height: 1.5,
               fontWeight: FontWeight.w600,
@@ -2588,7 +2639,10 @@ class RenderDocument extends RenderBox {
           final r = box.shift(offset);
           final rr = RRect.fromRectAndRadius(r, const Radius.circular(4));
           if (l.todoChecked) {
-            canvas.drawRRect(rr, Paint()..color = EditorTheme.caret);
+            canvas.drawRRect(
+              rr,
+              Paint()..color = _appearance.tokens.editor.caret,
+            );
             final tick = Path()
               ..moveTo(r.left + 4, r.center.dy)
               ..lineTo(r.left + 7.5, r.bottom - 4.5)
@@ -2606,7 +2660,7 @@ class RenderDocument extends RenderBox {
             canvas.drawRRect(
               rr,
               Paint()
-                ..color = EditorTheme.faint
+                ..color = _appearance.tokens.text.faint
                 ..style = PaintingStyle.stroke
                 ..strokeWidth = 1.5,
             );
@@ -2646,7 +2700,10 @@ class RenderDocument extends RenderBox {
             ..shader = ui.Gradient.linear(
               Offset(0, fadeTop),
               Offset(0, fadeTop + fadeH),
-              [EditorTheme.codeBg.withAlpha(0), EditorTheme.codeBg],
+              [
+                _appearance.tokens.editor.codeBg.withAlpha(0),
+                _appearance.tokens.editor.codeBg,
+              ],
             ),
         );
       }
@@ -2681,7 +2738,7 @@ class RenderDocument extends RenderBox {
   /// Rounded pills behind inline `code` spans. Painted under the selection +
   /// text layers, so a selection still tints them and the glyphs stay on top.
   void _paintInlineCode(Canvas canvas, Offset offset) {
-    final paint = Paint()..color = EditorTheme.inlineCodeBg;
+    final paint = Paint()..color = _appearance.tokens.editor.inlineCodeBg;
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
       if (!_nodeVisible(l)) continue; // viewport culling (see paint)
@@ -2762,8 +2819,8 @@ class RenderDocument extends RenderBox {
         final origin = offset + Offset(l.contentLeft - scroll, l.textTop);
         final paint = Paint()
           ..color = h.active
-              ? EditorTheme.commentHighlightActive
-              : EditorTheme.commentHighlight;
+              ? _appearance.tokens.editor.commentHighlightActive
+              : _appearance.tokens.editor.commentHighlight;
         for (final box in boxes) {
           canvas.drawRect(box.toRect().shift(origin), paint);
         }
@@ -2777,7 +2834,7 @@ class RenderDocument extends RenderBox {
     if (sel == null || sel.isCollapsed) return;
     final start = sel.start;
     final end = sel.end;
-    final paint = Paint()..color = EditorTheme.selection;
+    final paint = Paint()..color = _appearance.tokens.editor.selection;
     for (var i = start.node; i <= end.node && i < _layouts.length; i++) {
       // Viewport culling (see paint): a select-all on a huge doc must not
       // record highlight rects for thousands of off-screen nodes.
@@ -2981,7 +3038,7 @@ class RenderDocument extends RenderBox {
     }
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect.shift(offset), const Radius.circular(1)),
-      Paint()..color = EditorTheme.caret,
+      Paint()..color = _appearance.tokens.editor.caret,
     );
   }
 

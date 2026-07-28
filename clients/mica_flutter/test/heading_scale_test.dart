@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
 
@@ -8,6 +9,7 @@ import 'package:mica_flutter/editor/render.dart';
 void main() {
   double sizeOf(int level) => EditorTheme.styleFor(
     EditorNode(id: 'h', kind: 'heading', text: 'x', data: {'level': level}),
+    MicaTokens.light,
   ).fontSize!;
 
   test('heading font sizes are strictly decreasing across all 6 levels', () {
@@ -17,7 +19,8 @@ void main() {
       expect(
         sizes[i] > sizes[i + 1],
         isTrue,
-        reason: 'H${i + 1} (${sizes[i]}) must be larger than H${i + 2} (${sizes[i + 1]})',
+        reason:
+            'H${i + 1} (${sizes[i]}) must be larger than H${i + 2} (${sizes[i + 1]})',
       );
     }
   });

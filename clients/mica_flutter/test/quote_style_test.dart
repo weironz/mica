@@ -1,5 +1,6 @@
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
 
@@ -8,8 +9,10 @@ import 'package:mica_flutter/editor/render.dart';
 // (toggling the mark left the base italic behind). Emphasis is now left entirely
 // to marks; the left bar + muted ink still distinguish a quote.
 void main() {
-  TextStyle styleOf(String kind) =>
-      EditorTheme.styleFor(EditorNode(id: 'n', kind: kind, text: 'x'));
+  TextStyle styleOf(String kind) => EditorTheme.styleFor(
+    EditorNode(id: 'n', kind: kind, text: 'x'),
+    MicaTokens.light,
+  );
 
   test('quote base style is upright, not italic', () {
     expect(styleOf('quote').fontStyle, isNot(FontStyle.italic));
