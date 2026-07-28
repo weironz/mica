@@ -48,6 +48,7 @@ import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart' show LocalCacheStats;
 import 'cjk_fonts.dart';
 import 'prefs.dart';
+import 'server_list.dart';
 import 'updater.dart';
 import 'window_setup.dart';
 import 'upload/zip_writer.dart';
@@ -452,19 +453,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// server #1, so nobody's sign-in moves. [seed] is always present, even if a
   /// stale `servers` list somehow lost it — the app must never end up pointing
   /// at a server that isn't in its own list.
-  List<String> _loadServers(String seed) {
-    final raw = loadPref('servers') ?? '';
-    var list = <String>[];
-    if (raw.isNotEmpty) {
-      try {
-        list = (jsonDecode(raw) as List).cast<String>();
-      } catch (_) {
-        list = const [];
-      }
-    }
-    if (!list.contains(seed)) list = [seed, ...list];
-    return list;
-  }
+  List<String> _loadServers(String seed) =>
+      knownServers(rawPref: loadPref('servers'), seed: seed);
 
   void _saveServers() => savePref('servers', jsonEncode(_servers));
 
