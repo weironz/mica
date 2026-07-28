@@ -341,3 +341,37 @@ CI 加 `flutter build web --release` 关卡。
 - 结论:**缓存要落在"频繁 + 在关键路径 + 缓存能持久"的地方。** CI-on-main 已挂
   `Swatinem/rust-cache` 且总耗时才 ~3min(main 分支缓存能持久),那才是对的。发版慢的
   真杠杆是 Flutter 构建(更大 runner 或接受它),不是 Rust 缓存。v0.12.18 撤掉 sccache。
+
+### 本地 dev 栈:容器里的 API 做不了「服务端直传」
+
+- `docker-compose.yml` 的 `S3_ENDPOINT: http://127.0.0.1:9000` 是**给浏览器用的**——
+  后端只负责*签名*,presigned URL 的 host 必须是浏览器能到的地址,不能写 compose 服务名。
+  代价是:**任何由服务端自己发 PUT 的路径在容器里必然失败**,因为容器内 `127.0.0.1`
+  是它自己。踩到的是换头像(`PUT /api/auth/me/avatar`),同理还有 `files::import_url`
+  和导入时重托外链图片(`store_bytes`)。报错长这样:
+  `storage upload failed: error sending request for url (http://127.0.0.1:9000/...)`。
+- **绕法:API 跑在宿主机上**,`docker stop mica-api` 腾出 8080,然后用 compose 里同一套
+  环境变量 `cargo run -p mica-api-server`(DATABASE_URL 指 `127.0.0.1:5432`,S3 指
+  `127.0.0.1:9000`,两个端口都已 publish)。这样浏览器和服务端解析到同一个地方,
+  `deploy/nginx.dev.conf` 本来就把 `/api/` 代到 `host.docker.internal:8080`,web 端
+  (:8090)不用改。生产没这个问题:那边 `S3_ENDPOINT` 是真正可达的对象存储地址。
+
+### Route 看不到父级的重建(改完东西,你操作的那个面板是最后知道的)
+
+- 设置对话框是 `showDialog` 的 route。父级 `setState` 会重建侧边栏,**不会**重建它;
+  而 `await 动作()` 刚回来时,子 State 的 `widget.xxx` 还是旧值(父级的重建要等下一帧)。
+  实测症状:换头像后侧边栏头像变了,你点「更换头像」的那个面板还画着旧的首字母。
+- **修法不是等一帧**(`endOfFrame` 那类时序 hack),而是让动作**返回动作之后的状态**:
+  `Future<String?> onChangeAvatar()` 回新的头像 URL(用户取消就回原样),面板拿返回值
+  存进自己的 state。route 从此不依赖任何重建。
+- 附带教训:这类 bug 单测抓不到,因为 `_SettingsDialog` 是 `part of main.dart` 的私有类
+  ——`part of` 反模式的又一次收费。
+
+### 内容哈希做缓存键:负结果也会被缓存
+
+- 头像 URL 用内容哈希当 `?v=`(同一张图不换 URL,省一次下载)。副作用:
+  **装 → 移除 → 再装同一张**会回到那个中间 404 过的 URL,而 Flutter 的 `ImageCache`
+  把那次失败留到进程结束 → 应用说你有头像,画的是字母。
+- 修在唯一知道「这个 URL 背后的字节刚变了」的地方(写头像那一步)`NetworkImage(url).evict()`。
+  一般化:**只要缓存键是内容派生的,就要想清楚"同样的内容再次出现"这条路——尤其中间
+  夹过一次失败。**
