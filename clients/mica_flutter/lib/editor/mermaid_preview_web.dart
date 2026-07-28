@@ -4,6 +4,8 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import '../ui/theme_tokens.dart';
+import 'mermaid_theme.dart';
 
 const bool mermaidAvailable = true;
 
@@ -18,25 +20,43 @@ Future<void> _ensureLoaded() {
     final script = html.ScriptElement()..src = 'mermaid.min.js';
     final done = Completer<void>();
     script.onLoad.first.then((_) => done.complete());
-    script.onError.first.then((_) =>
-        done.completeError(StateError('mermaid.min.js failed to load')));
+    script.onError.first.then(
+      (_) => done.completeError(StateError('mermaid.min.js failed to load')),
+    );
     html.document.head!.append(script);
     await done.future;
-    final mermaid = globalContext.getProperty('mermaid'.toJS) as JSObject;
-    mermaid.callMethod(
-      'initialize'.toJS,
-      {
-        'startOnLoad': false,
-        'theme': 'neutral',
-        // No foreignObject labels: an SVG containing them TAINTS the canvas
-        // and toBlob throws. v11 honors the TOP-LEVEL htmlLabels key (the
-        // flowchart-scoped one alone is ignored); useMaxWidth:false gives the
-        // SVG an explicit width so the <img> decode size is trustworthy.
-        'htmlLabels': false,
-        'flowchart': {'htmlLabels': false, 'useMaxWidth': false},
-      }.jsify(),
-    );
+    _applyTheme(MicaTokens.light);
   }();
+}
+
+/// The palette the loaded engine is currently configured with. mermaid.js keeps
+/// its theme in module state, so re-initializing is how you change it — and it
+/// has to happen on a switch, not only on load, or every diagram keeps the
+/// palette that happened to be in effect when the page opened.
+MicaTokens? _themedWith;
+
+void _ensureTheme(MicaTokens tokens) {
+  if (identical(_themedWith, tokens)) return;
+  _applyTheme(tokens);
+}
+
+void _applyTheme(MicaTokens tokens) {
+  final mermaid = globalContext.getProperty('mermaid'.toJS) as JSObject;
+  mermaid.callMethod(
+    'initialize'.toJS,
+    {
+      'startOnLoad': false,
+      'theme': mermaidJsBaseTheme(tokens),
+      'themeVariables': mermaidJsThemeVariables(tokens),
+      // No foreignObject labels: an SVG containing them TAINTS the canvas
+      // and toBlob throws. v11 honors the TOP-LEVEL htmlLabels key (the
+      // flowchart-scoped one alone is ignored); useMaxWidth:false gives the
+      // SVG an explicit width so the <img> decode size is trustworthy.
+      'htmlLabels': false,
+      'flowchart': {'htmlLabels': false, 'useMaxWidth': false},
+    }.jsify(),
+  );
+  _themedWith = tokens;
 }
 
 int _renderSeq = 0;
@@ -45,15 +65,22 @@ int _renderSeq = 0;
 /// `<img>` → 2x offscreen canvas → PNG bytes → ui.Image. Any failure (load,
 /// syntax, raster) resolves to null; the preview pipeline records it and the
 /// block stays on its highlighted source form.
-Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
+Future<ui.Image?> renderMermaid(
+  String source,
+  double targetWidth,
+  MicaTokens tokens,
+) async {
   try {
     await _ensureLoaded();
+    _ensureTheme(tokens);
     final mermaid = globalContext.getProperty('mermaid'.toJS) as JSObject;
-    final promise = mermaid.callMethod(
-      'render'.toJS,
-      'micaMermaid${_renderSeq++}'.toJS,
-      source.toJS,
-    ) as JSPromise<JSObject>;
+    final promise =
+        mermaid.callMethod(
+              'render'.toJS,
+              'micaMermaid${_renderSeq++}'.toJS,
+              source.toJS,
+            )
+            as JSPromise<JSObject>;
     final result = await promise.toDart;
     final svg = (result.getProperty('svg'.toJS) as JSString).toDart;
 
@@ -66,7 +93,8 @@ Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
       final loaded = Completer<void>();
       img.onLoad.first.then((_) => loaded.complete());
       img.onError.first.then(
-          (_) => loaded.completeError(StateError('svg decode failed')));
+        (_) => loaded.completeError(StateError('svg decode failed')),
+      );
       img.src = url;
       await loaded.future;
 
@@ -76,7 +104,8 @@ Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
       // paint time would blur. Scale is capped so a tiny diagram on a huge
       // page doesn't allocate an absurd canvas.
       final natW = (img.naturalWidth == 0 ? 600 : img.naturalWidth).toDouble();
-      final natH = (img.naturalHeight == 0 ? 400 : img.naturalHeight).toDouble();
+      final natH = (img.naturalHeight == 0 ? 400 : img.naturalHeight)
+          .toDouble();
       // Clamp ABSOLUTE output dimensions, not just the scale — height was
       // unbounded and the 0.5 scale floor forced w >= natW/2, so a tall/wide
       // diagram could allocate a giant canvas/texture (same fix as the
@@ -93,8 +122,7 @@ Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
       final reader = html.FileReader()..readAsArrayBuffer(png);
       await reader.onLoad.first;
       final raw = reader.result;
-      final bytes =
-          raw is Uint8List ? raw : (raw as ByteBuffer).asUint8List();
+      final bytes = raw is Uint8List ? raw : (raw as ByteBuffer).asUint8List();
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
       return frame.image;

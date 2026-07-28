@@ -3215,10 +3215,13 @@ fn wire__crate__api__render__render_mermaid_svg_impl(
       };
       let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
       let api_source = <String>::sse_decode(&mut deserializer);
+      let api_theme = <Option<crate::api::render::MermaidTheme>>::sse_decode(&mut deserializer);
       deserializer.end();
       move |context| {
         transform_result_sse::<_, ()>((move || {
-          let output_ok = Result::<_, ()>::Ok(crate::api::render::render_mermaid_svg(api_source))?;
+          let output_ok = Result::<_, ()>::Ok(crate::api::render::render_mermaid_svg(
+            api_source, api_theme,
+          ))?;
           Ok(output_ok)
         })())
       }
@@ -3553,6 +3556,36 @@ impl SseDecode for crate::api::store::LocalWorkspace {
   }
 }
 
+impl SseDecode for crate::api::render::MermaidTheme {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    let mut var_dark = <bool>::sse_decode(deserializer);
+    let mut var_canvas = <String>::sse_decode(deserializer);
+    let mut var_surface = <String>::sse_decode(deserializer);
+    let mut var_surfaceAlt = <String>::sse_decode(deserializer);
+    let mut var_text = <String>::sse_decode(deserializer);
+    let mut var_subtleText = <String>::sse_decode(deserializer);
+    let mut var_border = <String>::sse_decode(deserializer);
+    let mut var_line = <String>::sse_decode(deserializer);
+    let mut var_error = <String>::sse_decode(deserializer);
+    let mut var_warning = <String>::sse_decode(deserializer);
+    let mut var_success = <String>::sse_decode(deserializer);
+    return crate::api::render::MermaidTheme {
+      dark: var_dark,
+      canvas: var_canvas,
+      surface: var_surface,
+      surface_alt: var_surfaceAlt,
+      text: var_text,
+      subtle_text: var_subtleText,
+      border: var_border,
+      line: var_line,
+      error: var_error,
+      warning: var_warning,
+      success: var_success,
+    };
+  }
+}
+
 impl SseDecode for Option<String> {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3604,6 +3637,17 @@ impl SseDecode for Option<crate::api::store::LocalVersion> {
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
     if (<bool>::sse_decode(deserializer)) {
       return Some(<crate::api::store::LocalVersion>::sse_decode(deserializer));
+    } else {
+      return None;
+    }
+  }
+}
+
+impl SseDecode for Option<crate::api::render::MermaidTheme> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    if (<bool>::sse_decode(deserializer)) {
+      return Some(<crate::api::render::MermaidTheme>::sse_decode(deserializer));
     } else {
       return None;
     }
@@ -3996,6 +4040,36 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::store::LocalWorkspace>
   }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::render::MermaidTheme {
+  fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+    [
+      self.dark.into_into_dart().into_dart(),
+      self.canvas.into_into_dart().into_dart(),
+      self.surface.into_into_dart().into_dart(),
+      self.surface_alt.into_into_dart().into_dart(),
+      self.text.into_into_dart().into_dart(),
+      self.subtle_text.into_into_dart().into_dart(),
+      self.border.into_into_dart().into_dart(),
+      self.line.into_into_dart().into_dart(),
+      self.error.into_into_dart().into_dart(),
+      self.warning.into_into_dart().into_dart(),
+      self.success.into_into_dart().into_dart(),
+    ]
+    .into_dart()
+  }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+  for crate::api::render::MermaidTheme
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::render::MermaidTheme>
+  for crate::api::render::MermaidTheme
+{
+  fn into_into_dart(self) -> crate::api::render::MermaidTheme {
+    self
+  }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::zip::StoreZipEntry {
   fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
     [
@@ -4304,6 +4378,23 @@ impl SseEncode for crate::api::store::LocalWorkspace {
   }
 }
 
+impl SseEncode for crate::api::render::MermaidTheme {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.dark, serializer);
+    <String>::sse_encode(self.canvas, serializer);
+    <String>::sse_encode(self.surface, serializer);
+    <String>::sse_encode(self.surface_alt, serializer);
+    <String>::sse_encode(self.text, serializer);
+    <String>::sse_encode(self.subtle_text, serializer);
+    <String>::sse_encode(self.border, serializer);
+    <String>::sse_encode(self.line, serializer);
+    <String>::sse_encode(self.error, serializer);
+    <String>::sse_encode(self.warning, serializer);
+    <String>::sse_encode(self.success, serializer);
+  }
+}
+
 impl SseEncode for Option<String> {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4350,6 +4441,16 @@ impl SseEncode for Option<crate::api::store::LocalVersion> {
     <bool>::sse_encode(self.is_some(), serializer);
     if let Some(value) = self {
       <crate::api::store::LocalVersion>::sse_encode(value, serializer);
+    }
+  }
+}
+
+impl SseEncode for Option<crate::api::render::MermaidTheme> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.is_some(), serializer);
+    if let Some(value) = self {
+      <crate::api::render::MermaidTheme>::sse_encode(value, serializer);
     }
   }
 }

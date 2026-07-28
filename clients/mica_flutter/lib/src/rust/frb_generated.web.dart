@@ -103,6 +103,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace dco_decode_box_autoadd_local_workspace(dynamic raw);
 
   @protected
+  MermaidTheme dco_decode_box_autoadd_mermaid_theme(dynamic raw);
+
+  @protected
   SyncCursor dco_decode_box_autoadd_sync_cursor(dynamic raw);
 
   @protected
@@ -166,6 +169,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace dco_decode_local_workspace(dynamic raw);
 
   @protected
+  MermaidTheme dco_decode_mermaid_theme(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -185,6 +191,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalVersion? dco_decode_opt_box_autoadd_local_version(dynamic raw);
+
+  @protected
+  MermaidTheme? dco_decode_opt_box_autoadd_mermaid_theme(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
@@ -297,6 +306,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  MermaidTheme sse_decode_box_autoadd_mermaid_theme(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SyncCursor sse_decode_box_autoadd_sync_cursor(SseDeserializer deserializer);
 
   @protected
@@ -374,6 +388,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace sse_decode_local_workspace(SseDeserializer deserializer);
 
   @protected
+  MermaidTheme sse_decode_mermaid_theme(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -395,6 +412,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalVersion? sse_decode_opt_box_autoadd_local_version(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MermaidTheme? sse_decode_opt_box_autoadd_mermaid_theme(
     SseDeserializer deserializer,
   );
 
@@ -531,6 +553,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_mermaid_theme(
+    MermaidTheme self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_sync_cursor(
     SyncCursor self,
     SseSerializer serializer,
@@ -636,6 +664,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_mermaid_theme(MermaidTheme self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -661,6 +692,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_local_version(
     LocalVersion? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_mermaid_theme(
+    MermaidTheme? self,
     SseSerializer serializer,
   );
 

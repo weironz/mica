@@ -6,8 +6,84 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
+
 /// Render Mermaid `source` to a self-contained SVG string, or `None` on a
 /// syntax / render error. Async by default (runs off the Dart isolate); the
 /// editor rasterizes the returned SVG for its inline preview.
-Future<String?> renderMermaidSvg({required String source}) =>
-    RustLib.instance.api.crateApiRenderRenderMermaidSvg(source: source);
+///
+/// `theme` absent keeps merman's own default (light) — which is what the export
+/// path wants, because an exported file is not inside anyone's editor.
+Future<String?> renderMermaidSvg({
+  required String source,
+  MermaidTheme? theme,
+}) => RustLib.instance.api.crateApiRenderRenderMermaidSvg(
+  source: source,
+  theme: theme,
+);
+
+/// The host palette handed to merman, mirrored to Dart.
+///
+/// Declared HERE rather than re-exported from `mica_markdown`: a type from
+/// another crate crosses the bridge as an opaque handle, which Dart can hold but
+/// cannot build — and building it in Dart is the entire point. The values come
+/// from `MicaTokens`, the one place the app's palette is defined; a copy on this
+/// side would be a second answer to the same question.
+class MermaidTheme {
+  final bool dark;
+  final String canvas;
+  final String surface;
+  final String surfaceAlt;
+  final String text;
+  final String subtleText;
+  final String border;
+  final String line;
+  final String error;
+  final String warning;
+  final String success;
+
+  const MermaidTheme({
+    required this.dark,
+    required this.canvas,
+    required this.surface,
+    required this.surfaceAlt,
+    required this.text,
+    required this.subtleText,
+    required this.border,
+    required this.line,
+    required this.error,
+    required this.warning,
+    required this.success,
+  });
+
+  @override
+  int get hashCode =>
+      dark.hashCode ^
+      canvas.hashCode ^
+      surface.hashCode ^
+      surfaceAlt.hashCode ^
+      text.hashCode ^
+      subtleText.hashCode ^
+      border.hashCode ^
+      line.hashCode ^
+      error.hashCode ^
+      warning.hashCode ^
+      success.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MermaidTheme &&
+          runtimeType == other.runtimeType &&
+          dark == other.dark &&
+          canvas == other.canvas &&
+          surface == other.surface &&
+          surfaceAlt == other.surfaceAlt &&
+          text == other.text &&
+          subtleText == other.subtleText &&
+          border == other.border &&
+          line == other.line &&
+          error == other.error &&
+          warning == other.warning &&
+          success == other.success;
+}

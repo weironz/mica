@@ -3,7 +3,9 @@ import 'dart:ui' as ui;
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../src/rust/api/render.dart';
+import '../ui/theme_tokens.dart';
 import 'mermaid_svg_inline.dart';
+import 'mermaid_theme.dart';
 
 /// Non-web (desktop/mobile) mermaid rendering through the headless pure-Rust
 /// `merman` engine — reached via OUR FFI (`api::render`, feature `render`) →
@@ -26,15 +28,22 @@ const bool mermaidAvailable = true;
 /// at 2x device pixels (matching the web path so a diagram stays crisp when the
 /// layout stretches it to the content width) and rasterize. Any failure (render
 /// error / empty SVG / decode) resolves to null.
-Future<ui.Image?> renderMermaid(String source, double targetWidth) async {
+Future<ui.Image?> renderMermaid(
+  String source,
+  double targetWidth,
+  MicaTokens tokens,
+) async {
   try {
     // FFI merman render is async (runs on the bridge's worker thread, off the
     // build/layout pass that requested this preview), so no manual yield.
-    final raw = await renderMermaidSvg(source: source);
+    final raw = await renderMermaidSvg(
+      source: source,
+      theme: mermaidThemeFor(tokens),
+    );
     if (raw == null || raw.trim().isEmpty) return null;
     // flutter_svg ignores merman's <style> CSS; flatten it to inline styles
     // first so the diagram keeps its theme fills/strokes instead of going black.
-    final svg = inlineMermaidCss(raw);
+    final svg = inlineMermaidCss(raw, background: cssHex(tokens.surface.base));
 
     final info = await vg.loadPicture(SvgStringLoader(svg), null);
     try {

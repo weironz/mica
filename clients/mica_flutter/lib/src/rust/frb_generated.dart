@@ -438,7 +438,10 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiSimpleInitApp();
 
-  Future<String?> crateApiRenderRenderMermaidSvg({required String source});
+  Future<String?> crateApiRenderRenderMermaidSvg({
+    required String source,
+    MermaidTheme? theme,
+  });
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_MicaDocument;
@@ -2752,12 +2755,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
-  Future<String?> crateApiRenderRenderMermaidSvg({required String source}) {
+  Future<String?> crateApiRenderRenderMermaidSvg({
+    required String source,
+    MermaidTheme? theme,
+  }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(source, serializer);
+          sse_encode_opt_box_autoadd_mermaid_theme(theme, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2770,7 +2777,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiRenderRenderMermaidSvgConstMeta,
-        argValues: [source],
+        argValues: [source, theme],
         apiImpl: this,
       ),
     );
@@ -2779,7 +2786,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiRenderRenderMermaidSvgConstMeta =>
       const TaskConstMeta(
         debugName: "render_mermaid_svg",
-        argNames: ["source"],
+        argNames: ["source", "theme"],
       );
 
   RustArcIncrementStrongCountFnType
@@ -2918,6 +2925,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalWorkspace dco_decode_box_autoadd_local_workspace(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_local_workspace(raw);
+  }
+
+  @protected
+  MermaidTheme dco_decode_box_autoadd_mermaid_theme(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_mermaid_theme(raw);
   }
 
   @protected
@@ -3096,6 +3109,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MermaidTheme dco_decode_mermaid_theme(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    return MermaidTheme(
+      dark: dco_decode_bool(arr[0]),
+      canvas: dco_decode_String(arr[1]),
+      surface: dco_decode_String(arr[2]),
+      surfaceAlt: dco_decode_String(arr[3]),
+      text: dco_decode_String(arr[4]),
+      subtleText: dco_decode_String(arr[5]),
+      border: dco_decode_String(arr[6]),
+      line: dco_decode_String(arr[7]),
+      error: dco_decode_String(arr[8]),
+      warning: dco_decode_String(arr[9]),
+      success: dco_decode_String(arr[10]),
+    );
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -3137,6 +3171,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalVersion? dco_decode_opt_box_autoadd_local_version(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_local_version(raw);
+  }
+
+  @protected
+  MermaidTheme? dco_decode_opt_box_autoadd_mermaid_theme(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_mermaid_theme(raw);
   }
 
   @protected
@@ -3375,6 +3415,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_local_workspace(deserializer));
+  }
+
+  @protected
+  MermaidTheme sse_decode_box_autoadd_mermaid_theme(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_mermaid_theme(deserializer));
   }
 
   @protected
@@ -3630,6 +3678,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MermaidTheme sse_decode_mermaid_theme(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_dark = sse_decode_bool(deserializer);
+    var var_canvas = sse_decode_String(deserializer);
+    var var_surface = sse_decode_String(deserializer);
+    var var_surfaceAlt = sse_decode_String(deserializer);
+    var var_text = sse_decode_String(deserializer);
+    var var_subtleText = sse_decode_String(deserializer);
+    var var_border = sse_decode_String(deserializer);
+    var var_line = sse_decode_String(deserializer);
+    var var_error = sse_decode_String(deserializer);
+    var var_warning = sse_decode_String(deserializer);
+    var var_success = sse_decode_String(deserializer);
+    return MermaidTheme(
+      dark: var_dark,
+      canvas: var_canvas,
+      surface: var_surface,
+      surfaceAlt: var_surfaceAlt,
+      text: var_text,
+      subtleText: var_subtleText,
+      border: var_border,
+      line: var_line,
+      error: var_error,
+      warning: var_warning,
+      success: var_success,
+    );
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3693,6 +3770,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_local_version(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  MermaidTheme? sse_decode_opt_box_autoadd_mermaid_theme(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_mermaid_theme(deserializer));
     } else {
       return null;
     }
@@ -3956,6 +4046,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_mermaid_theme(
+    MermaidTheme self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_mermaid_theme(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_sync_cursor(
     SyncCursor self,
     SseSerializer serializer,
@@ -4184,6 +4283,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_mermaid_theme(MermaidTheme self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.dark, serializer);
+    sse_encode_String(self.canvas, serializer);
+    sse_encode_String(self.surface, serializer);
+    sse_encode_String(self.surfaceAlt, serializer);
+    sse_encode_String(self.text, serializer);
+    sse_encode_String(self.subtleText, serializer);
+    sse_encode_String(self.border, serializer);
+    sse_encode_String(self.line, serializer);
+    sse_encode_String(self.error, serializer);
+    sse_encode_String(self.warning, serializer);
+    sse_encode_String(self.success, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -4250,6 +4365,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_local_version(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_mermaid_theme(
+    MermaidTheme? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_mermaid_theme(self, serializer);
     }
   }
 

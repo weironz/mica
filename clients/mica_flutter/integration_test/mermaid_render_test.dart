@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:mica_flutter/editor/mermaid_preview.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 /// Fraction of pixels that carry ink (non-transparent). A blank/failed render
 /// is fully transparent, so any healthy diagram clears this easily; this is the
@@ -58,13 +59,16 @@ void main() {
   };
 
   const targetWidth = 800.0;
+  // Both palettes must produce an inked diagram; dark is the one that used to
+  // come back as dark nodes on a white sheet.
+  const palette = MicaTokens.dark_;
 
   cases.forEach((name, source) {
     testWidgets('renders $name to an inked raster', (tester) async {
       ui.Image? image;
       double ink = 0;
       await tester.runAsync(() async {
-        image = await renderMermaid(source, targetWidth);
+        image = await renderMermaid(source, targetWidth, palette);
         if (image != null) ink = await _inkFraction(image!);
       });
       expect(image, isNotNull, reason: '$name should render to an image');
@@ -83,7 +87,11 @@ void main() {
   testWidgets('bad syntax degrades to null (never throws)', (tester) async {
     ui.Image? image;
     await tester.runAsync(() async {
-      image = await renderMermaid('graph TD; <<<not mermaid>>>', targetWidth);
+      image = await renderMermaid(
+        'graph TD; <<<not mermaid>>>',
+        targetWidth,
+        palette,
+      );
     });
     expect(image, isNull);
   });

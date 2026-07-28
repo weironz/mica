@@ -23,7 +23,15 @@ import 'package:xml/xml.dart';
 
 /// Inline merman's `<style>` CSS into element `style` attributes. Returns the
 /// rewritten SVG, or [svg] unchanged if anything goes wrong.
-String inlineMermaidCss(String svg) {
+///
+/// [background] overrides the diagram's canvas colour. merman's host theme
+/// recolours the NODES from the profile's roles, but the diagram's own backdrop
+/// stays whatever Mermaid's theme says — white — so on a dark page the nodes
+/// turned dark and sat on a white sheet. The backdrop is materialized right
+/// here (flutter_svg drops CSS backgrounds, so this file already has to paint
+/// it), which makes this the honest place to say what colour it is. Null keeps
+/// merman's own, which is what an export wants.
+String inlineMermaidCss(String svg, {String? background}) {
   try {
     final doc = XmlDocument.parse(svg);
 
@@ -40,9 +48,10 @@ String inlineMermaidCss(String svg) {
     // STILL need the font-weight sanitization below, so this is not an early
     // return.
     final rules = _parseCss(css.toString());
-    for (final el in rules.isEmpty
-        ? const <XmlElement>[]
-        : doc.descendants.whereType<XmlElement>()) {
+    for (final el
+        in rules.isEmpty
+            ? const <XmlElement>[]
+            : doc.descendants.whereType<XmlElement>()) {
       final ancestors = el.ancestors.whereType<XmlElement>().toList();
       // Winning declaration per property: chosen[prop] = [specificity, order].
       final chosen = <String, List<int>>{};
@@ -93,7 +102,7 @@ String inlineMermaidCss(String svg) {
     // host paints behind the PNG becomes the area "around" the nodes (solid
     // black on any dark surface). Emit that colour as an opaque <rect> covering
     // the viewBox, inserted first so it paints behind everything.
-    _materializeBackground(doc.rootElement);
+    _materializeBackground(doc.rootElement, background);
 
     // flutter_svg parses font-weight strictly and THROWS on the relative
     // keywords `bolder`/`lighter` (Mermaid's class/er themes use them). Map them
@@ -114,8 +123,10 @@ String inlineMermaidCss(String svg) {
 /// covering the viewBox (flutter_svg ignores CSS backgrounds). No-op when the
 /// colour is absent/transparent, so themes that intend a see-through canvas are
 /// respected.
-void _materializeBackground(XmlElement root) {
-  final bg = _parseDecls(root.getAttribute('style') ?? '')['background-color'];
+void _materializeBackground(XmlElement root, [String? override]) {
+  final bg =
+      override ??
+      _parseDecls(root.getAttribute('style') ?? '')['background-color'];
   if (bg == null) return;
   final color = bg.trim();
   if (color.isEmpty ||
@@ -130,8 +141,10 @@ void _materializeBackground(XmlElement root) {
   double x = 0, y = 0, w = 0, h = 0;
   final vb = root.getAttribute('viewBox');
   if (vb != null) {
-    final v =
-        _numRe.allMatches(vb).map((m) => double.parse(m.group(0)!)).toList();
+    final v = _numRe
+        .allMatches(vb)
+        .map((m) => double.parse(m.group(0)!))
+        .toList();
     if (v.length == 4) {
       x = v[0];
       y = v[1];
@@ -199,8 +212,10 @@ List<_Rule> _parseCss(String css) {
 
 List<_Compound> _parseSelector(String selector) {
   // Treat child/sibling combinators as descendants (good enough for Mermaid).
-  final normalized =
-      selector.replaceAll('>', ' ').replaceAll('+', ' ').replaceAll('~', ' ');
+  final normalized = selector
+      .replaceAll('>', ' ')
+      .replaceAll('+', ' ')
+      .replaceAll('~', ' ');
   final out = <_Compound>[];
   for (final token in normalized.trim().split(_ws)) {
     if (token.isEmpty || token == '*') continue;
@@ -228,7 +243,8 @@ _Compound? _parseCompound(String token) {
   }
   // Anything that isn't a tag/id/class (pseudo-classes, attribute selectors)
   // makes the selector unsupported.
-  final consumed = (tag?.length ?? 0) +
+  final consumed =
+      (tag?.length ?? 0) +
       (id != null ? id.length + 1 : 0) +
       classes.fold<int>(0, (a, c) => a + c.length + 1);
   if (consumed != token.length) return null;
@@ -357,8 +373,10 @@ _EdgeGeom? _edgeGeometry(XmlElement edge) {
   // Mermaid edge paths are absolute M/L/C — every coordinate comes in x,y pairs,
   // so naive pairing yields the on-path skeleton (curve control points included,
   // which still give a correct tangent at the ends).
-  final nums =
-      _numRe.allMatches(d).map((m) => double.parse(m.group(0)!)).toList();
+  final nums = _numRe
+      .allMatches(d)
+      .map((m) => double.parse(m.group(0)!))
+      .toList();
   if (nums.length < 4 || nums.length.isOdd) return null;
   final pts = <_Pt>[];
   for (var i = 0; i + 1 < nums.length; i += 2) {
@@ -369,8 +387,7 @@ _EdgeGeom? _edgeGeometry(XmlElement edge) {
   final afterStart = pts[1];
   final endPt = pts.last;
   final beforeEnd = pts[pts.length - 2];
-  final startAngle =
-      math.atan2(afterStart.y - start.y, afterStart.x - start.x);
+  final startAngle = math.atan2(afterStart.y - start.y, afterStart.x - start.x);
   final endAngle = math.atan2(endPt.y - beforeEnd.y, endPt.x - beforeEnd.x);
   return _EdgeGeom(start, endPt, startAngle, endAngle);
 }
@@ -396,8 +413,10 @@ XmlElement? _buildArrowhead(
   double angle,
   double strokeWidth,
 ) {
-  final shapes =
-      marker.children.whereType<XmlElement>().map((e) => e.copy()).toList();
+  final shapes = marker.children
+      .whereType<XmlElement>()
+      .map((e) => e.copy())
+      .toList();
   if (shapes.isEmpty) return null;
 
   final refX = double.tryParse(marker.getAttribute('refX') ?? '') ?? 0;
@@ -411,7 +430,10 @@ XmlElement? _buildArrowhead(
   double sx = 1, sy = 1;
   final vb = marker.getAttribute('viewBox');
   if (vb != null) {
-    final v = _numRe.allMatches(vb).map((m) => double.parse(m.group(0)!)).toList();
+    final v = _numRe
+        .allMatches(vb)
+        .map((m) => double.parse(m.group(0)!))
+        .toList();
     if (v.length == 4 && v[2] > 0 && v[3] > 0) {
       sx = mw / v[2];
       sy = mh / v[3];
@@ -423,7 +445,8 @@ XmlElement? _buildArrowhead(
 
   final deg = angle * 180 / math.pi;
   String n(double v) => v.toStringAsFixed(3);
-  final transform = 'translate(${n(at.x)},${n(at.y)}) rotate(${n(deg)}) '
+  final transform =
+      'translate(${n(at.x)},${n(at.y)}) rotate(${n(deg)}) '
       'scale(${n(sx)},${n(sy)}) translate(${n(-refX)},${n(-refY)})';
 
   // Marker shapes inherit fill/stroke from the marker element in SVG; once
@@ -432,12 +455,8 @@ XmlElement? _buildArrowhead(
   final fill = mStyle['fill'] ?? marker.getAttribute('fill') ?? '#333333';
   final stroke = mStyle['stroke'] ?? marker.getAttribute('stroke') ?? fill;
 
-  return XmlElement(
-    XmlName('g'),
-    [
-      XmlAttribute(XmlName('transform'), transform),
-      XmlAttribute(XmlName('style'), 'fill:$fill;stroke:$stroke'),
-    ],
-    shapes,
-  );
+  return XmlElement(XmlName('g'), [
+    XmlAttribute(XmlName('transform'), transform),
+    XmlAttribute(XmlName('style'), 'fill:$fill;stroke:$stroke'),
+  ], shapes);
 }

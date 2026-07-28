@@ -35,7 +35,14 @@ abstract class RasterPreviewer {
   /// Direct form: an async image producer. [targetWidth] is the layout width
   /// the preview will be shown at (logical px) — producers rasterize to fill
   /// it crisply instead of their natural size.
-  Future<ui.Image?>? produce(String source, double targetWidth) => null;
+  ///
+  /// [tokens] is the palette, for the same reason [buildOffstage] takes it: what
+  /// comes back is a bitmap, so the colours are baked in at production time.
+  Future<ui.Image?>? produce(
+    String source,
+    double targetWidth,
+    MicaTokens tokens,
+  ) => null;
 }
 
 /// Owns the `{previewer, source} → ui.Image` lifecycle: pending bookkeeping,
@@ -194,7 +201,7 @@ class RasterPreviewPipeline {
     final pending = _pending[id] ??= {};
     if (pending.contains(source)) return;
 
-    final direct = previewer.produce(source, targetWidth);
+    final direct = previewer.produce(source, targetWidth, _tokens);
     if (direct != null) {
       pending.add(source);
       direct.then((img) {
@@ -308,8 +315,11 @@ class MermaidPreviewer extends RasterPreviewer {
   String get id => 'mermaid';
 
   @override
-  Future<ui.Image?>? produce(String source, double targetWidth) =>
-      renderMermaid(source, targetWidth);
+  Future<ui.Image?>? produce(
+    String source,
+    double targetWidth,
+    MicaTokens tokens,
+  ) => renderMermaid(source, targetWidth, tokens);
 }
 
 /// LaTeX formulas through flutter_math_fork — the offstage form.

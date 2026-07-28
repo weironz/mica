@@ -303,33 +303,96 @@ fn render_math(_latex: &str, _display: bool) -> Option<String> {
   None
 }
 
+/// The host's palette, handed to merman so a diagram is drawn in the SAME
+/// colours as the page around it.
+///
+/// The values are CSS colour strings and they come from the CLIENT — `MicaTokens`
+/// is the one place the app's palette is defined, and copying it into Rust would
+/// be a second copy free to drift. merman documents this host-theme profile as
+/// the supported integration seam, which is why none of this touches the CSS
+/// flattener in `mermaid_svg_inline.dart`.
+#[derive(Debug, Clone)]
+pub struct MermaidHostTheme {
+  pub dark: bool,
+  pub canvas: String,
+  pub surface: String,
+  pub surface_alt: String,
+  pub text: String,
+  pub subtle_text: String,
+  pub border: String,
+  pub line: String,
+  pub error: String,
+  pub warning: String,
+  pub success: String,
+}
+
 /// A Mermaid diagram → a self-contained inline `<svg>` via the headless merman
 /// engine (the SAME engine the editor renders with). `id` scopes the SVG's
 /// `<style>` so multiple diagrams on one page don't cross-style each other.
 /// `None` on a syntax/render error (or feature off) → caller keeps the code.
+///
+/// `theme` absent keeps merman's own default (light), which is what the export
+/// path wants: an exported HTML file is not inside anyone's editor.
 #[cfg(feature = "render")]
-pub fn render_mermaid_svg_with_id(source: &str, id: &str) -> Option<String> {
-  use merman::render::{HeadlessRenderer, SvgPipeline};
+pub fn render_mermaid_svg_with_id(
+  source: &str,
+  id: &str,
+  theme: Option<&MermaidHostTheme>,
+) -> Option<String> {
+  use merman::render::{
+    HeadlessRenderer, HostThemeAppearance, HostThemeProfile, HostThemeRoles, SvgPipeline,
+  };
   // `resvg-safe`: plain shapes/text, no `<foreignObject>`. The editor's raster
   // preview (flutter_svg) can't decode foreignObject, so it already renders
   // this pipeline — using it here too means export == on-screen, and browsers
   // render the safe subset fine.
   let pipeline = SvgPipeline::resvg_safe();
-  HeadlessRenderer::new()
+  let renderer = HeadlessRenderer::new()
     .with_strict_parsing()
-    .with_diagram_id(id)
+    .with_diagram_id(id);
+  let profile = theme.map(|t| {
+    HostThemeProfile::builder()
+      .appearance(if t.dark {
+        HostThemeAppearance::Dark
+      } else {
+        HostThemeAppearance::Light
+      })
+      .roles(HostThemeRoles {
+        canvas: Some(t.canvas.clone()),
+        surface: Some(t.surface.clone()),
+        surface_alt: Some(t.surface_alt.clone()),
+        text: Some(t.text.clone()),
+        subtle_text: Some(t.subtle_text.clone()),
+        border: Some(t.border.clone()),
+        line: Some(t.line.clone()),
+        error: Some(t.error.clone()),
+        warning: Some(t.warning.clone()),
+        success: Some(t.success.clone()),
+        ..Default::default()
+      })
+      .build()
+  });
+  let renderer = match profile.as_ref() {
+    Some(p) => renderer.with_host_theme(p),
+    None => renderer,
+  };
+  renderer
     .render_svg_with_pipeline_sync(source, &pipeline)
     .ok()
     .flatten()
 }
 #[cfg(not(feature = "render"))]
-pub fn render_mermaid_svg_with_id(_source: &str, _id: &str) -> Option<String> {
+pub fn render_mermaid_svg_with_id(
+  _source: &str,
+  _id: &str,
+  _theme: Option<&MermaidHostTheme>,
+) -> Option<String> {
   None
 }
 
 /// Single-diagram convenience (the editor's live FFI preview): a stable id.
-pub fn render_mermaid_svg(source: &str) -> Option<String> {
-  render_mermaid_svg_with_id(source, "mica-mermaid")
+pub fn render_mermaid_svg(source: &str, theme: Option<&MermaidHostTheme>) -> Option<String> {
+  render_mermaid_svg_with_id(source, "mica-mermaid", theme)
 }
 
 /// A merman diagram id from a block id: only `[A-Za-z0-9_-]`, always leading
@@ -3379,7 +3442,7 @@ fn append_html_block(
       // syntax/render failure or the feature being off falls through to the
       // plain code block below, so the source is never lost.
       if lang == "mermaid" {
-        if let Some(svg) = render_mermaid_svg_with_id(&block.text, &mermaid_id(&block.id)) {
+        if let Some(svg) = render_mermaid_svg_with_id(&block.text, &mermaid_id(&block.id), None) {
           out.push_str("<div class=\"mermaid\">");
           out.push_str(&svg);
           out.push_str("</div>\n");
