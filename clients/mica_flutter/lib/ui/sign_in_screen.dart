@@ -26,8 +26,7 @@ const double kSignInFormWidth = 420;
 class SignInScreen extends StatelessWidget {
   const SignInScreen({
     required this.hero,
-    required this.form,
-    this.aboveForm,
+    required this.pane,
     this.onClose,
     super.key,
   });
@@ -35,13 +34,10 @@ class SignInScreen extends StatelessWidget {
   /// The brand panel (design 01's dark left side).
   final Widget hero;
 
-  /// The credentials form.
-  final Widget form;
-
-  /// Optional block above the form — desktop puts the world picker there, so the
-  /// front door can also add/choose a server. Null on web, which is served by its
-  /// one server and has no local world, leaving nothing to pick.
-  final Widget? aboveForm;
+  /// Everything on the right: on web just the credentials form, on desktop the
+  /// world tabs + server row + that form (see `sign_in_pane.dart`). Passed in as
+  /// one widget so this file stays pure layout.
+  final Widget pane;
 
   /// Non-null on desktop, where signing in is OPTIONAL — the app is usable in
   /// 本地模式 without an account, so this screen must be leaveable. Null on web,
@@ -61,16 +57,7 @@ class SignInScreen extends StatelessWidget {
                   horizontal: 28,
                   vertical: 32,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (aboveForm case final above?) ...[
-                      above,
-                      const SizedBox(height: 22),
-                    ],
-                    form,
-                  ],
-                ),
+                child: pane,
               ),
             ),
           ),

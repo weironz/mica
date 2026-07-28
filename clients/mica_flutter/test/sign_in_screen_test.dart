@@ -26,7 +26,7 @@ void main() {
               color: Color(0xFF0B1220),
               child: Center(child: Text('BRAND')),
             ),
-            form: const Text('FORM'),
+            pane: const Text('FORM'),
             onClose: onClose,
           ),
         ),

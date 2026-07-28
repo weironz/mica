@@ -42,7 +42,7 @@ import 'ui/rename.dart';
 import 'ui/search_data.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
-import 'ui/world_picker.dart';
+import 'ui/sign_in_pane.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
 import 'ui/user_avatar.dart';
@@ -1972,43 +1972,76 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ),
       );
 
+  SignInPaneStrings _signInPaneStrings(BuildContext context) {
+    final l10n = context.l10n;
+    return SignInPaneStrings(
+      cloudTab: l10n.worldTabCloud,
+      localTab: l10n.worldLocalName,
+      connected: l10n.serverStatusConnected,
+      unreachable: l10n.serverStatusUnreachable,
+      checking: l10n.serverStatusChecking,
+      serversLabel: l10n.serversSectionLabel,
+      addServer: l10n.serverAddTitle,
+      removeServer: l10n.commonDelete,
+      localTitle: l10n.signInLocalTitle,
+      localBody: l10n.signInLocalBody,
+      localAction: l10n.signInLocalAction,
+    );
+  }
+
+  /// Does this server answer? Straight to `/api/health`, unauthenticated — the
+  /// point is to tell "wrong address / not running" apart from "wrong password",
+  /// which is the failure a first-time user actually hits.
+  Future<bool> _probeServer(String origin) async {
+    final base = Uri.tryParse(origin);
+    if (base == null || base.host.isEmpty) return false;
+    try {
+      final r = await http
+          .get(base.resolve('/api/health'))
+          .timeout(const Duration(seconds: 4));
+      return r.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// The sign-in screen AS THE SCREEN — not the route.
   ///
   /// Reached whenever the world in effect is a server and there is no session:
   /// on web that is the only state there is, and on desktop it is what you land
   /// in after signing out or after switching to a server you have not signed in
-  /// to. No onClose, because nothing is behind it; the world picker's 本地模式 row
-  /// is the way out on desktop, and web has no local world to go to.
+  /// to. No onClose, because nothing is behind it; on desktop the pane's 本地模式
+  /// tab (and its 「开始使用」) is the way out, and web has no local world to go to.
   Widget _signInGate(BuildContext context) {
-    final l10n = context.l10n;
     final desktop = _local.available;
     return Scaffold(
       body: SafeArea(
         child: SignInScreen(
           // Desktop CAN write offline; web cannot, so the feature line differs.
           hero: _signInHero(context, offlineIsReal: desktop),
-          aboveForm: desktop
-              ? WorldPicker(
+          pane: desktop
+              ? SignInPane(
+                  strings: _signInPaneStrings(context),
                   origins: _servers,
                   active: _activeOrigin,
-                  strings: WorldPickerStrings(
-                    heading: l10n.worldPickerHeading,
-                    localName: l10n.worldLocalName,
-                    localSubtitle: l10n.worldPickerLocalSubtitle,
-                    addServer: l10n.serverAddTitle,
-                    removeServer: l10n.commonDelete,
-                  ),
                   onSelect: _setActiveConnection,
+                  onEnterLocal: () => _setActiveConnection(kLocalOrigin),
                   onAdd: promptAddServer,
                   onRemove: confirmRemoveServer,
+                  probeHealth: _probeServer,
+                  authForm: AuthFormCard(
+                    strings: _authFormStrings(context),
+                    isBusy: _isBusy,
+                    onSubmit: _authenticate,
+                    onForgotPassword: _forgotPassword,
+                  ),
                 )
-              : null,
-          form: AuthFormCard(
-            strings: _authFormStrings(context),
-            isBusy: _isBusy,
-            onSubmit: _authenticate,
-            onForgotPassword: _forgotPassword,
-          ),
+              : AuthFormCard(
+                  strings: _authFormStrings(context),
+                  isBusy: _isBusy,
+                  onSubmit: _authenticate,
+                  onForgotPassword: _forgotPassword,
+                ),
         ),
       ),
     );
@@ -3657,8 +3690,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         fullscreenDialog: true,
         // StatefulBuilder because this is a ROUTE: adding or removing a server
         // calls setState on the shell, which does NOT rebuild a route already on
-        // the stack (the lesson in dialog_controllers.dart / docs/lessons.md).
-        // Without this, you would add a server here and the list would not move.
+        // the stack (see dialog_controllers.dart / docs/lessons.md). Without it
+        // you would add a server here and the list would not move.
         builder: (routeContext) => StatefulBuilder(
           builder: (routeContext, setLocal) => Scaffold(
             body: SafeArea(
@@ -3666,33 +3699,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 // Desktop CAN write offline, so the feature line drops web's
                 // 「桌面端」 qualifier.
                 hero: _signInHero(context, offlineIsReal: true),
-                // Closeable, unlike web: 本地模式 is a complete way to use the app,
-                // so a sign-in screen you cannot leave would be a trap.
+                // Closeable, unlike the gate: you got here from a world that
+                // works, so there is something to go back to.
                 onClose: () => Navigator.of(routeContext).pop(),
-                // Desktop only: this screen is the front door, so the way in has
-                // to be reachable from here. Adding a server used to be reachable ONLY
-                // from a menu inside the shell — i.e. behind the door you were
-                // trying to open. Web gets no picker: it is served BY its one
-                // server and has no local world.
-                aboveForm: WorldPicker(
+                pane: SignInPane(
+                  strings: _signInPaneStrings(context),
                   origins: _servers,
                   active: _activeOrigin,
-                  strings: WorldPickerStrings(
-                    heading: l10n.worldPickerHeading,
-                    localName: l10n.worldLocalName,
-                    localSubtitle: l10n.worldPickerLocalSubtitle,
-                    addServer: l10n.serverAddTitle,
-                    removeServer: l10n.commonDelete,
-                  ),
+                  probeHealth: _probeServer,
                   onSelect: (origin) async {
-                    // Entering 本地模式 means there is nothing left to sign in to,
-                    // so leave. Picking a different SERVER keeps you here — you
-                    // still have to sign in to it.
                     await _setActiveConnection(origin);
-                    if (origin == kLocalOrigin && routeContext.mounted) {
+                    setLocal(() {});
+                  },
+                  // Already in 本地模式 or going back to it: nothing left to
+                  // sign in to, so leave.
+                  onEnterLocal: () async {
+                    await _setActiveConnection(kLocalOrigin);
+                    if (routeContext.mounted) {
                       Navigator.of(routeContext).pop();
-                    } else {
-                      setLocal(() {});
                     }
                   },
                   onAdd: () async {
@@ -3701,35 +3725,32 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   },
                   onRemove: (origin) async {
                     await confirmRemoveServer(origin);
-                    // Removing the world you were pointing at drops the app to
-                    // 本地模式 (see _removeServer), and then this screen has
-                    // nothing to sign in to.
                     if (!routeContext.mounted) return;
+                    // Removing the world you pointed at drops the app to
+                    // 本地模式 (see _removeServer) — then this screen has
+                    // nothing to sign in to.
                     if (_activeOrigin == kLocalOrigin) {
                       Navigator.of(routeContext).pop();
                     } else {
                       setLocal(() {});
                     }
                   },
-                ),
-                form: AuthFormCard(
-                  strings: _authFormStrings(
-                    context,
-                    // Non-migrate uses the shared default (signInTitle), so
-                    // desktop and web say the same thing.
-                    title: migrate ? l10n.worldMigrateSignInTitle : null,
+                  authForm: AuthFormCard(
+                    strings: _authFormStrings(
+                      context,
+                      title: migrate ? l10n.worldMigrateSignInTitle : null,
+                    ),
+                    note: migrate
+                        ? l10n.worldMigrateSignInDesc(migrateWorkspace)
+                        : null,
+                    actionLabelOverride: migrate
+                        ? l10n.worldMigrateAction
+                        : null,
+                    isBusy: _isBusy,
+                    onSubmit: (mode, form) async =>
+                        Navigator.of(routeContext).pop((mode, form)),
+                    onForgotPassword: _forgotPassword,
                   ),
-                  note: migrate
-                      ? l10n.worldMigrateSignInDesc(migrateWorkspace)
-                      : null,
-                  actionLabelOverride: migrate ? l10n.worldMigrateAction : null,
-                  isBusy: _isBusy,
-                  // Hand the credentials back to the caller — plain sign-in and
-                  // sign-in-then-migrate both continue from there, exactly as they
-                  // did when this was a dialog.
-                  onSubmit: (mode, form) async =>
-                      Navigator.of(routeContext).pop((mode, form)),
-                  onForgotPassword: _forgotPassword,
                 ),
               ),
             ),
