@@ -150,7 +150,16 @@ jobs:
           MICA_PAT: dummy-not-used-for-handshake
         run: |
           set -euo pipefail
-          npx -y @modelcontextprotocol/inspector@latest --cli \
+          # PINNED, and not to `@latest`. The inspector is a test harness, so
+          # `@latest` means any upstream publish can turn main red with no commit
+          # of ours involved - which is exactly what happened: 2.0.0 landed
+          # 2026-07-28T07:33Z and every run after it failed with "no server"
+          # (v2 stopped handing the parent env to the spawned server), across ten
+          # unrelated commits, for nine hours. A permanently red check is worse
+          # than no check: it is where a real failure goes unnoticed. Moving to
+          # v2 is fine, but as a deliberate change with its arg/env contract
+          # read, not as a surprise arriving on an unrelated commit.
+          npx -y @modelcontextprotocol/inspector@1 --cli \
             ./target/debug/mica-cli mcp --method tools/list > tools.json
           python3 - <<'EOF'
           import json, sys
