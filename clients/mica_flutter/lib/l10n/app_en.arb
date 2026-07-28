@@ -337,7 +337,7 @@
   "cacheClearConfirmTitle": "Clear the cloud mirror?",
   "cacheClearConfirmBody": "Cloud pages and images on this device are deleted and cached again next time you connect. Local-only content is untouched. Until then, these pages cannot be opened offline.",
   "cacheClearConfirm": "Clear",
-  "cacheCleared": "Freed {size}",
+  "cacheCleared": "Cloud mirror cleared, {size} freed",
   "@cacheCleared": {
     "placeholders": {
       "size": {

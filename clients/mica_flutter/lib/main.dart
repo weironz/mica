@@ -30,6 +30,7 @@ import 'ui/autoscroll.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/destructive_confirm.dart';
+import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/format_bytes.dart';
 import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
@@ -3482,92 +3483,94 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }) {
     final migrate = migrateWorkspace != null;
     final l10n = context.l10n;
-    final email = TextEditingController();
-    final name = TextEditingController();
-    final pass = TextEditingController();
     var mode = AuthMode.login;
     return showDialog<(AuthMode, AuthFormValue)?>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Text(
-            migrate ? l10n.worldMigrateSignInTitle : l10n.worldCloudSignInTitle,
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  migrate
-                      ? l10n.worldMigrateSignInDesc(migrateWorkspace)
-                      : l10n.worldCloudSignInDesc,
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 12),
-                SegmentedButton<AuthMode>(
-                  segments: [
-                    ButtonSegment(
-                      value: AuthMode.login,
-                      label: Text(l10n.loginActionLogin),
-                    ),
-                    ButtonSegment(
-                      value: AuthMode.register,
-                      label: Text(l10n.loginActionRegister),
-                    ),
-                  ],
-                  selected: {mode},
-                  onSelectionChanged: (s) => setLocal(() => mode = s.first),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: email,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: InputDecoration(labelText: l10n.loginEmailLabel),
-                ),
-                if (mode == AuthMode.register)
+      // The controllers belong to the ROUTE, not to this function: see
+      // dialog_controllers.dart for the crash that taught us the difference.
+      builder: (ctx) => DialogTextControllers(
+        count: 3,
+        builder: (ctx, fields) => StatefulBuilder(
+          builder: (ctx, setLocal) => AlertDialog(
+            title: Text(
+              migrate
+                  ? l10n.worldMigrateSignInTitle
+                  : l10n.worldCloudSignInTitle,
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    migrate
+                        ? l10n.worldMigrateSignInDesc(migrateWorkspace)
+                        : l10n.worldCloudSignInDesc,
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<AuthMode>(
+                    segments: [
+                      ButtonSegment(
+                        value: AuthMode.login,
+                        label: Text(l10n.loginActionLogin),
+                      ),
+                      ButtonSegment(
+                        value: AuthMode.register,
+                        label: Text(l10n.loginActionRegister),
+                      ),
+                    ],
+                    selected: {mode},
+                    onSelectionChanged: (s) => setLocal(() => mode = s.first),
+                  ),
+                  const SizedBox(height: 12),
                   TextField(
-                    controller: name,
+                    controller: fields[0],
+                    keyboardType: TextInputType.emailAddress,
                     decoration: InputDecoration(
-                      labelText: l10n.accountDisplayName,
+                      labelText: l10n.loginEmailLabel,
                     ),
                   ),
-                TextField(
-                  controller: pass,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: l10n.loginPasswordLabel,
+                  if (mode == AuthMode.register)
+                    TextField(
+                      controller: fields[1],
+                      decoration: InputDecoration(
+                        labelText: l10n.accountDisplayName,
+                      ),
+                    ),
+                  TextField(
+                    controller: fields[2],
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: l10n.loginPasswordLabel,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(null),
-              child: Text(l10n.commonCancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop((
-                mode,
-                AuthFormValue(
-                  email: email.text.trim(),
-                  displayName: name.text.trim(),
-                  password: pass.text,
-                ),
-              )),
-              child: Text(
-                migrate ? l10n.worldMigrateAction : l10n.loginActionLogin,
+                ],
               ),
             ),
-          ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: Text(l10n.commonCancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop((
+                  mode,
+                  AuthFormValue(
+                    email: fields[0].text.trim(),
+                    displayName: fields[1].text.trim(),
+                    password: fields[2].text,
+                  ),
+                )),
+                child: Text(
+                  migrate ? l10n.worldMigrateAction : l10n.loginActionLogin,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    ).whenComplete(() {
-      email.dispose();
-      name.dispose();
-      pass.dispose();
-    });
+    );
   }
 
   // ── local images (P2-M5): on-device content-addressed store, fully offline ──
@@ -4768,35 +4771,36 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// A small composer for the first comment on a range.
   Future<String?> _promptCommentBody() async {
-    final controller = TextEditingController();
     final l10n = context.l10n;
     final body = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.commentAdd),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          minLines: 2,
-          maxLines: 6,
-          decoration: InputDecoration(
-            hintText: l10n.commentPlaceholder,
-            border: const OutlineInputBorder(),
+      builder: (context) => DialogTextControllers(
+        count: 1,
+        builder: (context, fields) => AlertDialog(
+          title: Text(l10n.commentAdd),
+          content: TextField(
+            controller: fields[0],
+            autofocus: true,
+            minLines: 2,
+            maxLines: 6,
+            decoration: InputDecoration(
+              hintText: l10n.commentPlaceholder,
+              border: const OutlineInputBorder(),
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(l10n.commonCancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, fields[0].text),
+              child: Text(l10n.commentPost),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l10n.commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: Text(l10n.commentPost),
-          ),
-        ],
       ),
     );
-    controller.dispose();
     return body;
   }
 
@@ -7305,14 +7309,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
 
   Future<void> _promptAddServer() async {
-    final controller = TextEditingController();
+    // No TextEditingController on purpose. There was one, disposed right after
+    // `showDialog`'s future completed — but that future completes on
+    // `Navigator.pop`, while the dialog's exit transition still has the TextField
+    // mounted for another frame or two. Any rebuild during that window (adding a
+    // server calls setState upstream, which rebuilds the whole tree including the
+    // leaving route) had the decoration's animation re-listen to a disposed
+    // notifier: "A TextEditingController was used after being disposed", then a
+    // red screen. Reading the text through onChanged removes the lifecycle
+    // entirely rather than trying to time the disposal right.
+    var typed = '';
     final url = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(context.l10n.serverAddTitle),
         content: TextField(
-          controller: controller,
           autofocus: true,
+          onChanged: (v) => typed = v,
           keyboardType: TextInputType.url,
           autocorrect: false,
           decoration: InputDecoration(
@@ -7329,13 +7342,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             child: Text(context.l10n.commonCancel),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
+            onPressed: () => Navigator.of(context).pop(typed),
             child: Text(context.l10n.serverAdd),
           ),
         ],
       ),
     );
-    controller.dispose();
     if (url == null || url.trim().isEmpty || !mounted) return;
     // Adding is not switching: the new server joins the menu and nothing else
     // moves. Picking it is a separate act — adding one to use later must not
@@ -8724,55 +8736,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   Future<void> _promptCreateWorkspace() async {
-    final controller = TextEditingController();
     // Create in the CURRENT world — no local/cloud picker. `onCreateWorkspace`
     // is already routed to the active origin by the host, so a workspace made
     // while you're in local mode is local, and cloud while you're in cloud.
     final l10n = context.l10n;
     final name = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.workspaceRowNewWorkspace),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: l10n.workspaceNameLabel,
-            border: const OutlineInputBorder(),
-          ),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(l10n.commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: Text(l10n.workspaceCreate),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-
-    final trimmed = name?.trim() ?? '';
-    if (trimmed.isNotEmpty) {
-      await widget.onCreateWorkspace(trimmed);
-    }
-  }
-
-  Future<void> _promptRenameWorkspace(WorkspaceEntry entry) async {
-    final workspace = entry.workspace;
-    final controller = TextEditingController(text: workspace.name);
-    final l10n = context.l10n;
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(l10n.workspaceRename),
+      builder: (context) => DialogTextControllers(
+        count: 1,
+        builder: (context, fields) => AlertDialog(
+          title: Text(l10n.workspaceRowNewWorkspace),
           content: TextField(
-            controller: controller,
+            controller: fields[0],
             autofocus: true,
             decoration: InputDecoration(
               labelText: l10n.workspaceNameLabel,
@@ -8785,16 +8760,56 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               onPressed: () => Navigator.of(context).pop(),
               child: Text(l10n.commonCancel),
             ),
-            FilledButton.icon(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              icon: const Icon(Icons.save),
-              label: Text(l10n.commonSave),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(fields[0].text),
+              child: Text(l10n.workspaceCreate),
             ),
           ],
+        ),
+      ),
+    );
+
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      await widget.onCreateWorkspace(trimmed);
+    }
+  }
+
+  Future<void> _promptRenameWorkspace(WorkspaceEntry entry) async {
+    final workspace = entry.workspace;
+    final l10n = context.l10n;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return DialogTextControllers(
+          count: 1,
+          initialTexts: [workspace.name],
+          builder: (context, fields) => AlertDialog(
+            title: Text(l10n.workspaceRename),
+            content: TextField(
+              controller: fields[0],
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: l10n.workspaceNameLabel,
+                border: const OutlineInputBorder(),
+              ),
+              onSubmitted: (value) => Navigator.of(context).pop(value),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(l10n.commonCancel),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.of(context).pop(fields[0].text),
+                icon: const Icon(Icons.save),
+                label: Text(l10n.commonSave),
+              ),
+            ],
+          ),
         );
       },
     );
-    controller.dispose();
 
     final trimmed = name?.trim() ?? '';
     if (trimmed.isNotEmpty && trimmed != workspace.name) {

@@ -617,6 +617,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   String? _avatarUrl;
   LocalCacheStats? _cacheStats;
   bool _cacheBusy = false;
+
+  /// Result of the last clear, shown in the Data section — NOT in `_accountMsg`,
+  /// which only renders under Account. Reporting "freed 3.2 MB" into a tab the
+  /// user is not looking at is the same as not reporting it: the numbers just
+  /// changed and nothing said why.
+  String? _cacheMsg;
   bool _cacheStatsAsked = false;
   bool _tokenWrite = false;
   final _tokenName = TextEditingController();
@@ -1823,10 +1829,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         _cacheStats = after;
         // The freed figure is measured, not assumed: a blob that could not be
         // unlinked is still counted in `after`, so this never overstates.
-        _accountMsg = l10n.cacheCleared(formatBytes(freed));
+        _cacheMsg = l10n.cacheCleared(formatBytes(freed));
       });
     } catch (error) {
-      if (mounted) setState(() => _accountMsg = error.toString());
+      if (mounted) setState(() => _cacheMsg = error.toString());
     } finally {
       if (mounted) setState(() => _cacheBusy = false);
     }
@@ -1978,6 +1984,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
           ),
         ),
+      if (_cacheMsg case final msg?) ...[
+        const SizedBox(height: 8),
+        Text(
+          msg,
+          style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
+        ),
+      ],
     ],
     const SizedBox(height: 14),
     Row(
