@@ -500,14 +500,15 @@ class _SettingsDialog extends StatefulWidget {
   /// change — that silently did nothing.
   final Future<void> Function(String displayName)? onUpdateProfile;
 
-  /// Reads the signed-in user's picture URL at build time (null = none). A
-  /// getter rather than a value because this dialog is a route and never sees
-  /// the parent rebuild that follows an upload.
+  /// The signed-in user's picture URL when Settings opens (null = none). Only
+  /// the starting value: this dialog is a route, so it never sees the rebuild an
+  /// upload causes upstream — from then on it follows what the actions report.
   final String? Function() currentAvatarUrl;
 
-  /// Null in 本地模式 — no account, so no picture to change.
-  final Future<void> Function()? onChangeAvatar;
-  final Future<void> Function()? onRemoveAvatar;
+  /// Null in 本地模式 — no account, so no picture to change. Each returns the
+  /// URL that is true afterwards.
+  final Future<String?> Function()? onChangeAvatar;
+  final Future<String?> Function()? onRemoveAvatar;
   final Future<void> Function(String current, String next)? onChangePassword;
 
   /// Null in 本地模式 — no account to delete. Deletes the cloud account and
@@ -606,6 +607,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   bool _tokenBusy = false;
   ({int workspaces, int pages, int imageBytes})? _exportStats;
   bool _exportStatsAsked = false;
+
+  /// What the avatar circle shows right now. Seeded from the parent, then kept
+  /// current by what each action reports back.
+  String? _avatarUrl;
   LocalCacheStats? _cacheStats;
   bool _cacheStatsAsked = false;
   bool _tokenWrite = false;
@@ -650,6 +655,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // opened: it is one aggregate query, and asking on first paint of that tab
     // would render the export row without its meta line and then reflow under
     // the user.
+    _avatarUrl = widget.currentAvatarUrl();
     _ensureExportStats();
     _ensureCacheStats();
   }
@@ -775,16 +781,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   Future<void> _removeAvatar() => _runAvatarAction(widget.onRemoveAvatar!);
 
-  Future<void> _runAvatarAction(Future<void> Function() action) async {
+  Future<void> _runAvatarAction(Future<String?> Function() action) async {
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
     });
     try {
-      await action();
-      // setState with no assignment on purpose: the picture is read through
-      // widget.currentAvatarUrl(), so rebuilding IS the update.
-      if (mounted) setState(() {});
+      final url = await action();
+      if (mounted) setState(() => _avatarUrl = url);
     } catch (error) {
       if (mounted) setState(() => _accountMsg = error.toString());
     } finally {
@@ -1668,7 +1672,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       Row(
         children: [
           UserAvatar(
-            url: widget.currentAvatarUrl(),
+            url: _avatarUrl,
             radius: 28,
             fallback: widget.userName.isNotEmpty
                 ? widget.userName.substring(0, 1).toUpperCase()
@@ -1698,8 +1702,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                     // Only offered when there is something to remove — a
                     // greyed-out button here would be one more control that
                     // cannot say why it is dead.
-                    if (widget.currentAvatarUrl() != null &&
-                        widget.onRemoveAvatar != null)
+                    if (_avatarUrl != null && widget.onRemoveAvatar != null)
                       TextButton(
                         onPressed: _accountBusy ? null : _removeAvatar,
                         child: Text(context.l10n.accountRemoveAvatar),

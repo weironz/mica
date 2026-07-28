@@ -1893,37 +1893,61 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Pick a picture and make it this account's avatar. Returns without a word
-  /// if the picker was dismissed — cancelling is not an error.
-  Future<void> _changeAvatar() async {
+  /// Pick a picture and make it this account's avatar.
+  ///
+  /// Returns the avatar URL that is true AFTERWARDS — including when the picker
+  /// was dismissed, which is not an error and leaves the old picture in place.
+  /// Returning the resulting state rather than an event is what lets Settings
+  /// show the change: it is a route, so it never sees the rebuild this triggers
+  /// upstream, and reading a widget field back right after the await would read
+  /// the frame that has not happened yet. (Found the hard way — the sidebar
+  /// updated and the panel you changed it in did not.)
+  Future<String?> _changeAvatar() async {
     final session = _requireSession();
     final picked = await pickImage();
-    if (picked == null) return;
+    if (picked == null) return _avatarUrlFor(session.user.avatarVersion);
     final version = await _api.setAvatar(
       session.accessToken,
       picked.bytes,
       picked.mime,
     );
-    _applyAvatarVersion(session, version);
+    return _applyAvatarVersion(session, version);
   }
 
-  Future<void> _removeAvatar() async {
+  Future<String?> _removeAvatar() async {
     final session = _requireSession();
     await _api.removeAvatar(session.accessToken);
-    _applyAvatarVersion(session, null);
+    return _applyAvatarVersion(session, null);
   }
 
   /// Same copyWith discipline as _updateProfile: rebuilding the session here
   /// would drop the refresh token, and changing your picture would cost you the
   /// ability to renew.
-  void _applyAvatarVersion(AuthSession session, String? version) {
-    if (!mounted) return;
+  String? _applyAvatarVersion(AuthSession session, String? version) {
     final updated = session.copyWith(
       user: session.user.withAvatarVersion(version),
     );
-    setState(() => _session = updated);
-    _persistSession(updated);
+    if (mounted) {
+      setState(() => _session = updated);
+      _persistSession(updated);
+    }
+    // Derived from the version we just set, not read back out of state — the
+    // answer must be right even when this widget is already gone.
+    final url = _avatarUrlFor(version, userId: updated.user.id);
+    // The version is a content hash, so setting → removing → setting the SAME
+    // picture lands back on the exact URL that 404'd in between, and Flutter's
+    // ImageCache holds that failure for the rest of the run: the app would say
+    // you have a picture and draw your initial. Evicting here is the one moment
+    // anything knows the bytes behind this URL just changed.
+    if (url != null) NetworkImage(url).evict();
+    return url;
   }
+
+  String? _avatarUrlFor(String? version, {String? userId}) => avatarUrl(
+    base: _api.baseUri,
+    userId: userId ?? _session?.user.id ?? '',
+    version: version,
+  );
 
   Future<void> _changePassword(String current, String next) async {
     final session = _requireSession();
@@ -5908,9 +5932,11 @@ class WorkspaceView extends StatefulWidget {
   /// server have different ones.
   final Uri apiBase;
 
-  /// Null in 本地模式, where there is no account to have a picture.
-  final Future<void> Function()? onChangeAvatar;
-  final Future<void> Function()? onRemoveAvatar;
+  /// Null in 本地模式, where there is no account to have a picture. Both report
+  /// the avatar URL that holds afterwards, so a route can render the result
+  /// without waiting on a rebuild it will never receive.
+  final Future<String?> Function()? onChangeAvatar;
+  final Future<String?> Function()? onRemoveAvatar;
 
   /// The unified workspace list (P3c): local + cloud entries, grouped by
   /// origin in the switcher. Row actions dispatch on the ROW's entry.
