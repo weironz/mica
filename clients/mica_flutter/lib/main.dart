@@ -5080,14 +5080,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // it contributes just its selected workspace.
       homePane: buildHomePane(
         context,
-        // Empty in the local world on purpose: there is no account and so no
-        // one to name. It used to pass 「本地模式」 here, which the greeting then
-        // read out as 「下午好，本地模式」.
-        userName: local
-            ? ''
-            : ((session?.user.displayName.trim().isNotEmpty ?? false)
-                  ? session!.user.displayName
-                  : (session?.user.email ?? '')),
         viewsByWorkspace: local
             ? {
                 if (_localSelectedWorkspace != null)

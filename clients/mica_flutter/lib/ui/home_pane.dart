@@ -9,10 +9,8 @@
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../api/models.dart';
-import '../l10n/app_localizations.dart';
 import '../l10n/locale_controller.dart';
 import 'home_data.dart';
 import 'home_screen.dart';
@@ -25,7 +23,6 @@ import 'home_screen.dart';
 /// worlds stay separate — the caller passes whichever is active.
 Widget buildHomePane(
   BuildContext context, {
-  required String userName,
   required Map<String, List<DocumentView>> viewsByWorkspace,
   required Map<String, String> workspaceNames,
   required VoidCallback onCreatePage,
@@ -34,7 +31,6 @@ Widget buildHomePane(
 }) {
   final l10n = context.l10n;
   final clock = now ?? DateTime.now();
-  final locale = Localizations.localeOf(context).toLanguageTag();
 
   final relative = RelativeTimeStrings(
     justNow: l10n.homeJustNow,
@@ -45,9 +41,6 @@ Widget buildHomePane(
   );
 
   return HomeScreen(
-    // Localized long date, e.g. "2026年7月27日星期一" / "Monday, July 27, 2026".
-    dateText: DateFormat.yMMMMEEEEd(locale).format(clock),
-    greeting: _greeting(l10n, userName, clock),
     strings: HomeStrings(
       createTitle: l10n.homeCreateTitle,
       createSubtitle: l10n.homeCreateSubtitle,
@@ -77,29 +70,4 @@ Widget buildHomePane(
     onOpen: onOpenView,
     onCreatePage: onCreatePage,
   );
-}
-
-/// Time-of-day greeting. Boundaries at 05/12/18 local time — the point is that it
-/// matches what the user would call the current part of their day, so it follows
-/// the device clock rather than anything server-side.
-String _greeting(AppLocalizations l10n, String userName, DateTime clock) {
-  final hour = clock.hour;
-  // No name to greet is a real state, not an edge case: the local world has no
-  // account at all. Passing the world's own label in its place produced
-  // 「下午好，本地模式」 — greeting the user by the name of a mode — and passing an
-  // empty string left a dangling 「下午好，」. Both need the nameless wording.
-  final named = userName.trim().isNotEmpty;
-  if (hour >= 5 && hour < 12) {
-    return named
-        ? l10n.homeGreetingMorning(userName)
-        : l10n.homeGreetingMorningPlain;
-  }
-  if (hour >= 12 && hour < 18) {
-    return named
-        ? l10n.homeGreetingAfternoon(userName)
-        : l10n.homeGreetingAfternoonPlain;
-  }
-  return named
-      ? l10n.homeGreetingEvening(userName)
-      : l10n.homeGreetingEveningPlain;
 }

@@ -1,11 +1,17 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../editor/render.dart' show EditorTheme;
 
-/// The home screen: date + greeting, one big "create page" affordance, then the
-/// two lists that get a user back into work (recently edited, directories).
+/// The home screen: one "create page" affordance, then the two lists that get a
+/// user back into work (recently edited, directories).
+///
+/// It used to open with a date line and 「下午好,X」. Both are gone. Neither
+/// reference product has a greeting dashboard — AppFlowy lands you on the last
+/// document (sidebar spaces + favourites), AFFiNE on `all-page` / journals — and
+/// the greeting cost us a real bug on the way: in 本地模式 there is no account, so
+/// the world's name was passed as the user's and the app said 「下午好,本地模式」.
+/// What survives is the half that carries information: this is the only
+/// cross-workspace entry point (the sidebar shows the ONE workspace you are in).
 ///
 /// Design source: `docs/design/知识库软件开发协作/03 首页+侧栏.dc.html`, the
 /// `isHome` branch of the right pane. Where the mockup's legacy half-step sizes
@@ -29,8 +35,6 @@ import '../editor/render.dart' show EditorTheme;
 /// place where dates get formatted.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({
-    required this.dateText,
-    required this.greeting,
     required this.strings,
     required this.recents,
     required this.directories,
@@ -38,12 +42,6 @@ class HomeScreen extends StatelessWidget {
     required this.onCreatePage,
     super.key,
   });
-
-  /// Already formatted by the caller (it has the locale). E.g. "2026年7月16日 · 周四".
-  final String dateText;
-
-  /// Already formatted by the caller (it has the locale *and* the user's name).
-  final String greeting;
 
   final HomeStrings strings;
   final List<HomeDocEntry> recents;
@@ -62,32 +60,13 @@ class HomeScreen extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 840),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(40, 72, 40, 120),
+            // Was 72 at the top to sit under a date line that no longer exists.
+            padding: const EdgeInsets.fromLTRB(40, 48, 40, 120),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  dateText,
-                  style: const TextStyle(
-                    fontFamily: _monoFont,
-                    fontSize: 12,
-                    letterSpacing: 1.5,
-                    color: EditorTheme.faint,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  greeting,
-                  style: const TextStyle(
-                    fontSize: 34,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.6,
-                    color: EditorTheme.text,
-                  ),
-                ),
-                const SizedBox(height: 32),
                 _CreateCard(strings: strings, onTap: onCreatePage),
-                const SizedBox(height: 58),
+                const SizedBox(height: 48),
                 _SectionHeader(
                   icon: Icons.schedule,
                   label: strings.recentLabel,
@@ -99,7 +78,12 @@ class HomeScreen extends StatelessWidget {
                     body: strings.recentEmptyBody,
                   )
                 else
-                  _RecentGrid(entries: recents, onOpen: onOpen),
+                  for (final doc in recents)
+                    _DirectoryRow(
+                      entry: doc,
+                      onOpen: onOpen,
+                      fallbackIcon: Icons.description_outlined,
+                    ),
                 const SizedBox(height: 44),
                 _SectionHeader(
                   icon: Icons.folder_outlined,
@@ -113,7 +97,11 @@ class HomeScreen extends StatelessWidget {
                   )
                 else
                   for (final dir in directories)
-                    _DirectoryRow(entry: dir, onOpen: onOpen),
+                    _DirectoryRow(
+                      entry: dir,
+                      onOpen: onOpen,
+                      fallbackIcon: Icons.folder_outlined,
+                    ),
               ],
             ),
           ),
@@ -393,125 +381,22 @@ class _WorkspaceChip extends StatelessWidget {
 /// than roughly 180px, which is where the two-line name plus the chip row starts
 /// to wrap into mush. Thresholds are on the grid's own width (content width,
 /// i.e. after the 40px page padding): 3 columns from 600px, 2 from 380px.
-class _RecentGrid extends StatelessWidget {
-  const _RecentGrid({required this.entries, required this.onOpen});
-
-  final List<HomeDocEntry> entries;
-  final void Function(String id) onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    const gap = 14.0;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final columns = width >= 600
-            ? 3
-            : width >= 380
-            ? 2
-            : 1;
-        final rows = <Widget>[];
-        for (var i = 0; i < entries.length; i += columns) {
-          final slice = entries.sublist(
-            i,
-            math.min(i + columns, entries.length),
-          );
-          final cells = <Widget>[];
-          for (var j = 0; j < columns; j++) {
-            if (j > 0) cells.add(const SizedBox(width: gap));
-            cells.add(
-              Expanded(
-                child: j < slice.length
-                    ? _DocCard(entry: slice[j], onOpen: onOpen)
-                    // Keeps the last row's cards the same width as the rest
-                    // instead of stretching a lone card across the page.
-                    : const SizedBox.shrink(),
-              ),
-            );
-          }
-          if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
-          // IntrinsicHeight so cards in a row match the tallest one; names wrap
-          // to two lines at unpredictable places.
-          rows.add(
-            IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: cells,
-              ),
-            ),
-          );
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: rows,
-        );
-      },
-    );
-  }
-}
-
-class _DocCard extends StatelessWidget {
-  const _DocCard({required this.entry, required this.onOpen});
-
-  final HomeDocEntry entry;
-  final void Function(String id) onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Hoverable(
-      onTap: () => onOpen(entry.id),
-      builder: (hovered) => Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          border: Border.all(color: hovered ? _hoverBorder : _cardBorder),
-          borderRadius: const BorderRadius.all(Radius.circular(14)),
-          boxShadow: _hoverShadow(hovered),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _EntryIcon(
-              icon: entry.icon,
-              fallback: Icons.description_outlined,
-              size: 24,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              entry.name,
-              style: const TextStyle(
-                fontSize: 14,
-                height: 1.4,
-                fontWeight: FontWeight.w600,
-                color: EditorTheme.text,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Flexible(child: _WorkspaceChip(name: entry.workspaceName)),
-                const SizedBox(width: 8),
-                Text(
-                  entry.meta,
-                  style: const TextStyle(
-                    fontFamily: _monoFont,
-                    fontSize: 12,
-                    color: EditorTheme.faint,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _DirectoryRow extends StatelessWidget {
-  const _DirectoryRow({required this.entry, required this.onOpen});
+  const _DirectoryRow({
+    required this.entry,
+    required this.onOpen,
+    required this.fallbackIcon,
+  });
 
   final HomeDocEntry entry;
   final void Function(String id) onOpen;
+
+  /// Glyph for an entry with no emoji of its own. Passed in, because
+  /// `HomeDocEntry` carries no kind and the row cannot tell a page from a folder
+  /// — reusing this row for the recents list without it made every icon-less
+  /// PAGE look like a FOLDER. The list that owns the entries is the thing that
+  /// knows which they are.
+  final IconData fallbackIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -526,11 +411,7 @@ class _DirectoryRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            _EntryIcon(
-              icon: entry.icon,
-              fallback: Icons.folder_outlined,
-              size: 19,
-            ),
+            _EntryIcon(icon: entry.icon, fallback: fallbackIcon, size: 19),
             const SizedBox(width: 12),
             Expanded(
               child: Text(

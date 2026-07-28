@@ -44,8 +44,6 @@ void main() {
             child: SizedBox(
               width: width,
               child: HomeScreen(
-                dateText: 'DATE',
-                greeting: 'GREETING',
                 strings: _strings,
                 recents: recents ?? [entry('r1'), entry('r2'), entry('r3')],
                 directories: directories ?? [entry('d1')],
@@ -58,13 +56,6 @@ void main() {
       ),
     );
   }
-
-  testWidgets('renders the caller-formatted date and greeting', (tester) async {
-    await pumpHome(tester);
-    expect(find.text('DATE'), findsOneWidget);
-    expect(find.text('GREETING'), findsOneWidget);
-    expect(find.text('CTRL_N'), findsOneWidget);
-  });
 
   testWidgets('the create card fires onCreatePage', (tester) async {
     var created = 0;
@@ -139,41 +130,5 @@ void main() {
 
     expect(find.text('DIRS_EMPTY_TITLE'), findsOneWidget);
     expect(find.text('DIRS_EMPTY_BODY'), findsOneWidget);
-  });
-
-  testWidgets('recents grid is 3 columns when wide', (tester) async {
-    await pumpHome(tester, width: 1000);
-
-    final ys = ['doc r1', 'doc r2', 'doc r3']
-        .map((n) => tester.getTopLeft(find.text(n)).dy)
-        .toSet();
-    final xs = ['doc r1', 'doc r2', 'doc r3']
-        .map((n) => tester.getTopLeft(find.text(n)).dx)
-        .toSet();
-
-    expect(ys, hasLength(1), reason: 'all three should share one row');
-    expect(xs, hasLength(3), reason: 'and each should get its own column');
-  });
-
-  testWidgets('grid collapses to 2 then 1 column as width shrinks', (
-    tester,
-  ) async {
-    // 500 wide → 420 of content (page padding is 40 each side) → 2 columns.
-    await pumpHome(tester, width: 500);
-    var offsets = ['doc r1', 'doc r2', 'doc r3']
-        .map((n) => tester.getTopLeft(find.text(n)))
-        .toList();
-    expect(offsets[0].dy, offsets[1].dy);
-    expect(offsets[2].dy, greaterThan(offsets[1].dy));
-    expect(offsets[2].dx, offsets[0].dx, reason: 'r3 wraps under r1');
-
-    // 400 wide → 320 of content → 1 column, so every card is on its own row and
-    // they all start at the same x.
-    await pumpHome(tester, width: 400);
-    offsets = ['doc r1', 'doc r2', 'doc r3']
-        .map((n) => tester.getTopLeft(find.text(n)))
-        .toList();
-    expect(offsets.map((o) => o.dy).toSet(), hasLength(3));
-    expect(offsets.map((o) => o.dx).toSet(), hasLength(1));
   });
 }
