@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import 'marks.dart';
+import '../ui/theme_tokens.dart';
 
 /// A [TextEditingController] for a table cell that renders inline MARKS live
 /// (WYSIWYG) instead of the raw Markdown source. Its [text] is the clean cell
@@ -79,7 +80,12 @@ class CellEditController extends TextEditingController {
     // Render the marks over the field's own style — this is what makes editing
     // WYSIWYG. The IME's composing region is left un-underlined (the candidate
     // window still positions correctly from the field's caret rect).
-    return buildMarkedSpan(text, marks, style ?? const TextStyle());
+    return buildMarkedSpan(
+      text,
+      marks,
+      style ?? const TextStyle(),
+      MicaTheme.of(context),
+    );
   }
 
   int _commonPrefix(String a, String b) {

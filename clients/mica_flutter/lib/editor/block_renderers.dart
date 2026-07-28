@@ -519,6 +519,7 @@ class TableRenderer extends AtomicBlockRenderer {
                 host._appearance,
                 isHeader: isHeader,
               ),
+              host._appearance.tokens,
             ),
             textAlign: alignAt(c),
             textDirection: TextDirection.ltr,

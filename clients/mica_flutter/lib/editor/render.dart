@@ -1273,13 +1273,24 @@ class RenderDocument extends RenderBox {
       TextSpan span;
       List<PlaceholderDimensions>? dims;
       if (isCode && node.text.isNotEmpty) {
-        span = buildCodeSpan(node.text, codeLang!, style);
+        span = buildCodeSpan(
+          node.text,
+          codeLang!,
+          style,
+          _appearance.tokens.code,
+        );
       } else if (fold != null) {
-        final folded = buildFoldedSpan(node.text, marks, style, fold.atoms);
+        final folded = buildFoldedSpan(
+          node.text,
+          marks,
+          style,
+          fold.atoms,
+          _appearance.tokens,
+        );
         span = folded.span;
         dims = folded.dims;
       } else {
-        span = buildMarkedSpan(node.text, marks, style);
+        span = buildMarkedSpan(node.text, marks, style, _appearance.tokens);
       }
 
       final codeWrap = isCode && node.data['wrap'] == true;
@@ -1318,7 +1329,7 @@ class RenderDocument extends RenderBox {
             // every offset in the node; rebuild unfolded instead.
             fold = null;
             painter.dispose();
-            span = buildMarkedSpan(node.text, marks, style);
+            span = buildMarkedSpan(node.text, marks, style, _appearance.tokens);
             painter = TextPainter(
               text: span,
               textDirection: TextDirection.ltr,
@@ -1638,10 +1649,14 @@ class RenderDocument extends RenderBox {
   /// (`` `code` ``, `**bold**`, …); painting shows the rendered form while the
   /// overlay editor keeps showing the source (Typora-style). Parse failures
   /// can't happen — unmatched markers simply stay literal text.
-  static TextSpan cellDisplaySpan(String raw, TextStyle base) {
+  static TextSpan cellDisplaySpan(
+    String raw,
+    TextStyle base,
+    MicaTokens tokens,
+  ) {
     if (raw.isEmpty) return TextSpan(text: ' ', style: base);
     final parsed = parseInline(raw);
-    return buildMarkedSpan(parsed.text, parsed.marks, base);
+    return buildMarkedSpan(parsed.text, parsed.marks, base, tokens);
   }
 
   // ---------------------------------------------------------------------------

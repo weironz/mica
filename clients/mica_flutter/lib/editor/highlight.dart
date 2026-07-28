@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../ui/theme_tokens.dart';
+
 /// In-house syntax highlighter for code blocks. A single generic tokenizer
 /// (comments, strings, numbers, identifiers, keywords) is tuned per language by
 /// a small [_Lang] config — no third-party highlighter dependency. Language can
@@ -57,12 +59,19 @@ const List<String> kCodeLanguages = [
 ];
 
 // Light-theme token palette.
-const Color _kwColor = Color(0xFF7C3AED); // keyword — purple
-const Color _strColor = Color(0xFF0A7D34); // string — green
-const Color _comColor = Color(0xFF6B7280); // comment — grey
-const Color _numColor = Color(0xFFB45309); // number — amber
-const Color _fnColor = Color(0xFF2563EB); // function call — blue
-const Color _keyColor = Color(0xFF0F766E); // key / property / tag — teal
+/// What a match IS, not what colour it is. The rule tables below are built once
+/// at load time, so a colour baked into them could never follow the palette;
+/// naming the role instead lets the same table serve both.
+enum _Role { keyword, string, comment, number, function, key }
+
+Color _roleColor(_Role role, CodeTokens c) => switch (role) {
+  _Role.keyword => c.keyword,
+  _Role.string => c.string,
+  _Role.comment => c.comment,
+  _Role.number => c.number,
+  _Role.function => c.function,
+  _Role.key => c.key,
+};
 
 /// Fence labels people actually write, mapped to the name the tokenizer knows.
 ///
@@ -187,11 +196,11 @@ String canonicalCodeLanguage(String name) {
 /// otherwise the whole match; either way it must start at the match's start, so
 /// the scanner can simply skip past what it coloured.
 class _Rule {
-  _Rule(String source, this.color, {this.leadOnly = false})
-      : pattern = RegExp(source);
+  _Rule(String source, this.role, {this.leadOnly = false})
+    : pattern = RegExp(source);
 
   final RegExp pattern;
-  final Color color;
+  final _Role role;
 
   /// Only try at a line's first real token — after indentation and after
   /// YAML's `- ` item marker. This is what separates a `key:` from a colon
@@ -224,88 +233,406 @@ const _hashLike = ['#'];
 final Map<String, _Lang> _langs = {
   'dart': const _Lang(
     keywords: {
-      'abstract', 'as', 'async', 'await', 'break', 'case', 'catch', 'class',
-      'const', 'continue', 'default', 'do', 'dynamic', 'else', 'enum', 'export',
-      'extends', 'extension', 'external', 'factory', 'false', 'final', 'finally',
-      'for', 'get', 'if', 'implements', 'import', 'in', 'is', 'late', 'library',
-      'mixin', 'new', 'null', 'on', 'operator', 'part', 'required', 'rethrow',
-      'return', 'set', 'static', 'super', 'switch', 'this', 'throw', 'true',
-      'try', 'typedef', 'var', 'void', 'while', 'with', 'yield',
+      'abstract',
+      'as',
+      'async',
+      'await',
+      'break',
+      'case',
+      'catch',
+      'class',
+      'const',
+      'continue',
+      'default',
+      'do',
+      'dynamic',
+      'else',
+      'enum',
+      'export',
+      'extends',
+      'extension',
+      'external',
+      'factory',
+      'false',
+      'final',
+      'finally',
+      'for',
+      'get',
+      'if',
+      'implements',
+      'import',
+      'in',
+      'is',
+      'late',
+      'library',
+      'mixin',
+      'new',
+      'null',
+      'on',
+      'operator',
+      'part',
+      'required',
+      'rethrow',
+      'return',
+      'set',
+      'static',
+      'super',
+      'switch',
+      'this',
+      'throw',
+      'true',
+      'try',
+      'typedef',
+      'var',
+      'void',
+      'while',
+      'with',
+      'yield',
     },
   ),
   'javascript': const _Lang(
     keywords: {
-      'const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while',
-      'do', 'switch', 'case', 'break', 'continue', 'class', 'extends', 'super',
-      'new', 'this', 'typeof', 'instanceof', 'in', 'of', 'try', 'catch',
-      'finally', 'throw', 'async', 'await', 'yield', 'import', 'export', 'from',
-      'default', 'null', 'undefined', 'true', 'false', 'void', 'delete',
+      'const',
+      'let',
+      'var',
+      'function',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'break',
+      'continue',
+      'class',
+      'extends',
+      'super',
+      'new',
+      'this',
+      'typeof',
+      'instanceof',
+      'in',
+      'of',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'async',
+      'await',
+      'yield',
+      'import',
+      'export',
+      'from',
+      'default',
+      'null',
+      'undefined',
+      'true',
+      'false',
+      'void',
+      'delete',
     },
   ),
   'typescript': const _Lang(
     keywords: {
-      'const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while',
-      'do', 'switch', 'case', 'break', 'continue', 'class', 'extends', 'super',
-      'new', 'this', 'typeof', 'instanceof', 'in', 'of', 'try', 'catch',
-      'finally', 'throw', 'async', 'await', 'yield', 'import', 'export', 'from',
-      'default', 'null', 'undefined', 'true', 'false', 'void', 'delete',
-      'interface', 'type', 'enum', 'implements', 'public', 'private',
-      'protected', 'readonly', 'as', 'namespace', 'declare', 'keyof',
+      'const',
+      'let',
+      'var',
+      'function',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'break',
+      'continue',
+      'class',
+      'extends',
+      'super',
+      'new',
+      'this',
+      'typeof',
+      'instanceof',
+      'in',
+      'of',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'async',
+      'await',
+      'yield',
+      'import',
+      'export',
+      'from',
+      'default',
+      'null',
+      'undefined',
+      'true',
+      'false',
+      'void',
+      'delete',
+      'interface',
+      'type',
+      'enum',
+      'implements',
+      'public',
+      'private',
+      'protected',
+      'readonly',
+      'as',
+      'namespace',
+      'declare',
+      'keyof',
     },
   ),
   'python': const _Lang(
     keywords: {
-      'def', 'return', 'if', 'elif', 'else', 'for', 'while', 'break', 'continue',
-      'class', 'import', 'from', 'as', 'try', 'except', 'finally', 'raise',
-      'with', 'lambda', 'yield', 'global', 'nonlocal', 'pass', 'True', 'False',
-      'None', 'and', 'or', 'not', 'in', 'is', 'async', 'await', 'del', 'assert',
+      'def',
+      'return',
+      'if',
+      'elif',
+      'else',
+      'for',
+      'while',
+      'break',
+      'continue',
+      'class',
+      'import',
+      'from',
+      'as',
+      'try',
+      'except',
+      'finally',
+      'raise',
+      'with',
+      'lambda',
+      'yield',
+      'global',
+      'nonlocal',
+      'pass',
+      'True',
+      'False',
+      'None',
+      'and',
+      'or',
+      'not',
+      'in',
+      'is',
+      'async',
+      'await',
+      'del',
+      'assert',
     },
     lineComments: _hashLike,
     blockComments: false,
   ),
   'rust': const _Lang(
     keywords: {
-      'fn', 'let', 'mut', 'const', 'static', 'if', 'else', 'match', 'for',
-      'while', 'loop', 'break', 'continue', 'return', 'struct', 'enum', 'impl',
-      'trait', 'pub', 'use', 'mod', 'crate', 'self', 'super', 'as', 'where',
-      'move', 'ref', 'dyn', 'async', 'await', 'unsafe', 'extern', 'type',
-      'true', 'false', 'Some', 'None', 'Ok', 'Err',
+      'fn',
+      'let',
+      'mut',
+      'const',
+      'static',
+      'if',
+      'else',
+      'match',
+      'for',
+      'while',
+      'loop',
+      'break',
+      'continue',
+      'return',
+      'struct',
+      'enum',
+      'impl',
+      'trait',
+      'pub',
+      'use',
+      'mod',
+      'crate',
+      'self',
+      'super',
+      'as',
+      'where',
+      'move',
+      'ref',
+      'dyn',
+      'async',
+      'await',
+      'unsafe',
+      'extern',
+      'type',
+      'true',
+      'false',
+      'Some',
+      'None',
+      'Ok',
+      'Err',
     },
   ),
   'go': const _Lang(
     keywords: {
-      'func', 'var', 'const', 'package', 'import', 'if', 'else', 'for', 'range',
-      'switch', 'case', 'default', 'break', 'continue', 'return', 'type',
-      'struct', 'interface', 'map', 'chan', 'go', 'defer', 'select',
-      'fallthrough', 'nil', 'true', 'false',
+      'func',
+      'var',
+      'const',
+      'package',
+      'import',
+      'if',
+      'else',
+      'for',
+      'range',
+      'switch',
+      'case',
+      'default',
+      'break',
+      'continue',
+      'return',
+      'type',
+      'struct',
+      'interface',
+      'map',
+      'chan',
+      'go',
+      'defer',
+      'select',
+      'fallthrough',
+      'nil',
+      'true',
+      'false',
     },
   ),
   'java': const _Lang(
     keywords: {
-      'int', 'long', 'short', 'char', 'float', 'double', 'boolean', 'void',
-      'class', 'public', 'private', 'protected', 'static', 'final', 'return',
-      'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue',
-      'new', 'this', 'super', 'extends', 'implements', 'interface', 'enum',
-      'try', 'catch', 'finally', 'throw', 'throws', 'import', 'package', 'true',
-      'false', 'null', 'abstract', 'instanceof',
+      'int',
+      'long',
+      'short',
+      'char',
+      'float',
+      'double',
+      'boolean',
+      'void',
+      'class',
+      'public',
+      'private',
+      'protected',
+      'static',
+      'final',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'break',
+      'continue',
+      'new',
+      'this',
+      'super',
+      'extends',
+      'implements',
+      'interface',
+      'enum',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'throws',
+      'import',
+      'package',
+      'true',
+      'false',
+      'null',
+      'abstract',
+      'instanceof',
     },
   ),
   'c': const _Lang(
     keywords: {
-      'int', 'long', 'short', 'char', 'float', 'double', 'void', 'struct',
-      'union', 'enum', 'static', 'const', 'return', 'if', 'else', 'for', 'while',
-      'do', 'switch', 'case', 'break', 'continue', 'sizeof', 'typedef',
-      'unsigned', 'signed', 'extern', 'volatile', 'register', 'goto', 'NULL',
+      'int',
+      'long',
+      'short',
+      'char',
+      'float',
+      'double',
+      'void',
+      'struct',
+      'union',
+      'enum',
+      'static',
+      'const',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'break',
+      'continue',
+      'sizeof',
+      'typedef',
+      'unsigned',
+      'signed',
+      'extern',
+      'volatile',
+      'register',
+      'goto',
+      'NULL',
     },
   ),
   'cpp': const _Lang(
     keywords: {
-      'int', 'long', 'short', 'char', 'float', 'double', 'bool', 'void',
-      'class', 'struct', 'public', 'private', 'protected', 'static', 'const',
-      'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break',
-      'continue', 'new', 'delete', 'this', 'template', 'typename', 'namespace',
-      'using', 'auto', 'true', 'false', 'nullptr', 'virtual', 'override',
-      'sizeof', 'enum', 'try', 'catch', 'throw',
+      'int',
+      'long',
+      'short',
+      'char',
+      'float',
+      'double',
+      'bool',
+      'void',
+      'class',
+      'struct',
+      'public',
+      'private',
+      'protected',
+      'static',
+      'const',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'break',
+      'continue',
+      'new',
+      'delete',
+      'this',
+      'template',
+      'typename',
+      'namespace',
+      'using',
+      'auto',
+      'true',
+      'false',
+      'nullptr',
+      'virtual',
+      'override',
+      'sizeof',
+      'enum',
+      'try',
+      'catch',
+      'throw',
     },
   ),
   'json': _Lang(
@@ -316,7 +643,7 @@ final Map<String, _Lang> _langs = {
     rules: [
       // A key is a string too, so without this every key and every value came
       // out the same green and the structure read as one undifferentiated blob.
-      _Rule(r'"(?:[^"\\]|\\.)*"(?=\s*:)', _keyColor),
+      _Rule(r'"(?:[^"\\]|\\.)*"(?=\s*:)', _Role.key),
     ],
   ),
   // YAML is nearly all keys and values: `true/false/null` are the only words a
@@ -328,34 +655,105 @@ final Map<String, _Lang> _langs = {
     strings: const ['"', "'"],
     rules: [
       // `key:` at the head of a line (indentation and `- ` don't count).
-      _Rule(r'''[A-Za-z_][A-Za-z0-9_.\-/]*(?=\s*:(?:\s|$))''', _keyColor,
-          leadOnly: true),
+      _Rule(
+        r'''[A-Za-z_][A-Za-z0-9_.\-/]*(?=\s*:(?:\s|$))''',
+        _Role.key,
+        leadOnly: true,
+      ),
       // "quoted key":
-      _Rule(r'''"(?:[^"\\]|\\.)*"(?=\s*:(?:\s|$))''', _keyColor, leadOnly: true),
+      _Rule(
+        r'''"(?:[^"\\]|\\.)*"(?=\s*:(?:\s|$))''',
+        _Role.key,
+        leadOnly: true,
+      ),
       // Anchors, aliases and merge keys: &base  *base  <<:
-      _Rule(r'[&*][A-Za-z0-9_\-]+', _fnColor),
+      _Rule(r'[&*][A-Za-z0-9_\-]+', _Role.function),
       // Document markers.
-      _Rule(r'^(?:---|\.\.\.)$', _comColor, leadOnly: true),
+      _Rule(r'^(?:---|\.\.\.)$', _Role.comment, leadOnly: true),
     ],
   ),
   'sql': const _Lang(
     keywords: {
-      'select', 'from', 'where', 'insert', 'update', 'delete', 'create',
-      'table', 'drop', 'alter', 'join', 'left', 'right', 'inner', 'outer',
-      'full', 'on', 'group', 'by', 'order', 'having', 'limit', 'offset', 'as',
-      'and', 'or', 'not', 'null', 'into', 'values', 'set', 'distinct', 'count',
-      'sum', 'avg', 'min', 'max', 'primary', 'key', 'foreign', 'references',
-      'index', 'view', 'union', 'all', 'is', 'in', 'like', 'between', 'asc',
-      'desc', 'default',
+      'select',
+      'from',
+      'where',
+      'insert',
+      'update',
+      'delete',
+      'create',
+      'table',
+      'drop',
+      'alter',
+      'join',
+      'left',
+      'right',
+      'inner',
+      'outer',
+      'full',
+      'on',
+      'group',
+      'by',
+      'order',
+      'having',
+      'limit',
+      'offset',
+      'as',
+      'and',
+      'or',
+      'not',
+      'null',
+      'into',
+      'values',
+      'set',
+      'distinct',
+      'count',
+      'sum',
+      'avg',
+      'min',
+      'max',
+      'primary',
+      'key',
+      'foreign',
+      'references',
+      'index',
+      'view',
+      'union',
+      'all',
+      'is',
+      'in',
+      'like',
+      'between',
+      'asc',
+      'desc',
+      'default',
     },
     lineComments: ['--'],
     caseInsensitive: true,
   ),
   'bash': const _Lang(
     keywords: {
-      'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case',
-      'esac', 'function', 'echo', 'export', 'local', 'return', 'in', 'exit',
-      'set', 'cd', 'source', 'alias',
+      'if',
+      'then',
+      'else',
+      'elif',
+      'fi',
+      'for',
+      'while',
+      'do',
+      'done',
+      'case',
+      'esac',
+      'function',
+      'echo',
+      'export',
+      'local',
+      'return',
+      'in',
+      'exit',
+      'set',
+      'cd',
+      'source',
+      'alias',
     },
     lineComments: _hashLike,
     blockComments: false,
@@ -374,11 +772,43 @@ final Map<String, _Lang> _langs = {
   // way to express yet. A `<# #>` block renders plain rather than wrong.
   'powershell': const _Lang(
     keywords: {
-      'if', 'elseif', 'else', 'switch', 'foreach', 'for', 'while', 'do',
-      'until', 'break', 'continue', 'return', 'function', 'filter', 'param',
-      'begin', 'process', 'end', 'try', 'catch', 'finally', 'throw', 'trap',
-      'class', 'enum', 'in', 'exit', 'using', 'workflow', 'data', 'dynamicparam',
-      'true', 'false', 'null', 'not', 'and', 'or',
+      'if',
+      'elseif',
+      'else',
+      'switch',
+      'foreach',
+      'for',
+      'while',
+      'do',
+      'until',
+      'break',
+      'continue',
+      'return',
+      'function',
+      'filter',
+      'param',
+      'begin',
+      'process',
+      'end',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'trap',
+      'class',
+      'enum',
+      'in',
+      'exit',
+      'using',
+      'workflow',
+      'data',
+      'dynamicparam',
+      'true',
+      'false',
+      'null',
+      'not',
+      'and',
+      'or',
     },
     lineComments: _hashLike,
     blockComments: false,
@@ -392,11 +822,17 @@ final Map<String, _Lang> _langs = {
     lineComments: const [],
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'@[a-zA-Z-]+', _kwColor), // @media, @import, @keyframes
-      _Rule(r'[a-zA-Z-]+(?=\s*:)', _keyColor, leadOnly: true), // property:
-      _Rule(r'''[.#]?[A-Za-z_][A-Za-z0-9_\-]*(?=[^;{}]*\{)''', _fnColor,
-          leadOnly: true), // a selector, i.e. what precedes the next {
-      _Rule(r'[.#&:][A-Za-z_][A-Za-z0-9_\-]*', _fnColor), // .cls #id :hover
+      _Rule(r'@[a-zA-Z-]+', _Role.keyword), // @media, @import, @keyframes
+      _Rule(r'[a-zA-Z-]+(?=\s*:)', _Role.key, leadOnly: true), // property:
+      _Rule(
+        r'''[.#]?[A-Za-z_][A-Za-z0-9_\-]*(?=[^;{}]*\{)''',
+        _Role.function,
+        leadOnly: true,
+      ), // a selector, i.e. what precedes the next {
+      _Rule(
+        r'[.#&:][A-Za-z_][A-Za-z0-9_\-]*',
+        _Role.function,
+      ), // .cls #id :hover
     ],
   ),
   // HTML/XML: tags and attribute names carry the structure. Its `<!-- -->`
@@ -408,23 +844,59 @@ final Map<String, _Lang> _langs = {
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'<!--[\s\S]*?(?:-->|$)', _comColor),
-      _Rule(r'<[!/?]?[A-Za-z][A-Za-z0-9:.\-]*', _kwColor), // <div  </div  <?xml
-      _Rule(r'/?>', _kwColor),
-      _Rule(r'[A-Za-z_:][A-Za-z0-9_:.\-]*(?=\s*=)', _keyColor), // attr=
-      _Rule(r'&[a-zA-Z]+;|&#\d+;', _numColor), // &nbsp; &#8212;
+      _Rule(r'<!--[\s\S]*?(?:-->|$)', _Role.comment),
+      _Rule(
+        r'<[!/?]?[A-Za-z][A-Za-z0-9:.\-]*',
+        _Role.keyword,
+      ), // <div  </div  <?xml
+      _Rule(r'/?>', _Role.keyword),
+      _Rule(r'[A-Za-z_:][A-Za-z0-9_:.\-]*(?=\s*=)', _Role.key), // attr=
+      _Rule(r'&[a-zA-Z]+;|&#\d+;', _Role.number), // &nbsp; &#8212;
     ],
   ),
-  'plaintext': const _Lang(keywords: {}, lineComments: [], blockComments: false),
+  'plaintext': const _Lang(
+    keywords: {},
+    lineComments: [],
+    blockComments: false,
+  ),
   // Mermaid source (shown while the block is focused; unfocused blocks render
   // as a diagram). Diagram-type and structure words; `%%` line comments.
   'mermaid': const _Lang(
     keywords: {
-      'graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'stateDiagram',
-      'erDiagram', 'gantt', 'pie', 'journey', 'mindmap', 'timeline',
-      'gitGraph', 'quadrantChart', 'subgraph', 'end', 'participant', 'actor',
-      'loop', 'alt', 'else', 'opt', 'par', 'note', 'over', 'TD', 'TB', 'LR',
-      'RL', 'BT', 'title', 'section', 'class', 'state', 'direction',
+      'graph',
+      'flowchart',
+      'sequenceDiagram',
+      'classDiagram',
+      'stateDiagram',
+      'erDiagram',
+      'gantt',
+      'pie',
+      'journey',
+      'mindmap',
+      'timeline',
+      'gitGraph',
+      'quadrantChart',
+      'subgraph',
+      'end',
+      'participant',
+      'actor',
+      'loop',
+      'alt',
+      'else',
+      'opt',
+      'par',
+      'note',
+      'over',
+      'TD',
+      'TB',
+      'LR',
+      'RL',
+      'BT',
+      'title',
+      'section',
+      'class',
+      'state',
+      'direction',
     },
     lineComments: ['%%'],
     blockComments: false,
@@ -445,14 +917,64 @@ final Map<String, _Lang> _langs = {
   // test names are written that way constantly), never a string.
   'kotlin': const _Lang(
     keywords: {
-      'fun', 'val', 'var', 'class', 'object', 'interface', 'data', 'sealed',
-      'enum', 'companion', 'init', 'constructor', 'override', 'open',
-      'abstract', 'private', 'protected', 'public', 'internal', 'suspend',
-      'inline', 'reified', 'return', 'if', 'else', 'when', 'for', 'while',
-      'do', 'break', 'continue', 'try', 'catch', 'finally', 'throw', 'import',
-      'package', 'in', 'is', 'as', 'by', 'out', 'null', 'true', 'false',
-      'this', 'super', 'lateinit', 'typealias', 'vararg', 'operator', 'infix',
-      'const', 'annotation', 'crossinline', 'noinline', 'expect', 'actual',
+      'fun',
+      'val',
+      'var',
+      'class',
+      'object',
+      'interface',
+      'data',
+      'sealed',
+      'enum',
+      'companion',
+      'init',
+      'constructor',
+      'override',
+      'open',
+      'abstract',
+      'private',
+      'protected',
+      'public',
+      'internal',
+      'suspend',
+      'inline',
+      'reified',
+      'return',
+      'if',
+      'else',
+      'when',
+      'for',
+      'while',
+      'do',
+      'break',
+      'continue',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'import',
+      'package',
+      'in',
+      'is',
+      'as',
+      'by',
+      'out',
+      'null',
+      'true',
+      'false',
+      'this',
+      'super',
+      'lateinit',
+      'typealias',
+      'vararg',
+      'operator',
+      'infix',
+      'const',
+      'annotation',
+      'crossinline',
+      'noinline',
+      'expect',
+      'actual',
     },
     strings: ['"', "'"],
   ),
@@ -460,50 +982,217 @@ final Map<String, _Lang> _langs = {
   // `"a"` typed as Character), so `'` is never a delimiter.
   'swift': const _Lang(
     keywords: {
-      'func', 'let', 'var', 'class', 'struct', 'enum', 'protocol', 'extension',
-      'init', 'deinit', 'guard', 'if', 'else', 'switch', 'case', 'default',
-      'for', 'while', 'repeat', 'return', 'break', 'continue', 'in', 'is',
-      'as', 'throw', 'throws', 'rethrows', 'try', 'catch', 'defer', 'import',
-      'public', 'private', 'internal', 'fileprivate', 'open', 'static',
-      'final', 'lazy', 'weak', 'unowned', 'mutating', 'override', 'where',
-      'associatedtype', 'typealias', 'some', 'any', 'async', 'await', 'actor',
-      'inout', 'subscript', 'willSet', 'didSet', 'nil', 'true', 'false',
-      'self', 'Self', 'convenience', 'required', 'indirect',
+      'func',
+      'let',
+      'var',
+      'class',
+      'struct',
+      'enum',
+      'protocol',
+      'extension',
+      'init',
+      'deinit',
+      'guard',
+      'if',
+      'else',
+      'switch',
+      'case',
+      'default',
+      'for',
+      'while',
+      'repeat',
+      'return',
+      'break',
+      'continue',
+      'in',
+      'is',
+      'as',
+      'throw',
+      'throws',
+      'rethrows',
+      'try',
+      'catch',
+      'defer',
+      'import',
+      'public',
+      'private',
+      'internal',
+      'fileprivate',
+      'open',
+      'static',
+      'final',
+      'lazy',
+      'weak',
+      'unowned',
+      'mutating',
+      'override',
+      'where',
+      'associatedtype',
+      'typealias',
+      'some',
+      'any',
+      'async',
+      'await',
+      'actor',
+      'inout',
+      'subscript',
+      'willSet',
+      'didSet',
+      'nil',
+      'true',
+      'false',
+      'self',
+      'Self',
+      'convenience',
+      'required',
+      'indirect',
     },
     strings: ['"'],
   ),
   'csharp': const _Lang(
     keywords: {
-      'using', 'namespace', 'class', 'struct', 'interface', 'enum', 'record',
-      'public', 'private', 'protected', 'internal', 'static', 'readonly',
-      'const', 'void', 'int', 'long', 'short', 'byte', 'char', 'bool',
-      'float', 'double', 'decimal', 'string', 'object', 'var', 'dynamic',
-      'new', 'return', 'if', 'else', 'switch', 'case', 'default', 'for',
-      'foreach', 'while', 'do', 'break', 'continue', 'try', 'catch',
-      'finally', 'throw', 'async', 'await', 'get', 'set', 'this', 'base',
-      'null', 'true', 'false', 'override', 'virtual', 'abstract', 'sealed',
-      'partial', 'in', 'out', 'ref', 'is', 'as', 'typeof', 'nameof', 'yield',
-      'lock', 'params', 'delegate', 'event', 'operator', 'when', 'where',
+      'using',
+      'namespace',
+      'class',
+      'struct',
+      'interface',
+      'enum',
+      'record',
+      'public',
+      'private',
+      'protected',
+      'internal',
+      'static',
+      'readonly',
+      'const',
+      'void',
+      'int',
+      'long',
+      'short',
+      'byte',
+      'char',
+      'bool',
+      'float',
+      'double',
+      'decimal',
+      'string',
+      'object',
+      'var',
+      'dynamic',
+      'new',
+      'return',
+      'if',
+      'else',
+      'switch',
+      'case',
+      'default',
+      'for',
+      'foreach',
+      'while',
+      'do',
+      'break',
+      'continue',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'async',
+      'await',
+      'get',
+      'set',
+      'this',
+      'base',
+      'null',
+      'true',
+      'false',
+      'override',
+      'virtual',
+      'abstract',
+      'sealed',
+      'partial',
+      'in',
+      'out',
+      'ref',
+      'is',
+      'as',
+      'typeof',
+      'nameof',
+      'yield',
+      'lock',
+      'params',
+      'delegate',
+      'event',
+      'operator',
+      'when',
+      'where',
     },
     strings: ['"', "'"],
   ),
   // `#` is a second line comment in PHP alongside `//`.
   'php': _Lang(
     keywords: const {
-      'function', 'class', 'interface', 'trait', 'extends', 'implements',
-      'public', 'private', 'protected', 'static', 'const', 'return', 'if',
-      'else', 'elseif', 'endif', 'foreach', 'endforeach', 'as', 'for',
-      'while', 'do', 'switch', 'case', 'default', 'break', 'continue', 'try',
-      'catch', 'finally', 'throw', 'new', 'echo', 'print', 'require',
-      'require_once', 'include', 'include_once', 'namespace', 'use', 'array',
-      'null', 'true', 'false', 'this', 'abstract', 'final', 'global', 'isset',
-      'unset', 'instanceof', 'fn', 'match', 'enum', 'readonly', 'yield',
+      'function',
+      'class',
+      'interface',
+      'trait',
+      'extends',
+      'implements',
+      'public',
+      'private',
+      'protected',
+      'static',
+      'const',
+      'return',
+      'if',
+      'else',
+      'elseif',
+      'endif',
+      'foreach',
+      'endforeach',
+      'as',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'default',
+      'break',
+      'continue',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'new',
+      'echo',
+      'print',
+      'require',
+      'require_once',
+      'include',
+      'include_once',
+      'namespace',
+      'use',
+      'array',
+      'null',
+      'true',
+      'false',
+      'this',
+      'abstract',
+      'final',
+      'global',
+      'isset',
+      'unset',
+      'instanceof',
+      'fn',
+      'match',
+      'enum',
+      'readonly',
+      'yield',
     },
     lineComments: const ['//', '#'],
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'<\?(?:php|=)?|\?>', _kwColor),
-      _Rule(r'\$[A-Za-z_][A-Za-z0-9_]*', _keyColor),
+      _Rule(r'<\?(?:php|=)?|\?>', _Role.keyword),
+      _Rule(r'\$[A-Za-z_][A-Za-z0-9_]*', _Role.key),
     ],
   ),
   // Backtick excluded: `` `cmd` `` runs a subprocess in Ruby. `=begin/=end`
@@ -511,45 +1200,149 @@ final Map<String, _Lang> _langs = {
   // than wrong.
   'ruby': _Lang(
     keywords: const {
-      'def', 'end', 'class', 'module', 'if', 'elsif', 'else', 'unless',
-      'case', 'when', 'while', 'until', 'for', 'in', 'do', 'begin', 'rescue',
-      'ensure', 'raise', 'return', 'yield', 'next', 'break', 'redo', 'retry',
-      'then', 'self', 'nil', 'true', 'false', 'and', 'or', 'not', 'require',
-      'require_relative', 'include', 'extend', 'attr_accessor', 'attr_reader',
-      'attr_writer', 'lambda', 'proc', 'puts', 'new', 'super', 'alias',
-      'undef', 'private', 'public', 'protected', 'defined',
+      'def',
+      'end',
+      'class',
+      'module',
+      'if',
+      'elsif',
+      'else',
+      'unless',
+      'case',
+      'when',
+      'while',
+      'until',
+      'for',
+      'in',
+      'do',
+      'begin',
+      'rescue',
+      'ensure',
+      'raise',
+      'return',
+      'yield',
+      'next',
+      'break',
+      'redo',
+      'retry',
+      'then',
+      'self',
+      'nil',
+      'true',
+      'false',
+      'and',
+      'or',
+      'not',
+      'require',
+      'require_relative',
+      'include',
+      'extend',
+      'attr_accessor',
+      'attr_reader',
+      'attr_writer',
+      'lambda',
+      'proc',
+      'puts',
+      'new',
+      'super',
+      'alias',
+      'undef',
+      'private',
+      'public',
+      'protected',
+      'defined',
     },
     lineComments: _hashLike,
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'@@?[A-Za-z_][A-Za-z0-9_]*', _keyColor), // @ivar / @@cvar
-      _Rule(r':[A-Za-z_][A-Za-z0-9_]*[?!]?', _fnColor), // :symbol
+      _Rule(r'@@?[A-Za-z_][A-Za-z0-9_]*', _Role.key), // @ivar / @@cvar
+      _Rule(r':[A-Za-z_][A-Za-z0-9_]*[?!]?', _Role.function), // :symbol
     ],
   ),
   // `@interface` / `#import` are the shape of the language; the plain C
   // keyword set alone leaves an Objective-C header nearly grey.
   'objective-c': _Lang(
     keywords: const {
-      'id', 'self', 'super', 'nil', 'YES', 'NO', 'BOOL', 'instancetype',
-      'void', 'int', 'char', 'float', 'double', 'long', 'short', 'unsigned',
-      'signed', 'const', 'static', 'extern', 'struct', 'union', 'enum',
-      'typedef', 'return', 'if', 'else', 'for', 'while', 'do', 'switch',
-      'case', 'break', 'continue', 'sizeof', 'inline', 'NULL',
+      'id',
+      'self',
+      'super',
+      'nil',
+      'YES',
+      'NO',
+      'BOOL',
+      'instancetype',
+      'void',
+      'int',
+      'char',
+      'float',
+      'double',
+      'long',
+      'short',
+      'unsigned',
+      'signed',
+      'const',
+      'static',
+      'extern',
+      'struct',
+      'union',
+      'enum',
+      'typedef',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'break',
+      'continue',
+      'sizeof',
+      'inline',
+      'NULL',
     },
     strings: const ['"'],
     rules: [
-      _Rule(r'@[A-Za-z_][A-Za-z0-9_]*', _kwColor), // @interface @property @end
-      _Rule(r'#[a-z]+', _kwColor), // #import #define
+      _Rule(
+        r'@[A-Za-z_][A-Za-z0-9_]*',
+        _Role.keyword,
+      ), // @interface @property @end
+      _Rule(r'#[a-z]+', _Role.keyword), // #import #define
     ],
   ),
   // `--` line comments; `--[[ ]]` blocks are not `/* */`, hence false.
   'lua': const _Lang(
     keywords: {
-      'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
-      'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
-      'return', 'then', 'true', 'until', 'while', 'self', 'require', 'pairs',
-      'ipairs', 'print', 'pcall', 'setmetatable',
+      'and',
+      'break',
+      'do',
+      'else',
+      'elseif',
+      'end',
+      'false',
+      'for',
+      'function',
+      'goto',
+      'if',
+      'in',
+      'local',
+      'nil',
+      'not',
+      'or',
+      'repeat',
+      'return',
+      'then',
+      'true',
+      'until',
+      'while',
+      'self',
+      'require',
+      'pairs',
+      'ipairs',
+      'print',
+      'pcall',
+      'setmetatable',
     },
     lineComments: ['--'],
     blockComments: false,
@@ -558,27 +1351,99 @@ final Map<String, _Lang> _langs = {
   // Backtick excluded (subprocess, as in Ruby). Sigils carry the structure.
   'perl': _Lang(
     keywords: const {
-      'my', 'our', 'local', 'sub', 'package', 'use', 'no', 'require', 'if',
-      'elsif', 'else', 'unless', 'while', 'until', 'for', 'foreach', 'do',
-      'last', 'next', 'redo', 'return', 'die', 'warn', 'print', 'printf',
-      'say', 'chomp', 'chop', 'defined', 'undef', 'ref', 'bless', 'wantarray',
-      'eval', 'qw', 'and', 'or', 'not', 'eq', 'ne', 'lt', 'gt', 'le', 'ge',
-      'cmp', 'keys', 'values', 'push', 'pop', 'shift', 'unshift', 'split',
-      'join', 'map', 'grep', 'sort', 'scalar', 'exists', 'delete',
+      'my',
+      'our',
+      'local',
+      'sub',
+      'package',
+      'use',
+      'no',
+      'require',
+      'if',
+      'elsif',
+      'else',
+      'unless',
+      'while',
+      'until',
+      'for',
+      'foreach',
+      'do',
+      'last',
+      'next',
+      'redo',
+      'return',
+      'die',
+      'warn',
+      'print',
+      'printf',
+      'say',
+      'chomp',
+      'chop',
+      'defined',
+      'undef',
+      'ref',
+      'bless',
+      'wantarray',
+      'eval',
+      'qw',
+      'and',
+      'or',
+      'not',
+      'eq',
+      'ne',
+      'lt',
+      'gt',
+      'le',
+      'ge',
+      'cmp',
+      'keys',
+      'values',
+      'push',
+      'pop',
+      'shift',
+      'unshift',
+      'split',
+      'join',
+      'map',
+      'grep',
+      'sort',
+      'scalar',
+      'exists',
+      'delete',
     },
     lineComments: _hashLike,
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'[$@%][$#]?[A-Za-z_][A-Za-z0-9_:]*', _keyColor), // $x @a %h
+      _Rule(r'[$@%][$#]?[A-Za-z_][A-Za-z0-9_:]*', _Role.key), // $x @a %h
     ],
   ),
   // Backtick excluded: in R it quotes a non-syntactic name (`` `my col` ``).
   'r': const _Lang(
     keywords: {
-      'function', 'if', 'else', 'for', 'while', 'repeat', 'break', 'next',
-      'return', 'TRUE', 'FALSE', 'NULL', 'NA', 'Inf', 'NaN', 'library',
-      'require', 'in', 'invisible', 'switch', 'stop', 'warning', 'print',
+      'function',
+      'if',
+      'else',
+      'for',
+      'while',
+      'repeat',
+      'break',
+      'next',
+      'return',
+      'TRUE',
+      'FALSE',
+      'NULL',
+      'NA',
+      'Inf',
+      'NaN',
+      'library',
+      'require',
+      'in',
+      'invisible',
+      'switch',
+      'stop',
+      'warning',
+      'print',
     },
     lineComments: _hashLike,
     blockComments: false,
@@ -588,41 +1453,150 @@ final Map<String, _Lang> _langs = {
   // unterminated string and eat the line.
   'scala': const _Lang(
     keywords: {
-      'def', 'val', 'var', 'class', 'object', 'trait', 'case', 'match',
-      'extends', 'with', 'override', 'implicit', 'import', 'package', 'new',
-      'if', 'else', 'for', 'while', 'do', 'yield', 'try', 'catch', 'finally',
-      'throw', 'return', 'sealed', 'abstract', 'final', 'private',
-      'protected', 'lazy', 'type', 'this', 'super', 'null', 'true', 'false',
-      'given', 'using', 'enum', 'then', 'forSome',
+      'def',
+      'val',
+      'var',
+      'class',
+      'object',
+      'trait',
+      'case',
+      'match',
+      'extends',
+      'with',
+      'override',
+      'implicit',
+      'import',
+      'package',
+      'new',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'yield',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'return',
+      'sealed',
+      'abstract',
+      'final',
+      'private',
+      'protected',
+      'lazy',
+      'type',
+      'this',
+      'super',
+      'null',
+      'true',
+      'false',
+      'given',
+      'using',
+      'enum',
+      'then',
+      'forSome',
     },
     strings: ['"'],
   ),
   'groovy': const _Lang(
     keywords: {
-      'def', 'class', 'interface', 'trait', 'enum', 'extends', 'implements',
-      'import', 'package', 'new', 'return', 'if', 'else', 'for', 'while',
-      'do', 'switch', 'case', 'default', 'break', 'continue', 'try', 'catch',
-      'finally', 'throw', 'throws', 'public', 'private', 'protected',
-      'static', 'final', 'void', 'int', 'long', 'boolean', 'String', 'true',
-      'false', 'null', 'this', 'super', 'as', 'in', 'assert', 'it',
+      'def',
+      'class',
+      'interface',
+      'trait',
+      'enum',
+      'extends',
+      'implements',
+      'import',
+      'package',
+      'new',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'do',
+      'switch',
+      'case',
+      'default',
+      'break',
+      'continue',
+      'try',
+      'catch',
+      'finally',
+      'throw',
+      'throws',
+      'public',
+      'private',
+      'protected',
+      'static',
+      'final',
+      'void',
+      'int',
+      'long',
+      'boolean',
+      'String',
+      'true',
+      'false',
+      'null',
+      'this',
+      'super',
+      'as',
+      'in',
+      'assert',
+      'it',
     },
     strings: ['"', "'"],
   ),
   'elixir': _Lang(
     keywords: const {
-      'def', 'defp', 'defmodule', 'defstruct', 'defprotocol', 'defimpl',
-      'defmacro', 'defdelegate', 'defexception', 'do', 'end', 'if', 'else',
-      'unless', 'cond', 'case', 'when', 'fn', 'receive', 'after', 'rescue',
-      'catch', 'try', 'raise', 'throw', 'import', 'alias', 'require', 'use',
-      'with', 'for', 'and', 'or', 'not', 'in', 'nil', 'true', 'false',
+      'def',
+      'defp',
+      'defmodule',
+      'defstruct',
+      'defprotocol',
+      'defimpl',
+      'defmacro',
+      'defdelegate',
+      'defexception',
+      'do',
+      'end',
+      'if',
+      'else',
+      'unless',
+      'cond',
+      'case',
+      'when',
+      'fn',
+      'receive',
+      'after',
+      'rescue',
+      'catch',
+      'try',
+      'raise',
+      'throw',
+      'import',
+      'alias',
+      'require',
+      'use',
+      'with',
+      'for',
+      'and',
+      'or',
+      'not',
+      'in',
+      'nil',
+      'true',
+      'false',
     },
     lineComments: _hashLike,
     blockComments: false,
     // `'…'` is a charlist — a real literal, so both quotes stay.
     strings: const ['"', "'"],
     rules: [
-      _Rule(r':[A-Za-z_][A-Za-z0-9_]*[?!]?', _fnColor), // :atom
-      _Rule(r'@[a-z_][A-Za-z0-9_]*', _keyColor), // @moduledoc @spec
+      _Rule(r':[A-Za-z_][A-Za-z0-9_]*[?!]?', _Role.function), // :atom
+      _Rule(r'@[a-z_][A-Za-z0-9_]*', _Role.key), // @moduledoc @spec
     ],
   ),
   // `--` comments; `{- -}` blocks are not `/* */`. Only `"` for strings: an
@@ -630,11 +1604,41 @@ final Map<String, _Lang> _langs = {
   // so treating it as a quote would swallow the rest of the line.
   'haskell': const _Lang(
     keywords: {
-      'module', 'where', 'import', 'qualified', 'as', 'hiding', 'let', 'in',
-      'do', 'case', 'of', 'if', 'then', 'else', 'data', 'newtype', 'type',
-      'class', 'instance', 'deriving', 'default', 'infix', 'infixl', 'infixr',
-      'foreign', 'forall', 'True', 'False', 'Nothing', 'Just', 'IO', 'Maybe',
-      'Either', 'Left', 'Right',
+      'module',
+      'where',
+      'import',
+      'qualified',
+      'as',
+      'hiding',
+      'let',
+      'in',
+      'do',
+      'case',
+      'of',
+      'if',
+      'then',
+      'else',
+      'data',
+      'newtype',
+      'type',
+      'class',
+      'instance',
+      'deriving',
+      'default',
+      'infix',
+      'infixl',
+      'infixr',
+      'foreign',
+      'forall',
+      'True',
+      'False',
+      'Nothing',
+      'Just',
+      'IO',
+      'Maybe',
+      'Either',
+      'Left',
+      'Right',
     },
     lineComments: ['--'],
     blockComments: false,
@@ -644,20 +1648,74 @@ final Map<String, _Lang> _langs = {
   // generic `/* */` on would be inventing syntax.
   'zig': _Lang(
     keywords: const {
-      'const', 'var', 'fn', 'pub', 'return', 'if', 'else', 'switch', 'while',
-      'for', 'break', 'continue', 'defer', 'errdefer', 'try', 'catch',
-      'orelse', 'unreachable', 'struct', 'enum', 'union', 'error',
-      'comptime', 'inline', 'export', 'extern', 'test', 'and', 'or', 'null',
-      'undefined', 'true', 'false', 'usingnamespace', 'async', 'await',
-      'suspend', 'resume', 'anytype', 'noreturn', 'void', 'bool', 'u8',
-      'u16', 'u32', 'u64', 'i8', 'i16', 'i32', 'i64', 'usize', 'isize',
-      'f32', 'f64', 'align', 'packed', 'opaque', 'threadlocal', 'volatile',
-      'callconv', 'anyerror', 'linksection', 'noalias',
+      'const',
+      'var',
+      'fn',
+      'pub',
+      'return',
+      'if',
+      'else',
+      'switch',
+      'while',
+      'for',
+      'break',
+      'continue',
+      'defer',
+      'errdefer',
+      'try',
+      'catch',
+      'orelse',
+      'unreachable',
+      'struct',
+      'enum',
+      'union',
+      'error',
+      'comptime',
+      'inline',
+      'export',
+      'extern',
+      'test',
+      'and',
+      'or',
+      'null',
+      'undefined',
+      'true',
+      'false',
+      'usingnamespace',
+      'async',
+      'await',
+      'suspend',
+      'resume',
+      'anytype',
+      'noreturn',
+      'void',
+      'bool',
+      'u8',
+      'u16',
+      'u32',
+      'u64',
+      'i8',
+      'i16',
+      'i32',
+      'i64',
+      'usize',
+      'isize',
+      'f32',
+      'f64',
+      'align',
+      'packed',
+      'opaque',
+      'threadlocal',
+      'volatile',
+      'callconv',
+      'anyerror',
+      'linksection',
+      'noalias',
     },
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'@[A-Za-z_][A-Za-z0-9_]*', _fnColor), // @import @intCast
+      _Rule(r'@[A-Za-z_][A-Za-z0-9_]*', _Role.function), // @import @intCast
     ],
   ),
 
@@ -670,9 +1728,25 @@ final Map<String, _Lang> _langs = {
   // caseInsensitive, as for SQL and PowerShell.
   'dockerfile': const _Lang(
     keywords: {
-      'from', 'run', 'cmd', 'label', 'maintainer', 'expose', 'env', 'add',
-      'copy', 'entrypoint', 'volume', 'user', 'workdir', 'arg', 'onbuild',
-      'stopsignal', 'healthcheck', 'shell', 'as',
+      'from',
+      'run',
+      'cmd',
+      'label',
+      'maintainer',
+      'expose',
+      'env',
+      'add',
+      'copy',
+      'entrypoint',
+      'volume',
+      'user',
+      'workdir',
+      'arg',
+      'onbuild',
+      'stopsignal',
+      'healthcheck',
+      'shell',
+      'as',
     },
     lineComments: _hashLike,
     blockComments: false,
@@ -687,12 +1761,12 @@ final Map<String, _Lang> _langs = {
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'<!--[\s\S]*?(?:-->|$)', _comColor),
-      _Rule(r'<!\[CDATA\[[\s\S]*?(?:\]\]>|$)', _strColor),
-      _Rule(r'<[!/?]?[A-Za-z_][A-Za-z0-9:._\-]*', _kwColor),
-      _Rule(r'\??/?>', _kwColor),
-      _Rule(r'[A-Za-z_:][A-Za-z0-9_:.\-]*(?=\s*=)', _keyColor),
-      _Rule(r'&[a-zA-Z]+;|&#\d+;', _numColor),
+      _Rule(r'<!--[\s\S]*?(?:-->|$)', _Role.comment),
+      _Rule(r'<!\[CDATA\[[\s\S]*?(?:\]\]>|$)', _Role.string),
+      _Rule(r'<[!/?]?[A-Za-z_][A-Za-z0-9:._\-]*', _Role.keyword),
+      _Rule(r'\??/?>', _Role.keyword),
+      _Rule(r'[A-Za-z_:][A-Za-z0-9_:.\-]*(?=\s*=)', _Role.key),
+      _Rule(r'&[a-zA-Z]+;|&#\d+;', _Role.number),
     ],
   ),
   // Tables and keys, like YAML — a keyword set can only reach `true`/`false`.
@@ -703,9 +1777,13 @@ final Map<String, _Lang> _langs = {
     // `'…'` is TOML's literal string. No backtick.
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'\[\[?[^\]\n]*\]\]?', _fnColor, leadOnly: true), // [tbl] [[arr]]
-      _Rule(r'"(?:[^"\\]|\\.)*"(?=\s*=)', _keyColor, leadOnly: true),
-      _Rule(r'[A-Za-z_][A-Za-z0-9_.\-]*(?=\s*=)', _keyColor, leadOnly: true),
+      _Rule(
+        r'\[\[?[^\]\n]*\]\]?',
+        _Role.function,
+        leadOnly: true,
+      ), // [tbl] [[arr]]
+      _Rule(r'"(?:[^"\\]|\\.)*"(?=\s*=)', _Role.key, leadOnly: true),
+      _Rule(r'[A-Za-z_][A-Za-z0-9_.\-]*(?=\s*=)', _Role.key, leadOnly: true),
     ],
   ),
   // INI takes BOTH `;` and `#` as line comments — `;` is the older, and still
@@ -717,8 +1795,8 @@ final Map<String, _Lang> _langs = {
     strings: const ['"', "'"],
     caseInsensitive: true,
     rules: [
-      _Rule(r'\[[^\]\n]*\]', _fnColor, leadOnly: true), // [section]
-      _Rule(r'[A-Za-z_][A-Za-z0-9_.\-]*(?=\s*=)', _keyColor, leadOnly: true),
+      _Rule(r'\[[^\]\n]*\]', _Role.function, leadOnly: true), // [section]
+      _Rule(r'[A-Za-z_][A-Za-z0-9_.\-]*(?=\s*=)', _Role.key, leadOnly: true),
     ],
   ),
   // A diff has no lexical structure whatsoever — it is line-oriented, and the
@@ -733,12 +1811,15 @@ final Map<String, _Lang> _langs = {
     strings: const [],
     rules: [
       // `---`/`+++` first: they are also `-`/`+` lines.
-      _Rule(r'(?:\+\+\+|---)[^\n]*', _keyColor, leadOnly: true),
-      _Rule(r'@@[^\n]*', _fnColor, leadOnly: true),
-      _Rule(r'(?:diff|index|similarity|rename|new file|deleted file)[^\n]*',
-          _comColor, leadOnly: true),
-      _Rule(r'\+[^\n]*', _strColor, leadOnly: true), // added
-      _Rule(r'-[^\n]*', _numColor, leadOnly: true), // removed
+      _Rule(r'(?:\+\+\+|---)[^\n]*', _Role.key, leadOnly: true),
+      _Rule(r'@@[^\n]*', _Role.function, leadOnly: true),
+      _Rule(
+        r'(?:diff|index|similarity|rename|new file|deleted file)[^\n]*',
+        _Role.comment,
+        leadOnly: true,
+      ),
+      _Rule(r'\+[^\n]*', _Role.string, leadOnly: true), // added
+      _Rule(r'-[^\n]*', _Role.number, leadOnly: true), // removed
     ],
   ),
   // Markdown is punctuation, not words. Note `strings: []`: a backtick opens
@@ -751,37 +1832,82 @@ final Map<String, _Lang> _langs = {
     blockComments: false,
     strings: const [],
     rules: [
-      _Rule(r'#{1,6}[^\n]*', _kwColor, leadOnly: true), // # Heading
-      _Rule(r'>[^\n]*', _comColor, leadOnly: true), // > quote
-      _Rule(r'(?:```|~~~)[^\n]*', _keyColor), // fence
-      _Rule(r'`[^`\n]+`', _strColor), // `inline code`
-      _Rule(r'\*\*[^\n]*?\*\*|__[^\n]*?__', _kwColor), // **bold**
-      _Rule(r'\*[^*\n]+\*|_[^_\n]+_', _kwColor), // *italic*
-      _Rule(r'!?\[[^\]\n]*\]\([^)\n]*\)', _fnColor), // [text](url)
-      _Rule(r'[-*+](?=\s)', _numColor, leadOnly: true), // list bullet
+      _Rule(r'#{1,6}[^\n]*', _Role.keyword, leadOnly: true), // # Heading
+      _Rule(r'>[^\n]*', _Role.comment, leadOnly: true), // > quote
+      _Rule(r'(?:```|~~~)[^\n]*', _Role.key), // fence
+      _Rule(r'`[^`\n]+`', _Role.string), // `inline code`
+      _Rule(r'\*\*[^\n]*?\*\*|__[^\n]*?__', _Role.keyword), // **bold**
+      _Rule(r'\*[^*\n]+\*|_[^_\n]+_', _Role.keyword), // *italic*
+      _Rule(r'!?\[[^\]\n]*\]\([^)\n]*\)', _Role.function), // [text](url)
+      _Rule(r'[-*+](?=\s)', _Role.number, leadOnly: true), // list bullet
     ],
   ),
   'graphql': _Lang(
     keywords: const {
-      'query', 'mutation', 'subscription', 'fragment', 'on', 'type', 'input',
-      'interface', 'union', 'enum', 'scalar', 'schema', 'extend',
-      'implements', 'directive', 'repeatable', 'true', 'false', 'null',
+      'query',
+      'mutation',
+      'subscription',
+      'fragment',
+      'on',
+      'type',
+      'input',
+      'interface',
+      'union',
+      'enum',
+      'scalar',
+      'schema',
+      'extend',
+      'implements',
+      'directive',
+      'repeatable',
+      'true',
+      'false',
+      'null',
     },
     lineComments: _hashLike,
     blockComments: false,
     strings: const ['"'],
     rules: [
-      _Rule(r'[A-Za-z_][A-Za-z0-9_]*(?=\s*:)', _keyColor), // field:
-      _Rule(r'[$@][A-Za-z_][A-Za-z0-9_]*', _fnColor), // $var / @directive
+      _Rule(r'[A-Za-z_][A-Za-z0-9_]*(?=\s*:)', _Role.key), // field:
+      _Rule(r'[$@][A-Za-z_][A-Za-z0-9_]*', _Role.function), // $var / @directive
     ],
   ),
   'protobuf': const _Lang(
     keywords: {
-      'syntax', 'package', 'import', 'message', 'enum', 'service', 'rpc',
-      'returns', 'repeated', 'optional', 'required', 'reserved', 'oneof',
-      'map', 'extend', 'extensions', 'option', 'stream', 'public', 'bool',
-      'string', 'bytes', 'int32', 'int64', 'uint32', 'uint64', 'sint32',
-      'sint64', 'fixed32', 'fixed64', 'float', 'double', 'true', 'false',
+      'syntax',
+      'package',
+      'import',
+      'message',
+      'enum',
+      'service',
+      'rpc',
+      'returns',
+      'repeated',
+      'optional',
+      'required',
+      'reserved',
+      'oneof',
+      'map',
+      'extend',
+      'extensions',
+      'option',
+      'stream',
+      'public',
+      'bool',
+      'string',
+      'bytes',
+      'int32',
+      'int64',
+      'uint32',
+      'uint64',
+      'sint32',
+      'sint64',
+      'fixed32',
+      'fixed64',
+      'float',
+      'double',
+      'true',
+      'false',
     },
     strings: ['"', "'"],
   ),
@@ -793,26 +1919,44 @@ final Map<String, _Lang> _langs = {
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'[a-z_][a-z0-9_]*(?=[\s;{])', _keyColor, leadOnly: true),
-      _Rule(r'\$[A-Za-z_][A-Za-z0-9_]*', _fnColor), // $host $remote_addr
+      _Rule(r'[a-z_][a-z0-9_]*(?=[\s;{])', _Role.key, leadOnly: true),
+      _Rule(r'\$[A-Za-z_][A-Za-z0-9_]*', _Role.function), // $host $remote_addr
     ],
   ),
   // Targets and variable expansions. `$(…)` is claimed before anything else,
   // otherwise the `$` and the name split into unrelated tokens.
   'makefile': _Lang(
     keywords: const {
-      'ifeq', 'ifneq', 'ifdef', 'ifndef', 'else', 'endif', 'include',
-      'define', 'endef', 'export', 'unexport', 'override', 'vpath',
+      'ifeq',
+      'ifneq',
+      'ifdef',
+      'ifndef',
+      'else',
+      'endif',
+      'include',
+      'define',
+      'endef',
+      'export',
+      'unexport',
+      'override',
+      'vpath',
     },
     lineComments: _hashLike,
     blockComments: false,
     strings: const ['"', "'"],
     rules: [
-      _Rule(r'\$[({][^)}\n]*[)}]|\$\$?[A-Za-z@<^?*]', _kwColor),
+      _Rule(r'\$[({][^)}\n]*[)}]|\$\$?[A-Za-z@<^?*]', _Role.keyword),
       // `target:` — but not `VAR :=`, hence the (?!=).
-      _Rule(r'\.?[A-Za-z0-9_%./\-]+(?=\s*:(?!=))', _fnColor, leadOnly: true),
-      _Rule(r'[A-Za-z_][A-Za-z0-9_]*(?=\s*[:?+!]?=)', _keyColor,
-          leadOnly: true),
+      _Rule(
+        r'\.?[A-Za-z0-9_%./\-]+(?=\s*:(?!=))',
+        _Role.function,
+        leadOnly: true,
+      ),
+      _Rule(
+        r'[A-Za-z_][A-Za-z0-9_]*(?=\s*[:?+!]?=)',
+        _Role.key,
+        leadOnly: true,
+      ),
     ],
   ),
   // `%` line comments and NO block comment form at all. `strings: []` because
@@ -824,10 +1968,10 @@ final Map<String, _Lang> _langs = {
     blockComments: false,
     strings: const [],
     rules: [
-      _Rule(r'\\(?:begin|end)\{[^}\n]*\}', _fnColor),
-      _Rule(r'\\[A-Za-z@]+\*?', _kwColor), // \section \textbf
-      _Rule(r'\\[^A-Za-z\s]', _kwColor), // \% \& \\
-      _Rule(r'[\$&]', _keyColor), // math toggle, alignment tab
+      _Rule(r'\\(?:begin|end)\{[^}\n]*\}', _Role.function),
+      _Rule(r'\\[A-Za-z@]+\*?', _Role.keyword), // \section \textbf
+      _Rule(r'\\[^A-Za-z\s]', _Role.keyword), // \% \& \\
+      _Rule(r'[\$&]', _Role.key), // math toggle, alignment tab
     ],
   ),
   // Nix genuinely uses `/* */` (unlike every other `#`-comment language here),
@@ -835,9 +1979,26 @@ final Map<String, _Lang> _langs = {
   // treating a lone `'` as a delimiter would break it in half.
   'nix': const _Lang(
     keywords: {
-      'let', 'in', 'rec', 'with', 'inherit', 'if', 'then', 'else', 'assert',
-      'or', 'import', 'builtins', 'true', 'false', 'null', 'derivation',
-      'mkDerivation', 'callPackage', 'fetchurl', 'fetchFromGitHub',
+      'let',
+      'in',
+      'rec',
+      'with',
+      'inherit',
+      'if',
+      'then',
+      'else',
+      'assert',
+      'or',
+      'import',
+      'builtins',
+      'true',
+      'false',
+      'null',
+      'derivation',
+      'mkDerivation',
+      'callPackage',
+      'fetchurl',
+      'fetchFromGitHub',
     },
     lineComments: _hashLike,
     strings: ['"'],
@@ -908,7 +2069,8 @@ String detectLanguage(String code) {
   // is exactly why highlight.js over-claims bash on prose. (Shebang: `strong`.)
   if (hasLine(r'[\w.-]+@[\w.-]+:[^\n]*[$#%]') || // user@host:~/path$  /  …#
       hasLine(r'^\s*\[[^\]]+\]:?\s*[$#%]\s') || //  [root@box ~]#
-      hasLine(r'<<-?\s*[\x27"]?\w+\s*$')) {      //  cmd <<EOF  /  <<'EOF'
+      hasLine(r'<<-?\s*[\x27"]?\w+\s*$')) {
+    //  cmd <<EOF  /  <<'EOF'
     return 'bash';
   }
 
@@ -917,7 +2079,8 @@ String detectLanguage(String code) {
   }
   // CSS before YAML: a rule body is full of `prop: value;` lines, which are
   // indistinguishable from YAML keys once you're inside the braces.
-  if (has(r'\{[^{}]*[\w-]+\s*:\s*[^;{}]+;') || hasLine(r'^\s*@(?:media|import|keyframes|font-face)\b')) {
+  if (has(r'\{[^{}]*[\w-]+\s*:\s*[^;{}]+;') ||
+      hasLine(r'^\s*@(?:media|import|keyframes|font-face)\b')) {
     return 'css';
   }
   // YAML — and this was missing entirely, so a pasted config resolved to
@@ -928,35 +2091,45 @@ String detectLanguage(String code) {
   // `command: python -c "print(1)"` would otherwise trip Python's `print(`.
   // Python's real signature (`def f():`) already won above, via [strong].
   if (hasLine(r'^---\s*$') ||
-      RegExp(r'^[ \t]*-?[ \t]*[\w.-]+:(?:[ \t]|$)', multiLine: true)
-              .allMatches(c)
-              .length >=
+      RegExp(
+            r'^[ \t]*-?[ \t]*[\w.-]+:(?:[ \t]|$)',
+            multiLine: true,
+          ).allMatches(c).length >=
           2) {
     return 'yaml';
   }
-  if (has(r'\bfn\s+\w+') && (c.contains('->') || c.contains('let mut') || c.contains('println!'))) {
+  if (has(r'\bfn\s+\w+') &&
+      (c.contains('->') || c.contains('let mut') || c.contains('println!'))) {
     return 'rust';
   }
   if (has(r'\bfunc\s+\w+') || has(r'\bpackage\s+main') || c.contains(':=')) {
     return 'go';
   }
-  if (has(r'\bdef\s+\w+\s*\(') || has(r'^\s*import\s+\w+\s*$') || c.contains('print(')) {
+  if (has(r'\bdef\s+\w+\s*\(') ||
+      has(r'^\s*import\s+\w+\s*$') ||
+      c.contains('print(')) {
     return 'python';
   }
   if (c.contains('#include') || has(r'\bstd::')) {
     return c.contains('std::') || c.contains('template') ? 'cpp' : 'c';
   }
-  if (has(r'\b(public|private)\s+(static\s+)?(class|void|int)\b') || c.contains('System.out')) {
+  if (has(r'\b(public|private)\s+(static\s+)?(class|void|int)\b') ||
+      c.contains('System.out')) {
     return 'java';
   }
-  if (has(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE)\b', )) return 'sql';
-  if (has(r'\b(const|let|var|function)\b') && (c.contains('=>') || c.contains('){'))) {
-    return c.contains(': ') && (c.contains('interface ') || c.contains(': string') || c.contains(': number'))
+  if (has(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE)\b')) return 'sql';
+  if (has(r'\b(const|let|var|function)\b') &&
+      (c.contains('=>') || c.contains('){'))) {
+    return c.contains(': ') &&
+            (c.contains('interface ') ||
+                c.contains(': string') ||
+                c.contains(': number'))
         ? 'typescript'
         : 'javascript';
   }
   if (has(r'\bvoid\s+main\b') || c.contains('Widget build(')) return 'dart';
-  if (c.trimLeft().startsWith('{') || c.trimLeft().startsWith('[')) return 'json';
+  if (c.trimLeft().startsWith('{') || c.trimLeft().startsWith('['))
+    return 'json';
   // Shell — Tier B/C: weaker syntax, checked LAST so real Python/Ruby/Perl/JS
   // (which also use `#` comments, `$` sigils, `${…}` template literals, backticks)
   // win first. Keyed on shell SYNTAX, not command vocabulary (Pygments/linguist
@@ -969,13 +2142,17 @@ String detectLanguage(String code) {
   // behind a shell operator) need ≥2 together, since each alone also appears in
   // Perl/Ruby/Make.
   final strongShell =
-      has(r'\|\s*(?:grep|awk|sed|xargs|head|tail|sort|uniq|wc|cut|tr|tee|less)\b') ||
+      has(
+        r'\|\s*(?:grep|awk|sed|xargs|head|tail|sort|uniq|wc|cut|tr|tee|less)\b',
+      ) ||
       has(r'2>&1') ||
       has(r'>\s*/dev/null') ||
       has(r'&>') ||
       has(r'\$\(\(') ||
       has(r'<<<') ||
-      has(r'\$\{[#!]?\w+(?:\[[^\]]*\]|:[-=+?]|##?|%%?|/)') || // ${VAR:-x} ${#a} ${a[@]} ${x%%.y}
+      has(
+        r'\$\{[#!]?\w+(?:\[[^\]]*\]|:[-=+?]|##?|%%?|/)',
+      ) || // ${VAR:-x} ${#a} ${a[@]} ${x%%.y}
       (hasLine(r'^\s*(?:if|elif|for|while|until|case)\b') &&
           has(r'\b(?:fi|done|esac)\b'));
   if (strongShell) return 'bash';
@@ -984,10 +2161,12 @@ String detectLanguage(String code) {
   // `$(cmd)` and backticks: command substitution — but a JS template literal
   // `` `x ${y}` `` also has both a backtick and (bare) `${}`, so bare `${VAR}` is
   // NOT a signal here (only the shell-specific `${VAR:-…}` form, already STRONG).
-  if (has(r'\$\((?!\()') || has(r'`[^`\n$]+`')) weakShell++; // $(cmd) / `cmd` (no $ inside → not a template)
+  if (has(r'\$\((?!\()') || has(r'`[^`\n$]+`'))
+    weakShell++; // $(cmd) / `cmd` (no $ inside → not a template)
   if (has(r'\s(?:&&|\|\|)\s')) weakShell++;
   if (hasLine(r'^\s*(?:export|source|local|readonly)\s+\w')) weakShell++;
-  if (hasLine(r'^\s*[A-Za-z_]\w*=(?!=)\S')) weakShell++; // VAR=value, no spaces (python/ruby space it)
+  if (hasLine(r'^\s*[A-Za-z_]\w*=(?!=)\S'))
+    weakShell++; // VAR=value, no spaces (python/ruby space it)
   if (has(r'\becho\s+')) weakShell++;
   // Gated command list: ONE signal, and only when a shell operator co-occurs —
   // never a bare command word (that's the highlight.js over-claim bug).
@@ -1015,18 +2194,26 @@ String detectLanguage(String code) {
 /// Small bounded LRU; an unchanged block hits in ~O(1) (String.hashCode is
 /// cached on the instance, and TextSpan.== short-circuits on identity).
 class _CodeSpanKey {
-  const _CodeSpanKey(this.code, this.language, this.base);
+  const _CodeSpanKey(this.code, this.language, this.base, this.colors);
   final String code;
   final String language;
   final TextStyle base;
+
+  /// Part of the key, not a detail: the spans carry resolved colours, so a hit
+  /// from the other palette would repaint the block in the wrong theme and keep
+  /// doing it until the source changed. Same shape as the raster cache that had
+  /// to learn this — a key must name everything the value depends on.
+  final CodeTokens colors;
   @override
   bool operator ==(Object other) =>
       other is _CodeSpanKey &&
       other.code == code &&
       other.language == language &&
-      other.base == base;
+      other.base == base &&
+      identical(other.colors, colors);
   @override
-  int get hashCode => Object.hash(code, language, base);
+  int get hashCode =>
+      Object.hash(code, language, base, identityHashCode(colors));
 }
 
 final Map<_CodeSpanKey, TextSpan> _codeSpanMemo = {};
@@ -1035,14 +2222,19 @@ const int _codeSpanMemoMax = 128;
 /// Highlighted span for one code block, memoized (see [_CodeSpanKey]). The
 /// returned span is immutable and may be shared across painters — safe, and it
 /// makes the Phase-1 span-equality check identity-fast for unchanged blocks.
-TextSpan buildCodeSpan(String code, String language, TextStyle base) {
-  final key = _CodeSpanKey(code, language, base);
+TextSpan buildCodeSpan(
+  String code,
+  String language,
+  TextStyle base,
+  CodeTokens colors,
+) {
+  final key = _CodeSpanKey(code, language, base, colors);
   final hit = _codeSpanMemo.remove(key);
   if (hit != null) {
     _codeSpanMemo[key] = hit; // reinsert => most-recently-used
     return hit;
   }
-  final span = _buildCodeSpanUncached(code, language, base);
+  final span = _buildCodeSpanUncached(code, language, base, colors);
   _codeSpanMemo[key] = span;
   if (_codeSpanMemo.length > _codeSpanMemoMax) {
     _codeSpanMemo.remove(_codeSpanMemo.keys.first); // evict least-recently-used
@@ -1050,7 +2242,12 @@ TextSpan buildCodeSpan(String code, String language, TextStyle base) {
   return span;
 }
 
-TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
+TextSpan _buildCodeSpanUncached(
+  String code,
+  String language,
+  TextStyle base,
+  CodeTokens colors,
+) {
   final name = canonicalCodeLanguage(language);
   final lang = _langs[name];
   if (lang == null || name == 'plaintext') {
@@ -1069,9 +2266,14 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
     }
   }
 
-  void emit(String text, Color color) {
+  void emit(String text, _Role role) {
     flushPlain();
-    spans.add(TextSpan(text: text, style: base.copyWith(color: color)));
+    spans.add(
+      TextSpan(
+        text: text,
+        style: base.copyWith(color: _roleColor(role, colors)),
+      ),
+    );
   }
 
   bool isIdentStart(String ch) => RegExp(r'[A-Za-z_]').hasMatch(ch);
@@ -1102,7 +2304,7 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
       if (m == null) continue;
       final text = (m.groupCount >= 1 ? m.group(1) : m.group(0)) ?? '';
       if (text.isEmpty) continue;
-      emit(text, rule.color);
+      emit(text, rule.role);
       i += text.length;
       lineLead = false;
       matchedRule = true;
@@ -1114,7 +2316,7 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
     if (lang.blockComments && rest.startsWith('/*')) {
       final end = code.indexOf('*/', i + 2);
       final stop = end < 0 ? n : end + 2;
-      emit(code.substring(i, stop), _comColor);
+      emit(code.substring(i, stop), _Role.comment);
       i = stop;
       continue;
     }
@@ -1125,7 +2327,7 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
       if (rest.startsWith(prefix)) {
         final nl = code.indexOf('\n', i);
         final stop = nl < 0 ? n : nl;
-        emit(code.substring(i, stop), _comColor);
+        emit(code.substring(i, stop), _Role.comment);
         i = stop;
         matchedComment = true;
         break;
@@ -1148,7 +2350,7 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
         if (code[j] == '\n') break; // unterminated; stop at line end
         j += 1;
       }
-      emit(code.substring(i, j.clamp(0, n)), _strColor);
+      emit(code.substring(i, j.clamp(0, n)), _Role.string);
       i = j.clamp(0, n);
       continue;
     }
@@ -1159,7 +2361,7 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
       while (j < n && RegExp(r'[0-9a-fA-FxX._]').hasMatch(code[j])) {
         j += 1;
       }
-      emit(code.substring(i, j), _numColor);
+      emit(code.substring(i, j), _Role.number);
       i = j;
       continue;
     }
@@ -1176,9 +2378,9 @@ TextSpan _buildCodeSpanUncached(String code, String language, TextStyle base) {
           ? lang.keywords.contains(probe)
           : lang.keywords.contains(word);
       if (isKeyword) {
-        emit(word, _kwColor);
+        emit(word, _Role.keyword);
       } else if (j < n && code[j] == '(') {
-        emit(word, _fnColor);
+        emit(word, _Role.function);
       } else {
         buffer.write(word);
       }

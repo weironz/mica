@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'model.dart' show kMonoFont;
+import '../ui/theme_tokens.dart';
 
 /// Inline rich-text marks stored additively over a block's plain text (in
 /// `data.marks`). The text stays clean; a mark is a `[start, end)` range with a
@@ -58,14 +59,17 @@ List<Map<String, dynamic>> marksToJson(List<Mark> marks) => [
   for (final m in marks) m.toJson(),
 ];
 
-const Color _codeColor = Color(0xFF334155);
-const Color _linkColor = Color(0xFF2563EB);
-const Color _mathColor = Color(0xFF7C3AED);
-const Color _mathBg = Color(0x147C3AED);
-const Color _footnoteColor = Color(0xFF2563EB);
-
 /// Build a styled [TextSpan] for [text] with [marks] applied over [base].
-TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
+///
+/// [tokens] is the palette. It has to be a parameter: this is a plain top-level
+/// function with no widget tree to read from, and its five colours all have to
+/// differ between light and dark.
+TextSpan buildMarkedSpan(
+  String text,
+  List<Mark> marks,
+  TextStyle base,
+  MicaTokens tokens,
+) {
   if (text.isEmpty) return TextSpan(text: '​', style: base);
   if (marks.isEmpty) return TextSpan(text: text, style: base);
 
@@ -98,25 +102,31 @@ TextSpan buildMarkedSpan(String text, List<Mark> marks, TextStyle base) {
         case 'code':
           // The pill background is drawn in the render layer (_paintInlineCode)
           // for rounded corners + padding; here just the mono font + calm ink.
-          style = style.copyWith(fontFamily: kMonoFont, color: _codeColor);
+          style = style.copyWith(
+            fontFamily: kMonoFont,
+            color: tokens.editor.inlineCodeInk,
+          );
         case 'strike':
           decorations.add(TextDecoration.lineThrough);
         case 'link':
-          style = style.copyWith(color: _linkColor);
+          style = style.copyWith(color: tokens.accent.primary);
           decorations.add(TextDecoration.underline);
         case 'math':
           // LaTeX source shown styled until real typesetting lands.
           style = style.copyWith(
             fontFamily: kMonoFont,
             fontStyle: FontStyle.italic,
-            color: _mathColor,
-            backgroundColor: _mathBg,
+            // The same violet the highlighter paints keywords with: LaTeX shown
+            // as source IS syntax, and two violets a shade apart would just be
+            // two things nobody can keep in sync.
+            color: tokens.code.keyword,
+            backgroundColor: tokens.code.keyword.withValues(alpha: 0.08),
           );
         case 'footnote':
           // GFM reference chip: small superscript label in link blue. The
           // raised baseline + reduced size reads as a footnote marker.
           style = style.copyWith(
-            color: _footnoteColor,
+            color: tokens.accent.primary,
             fontSize: (style.fontSize ?? 14) * 0.75,
             fontFeatures: const [FontFeature.superscripts()],
           );
@@ -317,8 +327,12 @@ const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
 /// collapse to "ss". Mirrors Rust `normalize_label` (crates/markdown/src/lib.rs)
 /// — the missing `ß`→`ss` fold made `[ß]` fail to resolve against `[ss]: /url`
 /// on the Dart side only (P1-2, confirmed drift).
-String normalizeLabel(String label) =>
-    label.trim().split(RegExp(r'\s+')).join(' ').toLowerCase().replaceAll('ß', 'ss');
+String normalizeLabel(String label) => label
+    .trim()
+    .split(RegExp(r'\s+'))
+    .join(' ')
+    .toLowerCase()
+    .replaceAll('ß', 'ss');
 
 /// One past the code span / autolink / raw-inline-HTML region opening at
 /// [i], or -1 when [i] opens none. Mirrors Rust `inline_span_end`.
@@ -367,7 +381,7 @@ String _canonicalizeBreaks(String src) {
       i += 2;
       continue;
     }
-    if (c == 0x60 /* ` */ || c == 0x3c /* < */) {
+    if (c == 0x60 /* ` */ || c == 0x3c /* < */ ) {
       final end = _inlineSpanEnd(src, i);
       if (end > i) {
         for (var k = i; k < end; k++) {
@@ -1116,8 +1130,11 @@ bool _labelHasLinkCached(
 ) {
   final hit = cache[label];
   if (hit != null) return hit;
-  final answer =
-      _parseInlineMemo(label, defs, cache).marks.any((m) => m.type == 'link');
+  final answer = _parseInlineMemo(
+    label,
+    defs,
+    cache,
+  ).marks.any((m) => m.type == 'link');
   cache[label] = answer;
   return answer;
 }
@@ -1127,8 +1144,7 @@ bool _labelHasLinkCached(
 ({String text, List<Mark> marks}) parseInline(
   String src, {
   Map<String, ({String dest, String? title})> defs = const {},
-}) =>
-    _parseInlineMemo(src, defs, <String, bool>{});
+}) => _parseInlineMemo(src, defs, <String, bool>{});
 
 ({String text, List<Mark> marks}) _parseInlineMemo(
   String rawSrc,
@@ -1664,12 +1680,14 @@ String escapeBlockLeader(String line) {
       compact.length >= 3 && compact.split('').every((c) => c == '-');
   // Setext underline: a whole line of `=` or of `-` underlines the paragraph
   // above it as a heading on re-parse.
-  final setextLike = line.isNotEmpty &&
+  final setextLike =
+      line.isNotEmpty &&
       (line.split('').every((c) => c == '=') ||
           line.split('').every((c) => c == '-'));
   // ATX: `#`+ then a space (any count, matching Rust — not just 1–6).
   final atxLike =
-      line.startsWith('#') && line.replaceFirst(RegExp(r'^#+'), '').startsWith(' ');
+      line.startsWith('#') &&
+      line.replaceFirst(RegExp(r'^#+'), '').startsWith(' ');
   if (line.startsWith('- ') ||
       line.startsWith('+ ') ||
       line.startsWith('> ') ||

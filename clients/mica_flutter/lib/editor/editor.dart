@@ -4070,6 +4070,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             controller.text,
             controller.marks,
             _cellStyle(node, row),
+            widget.appearance.tokens,
           ),
           textDirection: TextDirection.ltr,
         )..layout(
@@ -4144,6 +4145,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         ac.ctl.text,
         ac.ctl.marks,
         _cellStyle(ac.node, ac.row),
+        widget.appearance.tokens,
       ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: (rect.width - padH * 2).clamp(1.0, double.infinity));

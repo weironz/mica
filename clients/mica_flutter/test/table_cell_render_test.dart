@@ -1,6 +1,7 @@
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/render.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 /// Table cells store raw inline-Markdown source; painting renders it
 /// (Typora-style) while the overlay editor keeps showing the source.
@@ -24,31 +25,56 @@ void main() {
   }
 
   test('inline code renders styled, backticks stripped', () {
-    final span = RenderDocument.cellDisplaySpan(r'run `kubectl get pods` now', base);
+    final span = RenderDocument.cellDisplaySpan(
+      r'run `kubectl get pods` now',
+      base,
+      MicaTokens.light,
+    );
     expect(span.toPlainText(), 'run kubectl get pods now');
     final code = leaves(span).firstWhere((s) => s.text == 'kubectl get pods');
-    expect(code.style?.fontFamily, isNotNull,
-        reason: 'code run must carry the monospace code style');
+    expect(
+      code.style?.fontFamily,
+      isNotNull,
+      reason: 'code run must carry the monospace code style',
+    );
     expect(code.style?.fontFamily == base.fontFamily, isFalse);
   });
 
   test('bold renders heavy, markers stripped', () {
-    final span = RenderDocument.cellDisplaySpan(r'list **pods** fast', base);
+    final span = RenderDocument.cellDisplaySpan(
+      r'list **pods** fast',
+      base,
+      MicaTokens.light,
+    );
     expect(span.toPlainText(), 'list pods fast');
     final bold = leaves(span).firstWhere((s) => s.text == 'pods');
     expect(bold.style?.fontWeight, FontWeight.w600);
   });
 
   test('plain text and unmatched markers stay literal', () {
-    expect(RenderDocument.cellDisplaySpan('plain', base).toPlainText(), 'plain');
     expect(
-      RenderDocument.cellDisplaySpan('a ** b ` c', base).toPlainText(),
+      RenderDocument.cellDisplaySpan(
+        'plain',
+        base,
+        MicaTokens.light,
+      ).toPlainText(),
+      'plain',
+    );
+    expect(
+      RenderDocument.cellDisplaySpan(
+        'a ** b ` c',
+        base,
+        MicaTokens.light,
+      ).toPlainText(),
       'a ** b ` c',
       reason: 'unmatched markers degrade gracefully to literal text',
     );
   });
 
   test('empty cell keeps its space placeholder', () {
-    expect(RenderDocument.cellDisplaySpan('', base).toPlainText(), ' ');
+    expect(
+      RenderDocument.cellDisplaySpan('', base, MicaTokens.light).toPlainText(),
+      ' ',
+    );
   });
 }

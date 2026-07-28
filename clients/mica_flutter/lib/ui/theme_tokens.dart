@@ -176,6 +176,7 @@ class EditorTokens {
     required this.caret,
     required this.codeBg,
     required this.inlineCodeBg,
+    required this.inlineCodeInk,
     required this.commentHighlight,
     required this.commentHighlightActive,
     required this.quoteBar,
@@ -191,6 +192,12 @@ class EditorTokens {
 
   /// Inline `code` pill. Translucent so a selection tints through it.
   final Color inlineCodeBg;
+
+  /// Ink ON that pill. A role of its own because it is deliberately not
+  /// `text.primary`: inline code reads as a slightly cooler, lighter ink so the
+  /// pill is legible as a pill. Pairing it with [inlineCodeBg] is what keeps the
+  /// two from drifting until the text disappears into its own chip.
+  final Color inlineCodeInk;
 
   /// Amber wash behind commented text; `active` is the focused thread.
   final Color commentHighlight;
@@ -209,6 +216,7 @@ class EditorTokens {
         caret: Color.lerp(a.caret, b.caret, t)!,
         codeBg: Color.lerp(a.codeBg, b.codeBg, t)!,
         inlineCodeBg: Color.lerp(a.inlineCodeBg, b.inlineCodeBg, t)!,
+        inlineCodeInk: Color.lerp(a.inlineCodeInk, b.inlineCodeInk, t)!,
         commentHighlight: Color.lerp(
           a.commentHighlight,
           b.commentHighlight,
@@ -235,7 +243,7 @@ class CodeTokens {
     required this.string,
     required this.number,
     required this.comment,
-    required this.type,
+    required this.key,
     required this.function,
   });
 
@@ -243,7 +251,11 @@ class CodeTokens {
   final Color string;
   final Color number;
   final Color comment;
-  final Color type;
+
+  /// Keys, properties, tags, attributes, sigils — the category the highlighter
+  /// actually paints. There is no `type` role because no rule table produces
+  /// one; naming a role nothing emits is how a palette starts lying.
+  final Color key;
   final Color function;
 
   static CodeTokens lerp(CodeTokens a, CodeTokens b, double t) => CodeTokens(
@@ -251,7 +263,7 @@ class CodeTokens {
     string: Color.lerp(a.string, b.string, t)!,
     number: Color.lerp(a.number, b.number, t)!,
     comment: Color.lerp(a.comment, b.comment, t)!,
-    type: Color.lerp(a.type, b.type, t)!,
+    key: Color.lerp(a.key, b.key, t)!,
     function: Color.lerp(a.function, b.function, t)!,
   );
 }
@@ -324,6 +336,7 @@ class MicaTokens {
       caret: Color(0xFF2563EB),
       codeBg: Color(0xFFF4F4F6),
       inlineCodeBg: Color(0x1A64748B),
+      inlineCodeInk: Color(0xFF334155),
       commentHighlight: Color(0x33F59E0B),
       commentHighlightActive: Color(0x59F59E0B),
       quoteBar: Color(0xFFCBD5E1),
@@ -336,13 +349,16 @@ class MicaTokens {
         'caution': Color(0xFFCF222E),
       },
     ),
+    // The values the highlighter has always painted, moved here verbatim. They
+    // were GitHub Primer's before, which nothing read — a palette that had
+    // never been wired to the thing it claimed to describe.
     code: CodeTokens(
-      keyword: Color(0xFFCF222E),
-      string: Color(0xFF0A3069),
-      number: Color(0xFF0550AE),
-      comment: Color(0xFF6E7781),
-      type: Color(0xFF953800),
-      function: Color(0xFF8250DF),
+      keyword: Color(0xFF7C3AED),
+      string: Color(0xFF0A7D34),
+      number: Color(0xFFB45309),
+      comment: Color(0xFF6B7280),
+      key: Color(0xFF0F766E),
+      function: Color(0xFF2563EB),
     ),
   );
 
@@ -395,6 +411,7 @@ class MicaTokens {
       caret: Color(0xFF4C8DF6),
       codeBg: Color(0xFF161B22),
       inlineCodeBg: Color(0x338B949E),
+      inlineCodeInk: Color(0xFFC9D1D9),
       commentHighlight: Color(0x3DE3B341),
       commentHighlightActive: Color(0x66E3B341),
       quoteBar: Color(0xFF444C56),
@@ -407,13 +424,17 @@ class MicaTokens {
         'caution': Color(0xFFF85149),
       },
     ),
+    // Each role keeps its LIGHT hue and is lifted for a dark page, rather than
+    // adopting a ready-made dark scheme: swapping in another palette would make
+    // keywords violet in one mode and red in the other, so the same file would
+    // read as two different languages depending on the time of day.
     code: CodeTokens(
-      keyword: Color(0xFFFF7B72),
-      string: Color(0xFFA5D6FF),
-      number: Color(0xFF79C0FF),
+      keyword: Color(0xFFC4A0FF),
+      string: Color(0xFF7EE787),
+      number: Color(0xFFE3B341),
       comment: Color(0xFF8B949E),
-      type: Color(0xFFFFA657),
-      function: Color(0xFFD2A8FF),
+      key: Color(0xFF39C5CF),
+      function: Color(0xFF79C0FF),
     ),
   );
 

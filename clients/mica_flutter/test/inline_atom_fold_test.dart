@@ -4,6 +4,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/render.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // FoldPlan is the load-bearing piece of inline math: every offset that crosses
 // between the document ("let \eta=2 be" — N chars) and the folded TextPainter
@@ -103,6 +104,7 @@ void main() {
         [Mark(2, 7, 'math')],
         base,
         [atom(2, 7)],
+        MicaTokens.light,
       );
       final painter = TextPainter(
         text: r.span,
@@ -130,6 +132,7 @@ void main() {
         [Mark(0, 2, 'bold'), Mark(2, 4, 'math')],
         base,
         [atom(2, 4)],
+        MicaTokens.light,
       );
       // Walk leaves: first text leaf must be bold.
       final leaves = <TextSpan>[];
@@ -159,7 +162,13 @@ void main() {
         baseline: null,
         renderer: const MathInlineAtomRenderer(),
       );
-      final r = buildFoldedSpan('xyz', [Mark(0, 3, 'math')], base, [a]);
+      final r = buildFoldedSpan(
+        'xyz',
+        [Mark(0, 3, 'math')],
+        base,
+        [a],
+        MicaTokens.light,
+      );
       expect(r.dims.single.alignment, ui.PlaceholderAlignment.middle);
     });
   });

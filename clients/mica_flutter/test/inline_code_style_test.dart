@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart' show kMonoFont;
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // Inline code moved from "red mono text + tight faint-red box" to "neutral mono
 // ink + a rounded pill drawn in the render layer" (_paintInlineCode). The span
@@ -12,6 +13,7 @@ void main() {
       'code',
       [Mark(0, 4, 'code')],
       const TextStyle(color: Color(0xFF24292F), fontSize: 16),
+      MicaTokens.light,
     );
     return (span.children!.first as TextSpan).style!;
   }
@@ -19,14 +21,26 @@ void main() {
   test('inline code: mono font, neutral ink, no tight backgroundColor', () {
     final s = codeStyle();
     expect(s.fontFamily, kMonoFont);
-    expect(s.color, const Color(0xFF334155));
-    expect(s.backgroundColor, isNull, reason: 'the pill is drawn by the render layer now');
+    // The ROLE, not the hex. This used to pin #334155, which is still what the
+    // light palette resolves to — but pinning the byte would mean the dark
+    // palette could not exist without editing the assertion.
+    expect(s.color, MicaTokens.light.editor.inlineCodeInk);
+    expect(
+      s.backgroundColor,
+      isNull,
+      reason: 'the pill is drawn by the render layer now',
+    );
   });
 
   test('bold / italic / strike still map to their styles', () {
     const base = TextStyle(color: Color(0xFF24292F));
     TextStyle only(String type) =>
-        (buildMarkedSpan('x', [Mark(0, 1, type)], base).children!.first
+        (buildMarkedSpan(
+                  'x',
+                  [Mark(0, 1, type)],
+                  base,
+                  MicaTokens.light,
+                ).children!.first
                 as TextSpan)
             .style!;
     expect(only('bold').fontWeight, FontWeight.w600);
@@ -50,6 +64,7 @@ void _boldTests() {
       'text',
       [Mark(0, 4, type)],
       const TextStyle(color: Color(0xFF24292F), fontSize: 16),
+      MicaTokens.light,
     );
     return (span.children!.first as TextSpan).style!;
   }

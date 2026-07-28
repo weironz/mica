@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/highlight.dart';
 import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // Three separate failures met here, all of them "the code block looks dead":
 //
@@ -26,7 +27,7 @@ int coloured(String code, String lang) {
     }
   }
 
-  walk(buildCodeSpan(code, lang, base));
+  walk(buildCodeSpan(code, lang, base, MicaTokens.light.code));
   return n;
 }
 
@@ -40,7 +41,7 @@ Color? colourOf(String code, String lang, String needle) {
     }
   }
 
-  walk(buildCodeSpan(code, lang, base));
+  walk(buildCodeSpan(code, lang, base, MicaTokens.light.code));
   return found;
 }
 
@@ -99,15 +100,20 @@ void main() {
       'protobuf': 'message A {\n  string b = 1;\n}\n',
       'nginx': 'server {\n    listen 80;\n}\n',
       'makefile': 'build:\n\tgo build ./...\n',
-      'latex': r'\documentclass{article}' '\n' r'\begin{document}' '\nHi\n',
+      'latex':
+          r'\documentclass{article}'
+          '\n'
+          r'\begin{document}'
+          '\nHi\n',
       'nix': 'let x = 1; in x\n',
     };
 
     test('every entry has a sample here', () {
       // Forces this test to be updated when a language is added, instead of the
       // new entry quietly escaping coverage.
-      final expected =
-          kCodeLanguages.where((l) => l != 'auto' && l != 'plaintext');
+      final expected = kCodeLanguages.where(
+        (l) => l != 'auto' && l != 'plaintext',
+      );
       expect(samples.keys.toSet(), expected.toSet());
     });
 
@@ -134,7 +140,9 @@ void main() {
     test('it is offered, and highlights', () {
       expect(kCodeLanguages, contains('powershell'));
       expect(
-          coloured(r'if ($x -eq 1) { exit 0 }', 'powershell'), greaterThan(0));
+        coloured(r'if ($x -eq 1) { exit 0 }', 'powershell'),
+        greaterThan(0),
+      );
     });
 
     test('ps / ps1 / pwsh resolve to it', () {
@@ -184,27 +192,34 @@ void main() {
       var best = 0;
       void walk(InlineSpan s) {
         if (s is TextSpan) {
-          if (s.style?.color != null && s.text != null && s.text!.length > best) {
+          if (s.style?.color != null &&
+              s.text != null &&
+              s.text!.length > best) {
             best = s.text!.length;
           }
           s.children?.forEach(walk);
         }
       }
 
-      walk(buildCodeSpan(code, lang, base));
+      walk(buildCodeSpan(code, lang, base, MicaTokens.light.code));
       return best;
     }
 
     test('an apostrophe in markdown prose is not a string', () {
       // "don't" would open a string that never closes.
       const md = "It doesn't matter, and it isn't a string either.\n";
-      expect(longestRun(md, 'markdown'), lessThan(10),
-          reason: 'an unclosed quote would paint the whole sentence');
+      expect(
+        longestRun(md, 'markdown'),
+        lessThan(10),
+        reason: 'an unclosed quote would paint the whole sentence',
+      );
     });
 
     test('a backtick in markdown opens inline code, not a string', () {
-      expect(colourOf('use `git log` here\n', 'markdown', '`git log`'),
-          isNotNull);
+      expect(
+        colourOf('use `git log` here\n', 'markdown', '`git log`'),
+        isNotNull,
+      );
     });
 
     test('a markdown heading and a bullet are coloured', () {
@@ -215,8 +230,10 @@ void main() {
     test('an apostrophe in Haskell is an identifier character', () {
       // `foldl'` and `x'` are ordinary names; as a quote they would eat the
       // rest of the line. Control has the same length with a plain letter.
-      expect(longestRun("let xs' = foldl' f z ys\n", 'haskell'),
-          longestRun('let xsA = foldlA f z ys\n', 'haskell'));
+      expect(
+        longestRun("let xs' = foldl' f z ys\n", 'haskell'),
+        longestRun('let xsA = foldlA f z ys\n', 'haskell'),
+      );
     });
 
     test('a backtick in Ruby is a subprocess, not a string', () {
@@ -227,8 +244,10 @@ void main() {
       // The rest of the line has to be long enough to be worth swallowing —
       // the scanner gives up at a newline, so a short line would pass either
       // way and prove nothing.
-      expect(longestRun("val sym = 'notAString and more text here\n", 'scala'),
-          lessThan(8));
+      expect(
+        longestRun("val sym = 'notAString and more text here\n", 'scala'),
+        lessThan(8),
+      );
     });
 
     test('diff colours added and removed lines differently', () {
@@ -238,14 +257,20 @@ void main() {
       expect(added, isNotNull);
       expect(removed, isNotNull);
       expect(added, isNot(removed), reason: 'a diff is +/- or it is nothing');
-      expect(colourOf(d, 'diff', '+++ b/x'), isNot(added),
-          reason: 'the file header is not an added line');
+      expect(
+        colourOf(d, 'diff', '+++ b/x'),
+        isNot(added),
+        reason: 'the file header is not an added line',
+      );
     });
 
     test('a quote inside a diff body does not pair across lines', () {
       const d = '-  say "hi\n+  say "hello"\n';
-      expect(colourOf(d, 'diff', '-  say "hi'), isNotNull,
-          reason: 'the whole line is one token; quotes are just characters');
+      expect(
+        colourOf(d, 'diff', '-  say "hi'),
+        isNotNull,
+        reason: 'the whole line is one token; quotes are just characters',
+      );
     });
 
     test('an INI comment can start with ; as well as #', () {
@@ -285,8 +310,11 @@ void main() {
       const mk = 'CC := gcc\nbuild:\n\t\$(CC) main.c\n';
       final target = colourOf(mk, 'makefile', 'build');
       expect(target, isNotNull);
-      expect(colourOf(mk, 'makefile', 'CC'), isNot(target),
-          reason: 'a variable is not a target');
+      expect(
+        colourOf(mk, 'makefile', 'CC'),
+        isNot(target),
+        reason: 'a variable is not a target',
+      );
     });
 
     test('XML gets its own entry, and CDATA is not markup', () {
@@ -299,8 +327,10 @@ void main() {
     test('Zig has no block comments', () {
       // `/*` is division-then-star in Zig; treating it as a comment opener
       // would grey out everything after it.
-      expect(longestRun('const a = b / *c;\nconst d = 1;\n', 'zig'),
-          lessThan(10));
+      expect(
+        longestRun('const a = b / *c;\nconst d = 1;\n', 'zig'),
+        lessThan(10),
+      );
     });
   });
 
@@ -350,9 +380,13 @@ void main() {
 
   group('structural highlighting', () {
     test('a YAML key is coloured, and differently from its value', () {
-      const yaml = 'name: mica\nversion: 1.2\nservices:\n  api:\n    image: foo\n';
-      expect(coloured(yaml, 'yaml'), greaterThan(20),
-          reason: 'this used to colour 3 characters out of 56');
+      const yaml =
+          'name: mica\nversion: 1.2\nservices:\n  api:\n    image: foo\n';
+      expect(
+        coloured(yaml, 'yaml'),
+        greaterThan(20),
+        reason: 'this used to colour 3 characters out of 56',
+      );
       final key = colourOf(yaml, 'yaml', 'name');
       expect(key, isNotNull, reason: 'the key must not be plain text');
       expect(colourOf(yaml, 'yaml', 'api'), key, reason: 'nested keys too');
@@ -361,15 +395,21 @@ void main() {
     test('a colon inside a YAML value is not mistaken for a key', () {
       const yaml = 'url: http://example.com\n';
       expect(colourOf(yaml, 'yaml', 'url'), isNotNull);
-      expect(colourOf(yaml, 'yaml', 'http'), isNull,
-          reason: 'only a line-leading token can be a key');
+      expect(
+        colourOf(yaml, 'yaml', 'http'),
+        isNull,
+        reason: 'only a line-leading token can be a key',
+      );
     });
 
     test('a YAML list item key is still a key', () {
       const yaml = 'items:\n  - name: a\n  - name: b\n';
       expect(colourOf(yaml, 'yaml', 'items'), isNotNull);
-      expect(colourOf(yaml, 'yaml', 'name'), isNotNull,
-          reason: 'the `- ` marker must not disqualify the key after it');
+      expect(
+        colourOf(yaml, 'yaml', 'name'),
+        isNotNull,
+        reason: 'the `- ` marker must not disqualify the key after it',
+      );
     });
 
     test('a YAML comment still wins over the key rule', () {
@@ -379,20 +419,29 @@ void main() {
 
     test('a CSS property and selector are coloured differently', () {
       const css = 'body {\n  color: red;\n  margin: 0;\n}\n';
-      expect(coloured(css, 'css'), greaterThan(10),
-          reason: 'this used to colour 1 character out of 36');
+      expect(
+        coloured(css, 'css'),
+        greaterThan(10),
+        reason: 'this used to colour 1 character out of 36',
+      );
       final prop = colourOf(css, 'css', 'color');
       expect(prop, isNotNull);
-      expect(colourOf(css, 'css', 'body'), isNot(prop),
-          reason: 'a selector is not a property');
+      expect(
+        colourOf(css, 'css', 'body'),
+        isNot(prop),
+        reason: 'a selector is not a property',
+      );
     });
 
     test('an HTML tag, attribute and comment each get colour', () {
       const html = '<!-- hi -->\n<div class="a" id="b">text</div>\n';
       expect(colourOf(html, 'html', '<div'), isNotNull);
       expect(colourOf(html, 'html', 'class'), isNotNull);
-      expect(colourOf(html, 'html', '<!-- hi -->'), isNotNull,
-          reason: 'HTML comments are neither // nor /* */');
+      expect(
+        colourOf(html, 'html', '<!-- hi -->'),
+        isNotNull,
+        reason: 'HTML comments are neither // nor /* */',
+      );
     });
 
     test('a JSON key is distinguishable from a string value', () {
@@ -401,8 +450,11 @@ void main() {
       final value = colourOf(json, 'json', '"x"');
       expect(key, isNotNull);
       expect(value, isNotNull);
-      expect(key, isNot(value),
-          reason: 'both were green — the structure read as one blob');
+      expect(
+        key,
+        isNot(value),
+        reason: 'both were green — the structure read as one blob',
+      );
     });
   });
 
@@ -419,8 +471,11 @@ void main() {
         detectLanguage('name: CI\non:\n  push:\n    tags: ["v*"]\n'),
         'yaml',
       );
-      expect(detectLanguage('---\ntitle: hi\ndate: 2026-01-01\n---\n'), 'yaml',
-          reason: 'a document marker is enough on its own');
+      expect(
+        detectLanguage('---\ntitle: hi\ndate: 2026-01-01\n---\n'),
+        'yaml',
+        reason: 'a document marker is enough on its own',
+      );
     });
 
     test('an auto block follows pasted yaml', () {
@@ -450,7 +505,9 @@ void main() {
       // `color: red;` inside braces looks exactly like a YAML key.
       expect(detectLanguage('body {\n  color: red;\n  margin: 0;\n}\n'), 'css');
       expect(
-        detectLanguage('@media (max-width: 600px) {\n  .a { display: none; }\n}\n'),
+        detectLanguage(
+          '@media (max-width: 600px) {\n  .a { display: none; }\n}\n',
+        ),
         'css',
       );
     });
@@ -501,8 +558,11 @@ def process_data(file_path):
       const ruby = '```ruby\nputs "hi"\n```\n';
       expect(retagMislabeledFences(ruby), ruby);
       const unlabelled = '```\ndef f():\n    pass\n```\n';
-      expect(retagMislabeledFences(unlabelled), unlabelled,
-          reason: 'no label to correct — auto-detect handles this already');
+      expect(
+        retagMislabeledFences(unlabelled),
+        unlabelled,
+        reason: 'no label to correct — auto-detect handles this already',
+      );
     });
 
     test('a shebang outranks the label', () {
@@ -538,7 +598,11 @@ after
     test('a fence-looking line INSIDE a block is not treated as a fence', () {
       const doc = '```bash\ndef a():\n    s = "```python"\n```\n';
       final out = retagMislabeledFences(doc);
-      expect(out, contains('s = "```python"'), reason: 'body is never rewritten');
+      expect(
+        out,
+        contains('s = "```python"'),
+        reason: 'body is never rewritten',
+      );
     });
   });
 
@@ -547,15 +611,24 @@ after
       // `#include` is C AND C++; `public class` is Java, C# and Kotlin. A
       // signature that cannot name ONE language must return null, or it would
       // retag correct code into the wrong language.
-      expect(strongLanguageSignature('#include <stdio.h>\nint main(){}'), isNull);
+      expect(
+        strongLanguageSignature('#include <stdio.h>\nint main(){}'),
+        isNull,
+      );
       expect(
         strongLanguageSignature('public class Foo { void a() {} }'),
         isNull,
       );
-      expect(strongLanguageSignature('echo hello'), isNull,
-          reason: 'a bare word is never strong evidence');
-      expect(strongLanguageSignature('print(1)'), isNull,
-          reason: 'print( exists in half the languages alive');
+      expect(
+        strongLanguageSignature('echo hello'),
+        isNull,
+        reason: 'a bare word is never strong evidence',
+      );
+      expect(
+        strongLanguageSignature('print(1)'),
+        isNull,
+        reason: 'print( exists in half the languages alive',
+      );
       expect(strongLanguageSignature(''), isNull);
     });
 
@@ -565,10 +638,7 @@ after
         strongLanguageSignature('fn main() {\n  let mut x = 1;\n}'),
         'rust',
       );
-      expect(
-        strongLanguageSignature('package main\n\nfunc main() {\n}'),
-        'go',
-      );
+      expect(strongLanguageSignature('package main\n\nfunc main() {\n}'), 'go');
     });
 
     test('a diff of python is not python', () {
@@ -617,9 +687,21 @@ after
     // in any whitelist is still bash, via the pipe / param-expansion / control
     // flow around it.
     test('an unlisted command is bash via shell syntax, not vocabulary', () {
-      expect(detectLanguage('podman ps -a | grep running\n'), 'bash'); // pipe → filter
-      expect(detectLanguage('ethtool eth0 >/dev/null 2>&1\n'), 'bash'); // redirect
-      expect(detectLanguage(r'echo "${LOG_DIR:-/var/log}/app.log"' '\n'), 'bash'); // ${x:-y}
+      expect(
+        detectLanguage('podman ps -a | grep running\n'),
+        'bash',
+      ); // pipe → filter
+      expect(
+        detectLanguage('ethtool eth0 >/dev/null 2>&1\n'),
+        'bash',
+      ); // redirect
+      expect(
+        detectLanguage(
+          r'echo "${LOG_DIR:-/var/log}/app.log"'
+          '\n',
+        ),
+        'bash',
+      ); // ${x:-y}
       expect(
         detectLanguage('for f in *.log; do gzip "\$f"; done\n'),
         'bash', // for…done pair — gzip is in no list
@@ -632,7 +714,10 @@ after
     // (backtick + `${…}`) is NOT mistaken for shell.
     test('does not steal Python, prose, or a JS template literal', () {
       expect(detectLanguage('def f(x):\n    return x + 1\n'), 'python');
-      expect(detectLanguage('Ping @alice about the docs, thanks!\n'), 'plaintext');
+      expect(
+        detectLanguage('Ping @alice about the docs, thanks!\n'),
+        'plaintext',
+      );
       expect(detectLanguage('`Hello \${name}, welcome back`\n'), isNot('bash'));
     });
   });

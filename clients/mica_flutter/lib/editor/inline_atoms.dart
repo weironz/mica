@@ -198,6 +198,7 @@ buildFoldedSpan(
   List<Mark> marks,
   TextStyle base,
   List<InlineAtom> atoms,
+  MicaTokens tokens,
 ) {
   final len = text.length;
   final dims = <PlaceholderDimensions>[];
@@ -226,7 +227,12 @@ buildFoldedSpan(
             title: m.title,
           ),
     ];
-    final piece = buildMarkedSpan(text.substring(from, to), localMarks, base);
+    final piece = buildMarkedSpan(
+      text.substring(from, to),
+      localMarks,
+      base,
+      tokens,
+    );
     children.add(piece);
   }
 
