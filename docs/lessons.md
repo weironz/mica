@@ -375,3 +375,25 @@ CI 加 `flutter build web --release` 关卡。
 - 修在唯一知道「这个 URL 背后的字节刚变了」的地方(写头像那一步)`NetworkImage(url).evict()`。
   一般化:**只要缓存键是内容派生的,就要想清楚"同样的内容再次出现"这条路——尤其中间
   夹过一次失败。**
+
+### 对话框的 TextEditingController 该由路由持有,不是调用方
+
+- 四个对话框都是这个写法:`final c = TextEditingController();` → `await showDialog(...)`
+  → `c.dispose();`。**那个 future 在 `Navigator.pop` 时就完成,退场动画还让 TextField
+  挂着一两帧**;这期间任何一次重建都会让 `InputDecorator` 的动画去重新监听一个已 dispose
+  的 notifier → `A TextEditingController was used after being disposed`,紧接着
+  `_dependents.isEmpty` 红屏。登录和添加服务器都是 pop 之后立刻 setState(整棵树重建,
+  含正在退场的路由),所以**必崩,不是竞态**。「添加服务器」输入框为空时不崩,是因为那条
+  路径在 setState 之前就 return 了 —— 这就是它看着像偶发的原因。
+- 修法是所有权,不是时序:controller 放进路由自己的子树(`ui/dialog_controllers.dart`
+  的 `DialogTextControllers`),`State.dispose` 在路由真正消失时才跑。别去猜动画多长
+  (`addPostFrameCallback` 那类都不可靠)。
+- **这类只有真跑桌面端才撞得到**:单测不会在退场动画中途重建,web 端也没走这条路。
+
+### 报告写进了用户没在看的那块 UI = 没报告
+
+- 「清理缓存」把「已释放 X」写进了 `_accountMsg`,而那个变量只在设置的**账户**区渲染,
+  按钮在**数据**区 —— 点完按钮,数字变了、没有一句话说为什么。眼看才发现,`flutter test`
+  和 curl 都测不出来。
+- 一并的教训:文案要说清**动作**,不只是数字。镜像里没有图片时「已释放 0 B」读起来像什么
+  都没干,而页面确实清了 → 「已清理云端镜像,释放 {size}」。
