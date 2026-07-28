@@ -6,9 +6,22 @@ stay inside the library boundary instead of forcing layout internals
 public); the preview pipeline in `lib/editor/preview_raster.dart`. Body
 paint dispatches on the layout's producer (`renderedBy`); backdrops
 dispatch by kind (block identity, shown on the fallen-through source form
-too). Still open: collapsing _NodeLayout's per-kind fields into a
-rendererData slot, and hit-test dispatch — both deferred until a renderer
-actually needs them.
+too).
+
+The SHIPPED dispatch differs from Decision 1's sketch below (kept as the
+historical record): registration is a const `List<AtomicBlockRenderer>`
+flattened into a kind-keyed `Map`, and a renderer declines by returning
+null from `layout()` — not `canHandle` order. Consequence: **one renderer
+per kind**; a second registration for the same kind (e.g. Graphviz sharing
+`code_block` with Mermaid) silently replaces the first, with no compile
+error. That is the real constraint to solve when a second same-kind
+renderer arrives (code-review 2026-07-20, P3-1).
+
+Still open: collapsing _NodeLayout's per-kind fields into a rendererData
+slot (still unneeded); hit-test dispatch is NOT "unneeded" anymore —
+TableRenderer needs it today and does it ad-hoc via RenderDocument methods
+(`tableCellAt`/`tableCellRect`/`tableHandleAt`/`tableDeleteAt`,
+render.dart ~2908-2966) outside the registry (code-review P3-2, open).
 
 ## Problem
 

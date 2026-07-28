@@ -1,5 +1,11 @@
 # 跨 workspace 移动 / 复制页面·目录(#3)
 
+> **Status: IMPLEMENTED(M1–M3 已发)。** 服务端 `transfer_view`
+> (`documents.rs:2946`,含 file_id 重写与子树内链改写的测试)、客户端 UI
+> (`main.dart` 调 `_api.transferView`)、MCP `mica_transfer_view`
+> (`mcp-server/lib.rs`)均已上线。v1 范围裁剪(仅云端同服务器互移、
+> 链接页不自动跟随、不携带版本历史)见下文,未变。
+
 把一个页面(及其子树)或文件夹从一个云端工作区搬到**同一服务器上的另一个云端
 工作区**。菜单出「移动到工作区…」「复制到工作区…」。本地↔云是单独的 #4。
 

@@ -97,9 +97,15 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
    测试会**静默跳过**,整套 0.00s「全过」,那是真空通过不是验证(见 `docs/lessons.md`)。
    本地栈起着的话:`$env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"`,
    跑完看耗时 —— 秒级才说明真跑了。想更稳再跑 `just parity-check`(容器形态,见下)。
-4. 提交 → `git push origin main` → `git tag vX.Y.Z && git push origin vX.Y.Z`
+4. **同步 `docs/roadmap.md`**:这一版关掉了哪些条目,当场标 ✅ 或删掉。
+   roadmap 的条目多是「无 X」这类**否定式能力声明**,功能做了它不会自己变 ——
+   代码删个函数会编译报错,文档说"没有"而实际有了,什么都不会响。发版是唯一
+   每次都会走完的流程,所以执行点放在这里,不放在记性里。
+   (2026-07-29 一次盘点发现 7 处过期,最刺眼的是深色主题当天发布、
+   roadmap 还写着「无 dark mode」。)
+5. 提交 → `git push origin main` → `git tag vX.Y.Z && git push origin vX.Y.Z`
    → **CI 自动产出全部 7 个产物**(约 10–15 分钟)。
-5. `gh run watch` 等 CI 绿;`gh release view vX.Y.Z` 确认 4 个 asset 都在。
+6. `gh run watch` 等 CI 绿;`gh release view vX.Y.Z` 确认 4 个 asset 都在。
 
    > **CI 先建草稿 release,最后才发布。** 各 job 并行往草稿上挂产物,末尾的
    > `publish` job 把它翻成正式版并设 `--latest`。这样 `/releases/latest` 要么是
@@ -111,13 +117,13 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
    > ```bash
    > gh release edit vX.Y.Z --draft=false --latest
    > ```
-6. **带数据改动就先落还原点**(`deploy-prod` 自己不做备份,理由见「生产运维要点」):
+7. **带数据改动就先落还原点**(`deploy-prod` 自己不做备份,理由见「生产运维要点」):
    ```bash
    ssh root@mica.cloudcele.com \
      'docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-X.Y.Z-$(date +%Y%m%d-%H%M%S).sql.gz'
    # 验完整性:gzip -t <file>,再 zcat <file> | grep -c "^COPY public.documents " 确认目标表在内
    ```
-7. **部署**。两条路,都走节点上同一个受限入口 `/usr/local/sbin/mica-deploy`:
+8. **部署**。两条路,都走节点上同一个受限入口 `/usr/local/sbin/mica-deploy`:
 
    ```bash
    # 常规:触发即部署(没有审批门 —— 触发本身就是那个决定)
@@ -135,9 +141,9 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
    > 就拒绝,并提示你用 `just deploy-prod` 同步。哈希只能拒绝、无法注入;传文件则等于
    > 把 `-v /:/host` 的能力交出去。**compose 改了之后的第一次部署必须走 `deploy-prod`。**
 
-8. `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**(workflow 里已内置
+9. `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**(workflow 里已内置
    这一步)。
-9. **冒烟测这一版真正改了什么。** `verify-prod` 只断言版本号,证明不了功能。挑一个
+10. **冒烟测这一版真正改了什么。** `verify-prod` 只断言版本号,证明不了功能。挑一个
    改动前后行为可区分的操作实测 —— 例如 v0.12.7 修的是「文档读取 400」,判据就是
    同一个 `mica_read_document` 调用:部署前报 `bad request: block not found:`,
    部署后返回正文。有这种硬判据就用它,没有就手工点一遍受影响的入口。

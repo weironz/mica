@@ -5,10 +5,11 @@ name: CI
 # here was verified green locally (2026-07-08): cargo test on the pure crates
 # (~45 tests) and `flutter test test` (206 tests).
 #
-# Deliberately NOT covered yet (need infra a headless runner can't trivially
-# provide — left for a reviewer to enable + validate against a real run):
-#   - The Windows integration_test suite (yrs sync e2e, page-switch fidelity) —
-#     needs a desktop runner + the native FFI (flutter_rust_bridge) build.
+# The Windows integration_test suite runs in flutter-integration.yml (a real
+# Windows runner builds the native FFI and drives the app). Only its OFFLINE
+# subset runs there; four files still need the whole dev stack (postgres +
+# rustfs + api-server) and are excluded, listed with reasons in that file's
+# header.
 #
 # 2026-07-21 audit (docs/code-review-2026-07-20.md) found 167 tests that never
 # ran here. Three causes, all fixed below:

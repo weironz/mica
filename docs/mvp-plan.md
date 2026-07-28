@@ -1,5 +1,9 @@
 # MVP Development Plan
 
+> **历史文档(MVP 期,已整体超越)**:本文的 out-of-scope 清单(local-first、
+> 离线冲突、AI、公开分享)此后都已建成。现状看 `roadmap.md`;本文仅留作当时
+> 取舍的记录,不再维护。
+
 ## MVP Definition
 
 The MVP is a cloud-first collaborative document editor with:

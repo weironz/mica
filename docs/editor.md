@@ -95,7 +95,9 @@ caret scroll-into-view still need live-browser tuning.
 
 ## Out of scope (for now)
 
-- Inline rich text (bold/italic/links as styled spans) is planned as **marks over
-  plain text** on the in-house engine (Milestone 3), not via a third-party editor
-  core. Block-level structure works today; inline formatting is the next layer.
-- Conflict-free concurrent typing (CRDT/OT) is deferred per the MVP plan.
+- ~~Inline rich text~~ **shipped** as marks over plain text (see
+  `editor-engine.md` M3 and `render-architecture.md` Decision 4).
+- ~~CRDT~~ **shipped**: the yrs CRDT core is the storage/sync model end-to-end
+  (`phase2-offline-crdt.md`, P2-M0…M3 all done). Honest residual: same-block
+  concurrent typing is still last-write-wins until the real cloud-sync stream
+  lands (P2-M4, see `roadmap.md`).
