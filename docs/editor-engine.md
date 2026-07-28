@@ -385,8 +385,9 @@ The recurring problem the engine must get right for every node type:
    block-op diff (`_diffOps`) so the backend follows — no `move_block` since the
    editor never reorders existing blocks. A debounced typing burst coalesces into
    one step (undo flushes pending first). Bound to Ctrl/Cmd+Z and
-   Ctrl/Cmd+Shift+Z / Ctrl+Y in `editor._onKey`. *Pending:* toolbar buttons
-   (state is controller-private; keyboard-only for now).
+   Ctrl/Cmd+Shift+Z / Ctrl+Y in `editor._onKey`. *Done:* toolbar undo/redo
+   buttons ship in the format bar (`main.dart` via `EditorCommandHook` — state
+   stays controller-private; the hook exposes exactly the two calls).
 5. **Void nodes — DONE (divider + image).** Atomic nodes (`EditorNode.isAtomic`:
    `table`/`divider`/`image`) hold no inline caret: `caretRectFor` returns null,
    `positionAt` snaps clicks to the nearest text node, Up/Down make the block a

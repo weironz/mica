@@ -14,10 +14,11 @@
 
 ## 可靠性与同步
 
-- **P2-M4 云同步流未真正建**(bigserial 单调流 + 断点续传 + SV 回退 + local-seq→Rid)—— 离线优先同步的主干,现有 op 模型本应随它退役。(L) `[需后端]`
-- **实时字符级并发协同未落地** —— presence 光标已画(`render.dart`),但同块并发输入仍靠 last-write,「协同」名不副实。(L) `[需后端]`
-- **M-R 收尾 C3/D1/D2/A3** —— 坏更新加载自愈 + schema 版本号、静默 `catch{}`→计数日志、同步健康态、会话持久化 e2e。(M)
-- **离线→在线 blob 自动 reconcile** —— 现只在重开文档时懒重传;可挂到自动重连成功事件上。(M) `[需后端]`
+- ~~**P2-M4 云同步流未真正建**~~ ✅ **主干早已上线**(2026-07-29 对代码核实,此条整条过期)—— `sync.rs` push_update 写流+fold、`catch_up_document` 按 since_rid 续传+剪枝缺口自动 Rebootstrap、`diff_from_base` SV 兜底;WS `sync.bootstrap/pull/push` 三 handler(`ws.rs:336-440`)+ 客户端 `_pullPayload(since_rid+sv)` 消费;真 PG 集成测试 `sync_pg.rs`。**它一直被记成未建,把整棵依赖树都记歪了** —— 实际解锁的下一步是 op 模型退役(见「数据生命周期」)。
+- **实时字符级并发协同未落地**(2026-07-29 措辞修正)—— 传输/应用层是**真 yrs merge**(`sync.rs` guarded_apply、客户端 applyUpdate),不是 last-write;真实缺陷在编辑器 op 粒度:`update_block` 整段换文本(`doc.rs` set_text_and_marks = remove_range+insert),两端并发编辑同块合并成**重复/拼接**而非字符交织。字符级 API 已在(`text_insert`/`text_delete`)但编辑器热路径不用;细粒度化 = delta↔marks 映射,phase2 §12 明言的最大风险区。(L) `[需后端]`
+- 🟡 **M-R 收尾**(2026-07-29 核实:4 项里 3 项早已落地)—— ~~C3 坏更新自愈+schema 版本~~ ✅(`store.rs` SCHEMA_VERSION=6 + 太新拒开 + 每 blob CRC-32 + yrs panic 包成 CorruptDoc;客户端坏副本冷 bootstrap 自愈、坏 remote 封顶熔断);~~D2 同步健康态~~ ✅(`sync_status.dart` → _SyncBadge + fault banner);~~A3 会话持久化 e2e~~ ✅(`cloud_sync_integrity_test.dart`:未 ack 编辑跨重启重推)。**残留仅 D1 尾巴**:关键故障已计数上报(onFault/_faultCount/_persistFails/_pushRejects),但 `onError:(_){}` 等带注释静默吞仍无通用计数设施。(S)
+- **离线→在线 blob 自动 reconcile** —— `_reconcilePendingUploads` 全仓唯一调用点在 onReady(=重开文档);重连侧 `_onCloudOnline` 只扫文本 outbox 不扫 blob(`_sweepPendingOutboxes` 的注释自己点名了这个洞),且 onServerConnected 每会话只 latch 一次、会话内二次重连无回调可挂。(S,客户端为主)
+- 🆕 **重连复用过期 token → 永久退避循环**(bug,2026-07-29 核实中发现)—— token 烤死在会话创建时的 `uri`(`cloud_sync_session.dart:62` 注释自认 + `:259` connect 用 this.uri),access TTL 1h 过后断线重连恒 401 → 退避循环,直到用户切文档才拿到新 token;长开会话表现为「静默停止同步」。修法:uri 改 getter/回调注入刷新后 token;顺手把服务端「exp 到期 close(4401)」一起做(即安全小节的 TTL 条)。待实测复现确认路径。(S-M)
 - ~~**双向 state-vector 协商**~~ ✅ 已做(校准复核)—— P4-3:`ws.rs:508` `client_sv.and_then(|sv| sync::diff_from_base(base, sv))` 按 client SV 发最小 diff,base_message delta 分支 + 单测 `base_message_sends_delta_only_when_sv_yields_one`。
 - ~~**broadcast lag 触发整档重载**~~ ✅ 已做(校准复核)—— 客户端 `_resyncFromLag` 发 `sync.pull` 带 cursor+SV 增量续拉,非整档重载。(`cloud_sync_session.dart`)
 - ~~🆕 **`client_out_of_date` 客户端零处理 → 被跳过的更新永久静默丢失**~~ ✅ 已做(校准复核)—— `cloud_sync_session.dart:467` 收到 `code:'client_out_of_date'`(无 ack_id)即 `_resyncFromLag()` 触发 pull/bootstrap 补洞;server 侧 `ws.rs:170` 发 notice。
@@ -65,7 +66,7 @@
 - 🆕 **备份恢复演练纯手动、`rustic check` 不在自动流程**(medium) —— `backup.md:135` 自写「没恢复过的备份只是猜测」,但无 cron/CI/脚本承载,每日脚本也不跑 `rustic check`(OSS 端静默损坏只在恢复那天发现,prune 又最易放大损坏)。修:`rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)
 - ~~🆕 **单机兜底部署脚本 `deploy/deploy.sh` 已漂移**~~ ✅ 已做(2026-07-23)—— 对齐 justfile 权威版:`flutter build web` 补 `--no-web-resources-cdn`(修 CN 运行时拉 gstatic CanvasKit 不可用)、删 stale `--no-tree-shake-icons`、rsync→`rm -rf + cp -r`(Windows 无 rsync);`bash -n` 过。
 - ~~🆕 **Postgres 大版本升级路径无文档**~~ ✅ 已做(deploy.md 早有升级 section,0d9c404;2026-07-23 补「PG16 上游支持到 ~2028、这是主动维护任务非顺手改 tag」)。
-- 🆕 **共享 Traefik 证书无过期监控、配置不在仓库**(medium) —— 生产 HTTPS 由仓库外的 EXISTING Traefik 终结,`deploy.md:86` 记了 ACME 卡死需手动重启的真实故障;证书过期无监控,S3_DOMAIN 证书失效会让所有 presigned 图片 URL 浏览器端全挂。修:外部拨测顺带断言两域名证书剩余有效期;把 Traefik 配置纳入某受管仓库。(S)
+- 🟡 **Traefik:证书监控已做,配置仍不在仓库**(2026-07-29 核实)—— ~~过期无监控~~ ✅:`uptime.yml` 每 15 分钟对两域名(app + s3)openssl 查证书剩余有效期,< 10 天(CERT_MIN_DAYS)即 fail → Actions 失败邮件。**残留**:Traefik 配置本体在仓库外未纳管;ACME 卡死那类故障仍靠 `deploy.md:86` 的手动 runbook。(S,external)
 
 ## 数据生命周期与增长 🆕
 
@@ -74,13 +75,13 @@
 - ~~**REST/MCP 写路径从不落自动版本快照**~~ ✅ `apply_derived_operations` 复用 push_update 的 auto 版本 INSERT(同事务、10min cadence、30 天;只写版本归档表、不碰双表示红线,6612330;连真 PG 测试)。
 - ~~**删除 workspace 永久泄漏其全部 S3/RustFS 图片对象**~~ ✅ `workspaces::delete` 删库前枚举 `DISTINCT object_key` 逐个删存储对象(best-effort、objects-first,6612330)。
 - ~~🆕 **`purge_view`「永久删除」只删 views 行**~~ ✅ 已做(927d7f7)—— `purge_view_subtree` 一条原子 CTE 删 views 子树 + 对 document 型视图删 `documents` 行,DB `ON DELETE CASCADE` 随之清空所有 document_* 表(yrs base/快照/版本/op/**分享 token**);blob 靠 blob_gc 惰性回收(去重共享,不急删)。DB 门控测试锁级联。(`documents.rs` `purge_view_subtree`)
-- 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」是计划,退役前按「文档大小×写入次数」增长。(`store.rs:252`, `sync.rs:284`)(M) `[需后端]`
+- 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」的前置**已解除**(P2-M4 主干已上线,见「可靠性与同步」——该条此前一直误记为未建):现在可动手,先删死写入器(`create_named_version`/`restore_snapshot`,version-history-plan 点名已久,S),再拍修剪/退役方案。退役前仍按「文档大小×写入次数」增长。(`store.rs:252`, `sync.rs:284`)(M) `[需后端]`
 - 🆕 **无任何容量配额**(medium) —— 唯一限制是单文件 25MB + 导入 1GiB body;无 workspace 总量/单文档大小/用户级上限,WS 路径默认可收 64MiB 单条消息,大文档写放大(每 push 全量 base 覆写 + 每 10min 全量版本)。开放注册单节点最易被无意/恶意打爆盘。(`storage.rs:50`, `ws.rs:60`, `sync.rs:244`)(M) `[需后端]`
 - ~~**`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**~~ ✅ blob_gc 6h 循环加全局 `DELETE ... expires_at IS NOT NULL AND < now()`(只命中 auto、不碰命名检查点,6612330)。**残留**:`list_yrs_versions` 仍不过滤 expires_at(6h 扫前的过期行可能短暂现于面板,极小)。
 - 🆕 **回收站无保留期限,永久堆积**(low) —— 纯 `is_deleted` 标志,无自动清空/保留期;blob GC 刻意把回收站引用算存活 → 图片 blob 也永久保留。`blob_gc.rs:43` 注释预设了一个不存在的「回收站保留期」。可能是有意的产品选择(如 Notion),但从未写成决定且与注释矛盾。(S) `[需后端]`
 - ~~**`refresh_tokens` 只增不删**~~ ✅ blob_gc 6h 循环加 `DELETE ... expires_at < now()-7d`(6612330)。
 - ~~🟡 **账号删除功能不存在**~~ ✅ 已做(18300d1,2026-07-23)—— `delete_account` 事务级联(密码门控 + 跨他人 workspace RESTRICT 阻塞回滚 409),详见「产品与公开发布合规」小节;级联顺序备忘 deploy.md 早有(0d9c404)。
-- 🆕 **导出(及其上的每日备份)不含回收站内容**(low) —— `fetch_workspace_views` 过滤 `is_deleted=false`,回收站页面及其独有图片不进导出包;一个页面在回收站躺过备份保留窗口(7天/4周/6月)后,备份里最后副本也被 prune,唯一副本只剩生产库。`backup.md` 记了排除编辑历史/用户数据,回收站排除没写。(`documents.rs:2101`)(S)
+- 🟡 **导出不含回收站;备份已含其文本、独有 blob 仍漏**(2026-07-29 更正)—— 导出确实过滤 `is_deleted=false`;但 2026-07-22 起每日备份走**全库 pg_dump**(`mica-backup.sh`,label=_pgdump),回收站页面的文本+CRDT 历史**在备份里**,原「备份里最后副本被 prune」的推演已不成立。**残留**:回收站页面独有的图片 blob(第二对象存储,pg_dump 不含)。(S)
 
 ## 编辑器与功能广度
 
@@ -144,7 +145,7 @@
 - ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
 - **每次 push 重建+重编码+重写整档(写放大)** —— `from_update`→全档 `encode_state`+upsert,成本 O(文档) 而非 O(更新)(`sync.rs`)。(M) `[需后端]`
 - **yrs base 无 squash/GC,无界增长** —— 只裁 stream 不压 base,长寿文档 base 越滚越大(`sync.rs`)。(L) `[需后端]`
-- **本地持久化仅全量快照** —— §4 的增量队列 + squash 折叠推迟中。(M)
+- 🟡 **本地持久化:云文档已增量,纯本地文档仍全量**(2026-07-29 更正)—— 云端(在线)文档早已 append+squash(`store_cloud_doc_store.dart` appendOutbox/appendUpdate/compact,每 32 次 append 检查、日志 >256 squash;store 层 `append_update`/`squash` 全备)。「仅全量快照」只剩**纯本地(离线)文档**的 `local_doc.dart` debounce saveDoc 路径,接线即可。(S/M)
 - **frb v2 热路径 FFI 基准待测** —— IME/逐字输入若过慢,热路径留 Dart(phase2 §12)。(M)
 
 ## 开发者体验 / CI / Markdown
@@ -153,7 +154,7 @@
 - ~~🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**~~ ✅ 已做(校准复核)—— `documents.rs` `parent_guard_pg` 测 folder 接受/page 拒绝/缺失父 + 触发器 backstop(真 PG 门控)。
 - ~~**Release 出的 Windows 安装包从未被自动安装-启动验证**~~ ✅ release.yml 加「安装-启动冒烟」(/VERYSILENT 装 + 启动 + 存活 10s + finally 清理,发布前拦,0d9c404)。**2026-07-23 根治 flaky**:冒烟测撞单实例 mutex 竞态偶发假失败(安装器 `[Run]` 自启一个 + 测试又自启一个,谁后抢到 `Local\MicaSingleInstance` 谁 `exit 0`;`[Run]` 触发时机随机)。结构性解法(ShareX 同款):`mica.iss` 的 `[Run]` 加 `Check: not CmdLineParamExists('/SKIPRUN')`,CI 安装传 `/SKIPRUN` → 安装器不自启 → 测试是唯一启动方 → mutex 永不争用,竞态从结构上消失(9c006e6),0.12.16 真 CI 跑绿实证。〔sccache 曾加在 windows job(b5e7f04)后于 v0.12.18 撤除:tag 触发的 job 命中率恒 0%(GHA cache 按 ref 隔离、release 只在 tag 上跑),且长杆是 Flutter 构建非 Rust——详见 `docs/lessons.md`。〕
 - 🟡 **CI 补 Windows 集成测试**(2026-07-23:离线子集已进)—— 新 `.github/workflows/flutter-integration.yml`:windows-latest **串行**跑 **14 个离线/客户端**集成测试(文件间杀 `mica_flutter.exe`,化解单实例守卫导致的 debug-connection race——已复现:残留进程锁住下次启动)。**残留**:4 个需活的 dev 栈(postgres+rustfs+api)的测试仍排除(`cloud_sync_test`/`migration_sync_test`/`offline_image_reconcile_test`/`page_switch_fidelity_test`,含那对 race 文件)——CI 里起全栈超范围。且 12/14 是读文件头判定离线(实跑了 2)、首次 CI 真跑确认。(M) `[需后端]`(残留部分)
-- 🆕 **全项目零自动化 e2e**(medium) —— 桌面 integration_test 手跑;web 端零 e2e,CLAUDE.md「playwright 截图」是人工手段,仓库无任何 `.spec.ts`/committed 脚本,CI 对 web 只验「能编译」。(L)
+- 🟡 **e2e:桌面已进 CI,web 仍为零**(2026-07-29 更正:「全项目零 e2e」失实)—— 桌面 14 个离线集成测试已在 windows-latest **真 app 实跑**(flutter-integration.yml,2026-07-23 起,那就是 e2e);web 端仍零(无 spec,CI 只验能编译;playwright 截图是人工手段)。(web 侧 L)
 - 🟡 **不可信输入解析面 fuzz**(2026-07-23:markdown + interchange 已上,yrs 待)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**已做**:proptest 属性 fuzz 覆盖前两个自家解析面——`markdown/tests/proptest_parse.rs`(`import_markdown` 灌任意字节 + markdown-ish 片段,never-panic)+ `interchange/tests/proptest_zip.rs`(`read_zip→normalize_entries→expand_nested_zips` 灌任意/PK-前缀字节)。本轮**未挖出 panic**(解析器稳),但落成**快回归门**(各 ~2–5s,随 `cargo test` 进 CI;`PROPTEST_CASES=100000` 可本机长跑)。**残留**:yrs 二进制更新那面——手写 xor 已实证挖出远程可达(需认证)UB,但 UB 要 **cargo-fuzz + sanitizer(ASan)** 才抓得住,proptest(只抓 panic)不够 → 留 Linux/CI 的 cargo-fuzz。(`store.rs:2202`)(M)
 - 🆕 **本地 SQLite 真库升级冒烟不在发版清单**(medium) —— `upgrade_real_store_smoke`(`#[ignore]`+需手动设 `MICA_REAL_STORE`)是发版前手动步骤,但 `release.md` 全篇不含其字样 → 发版流程不会触发任何人想起它;而桌面自动更新后首启就地迁移本地库,迁移写坏=用户笔记不可见。(`store.rs:2083`, `local-first-p3-design.md:288`)(S)
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
@@ -180,7 +181,19 @@
 - 🆕 **已上线实例无隐私声明/服务条款**(low) —— 正面:诊断 opt-in 默认关、无 telemetry 回传,产品内隐私姿态好;缺口是外部合规面,仓库无任何面向用户的隐私政策/条款文本。(M)
 - 🆕 **打包 Noto Sans SC 走 OFL 1.1 但没随附 OFL.txt**(low) —— `fonts/NOTICE.md` 自写「include the full OFL.txt alongside for strict compliance」,但 fonts/ 只有 NOTICE.md,OFL 要求许可证正文与字体一同分发。(`fonts/NOTICE.md:9`)(S)
 
-## 接下来最该做的 3–5 件(2026-07-22 重排)
+## 接下来最该做的(2026-07-29 重排)
+
+> 本轮 7 路并行对代码逐条核实 53 项候选:翻掉 **5 个整条误报**(P2-M4 云同步流、撤销/重做按钮、版本富预览、登录页服务器选择器、证书监控)+ **6 处部分失实**,挖出 **1 个真 bug**(重连复用过期 token)。排序原则:先闭环、再立规、后大件。
+
+1. **同步「离线→在线」闭环三小件**(各 S/S-M)—— ① 修重连过期 token 死循环(bug);② blob 重传挂上重连(现只在重开文档时);③ outbox 分批背压(重连风暴)。全是小活,合起来把离线体验真正关上门。
+2. **op 模型退役启动**(M)`[需后端]` —— P2-M4 主干已上线,阻塞解除:先删死写入器(S),再拍修剪/退役;这是库里唯一无界增长的大头。
+3. **协议版本门**(S-M)`[需后端]` —— 桌面自装包版本天然漂;退役 op 模型(现在的 REST 兜底)之前先把 WS min-version 闸门立好,退役才敢做。
+4. **快赢打包**(合计约一个下午)—— OFL.txt 附上、0.0.0.0 明文绑定启动告警、`upgrade_real_store_smoke` 写进 release.md 清单、catch-up 常量进 AppConfig、残余静默 catch 接计数。
+5. **拍板项(先决策不写码)**—— 回收站保留期写成决定(blob_gc 注释预设了一个不存在的保留期);toggle 结构块要不要新 kind;MCP inspector v2 迁移;M8 comrak 取舍。
+
+**中期(用户挑)**:安全三件(token DPAPI / 邮箱验证 / WS token 出 query string);平台两件(Authenticode 签名 / Linux CI 出包);产品大件(同块字符级协同 L / 本地全文搜索 M-L / 本地反链 / 视口虚拟化 L / 触屏选择 L)。
+
+## 上一批「最该做」(2026-07-22 排,当批已全部完成)
 
 > 数据安全里程碑已收口后,重心转向「公网自托管的硬底线」——发出去前一次事故就不可挽回的类型。
 

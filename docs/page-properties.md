@@ -40,7 +40,7 @@ lessons.md 的 round-trip 是红线。front matter 存为不透明字符串时�
 
 **支持的扁平子集**(即 Obsidian Properties 那档):顶层 `key: 标量`、flow list `key: [a, b]`、block list(`key:` 后跟缩进 `- item`)。**更复杂的**(嵌套 map、多行 block scalar、锚点)**原样保留、不作为可编辑属性露出**——它还是它原来的不透明字节。
 
-**M2**(未做):tag 可点可搜(派生索引复用 ref 基建)、属性筛选、按属性排序。派生索引是**可丢弃缓存**(front matter 是唯一权威,索引脏了重建)——不破双表示红线。
+**M2**(部分完成,2026-07-29 核实):~~tag 可点可搜~~ ✅(ce13cef —— 属性值折进 `content_text`、list 值存 `#值`,tag chip 点击精确搜索跳页;没建独立派生索引,content_text 投影已够,更省)。**余下**:属性筛选、按属性排序 —— 做前先拍范围,它们与下方「数据库视图不做」的红线相邻。
 
 **注定不做 / 另立项**:
 - **数据库视图(Notion database:带类型列、筛选、排序、看板/画廊、relation、rollup)**。这要么把类型编码进 markdown(=第二份要同步的表示,破红线),要么像 AFFiNE/siyuan/AppFlowy 那样**把数据库节点从 markdown 权威里豁免出去**(散文仍 md 权威,数据库是 yrs 里一座带 id 的类型化孤岛、markdown 只单向导出)。后者是可行的**独立大决策**,不属于「页面属性」,单独立项再拍。

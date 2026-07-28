@@ -18,10 +18,12 @@ What shipped vs. this doc:
   auto-capture in `save_doc`; FFI `list/create/restore_local_version`; restore =
   hard reset (single-device, the `rollback_doc` shape) with the pre-restore state
   preserved as an auto version. Wired to the same dialog for local pages.
-- **Deferred:** rich read-only preview in the editor (the `GET /versions/{id}`
-  endpoint returns blocks and is ready; the client shows the timeline + restore,
-  restore being non-destructive/undoable). Retire the dead op-model history
-  store fns (`create_named_version`/`restore_snapshot`) — left in place, unused.
+- ~~**Deferred:** rich read-only preview in the editor~~ **Shipped**
+  (verified 2026-07-29): `_VersionHistoryDialog` renders a past version in a
+  read-only editor (`canEdit:false` — the real renderer, no separate HTML path)
+  with block-level added/changed/removed diff and image resolution; server-side
+  preview endpoint in `history.rs`. Still open: retire the dead op-model history
+  store fns (`create_named_version`/`restore_snapshot`) — in place, unused.
 
 The original plan follows for reference.
 
