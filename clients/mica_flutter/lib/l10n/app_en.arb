@@ -556,6 +556,8 @@
   "loginForgotEnterEmail": "Enter your email above first.",
   "loginForgotSentTitle": "Check your email",
   "loginForgotSentBody": "If that email is registered, we've sent a link to reset your password. It expires in one hour.",
+  "worldPickerHeading": "Which world",
+  "worldPickerLocalSubtitle": "Works without a network; stays on this device",
   "signInTitle": "Sign in to Mica",
   "signInTagline": "A local-first\ncollaborative wiki",
   "signInPitch": "Block editor, real-time collaboration. Edits merge through CRDTs, so your devices never overwrite each other.",

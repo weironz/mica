@@ -42,6 +42,7 @@ import 'ui/rename.dart';
 import 'ui/search_data.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
+import 'ui/world_picker.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
 import 'ui/user_avatar.dart';
@@ -459,6 +460,70 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       knownServers(rawPref: loadPref('servers'), seed: seed);
 
   void _saveServers() => savePref('servers', jsonEncode(_servers));
+
+  /// Ask for a URL, then add it. One implementation for both entry points: the
+  /// account menu and the sign-in screen. It used to live only in the menu's
+  /// State, which is why the sign-in screen — the app's actual entry — could not
+  /// offer it at all.
+  Future<void> promptAddServer() async {
+    // No TextEditingController on purpose: see dialog_controllers.dart. Reading
+    // through onChanged removes the lifecycle instead of timing the disposal.
+    var typed = '';
+    final l10n = context.l10n;
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.serverAddTitle),
+        content: TextField(
+          autofocus: true,
+          onChanged: (v) => typed = v,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: InputDecoration(
+            labelText: l10n.serverUrlLabel,
+            hintText: 'https://mica.example.com',
+            prefixIcon: const Icon(Icons.link),
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(typed),
+            child: Text(l10n.serverAdd),
+          ),
+        ],
+      ),
+    );
+    if (url == null || url.trim().isEmpty || !mounted) return;
+    // Adding is not switching: the new server joins the list and nothing else
+    // moves. Picking it is a separate act.
+    final error = await _addServer(url);
+    if (!mounted || error == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+  }
+
+  /// Confirm, then forget a server — credentials AND on-device mirror.
+  ///
+  /// Through `showDestructiveConfirm`, not a hand-rolled red AlertDialog: that
+  /// helper exists precisely because the app had grown several, each re-deciding
+  /// what "dangerous" looks like.
+  Future<void> confirmRemoveServer(String origin) async {
+    final l10n = context.l10n;
+    final ok = await showDestructiveConfirm(
+      context,
+      title: l10n.serverRemoveTitle(serverLabel(origin)),
+      body: l10n.serverRemoveBody,
+      confirmLabel: l10n.commonDelete,
+      cancelLabel: l10n.commonCancel,
+    );
+    if (!ok || !mounted) return;
+    await _removeServer(origin);
+  }
 
   /// Make [origin] the one world on screen — `'local'` or one of [_servers].
   /// The single entry point: local and a server are the same kind of choice, so
@@ -3548,33 +3613,82 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return Navigator.of(context).push<(AuthMode, AuthFormValue)>(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (routeContext) => Scaffold(
-          body: SafeArea(
-            child: SignInScreen(
-              // Desktop CAN write offline, so the feature line drops web's
-              // 「桌面端」 qualifier.
-              hero: _signInHero(context, offlineIsReal: true),
-              // Closeable, unlike web: 本地模式 is a complete way to use the app,
-              // so a sign-in screen you cannot leave would be a trap.
-              onClose: () => Navigator.of(routeContext).pop(),
-              form: AuthFormCard(
-                strings: _authFormStrings(
-                  context,
-                  // Non-migrate uses the shared default (signInTitle), so
-                  // desktop and web say the same thing.
-                  title: migrate ? l10n.worldMigrateSignInTitle : null,
+        // StatefulBuilder because this is a ROUTE: adding or removing a server
+        // calls setState on the shell, which does NOT rebuild a route already on
+        // the stack (the lesson in dialog_controllers.dart / docs/lessons.md).
+        // Without this, you would add a server here and the list would not move.
+        builder: (routeContext) => StatefulBuilder(
+          builder: (routeContext, setLocal) => Scaffold(
+            body: SafeArea(
+              child: SignInScreen(
+                // Desktop CAN write offline, so the feature line drops web's
+                // 「桌面端」 qualifier.
+                hero: _signInHero(context, offlineIsReal: true),
+                // Closeable, unlike web: 本地模式 is a complete way to use the app,
+                // so a sign-in screen you cannot leave would be a trap.
+                onClose: () => Navigator.of(routeContext).pop(),
+                // Desktop only: this screen is the front door, so the way in has
+                // to be reachable from here. Adding a server used to be reachable ONLY
+                // from a menu inside the shell — i.e. behind the door you were
+                // trying to open. Web gets no picker: it is served BY its one
+                // server and has no local world.
+                aboveForm: WorldPicker(
+                  origins: _servers,
+                  active: _activeOrigin,
+                  strings: WorldPickerStrings(
+                    heading: l10n.worldPickerHeading,
+                    localName: l10n.worldLocalName,
+                    localSubtitle: l10n.worldPickerLocalSubtitle,
+                    addServer: l10n.serverAddTitle,
+                    removeServer: l10n.commonDelete,
+                  ),
+                  onSelect: (origin) async {
+                    // Entering 本地模式 means there is nothing left to sign in to,
+                    // so leave. Picking a different SERVER keeps you here — you
+                    // still have to sign in to it.
+                    await _setActiveConnection(origin);
+                    if (origin == kLocalOrigin && routeContext.mounted) {
+                      Navigator.of(routeContext).pop();
+                    } else {
+                      setLocal(() {});
+                    }
+                  },
+                  onAdd: () async {
+                    await promptAddServer();
+                    setLocal(() {});
+                  },
+                  onRemove: (origin) async {
+                    await confirmRemoveServer(origin);
+                    // Removing the world you were pointing at drops the app to
+                    // 本地模式 (see _removeServer), and then this screen has
+                    // nothing to sign in to.
+                    if (!routeContext.mounted) return;
+                    if (_activeOrigin == kLocalOrigin) {
+                      Navigator.of(routeContext).pop();
+                    } else {
+                      setLocal(() {});
+                    }
+                  },
                 ),
-                note: migrate
-                    ? l10n.worldMigrateSignInDesc(migrateWorkspace)
-                    : null,
-                actionLabelOverride: migrate ? l10n.worldMigrateAction : null,
-                isBusy: _isBusy,
-                // Hand the credentials back to the caller — plain sign-in and
-                // sign-in-then-migrate both continue from there, exactly as they
-                // did when this was a dialog.
-                onSubmit: (mode, form) async =>
-                    Navigator.of(routeContext).pop((mode, form)),
-                onForgotPassword: _forgotPassword,
+                form: AuthFormCard(
+                  strings: _authFormStrings(
+                    context,
+                    // Non-migrate uses the shared default (signInTitle), so
+                    // desktop and web say the same thing.
+                    title: migrate ? l10n.worldMigrateSignInTitle : null,
+                  ),
+                  note: migrate
+                      ? l10n.worldMigrateSignInDesc(migrateWorkspace)
+                      : null,
+                  actionLabelOverride: migrate ? l10n.worldMigrateAction : null,
+                  isBusy: _isBusy,
+                  // Hand the credentials back to the caller — plain sign-in and
+                  // sign-in-then-migrate both continue from there, exactly as they
+                  // did when this was a dialog.
+                  onSubmit: (mode, form) async =>
+                      Navigator.of(routeContext).pop((mode, form)),
+                  onForgotPassword: _forgotPassword,
+                ),
               ),
             ),
           ),
@@ -5062,8 +5176,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onDeleteAccount: local ? null : _deleteAccount,
       connections: _connections,
       onSetActiveConnection: _setActiveConnection,
-      onAddServer: _addServer,
-      onRemoveServer: _removeServer,
+      onAddServer: promptAddServer,
+      onRemoveServer: confirmRemoveServer,
       appearance: _appearance,
       pageWidth: _pageWidth,
       reHostImages: _reHostImages,
@@ -5875,7 +5989,10 @@ class WorkspaceView extends StatefulWidget {
   final List<String> connections;
 
   final Future<void> Function(String origin) onSetActiveConnection;
-  final Future<String?> Function(String url) onAddServer;
+
+  /// Ask-and-add / confirm-and-remove, owned by the shell so the sign-in
+  /// screen and the account menu run the same flow.
+  final Future<void> Function() onAddServer;
   final Future<void> Function(String origin) onRemoveServer;
   final EditorAppearance appearance;
   final double pageWidth;
@@ -6969,7 +7086,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       child: Text(
                         local
                             ? context.l10n.worldLocalName
-                            : (Uri.tryParse(origin)?.host ?? origin),
+                            : serverLabel(origin),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: selected
@@ -6993,7 +7110,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               visualDensity: VisualDensity.compact,
               onPressed: () {
                 _accountMenu.close();
-                _confirmRemoveServer(origin);
+                widget.onRemoveServer(origin);
               },
               icon: const Icon(
                 Icons.delete_outline,
@@ -7011,7 +7128,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     child: InkWell(
       onTap: () {
         _accountMenu.close();
-        _promptAddServer();
+        widget.onAddServer();
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -7053,85 +7170,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           ),
         ),
       );
-
-  Future<void> _promptAddServer() async {
-    // No TextEditingController on purpose. There was one, disposed right after
-    // `showDialog`'s future completed — but that future completes on
-    // `Navigator.pop`, while the dialog's exit transition still has the TextField
-    // mounted for another frame or two. Any rebuild during that window (adding a
-    // server calls setState upstream, which rebuilds the whole tree including the
-    // leaving route) had the decoration's animation re-listen to a disposed
-    // notifier: "A TextEditingController was used after being disposed", then a
-    // red screen. Reading the text through onChanged removes the lifecycle
-    // entirely rather than trying to time the disposal right.
-    var typed = '';
-    final url = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.l10n.serverAddTitle),
-        content: TextField(
-          autofocus: true,
-          onChanged: (v) => typed = v,
-          keyboardType: TextInputType.url,
-          autocorrect: false,
-          decoration: InputDecoration(
-            labelText: context.l10n.serverUrlLabel,
-            hintText: 'https://mica.example.com',
-            prefixIcon: const Icon(Icons.link),
-            border: const OutlineInputBorder(),
-          ),
-          onSubmitted: (v) => Navigator.of(context).pop(v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(context.l10n.commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(typed),
-            child: Text(context.l10n.serverAdd),
-          ),
-        ],
-      ),
-    );
-    if (url == null || url.trim().isEmpty || !mounted) return;
-    // Adding is not switching: the new server joins the menu and nothing else
-    // moves. Picking it is a separate act — adding one to use later must not
-    // yank the whole app over to it.
-    final error = await widget.onAddServer(url);
-    if (!mounted || error == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
-  }
-
-  Future<void> _confirmRemoveServer(String origin) async {
-    final host = Uri.tryParse(origin)?.host ?? origin;
-    final l10n = context.l10n;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.serverRemoveTitle(host)),
-        content: Text(l10n.serverRemoveBody),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text(l10n.commonCancel),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFDC2626),
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(l10n.commonDelete),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    // No local "saving" flag to clear: the shell owns the list and the active
-    // connection, and it rebuilds us — including _removeServer having dropped
-    // us to 本地模式 if we just deleted the world we were in.
-    await widget.onRemoveServer(origin);
-  }
 
   Widget _pageTree(BuildContext context, bool canEdit) {
     if (widget.selectedWorkspace == null) {

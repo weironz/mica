@@ -47,3 +47,14 @@ List<String> knownServers({required String? rawPref, required String seed}) {
   if (seed.isNotEmpty && !list.contains(seed)) list = [seed, ...list];
   return list;
 }
+
+/// How a server origin is shown to a person: its host.
+///
+/// `https://mica.example.com` reads as `mica.example.com`; anything unparseable
+/// falls back to the raw string rather than an empty row (the account menu once
+/// drew exactly that — see [knownServers]). Derived in ONE place because three
+/// call sites had their own copy of this expression.
+String serverLabel(String origin) =>
+    Uri.tryParse(origin)?.host.isNotEmpty == true
+    ? Uri.parse(origin).host
+    : origin;
