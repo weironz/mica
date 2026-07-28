@@ -1,5 +1,9 @@
 {
   "@@locale": "zh",
+  "themeLabel": "主题",
+  "themeSystem": "跟随系统",
+  "themeLight": "浅色",
+  "themeDark": "深色",
   "languageLabel": "语言",
   "languageSystem": "跟随系统",
   "languageChinese": "中文",

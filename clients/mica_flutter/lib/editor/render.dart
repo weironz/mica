@@ -45,6 +45,18 @@ class EditorAppearance {
   /// the bundled font on web. See [cjkFontFallback].
   static List<String> get cjkFallback => cjkFontFallback;
 
+  /// The same appearance with a different palette.
+  ///
+  /// The palette comes from the widget tree (a theme) while the rest comes from
+  /// prefs, so they are assembled at the point of use rather than stored
+  /// together — otherwise the stored copy would go stale the moment the theme
+  /// changed, and the canvas would keep painting yesterday's colours.
+  EditorAppearance withTokens(MicaTokens value) => EditorAppearance(
+    fontScale: fontScale,
+    fontFamily: fontFamily,
+    tokens: value,
+  );
+
   TextStyle applyTo(TextStyle base, {required bool isCode}) {
     final scaled = (base.fontSize ?? 16) * fontScale;
     return base.copyWith(

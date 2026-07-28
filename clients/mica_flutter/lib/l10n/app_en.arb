@@ -1,5 +1,9 @@
 {
   "@@locale": "en",
+  "themeLabel": "Theme",
+  "themeSystem": "System",
+  "themeLight": "Light",
+  "themeDark": "Dark",
   "languageLabel": "Language",
   "@languageLabel": {
     "description": "Settings row label for the UI language selector"

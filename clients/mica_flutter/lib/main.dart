@@ -44,6 +44,7 @@ import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
 import 'ui/sign_in_pane.dart';
 import 'ui/status_kit.dart';
+import 'ui/theme_tokens.dart';
 import 'ui/trash_data.dart';
 import 'ui/user_avatar.dart';
 import 'ui/version_data.dart';
@@ -51,6 +52,7 @@ import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart' show LocalCacheStats;
 import 'cjk_fonts.dart';
 import 'prefs.dart';
+import 'theme_controller.dart';
 import 'server_list.dart';
 import 'updater.dart';
 import 'window_setup.dart';
@@ -252,33 +254,46 @@ class MicaApp extends StatelessWidget {
     // `locale: null` means follow the system, resolved against supportedLocales.
     return ValueListenableBuilder<Locale?>(
       valueListenable: localeController,
-      builder: (context, locale, _) => MaterialApp(
-        title: 'Mica',
-        // The window's close listener lives outside the widget tree and has no
-        // context of its own — this is how it reaches a Navigator to ask whether
-        // X should quit or minimise. No-op on web.
-        navigatorKey: appNavigatorKey,
-        debugShowCheckedModeBanner: false,
-        locale: locale,
-        localizationsDelegates: const [
-          AppLocalizations.delegate,
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: kSupportedLocales,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF2563EB),
-            brightness: Brightness.light,
+      builder: (context, locale, _) => ValueListenableBuilder<MicaThemeMode>(
+        valueListenable: themeModeController,
+        builder: (context, themeMode, _) => MaterialApp(
+          title: 'Mica',
+          // The window's close listener lives outside the widget tree and has no
+          // context of its own — this is how it reaches a Navigator to ask whether
+          // X should quit or minimise. No-op on web.
+          navigatorKey: appNavigatorKey,
+          debugShowCheckedModeBanner: false,
+          locale: locale,
+          localizationsDelegates: const [
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: kSupportedLocales,
+          // Both palettes go in and `themeMode` decides, so following the OS is
+          // Flutter's job rather than a brightness we resolve ourselves.
+          theme: MicaTokens.light.toMaterialTheme().copyWith(
+            // Crisp system CJK fonts on desktop (Windows 微软雅黑 / macOS 苹方 /
+            // Linux Noto CJK); the bundled font is the tail + web's only option.
+            textTheme: ThemeData(fontFamilyFallback: cjkFontFallback).textTheme,
           ),
-          scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-          useMaterial3: true,
-          // Crisp system CJK fonts on desktop (Windows 微软雅黑 / macOS 苹方 /
-          // Linux Noto CJK); the bundled font is the tail + web's only option.
-          fontFamilyFallback: cjkFontFallback,
+          darkTheme: MicaTokens.dark_.toMaterialTheme().copyWith(
+            textTheme: ThemeData(
+              brightness: Brightness.dark,
+              fontFamilyFallback: cjkFontFallback,
+            ).textTheme,
+          ),
+          themeMode: themeMode.material,
+          // Inside the builder, `Theme.of` reports which of the two Flutter
+          // actually picked — so the tokens the rest of the app reads can never
+          // disagree with the Material theme around them.
+          builder: (context, child) => MicaTheme(
+            tokens: tokensForBrightness(Theme.of(context).brightness),
+            child: child ?? const SizedBox.shrink(),
+          ),
+          home: const WorkspaceShell(),
         ),
-        home: const WorkspaceShell(),
       ),
     );
   }
@@ -672,6 +687,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (base != null) {
       _api.baseUri = base;
     }
+    // Anything unrecognised reads as "follow the system" — see parseThemeMode.
+    themeModeController.value = parseThemeMode(loadPref('themeMode'));
     final fontScale = double.tryParse(loadPref('fontScale') ?? '');
     final fontFamily = loadPref('fontFamily');
     _appearance = EditorAppearance(
@@ -5252,7 +5269,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onSetActiveConnection: _setActiveConnection,
       onAddServer: promptAddServer,
       onRemoveServer: confirmRemoveServer,
-      appearance: _appearance,
+      // Assembled here, not stored: the palette comes from the theme above us
+      // and the rest from prefs. A stored copy would go stale the moment the
+      // theme changed and the canvas would keep painting the old colours.
+      appearance: _appearance.withTokens(MicaTheme.of(context)),
       pageWidth: _pageWidth,
       reHostImages: _reHostImages,
       onReHostImagesChanged: (value) {

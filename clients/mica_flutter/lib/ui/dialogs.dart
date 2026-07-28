@@ -760,6 +760,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     );
   }
 
+  /// Theme chip. Writes the pref and flips [themeModeController], which rebuilds
+  /// MaterialApp — this open dialog included, so the switch is visible on the
+  /// very surface you flipped it from.
+  Widget _themeChip(String label, MicaThemeMode mode) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: themeModeController.value == mode,
+      onSelected: (_) => setState(() {
+        savePref('themeMode', themeModePref(mode));
+        themeModeController.value = mode;
+      }),
+    );
+  }
+
   /// UI-language chip. Writes through [setLanguage] (persists + flips
   /// localeController), which rebuilds MaterialApp — the whole app, including
   /// this open dialog, re-renders in the chosen language immediately.
@@ -1480,6 +1494,22 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               _langChip(context.l10n.languageSystem, kLangSystem),
               _langChip(context.l10n.languageChinese, kLangChinese),
               _langChip(context.l10n.languageEnglish, kLangEnglish),
+            ],
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
+    Row(
+      children: [
+        SizedBox(width: 90, child: Text(context.l10n.themeLabel)),
+        Expanded(
+          child: Wrap(
+            spacing: 8,
+            children: [
+              _themeChip(context.l10n.themeSystem, MicaThemeMode.system),
+              _themeChip(context.l10n.themeLight, MicaThemeMode.light),
+              _themeChip(context.l10n.themeDark, MicaThemeMode.dark),
             ],
           ),
         ),
