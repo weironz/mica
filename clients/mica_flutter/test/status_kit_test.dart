@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/ui/status_kit.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // What these pin is the design's one rule for status surfaces (`19 空状态与故障
 // 态`): say what happened, give one next step. Concretely — the copy the caller
@@ -123,13 +124,18 @@ void main() {
           )
           .color!;
 
+      // Roles, not hexes. What this test is about is that severity picks a
+      // DIFFERENT pair — pinning the light-mode bytes would mean the dark palette
+      // could not be introduced without editing the assertion.
+      const light = MicaTokens.light;
+
       await pump(MicaFailureSeverity.warning);
-      expect(tileColor(), const Color(0xFFFEF3C7));
-      expect(glyphColor(), const Color(0xFFB45309));
+      expect(tileColor(), light.status.warningWash);
+      expect(glyphColor(), light.status.warning);
 
       await pump(MicaFailureSeverity.error);
-      expect(tileColor(), const Color(0xFFFEF2F2));
-      expect(glyphColor(), const Color(0xFFDC2626));
+      expect(tileColor(), light.status.dangerWash);
+      expect(glyphColor(), light.status.danger);
     });
   });
 

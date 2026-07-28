@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
-import '../editor/render.dart' show EditorTheme;
 import '../l10n/locale_controller.dart';
+import 'theme_tokens.dart';
 
 /// The comment panel: every thread on the open document, with replies.
 ///
@@ -79,13 +79,14 @@ class _CommentPanelState extends State<CommentPanel> {
     final l10n = context.l10n;
     // Open first, then resolved — an unresolved discussion is the one that wants
     // attention. Orphans stay with the open ones (they still need answering).
-    final threads = [...widget.threads]..sort((a, b) {
-      if (a.isResolved != b.isResolved) return a.isResolved ? 1 : -1;
-      final at = a.createdAt;
-      final bt = b.createdAt;
-      if (at == null || bt == null) return 0;
-      return at.compareTo(bt);
-    });
+    final threads = [...widget.threads]
+      ..sort((a, b) {
+        if (a.isResolved != b.isResolved) return a.isResolved ? 1 : -1;
+        final at = a.createdAt;
+        final bt = b.createdAt;
+        if (at == null || bt == null) return 0;
+        return at.compareTo(bt);
+      });
 
     return SizedBox(
       width: 380,
@@ -94,7 +95,10 @@ class _CommentPanelState extends State<CommentPanel> {
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
                 l10n.commentsEmpty,
-                style: const TextStyle(fontSize: 13, color: EditorTheme.muted),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: MicaTheme.of(context).text.muted,
+                ),
               ),
             )
           : ListView.separated(
@@ -109,7 +113,8 @@ class _CommentPanelState extends State<CommentPanel> {
   Widget _threadTile(BuildContext context, CommentThread thread) {
     final l10n = context.l10n;
     final canDelete =
-        widget.currentUserId == null || thread.createdBy == widget.currentUserId;
+        widget.currentUserId == null ||
+        thread.createdBy == widget.currentUserId;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -123,8 +128,8 @@ class _CommentPanelState extends State<CommentPanel> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
               color: thread.isOrphaned
-                  ? EditorTheme.codeBg
-                  : EditorTheme.commentHighlight,
+                  ? MicaTheme.of(context).surface.sunken
+                  : MicaTheme.of(context).editor.commentHighlight,
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
@@ -133,7 +138,7 @@ class _CommentPanelState extends State<CommentPanel> {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 12,
-                color: EditorTheme.muted,
+                color: MicaTheme.of(context).text.muted,
                 decoration: thread.isOrphaned
                     ? TextDecoration.lineThrough
                     : null,
@@ -146,7 +151,10 @@ class _CommentPanelState extends State<CommentPanel> {
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               l10n.commentOrphaned,
-              style: const TextStyle(fontSize: 11, color: EditorTheme.faint),
+              style: TextStyle(
+                fontSize: 11,
+                color: MicaTheme.of(context).text.faint,
+              ),
             ),
           ),
         if (thread.isResolved)
@@ -154,17 +162,17 @@ class _CommentPanelState extends State<CommentPanel> {
             padding: const EdgeInsets.only(top: 4),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.check_circle_outline,
                   size: 13,
-                  color: EditorTheme.faint,
+                  color: MicaTheme.of(context).text.faint,
                 ),
                 const SizedBox(width: 4),
                 Text(
                   l10n.commentResolved,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: EditorTheme.faint,
+                    color: MicaTheme.of(context).text.faint,
                   ),
                 ),
               ],

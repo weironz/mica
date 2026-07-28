@@ -12,6 +12,7 @@
 import 'package:flutter/material.dart';
 
 import '../api/models.dart' show AuthFormValue, AuthMode;
+import 'theme_tokens.dart';
 
 /// Finished strings for [AuthFormCard].
 class AuthFormStrings {
@@ -121,9 +122,9 @@ class _AuthFormCardState extends State<AuthFormCard> {
           const SizedBox(height: 6),
           Text(
             note,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: MicaTheme.of(context).text.muted,
+            ),
           ),
         ],
         const SizedBox(height: 16),
@@ -212,19 +213,19 @@ class _AuthFormCardState extends State<AuthFormCard> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline,
                 size: 15,
-                color: Color(0xFFDC2626),
+                color: MicaTheme.of(context).status.danger,
               ),
               const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   error,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12.5,
                     height: 1.5,
-                    color: Color(0xFFDC2626),
+                    color: MicaTheme.of(context).status.danger,
                   ),
                 ),
               ),

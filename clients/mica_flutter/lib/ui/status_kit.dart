@@ -17,29 +17,45 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../editor/render.dart' show EditorTheme;
+import 'theme_tokens.dart';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 // Greys/accent are EditorTheme's, so a status surface and the canvas next to it
 // can't drift apart. Only the tints that exist nowhere else are local.
 
 /// Container border — cards and the outlined secondary button.
-const Color _border = Color(0xFFE5E9F0);
+Color _border(BuildContext context) => MicaTheme.of(context).border.normal;
 
-/// Accent button: `#2563EB` ink on a pale wash with a slightly deeper edge.
-const Color _accentWash = Color(0xFFEFF6FF);
-const Color _accentBorder = Color(0xFFDBEAFE);
+/// Accent button: accent ink on a pale wash with a slightly deeper edge. The
+/// edge has no role of its own — it is the accent at low opacity, which is what
+/// the design's #DBEAFE was over white, and which tints rather than glows on a
+/// dark page.
+Color _accentWash(BuildContext context) => MicaTheme.of(context).accent.wash;
+Color _accentBorder(BuildContext context) =>
+    MicaTheme.of(context).accent.primary.withValues(alpha: 0.22);
 
 /// Failure tile tints, per severity.
-const Color _warnTile = Color(0xFFFEF3C7);
-const Color _warnIcon = Color(0xFFB45309);
-const Color _errorTile = Color(0xFFFEF2F2);
-const Color _errorIcon = Color(0xFFDC2626);
+Color _warnTile(BuildContext context) =>
+    MicaTheme.of(context).status.warningWash;
+Color _warnIcon(BuildContext context) => MicaTheme.of(context).status.warning;
+Color _errorTile(BuildContext context) =>
+    MicaTheme.of(context).status.dangerWash;
+Color _errorIcon(BuildContext context) => MicaTheme.of(context).status.danger;
 
 /// Toast: near-black pill, pale-blue action ink.
-const Color _toastBg = Color(0xFF0F172A);
+///
+/// The pill is the one surface that does NOT invert. It is already dark, and in
+/// dark mode a #0F172A pill on a #0F1419 page would simply disappear — so there
+/// it lifts to the hover surface instead, which keeps it a dark pill while
+/// staying visibly above the page. The pale inks below read on either.
+Color _toastBg(BuildContext context) {
+  final tokens = MicaTheme.of(context);
+  return tokens.dark ? tokens.surface.hover : const Color(0xFF0F172A);
+}
+
 const Color _toastAction = Color(0xFF93C5FD);
-const Color _toastIconNeutral = Color(0xFFCBD5E1);
+Color _toastIconNeutral(BuildContext context) =>
+    MicaTheme.of(context).border.strong;
 const Color _toastIconAlert = Color(0xFFFCA5A5);
 
 /// 12.5 is off the 12/13/14/16/20/26/34 ladder on purpose: it is the design's
@@ -97,30 +113,34 @@ class MicaEmptyState extends StatelessWidget {
               width: 46,
               height: 46,
               decoration: BoxDecoration(
-                color: EditorTheme.codeBg,
+                color: MicaTheme.of(context).surface.sunken,
                 borderRadius: BorderRadius.circular(13),
               ),
               alignment: Alignment.center,
-              child: Icon(icon, size: 21, color: EditorTheme.faint),
+              child: Icon(
+                icon,
+                size: 21,
+                color: MicaTheme.of(context).text.faint,
+              ),
             ),
             const SizedBox(height: 11),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: EditorTheme.text,
+                color: MicaTheme.of(context).text.primary,
               ),
             ),
             const SizedBox(height: 9),
             Text(
               body,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: _bodySize,
                 height: 1.75,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
             if (actionLabel != null) ...[
@@ -198,11 +218,15 @@ class MicaFailureCard extends StatelessWidget {
   final String? secondaryLabel;
   final VoidCallback? onSecondary;
 
-  Color get _tileColor =>
-      severity == MicaFailureSeverity.warning ? _warnTile : _errorTile;
+  Color _tileColor(BuildContext context) =>
+      severity == MicaFailureSeverity.warning
+      ? _warnTile(context)
+      : _errorTile(context);
 
-  Color get _iconColor =>
-      severity == MicaFailureSeverity.warning ? _warnIcon : _errorIcon;
+  Color _iconColor(BuildContext context) =>
+      severity == MicaFailureSeverity.warning
+      ? _warnIcon(context)
+      : _errorIcon(context);
 
   IconData get _icon =>
       icon ??
@@ -216,8 +240,8 @@ class MicaFailureCard extends StatelessWidget {
       width: width,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: _border),
+        color: MicaTheme.of(context).surface.base,
+        border: Border.all(color: _border(context)),
         borderRadius: BorderRadius.circular(16),
         // A wide, far-offset, tightly-spread shadow: the card should look lifted
         // off the page without a visible grey halo around its edge.
@@ -241,20 +265,20 @@ class MicaFailureCard extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: _tileColor,
+                  color: _tileColor(context),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 alignment: Alignment.center,
-                child: Icon(_icon, size: 17, color: _iconColor),
+                child: Icon(_icon, size: 17, color: _iconColor(context)),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
-                    color: EditorTheme.text,
+                    color: MicaTheme.of(context).text.primary,
                   ),
                 ),
               ),
@@ -263,10 +287,10 @@ class MicaFailureCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             body,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               height: 1.75,
-              color: EditorTheme.muted,
+              color: MicaTheme.of(context).text.muted,
             ),
           ),
           const SizedBox(height: 18),
@@ -375,14 +399,14 @@ class MicaStatusToast extends StatelessWidget {
     final tint =
         iconColor ??
         (kind == MicaToastKind.selfHealing
-            ? _toastIconNeutral
+            ? _toastIconNeutral(context)
             : _toastIconAlert);
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: maxWidth),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         decoration: BoxDecoration(
-          color: _toastBg,
+          color: _toastBg(context),
           borderRadius: BorderRadius.circular(11),
         ),
         child: Row(
@@ -499,7 +523,10 @@ class MicaProgressRow extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(fontSize: _bodySize, color: EditorTheme.muted),
+          style: TextStyle(
+            fontSize: _bodySize,
+            color: MicaTheme.of(context).text.muted,
+          ),
         ),
         const SizedBox(height: 6),
         ClipRRect(
@@ -508,8 +535,10 @@ class MicaProgressRow extends StatelessWidget {
             height: 6,
             child: LinearProgressIndicator(
               value: fraction,
-              backgroundColor: const Color(0xFFEEF1F5),
-              valueColor: const AlwaysStoppedAnimation(EditorTheme.caret),
+              backgroundColor: MicaTheme.of(context).border.subtle,
+              valueColor: AlwaysStoppedAnimation(
+                MicaTheme.of(context).accent.primary,
+              ),
             ),
           ),
         ),
@@ -541,16 +570,16 @@ class _AccentButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: _accentWash,
-          border: Border.all(color: _accentBorder),
+          color: _accentWash(context),
+          border: Border.all(color: _accentBorder(context)),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: EditorTheme.caret,
+            color: MicaTheme.of(context).accent.primary,
           ),
         ),
       ),
@@ -575,15 +604,15 @@ class _PrimaryButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
         decoration: BoxDecoration(
-          color: EditorTheme.caret,
+          color: MicaTheme.of(context).accent.primary,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: Colors.white,
+            color: MicaTheme.of(context).accent.onPrimary,
           ),
         ),
       ),
@@ -608,12 +637,15 @@ class _OutlinedButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          border: Border.all(color: _border),
+          border: Border.all(color: _border(context)),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
           label,
-          style: const TextStyle(fontSize: 13, color: EditorTheme.muted),
+          style: TextStyle(
+            fontSize: 13,
+            color: MicaTheme.of(context).text.muted,
+          ),
         ),
       ),
     );

@@ -13,14 +13,14 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../editor/render.dart' show EditorTheme;
+import 'theme_tokens.dart';
 
 /// Card border.
-const Color _cardBorder = Color(0xFFEEF1F5);
+Color _cardBorder(BuildContext context) => MicaTheme.of(context).border.subtle;
 
 /// Dashed pick-zone: a hair cooler than the card border, on an almost-white fill.
-const Color _zoneBorder = Color(0xFFE5E9F0);
-const Color _zoneFill = Color(0xFFFCFDFE);
+Color _zoneBorder(BuildContext context) => MicaTheme.of(context).border.normal;
+Color _zoneFill(BuildContext context) => MicaTheme.of(context).surface.raised;
 
 /// The small tracked label above a section.
 ///
@@ -42,16 +42,16 @@ class MicaEyebrow extends StatelessWidget {
     return Row(
       children: [
         if (icon case final i?) ...[
-          Icon(i, size: 13, color: EditorTheme.faint),
+          Icon(i, size: 13, color: MicaTheme.of(context).text.faint),
           const SizedBox(width: 6),
         ],
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.6,
-            color: EditorTheme.faint,
+            color: MicaTheme.of(context).text.faint,
           ),
         ),
       ],
@@ -78,8 +78,8 @@ class MicaCard extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: _cardBorder),
+        color: MicaTheme.of(context).surface.base,
+        border: Border.all(color: _cardBorder(context)),
         borderRadius: BorderRadius.circular(14),
       ),
       padding: padding,
@@ -116,9 +116,9 @@ class MicaPickZone extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: const _DashedBorderPainter(),
+      painter: _DashedBorderPainter(_zoneBorder(context)),
       child: Material(
-        color: _zoneFill,
+        color: _zoneFill(context),
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
@@ -131,20 +131,24 @@ class MicaPickZone extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
+                    color: MicaTheme.of(context).accent.wash,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   alignment: Alignment.center,
-                  child: Icon(icon, size: 20, color: EditorTheme.caret),
+                  child: Icon(
+                    icon,
+                    size: 20,
+                    color: MicaTheme.of(context).accent.primary,
+                  ),
                 ),
                 const SizedBox(height: 11),
                 Text(
                   title,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: EditorTheme.text,
+                    color: MicaTheme.of(context).text.primary,
                   ),
                 ),
                 if (subtitle case final s?) ...[
@@ -152,10 +156,10 @@ class MicaPickZone extends StatelessWidget {
                   Text(
                     s,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12.5,
                       height: 1.6,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                 ],
@@ -175,7 +179,11 @@ class MicaPickZone extends StatelessWidget {
 /// that stays correct when the box is resized, and it walks the rounded outline so
 /// the dashes follow the corners instead of breaking at them.
 class _DashedBorderPainter extends CustomPainter {
-  const _DashedBorderPainter();
+  const _DashedBorderPainter(this.color);
+
+  /// Passed in, not read here: a painter has no BuildContext, so the token
+  /// lookup has to happen in the widget that builds it.
+  final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -186,7 +194,7 @@ class _DashedBorderPainter extends CustomPainter {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5
-      ..color = _zoneBorder;
+      ..color = color;
 
     const dash = 6.0;
     const gap = 4.0;
@@ -201,5 +209,6 @@ class _DashedBorderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_DashedBorderPainter oldDelegate) => false;
+  bool shouldRepaint(_DashedBorderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

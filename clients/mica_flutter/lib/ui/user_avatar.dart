@@ -5,6 +5,7 @@
 // a letter" cannot look like two different products.
 
 import 'package:flutter/material.dart';
+import 'theme_tokens.dart';
 
 /// A user's profile picture, falling back to their initial.
 ///
@@ -21,8 +22,8 @@ class UserAvatar extends StatelessWidget {
     required this.url,
     required this.fallback,
     this.radius = 16,
-    this.background = const Color(0xFFE2E8F0),
-    this.foreground = const Color(0xFF334155),
+    this.background,
+    this.foreground,
   });
 
   final String? url;
@@ -31,14 +32,18 @@ class UserAvatar extends StatelessWidget {
   final String fallback;
 
   final double radius;
-  final Color background;
-  final Color foreground;
+
+  /// Null means "use the palette" — a default cannot name a token, because a
+  /// default has to be a constant and a token is read from the widget tree.
+  final Color? background;
+  final Color? foreground;
 
   @override
   Widget build(BuildContext context) {
+    final tokens = MicaTheme.of(context);
     return CircleAvatar(
       radius: radius,
-      backgroundColor: background,
+      backgroundColor: background ?? tokens.border.normal,
       // foregroundImage, not backgroundImage: it paints OVER the child, so the
       // initial is already in place underneath and a slow or failed load never
       // leaves an empty circle.
@@ -49,7 +54,7 @@ class UserAvatar extends StatelessWidget {
         style: TextStyle(
           fontSize: radius * 0.875,
           fontWeight: FontWeight.w600,
-          color: foreground,
+          color: foreground ?? tokens.text.primary,
         ),
       ),
     );

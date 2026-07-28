@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../editor/render.dart' show EditorTheme;
+import 'theme_tokens.dart';
 
 /// The home screen: one "create page" affordance, then the two lists that get a
 /// user back into work (recently edited, directories).
@@ -24,10 +24,10 @@ import '../editor/render.dart' show EditorTheme;
 ///   the 14 card names and 13 section labels, which 16 would not).
 /// - 13.5 → 13, 14.5 → 14, 12.5 / 11.5 / 11 → 12 (12 is the floor of the ladder).
 /// - radii 13 / 9 → 14, 6 / 5 → 8.
-/// - slate fills (#F1F5F9) → `EditorTheme.codeBg`, the app's own neutral fill;
-///   the design rules ban introducing further slate tones, and the two are
-///   visually interchangeable. Same for the #F5F7FA row rule → #EEF1F5 and the
-///   #DBE3EF container border → #E5E9F0.
+/// - slate fills (#F1F5F9) → `surface.sunken`, the app's own neutral fill; the
+///   design rules ban introducing further slate tones, and the two are visually
+///   interchangeable. Same for the #F5F7FA row rule → `border.subtle` and the
+///   #DBE3EF container border → `border.normal`.
 ///
 /// Deliberately dumb: it owns no data and talks to no service. Everything
 /// arrives pre-formatted (dates, relative times, greeting) because the caller is
@@ -162,29 +162,42 @@ class HomeStrings {
 /// dependency budget — one string is cheaper than a new coupling.
 const String _monoFont = 'RobotoMono';
 
-const Color _cardBorder = Color(0xFFEEF1F5);
-const Color _containerBorder = Color(0xFFE5E9F0);
+Color _cardBorder(BuildContext context) => MicaTheme.of(context).border.subtle;
+Color _containerBorder(BuildContext context) =>
+    MicaTheme.of(context).border.normal;
 
 /// Hover border: an accent tint, not a grey, so it is exempt from the
 /// three-greys rule.
-const Color _hoverBorder = Color(0xFFC7D2FE);
+Color _hoverBorder(BuildContext context) =>
+    MicaTheme.of(context).accent.primary.withValues(alpha: 0.35);
 
-/// The near-black tile behind the "+". Darker than `EditorTheme.text` on
-/// purpose — it reads as a surface, not as text.
-const Color _createTileBg = Color(0xFF0F172A);
+/// The near-black tile behind the "+".
+///
+/// The one surface here that does NOT invert: it is already dark, and the "+" on
+/// it is white. In dark mode #0F172A would vanish into the #0F1419 page, so there
+/// it lifts to the hover surface — still a dark tile, still visibly a tile.
+Color _createTileBg(BuildContext context) {
+  final tokens = MicaTheme.of(context);
+  return tokens.dark ? tokens.surface.hover : const Color(0xFF0F172A);
+}
 
-const _createGradient = LinearGradient(
+/// The card's near-white vertical wash. Two surface steps, so it stays a wash
+/// rather than a grey slab when the palette flips.
+LinearGradient _createGradient(BuildContext context) => LinearGradient(
   begin: Alignment.topCenter,
   end: Alignment.bottomCenter,
-  colors: [Color(0xFFFBFCFE), Color(0xFFF4F7FC)],
+  colors: [
+    MicaTheme.of(context).surface.base,
+    MicaTheme.of(context).surface.raised,
+  ],
 );
 
 /// Shared card hover treatment (`.card:hover` in the mockup): accent border plus
 /// a soft accent shadow. Negative spread matches the CSS `-12px` inset.
-List<BoxShadow>? _hoverShadow(bool hovered) => hovered
+List<BoxShadow>? _hoverShadow(BuildContext context, bool hovered) => hovered
     ? [
         BoxShadow(
-          color: EditorTheme.caret.withValues(alpha: 0.28),
+          color: MicaTheme.of(context).accent.primary.withValues(alpha: 0.28),
           blurRadius: 24,
           spreadRadius: -12,
           offset: const Offset(0, 8),
@@ -236,15 +249,15 @@ class _CreateCard extends StatelessWidget {
       builder: (hovered) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
         decoration: BoxDecoration(
-          gradient: _createGradient,
+          gradient: _createGradient(context),
           // 1.5px, thicker than the document cards': this is the one thing on
           // the page a new user is meant to hit.
           border: Border.all(
-            color: hovered ? _hoverBorder : _containerBorder,
+            color: hovered ? _hoverBorder(context) : _containerBorder(context),
             width: 1.5,
           ),
           borderRadius: const BorderRadius.all(Radius.circular(16)),
-          boxShadow: _hoverShadow(hovered),
+          boxShadow: _hoverShadow(context, hovered),
         ),
         child: Row(
           children: [
@@ -252,8 +265,8 @@ class _CreateCard extends StatelessWidget {
               width: 52,
               height: 52,
               alignment: Alignment.center,
-              decoration: const BoxDecoration(
-                color: _createTileBg,
+              decoration: BoxDecoration(
+                color: _createTileBg(context),
                 borderRadius: BorderRadius.all(Radius.circular(14)),
               ),
               child: const Icon(Icons.add, size: 24, color: Colors.white),
@@ -265,19 +278,19 @@ class _CreateCard extends StatelessWidget {
                 children: [
                   Text(
                     strings.createTitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
                       letterSpacing: -0.3,
-                      color: EditorTheme.text,
+                      color: MicaTheme.of(context).text.primary,
                     ),
                   ),
                   const SizedBox(height: 3),
                   Text(
                     strings.createSubtitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                 ],
@@ -286,18 +299,18 @@ class _CreateCard extends StatelessWidget {
             const SizedBox(width: 18),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 border: Border.fromBorderSide(
-                  BorderSide(color: _containerBorder),
+                  BorderSide(color: _containerBorder(context)),
                 ),
                 borderRadius: BorderRadius.all(Radius.circular(8)),
               ),
               child: Text(
                 strings.createHint,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: _monoFont,
                   fontSize: 12,
-                  color: EditorTheme.faint,
+                  color: MicaTheme.of(context).text.faint,
                 ),
               ),
             ),
@@ -318,14 +331,14 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 16, color: EditorTheme.faint),
+        Icon(icon, size: 16, color: MicaTheme.of(context).text.faint),
         const SizedBox(width: 8),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: EditorTheme.muted,
+            color: MicaTheme.of(context).text.muted,
           ),
         ),
       ],
@@ -350,7 +363,11 @@ class _EntryIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     final emoji = icon;
     if (emoji == null || emoji.isEmpty) {
-      return Icon(fallback, size: size, color: EditorTheme.faint);
+      return Icon(
+        fallback,
+        size: size,
+        color: MicaTheme.of(context).text.faint,
+      );
     }
     return Text(emoji, style: TextStyle(fontSize: size));
   }
@@ -365,13 +382,13 @@ class _WorkspaceChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: const BoxDecoration(
-        color: EditorTheme.codeBg,
+      decoration: BoxDecoration(
+        color: MicaTheme.of(context).surface.sunken,
         borderRadius: BorderRadius.all(Radius.circular(8)),
       ),
       child: Text(
         name,
-        style: const TextStyle(fontSize: 12, color: EditorTheme.muted),
+        style: TextStyle(fontSize: 12, color: MicaTheme.of(context).text.muted),
       ),
     );
   }
@@ -405,9 +422,9 @@ class _DirectoryRow extends StatelessWidget {
       builder: (hovered) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         decoration: BoxDecoration(
-          color: hovered ? EditorTheme.codeBg : null,
+          color: hovered ? MicaTheme.of(context).surface.sunken : null,
           borderRadius: const BorderRadius.all(Radius.circular(8)),
-          border: const Border(bottom: BorderSide(color: _cardBorder)),
+          border: Border(bottom: BorderSide(color: _cardBorder(context))),
         ),
         child: Row(
           children: [
@@ -417,10 +434,10 @@ class _DirectoryRow extends StatelessWidget {
               child: Text(
                 entry.name,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
-                  color: EditorTheme.text,
+                  color: MicaTheme.of(context).text.primary,
                 ),
               ),
             ),
@@ -434,10 +451,10 @@ class _DirectoryRow extends StatelessWidget {
               child: Text(
                 entry.meta,
                 textAlign: TextAlign.right,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: _monoFont,
                   fontSize: 12,
-                  color: EditorTheme.faint,
+                  color: MicaTheme.of(context).text.faint,
                 ),
               ),
             ),
@@ -467,34 +484,34 @@ class _EmptyState extends StatelessWidget {
             width: 46,
             height: 46,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(
-              color: EditorTheme.codeBg,
+            decoration: BoxDecoration(
+              color: MicaTheme.of(context).surface.sunken,
               borderRadius: BorderRadius.all(Radius.circular(14)),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.article_outlined,
               size: 22,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
           ),
           const SizedBox(height: 11),
           Text(
             title,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
-              color: EditorTheme.text,
+              color: MicaTheme.of(context).text.primary,
             ),
           ),
           const SizedBox(height: 9),
           Text(
             body,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               height: 1.75,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
           ),
         ],

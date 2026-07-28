@@ -10,11 +10,11 @@
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
-import '../editor/render.dart' show EditorTheme;
 import '../l10n/locale_controller.dart';
 import 'home_data.dart' show RelativeTimeStrings, relativeMeta;
 import 'overview_data.dart';
 import 'workspace_overview.dart';
+import 'theme_tokens.dart';
 
 /// Build the overview of [folderId] (null = the workspace root).
 ///
@@ -111,24 +111,25 @@ class _Breadcrumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final crumbs = <Widget>[
-      _crumb(rootLabel, trail.isEmpty, () => onTap(null)),
+      _crumb(context, rootLabel, trail.isEmpty, () => onTap(null)),
     ];
     for (var i = 0; i < trail.length; i++) {
       final view = trail[i];
       final isLast = i == trail.length - 1;
       crumbs
         ..add(
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 6),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
             child: Icon(
               Icons.chevron_right,
               size: 14,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
           ),
         )
         ..add(
           _crumb(
+            context,
             view.icon == null ? view.name : '${view.icon} ${view.name}',
             isLast,
             () => onTap(view.id),
@@ -145,13 +146,22 @@ class _Breadcrumb extends StatelessWidget {
     );
   }
 
-  Widget _crumb(String label, bool current, VoidCallback onPressed) {
+  // Takes the context rather than reading a theme constant: the crumb colours
+  // are tokens now, and tokens live on an InheritedWidget.
+  Widget _crumb(
+    BuildContext context,
+    String label,
+    bool current,
+    VoidCallback onPressed,
+  ) {
     final text = Text(
       label,
       style: TextStyle(
         fontSize: 13,
         fontWeight: current ? FontWeight.w600 : FontWeight.w400,
-        color: current ? EditorTheme.text : EditorTheme.muted,
+        color: current
+            ? MicaTheme.of(context).text.primary
+            : MicaTheme.of(context).text.muted,
       ),
     );
     // The current crumb is where you already are — a button that would do nothing.

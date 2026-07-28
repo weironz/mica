@@ -18,16 +18,16 @@ class _KeyCap extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
+        color: MicaTheme.of(context).surface.sunken,
         borderRadius: BorderRadius.circular(5),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 11,
           fontFamily: kMonoFont,
-          color: EditorTheme.faint,
+          color: MicaTheme.of(context).text.faint,
         ),
       ),
     );
@@ -231,9 +231,9 @@ class _SearchDialogState extends State<_SearchDialog> {
                   const SizedBox(width: 6),
                   Text(
                     context.l10n.searchHintSelect,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -241,9 +241,9 @@ class _SearchDialogState extends State<_SearchDialog> {
                   const SizedBox(width: 6),
                   Text(
                     context.l10n.searchHintOpen,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                   const Spacer(),
@@ -252,9 +252,9 @@ class _SearchDialogState extends State<_SearchDialog> {
                   // right glyph for a Windows-first product.
                   Text(
                     context.l10n.searchHintInPage,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -321,7 +321,11 @@ class _SearchDialogState extends State<_SearchDialog> {
             TextSpan(
               text: r.text,
               style: r.hit
-                  ? const TextStyle(backgroundColor: Color(0xFFFEF08A))
+                  ? TextStyle(
+                      backgroundColor: MicaTheme.of(
+                        context,
+                      ).editor.commentHighlight,
+                    )
                   : null,
             ),
         ],
@@ -378,11 +382,11 @@ class _SearchDialogState extends State<_SearchDialog> {
             padding: const EdgeInsets.only(left: 4, bottom: 6),
             child: Text(
               context.l10n.searchResultCount(_results.length),
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.6,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
           ),
@@ -397,7 +401,9 @@ class _SearchDialogState extends State<_SearchDialog> {
             itemBuilder: (context, i) {
               final result = _results[i];
               return Container(
-                color: i == _selected ? const Color(0xFFEFF6FF) : null,
+                color: i == _selected
+                    ? MicaTheme.of(context).accent.wash
+                    : null,
                 child: ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                   leading: const Icon(Icons.description_outlined, size: 18),
@@ -705,7 +711,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           child: Text(
             '${w.round()} px',
             textAlign: TextAlign.right,
-            style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
+            style: TextStyle(
+              color: MicaTheme.of(context).text.muted,
+              fontSize: 13,
+            ),
           ),
         ),
         IconButton(
@@ -742,7 +751,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           child: Text(
             display,
             textAlign: TextAlign.right,
-            style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
+            style: TextStyle(
+              color: MicaTheme.of(context).text.muted,
+              fontSize: 13,
+            ),
           ),
         ),
       ],
@@ -886,7 +898,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             children: [
               Text(
                 l10n.accountDeleteWarning,
-                style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
+                style: TextStyle(
+                  color: MicaTheme.of(context).text.muted,
+                  fontSize: 13,
+                ),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -907,7 +922,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             ),
             FilledButton(
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
+                backgroundColor: MicaTheme.of(context).status.danger,
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
               child: Text(l10n.accountDeleteConfirm),
@@ -1034,8 +1049,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           // 「立即复制」 is not read as boilerplate.
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF0FDF4),
-              border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
+              color: MicaTheme.of(context).status.successWash,
+              border: Border.all(
+                color: MicaTheme.of(
+                  context,
+                ).status.success.withValues(alpha: 0.45),
+                width: 1.5,
+              ),
               borderRadius: BorderRadius.circular(14),
             ),
             padding: const EdgeInsets.all(14),
@@ -1045,19 +1065,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               children: [
                 Row(
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.check_circle_outline,
                       size: 16,
-                      color: Color(0xFF047857),
+                      color: MicaTheme.of(context).status.success,
                     ),
                     const SizedBox(width: 7),
                     Expanded(
                       child: Text(
                         context.l10n.tokenCopyNow,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12.5,
                           height: 1.5,
-                          color: Color(0xFF047857),
+                          color: MicaTheme.of(context).status.success,
                         ),
                       ),
                     ),
@@ -1071,8 +1091,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                     vertical: 10,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: const Color(0xFFD1FAE5)),
+                    color: MicaTheme.of(context).surface.base,
+                    border: Border.all(
+                      color: MicaTheme.of(
+                        context,
+                      ).status.success.withValues(alpha: 0.3),
+                    ),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   // Monospace via kMonoFont, not 'monospace': that family name
@@ -1120,7 +1144,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
-        color: active ? const Color(0xFFEFF6FF) : Colors.transparent,
+        color: active ? MicaTheme.of(context).accent.wash : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
@@ -1132,7 +1156,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                 Icon(
                   icon,
                   size: 18,
-                  color: active ? const Color(0xFF2563EB) : EditorTheme.muted,
+                  color: active
+                      ? MicaTheme.of(context).accent.primary
+                      : MicaTheme.of(context).text.muted,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1144,8 +1170,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                       fontSize: 13,
                       fontWeight: active ? FontWeight.w600 : FontWeight.w400,
                       color: active
-                          ? const Color(0xFF2563EB)
-                          : EditorTheme.text,
+                          ? MicaTheme.of(context).accent.primary
+                          : MicaTheme.of(context).text.primary,
                     ),
                   ),
                 ),
@@ -1182,7 +1208,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
       decoration: BoxDecoration(
-        color: canWrite ? const Color(0xFFFEF3C7) : const Color(0xFFF4F4F6),
+        color: canWrite
+            ? MicaTheme.of(context).status.warningWash
+            : MicaTheme.of(context).surface.hover,
         borderRadius: BorderRadius.circular(5),
       ),
       child: Text(
@@ -1190,7 +1218,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w500,
-          color: canWrite ? const Color(0xFFB45309) : EditorTheme.muted,
+          color: canWrite
+              ? MicaTheme.of(context).status.warning
+              : MicaTheme.of(context).text.muted,
         ),
       ),
     );
@@ -1259,9 +1289,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 4),
       Text(
         context.l10n.tokenDescription,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: MicaTheme.of(context).text.muted,
+        ),
       ),
       const SizedBox(height: 16),
       TextField(
@@ -1584,9 +1614,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 8),
       Text(
         context.l10n.closeWindowHeader,
-        style: const TextStyle(
+        style: TextStyle(
           fontWeight: FontWeight.w600,
-          color: EditorTheme.muted,
+          color: MicaTheme.of(context).text.muted,
         ),
       ),
       // RadioGroup, not per-tile groupValue/onChanged — those were deprecated
@@ -1701,7 +1731,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       context.l10n.aiKeyHelp,
       style: Theme.of(
         context,
-      ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
+      ).textTheme.bodySmall?.copyWith(color: MicaTheme.of(context).text.muted),
     ),
     if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
   ];
@@ -1727,9 +1757,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               children: [
                 Text(
                   widget.userEmail,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: MicaTheme.of(context).text.muted,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -1760,9 +1790,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 4),
       Text(
         widget.userEmail,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: EditorTheme.muted),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: MicaTheme.of(context).text.muted,
+        ),
       ),
       const SizedBox(height: 12),
     ],
@@ -1816,7 +1846,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 10),
       Text(
         _accountMsg!,
-        style: const TextStyle(color: EditorTheme.muted, fontSize: 13),
+        style: TextStyle(color: MicaTheme.of(context).text.muted, fontSize: 13),
       ),
     ],
     if (widget.onDeleteAccount != null) ...[
@@ -1826,8 +1856,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         child: OutlinedButton.icon(
           onPressed: _accountBusy ? null : _deleteAccount,
           style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFFDC2626),
-            side: const BorderSide(color: Color(0xFFFCA5A5)),
+            foregroundColor: MicaTheme.of(context).status.danger,
+            side: BorderSide(
+              color: MicaTheme.of(context).status.danger.withValues(alpha: 0.5),
+            ),
           ),
           icon: const Icon(Icons.delete_forever_outlined, size: 16),
           label: Text(context.l10n.accountDelete),
@@ -1899,8 +1931,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 12),
     Text(
       context.l10n.dataImportDescription,
-      style: const TextStyle(
-        color: EditorTheme.muted,
+      style: TextStyle(
+        color: MicaTheme.of(context).text.muted,
         fontSize: 12.5,
         height: 1.6,
       ),
@@ -1922,7 +1954,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // thing and not as a second import action.
       Container(
         decoration: BoxDecoration(
-          border: Border.all(color: const Color(0xFFEEF1F5)),
+          border: Border.all(color: MicaTheme.of(context).border.subtle),
           borderRadius: BorderRadius.circular(12),
         ),
         padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
@@ -1951,9 +1983,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                           st.pages,
                           formatBytes(st.imageBytes),
                         ),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: EditorTheme.faint,
+                          color: MicaTheme.of(context).text.faint,
                         ),
                       ),
                     ),
@@ -1986,9 +2018,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                   c.mirroredPages,
                   formatBytes(c.mirroredBytes),
                 ),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12.5,
-                  color: EditorTheme.muted,
+                  color: MicaTheme.of(context).text.muted,
                 ),
               ),
             ),
@@ -2011,14 +2043,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               c.localOnlyPages,
               formatBytes(c.localOnlyBytes),
             ),
-            style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
+            style: TextStyle(
+              fontSize: 12.5,
+              color: MicaTheme.of(context).text.muted,
+            ),
           ),
         ),
       if (_cacheMsg case final msg?) ...[
         const SizedBox(height: 8),
         Text(
           msg,
-          style: const TextStyle(fontSize: 12.5, color: EditorTheme.muted),
+          style: TextStyle(
+            fontSize: 12.5,
+            color: MicaTheme.of(context).text.muted,
+          ),
         ),
       ],
     ],
@@ -2026,15 +2064,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.info_outline, size: 14, color: EditorTheme.faint),
+        Icon(
+          Icons.info_outline,
+          size: 14,
+          color: MicaTheme.of(context).text.faint,
+        ),
         const SizedBox(width: 7),
         Expanded(
           child: Text(
             context.l10n.dataExportTip,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12.5,
               height: 1.6,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
           ),
         ),
@@ -2045,9 +2087,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   Widget _kbd(String text) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
     decoration: BoxDecoration(
-      color: const Color(0xFFF1F5F9),
+      color: MicaTheme.of(context).surface.sunken,
       borderRadius: BorderRadius.circular(5),
-      border: Border.all(color: const Color(0xFFCBD5E1)),
+      border: Border.all(color: MicaTheme.of(context).border.strong),
     ),
     child: Text(text, style: const TextStyle(fontSize: 12)),
   );
@@ -2098,9 +2140,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       padding: const EdgeInsets.only(top: 8, bottom: 4),
       child: Text(
         t,
-        style: const TextStyle(
+        style: TextStyle(
           fontWeight: FontWeight.w600,
-          color: EditorTheme.muted,
+          color: MicaTheme.of(context).text.muted,
         ),
       ),
     );
@@ -2142,9 +2184,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 12),
       Text(
         context.l10n.shortcutsNote,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: EditorTheme.faint),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: MicaTheme.of(context).text.faint,
+        ),
       ),
     ];
   }
@@ -2253,11 +2295,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                               ),
                               child: Text(
                                 tabs[i].group.toUpperCase(),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: 0.6,
-                                  color: EditorTheme.faint,
+                                  color: MicaTheme.of(context).text.faint,
                                 ),
                               ),
                             ),
@@ -2434,7 +2476,11 @@ class _AiDialogState extends State<_AiDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.auto_awesome, size: 22, color: Color(0xFF7C3AED)),
+          Icon(
+            Icons.auto_awesome,
+            size: 22,
+            color: MicaTheme.of(context).editor.alertAccents['important'],
+          ),
           const SizedBox(width: 8),
           Text(context.l10n.aiAskTitle),
         ],
@@ -2493,9 +2539,11 @@ class _AiDialogState extends State<_AiDialog> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFC),
+                  color: MicaTheme.of(context).surface.raised,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  border: Border.all(
+                    color: MicaTheme.of(context).border.normal,
+                  ),
                 ),
                 child: SingleChildScrollView(
                   controller: _scroll,
@@ -2519,7 +2567,7 @@ class _AiDialogState extends State<_AiDialog> {
                   ] else if (_done)
                     Text(
                       context.l10n.aiDoneReview,
-                      style: const TextStyle(color: EditorTheme.muted),
+                      style: TextStyle(color: MicaTheme.of(context).text.muted),
                     ),
                 ],
               ),
@@ -2701,7 +2749,7 @@ class _ShareDialogState extends State<_ShareDialog> {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF6F8FA),
+                        color: MicaTheme.of(context).surface.raised,
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Row(
@@ -2899,7 +2947,7 @@ class _TransferDialogState extends State<_TransferDialog> {
                       const SizedBox(height: 10),
                       _TransferNotice(
                         icon: Icons.link_off,
-                        color: const Color(0xFFB54708),
+                        color: MicaTheme.of(context).status.warning,
                         text: l10n.transferDanglingWarning(
                           report.danglingLinks.length,
                         ),
@@ -2912,7 +2960,7 @@ class _TransferDialogState extends State<_TransferDialog> {
                     const SizedBox(height: 10),
                     _TransferNotice(
                       icon: Icons.info_outline,
-                      color: EditorTheme.muted,
+                      color: MicaTheme.of(context).text.muted,
                       text: l10n.transferVersionNotice,
                     ),
                   ],
@@ -2920,8 +2968,8 @@ class _TransferDialogState extends State<_TransferDialog> {
                     const SizedBox(height: 12),
                     Text(
                       _error!,
-                      style: const TextStyle(
-                        color: Color(0xFFB42318),
+                      style: TextStyle(
+                        color: MicaTheme.of(context).status.danger,
                         fontSize: 13,
                       ),
                     ),
@@ -3220,7 +3268,9 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
-        color: selected ? const Color(0xFFF5F9FF) : Colors.transparent,
+        color: selected
+            ? MicaTheme.of(context).accent.wash
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
@@ -3229,7 +3279,11 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selected ? const Color(0xFFBFDBFE) : Colors.transparent,
+                color: selected
+                    ? MicaTheme.of(
+                        context,
+                      ).accent.primary.withValues(alpha: 0.35)
+                    : Colors.transparent,
               ),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
@@ -3238,7 +3292,9 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
                 Icon(
                   v.isAuto ? Icons.schedule : Icons.bookmark,
                   size: 16,
-                  color: selected ? const Color(0xFF2563EB) : EditorTheme.faint,
+                  color: selected
+                      ? MicaTheme.of(context).accent.primary
+                      : MicaTheme.of(context).text.faint,
                 ),
                 const SizedBox(width: 9),
                 Expanded(
@@ -3255,8 +3311,8 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
                               ? FontWeight.w400
                               : FontWeight.w600,
                           color: selected
-                              ? const Color(0xFF2563EB)
-                              : EditorTheme.text,
+                              ? MicaTheme.of(context).accent.primary
+                              : MicaTheme.of(context).text.primary,
                         ),
                       ),
                       ?_rowSubtitle(v),
@@ -3436,11 +3492,20 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
             ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
             child: Row(
               children: [
-                _legendDot(const Color(0xFF22C55E), l10n.versionDiffAdded),
+                _legendDot(
+                  MicaTheme.of(context).status.success,
+                  l10n.versionDiffAdded,
+                ),
                 const SizedBox(width: 14),
-                _legendDot(const Color(0xFFF59E0B), l10n.versionDiffChanged),
+                _legendDot(
+                  MicaTheme.of(context).status.warning,
+                  l10n.versionDiffChanged,
+                ),
                 const SizedBox(width: 14),
-                _legendDot(const Color(0xFFEF4444), l10n.versionDiffRemoved),
+                _legendDot(
+                  MicaTheme.of(context).status.danger,
+                  l10n.versionDiffRemoved,
+                ),
               ],
             ),
           ),
@@ -3540,11 +3605,11 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
                           section.day == VersionDay.today
                               ? context.l10n.versionGroupToday
                               : context.l10n.versionGroupEarlier,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             letterSpacing: 0.6,
-                            color: EditorTheme.faint,
+                            color: MicaTheme.of(context).text.faint,
                           ),
                         ),
                       ),
@@ -3662,7 +3727,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
     return Icon(
       view.isFolder ? Icons.folder_outlined : Icons.description_outlined,
       size: 18,
-      color: EditorTheme.muted,
+      color: MicaTheme.of(context).text.muted,
     );
   }
 
@@ -3692,7 +3757,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
       parts.join('  ·  '),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: const TextStyle(fontSize: 12, color: EditorTheme.faint),
+      style: TextStyle(fontSize: 12, color: MicaTheme.of(context).text.faint),
     );
   }
 
@@ -3761,7 +3826,9 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
         // Only with something to empty, and only where a bulk purge exists.
         if (widget.onPurgeAll != null && widget.canEdit && _entries.isNotEmpty)
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: kDestructiveRed),
+            style: TextButton.styleFrom(
+              foregroundColor: kDestructiveRed(context),
+            ),
             onPressed: _confirmPurgeAll,
             child: Text(context.l10n.recycleEmptyAll),
           ),
@@ -3813,7 +3880,7 @@ class _RecycleBinDialogState extends State<_RecycleBinDialog> {
                     ),
                     IconButton(
                       tooltip: context.l10n.recycleDeleteForever,
-                      color: const Color(0xFFDC2626),
+                      color: MicaTheme.of(context).status.danger,
                       icon: const Icon(Icons.delete_forever, size: 20),
                       onPressed: () async {
                         if (!await _confirmPurge(view)) return;

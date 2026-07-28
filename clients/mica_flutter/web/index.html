@@ -14,6 +14,19 @@
          the browser's generic globe. -->
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <meta name="theme-color" content="#1D4ED8">
+    <!-- The page around the canvas, before Flutter has painted and wherever the
+         canvas does not reach (overscroll, the scrollbar gutter). Without these two
+         the shell is white while a dark-mode app loads into it, which reads as a
+         flash of the wrong app. `color-scheme` is what makes the browser's own
+         chrome — scrollbars, form controls, the canvas backdrop — follow along; the
+         values mirror MicaTokens' `surface.base` in each palette. -->
+    <meta name="color-scheme" content="light dark">
+    <style>
+      body { margin: 0; background: #FFFFFF; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0F1419; }
+      }
+    </style>
     <!-- P2-M4 web→yjs: the browser-side CRDT engine (yjs), wire-compatible with
          the Rust yrs core/server. Loaded before Flutter so js_interop can use it. -->
     <script src="yjs_bundle.js"></script>

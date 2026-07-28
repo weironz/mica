@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../editor/render.dart' show EditorTheme;
+import 'theme_tokens.dart';
 
 /// Every user-visible string in the picker. Passed in rather than looked up so
 /// this file stays free of both hardcoded copy and a dependency on the app's
@@ -63,8 +63,8 @@ Future<String?> showEmojiPicker(
 
 // Container border (#E5E9F0) and inner divider (#EEF1F5) from the visual spec.
 // Not in EditorTheme — that one only carries canvas ink/wash colours.
-const Color _border = Color(0xFFE5E9F0);
-const Color _divider = Color(0xFFEEF1F5);
+Color _border(BuildContext context) => MicaTheme.of(context).border.normal;
+Color _divider(BuildContext context) => MicaTheme.of(context).border.subtle;
 
 /// Cell side and gap: 8 columns must fit the 360-wide popup minus its padding
 /// (8×38 + 7×3 = 325 ≤ 332), and 38 keeps the tap target well over 32.
@@ -151,8 +151,8 @@ class _EmojiPickerState extends State<_EmojiPicker> {
           width: 360,
           height: 420,
           decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: _border),
+            color: MicaTheme.of(context).surface.overlay,
+            border: Border.all(color: _border(context)),
             borderRadius: const BorderRadius.all(Radius.circular(16)),
             boxShadow: const [
               BoxShadow(
@@ -172,10 +172,10 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                     Expanded(
                       child: Text(
                         s.title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
-                          color: EditorTheme.text,
+                          color: MicaTheme.of(context).text.primary,
                         ),
                       ),
                     ),
@@ -194,52 +194,55 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                 child: TextField(
                   controller: _query,
                   autofocus: true,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
-                    color: EditorTheme.text,
+                    color: MicaTheme.of(context).text.primary,
                   ),
-                  cursorColor: EditorTheme.caret,
+                  cursorColor: MicaTheme.of(context).accent.primary,
                   onChanged: (value) =>
                       setState(() => _needle = value.trim().toLowerCase()),
                   onSubmitted: (_) => _pickFirst(),
                   decoration: InputDecoration(
                     isDense: true,
                     hintText: s.searchHint,
-                    hintStyle: const TextStyle(
+                    hintStyle: TextStyle(
                       fontSize: 13,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
-                    prefixIcon: const Icon(
+                    prefixIcon: Icon(
                       Icons.search,
                       size: 15,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                     prefixIconConstraints: const BoxConstraints(
                       minWidth: 32,
                       minHeight: 32,
                     ),
                     contentPadding: const EdgeInsets.only(right: 10, bottom: 9),
-                    enabledBorder: const OutlineInputBorder(
+                    enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.all(Radius.circular(8)),
-                      borderSide: BorderSide(color: _border),
+                      borderSide: BorderSide(color: _border(context)),
                     ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(8)),
-                      borderSide: BorderSide(color: EditorTheme.caret),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: const BorderRadius.all(Radius.circular(8)),
+                      borderSide: BorderSide(
+                        color: MicaTheme.of(context).accent.primary,
+                      ),
                     ),
                   ),
                 ),
               ),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 10),
-                child: Divider(height: 1, thickness: 1, color: _divider),
+                child: Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: _divider(context),
+                ),
               ),
               Expanded(
                 child: sections.isEmpty
-                    ? _NoResults(
-                        title: s.noResultsTitle,
-                        body: s.noResultsBody,
-                      )
+                    ? _NoResults(title: s.noResultsTitle, body: s.noResultsBody)
                     : ListView(
                         padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
                         children: [
@@ -283,10 +286,10 @@ class _Section extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 6, top: 2),
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
           ),
         ),
@@ -344,17 +347,14 @@ class _EmojiCellState extends State<_EmojiCell> {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: widget.selected
-                ? EditorTheme.selection
-                : (_hovered ? EditorTheme.codeBg : null),
+                ? MicaTheme.of(context).editor.selection
+                : (_hovered ? MicaTheme.of(context).surface.sunken : null),
             borderRadius: const BorderRadius.all(Radius.circular(8)),
             border: widget.selected
-                ? Border.all(color: EditorTheme.caret)
+                ? Border.all(color: MicaTheme.of(context).accent.primary)
                 : null,
           ),
-          child: Text(
-            widget.emoji,
-            style: const TextStyle(fontSize: 20),
-          ),
+          child: Text(widget.emoji, style: const TextStyle(fontSize: 20)),
         ),
       ),
     );
@@ -378,12 +378,15 @@ class _RemoveAction extends StatelessWidget {
           key: const ValueKey('emoji-picker-remove'),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            border: Border.all(color: _border),
+            border: Border.all(color: _border(context)),
             borderRadius: const BorderRadius.all(Radius.circular(8)),
           ),
           child: Text(
             label,
-            style: const TextStyle(fontSize: 12, color: EditorTheme.muted),
+            style: TextStyle(
+              fontSize: 12,
+              color: MicaTheme.of(context).text.muted,
+            ),
           ),
         ),
       ),
@@ -411,34 +414,34 @@ class _NoResults extends StatelessWidget {
               width: 46,
               height: 46,
               alignment: Alignment.center,
-              decoration: const BoxDecoration(
-                color: EditorTheme.codeBg,
+              decoration: BoxDecoration(
+                color: MicaTheme.of(context).surface.sunken,
                 borderRadius: BorderRadius.all(Radius.circular(13)),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.search_off,
                 size: 21,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
             const SizedBox(height: 11),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: EditorTheme.text,
+                color: MicaTheme.of(context).text.primary,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               body,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12.5,
                 height: 1.75,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
           ],

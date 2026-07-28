@@ -128,10 +128,10 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         SizedBox(
           width: 320,
           child: SubmenuButton(
-            leadingIcon: const Icon(
+            leadingIcon: Icon(
               Icons.upload_file_outlined,
               size: 18,
-              color: Color(0xFF475569),
+              color: MicaTheme.of(context).text.muted,
             ),
             menuChildren: [
               _importChoice(
@@ -147,8 +147,8 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             ],
             child: Text(
               context.l10n.workspaceRowImportWorkspace,
-              style: const TextStyle(
-                color: Color(0xFF475569),
+              style: TextStyle(
+                color: MicaTheme.of(context).text.muted,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -180,7 +180,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                     width: 30,
                     height: 30,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
+                      color: MicaTheme.of(context).accent.wash,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Icon(
@@ -188,7 +188,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                           ? Icons.computer_outlined
                           : Icons.cloud_outlined,
                       size: 17,
-                      color: EditorTheme.caret,
+                      color: MicaTheme.of(context).accent.primary,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -201,10 +201,10 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                           label,
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
-                            color: EditorTheme.text,
+                            color: MicaTheme.of(context).text.primary,
                           ),
                         ),
                         if (widget.activeMeta != null)
@@ -212,18 +212,18 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                             widget.activeMeta!,
                             overflow: TextOverflow.ellipsis,
                             maxLines: 1,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: EditorTheme.faint,
+                              color: MicaTheme.of(context).text.faint,
                             ),
                           ),
                       ],
                     ),
                   ),
-                  const Icon(
+                  Icon(
                     Icons.unfold_more,
                     size: 16,
-                    color: EditorTheme.faint,
+                    color: MicaTheme.of(context).text.faint,
                   ),
                 ],
               ),
@@ -248,12 +248,16 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              const Icon(Icons.login, size: 18, color: Color(0xFF2563EB)),
+              Icon(
+                Icons.login,
+                size: 18,
+                color: MicaTheme.of(context).accent.primary,
+              ),
               const SizedBox(width: 10),
               Text(
                 context.l10n.workspaceRowSignInCloud,
-                style: const TextStyle(
-                  color: Color(0xFF2563EB),
+                style: TextStyle(
+                  color: MicaTheme.of(context).accent.primary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -307,7 +311,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           constraints: const BoxConstraints(maxWidth: 260),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: MicaTheme.of(context).surface.overlay,
             borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
@@ -316,7 +320,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
               Icon(
                 entry.isLocal ? Icons.computer_outlined : Icons.cloud_outlined,
                 size: 18,
-                color: const Color(0xFF2563EB),
+                color: MicaTheme.of(context).accent.primary,
               ),
               const SizedBox(width: 8),
               Flexible(
@@ -363,7 +367,9 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           alignment: before ? Alignment.topCenter : Alignment.bottomCenter,
           child: Container(
             height: 2,
-            color: active ? const Color(0xFF2563EB) : Colors.transparent,
+            color: active
+                ? MicaTheme.of(context).accent.primary
+                : Colors.transparent,
           ),
         );
       },
@@ -401,8 +407,8 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                             : Icons.cloud_outlined,
                         size: 18,
                         color: selected
-                            ? const Color(0xFF2563EB)
-                            : EditorTheme.faint,
+                            ? MicaTheme.of(context).accent.primary
+                            : MicaTheme.of(context).text.faint,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -417,7 +423,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                                 fontWeight: selected
                                     ? FontWeight.w600
                                     : FontWeight.w400,
-                                color: const Color(0xFF0F172A),
+                                color: MicaTheme.of(context).text.primary,
                               ),
                             ),
                             // Page count, and ONLY when the server actually sent
@@ -431,9 +437,9 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                                 padding: const EdgeInsets.only(top: 2),
                                 child: Text(
                                   context.l10n.pageCount(workspace.pageCount),
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: EditorTheme.faint,
+                                    color: MicaTheme.of(context).text.faint,
                                   ),
                                 ),
                               ),
@@ -460,10 +466,10 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                 // One Import entry; the native picker can't mix files and
                 // folders, so the choice lives in a submenu.
                 SubmenuButton(
-                  leadingIcon: const Icon(
+                  leadingIcon: Icon(
                     Icons.download_outlined,
                     size: 18,
-                    color: Color(0xFF475569),
+                    color: MicaTheme.of(context).text.muted,
                   ),
                   menuChildren: [
                     _wsAction(
@@ -495,7 +501,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                   Icons.delete_outline,
                   context.l10n.commonDelete,
                   () => widget.onDelete(entry),
-                  color: const Color(0xFFDC2626),
+                  color: MicaTheme.of(context).status.danger,
                 ),
               ],
               builder: (context, controller, child) => IconButton(
@@ -524,12 +530,16 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             children: [
-              const Icon(Icons.add, size: 18, color: Color(0xFF2563EB)),
+              Icon(
+                Icons.add,
+                size: 18,
+                color: MicaTheme.of(context).accent.primary,
+              ),
               const SizedBox(width: 10),
               Text(
                 context.l10n.workspaceRowNewWorkspace,
-                style: const TextStyle(
-                  color: Color(0xFF2563EB),
+                style: TextStyle(
+                  color: MicaTheme.of(context).accent.primary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -551,7 +561,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
       leadingIcon: Icon(
         icon,
         size: 18,
-        color: color ?? const Color(0xFF475569),
+        color: color ?? MicaTheme.of(context).text.muted,
       ),
       onPressed: () {
         _menu.close();
@@ -559,7 +569,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
       },
       child: Text(
         label,
-        style: TextStyle(color: color ?? const Color(0xFF0F172A)),
+        style: TextStyle(color: color ?? MicaTheme.of(context).text.primary),
       ),
     );
   }
@@ -568,12 +578,19 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
   /// Notion adaptation (ID-suffix stripping, folder↔page matching).
   Widget _importChoice(IconData icon, String label, {required bool notion}) {
     return MenuItemButton(
-      leadingIcon: Icon(icon, size: 18, color: const Color(0xFF475569)),
+      leadingIcon: Icon(
+        icon,
+        size: 18,
+        color: MicaTheme.of(context).text.muted,
+      ),
       onPressed: () {
         _menu.close();
         widget.onImport(notion);
       },
-      child: Text(label, style: const TextStyle(color: Color(0xFF475569))),
+      child: Text(
+        label,
+        style: TextStyle(color: MicaTheme.of(context).text.muted),
+      ),
     );
   }
 }
@@ -593,10 +610,14 @@ class WorkspaceListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: isSelected ? const Color(0xFFEFF6FF) : Colors.white,
+      color: isSelected
+          ? MicaTheme.of(context).accent.wash
+          : MicaTheme.of(context).surface.base,
       shape: RoundedRectangleBorder(
         side: BorderSide(
-          color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0),
+          color: isSelected
+              ? MicaTheme.of(context).accent.primary
+              : MicaTheme.of(context).border.normal,
         ),
         borderRadius: BorderRadius.circular(8),
       ),
@@ -635,9 +656,9 @@ class MemberListItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: MicaTheme.of(context).surface.raised,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: MicaTheme.of(context).border.normal),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -738,17 +759,17 @@ class BlockListItem extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: kind == DocumentBlockKind.codeBlock
-            ? const Color(0xFFF1F5F9)
-            : Colors.white,
+            ? MicaTheme.of(context).editor.codeBg
+            : MicaTheme.of(context).surface.base,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: MicaTheme.of(context).border.normal),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(_iconFor(kind), color: EditorTheme.muted),
+            Icon(_iconFor(kind), color: MicaTheme.of(context).text.muted),
             const SizedBox(width: 12),
             Expanded(child: _contentFor(context, kind)),
             IconButton(
@@ -816,18 +837,21 @@ class BlockListItem extends StatelessWidget {
         );
       case DocumentBlockKind.quote:
         return DecoratedBox(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(
-              left: BorderSide(color: EditorTheme.faint, width: 3),
+              left: BorderSide(
+                color: MicaTheme.of(context).text.faint,
+                width: 3,
+              ),
             ),
           ),
           child: Padding(
             padding: const EdgeInsets.only(left: 12),
             child: SelectableText(
               text,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyLarge?.copyWith(color: const Color(0xFF475569)),
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: MicaTheme.of(context).text.muted,
+              ),
             ),
           ),
         );
@@ -1204,7 +1228,9 @@ class _DocumentListItemState extends State<DocumentListItem> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: Material(
-        color: w.isSelected ? const Color(0xFFEFF6FF) : Colors.transparent,
+        color: w.isSelected
+            ? MicaTheme.of(context).accent.wash
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
@@ -1270,8 +1296,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
                           : Icons.description_outlined,
                       size: 18,
                       color: w.isSelected
-                          ? const Color(0xFF2563EB)
-                          : EditorTheme.muted,
+                          ? MicaTheme.of(context).accent.primary
+                          : MicaTheme.of(context).text.muted,
                     ),
                   const SizedBox(width: 6),
                   Expanded(
@@ -1376,7 +1402,7 @@ class _MenuRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = danger ? const Color(0xFFDC2626) : null;
+    final color = danger ? MicaTheme.of(context).status.danger : null;
     return Row(
       children: [
         Icon(icon, size: 18, color: color),
@@ -1464,16 +1490,21 @@ class ErrorBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
+        color: MicaTheme.of(context).status.dangerWash,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFFCA5A5)),
+        border: Border.all(
+          color: MicaTheme.of(context).status.danger.withValues(alpha: 0.5),
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.error_outline, color: Color(0xFFDC2626)),
+            Icon(
+              Icons.error_outline,
+              color: MicaTheme.of(context).status.danger,
+            ),
             const SizedBox(width: 10),
             Expanded(child: SelectableText(message)),
           ],
@@ -1501,7 +1532,11 @@ class _PresenceBar extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.circle, size: 8, color: Color(0xFF16A34A)),
+        Icon(
+          Icons.circle,
+          size: 8,
+          color: MicaTheme.of(context).status.success,
+        ),
         const SizedBox(width: 8),
         for (var i = 0; i < presence.length && i < 5; i++)
           Padding(
@@ -1527,9 +1562,9 @@ class _PresenceBar extends StatelessWidget {
         const SizedBox(width: 4),
         Text(
           context.l10n.presenceEditing(presence.length),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: const Color(0xFF16A34A)),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: MicaTheme.of(context).status.success,
+          ),
         ),
       ],
     );
@@ -1659,10 +1694,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
       case _UpdateStage.upToDate:
         return Row(
           children: [
-            const Icon(
+            Icon(
               Icons.check_circle_outline,
               size: 18,
-              color: Color(0xFF16A34A),
+              color: MicaTheme.of(context).status.success,
             ),
             const SizedBox(width: 8),
             Text(context.l10n.updateUpToDate(kAppVersion)),
@@ -1680,10 +1715,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
           children: [
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.new_releases_outlined,
                   size: 18,
-                  color: Color(0xFF2563EB),
+                  color: MicaTheme.of(context).accent.primary,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1714,7 +1749,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
             const SizedBox(height: 6),
             Text(
               context.l10n.updateWillRestart,
-              style: const TextStyle(fontSize: 12, color: EditorTheme.muted),
+              style: TextStyle(
+                fontSize: 12,
+                color: MicaTheme.of(context).text.muted,
+              ),
             ),
           ],
         );
@@ -1741,10 +1779,10 @@ class _UpdateCheckerState extends State<UpdateChecker> {
           children: [
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.error_outline,
                   size: 18,
-                  color: Color(0xFFDC2626),
+                  color: MicaTheme.of(context).status.danger,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1859,12 +1897,12 @@ class _PageBreadcrumbState extends State<_PageBreadcrumb> {
               children: [
                 for (var i = 0; i < path.length; i++) ...[
                   if (i > 0)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 3),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
                       child: Icon(
                         Icons.chevron_right,
                         size: 14,
-                        color: EditorTheme.faint,
+                        color: MicaTheme.of(context).text.faint,
                       ),
                     ),
                   _crumb(path[i], isLast: i == path.length - 1),
@@ -1885,7 +1923,9 @@ class _PageBreadcrumbState extends State<_PageBreadcrumb> {
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: TextStyle(
-        color: isLast ? EditorTheme.muted : EditorTheme.faint,
+        color: isLast
+            ? MicaTheme.of(context).text.muted
+            : MicaTheme.of(context).text.faint,
         fontSize: 12,
       ),
     );
@@ -1936,7 +1976,7 @@ extension _PageBreadcrumbPopover on _PageBreadcrumbState {
             width: 26,
             height: 26,
             decoration: BoxDecoration(
-              color: EditorTheme.codeBg,
+              color: MicaTheme.of(context).surface.sunken,
               borderRadius: BorderRadius.circular(6),
             ),
             alignment: Alignment.center,
@@ -1950,7 +1990,7 @@ extension _PageBreadcrumbPopover on _PageBreadcrumbState {
                         ? Icons.folder_outlined
                         : Icons.description_outlined,
                     size: 15,
-                    color: EditorTheme.muted,
+                    color: MicaTheme.of(context).text.muted,
                   ),
           ),
           const SizedBox(width: 8),
@@ -2007,8 +2047,10 @@ class _PropertiesToggle extends StatelessWidget {
         filled ? Icons.info : Icons.info_outline,
         size: 16,
         color: active
-            ? EditorTheme.caret
-            : (hasProperties ? EditorTheme.muted : EditorTheme.faint),
+            ? MicaTheme.of(context).accent.primary
+            : (hasProperties
+                  ? MicaTheme.of(context).text.muted
+                  : MicaTheme.of(context).text.faint),
       ),
     );
   }

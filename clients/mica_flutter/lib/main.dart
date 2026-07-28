@@ -1721,9 +1721,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                     l10n.importSkippedTruncated(
                       job.skippedTotal - job.skipped.length,
                     ),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: EditorTheme.faint,
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                 ),
@@ -5542,14 +5542,18 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
         children: [
           Row(
             children: [
-              const Icon(Icons.link, size: 16, color: EditorTheme.muted),
+              Icon(
+                Icons.link,
+                size: 16,
+                color: MicaTheme.of(context).text.muted,
+              ),
               const SizedBox(width: 6),
               Text(
                 context.l10n.backlinksHeading(_links.length),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: EditorTheme.muted,
+                  color: MicaTheme.of(context).text.muted,
                 ),
               ),
             ],
@@ -5563,10 +5567,10 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
                 child: Row(
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.description_outlined,
                       size: 16,
-                      color: Color(0xFF475569),
+                      color: MicaTheme.of(context).text.muted,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -5574,9 +5578,9 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
                         link.title.isEmpty ? 'Untitled' : link.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
-                          color: Color(0xFF334155),
+                          color: MicaTheme.of(context).text.primary,
                         ),
                       ),
                     ),
@@ -5613,7 +5617,7 @@ class _HomeNavRow extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFEFF6FF) : null,
+          color: selected ? MicaTheme.of(context).accent.wash : null,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -5621,7 +5625,9 @@ class _HomeNavRow extends StatelessWidget {
             Icon(
               Icons.home_outlined,
               size: 18,
-              color: selected ? EditorTheme.caret : EditorTheme.muted,
+              color: selected
+                  ? MicaTheme.of(context).accent.primary
+                  : MicaTheme.of(context).text.muted,
             ),
             const SizedBox(width: 10),
             Text(
@@ -5629,7 +5635,9 @@ class _HomeNavRow extends StatelessWidget {
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: selected ? const Color(0xFF1D4ED8) : EditorTheme.text,
+                color: selected
+                    ? MicaTheme.of(context).accent.hover
+                    : MicaTheme.of(context).text.primary,
               ),
             ),
           ],
@@ -5657,18 +5665,18 @@ class _CommentsButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.chat_bubble_outline,
                 size: 15,
-                color: EditorTheme.muted,
+                color: MicaTheme.of(context).text.muted,
               ),
               if (openCount > 0) ...[
                 const SizedBox(width: 3),
                 Text(
                   '$openCount',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: EditorTheme.muted,
+                    color: MicaTheme.of(context).text.muted,
                   ),
                 ),
               ],
@@ -5696,14 +5704,14 @@ class _SyncBadge extends StatelessWidget {
       case SyncPhase.synced:
         return const SizedBox.shrink();
       case SyncPhase.syncing:
-        return const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 6),
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           child: SizedBox(
             width: 13,
             height: 13,
             child: CircularProgressIndicator(
               strokeWidth: 1.6,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
           ),
         );
@@ -5712,10 +5720,10 @@ class _SyncBadge extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 6),
           child: Tooltip(
             message: context.l10n.syncOffline,
-            child: const Icon(
+            child: Icon(
               Icons.cloud_off_outlined,
               size: 15,
-              color: EditorTheme.muted,
+              color: MicaTheme.of(context).text.muted,
             ),
           ),
         );
@@ -6598,7 +6606,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Widget _narrowTopBar(BuildContext context) {
     final title = widget.selectedBootstrap?.view.name ?? 'Mica';
     return Material(
-      color: Colors.white,
+      color: MicaTheme.of(context).surface.base,
       child: SizedBox(
         height: 48,
         child: Row(
@@ -6613,9 +6621,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF0F172A),
+                  color: MicaTheme.of(context).text.primary,
                 ),
               ),
             ),
@@ -6705,7 +6713,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final canEdit = matchesEditRole(widget.selectedWorkspace?.role);
 
     return ColoredBox(
-      color: Colors.white,
+      color: MicaTheme.of(context).surface.base,
       child: MouseRegion(
         onEnter: (_) => setState(() => _navHovered = true),
         onExit: (_) => setState(() => _navHovered = false),
@@ -6764,7 +6772,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ],
               _searchBox(context),
               const SizedBox(height: 14),
-              const Divider(height: 1, color: Color(0xFFF1F5F9)),
+              Divider(height: 1, color: MicaTheme.of(context).border.subtle),
               const SizedBox(height: 14),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -6849,11 +6857,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     padding: const EdgeInsets.only(left: 4),
                     child: Text(
                       context.l10n.sidebarPagesLabel,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         letterSpacing: 1.5,
                         fontWeight: FontWeight.w500,
-                        color: EditorTheme.faint,
+                        color: MicaTheme.of(context).text.faint,
                       ),
                     ),
                   ),
@@ -6870,10 +6878,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ),
                   PopupMenuButton<String>(
                     tooltip: context.l10n.sidebarMoreActions,
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.more_horiz,
                       size: 18,
-                      color: EditorTheme.muted,
+                      color: MicaTheme.of(context).text.muted,
                     ),
                     padding: EdgeInsets.zero,
                     onSelected: (value) {
@@ -6961,7 +6969,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: const Color(0xFFF1F5F9),
+          color: MicaTheme.of(context).surface.sunken,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -6969,13 +6977,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             Icon(
               Icons.search,
               size: 18,
-              color: enabled ? EditorTheme.muted : const Color(0xFFCBD5E1),
+              color: enabled
+                  ? MicaTheme.of(context).text.muted
+                  : MicaTheme.of(context).border.strong,
             ),
             const SizedBox(width: 8),
             Text(
               context.l10n.search,
               style: TextStyle(
-                color: enabled ? EditorTheme.muted : const Color(0xFFCBD5E1),
+                color: enabled
+                    ? MicaTheme.of(context).text.muted
+                    : MicaTheme.of(context).border.strong,
               ),
             ),
           ],
@@ -6987,7 +6999,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// The sidebar collapsed to a slim rail: just the logo and an expand button.
   Widget _collapsedNavRail(BuildContext context) {
     return ColoredBox(
-      color: Colors.white,
+      color: MicaTheme.of(context).surface.base,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 16),
         child: Column(
@@ -7106,15 +7118,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         id.email!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: EditorTheme.muted,
+                          color: MicaTheme.of(context).text.muted,
                         ),
                       ),
                   ],
                 ),
               ),
-              const Icon(Icons.more_vert, size: 18, color: EditorTheme.faint),
+              Icon(
+                Icons.more_vert,
+                size: 18,
+                color: MicaTheme.of(context).text.faint,
+              ),
             ],
           ),
         ),
@@ -7155,10 +7171,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     SizedBox(
                       width: 14,
                       child: selected
-                          ? const Icon(
+                          ? Icon(
                               Icons.check,
                               size: 14,
-                              color: Color(0xFF2563EB),
+                              color: MicaTheme.of(context).accent.primary,
                             )
                           : null,
                     ),
@@ -7166,7 +7182,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     Icon(
                       local ? Icons.computer_outlined : Icons.cloud_outlined,
                       size: 16,
-                      color: const Color(0xFF475569),
+                      color: MicaTheme.of(context).text.muted,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -7179,7 +7195,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           fontWeight: selected
                               ? FontWeight.w600
                               : FontWeight.w400,
-                          color: const Color(0xFF0F172A),
+                          color: MicaTheme.of(context).text.primary,
                         ),
                       ),
                     ),
@@ -7199,10 +7215,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 _accountMenu.close();
                 widget.onRemoveServer(origin);
               },
-              icon: const Icon(
+              icon: Icon(
                 Icons.delete_outline,
                 size: 16,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
         ],
@@ -7222,12 +7238,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         child: Row(
           children: [
             const SizedBox(width: 20),
-            const Icon(Icons.add, size: 16, color: Color(0xFF2563EB)),
+            Icon(
+              Icons.add,
+              size: 16,
+              color: MicaTheme.of(context).accent.primary,
+            ),
             const SizedBox(width: 8),
             Text(
               context.l10n.serverAddRow,
-              style: const TextStyle(
-                color: Color(0xFF2563EB),
+              style: TextStyle(
+                color: MicaTheme.of(context).accent.primary,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -7249,9 +7269,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                Icon(icon, size: 18, color: const Color(0xFF475569)),
+                Icon(icon, size: 18, color: MicaTheme.of(context).text.muted),
                 const SizedBox(width: 10),
-                Text(label, style: const TextStyle(color: Color(0xFF0F172A))),
+                Text(
+                  label,
+                  style: TextStyle(color: MicaTheme.of(context).text.primary),
+                ),
               ],
             ),
           ),
@@ -7402,16 +7425,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             constraints: const BoxConstraints(maxWidth: 260),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: MicaTheme.of(context).surface.overlay,
               borderRadius: BorderRadius.circular(6),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
+                Icon(
                   Icons.description_outlined,
                   size: 18,
-                  color: Color(0xFF2563EB),
+                  color: MicaTheme.of(context).accent.primary,
                 ),
                 const SizedBox(width: 8),
                 Flexible(
@@ -7508,10 +7531,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: active ? const Color(0xFF2563EB) : Colors.transparent,
+                color: active
+                    ? MicaTheme.of(context).accent.primary
+                    : Colors.transparent,
                 width: 2,
               ),
-              color: active ? const Color(0x142563EB) : Colors.transparent,
+              color: active
+                  ? MicaTheme.of(context).accent.primary.withValues(alpha: 0.08)
+                  : Colors.transparent,
             ),
           );
         }
@@ -7521,7 +7548,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               : Alignment.bottomCenter,
           child: Container(
             height: 2,
-            color: active ? const Color(0xFF2563EB) : Colors.transparent,
+            color: active
+                ? MicaTheme.of(context).accent.primary
+                : Colors.transparent,
           ),
         );
       },
@@ -7750,7 +7779,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final canEdit = matchesEditRole(workspace.role);
 
     return ColoredBox(
-      color: Colors.white,
+      color: MicaTheme.of(context).surface.base,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -7802,7 +7831,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           child: Container(
             decoration: active
                 ? BoxDecoration(
-                    color: const Color(0x142563EB),
+                    color: MicaTheme.of(
+                      context,
+                    ).accent.primary.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(6),
                   )
                 : null,
@@ -7810,7 +7841,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             child: Icon(
               icon,
               size: 18,
-              color: active ? const Color(0xFF2563EB) : const Color(0xFF475569),
+              color: active
+                  ? MicaTheme.of(context).accent.primary
+                  : MicaTheme.of(context).text.muted,
             ),
           ),
         ),
@@ -7821,7 +7854,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       width: 1,
       height: 18,
       margin: const EdgeInsets.symmetric(horizontal: 4),
-      color: const Color(0xFFE2E8F0),
+      color: MicaTheme.of(context).border.normal,
     );
 
     final h = _commandHook;
@@ -7833,9 +7866,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // cell on pointer-down, so the command would land after the cell closed.
     return TextFieldTapRegion(
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+        decoration: BoxDecoration(
+          color: MicaTheme.of(context).surface.base,
+          border: Border(
+            bottom: BorderSide(color: MicaTheme.of(context).border.normal),
+          ),
         ),
         padding: const EdgeInsets.symmetric(vertical: 3),
         // Align the buttons with the page's centered text column (not the pane
@@ -8333,9 +8368,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   const SizedBox(height: 12),
                   DecoratedBox(
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: MicaTheme.of(context).surface.base,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      border: Border.all(
+                        color: MicaTheme.of(context).border.normal,
+                      ),
                     ),
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -8379,7 +8416,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 style: TextStyle(
                   fontSize: h.level <= 1 ? 14 : 13,
                   fontWeight: h.level <= 1 ? FontWeight.w600 : FontWeight.w400,
-                  color: const Color(0xFF334155),
+                  color: MicaTheme.of(context).text.primary,
                 ),
               ),
             ),
@@ -8402,7 +8439,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       builder: (context, _) {
         final outline = _pageOutlineItems(context, _outlineHook.headings);
         return ColoredBox(
-          color: Colors.white,
+          color: MicaTheme.of(context).surface.base,
           child: outline.isEmpty
               ? EmptyState(
                   icon: Icons.toc,
@@ -8516,7 +8553,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       if (members.isEmpty)
                         Text(
                           l10n.workspaceNoMembers,
-                          style: const TextStyle(color: EditorTheme.faint),
+                          style: TextStyle(
+                            color: MicaTheme.of(context).text.faint,
+                          ),
                         )
                       else
                         for (final member in members)
@@ -8804,7 +8843,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
             FilledButton.icon(
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
+                backgroundColor: MicaTheme.of(context).status.danger,
               ),
               onPressed: () => Navigator.of(context).pop(true),
               icon: const Icon(Icons.delete_outline),

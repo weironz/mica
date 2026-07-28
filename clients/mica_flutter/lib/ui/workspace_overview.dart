@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../editor/render.dart' show EditorTheme;
+import 'theme_tokens.dart';
 
 /// One entry of a workspace, already resolved and already formatted.
 ///
@@ -117,49 +117,50 @@ class WorkspaceOverview extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _header(),
+            _header(context),
             const SizedBox(height: 18),
             if (items.isEmpty)
-              _emptyState()
+              _emptyState(context)
             else if (mode == WorkspaceOverviewMode.cards)
-              _cardGrid(width)
+              _cardGrid(context, width)
             else
-              _directoryList(width),
+              _directoryList(context, width),
           ],
         );
       },
     );
   }
 
-  Widget _header() {
+  Widget _header(BuildContext context) {
     return Row(
       children: [
         Text(
           strings.sectionLabel,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: EditorTheme.muted,
+            color: MicaTheme.of(context).text.muted,
           ),
         ),
         const Spacer(),
         // Stays visible when the workspace is empty: it reflects a stored
         // preference, so hiding it would make the setting look lost.
-        _modeToggle(),
+        _modeToggle(context),
       ],
     );
   }
 
-  Widget _modeToggle() {
+  Widget _modeToggle(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        border: Border.all(color: _containerBorder),
+        border: Border.all(color: MicaTheme.of(context).border.normal),
         borderRadius: BorderRadius.circular(_controlRadius),
       ),
       child: Row(
         children: [
           _modeSegment(
+            context,
             mode: WorkspaceOverviewMode.cards,
             icon: Icons.grid_view_outlined,
             label: strings.cardsModeLabel,
@@ -167,6 +168,7 @@ class WorkspaceOverview extends StatelessWidget {
           ),
           const SizedBox(width: 2),
           _modeSegment(
+            context,
             mode: WorkspaceOverviewMode.list,
             icon: Icons.format_list_bulleted,
             label: strings.listModeLabel,
@@ -177,7 +179,8 @@ class WorkspaceOverview extends StatelessWidget {
     );
   }
 
-  Widget _modeSegment({
+  Widget _modeSegment(
+    BuildContext context, {
     required WorkspaceOverviewMode mode,
     required IconData icon,
     required String label,
@@ -198,21 +201,23 @@ class WorkspaceOverview extends StatelessWidget {
           height: 28,
           decoration: BoxDecoration(
             color: selected
-                ? _accentWash
-                : (hovered ? EditorTheme.codeBg : null),
+                ? MicaTheme.of(context).accent.wash
+                : (hovered ? MicaTheme.of(context).surface.sunken : null),
             borderRadius: BorderRadius.circular(_nestedRadius),
           ),
           child: Icon(
             icon,
             size: 16,
-            color: selected ? EditorTheme.caret : EditorTheme.faint,
+            color: selected
+                ? MicaTheme.of(context).accent.primary
+                : MicaTheme.of(context).text.faint,
           ),
         ),
       ),
     );
   }
 
-  Widget _cardGrid(double width) {
+  Widget _cardGrid(BuildContext context, double width) {
     // Columns, not a fixed aspect ratio: a card is icon + name + meta, so its
     // height is content-driven. Thresholds are the widths at which a card would
     // fall under ~215px and start ellipsizing ordinary page names.
@@ -221,31 +226,35 @@ class WorkspaceOverview extends StatelessWidget {
         : width >= 460
         ? 2
         : 1;
-    final cardWidth =
-        ((width - _gridGap * (columns - 1)) / columns).floorToDouble();
+    final cardWidth = ((width - _gridGap * (columns - 1)) / columns)
+        .floorToDouble();
     return Wrap(
       spacing: _gridGap,
       runSpacing: _gridGap,
       children: [
         for (final item in items)
-          SizedBox(width: cardWidth, child: _card(item)),
+          SizedBox(width: cardWidth, child: _card(context, item)),
       ],
     );
   }
 
-  Widget _card(WorkspaceItem item) {
+  Widget _card(BuildContext context, WorkspaceItem item) {
     return _Pressable(
       key: ValueKey('workspaceOverview.card.${item.id}'),
       onTap: () => onOpen(item.id),
       builder: (hovered) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          border: Border.all(color: hovered ? _accentBorder : _innerBorder),
+          border: Border.all(
+            color: hovered
+                ? MicaTheme.of(context).accent.primary.withValues(alpha: 0.35)
+                : MicaTheme.of(context).border.subtle,
+          ),
           borderRadius: BorderRadius.circular(_cardRadius),
         ),
         child: Row(
           children: [
-            _itemGlyph(item, size: 20),
+            _itemGlyph(context, item, size: 20),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -255,10 +264,10 @@ class WorkspaceOverview extends StatelessWidget {
                     item.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: EditorTheme.text,
+                      color: MicaTheme.of(context).text.primary,
                     ),
                   ),
                   if (item.meta.isNotEmpty) ...[
@@ -267,9 +276,9 @@ class WorkspaceOverview extends StatelessWidget {
                       item.meta,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: EditorTheme.faint,
+                        color: MicaTheme.of(context).text.faint,
                       ),
                     ),
                   ],
@@ -281,12 +290,15 @@ class WorkspaceOverview extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 '${item.childCount}',
-                style: const TextStyle(fontSize: 12, color: EditorTheme.faint),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: MicaTheme.of(context).text.faint,
+                ),
               ),
             ],
             if (onMore != null) ...[
               const SizedBox(width: 4),
-              _moreButton(item),
+              _moreButton(context, item),
             ],
           ],
         ),
@@ -294,18 +306,18 @@ class WorkspaceOverview extends StatelessWidget {
     );
   }
 
-  Widget _directoryList(double width) {
+  Widget _directoryList(BuildContext context, double width) {
     // The name is capped instead of flexed so the leader dashes and the trailing
     // meta keep their space: a long name ellipsizes rather than pushing the
     // right-hand column off the row.
     final nameMaxWidth = (width * 0.55).clamp(80.0, 520.0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [for (final item in items) _row(item, nameMaxWidth)],
+      children: [for (final item in items) _row(context, item, nameMaxWidth)],
     );
   }
 
-  Widget _row(WorkspaceItem item, double nameMaxWidth) {
+  Widget _row(BuildContext context, WorkspaceItem item, double nameMaxWidth) {
     final trailing = item.isFolder ? '${item.childCount}' : item.meta;
     return _Pressable(
       key: ValueKey('workspaceOverview.row.${item.id}'),
@@ -313,12 +325,12 @@ class WorkspaceOverview extends StatelessWidget {
       builder: (hovered) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
         decoration: BoxDecoration(
-          color: hovered ? EditorTheme.codeBg : null,
+          color: hovered ? MicaTheme.of(context).surface.sunken : null,
           borderRadius: BorderRadius.circular(_nestedRadius),
         ),
         child: Row(
           children: [
-            _itemGlyph(item, size: 16),
+            _itemGlyph(context, item, size: 16),
             const SizedBox(width: 8),
             ConstrainedBox(
               constraints: BoxConstraints(maxWidth: nameMaxWidth),
@@ -329,10 +341,8 @@ class WorkspaceOverview extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 13,
                   // Folders read as the heading of their run of pages.
-                  fontWeight: item.isFolder
-                      ? FontWeight.w600
-                      : FontWeight.w400,
-                  color: EditorTheme.text,
+                  fontWeight: item.isFolder ? FontWeight.w600 : FontWeight.w400,
+                  color: MicaTheme.of(context).text.primary,
                 ),
               ),
             ),
@@ -345,11 +355,14 @@ class WorkspaceOverview extends StatelessWidget {
             if (trailing.isNotEmpty)
               Text(
                 trailing,
-                style: const TextStyle(fontSize: 12, color: EditorTheme.faint),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: MicaTheme.of(context).text.faint,
+                ),
               ),
             if (onMore != null) ...[
               const SizedBox(width: 4),
-              _moreButton(item),
+              _moreButton(context, item),
             ],
           ],
         ),
@@ -357,7 +370,7 @@ class WorkspaceOverview extends StatelessWidget {
     );
   }
 
-  Widget _moreButton(WorkspaceItem item) {
+  Widget _moreButton(BuildContext context, WorkspaceItem item) {
     return Semantics(
       label: strings.moreActionsLabel,
       button: true,
@@ -368,13 +381,15 @@ class WorkspaceOverview extends StatelessWidget {
           width: 24,
           height: 24,
           decoration: BoxDecoration(
-            color: hovered ? _accentWash : null,
+            color: hovered ? MicaTheme.of(context).accent.wash : null,
             borderRadius: BorderRadius.circular(_nestedRadius),
           ),
           child: Icon(
             Icons.more_horiz,
             size: 16,
-            color: hovered ? EditorTheme.caret : EditorTheme.faint,
+            color: hovered
+                ? MicaTheme.of(context).accent.primary
+                : MicaTheme.of(context).text.faint,
           ),
         ),
       ),
@@ -383,7 +398,11 @@ class WorkspaceOverview extends StatelessWidget {
 
   /// The user's emoji, or a neutral glyph. Never a substitute emoji: an invented
   /// one reads as a choice the user made.
-  Widget _itemGlyph(WorkspaceItem item, {required double size}) {
+  Widget _itemGlyph(
+    BuildContext context,
+    WorkspaceItem item, {
+    required double size,
+  }) {
     final icon = item.icon;
     if (icon != null && icon.isNotEmpty) {
       return Text(icon, style: TextStyle(fontSize: size));
@@ -391,11 +410,11 @@ class WorkspaceOverview extends StatelessWidget {
     return Icon(
       item.isFolder ? Icons.folder_outlined : Icons.description_outlined,
       size: size,
-      color: EditorTheme.faint,
+      color: MicaTheme.of(context).text.faint,
     );
   }
 
-  Widget _emptyState() {
+  Widget _emptyState(BuildContext context) {
     final actionLabel = strings.emptyActionLabel;
     return SizedBox(
       key: const ValueKey('workspaceOverview.empty'),
@@ -408,33 +427,33 @@ class WorkspaceOverview extends StatelessWidget {
               width: 46,
               height: 46,
               decoration: BoxDecoration(
-                color: EditorTheme.codeBg,
+                color: MicaTheme.of(context).surface.sunken,
                 borderRadius: BorderRadius.circular(_cardRadius),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.folder_outlined,
                 size: 21,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
             const SizedBox(height: 11),
             Text(
               strings.emptyTitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: EditorTheme.text,
+                color: MicaTheme.of(context).text.primary,
               ),
             ),
             const SizedBox(height: 9),
             Text(
               strings.emptyBody,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 height: 1.75,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
             // One action at most — an empty state that offers three next steps
@@ -450,18 +469,24 @@ class WorkspaceOverview extends StatelessWidget {
                     vertical: 7,
                   ),
                   decoration: BoxDecoration(
-                    color: _accentWash,
+                    color: MicaTheme.of(context).accent.wash,
                     border: Border.all(
-                      color: hovered ? _accentBorder : _accentHairline,
+                      color: hovered
+                          ? MicaTheme.of(
+                              context,
+                            ).accent.primary.withValues(alpha: 0.35)
+                          : MicaTheme.of(
+                              context,
+                            ).accent.primary.withValues(alpha: 0.22),
                     ),
                     borderRadius: BorderRadius.circular(_controlRadius),
                   ),
                   child: Text(
                     actionLabel,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: EditorTheme.caret,
+                      color: MicaTheme.of(context).accent.primary,
                     ),
                   ),
                 ),
@@ -474,17 +499,16 @@ class WorkspaceOverview extends StatelessWidget {
   }
 }
 
-/// Container hairline (#E5E9F0) and inner hairline (#EEF1F5) from the design
-/// system. EditorTheme has no border tokens — it is a text/ink palette.
-const Color _containerBorder = Color(0xFFE5E9F0);
-const Color _innerBorder = Color(0xFFEEF1F5);
-
-/// Accent washes, not new greys: the two tinted surfaces in the mockups are the
-/// selected toggle segment and the empty-state action. Both derive from
-/// [EditorTheme.caret] (#2563EB) rather than introducing another hue.
-const Color _accentWash = Color(0xFFEFF6FF);
-const Color _accentHairline = Color(0xFFDBEAFE);
-final Color _accentBorder = EditorTheme.caret.withValues(alpha: 0.35);
+// The design's two hairlines (#E5E9F0 container, #EEF1F5 inner) and its two
+// accent washes used to live here as top-level constants. They are token roles
+// now — `border.normal` / `border.subtle` and `accent.wash` — because a constant
+// cannot change when the palette does, and these are precisely the surfaces that
+// have to invert in dark mode. The greys land within ~3/255 of the originals:
+// collapsing near-duplicate hairlines is the point of having roles at all.
+//
+// The accent HAIRLINE had no exact role, so it is expressed the way it was always
+// meant: the accent at low opacity. Over white that is the old #DBEAFE; over a
+// dark base it tints instead of glowing.
 
 const double _controlRadius = 8;
 const double _cardRadius = 14;
@@ -538,22 +562,27 @@ class _DashedLeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const SizedBox(
+    return SizedBox(
       height: 1,
-      child: CustomPaint(painter: _DashedLeaderPainter()),
+      child: CustomPaint(
+        painter: _DashedLeaderPainter(MicaTheme.of(context).border.normal),
+      ),
     );
   }
 }
 
 class _DashedLeaderPainter extends CustomPainter {
-  const _DashedLeaderPainter();
+  const _DashedLeaderPainter(this.color);
+
+  /// Passed in: a painter has no BuildContext to read tokens from.
+  final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
     const dash = 3.0;
     const gap = 3.0;
     final paint = Paint()
-      ..color = _containerBorder
+      ..color = color
       ..strokeWidth = 1;
     for (double x = 0; x < size.width; x += dash + gap) {
       final end = (x + dash).clamp(0.0, size.width);
@@ -562,5 +591,6 @@ class _DashedLeaderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_DashedLeaderPainter oldDelegate) => false;
+  bool shouldRepaint(_DashedLeaderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

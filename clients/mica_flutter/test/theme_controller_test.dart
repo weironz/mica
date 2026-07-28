@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/theme_controller.dart';
-import 'package:mica_flutter/ui/theme_tokens.dart';
 
 /// The pref is the only part of this that can silently ruin someone's setup, so
 /// that is what the tests are about.

@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
 
+import 'theme_tokens.dart';
+
 /// The one red used for irreversible actions across the app.
-const Color kDestructiveRed = Color(0xFFDC2626);
+///
+/// A function, not a constant: the red is `status.danger`, and which red that is
+/// depends on the palette in effect — light mode's #DC2626 is too dark to read on
+/// a dark page.
+Color kDestructiveRed(BuildContext context) =>
+    MicaTheme.of(context).status.danger;
 
 /// The confirmation gate in front of an action that cannot be undone.
 ///
@@ -44,7 +51,9 @@ Future<bool> showDestructiveConfirm(
         ),
         FilledButton(
           style: destructive
-              ? FilledButton.styleFrom(backgroundColor: kDestructiveRed)
+              ? FilledButton.styleFrom(
+                  backgroundColor: kDestructiveRed(context),
+                )
               : null,
           onPressed: () => Navigator.pop(context, true),
           child: Text(confirmLabel),

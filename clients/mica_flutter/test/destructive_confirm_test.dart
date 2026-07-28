@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/ui/destructive_confirm.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 
 /// The behaviour under test is "the irreversible thing does not happen unless
 /// the user says yes". Purging from the recycle bin and revoking an API token
@@ -90,9 +91,11 @@ void main() {
     final confirm = tester.widget<FilledButton>(
       find.ancestor(of: find.text('永久删除'), matching: find.byType(FilledButton)),
     );
+    // The ROLE, not a hex: which red `status.danger` is depends on the palette,
+    // and the gate is wrapped in no MicaTheme here, so it resolves to light.
     expect(
       confirm.style?.backgroundColor?.resolve(const <WidgetState>{}),
-      kDestructiveRed,
+      MicaTokens.light.status.danger,
     );
     // Cancel stays a plain TextButton: only one of the two should look like the
     // thing you meant to press.
@@ -137,9 +140,11 @@ void main() {
     final confirm = tester.widget<FilledButton>(
       find.ancestor(of: find.text('清理'), matching: find.byType(FilledButton)),
     );
+    // `isNot(kDestructiveRed)` would pass here no matter what — `kDestructiveRed`
+    // is a function now, and a Color is never equal to a closure. Name the value.
     expect(
       confirm.style?.backgroundColor?.resolve(const <WidgetState>{}),
-      isNot(kDestructiveRed),
+      isNot(MicaTokens.light.status.danger),
     );
 
     // Still a gate: the action must not run on its own.

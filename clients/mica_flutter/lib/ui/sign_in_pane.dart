@@ -31,6 +31,7 @@ import 'package:flutter/material.dart';
 
 import '../editor/model.dart' show kMonoFont;
 import '../server_list.dart' show serverLabel;
+import 'theme_tokens.dart';
 
 /// The origin string meaning "the on-device world", matching the store's own
 /// `origin` column.
@@ -206,10 +207,10 @@ class _SignInPaneState extends State<SignInPane> {
           height: 38,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? Colors.white : null,
+            color: selected ? MicaTheme.of(context).surface.base : null,
             borderRadius: BorderRadius.circular(9),
             border: selected
-                ? Border.all(color: const Color(0xFFE2E8F0))
+                ? Border.all(color: MicaTheme.of(context).border.normal)
                 : null,
           ),
           child: Row(
@@ -219,8 +220,8 @@ class _SignInPaneState extends State<SignInPane> {
                 icon,
                 size: 15,
                 color: selected
-                    ? const Color(0xFF2563EB)
-                    : const Color(0xFF64748B),
+                    ? MicaTheme.of(context).accent.primary
+                    : MicaTheme.of(context).text.muted,
               ),
               const SizedBox(width: 7),
               Text(
@@ -229,8 +230,8 @@ class _SignInPaneState extends State<SignInPane> {
                   fontSize: 13,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                   color: selected
-                      ? const Color(0xFF0F172A)
-                      : const Color(0xFF64748B),
+                      ? MicaTheme.of(context).text.primary
+                      : MicaTheme.of(context).text.muted,
                 ),
               ),
             ],
@@ -241,7 +242,7 @@ class _SignInPaneState extends State<SignInPane> {
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
+        color: MicaTheme.of(context).surface.sunken,
         borderRadius: BorderRadius.circular(11),
       ),
       child: Padding(
@@ -271,20 +272,21 @@ class _SignInPaneState extends State<SignInPane> {
     );
   }
 
-  static const _green = Color(0xFF22C55E);
-
   ({Color dot, String text}) get _status => switch (_reach) {
-    ServerReach.reachable => (dot: _green, text: widget.strings.connected),
+    ServerReach.reachable => (
+      dot: MicaTheme.of(context).status.success,
+      text: widget.strings.connected,
+    ),
     ServerReach.unreachable => (
-      dot: const Color(0xFFDC2626),
+      dot: MicaTheme.of(context).status.danger,
       text: widget.strings.unreachable,
     ),
     ServerReach.checking => (
-      dot: const Color(0xFFCBD5E1),
+      dot: MicaTheme.of(context).border.strong,
       text: widget.strings.checking,
     ),
     // No probe wired: show the server, claim nothing about the connection.
-    null => (dot: const Color(0xFFCBD5E1), text: ''),
+    null => (dot: MicaTheme.of(context).border.strong, text: ''),
   };
 
   Widget _serverRow(BuildContext context) {
@@ -303,9 +305,9 @@ class _SignInPaneState extends State<SignInPane> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFC),
+              color: MicaTheme.of(context).surface.raised,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE5E9F0)),
+              border: Border.all(color: MicaTheme.of(context).border.normal),
             ),
             child: Row(
               children: [
@@ -331,9 +333,13 @@ class _SignInPaneState extends State<SignInPane> {
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: status.dot == _green
-                                    ? const Color(0xFF16A34A)
-                                    : const Color(0xFF64748B),
+                                // On `_reach`, not on the dot's colour: asking
+                                // "is the dot green?" made the palette the
+                                // carrier of a fact the enum already holds, so
+                                // recolouring the dot silently recoloured this.
+                                color: _reach == ServerReach.reachable
+                                    ? MicaTheme.of(context).status.success
+                                    : MicaTheme.of(context).text.muted,
                               ),
                             ),
                           ],
@@ -342,10 +348,10 @@ class _SignInPaneState extends State<SignInPane> {
                         serverLabel(showing),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: kMonoFont,
                           fontSize: 12.5,
-                          color: Color(0xFF334155),
+                          color: MicaTheme.of(context).text.primary,
                         ),
                       ),
                     ],
@@ -354,10 +360,10 @@ class _SignInPaneState extends State<SignInPane> {
                 AnimatedRotation(
                   turns: _serversOpen ? 0.5 : 0,
                   duration: const Duration(milliseconds: 180),
-                  child: const Icon(
+                  child: Icon(
                     Icons.expand_more,
                     size: 18,
-                    color: Color(0xFF64748B),
+                    color: MicaTheme.of(context).text.muted,
                   ),
                 ),
               ],
@@ -371,9 +377,9 @@ class _SignInPaneState extends State<SignInPane> {
           const SizedBox(height: 8),
           DecoratedBox(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: MicaTheme.of(context).surface.base,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE5E9F0)),
+              border: Border.all(color: MicaTheme.of(context).border.normal),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -382,19 +388,23 @@ class _SignInPaneState extends State<SignInPane> {
                   padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
                   child: Text(
                     widget.strings.serversLabel,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.6,
-                      color: Color(0xFF9AA4AF),
+                      color: MicaTheme.of(context).text.faint,
                     ),
                   ),
                 ),
                 for (final origin in widget.origins) _listRow(origin),
                 if (widget.onAdd != null)
                   DecoratedBox(
-                    decoration: const BoxDecoration(
-                      border: Border(top: BorderSide(color: Color(0xFFF1F5F9))),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(
+                          color: MicaTheme.of(context).border.subtle,
+                        ),
+                      ),
                     ),
                     child: _addRow(),
                   ),
@@ -420,7 +430,11 @@ class _SignInPaneState extends State<SignInPane> {
             SizedBox(
               width: 18,
               child: selected
-                  ? const Icon(Icons.check, size: 15, color: Color(0xFF2563EB))
+                  ? Icon(
+                      Icons.check,
+                      size: 15,
+                      color: MicaTheme.of(context).accent.primary,
+                    )
                   : null,
             ),
             const SizedBox(width: 6),
@@ -429,10 +443,10 @@ class _SignInPaneState extends State<SignInPane> {
                 serverLabel(origin),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: kMonoFont,
                   fontSize: 12.5,
-                  color: Color(0xFF24292F),
+                  color: MicaTheme.of(context).text.primary,
                 ),
               ),
             ),
@@ -443,7 +457,7 @@ class _SignInPaneState extends State<SignInPane> {
                   widget.onRemove!(origin);
                 },
                 icon: const Icon(Icons.delete_outline, size: 16),
-                color: const Color(0xFFDC2626),
+                color: MicaTheme.of(context).status.danger,
                 tooltip: widget.strings.removeServer,
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
@@ -462,14 +476,18 @@ class _SignInPaneState extends State<SignInPane> {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         child: Row(
           children: [
-            const Icon(Icons.add, size: 16, color: Color(0xFF2563EB)),
+            Icon(
+              Icons.add,
+              size: 16,
+              color: MicaTheme.of(context).accent.primary,
+            ),
             const SizedBox(width: 9),
             Text(
               widget.strings.addServer,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF2563EB),
+                color: MicaTheme.of(context).accent.primary,
               ),
             ),
           ],
@@ -479,9 +497,9 @@ class _SignInPaneState extends State<SignInPane> {
     if (!boxed) return row;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: MicaTheme.of(context).surface.raised,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E9F0)),
+        border: Border.all(color: MicaTheme.of(context).border.normal),
       ),
       child: row,
     );
@@ -493,20 +511,20 @@ class _SignInPaneState extends State<SignInPane> {
       children: [
         Text(
           widget.strings.localTitle,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 26,
             fontWeight: FontWeight.w700,
             letterSpacing: -0.5,
-            color: Color(0xFF0F172A),
+            color: MicaTheme.of(context).text.primary,
           ),
         ),
         const SizedBox(height: 8),
         Text(
           widget.strings.localBody,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             height: 1.6,
-            color: Color(0xFF64748B),
+            color: MicaTheme.of(context).text.muted,
           ),
         ),
         const SizedBox(height: 24),
