@@ -197,9 +197,12 @@ void main() {
       // Desktop: restore window size/position + enforce a min size before the first
       // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
       await initDesktopWindow();
-      // Seed the UI language from the persisted choice (prefs are file/localStorage
-      // backed and loaded synchronously) before the first frame renders.
+      // Seed the UI language and the palette from the persisted choices (prefs are
+      // file/localStorage backed and loaded synchronously) before the first frame
+      // renders. Both MUST happen here rather than from a widget's initState —
+      // see loadPersistedThemeMode for what that looked like when it didn't.
       loadPersistedLocale();
+      loadPersistedThemeMode();
       // Suppress the browser's native right-click menu so the editor can show its
       // own (e.g. image actions) on web.
       if (kIsWeb) BrowserContextMenu.disableContextMenu();
@@ -687,8 +690,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (base != null) {
       _api.baseUri = base;
     }
-    // Anything unrecognised reads as "follow the system" — see parseThemeMode.
-    themeModeController.value = parseThemeMode(loadPref('themeMode'));
+    // The palette is NOT seeded here. It used to be, and that is exactly one
+    // frame too late: this runs from initState, inside MaterialApp's first
+    // build, where notifying an ancestor cannot rebuild it. main() does it
+    // before runApp instead.
     final fontScale = double.tryParse(loadPref('fontScale') ?? '');
     final fontFamily = loadPref('fontFamily');
     _appearance = EditorAppearance(

@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'prefs.dart';
 import 'ui/theme_tokens.dart';
 
 /// The user's choice, not the resulting brightness.
@@ -48,6 +49,21 @@ MicaThemeMode parseThemeMode(String? raw) => switch (raw) {
 MicaTokens tokensForBrightness(Brightness brightness) =>
     brightness == Brightness.dark ? MicaTokens.dark_ : MicaTokens.light;
 
-/// The live choice. Set from Settings; `MicaApp` listens.
+/// The live choice. Seeded by [loadPersistedThemeMode] before runApp, then set
+/// from Settings; `MicaApp` listens.
 final ValueNotifier<MicaThemeMode> themeModeController =
     ValueNotifier<MicaThemeMode>(MicaThemeMode.system);
+
+/// Load the persisted choice into [themeModeController].
+///
+/// **Call this in main() before runApp**, the same way the locale is seeded.
+/// Assigning it any later does not work, and fails in a way that looks like
+/// nothing at all: the shell used to do it from `initState`, which runs while
+/// `MaterialApp` is already building the first frame. A notifier assigned then
+/// cannot rebuild an ancestor that has finished building — so the app came up in
+/// the DEFAULT palette while Settings correctly showed 「深色」 ticked, and only
+/// touching the setting (a real change, so a real notification) fixed it. Two
+/// readings of the same notifier, one frame apart, disagreeing.
+void loadPersistedThemeMode() {
+  themeModeController.value = parseThemeMode(loadPref('themeMode'));
+}

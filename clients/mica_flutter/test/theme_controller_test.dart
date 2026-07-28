@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/theme_controller.dart';
@@ -36,5 +38,32 @@ void main() {
   test('a resolved brightness picks the matching palette', () {
     expect(tokensForBrightness(Brightness.dark).dark, isTrue);
     expect(tokensForBrightness(Brightness.light).dark, isFalse);
+  });
+
+  test('main() seeds the palette BEFORE runApp, like the locale', () {
+    // The bug this pins had nothing wrong with any function above: every one of
+    // them returned the right answer. The palette was simply assigned one frame
+    // too late — from the shell's initState, which runs inside MaterialApp's
+    // first build, where notifying an ancestor cannot rebuild it. The app opened
+    // in the default palette while Settings showed 「深色」 ticked, and only
+    // touching the setting fixed it. Desktop reproduced it every launch; the web
+    // build happened to win the same race, so no unit test over these functions
+    // could have caught it — the invariant is an ORDERING in main(), so that is
+    // what gets asserted.
+    final source = File('lib/main.dart').readAsStringSync();
+    final seeded = source.indexOf('loadPersistedThemeMode()');
+    final started = source.indexOf('runApp(');
+
+    expect(
+      seeded,
+      isNonNegative,
+      reason: 'main() must seed the palette at all',
+    );
+    expect(started, isNonNegative);
+    expect(
+      seeded,
+      lessThan(started),
+      reason: 'seeding after runApp is the bug: the first frame is already out',
+    );
   });
 }
