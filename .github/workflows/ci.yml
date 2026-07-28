@@ -23,8 +23,27 @@ name: CI
 on:
   push:
     branches: [main]
+    # A markdown-only commit cannot break a build. Two docs commits on 07-28
+    # each started the full matrix; on the Windows integration workflow that is
+    # 14 minutes of runner time for a paragraph.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
   workflow_dispatch:
+
+# Pushing several commits in a row (five within an hour on 07-28) left four
+# superseded runs burning runners for a verdict nobody would read. The newest
+# commit's result is the one that matters; a broken commit in the middle is
+# still caught, because the fix is a later commit with its own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust:

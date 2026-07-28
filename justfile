@@ -125,7 +125,20 @@ parity-down:
 
 [doc("Run all tests (Rust workspace + Flutter)")]
 test:
-    cargo test --workspace
+    # The Postgres-backed tests (`pool()` in documents.rs / password_reset.rs)
+    # SKIP when DATABASE_URL is unset — and a skipped test reports as PASSED.
+    # That is exactly how two broken tests reached main on 07-27: locally
+    # "108 passed", in CI "106 passed; 2 failed" for four days. So run them for
+    # real against the dev database when it is up, and say so out loud when it
+    # is not, instead of quietly testing less than CI does.
+    if docker exec mica-postgres pg_isready -U mica -d mica >/dev/null 2>&1; then \
+        echo "==> Postgres-backed tests: ON (dev database)"; \
+        DATABASE_URL=postgres://mica:mica@127.0.0.1:5432/mica cargo test --workspace; \
+    else \
+        echo "==> WARNING: dev Postgres is down, so the Postgres-backed tests will SKIP"; \
+        echo "    (a skipped test still reports as passed). Run 'just dev' to include them."; \
+        cargo test --workspace; \
+    fi
     # `store` is a non-default feature and features do not apply across a
     # multi-package `-p` list, so `--workspace` never compiles mica-core's
     # gated SQLite migration tests. Mirror ci.yml's separate step (the 24

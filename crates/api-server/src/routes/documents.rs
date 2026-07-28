@@ -4121,6 +4121,20 @@ mod tests {
         .execute(db)
         .await
         .unwrap();
+      // The owner is a MEMBER — `create_workspace` writes this row, and every
+      // "what does this user have" query joins through it. A seed that skipped
+      // it produced workspaces nobody belonged to: two tests that counted
+      // through workspace_members got 0 and only failed in CI, because a local
+      // run without DATABASE_URL never executed them at all.
+      sqlx::query(
+        "INSERT INTO workspace_members(workspace_id,user_id,role,position)          VALUES($1,$2,'owner',$3)",
+      )
+      .bind(ws)
+      .bind(user)
+      .bind(crate::routes::workspaces::pad_position(1))
+      .execute(db)
+      .await
+      .unwrap();
       (ws, user)
     }
 
@@ -4625,11 +4639,12 @@ mod tests {
         .await
         .unwrap();
       sqlx::query(
-        "INSERT INTO views(id, workspace_id, parent_view_id, object_id, object_type,          name, position) VALUES($1,$2,NULL,$3,'folder','一个文件夹','a0')",
+        "INSERT INTO views(id, workspace_id, parent_view_id, object_id, object_type,          name, position, created_by) VALUES($1,$2,NULL,$3,'folder','一个文件夹','a0',$4)",
       )
       .bind(Uuid::new_v4())
       .bind(ws)
       .bind(Uuid::new_v4())
+      .bind(user)
       .execute(&db)
       .await
       .unwrap();

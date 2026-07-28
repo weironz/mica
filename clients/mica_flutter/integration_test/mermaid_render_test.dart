@@ -12,6 +12,7 @@ import 'dart:ui' as ui;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:mica_flutter/editor/mermaid_preview.dart';
+import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 /// Fraction of pixels that carry ink (non-transparent). A blank/failed render
 /// is fully transparent, so any healthy diagram clears this easily; this is the
@@ -28,6 +29,14 @@ Future<double> _inkFraction(ui.Image img) async {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  // The app boots the bridge in LocalOffline.open(); a test drives the FFI
+  // directly, so it has to do it itself — every other integration_test file
+  // does. Without this, renderMermaidSvg throws "flutter_rust_bridge has not
+  // been initialized", renderMermaid swallows it (`catch (_) => null`), and the
+  // suite reports "rendered blank" — which reads like a broken renderer and is
+  // why this file failed all 68 CI runs since it was added.
+  setUpAll(() async => RustLib.init());
+  tearDownAll(() async => RustLib.dispose());
 
   test('mermaid is available on this (non-web) platform', () {
     expect(mermaidAvailable, isTrue);
@@ -36,12 +45,16 @@ void main() {
   // One representative diagram per major mermaid family, in valid (newline)
   // syntax — each must render to a non-empty, inked raster.
   const cases = <String, String>{
-    'flowchart': 'graph TD\n  A[Start] --> B{Choice}\n  B -->|yes| C[OK]\n  B -->|no| D[Stop]',
+    'flowchart':
+        'graph TD\n  A[Start] --> B{Choice}\n  B -->|yes| C[OK]\n  B -->|no| D[Stop]',
     'sequence': 'sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi',
-    'class': 'classDiagram\n  Animal <|-- Dog\n  Animal : +int age\n  Dog : +bark()',
-    'state': 'stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running\n  Running --> [*]',
+    'class':
+        'classDiagram\n  Animal <|-- Dog\n  Animal : +int age\n  Dog : +bark()',
+    'state':
+        'stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running\n  Running --> [*]',
     'pie': 'pie title Pets\n  "Dogs" : 386\n  "Cats" : 85',
-    'gantt': 'gantt\n  title Plan\n  section A\n  Task1 : a1, 2026-01-01, 7d\n  Task2 : after a1, 5d',
+    'gantt':
+        'gantt\n  title Plan\n  section A\n  Task1 : a1, 2026-01-01, 7d\n  Task2 : after a1, 5d',
   };
 
   const targetWidth = 800.0;
@@ -58,8 +71,11 @@ void main() {
       expect(image!.width, greaterThan(0));
       expect(image!.height, greaterThan(0));
       expect(image!.width, lessThanOrEqualTo((targetWidth * 8).round()));
-      expect(ink, greaterThan(0.003),
-          reason: '$name rendered blank (ink=$ink) — theme/CSS likely lost');
+      expect(
+        ink,
+        greaterThan(0.003),
+        reason: '$name rendered blank (ink=$ink) — theme/CSS likely lost',
+      );
       image!.dispose();
     });
   });
