@@ -40,6 +40,9 @@ class DocumentSyncClient {
   void connect() {
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
+    // See cloud_sync_session.connect: the connect failure lands on `ready` too,
+    // and an unobserved future error becomes an uncaught zone error.
+    unawaited(channel.ready.catchError((_) {}));
     _subscription = channel.stream.listen(
       _onMessage,
       onError: (_) {},

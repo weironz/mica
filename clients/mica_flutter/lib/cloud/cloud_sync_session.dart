@@ -155,21 +155,25 @@ class CloudSyncSession {
   /// outbox (which couldn't tell a specific diff apart from its ack).
   final List<_Pending> _unacked = [];
   int _pushSeq = 0;
+
   /// Append-log path (`persistence != null`): the highest outbox `clock` pushed
   /// on the current WS connection, so a live re-flush skips still-in-flight diffs
   /// (the append-log has no per-entry `sent` flag). Reset on each (re)connect.
   int _sentThroughClock = 0;
+
   /// Append-log path: outbox clocks acked out of contiguous order (a lower clock
   /// errored / isn't acked yet). `pushed_clock` advances only through the
   /// contiguous acked prefix, so an un-acked lower clock is never skipped
   /// (skipping it drops it from `outboxAfter` = silent server-side loss).
   final Set<int> _ackedAhead = {};
+
   /// Consecutive push rejections without contiguous progress — bounds the
   /// re-push retry so a permanent rejection (e.g. permission) can't spin.
   /// NOTE: kept > 3 so the UI's fault-banner threshold (main.dart, count > 3)
   /// still surfaces `push_rejected`; lowering it silently hides the banner.
   int _pushRejects = 0;
   static const int _maxPushRejects = 5;
+
   /// Set once the retry budget is exhausted (a push is permanently rejected):
   /// stop actively pushing so we don't grow `_ackedAhead` / re-flood the server
   /// with a poison edit that can never ack. Edits still append durably to the
@@ -254,6 +258,14 @@ class CloudSyncSession {
     _seedFromLocalOnce();
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
+    // Being unable to reach the server is a STATE, not a crash. The stream
+    // listener below already turns it into one (onDone → offline badge →
+    // backoff reconnect), but the failure also completes `ready`, and an
+    // unobserved future error is an uncaught zone error: every offline moment
+    // wrote a WebSocketChannelException into crash.log, which is where real
+    // faults are supposed to stand out. Observed and dropped here — the
+    // handling lives in _onDone.
+    unawaited(channel.ready.catchError((_) {}));
     _sub = channel.stream.listen(
       _onMessage,
       onError: (_) {},
@@ -675,8 +687,9 @@ class CloudSyncSession {
       // skip what we already sent (> _sentThroughClock). Idempotent regardless —
       // the server folds duplicate updates.
       final pushed = persistence!.cursor().pushedClock;
-      final floor =
-          resendAll || pushed > _sentThroughClock ? pushed : _sentThroughClock;
+      final floor = resendAll || pushed > _sentThroughClock
+          ? pushed
+          : _sentThroughClock;
       for (final e in persistence!.outboxAfter(floor)) {
         _sendPushRaw(e.clock.toString(), e.bytes);
         if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;
@@ -868,6 +881,7 @@ class CloudSyncSession {
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;
-    persistence?.dispose(); // release per-session store resources (locks/handles)
+    persistence
+        ?.dispose(); // release per-session store resources (locks/handles)
   }
 }

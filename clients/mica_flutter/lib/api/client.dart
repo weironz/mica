@@ -1,4 +1,5 @@
 // HTTP client for the Mica REST API. Extracted from main.dart (2026-07).
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -547,6 +548,9 @@ class ApiClient {
       queryParameters: {'token': token},
     );
     final channel = WebSocketChannel.connect(uri);
+    // The caller sees the failure through the stream below; `ready` carries the
+    // same error and would otherwise go unobserved (uncaught zone error).
+    unawaited(channel.ready.catchError((_) {}));
     try {
       channel.sink.add(jsonEncode({'prompt': prompt, 'system': ?system}));
       await for (final raw in channel.stream) {
