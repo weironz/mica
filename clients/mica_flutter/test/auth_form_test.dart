@@ -22,6 +22,7 @@ void main() {
     Future<void> Function(String email)? onForgot,
     String? actionLabelOverride,
     String? note,
+    String? errorText,
     bool isBusy = false,
   }) async {
     final submitted = <(AuthMode, AuthFormValue)>[];
@@ -34,6 +35,7 @@ void main() {
             strings: strings,
             isBusy: isBusy,
             note: note,
+            errorText: errorText,
             actionLabelOverride: actionLabelOverride,
             onForgotPassword: onForgot,
             onSubmit: (m, f) async => submitted.add((m, f)),
@@ -112,6 +114,43 @@ void main() {
     await pump(tester, actionLabelOverride: '迁移', note: '把「笔记」搬到云端');
     expect(find.widgetWithText(FilledButton, '迁移'), findsOneWidget);
     expect(find.text('把「笔记」搬到云端'), findsOneWidget);
+  });
+
+  testWidgets('Enter submits from the EMAIL field, not just the password', (
+    tester,
+  ) async {
+    // The email box has focus when the screen opens, so this is the field people
+    // actually press Enter in. It used to do nothing there.
+    final submitted = await pump(tester);
+    await tester.enterText(find.byType(TextField).first, 'a@b.dev');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(submitted, hasLength(1));
+  });
+
+  testWidgets('Enter submits from the password field too', (tester) async {
+    final submitted = await pump(tester);
+    await tester.enterText(find.byType(TextField).first, 'a@b.dev');
+    await tester.enterText(find.byType(TextField).last, 'secret123');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(submitted, hasLength(1));
+    expect(submitted.single.$2.password, 'secret123');
+  });
+
+  testWidgets('a failed attempt is shown BY THE FORM, not left invisible', (
+    tester,
+  ) async {
+    // The app parks failures in a shell-level banner, and the sign-in screen is
+    // not the shell: a wrong password used to produce no visible reaction at all.
+    await pump(tester, errorText: '邮箱或密码不正确');
+    expect(find.text('邮箱或密码不正确'), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+  });
+
+  testWidgets('no error means no empty red row', (tester) async {
+    await pump(tester);
+    expect(find.byIcon(Icons.error_outline), findsNothing);
   });
 
   testWidgets('busy disables submit instead of queueing a second sign-in', (

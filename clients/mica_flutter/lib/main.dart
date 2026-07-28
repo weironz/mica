@@ -1327,9 +1327,26 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _authenticate(AuthMode mode, AuthFormValue form) {
     return _run(() async {
-      final session = mode == AuthMode.register
-          ? await _api.register(form)
-          : await _api.login(form);
+      final AuthSession session;
+      try {
+        session = mode == AuthMode.register
+            ? await _api.register(form)
+            : await _api.login(form);
+      } on ApiException catch (error) {
+        // Translate the two failures a person can actually act on. Done HERE and
+        // not in `_apiMessage`, because these codes mean different things
+        // elsewhere: a 401 with a live session is an expired token (handled in
+        // _run), and `conflict` covers stale writes too. Left alone, the form
+        // showed the server's bare English word — 「unauthorized」 in a Chinese UI,
+        // which is barely better than the nothing it used to show.
+        if (error.isUnauthorized) {
+          throw ApiException(context.l10n.loginBadCredentials);
+        }
+        if (error.statusCode == 409) {
+          throw ApiException(context.l10n.loginEmailTaken);
+        }
+        rethrow;
+      }
       final workspaces = await _api.listWorkspaces(session.accessToken);
 
       setState(() {
@@ -2032,6 +2049,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   authForm: AuthFormCard(
                     strings: _authFormStrings(context),
                     isBusy: _isBusy,
+                    errorText: _message,
                     onSubmit: _authenticate,
                     onForgotPassword: _forgotPassword,
                   ),
@@ -2039,6 +2057,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               : AuthFormCard(
                   strings: _authFormStrings(context),
                   isBusy: _isBusy,
+                  errorText: _message,
                   onSubmit: _authenticate,
                   onForgotPassword: _forgotPassword,
                 ),

@@ -51,6 +51,7 @@ class AuthFormCard extends StatefulWidget {
     this.onForgotPassword,
     this.actionLabelOverride,
     this.note,
+    this.errorText,
     this.isBusy = false,
     super.key,
   });
@@ -72,6 +73,15 @@ class AuthFormCard extends StatefulWidget {
 
   /// One explanatory line under the title (the migrate flow explains itself).
   final String? note;
+
+  /// Why the last attempt failed, shown under the button.
+  ///
+  /// It has to live HERE. The app parks failures in a shell-level banner, and the
+  /// sign-in screen is not the shell — so a wrong password set a message onto a
+  /// widget that was not on screen and the form just sat there, looking like the
+  /// click had not registered. Same class of bug as reporting "freed 3.2 MB" into
+  /// a settings tab the user was not looking at.
+  final String? errorText;
 
   final bool isBusy;
 
@@ -140,6 +150,12 @@ class _AuthFormCardState extends State<AuthFormCard> {
           controller: _email,
           enabled: !widget.isBusy,
           keyboardType: TextInputType.emailAddress,
+          // Enter submits from ANY field, the way a browser form does. It used to
+          // work only from the password box, so hitting it in the email box — the
+          // one that has focus when the screen opens — did nothing at all.
+          onSubmitted: widget.isBusy
+              ? null
+              : (_) => widget.onSubmit(_mode, _value),
           decoration: InputDecoration(
             labelText: s.email,
             prefixIcon: const Icon(Icons.alternate_email),
@@ -153,6 +169,9 @@ class _AuthFormCardState extends State<AuthFormCard> {
           TextField(
             controller: _displayName,
             enabled: !widget.isBusy,
+            onSubmitted: widget.isBusy
+                ? null
+                : (_) => widget.onSubmit(_mode, _value),
             decoration: InputDecoration(
               labelText: s.displayName,
               prefixIcon: const Icon(Icons.badge),
@@ -183,10 +202,35 @@ class _AuthFormCardState extends State<AuthFormCard> {
                 : () => widget.onSubmit(_mode, _value),
             icon: Icon(registering ? Icons.person_add : Icons.login),
             label: Text(
-              widget.actionLabelOverride ?? (registering ? s.register : s.login),
+              widget.actionLabelOverride ??
+                  (registering ? s.register : s.login),
             ),
           ),
         ),
+        if (widget.errorText case final error?) ...[
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 15,
+                color: Color(0xFFDC2626),
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  error,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    height: 1.5,
+                    color: Color(0xFFDC2626),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
         // Login tab only: someone registering cannot have forgotten a password
         // yet. A reset link is emailed; the reset itself is a web page.
         if (!registering && widget.onForgotPassword != null)

@@ -543,6 +543,8 @@
   "loginActionRegister": "Register",
   "loginEmailLabel": "Email",
   "loginPasswordLabel": "Password",
+  "loginBadCredentials": "That email and password do not match",
+  "loginEmailTaken": "That email is already registered — sign in instead",
   "loginForgotPassword": "Forgot password?",
   "loginForgotEnterEmail": "Enter your email above first.",
   "loginForgotSentTitle": "Check your email",

@@ -305,6 +305,8 @@
   "loginActionRegister": "注册",
   "loginEmailLabel": "邮箱",
   "loginPasswordLabel": "密码",
+  "loginBadCredentials": "邮箱或密码不正确",
+  "loginEmailTaken": "这个邮箱已经注册过了,直接登录即可",
   "loginForgotPassword": "忘记密码？",
   "loginForgotEnterEmail": "请先在上方填写邮箱。",
   "loginForgotSentTitle": "请查收邮件",
