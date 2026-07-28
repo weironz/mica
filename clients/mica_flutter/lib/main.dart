@@ -26,6 +26,7 @@ import 'editor/pick_file.dart';
 import 'editor/property_panel.dart';
 import 'widgets/mica_logo.dart';
 import 'editor/pick_image.dart';
+import 'ui/auth_form.dart';
 import 'ui/autoscroll.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
@@ -40,6 +41,7 @@ import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
 import 'ui/sign_in_hero.dart';
+import 'ui/sign_in_screen.dart';
 import 'ui/status_kit.dart';
 import 'ui/trash_data.dart';
 import 'ui/user_avatar.dart';
@@ -1884,6 +1886,72 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Design 01's brand half, with copy checked against what the product does.
+  SignInHero _signInHero(BuildContext context, {required bool offlineIsReal}) =>
+      SignInHero(
+        strings: SignInHeroStrings(
+          tagline: context.l10n.signInTagline,
+          pitch: context.l10n.signInPitch,
+          features: [
+            // On web the offline line carries a 「桌面端」 qualifier, because the
+            // platform reading it cannot do that. On desktop it can, so the
+            // qualifier would be pointless there — same claim, told truthfully
+            // on each platform.
+            offlineIsReal
+                ? context.l10n.signInFeatureOfflineHere
+                : context.l10n.signInFeatureOffline,
+            context.l10n.signInFeatureCollab,
+            context.l10n.signInFeatureEditor,
+          ],
+          badge: context.l10n.signInBadge(kAppVersion),
+        ),
+      );
+
+  AuthFormStrings _authFormStrings(BuildContext context, {String? title}) =>
+      AuthFormStrings(
+        title: title ?? context.l10n.signInTitle,
+        login: context.l10n.loginActionLogin,
+        register: context.l10n.loginActionRegister,
+        email: context.l10n.loginEmailLabel,
+        displayName: context.l10n.accountDisplayName,
+        password: context.l10n.loginPasswordLabel,
+        forgotPassword: context.l10n.loginForgotPassword,
+      );
+
+  /// The forgot-password flow, shared by both platforms' forms. The form hands up
+  /// whatever is typed; the copy for "nothing typed" belongs here.
+  Future<void> _forgotPassword(String email) async {
+    final l10n = context.l10n;
+    final messenger = ScaffoldMessenger.of(context);
+    if (email.isEmpty) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.loginForgotEnterEmail)),
+      );
+      return;
+    }
+    try {
+      await _api.requestPasswordReset(email);
+    } catch (_) {
+      // The endpoint answers 204 whether or not the address is registered, so
+      // there is nothing to distinguish; a network failure still shouldn't claim
+      // the mail went out.
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.loginForgotSentTitle),
+        content: Text(l10n.loginForgotSentBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(l10n.commonOk),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Pick a picture and make it this account's avatar.
   ///
   /// Returns the avatar URL that is true AFTERWARDS — including when the picker
@@ -3473,90 +3541,42 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }) {
     final migrate = migrateWorkspace != null;
     final l10n = context.l10n;
-    var mode = AuthMode.login;
-    return showDialog<(AuthMode, AuthFormValue)?>(
-      context: context,
-      // The controllers belong to the ROUTE, not to this function: see
-      // dialog_controllers.dart for the crash that taught us the difference.
-      builder: (ctx) => DialogTextControllers(
-        count: 3,
-        builder: (ctx, fields) => StatefulBuilder(
-          builder: (ctx, setLocal) => AlertDialog(
-            title: Text(
-              migrate
-                  ? l10n.worldMigrateSignInTitle
-                  : l10n.worldCloudSignInTitle,
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    migrate
-                        ? l10n.worldMigrateSignInDesc(migrateWorkspace)
-                        : l10n.worldCloudSignInDesc,
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 12),
-                  SegmentedButton<AuthMode>(
-                    segments: [
-                      ButtonSegment(
-                        value: AuthMode.login,
-                        label: Text(l10n.loginActionLogin),
-                      ),
-                      ButtonSegment(
-                        value: AuthMode.register,
-                        label: Text(l10n.loginActionRegister),
-                      ),
-                    ],
-                    selected: {mode},
-                    onSelectionChanged: (s) => setLocal(() => mode = s.first),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: fields[0],
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
-                      labelText: l10n.loginEmailLabel,
-                    ),
-                  ),
-                  if (mode == AuthMode.register)
-                    TextField(
-                      controller: fields[1],
-                      decoration: InputDecoration(
-                        labelText: l10n.accountDisplayName,
-                      ),
-                    ),
-                  TextField(
-                    controller: fields[2],
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      labelText: l10n.loginPasswordLabel,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(null),
-                child: Text(l10n.commonCancel),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop((
-                  mode,
-                  AuthFormValue(
-                    email: fields[0].text.trim(),
-                    displayName: fields[1].text.trim(),
-                    password: fields[2].text,
-                  ),
-                )),
-                child: Text(
-                  migrate ? l10n.worldMigrateAction : l10n.loginActionLogin,
+    // A full-window route, not an AlertDialog. Desktop used to collect these
+    // credentials in a small modal while web showed design 01's split screen —
+    // the same product looked like two. Now both build SignInScreen with the
+    // same hero and the same form; only the copy and the escape hatch differ.
+    return Navigator.of(context).push<(AuthMode, AuthFormValue)>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (routeContext) => Scaffold(
+          body: SafeArea(
+            child: SignInScreen(
+              // Desktop CAN write offline, so the feature line drops web's
+              // 「桌面端」 qualifier.
+              hero: _signInHero(context, offlineIsReal: true),
+              // Closeable, unlike web: 本地模式 is a complete way to use the app,
+              // so a sign-in screen you cannot leave would be a trap.
+              onClose: () => Navigator.of(routeContext).pop(),
+              form: AuthFormCard(
+                strings: _authFormStrings(
+                  context,
+                  // Non-migrate uses the shared default (signInTitle), so
+                  // desktop and web say the same thing.
+                  title: migrate ? l10n.worldMigrateSignInTitle : null,
                 ),
+                note: migrate
+                    ? l10n.worldMigrateSignInDesc(migrateWorkspace)
+                    : null,
+                actionLabelOverride: migrate ? l10n.worldMigrateAction : null,
+                isBusy: _isBusy,
+                // Hand the credentials back to the caller — plain sign-in and
+                // sign-in-then-migrate both continue from there, exactly as they
+                // did when this was a dialog.
+                onSubmit: (mode, form) async =>
+                    Navigator.of(routeContext).pop((mode, form)),
+                onForgotPassword: _forgotPassword,
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -5154,43 +5174,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (!_local.available && session == null) {
       return Scaffold(
         body: SafeArea(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                width: 360,
-                child: SidePanel(
-                  session: session,
-                  isBusy: _isBusy,
-                  onAuthenticate: _authenticate,
-                  onForgotPassword: (email) => _api.requestPasswordReset(email),
-                  onCreateWorkspace: _createWorkspace,
-                ),
-              ),
-              const VerticalDivider(width: 1),
-              Expanded(
-                // Design 01's brand half. It replaces an EmptyState that said
-                // only 「登录后即可打开你的工作区」 — true, and it told a
-                // first-time visitor nothing about what they were signing in to.
-                child: SignInHero(
-                  strings: SignInHeroStrings(
-                    tagline: context.l10n.signInTagline,
-                    pitch: context.l10n.signInPitch,
-                    features: [
-                      // The offline line is qualified with 「桌面端」 on purpose:
-                      // this screen only ever renders on web (see the guard
-                      // above — `_local.available` is false there), so an
-                      // unqualified "works offline" would promise the one thing
-                      // that cannot be true where it is being read.
-                      context.l10n.signInFeatureOffline,
-                      context.l10n.signInFeatureCollab,
-                      context.l10n.signInFeatureEditor,
-                    ],
-                    badge: context.l10n.signInBadge(kAppVersion),
-                  ),
-                ),
-              ),
-            ],
+          // Same screen the desktop sign-in route builds — one composition, so
+          // the two platforms cannot drift apart again. No onClose: on web there
+          // is nothing behind this screen to go back to.
+          child: SignInScreen(
+            hero: _signInHero(context, offlineIsReal: false),
+            form: AuthFormCard(
+              strings: _authFormStrings(context),
+              isBusy: _isBusy,
+              onSubmit: _authenticate,
+              onForgotPassword: _forgotPassword,
+            ),
           ),
         ),
       );
@@ -5203,6 +5197,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return Scaffold(body: SafeArea(child: _unifiedWorkspaceView(session)));
   }
 }
+
+/// The currently-mounted editor's debounce flush, registered by the active
+/// [WorkspaceView] (via its command hook) so the app-exit path
+/// ([_WorkspaceShellState._flushForExit]) can drain the last <=400ms of typing
+/// before quitting. Null when no editor is on screen (settings, empty state).
+Future<void> Function()? _activeEditorFlush;
 
 /// The rename dialog, as a widget that OWNS its controller.
 ///
@@ -5271,250 +5271,6 @@ class _RenameDialogState extends State<_RenameDialog> {
     );
   }
 }
-
-class SidePanel extends StatefulWidget {
-  const SidePanel({
-    required this.session,
-    required this.isBusy,
-    required this.onAuthenticate,
-    required this.onForgotPassword,
-    required this.onCreateWorkspace,
-    super.key,
-  });
-
-  final AuthSession? session;
-  final bool isBusy;
-  final Future<void> Function(AuthMode mode, AuthFormValue form) onAuthenticate;
-
-  /// Ask the server to email a reset link for [email]. The reset itself happens
-  /// on the emailed web page, never in the app.
-  final Future<void> Function(String email) onForgotPassword;
-  final Future<void> Function(String name) onCreateWorkspace;
-
-  @override
-  State<SidePanel> createState() => _SidePanelState();
-}
-
-class _SidePanelState extends State<SidePanel> {
-  AuthMode _mode = AuthMode.login;
-  final _email = TextEditingController();
-  final _displayName = TextEditingController();
-  final _password = TextEditingController();
-  final _workspaceName = TextEditingController();
-
-  @override
-  void dispose() {
-    _email.dispose();
-    _displayName.dispose();
-    _password.dispose();
-    _workspaceName.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final session = widget.session;
-
-    return ColoredBox(
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: session == null ? _authForm(context) : _workspaceForm(context),
-      ),
-    );
-  }
-
-  Widget _authForm(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          context.l10n.settingsAccount,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 16),
-        SegmentedButton<AuthMode>(
-          segments: [
-            ButtonSegment(
-              value: AuthMode.login,
-              icon: const Icon(Icons.login),
-              label: Text(context.l10n.loginActionLogin),
-            ),
-            ButtonSegment(
-              value: AuthMode.register,
-              icon: const Icon(Icons.person_add),
-              label: Text(context.l10n.loginActionRegister),
-            ),
-          ],
-          selected: {_mode},
-          onSelectionChanged: widget.isBusy
-              ? null
-              : (selection) {
-                  setState(() {
-                    _mode = selection.single;
-                  });
-                },
-        ),
-        const SizedBox(height: 18),
-        TextField(
-          controller: _email,
-          enabled: !widget.isBusy,
-          keyboardType: TextInputType.emailAddress,
-          decoration: InputDecoration(
-            labelText: context.l10n.loginEmailLabel,
-            prefixIcon: const Icon(Icons.alternate_email),
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_mode == AuthMode.register) ...[
-          TextField(
-            controller: _displayName,
-            enabled: !widget.isBusy,
-            decoration: InputDecoration(
-              labelText: context.l10n.accountDisplayName,
-              prefixIcon: const Icon(Icons.badge),
-              border: const OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
-        TextField(
-          controller: _password,
-          enabled: !widget.isBusy,
-          obscureText: true,
-          decoration: InputDecoration(
-            labelText: context.l10n.loginPasswordLabel,
-            prefixIcon: const Icon(Icons.lock),
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        FilledButton.icon(
-          onPressed: widget.isBusy ? null : _submitAuth,
-          icon: Icon(
-            _mode == AuthMode.register ? Icons.person_add : Icons.login,
-          ),
-          label: Text(
-            _mode == AuthMode.register
-                ? context.l10n.loginActionRegister
-                : context.l10n.loginActionLogin,
-          ),
-        ),
-        // Only on the login tab: registering can't have forgotten a password
-        // yet. A reset link is emailed; the reset itself is a web page.
-        if (_mode == AuthMode.login)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: widget.isBusy ? null : _forgotPassword,
-              child: Text(context.l10n.loginForgotPassword),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Future<void> _forgotPassword() async {
-    final l10n = context.l10n;
-    final email = _email.text.trim();
-    if (email.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(l10n.loginForgotEnterEmail)));
-      return;
-    }
-    try {
-      await widget.onForgotPassword(email);
-      if (!mounted) return;
-      // Deliberately generic — the server won't say whether the address is
-      // registered, and neither do we.
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(l10n.loginForgotSentTitle),
-          content: Text(l10n.loginForgotSentBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(l10n.commonOk),
-            ),
-          ],
-        ),
-      );
-    } on ApiException catch (error) {
-      // A malformed address (400) is worth surfacing; anything else falls back
-      // to the same neutral confirmation.
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(l10n.loginForgotSentBody)));
-    }
-  }
-
-  Widget _workspaceForm(BuildContext context) {
-    final session = widget.session!;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          context.l10n.workspaceTitle,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 4),
-        Text(
-          session.user.email,
-          style: Theme.of(context).textTheme.bodySmall,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 20),
-        TextField(
-          controller: _workspaceName,
-          enabled: !widget.isBusy,
-          decoration: InputDecoration(
-            labelText: context.l10n.workspaceNameLabel,
-            prefixIcon: const Icon(Icons.workspaces),
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.icon(
-          onPressed: widget.isBusy ? null : _submitWorkspace,
-          icon: const Icon(Icons.add),
-          label: Text(context.l10n.workspaceCreate),
-        ),
-      ],
-    );
-  }
-
-  void _submitAuth() {
-    widget.onAuthenticate(
-      _mode,
-      AuthFormValue(
-        email: _email.text,
-        displayName: _displayName.text,
-        password: _password.text,
-      ),
-    );
-  }
-
-  void _submitWorkspace() {
-    widget.onCreateWorkspace(_workspaceName.text);
-    _workspaceName.clear();
-  }
-}
-
-/// The currently-mounted editor's debounce flush, registered by the active
-/// [WorkspaceView] (via its command hook) so the app-exit path
-/// ([_WorkspaceShellState._flushForExit]) can drain the last <=400ms of typing
-/// before quitting. Null when no editor is on screen (settings, empty state).
-Future<void> Function()? _activeEditorFlush;
 
 /// Reverse-reference panel under a cloud page: the pages that link TO it.
 ///

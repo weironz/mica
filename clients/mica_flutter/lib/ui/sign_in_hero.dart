@@ -9,7 +9,6 @@
 
 import 'package:flutter/material.dart';
 
-import '../editor/render.dart' show EditorTheme;
 import '../widgets/mica_logo.dart';
 
 /// Copy for [SignInHero]. Every string is the caller's, so wording stays in the
@@ -41,6 +40,12 @@ class SignInHeroStrings {
 ///
 /// Replaces an `EmptyState` that said only 「登录后即可打开你的工作区」 — true, but
 /// it told a first-time visitor nothing about what they were signing in to.
+///
+/// Dark on purpose: it is the one surface in the app that is pure brand, and the
+/// contrast against the white form beside it is what makes the pair read as one
+/// composed screen rather than two panes that happen to be adjacent. (It shipped
+/// near-white AND on the wrong side — this file said "left half" while the
+/// wiring put it on the right.)
 class SignInHero extends StatelessWidget {
   const SignInHero({required this.strings, super.key});
 
@@ -49,7 +54,15 @@ class SignInHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFF8FAFC),
+      decoration: const BoxDecoration(
+        // A glow behind the mark, not a flat fill: the flat version read as
+        // "unstyled dark" rather than deliberate.
+        gradient: RadialGradient(
+          center: Alignment(-0.6, -0.8),
+          radius: 1.5,
+          colors: [Color(0xFF1E293B), Color(0xFF0B1220)],
+        ),
+      ),
       alignment: Alignment.center,
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 40),
@@ -68,7 +81,7 @@ class SignInHero extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.w700,
-                      color: EditorTheme.text,
+                      color: Colors.white,
                     ),
                   ),
                 ],
@@ -80,7 +93,7 @@ class SignInHero extends StatelessWidget {
                   fontSize: 34,
                   height: 1.3,
                   fontWeight: FontWeight.w700,
-                  color: EditorTheme.text,
+                  color: Colors.white,
                 ),
               ),
               const SizedBox(height: 14),
@@ -89,7 +102,7 @@ class SignInHero extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 14,
                   height: 1.75,
-                  color: EditorTheme.muted,
+                  color: Color(0xFF94A3B8),
                 ),
               ),
               const SizedBox(height: 26),
@@ -103,14 +116,15 @@ class SignInHero extends StatelessWidget {
                         width: 22,
                         height: 22,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFEFF6FF),
-                          borderRadius: BorderRadius.circular(6),
+                          // Circular, matching the design's chips.
+                          color: const Color(0xFF2563EB).withValues(alpha: 0.22),
+                          shape: BoxShape.circle,
                         ),
                         alignment: Alignment.center,
                         child: const Icon(
                           Icons.check,
                           size: 13,
-                          color: EditorTheme.caret,
+                          color: Color(0xFF93C5FD),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -120,7 +134,7 @@ class SignInHero extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 13,
                             height: 1.6,
-                            color: EditorTheme.text,
+                            color: Color(0xFFE2E8F0),
                           ),
                         ),
                       ),
@@ -133,7 +147,7 @@ class SignInHero extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 11,
                   letterSpacing: 0.8,
-                  color: EditorTheme.faint,
+                  color: Color(0xFF64748B),
                 ),
               ),
             ],
