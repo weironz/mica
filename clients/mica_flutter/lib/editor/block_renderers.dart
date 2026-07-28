@@ -316,7 +316,10 @@ class ImageRenderer extends AtomicBlockRenderer {
       return;
     }
     // Placeholder: rounded fill + centered icon (broken on error, else image).
-    canvas.drawRRect(rr, Paint()..color = EditorTheme.codeBg);
+    canvas.drawRRect(
+      rr,
+      Paint()..color = host._appearance.tokens.editor.codeBg,
+    );
     final isError = key != null && host._imageErrors.contains(key);
     final icon = isError ? Icons.broken_image_outlined : Icons.image_outlined;
     final glyph = TextPainter(
@@ -326,7 +329,7 @@ class ImageRenderer extends AtomicBlockRenderer {
           fontFamily: icon.fontFamily,
           package: icon.fontPackage,
           fontSize: 28,
-          color: EditorTheme.faint,
+          color: host._appearance.tokens.text.faint,
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -343,7 +346,10 @@ class ImageRenderer extends AtomicBlockRenderer {
         : (TextPainter(
             text: TextSpan(
               text: l10nNoContext.imageBrokenCaption(caption),
-              style: TextStyle(fontSize: 11, color: EditorTheme.faint),
+              style: TextStyle(
+                fontSize: 11,
+                color: host._appearance.tokens.text.faint,
+              ),
             ),
             textDirection: TextDirection.ltr,
             maxLines: 1,
@@ -717,11 +723,14 @@ class TableRenderer extends AtomicBlockRenderer {
       }
       if (band != null) {
         final box = band.shift(offset);
-        canvas.drawRect(box, Paint()..color = EditorTheme.selection);
+        canvas.drawRect(
+          box,
+          Paint()..color = host._appearance.tokens.editor.selection,
+        );
         canvas.drawRect(
           box,
           Paint()
-            ..color = EditorTheme.caret
+            ..color = host._appearance.tokens.editor.caret
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2,
         );
@@ -733,7 +742,7 @@ class TableRenderer extends AtomicBlockRenderer {
     // Affordances reveal per the cell/row/column the pointer is actually over,
     // not for the whole table at once (AppFlowy/AFFiNE-style).
     final th = host._hoverTable?.node == index ? host._hoverTable : null;
-    final plusColor = EditorTheme.muted;
+    final plusColor = host._appearance.tokens.text.muted;
 
     // Hovered column border: an accent line so the resize target is obvious.
     final hb = host._hoverColBorder;
@@ -833,8 +842,18 @@ class TableRenderer extends AtomicBlockRenderer {
       tp.dispose();
     }
 
-    cornerIcon(l.tableHandle, Icons.drag_indicator, EditorTheme.muted);
-    cornerIcon(l.tableDelete, Icons.delete_outline, const Color(0xFFDC2626));
+    cornerIcon(
+      l.tableHandle,
+      Icons.drag_indicator,
+      host._appearance.tokens.text.muted,
+    );
+    // The delete affordance is the one red on the canvas; it is a role, not a
+    // hex, because #DC2626 does not read on a dark page.
+    cornerIcon(
+      l.tableDelete,
+      Icons.delete_outline,
+      host._appearance.tokens.status.danger,
+    );
   }
 }
 
@@ -1033,7 +1052,7 @@ class DividerRenderer extends AtomicBlockRenderer {
       Offset(offset.dx + l.contentLeft, cy),
       Offset(offset.dx + host.size.width, cy),
       Paint()
-        ..color = EditorTheme.quoteBar
+        ..color = host._appearance.tokens.editor.quoteBar
         ..strokeWidth = 1.5,
     );
   }

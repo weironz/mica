@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/locale_controller.dart';
 import 'properties.dart';
 import 'render.dart' show EditorTheme;
+import '../ui/theme_tokens.dart';
 
 /// Page-properties panel — a lazy structured view over the document's YAML front
 /// matter (the SOLE authority). Renders each property with a type-appropriate
@@ -145,7 +146,7 @@ class _CollapseHeader extends StatelessWidget {
             Icon(
               collapsed ? Icons.chevron_right : Icons.expand_more,
               size: 16,
-              color: EditorTheme.faint,
+              color: MicaTheme.of(context).text.faint,
             ),
             const SizedBox(width: 2),
             if (collapsed)
@@ -154,13 +155,19 @@ class _CollapseHeader extends StatelessWidget {
                   _summary(props),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: EditorTheme.faint, fontSize: 12),
+                  style: TextStyle(
+                    color: MicaTheme.of(context).text.faint,
+                    fontSize: 12,
+                  ),
                 ),
               )
             else
               Text(
                 '${props.length}',
-                style: const TextStyle(color: EditorTheme.faint, fontSize: 12),
+                style: TextStyle(
+                  color: MicaTheme.of(context).text.faint,
+                  fontSize: 12,
+                ),
               ),
           ],
         ),
@@ -184,18 +191,17 @@ class _CollapseHeader extends StatelessWidget {
   }
 }
 
-String _numText(double n) =>
-    n == n.truncateToDouble() && n.abs() < 1e15
-        ? n.toInt().toString()
-        : n.toString();
+String _numText(double n) => n == n.truncateToDouble() && n.abs() < 1e15
+    ? n.toInt().toString()
+    : n.toString();
 
 IconData _typeIcon(PropertyValue v) => switch (v) {
-      PropText() => Icons.subject,
-      PropNumber() => Icons.tag,
-      PropCheckbox() => Icons.check_box_outlined,
-      PropDate() => Icons.calendar_today_outlined,
-      PropList() => Icons.sell_outlined,
-    };
+  PropText() => Icons.subject,
+  PropNumber() => Icons.tag,
+  PropCheckbox() => Icons.check_box_outlined,
+  PropDate() => Icons.calendar_today_outlined,
+  PropList() => Icons.sell_outlined,
+};
 
 /// One property: a small type icon + a narrow key label + a type-appropriate
 /// value editor. The remove × is revealed on hover (edit mode only) to keep the
@@ -238,7 +244,7 @@ class _PropertyRowState extends State<_PropertyRow> {
               child: Icon(
                 _typeIcon(widget.property.value),
                 size: 14,
-                color: EditorTheme.faint,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
             const SizedBox(width: 6),
@@ -248,8 +254,8 @@ class _PropertyRowState extends State<_PropertyRow> {
                 width: 84,
                 child: Text(
                   widget.property.key,
-                  style: const TextStyle(
-                    color: EditorTheme.muted,
+                  style: TextStyle(
+                    color: MicaTheme.of(context).text.muted,
                     fontSize: 13,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -270,15 +276,21 @@ class _PropertyRowState extends State<_PropertyRow> {
               width: 22,
               child: (widget.canEdit && _hover)
                   ? IconButton(
-                      icon: const Icon(Icons.close,
-                          size: 13, color: EditorTheme.faint),
+                      icon: Icon(
+                        Icons.close,
+                        size: 13,
+                        color: MicaTheme.of(context).text.faint,
+                      ),
                       splashRadius: 12,
                       visualDensity: VisualDensity.compact,
-                      constraints:
-                          const BoxConstraints(minWidth: 22, minHeight: 22),
+                      constraints: const BoxConstraints(
+                        minWidth: 22,
+                        minHeight: 22,
+                      ),
                       padding: EdgeInsets.zero,
-                      tooltip:
-                          MaterialLocalizations.of(context).deleteButtonTooltip,
+                      tooltip: MaterialLocalizations.of(
+                        context,
+                      ).deleteButtonTooltip,
                       onPressed: widget.onRemove,
                     )
                   : null,
@@ -318,8 +330,9 @@ class _ValueEditor extends StatelessWidget {
               value: value,
               visualDensity: VisualDensity.compact,
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              onChanged:
-                  canEdit ? (v) => onChanged(PropCheckbox(v ?? false)) : null,
+              onChanged: canEdit
+                  ? (v) => onChanged(PropCheckbox(v ?? false))
+                  : null,
             ),
           ),
         );
@@ -331,7 +344,11 @@ class _ValueEditor extends StatelessWidget {
           onOpenTag: onOpenTag,
         );
       case PropText(:final value):
-        return _ScalarField(text: value, canEdit: canEdit, onChanged: onChanged);
+        return _ScalarField(
+          text: value,
+          canEdit: canEdit,
+          onChanged: onChanged,
+        );
       case PropNumber(:final value):
         return _ScalarField(
           text: _numText(value),
@@ -339,7 +356,11 @@ class _ValueEditor extends StatelessWidget {
           onChanged: onChanged,
         );
       case PropDate(:final value):
-        return _ScalarField(text: value, canEdit: canEdit, onChanged: onChanged);
+        return _ScalarField(
+          text: value,
+          canEdit: canEdit,
+          onChanged: onChanged,
+        );
     }
   }
 }
@@ -363,7 +384,9 @@ class _ScalarField extends StatefulWidget {
 }
 
 class _ScalarFieldState extends State<_ScalarField> {
-  late final TextEditingController _c = TextEditingController(text: widget.text);
+  late final TextEditingController _c = TextEditingController(
+    text: widget.text,
+  );
   final FocusNode _focus = FocusNode();
 
   @override
@@ -401,14 +424,17 @@ class _ScalarFieldState extends State<_ScalarField> {
       controller: _c,
       focusNode: _focus,
       enabled: widget.canEdit,
-      style: const TextStyle(color: EditorTheme.text, fontSize: 13),
-      decoration: const InputDecoration(
+      style: TextStyle(color: MicaTheme.of(context).text.primary, fontSize: 13),
+      decoration: InputDecoration(
         isDense: true,
         isCollapsed: true,
         contentPadding: EdgeInsets.symmetric(vertical: 4),
         border: InputBorder.none,
         hintText: '—',
-        hintStyle: TextStyle(color: EditorTheme.faint, fontSize: 13),
+        hintStyle: TextStyle(
+          color: MicaTheme.of(context).text.faint,
+          fontSize: 13,
+        ),
       ),
       onSubmitted: (_) => _commit(),
     );
@@ -476,15 +502,20 @@ class _TagListState extends State<_TagList> {
               width: 84,
               child: TextField(
                 controller: _add,
-                style: const TextStyle(color: EditorTheme.text, fontSize: 13),
+                style: TextStyle(
+                  color: MicaTheme.of(context).text.primary,
+                  fontSize: 13,
+                ),
                 decoration: InputDecoration(
                   isDense: true,
                   isCollapsed: true,
                   contentPadding: const EdgeInsets.symmetric(vertical: 4),
                   border: InputBorder.none,
                   hintText: context.l10n.propertyTagAdd,
-                  hintStyle:
-                      const TextStyle(color: EditorTheme.faint, fontSize: 12),
+                  hintStyle: TextStyle(
+                    color: MicaTheme.of(context).text.faint,
+                    fontSize: 12,
+                  ),
                 ),
                 onSubmitted: _submitAdd,
               ),
@@ -514,29 +545,37 @@ class _Chip extends StatelessWidget {
         bottom: 2,
       ),
       decoration: BoxDecoration(
-        color: EditorTheme.codeBg,
+        color: MicaTheme.of(context).editor.codeBg,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           MouseRegion(
-            cursor:
-                onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
+            cursor: onTap == null
+                ? MouseCursor.defer
+                : SystemMouseCursors.click,
             child: GestureDetector(
               onTap: onTap,
               child: Text(
                 label,
-                style: const TextStyle(color: EditorTheme.text, fontSize: 12),
+                style: TextStyle(
+                  color: MicaTheme.of(context).text.primary,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
           if (onDeleted != null)
             GestureDetector(
               onTap: onDeleted,
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.only(left: 3),
-                child: Icon(Icons.close, size: 12, color: EditorTheme.faint),
+                child: Icon(
+                  Icons.close,
+                  size: 12,
+                  color: MicaTheme.of(context).text.faint,
+                ),
               ),
             ),
         ],
@@ -585,14 +624,20 @@ class _KeyFieldState extends State<_KeyField> {
         child: TextField(
           controller: _c,
           focusNode: _focus,
-          style: const TextStyle(color: EditorTheme.text, fontSize: 13),
+          style: TextStyle(
+            color: MicaTheme.of(context).text.primary,
+            fontSize: 13,
+          ),
           decoration: InputDecoration(
             isDense: true,
             isCollapsed: true,
             contentPadding: const EdgeInsets.symmetric(vertical: 5),
             border: InputBorder.none,
             hintText: context.l10n.propertyKeyHint,
-            hintStyle: const TextStyle(color: EditorTheme.faint, fontSize: 13),
+            hintStyle: TextStyle(
+              color: MicaTheme.of(context).text.faint,
+              fontSize: 13,
+            ),
           ),
           onSubmitted: widget.onSubmit,
         ),
@@ -618,11 +663,18 @@ class _AddPropertyButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.add, size: 15, color: EditorTheme.faint),
+              Icon(
+                Icons.add,
+                size: 15,
+                color: MicaTheme.of(context).text.faint,
+              ),
               const SizedBox(width: 4),
               Text(
                 context.l10n.propertyAdd,
-                style: const TextStyle(color: EditorTheme.faint, fontSize: 13),
+                style: TextStyle(
+                  color: MicaTheme.of(context).text.faint,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),

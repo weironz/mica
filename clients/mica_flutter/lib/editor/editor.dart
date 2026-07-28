@@ -27,6 +27,7 @@ import 'cell_edit_controller.dart';
 import 'table.dart';
 import 'word_count.dart';
 import '../l10n/locale_controller.dart';
+import '../ui/theme_tokens.dart';
 
 export 'controller.dart' show DocOp, ApplyOps;
 export 'markdown.dart' show markdownToBlocks, BlockSpec;
@@ -387,6 +388,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     requestRebuild: (fn) {
       if (mounted) setState(fn);
     },
+    tokens: widget.appearance.tokens,
   );
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
@@ -965,6 +967,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   @override
   void didUpdateWidget(covariant MicaEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // A preview is a bitmap, so the palette it was captured with is baked into
+    // it. The pipeline's setter is a no-op unless the palette actually changed.
+    _previews.tokens = widget.appearance.tokens;
     if (widget.version != oldWidget.version) {
       // A routine snapshot (our own save, a remote edit, presence) must NOT
       // disturb the editing session: keep focus, keep the caret, and keep the
@@ -3258,7 +3263,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         iconSize: 18,
         visualDensity: VisualDensity.compact,
         tooltip: tip,
-        icon: Icon(icon, color: EditorTheme.text),
+        icon: Icon(icon, color: MicaTheme.of(context).text.primary),
         onPressed: custom ?? () => _toggleMarkCtx(type),
       );
     }
@@ -3273,7 +3278,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         iconSize: 18,
         visualDensity: VisualDensity.compact,
         tooltip: tip,
-        icon: Icon(icon, color: EditorTheme.muted),
+        icon: Icon(icon, color: MicaTheme.of(context).text.muted),
         onPressed: () => _controller.setSelectedBlocksKind(kind, data: data),
       );
     }
@@ -3305,7 +3310,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           style: TextStyle(
             fontSize: 13,
             fontWeight: level == 1 ? FontWeight.w800 : FontWeight.w600,
-            color: active ? EditorTheme.text : EditorTheme.muted,
+            color: active
+                ? MicaTheme.of(context).text.primary
+                : MicaTheme.of(context).text.muted,
           ),
         ),
         onPressed: () => _controller.setSelectedBlocksKind(
@@ -3331,7 +3338,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               : null,
           icon: Icon(
             Icons.expand_more,
-            color: activeDeep ? EditorTheme.text : EditorTheme.muted,
+            color: activeDeep
+                ? MicaTheme.of(context).text.primary
+                : MicaTheme.of(context).text.muted,
           ),
           onPressed: () async {
             final box = btnContext.findRenderObject() as RenderBox?;
@@ -5043,7 +5052,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 // by design (the UUID is the capability) so copied images keep
                 // rendering elsewhere. Copying the link IS sharing the image.
                 : context.l10n.imageStoredPublic,
-            style: TextStyle(fontSize: 12, color: EditorTheme.muted),
+            style: TextStyle(
+              fontSize: 12,
+              color: MicaTheme.of(context).text.muted,
+            ),
           ),
         ),
         const PopupMenuDivider(height: 1),
@@ -6240,14 +6252,17 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                 widget.external
                     ? context.l10n.imageExternalWarning
                     : context.l10n.imageStoredPublic,
-                style: TextStyle(fontSize: 12, color: EditorTheme.muted),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: MicaTheme.of(context).text.muted,
+                ),
               ),
               const SizedBox(height: 6),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: EditorTheme.codeBg,
+                  color: MicaTheme.of(context).editor.codeBg,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: SelectableText(
@@ -6304,7 +6319,10 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                 widget.reHost
                     ? context.l10n.imageRehostOn
                     : context.l10n.imageRehostOff,
-                style: TextStyle(fontSize: 11, color: EditorTheme.faint),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: MicaTheme.of(context).text.faint,
+                ),
               ),
             ],
           ),

@@ -6,6 +6,7 @@ import 'package:flutter_math_fork/flutter_math.dart';
 
 import 'mermaid_preview.dart';
 import 'model.dart' show kMonoFont;
+import '../ui/theme_tokens.dart';
 import 'render.dart' show EditorTheme;
 
 /// A "source → picture" preview producer for one previewer id ('math',
@@ -25,7 +26,11 @@ abstract class RasterPreviewer {
   String get id;
 
   /// Offstage form: a widget to render off-screen and capture.
-  Widget? buildOffstage(String source) => null;
+  ///
+  /// [tokens] is the palette in effect. It has to be a parameter: what comes
+  /// back is a bitmap, so whatever ink colour is used here is baked in — there
+  /// is no later chance to recolour it the way a live widget would get.
+  Widget? buildOffstage(String source, MicaTokens tokens) => null;
 
   /// Direct form: an async image producer. [targetWidth] is the layout width
   /// the preview will be shown at (logical px) — producers rasterize to fill
@@ -40,9 +45,44 @@ class RasterPreviewPipeline {
   RasterPreviewPipeline({
     required this.previewers,
     required this.requestRebuild,
-  });
+    MicaTokens tokens = MicaTokens.light,
+  }) : _tokens = tokens;
 
   final List<RasterPreviewer> previewers;
+
+  MicaTokens _tokens;
+
+  /// The palette the cached rasters were produced with.
+  MicaTokens get tokens => _tokens;
+
+  /// Switching palettes throws every raster away.
+  ///
+  /// The cache is keyed by SOURCE alone, and a raster is pixels: a formula
+  /// captured with light ink stays in the map and gets painted onto a dark page,
+  /// where it is invisible. Keying by `(source, palette)` instead would keep both
+  /// copies of every formula alive for a switch nobody makes twice a minute — so
+  /// invalidate, and let them re-capture. Textures are disposed POST-frame
+  /// through the same path eviction uses, because the frame in flight may still
+  /// be painting them.
+  set tokens(MicaTokens value) {
+    if (_tokens == value) return;
+    _tokens = value;
+    for (final map in _cache.values) {
+      _evictedPendingDispose.addAll(map.values);
+      map.clear();
+    }
+    _baselines.clear();
+    // Pending captures were queued against the old palette; their offstage
+    // widgets are rebuilt from `_tokens`, so leaving them pending would publish
+    // a raster nobody asked for at this palette. Drop and let layout re-request.
+    _pending.clear();
+    _keys.clear();
+    _tries.clear();
+    // Not the negative cache: a formula that fails to render fails in both
+    // palettes, and re-trying every broken block on a theme switch is the loop
+    // `_failed` exists to prevent.
+    _disposeEvictedPostFrame();
+  }
 
   /// Host hook: apply [fn] inside setState when still mounted. The pipeline
   /// itself is plain state — the owning widget controls rebuild safety.
@@ -91,15 +131,21 @@ class RasterPreviewPipeline {
     while (failed != null && failed.length > 256) {
       failed.remove(failed.first);
     }
-    if (_evictedPendingDispose.isNotEmpty) {
-      final batch = List<ui.Image>.of(_evictedPendingDispose);
-      _evictedPendingDispose.clear();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        for (final img in batch) {
-          img.dispose();
-        }
-      });
-    }
+    _disposeEvictedPostFrame();
+  }
+
+  /// Hand the evicted textures to the next frame boundary to dispose. Shared by
+  /// the size cap and by a palette switch — both drop images that the frame
+  /// currently being painted may still be drawing.
+  void _disposeEvictedPostFrame() {
+    if (_evictedPendingDispose.isEmpty) return;
+    final batch = List<ui.Image>.of(_evictedPendingDispose);
+    _evictedPendingDispose.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final img in batch) {
+        img.dispose();
+      }
+    });
   }
 
   /// Dispose every cached preview texture. The owning editor State disposed
@@ -165,7 +211,7 @@ class RasterPreviewPipeline {
       return;
     }
 
-    if (previewer.buildOffstage(source) == null) return;
+    if (previewer.buildOffstage(source, _tokens) == null) return;
     pending.add(source);
     (_keys[id] ??= {})[source] = GlobalKey();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -196,7 +242,8 @@ class RasterPreviewPipeline {
                 onBaseline: (v) {
                   if (v != null) baselinesOf(p.id)[source] = v;
                 },
-                child: p.buildOffstage(source) ?? const SizedBox.shrink(),
+                child:
+                    p.buildOffstage(source, _tokens) ?? const SizedBox.shrink(),
               ),
             ),
     ],
@@ -273,18 +320,18 @@ class MathPreviewer extends RasterPreviewer {
   String get id => 'math';
 
   @override
-  Widget buildOffstage(String source) => Math.tex(
+  Widget buildOffstage(String source, MicaTokens tokens) => Math.tex(
     source,
-    textStyle: const TextStyle(
+    textStyle: TextStyle(
       fontSize: EditorTheme.mathRasterFontSize,
-      color: EditorTheme.text,
+      color: tokens.text.primary,
     ),
     onErrorFallback: (e) => Text(
       source,
-      style: const TextStyle(
+      style: TextStyle(
         fontFamily: kMonoFont,
         fontSize: 14,
-        color: Color(0xFFB91C1C),
+        color: tokens.status.danger,
       ),
     ),
   );
