@@ -41,11 +41,18 @@ use mica_infra::storage::S3Config;
 ///
 /// The clock starts at PURGE, not at delete: a page in the recycle bin still
 /// owns its `views` row, so its blobs stay referenced (see
-/// [referenced_file_ids]). That makes the effective margin "recycle-bin
-/// retention + this", and makes restore-from-trash safe by construction rather
-/// than by racing a timer. AFFiNE's equivalent misses exactly this: it walks the
-/// root doc with `include_trash = false`, so trashing a page frees its blobs and
-/// restoring it returns broken images.
+/// [referenced_file_ids]). Restore-from-trash is therefore safe by construction
+/// rather than by racing a timer.
+///
+/// Note what that does NOT say: there is no "recycle-bin retention" to add to
+/// this window. The bin never empties itself — only the user does, through
+/// restore / purge / empty-trash — so a trashed page's blobs are held for
+/// [0, until someone clears it), and this grace period starts counting only
+/// afterwards. Deliberate, see docs/roadmap.md「回收站不做自动清空」.
+///
+/// AFFiNE's equivalent misses the reachability half: it walks the root doc with
+/// `include_trash = false`, so trashing a page frees its blobs and restoring it
+/// returns broken images.
 const UNREFERENCED_GRACE: chrono::Duration = chrono::Duration::days(30);
 
 /// A blob must also be this old before it may be deleted, regardless of the

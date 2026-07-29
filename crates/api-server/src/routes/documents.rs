@@ -509,7 +509,34 @@ pub async fn create_document(
 
   tx.commit().await?;
 
+  bootstrap_bases_best_effort(&state.db, &[document.id], "create_document").await;
+
   Ok(Json(DocumentCreateResponse { document, view }))
+}
+
+/// Build the yrs base for documents that were just created from an op-model
+/// snapshot, so they are not left with only the legacy half.
+///
+/// Every write path other than these creates its base on first edit, through
+/// `ensure_base_tx`'s lazy bridge — which reads the op-model snapshot. That
+/// bridge is the thing op-model retirement removes, and a document whose only
+/// content lives in `document_snapshots` would then have nowhere to migrate
+/// from: its first edit 404s. Building the base at birth is what lets the old
+/// tables go.
+///
+/// Best-effort and post-commit, matching the import paths: the rows are already
+/// durable, and a document without a base still opens (it just takes the lazy
+/// path today, and its body is unsearchable until first open). Failing the
+/// request over this would trade a real user action for a background nicety.
+async fn bootstrap_bases_best_effort(db: &sqlx::PgPool, document_ids: &[Uuid], what: &str) {
+  for id in document_ids {
+    if let Err(error) = mica_app_core::sync::bootstrap_base(db, *id).await {
+      tracing::warn!(
+        document_id = %id, %error,
+        "{what}: eager yrs base build failed; falls back to lazy build on first open"
+      );
+    }
+  }
 }
 
 /// `POST /api/workspaces/{workspace_id}/folders`
@@ -3105,6 +3132,9 @@ pub async fn transfer_view(
     subtree.iter().map(|r| (r.id, Uuid::new_v4())).collect();
   let ordered = topo_order_subtree(&subtree);
 
+  // Filled as the subtree is rebuilt; each copied document gets its yrs base
+  // built after the commit (see bootstrap_bases_best_effort).
+  let mut created_document_ids: Vec<Uuid> = Vec::new();
   let mut tx = state.db.begin().await?;
   for row in &ordered {
     let new_view_id = view_map[&row.id];
@@ -3144,6 +3174,7 @@ pub async fn transfer_view(
       .fetch_one(&mut *tx)
       .await?;
       store::insert_root_snapshot(&mut tx, document.id, &payload).await?;
+      created_document_ids.push(document.id);
       sqlx::query(
         r#"
           INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
@@ -3198,6 +3229,8 @@ pub async fn transfer_view(
   }
 
   tx.commit().await?;
+
+  bootstrap_bases_best_effort(&state.db, &created_document_ids, "transfer_view").await;
 
   Ok(Json(TransferResponse {
     new_root_view_id: Some(view_map[&view_id]),
@@ -3332,6 +3365,9 @@ pub async fn clone_view(
     }));
   }
 
+  // Filled as the subtree is rebuilt; each copied document gets its yrs base
+  // built after the commit (see bootstrap_bases_best_effort).
+  let mut created_document_ids: Vec<Uuid> = Vec::new();
   // 5. One transaction: build the copied tree with fresh ids. file_map is empty
   //    (blobs shared), view_map remaps in-subtree links to the new ids.
   let view_map: std::collections::HashMap<Uuid, Uuid> =
@@ -3389,6 +3425,7 @@ pub async fn clone_view(
       .fetch_one(&mut *tx)
       .await?;
       store::insert_root_snapshot(&mut tx, document.id, &payload).await?;
+      created_document_ids.push(document.id);
       sqlx::query(
         r#"
           INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
@@ -3423,6 +3460,8 @@ pub async fn clone_view(
     }
   }
   tx.commit().await?;
+
+  bootstrap_bases_best_effort(&state.db, &created_document_ids, "clone_view").await;
 
   Ok(Json(CloneResponse {
     new_root_view_id: Some(view_map[&view_id]),
@@ -4501,6 +4540,52 @@ mod tests {
       let hits = search_views(&db, ws, "100%").await.unwrap();
       assert_eq!(hits.len(), 1, "only the literal '100%' body, not '100 percent': {hits:?}");
       assert_eq!(hits[0].view_id, view_p);
+    }
+
+    /// S1 (op-model retirement): a document created through `create_document`
+    /// must have its yrs base built at birth, not lazily on first edit.
+    ///
+    /// Until now three paths — create / transfer / clone — wrote only the
+    /// op-model snapshot and relied on `ensure_base_tx`'s lazy bridge to build
+    /// the base out of it on the first write. That bridge is exactly what
+    /// retiring the op model removes; a document whose content lived only in
+    /// `document_snapshots` would then have nothing to migrate from and its
+    /// first edit would 404. This pins the invariant the retirement depends on:
+    /// **every new document owns a base immediately.**
+    #[tokio::test]
+    async fn a_created_document_owns_a_yrs_base_immediately() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      // Same shape create_document commits, then the same post-commit hook.
+      let document = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+          INSERT INTO documents (workspace_id, root_block_id, created_by)
+          VALUES ($1, 'root', $2)
+          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+        "#,
+      )
+      .bind(ws)
+      .bind(user)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+      let mut tx = db.begin().await.unwrap();
+      store::insert_initial_snapshot(&mut tx, &document).await.unwrap();
+      tx.commit().await.unwrap();
+
+      bootstrap_bases_best_effort(&db, &[document.id], "test").await;
+
+      let bases: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
+          .bind(document.id)
+          .fetch_one(&db)
+          .await
+          .unwrap();
+      assert_eq!(
+        bases, 1,
+        "a fresh document must not be left with only the op-model half"
+      );
     }
 
     /// FTS M1 tail: a document with only an op-model snapshot and NO yrs base yet

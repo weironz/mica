@@ -480,8 +480,11 @@ fn accepted_event(applied: &AppliedUpdate, ack_id: Option<&str>) -> Value {
     "server_seq": applied.update.seq,
     "actor_id": applied.update.actor_id,
     "ack_id": ack_id,
-    // `block_operations` for ordinary edits, `restore_snapshot` for a restore;
-    // clients that cannot apply the latter incrementally should rebootstrap.
+    // `block_operations` for every edit this server still writes. Historical
+    // rows may also carry `restore_snapshot`: the op-model restore that wrote it
+    // was deleted with the rest of the dead op-model history writers, so no new
+    // ones appear — real restores go through the yrs-native history routes.
+    // Clients that cannot apply a non-`block_operations` kind should rebootstrap.
     "kind": applied.update.update_kind,
     "payload": applied.update.payload,
   })

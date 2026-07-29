@@ -75,10 +75,23 @@
 - ~~**REST/MCP 写路径从不落自动版本快照**~~ ✅ `apply_derived_operations` 复用 push_update 的 auto 版本 INSERT(同事务、10min cadence、30 天;只写版本归档表、不碰双表示红线,6612330;连真 PG 测试)。
 - ~~**删除 workspace 永久泄漏其全部 S3/RustFS 图片对象**~~ ✅ `workspaces::delete` 删库前枚举 `DISTINCT object_key` 逐个删存储对象(best-effort、objects-first,6612330)。
 - ~~🆕 **`purge_view`「永久删除」只删 views 行**~~ ✅ 已做(927d7f7)—— `purge_view_subtree` 一条原子 CTE 删 views 子树 + 对 document 型视图删 `documents` 行,DB `ON DELETE CASCADE` 随之清空所有 document_* 表(yrs base/快照/版本/op/**分享 token**);blob 靠 blob_gc 惰性回收(去重共享,不急删)。DB 门控测试锁级联。(`documents.rs` `purge_view_subtree`)
-- 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」的前置**已解除**(P2-M4 主干已上线,见「可靠性与同步」——该条此前一直误记为未建):现在可动手,先删死写入器(`create_named_version`/`restore_snapshot`,version-history-plan 点名已久,S),再拍修剪/退役方案。退役前仍按「文档大小×写入次数」增长。(`store.rs:252`, `sync.rs:284`)(M) `[需后端]`
+- 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」的前置**已解除**(P2-M4 主干已上线)。退役分 6 步,**S0/S1 已完成(2026-07-29)**:
+  - ~~**S0 删死代码**~~ ✅ —— 删掉 7 个零调用者函数(文档只点名了 `create_named_version`/`restore_snapshot`,实际排查还有 `list_updates`/`list_versions`/`fetch_version`/`fetch_snapshot`/`fetch_snapshot_by_version_seq`)+ 随之成为孤儿的 `VersionRecord`,共 ~245 行。
+  - ~~**S1 补齐「只走 op 模型」的路径**~~ ✅ —— **这是退役真正的拦路虎**:`create_document`/`transfer_view`/`clone_view` 三条只写 op-model 快照、不建 yrs base,全靠 `ensure_base_tx` 的惰性桥在首次编辑时**从快照**现造 base。而那座桥正是退役要拆的东西 —— 直接停写快照,这些文档首次编辑就 404。现已在三处提交后补 `bootstrap_base`(best-effort,与 import 两条路径同款),新文档一出生就有 base。回归测试 `a_created_document_owns_a_yrs_base_immediately`(真 PG 门控)。
+  - **S2 存量体检 + 回填**(未做,需在生产上量):`SELECT count(*) FROM documents d WHERE NOT EXISTS (SELECT 1 FROM document_yrs_base b WHERE b.document_id=d.id)`,对差集批量 `bootstrap_base`。**带数据改动,先落还原点**。
+  - **S3 协议版本门**(未做)—— 见「可靠性与同步」。老客户端还有一条 REST 兜底会写 op 模型,闸门立好才敢停写。
+  - **S4 停写**(未做):`apply_derived_operations` 不再写两表、`current_payload` 去掉快照兜底。会挂一批用 `seed_document`(直插 `document_snapshots`)的测试夹具,需同批改造。
+  - **S5 删表**(未做,最危险):注意 `document_versions.snapshot_id` 是 `ON DELETE RESTRICT`,删表要先删它;加迁移后必须 `touch crates/infra/src/db.rs`。
+  退役完成前,两表仍按「文档大小×写入次数」增长。(M) `[需后端]`
 - 🆕 **无任何容量配额**(medium) —— 唯一限制是单文件 25MB + 导入 1GiB body;无 workspace 总量/单文档大小/用户级上限,WS 路径默认可收 64MiB 单条消息,大文档写放大(每 push 全量 base 覆写 + 每 10min 全量版本)。开放注册单节点最易被无意/恶意打爆盘。(`storage.rs:50`, `ws.rs:60`, `sync.rs:244`)(M) `[需后端]`
 - ~~**`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**~~ ✅ blob_gc 6h 循环加全局 `DELETE ... expires_at IS NOT NULL AND < now()`(只命中 auto、不碰命名检查点,6612330)。**残留**:`list_yrs_versions` 仍不过滤 expires_at(6h 扫前的过期行可能短暂现于面板,极小)。
-- 🆕 **回收站无保留期限,永久堆积**(low) —— 纯 `is_deleted` 标志,无自动清空/保留期;blob GC 刻意把回收站引用算存活 → 图片 blob 也永久保留。`blob_gc.rs:43` 注释预设了一个不存在的「回收站保留期」。可能是有意的产品选择(如 Notion),但从未写成决定且与注释矛盾。(S) `[需后端]`
+- ⏸️ **回收站不做自动清空 —— 已拍板(2026-07-29),不是遗留 TODO**。现状:纯 `is_deleted` 标志,只有用户手动「恢复 / 永久删除 / 清空回收站」三个出口(`documents.rs` 的 trash/restore/purge + `mod.rs:164` 那条 DELETE),**没有任何定时任务**碰它;blob GC 刻意把回收站引用算存活(`blob_gc.rs` `referenced_file_ids` 不过滤 `is_deleted`),所以图片 blob 跟着一起留。**决定不做自动过期删除**,四条理由:
+  1. **同类一致**:AFFiNE、AppFlowy、Notion、Obsidian 在「用户自己是唯一管理员」这个相同约束下**都没有**做"回收站到期自动永久删除"。AFFiNE 的 blob 宽限期只针对已失活 blob,页面本身不过期;AppFlowy 干脆没有 blob GC。这是跨产品收敛的答案,不是巧合。
+  2. **它解决不了真正的风险**。真风险是"单节点小盘 + 开放注册被撑爆",根源是**没有容量配额**(见本小节「无任何容量配额」条)。用一个会误伤用户数据的机制去掩盖一个该用配额解决的运维问题,是治标且引入新的不可逆风险。
+  3. **代价不对称,且备份补不上**。每日全库 `pg_dump` 含回收站的文本与 CRDT 历史,但**不含 blob**(第二对象存储)。自动清空后就算靠备份找回文字,配图也真的没了 —— 对自托管的单管理员,这个恢复成本大概率承担不起。
+  4. **手动出口已经齐备**:`_confirmPurgeAll` / 单条永久删除都带二次确认,要腾空间今天就能腾,不需要系统替用户决定。
+  **配套(小,未做)**:回收站占用可见性 —— 照 `export_all_stats` 现成模式统计"回收站里几页 / 独有 blob 多少字节",显示在回收站对话框标题栏,让用户自己看见再决定。这比替他自动删更符合上面四条。(S)
+- ~~🆕 `blob_gc.rs` 注释预设了一个不存在的「回收站保留期」~~ ✅ 已修(2026-07-29)—— 原文写 effective margin 是 "recycle-bin retention + this",而回收站根本没有 retention 这个量;改成如实说明它是 [0, 用户手动清空) 的不定时长。
 - ~~**`refresh_tokens` 只增不删**~~ ✅ blob_gc 6h 循环加 `DELETE ... expires_at < now()-7d`(6612330)。
 - ~~🟡 **账号删除功能不存在**~~ ✅ 已做(18300d1,2026-07-23)—— `delete_account` 事务级联(密码门控 + 跨他人 workspace RESTRICT 阻塞回滚 409),详见「产品与公开发布合规」小节;级联顺序备忘 deploy.md 早有(0d9c404)。
 - 🟡 **导出不含回收站;备份已含其文本、独有 blob 仍漏**(2026-07-29 更正)—— 导出确实过滤 `is_deleted=false`;但 2026-07-22 起每日备份走**全库 pg_dump**(`mica-backup.sh`,label=_pgdump),回收站页面的文本+CRDT 历史**在备份里**,原「备份里最后副本被 prune」的推演已不成立。**残留**:回收站页面独有的图片 blob(第二对象存储,pg_dump 不含)。(S)
@@ -96,7 +109,7 @@
   事实说了出来。**已先止血**(改成 null-means-absent + 诚实文案 + 指向页内 Ctrl+F,
   6668976 一批),真做需要本地 store 侧同样维护一份正文投影并给 FFI 查询接口 ——
   和云端那条是同一套设计,不是两套。(M)
-- 🟡 **结构块 callout/toggle/embed/columns** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— `<details>` 现已当 raw-HTML 直通 round-trip(不可编辑);可编辑结构化 toggle 需新 kind + 教导入器反解析 HTML(有损成本),留独立决策;② **columns** —— **红线不做**(标准 md 无多列表示,同表格合并;要做只能显式有损方言);③ embed 未做。附:render 注册表 P3-1 对这三种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
+- 🟡 **结构块 callout/toggle/embed/columns** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— **已拍板(2026-07-29):分两步,先做渲染层折叠 UI**。关键区分:`<details><summary>` 是**合法的 CommonMark/GFM raw-HTML block**(GitHub 官方推荐写法),属于"我们的解析器没接住",**不是**像合并单元格/多列那样"标准 md 表达不了"——所以**不适用**那两条的「红线不做」先例。现状比参照产品还弱一档:AppFlowy(原生 `toggle_list` block)和 AFFiNE(`collapsed` 做成 list/heading 通用属性)**编辑器里都有可点的折叠 UI**,只在导出 md 时降级;我们是连折叠 UI 都没有,`<details>` 源码当代码块摆着。**第一步(S,建议先做)**:纯渲染层——`code_block`+`raw:true` 的解析/序列化**一个字不改**,只在渲染层认出规范形态的 `<details>` 就换折叠外观,走 `AtomicBlockRenderer` 注册表(不堆 if,守渲染红线);折叠态复用现有 `data.collapsed` 那条路。round-trip 零改动。**第二步(M–L,另议)**:规范子集结构化成新 kind(summary 富文本 + body 复用 `data.li` 扁平容器),非规范形态退回现状直通;成本大头在教导入器反解析真实世界五花八门的 `<details>`。**顺带定论**:折叠状态**是文档数据不是视图状态**——AppFlowy(`updateNode` 事务)、AFFiNE(`store.updateBlock`)、以及本仓库自己的代码块折叠先例(`controller.dart` `toggleCollapsed` 走 `update_block`,但 `collapsed` **从不进 md 字节**)三方一致;`<details open>` 让我们有机会比前两家更彻底(折叠态也能 round-trip),但那意味着"点一下折叠"变成一次真实文本编辑,留到第二步再定;② **columns** —— **红线不做**(标准 md 无多列表示,同表格合并;要做只能显式有损方言);③ embed 未做。附:render 注册表 P3-1 对这三种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;10+ 处硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
 - ~~无暗色模式~~ ✅ **已做**(v0.13.2,2026-07-29):语义色 token 层(`ui/theme_tokens.dart`,AppFlowy 式角色分组)贯穿外壳 / 自绘画布(挂 `EditorAppearance.tokens`)/ 语法高亮(`_Rule` 存角色,emit 时解析)/ mermaid(merman host theme + mermaid.js themeVariables);跟随系统或设置手切,冷启动在 runApp 前就位。**位图与记忆化缓存的 key 都带调色板**(公式/mermaid 栅格、代码 span memo),否则浅色下烤出的产物会画到深色页上。
 - ~~**文档内查找/替换缺失**~~ ✅ Ctrl+F 查找栏(导航/计数/当前匹配高亮)原已具备;2026-07-22 补齐**替换**(`replaceRange`/`replaceAll` 走既有 op 路径,9fe9ae8)+ F3/Shift+F3。**全部匹配高亮**有意不做(要动 render.dart 加第二遍选区叠绘,超 MVP)。
@@ -189,7 +202,7 @@
 2. **op 模型退役启动**(M)`[需后端]` —— P2-M4 主干已上线,阻塞解除:先删死写入器(S),再拍修剪/退役;这是库里唯一无界增长的大头。
 3. **协议版本门**(S-M)`[需后端]` —— 桌面自装包版本天然漂;退役 op 模型(现在的 REST 兜底)之前先把 WS min-version 闸门立好,退役才敢做。
 4. **快赢打包**(合计约一个下午)—— OFL.txt 附上、0.0.0.0 明文绑定启动告警、`upgrade_real_store_smoke` 写进 release.md 清单、catch-up 常量进 AppConfig、残余静默 catch 接计数。
-5. **拍板项(先决策不写码)**—— 回收站保留期写成决定(blob_gc 注释预设了一个不存在的保留期);toggle 结构块要不要新 kind;MCP inspector v2 迁移;M8 comrak 取舍。
+5. **拍板项(先决策不写码)**—— ~~回收站保留期~~ ✅ 已拍板不做(见「数据生命周期」);~~toggle 要不要新 kind~~ ✅ 已拍板分两步(见「编辑器与功能广度」);~~MCP inspector v2~~ ✅ 已拍板**暂不升**(官方迁移指南 #1822 未完成、v2 当天 tree-swap 上线自家 CI 都在抖;`@1` 仍收安全补丁,改法已备:命令里补 `-e KEY=VALUE` 且必须放在 target 之后);**剩** M8 comrak 取舍。
 
 **中期(用户挑)**:安全三件(token DPAPI / 邮箱验证 / WS token 出 query string);平台两件(Authenticode 签名 / Linux CI 出包);产品大件(同块字符级协同 L / 本地全文搜索 M-L / 本地反链 / 视口虚拟化 L / 触屏选择 L)。
 

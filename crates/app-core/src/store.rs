@@ -43,18 +43,6 @@ pub struct UpdateRecord {
   pub created_at: DateTime<Utc>,
 }
 
-/// A named, restorable version pinned to a stored snapshot.
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct VersionRecord {
-  pub id: Uuid,
-  pub document_id: Uuid,
-  pub snapshot_id: Uuid,
-  pub version_seq: i64,
-  pub name: String,
-  pub created_by: Uuid,
-  pub created_at: DateTime<Utc>,
-}
-
 /// A yrs-native version-history row (see docs/version-history-plan.md). Metadata
 /// only — the `state` blob is fetched separately so timeline listings stay cheap.
 /// `label` NULL = an auto snapshot; set = a named user checkpoint. `expires_at`
@@ -568,51 +556,6 @@ pub(crate) async fn latest_snapshot_tx(
 /// Maximum number of change-log entries returned in a single history page.
 pub const MAX_HISTORY_PAGE: i64 = 200;
 
-/// List change-log entries newest first, optionally paging backwards from an
-/// exclusive `before_seq` cursor.
-pub async fn list_updates(
-  db: &PgPool,
-  document_id: Uuid,
-  limit: i64,
-  before_seq: Option<i64>,
-) -> ApiResult<Vec<UpdateLogEntry>> {
-  let limit = limit.clamp(1, MAX_HISTORY_PAGE);
-  // A NULL cursor (bound below) matches every row, so the same query serves both
-  // the first page and subsequent pages.
-  sqlx::query_as::<_, UpdateLogEntry>(
-    r#"
-      SELECT id, seq, actor_id, update_kind, created_at
-      FROM document_updates
-      WHERE document_id = $1 AND ($2::bigint IS NULL OR seq < $2)
-      ORDER BY seq DESC
-      LIMIT $3
-    "#,
-  )
-  .bind(document_id)
-  .bind(before_seq)
-  .bind(limit)
-  .fetch_all(db)
-  .await
-  .map_err(ApiError::from)
-}
-
-/// List named versions newest first, resolving each to its snapshot's sequence.
-pub async fn list_versions(db: &PgPool, document_id: Uuid) -> ApiResult<Vec<VersionRecord>> {
-  sqlx::query_as::<_, VersionRecord>(
-    r#"
-      SELECT v.id, v.document_id, v.snapshot_id, s.version_seq, v.name, v.created_by, v.created_at
-      FROM document_versions v
-      INNER JOIN document_snapshots s ON s.id = v.snapshot_id
-      WHERE v.document_id = $1
-      ORDER BY v.created_at DESC
-    "#,
-  )
-  .bind(document_id)
-  .fetch_all(db)
-  .await
-  .map_err(ApiError::from)
-}
-
 // ── Public sharing (publish a page to a /s/{token} URL) ──────────────────────
 
 /// An active public share of a document. `token` is the unguessable capability
@@ -711,45 +654,6 @@ pub async fn fetch_share_by_token(db: &PgPool, token: &str) -> ApiResult<Option<
   .map_err(ApiError::from)
 }
 
-pub async fn fetch_version(
-  db: &PgPool,
-  document_id: Uuid,
-  version_id: Uuid,
-) -> ApiResult<Option<VersionRecord>> {
-  sqlx::query_as::<_, VersionRecord>(
-    r#"
-      SELECT v.id, v.document_id, v.snapshot_id, s.version_seq, v.name, v.created_by, v.created_at
-      FROM document_versions v
-      INNER JOIN document_snapshots s ON s.id = v.snapshot_id
-      WHERE v.document_id = $1 AND v.id = $2
-    "#,
-  )
-  .bind(document_id)
-  .bind(version_id)
-  .fetch_optional(db)
-  .await
-  .map_err(ApiError::from)
-}
-
-pub async fn fetch_snapshot(
-  db: &PgPool,
-  document_id: Uuid,
-  snapshot_id: Uuid,
-) -> ApiResult<Option<SnapshotRecord>> {
-  sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      SELECT id, document_id, version_seq, schema_version, payload, created_at
-      FROM document_snapshots
-      WHERE document_id = $1 AND id = $2
-    "#,
-  )
-  .bind(document_id)
-  .bind(snapshot_id)
-  .fetch_optional(db)
-  .await
-  .map_err(ApiError::from)
-}
-
 // ── yrs-native version history (docs/version-history-plan.md) ────────────────
 // The op-model history below froze with P4①b; real history routes through these.
 
@@ -815,155 +719,6 @@ pub async fn create_named_yrs_version(
   .fetch_optional(db)
   .await?
   .ok_or(ApiError::NotFound)
-}
-
-pub async fn fetch_snapshot_by_version_seq(
-  db: &PgPool,
-  document_id: Uuid,
-  version_seq: i64,
-) -> ApiResult<Option<SnapshotRecord>> {
-  sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      SELECT id, document_id, version_seq, schema_version, payload, created_at
-      FROM document_snapshots
-      WHERE document_id = $1 AND version_seq = $2
-    "#,
-  )
-  .bind(document_id)
-  .bind(version_seq)
-  .fetch_optional(db)
-  .await
-  .map_err(ApiError::from)
-}
-
-/// Pin the document's current state as a named version. Because a snapshot is
-/// stored for every accepted update, this points at the latest snapshot rather
-/// than duplicating state.
-pub async fn create_named_version(
-  db: &PgPool,
-  document_id: Uuid,
-  name: &str,
-  created_by: Uuid,
-) -> ApiResult<VersionRecord> {
-  let mut tx = db.begin().await?;
-
-  let snapshot = latest_snapshot_tx(&mut tx, document_id)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-
-  let version = sqlx::query_as::<_, VersionRecord>(
-    r#"
-      WITH inserted AS (
-        INSERT INTO document_versions (document_id, snapshot_id, name, created_by)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, document_id, snapshot_id, name, created_by, created_at
-      )
-      SELECT i.id, i.document_id, i.snapshot_id, s.version_seq, i.name, i.created_by, i.created_at
-      FROM inserted i
-      INNER JOIN document_snapshots s ON s.id = i.snapshot_id
-    "#,
-  )
-  .bind(document_id)
-  .bind(snapshot.id)
-  .bind(name)
-  .bind(created_by)
-  .fetch_one(&mut *tx)
-  .await?;
-
-  tx.commit().await?;
-
-  Ok(version)
-}
-
-/// Restore a document to a prior snapshot's state. History is append-only: this
-/// records a `restore_snapshot` update and a fresh snapshot at the next sequence
-/// rather than rewriting past entries. The returned [`AppliedUpdate`] can be
-/// broadcast to connected clients exactly like an ordinary edit.
-pub async fn restore_snapshot(
-  db: &PgPool,
-  workspace_id: Uuid,
-  document_id: Uuid,
-  actor_id: Uuid,
-  source_version_seq: i64,
-) -> ApiResult<AppliedUpdate> {
-  let mut tx = db.begin().await?;
-
-  let locked = lock_document_tx(&mut tx, workspace_id, document_id)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-
-  let source = sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      SELECT id, document_id, version_seq, schema_version, payload, created_at
-      FROM document_snapshots
-      WHERE document_id = $1 AND version_seq = $2
-    "#,
-  )
-  .bind(document_id)
-  .bind(source_version_seq)
-  .fetch_optional(&mut *tx)
-  .await?
-  .ok_or(ApiError::NotFound)?;
-
-  // Validate the restored payload before committing to it.
-  let restored = payload_from_value(source.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid snapshot to restore: {error}")))?;
-  let restored_value =
-    serde_json::to_value(restored).map_err(|error| ApiError::Internal(error.to_string()))?;
-  let next_seq = locked.current_seq + 1;
-
-  let update = sqlx::query_as::<_, UpdateRecord>(
-    r#"
-      INSERT INTO document_updates (document_id, seq, actor_id, update_kind, payload)
-      VALUES ($1, $2, $3, 'restore_snapshot', $4)
-      RETURNING id, document_id, seq, actor_id, update_kind, payload, created_at
-    "#,
-  )
-  .bind(document_id)
-  .bind(next_seq)
-  .bind(actor_id)
-  .bind(json!({ "restored_from_version_seq": source_version_seq }))
-  .fetch_one(&mut *tx)
-  .await?;
-
-  let snapshot = sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      INSERT INTO document_snapshots (document_id, version_seq, schema_version, payload)
-      VALUES ($1, $2, 1, $3)
-      RETURNING id, document_id, version_seq, schema_version, payload, created_at
-    "#,
-  )
-  .bind(document_id)
-  .bind(next_seq)
-  .bind(restored_value)
-  .fetch_one(&mut *tx)
-  .await?;
-  // (legacy path — see the `yrs: None` note at the end of this function)
-
-  let document = sqlx::query_as::<_, DocumentRecord>(
-    r#"
-      UPDATE documents
-      SET current_seq = $1, updated_at = now()
-      WHERE id = $2 AND workspace_id = $3
-      RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
-    "#,
-  )
-  .bind(next_seq)
-  .bind(document_id)
-  .bind(workspace_id)
-  .fetch_one(&mut *tx)
-  .await?;
-
-  tx.commit().await?;
-
-  Ok(AppliedUpdate {
-    document,
-    snapshot,
-    update,
-    // Legacy op-model restore, superseded by `sync::restore_yrs_version` (the
-    // yrs-native path history.rs actually calls). No yrs half to broadcast.
-    yrs: None,
-  })
 }
 
 /// Store an imported document's initial state as its `version_seq = 0` snapshot.
