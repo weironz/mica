@@ -832,3 +832,60 @@ async fn backfill_fills_valid_and_skips_corrupt() {
 
     cleanup(&db, ws, user).await;
 }
+
+/// op-model retirement S2: the backfill must give a snapshot-only document a yrs
+/// base, and running it again must be a no-op.
+///
+/// `seed_doc` produces exactly the shape S2 exists for — a `documents` row plus a
+/// `document_snapshots` row and nothing else — which is what create/transfer/clone
+/// left behind before S1 closed those paths. Until the backfill has emptied that
+/// stock, S4 cannot stop writing snapshots: the lazy bridge those documents rely
+/// on reads the very table S4 removes.
+#[tokio::test]
+async fn backfill_builds_a_base_for_a_snapshot_only_document() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    let before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(before, 0, "fixture must start with no base");
+
+    let built = mica_app_core::sync::backfill_yrs_bases(&db).await.unwrap();
+    assert!(built >= 1, "the snapshot-only document should have been built");
+
+    let after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(after, 1, "backfill must leave exactly one base row");
+
+    // The base carries the snapshot's content, not an empty doc.
+    let text: String =
+        sqlx::query_scalar("SELECT content_text FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(
+        text.contains("Hello"),
+        "the base must be built FROM the snapshot, got {text:?}"
+    );
+
+    // Idempotent: a second pass must not touch this document again.
+    let again = mica_app_core::sync::backfill_yrs_bases(&db).await.unwrap();
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(rows, 1, "a second pass must not duplicate (built={again})");
+
+    cleanup(&db, ws, user).await;
+}

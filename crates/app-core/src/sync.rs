@@ -241,6 +241,61 @@ pub async fn backfill_content_text(db: &PgPool) -> ApiResult<usize> {
     Ok(filled)
 }
 
+/// Backfill `document_yrs_base` for documents that only ever got an op-model
+/// snapshot (op-model retirement, S2).
+///
+/// Three write paths — create / transfer / clone — used to leave a document with
+/// nothing but its snapshot, and `ensure_base_tx`'s lazy bridge built the base
+/// out of that snapshot on first access. S1 closed those paths at the source, so
+/// no NEW document arrives base-less; this closes the stock that accumulated
+/// before it. Both halves are needed before the op model can stop being written:
+/// the bridge reads the very table S4 removes, so a document that never got a
+/// base would have nothing left to migrate from.
+///
+/// Idempotent and safe to run every boot — it only visits documents that have no
+/// base row, and `ensure_base_tx` inserts `ON CONFLICT DO NOTHING`, so racing the
+/// lazy path (or a second backfill) cannot corrupt or duplicate anything.
+/// Keyset-paginated by `documents.id` so each row is visited at most once per
+/// pass even when its build fails. A document whose snapshot cannot be decoded is
+/// warn-logged and skipped: it keeps today's behaviour (lazy build on next open)
+/// rather than blocking every other document behind it.
+///
+/// Returns how many bases were built (for the startup log line).
+pub async fn backfill_yrs_bases(db: &PgPool) -> ApiResult<usize> {
+    let mut built = 0usize;
+    let mut cursor = Uuid::nil();
+    loop {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT d.id FROM documents d
+             WHERE NOT EXISTS (
+                     SELECT 1 FROM document_yrs_base b WHERE b.document_id = d.id
+                   )
+               AND d.id > $1
+             ORDER BY d.id
+             LIMIT $2",
+        )
+        .bind(cursor)
+        .bind(BACKFILL_BATCH)
+        .fetch_all(db)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        for (document_id,) in &rows {
+            cursor = *document_id;
+            match bootstrap_base(db, *document_id).await {
+                Ok(_) => built += 1,
+                Err(error) => tracing::warn!(
+                    document_id = %document_id,
+                    %error,
+                    "yrs base backfill: skipping document; it keeps the lazy build on next open"
+                ),
+            }
+        }
+    }
+    Ok(built)
+}
+
 /// Load the document's folded yrs base, building it from the latest op-model
 /// snapshot on first access (the lazy migration bridge). Errors if the document
 /// has neither a yrs base nor a snapshot.
