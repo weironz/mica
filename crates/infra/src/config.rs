@@ -27,6 +27,16 @@ pub struct AppConfig {
   /// Lifetime of the stateless access JWT. It cannot be revoked before it
   /// expires (the price of being stateless), so this doubles as the worst-case
   /// revocation window — kept short; the client refreshes transparently.
+  /// Lowest WS sync-protocol version this server still accepts.
+  ///
+  /// **Defaults to 0, which rejects nobody** — the gate ships inert on purpose.
+  /// Its job is to exist BEFORE it is needed: desktop clients are user-installed
+  /// binaries that drift at their own pace, and the op-model REST fallback is
+  /// what silently catches an old client today. When that fallback is removed
+  /// (op-model retirement S4), an old client would start failing in confusing
+  /// ways instead of being told why — so the floor is raised at that point, to a
+  /// server that already knows how to say "your client is too old".
+  pub ws_min_protocol: u32,
   pub access_token_ttl_seconds: i64,
   /// How long a sign-in survives without touching the password again. The
   /// access token above stays short — it is an unrevocable JWT — and the
@@ -87,6 +97,13 @@ impl AppConfig {
     // shorter access token shrinks the window in which a token that SHOULD be
     // dead (password changed, session revoked) still works, at no user-visible
     // cost. Override with ACCESS_TOKEN_TTL_SECONDS.
+    // 0 = accept every client, including ones predating the version parameter.
+    // Raise to WS_PROTOCOL_VERSION once the op-model fallback is gone (S4).
+    let ws_min_protocol = env::var("MICA_WS_MIN_PROTOCOL")
+      .ok()
+      .and_then(|value| value.parse::<u32>().ok())
+      .unwrap_or(0);
+
     let access_token_ttl_seconds = env::var("ACCESS_TOKEN_TTL_SECONDS")
       .ok()
       .and_then(|value| value.parse::<i64>().ok())
@@ -154,6 +171,7 @@ impl AppConfig {
       database_url,
       database_max_connections,
       jwt_secret,
+      ws_min_protocol,
       access_token_ttl_seconds,
       refresh_token_ttl_seconds,
       cors_allowed_origins,

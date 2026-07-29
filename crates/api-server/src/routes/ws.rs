@@ -27,9 +27,24 @@ use crate::routes::documents::{
   DocumentPermissions, ensure_workspace_member, permissions_for_role, workspace_role,
 };
 
+/// The WS sync protocol this server speaks.
+///
+/// `1` = `sync.bootstrap` / `sync.pull` / `sync.push` with the optional state
+/// vector. A client that sends nothing is `0`: it predates the parameter, which
+/// in practice means it predates this gate.
+///
+/// Bump this only for a change an old client cannot survive. Everything the
+/// protocol has grown so far has been additive by discipline (old clients never
+/// send the new field, old servers ignore it), and additive changes must NOT
+/// bump it — the number exists to mark the breaks, and a version that moves for
+/// compatible changes would force upgrades nobody needed.
+pub const WS_PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Deserialize)]
 pub struct ConnectQuery {
   token: Option<String>,
+  /// Client's protocol version (`v` in the query string). Absent = 0.
+  v: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,8 +74,29 @@ pub async fn document_socket(
   headers: HeaderMap,
   upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
+  // Version gate first — before auth, and before the upgrade.
+  //
+  // Before the upgrade so a client too old to be handled gets a clean HTTP error
+  // carrying a machine code, instead of a socket that opens and then misbehaves
+  // in ways neither side can explain. Before AUTH because an old client whose
+  // token also happens to have lapsed would otherwise be told `unauthorized` and
+  // sent off to sign in again — it would sign in, reconnect, and be refused
+  // exactly the same way, forever. The version is a public parameter and the
+  // check reveals nothing, so there is no reason to make it wait behind a secret.
+  let client_protocol = check_protocol(query.v, state.config.ws_min_protocol)?;
+
   let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
   let user_id = user_id_from_token(&state, &token)?;
+  if client_protocol < WS_PROTOCOL_VERSION {
+    // The signal that decides when the floor can be raised. Logged only for
+    // below-current clients, so ordinary traffic stays quiet and this line
+    // appearing at all means "someone out there still needs the old behaviour".
+    tracing::info!(
+      client_protocol,
+      server_protocol = WS_PROTOCOL_VERSION,
+      "ws: client below current sync protocol"
+    );
+  }
 
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   let role = workspace_role(&state.db, workspace_id, user_id)
@@ -84,6 +120,22 @@ pub async fn document_socket(
       permissions,
     )
   }))
+}
+
+/// Resolve the client's announced protocol version against the server's floor.
+///
+/// Absent means 0 — a client older than the parameter itself. `client_too_old`
+/// is a stable machine code, deliberately distinct from an auth failure, so the
+/// client can tell the user to update instead of to sign in again.
+fn check_protocol(announced: Option<u32>, floor: u32) -> ApiResult<u32> {
+  let client_protocol = announced.unwrap_or(0);
+  if client_protocol < floor {
+    return Err(ApiError::BadRequestCode(
+      "client_too_old",
+      format!("client speaks sync protocol {client_protocol}; this server requires at least {floor}"),
+    ));
+  }
+  Ok(client_protocol)
 }
 
 fn token_from_request(headers: &HeaderMap, query: &ConnectQuery) -> Option<String> {
@@ -563,6 +615,41 @@ mod tests {
   use mica_app_core::store::{DocumentRecord, SnapshotRecord, UpdateRecord};
   use serde_json::json;
 
+  /// The gate ships INERT: the default floor is 0, so every client — including
+  /// ones that predate the `v` parameter entirely — still connects. That is the
+  /// whole point of landing it early; a gate that started rejecting on the day
+  /// it shipped would break every desktop install that had not updated yet.
+  #[test]
+  fn the_default_floor_rejects_nobody() {
+    assert_eq!(check_protocol(None, 0).unwrap(), 0, "a pre-parameter client");
+    assert_eq!(check_protocol(Some(1), 0).unwrap(), 1);
+    assert_eq!(check_protocol(Some(99), 0).unwrap(), 99, "a client newer than us");
+  }
+
+  /// Once the floor is raised (op-model retirement S4 removes the REST fallback
+  /// that quietly caught old clients), a client below it must be turned away
+  /// with a code it can act on — not left to fail later in ways neither side
+  /// can explain.
+  #[test]
+  fn a_raised_floor_turns_old_clients_away_by_code() {
+    let error = check_protocol(None, 1).unwrap_err();
+    match error {
+      ApiError::BadRequestCode(code, _) => assert_eq!(code, "client_too_old"),
+      other => panic!("expected a machine code the client can branch on, got {other:?}"),
+    }
+    assert!(check_protocol(Some(1), 1).is_ok(), "exactly at the floor is fine");
+  }
+
+  /// The client announces the same number the server calls current. They live in
+  /// two languages and drift silently; this is the cheapest place to notice.
+  #[test]
+  fn the_current_version_is_one() {
+    assert_eq!(
+      WS_PROTOCOL_VERSION, 1,
+      "bump kSyncProtocolVersion in sync_client.dart in the same commit"
+    );
+  }
+
   fn sample_applied() -> AppliedUpdate {
     let now = Utc::now();
     let document_id = Uuid::from_u128(1);
@@ -686,6 +773,7 @@ mod tests {
     headers.insert(AUTHORIZATION, "Bearer header-token".parse().unwrap());
     let query = ConnectQuery {
       token: Some("query-token".to_string()),
+      v: None,
     };
     assert_eq!(
       token_from_request(&headers, &query),
@@ -698,6 +786,7 @@ mod tests {
     let headers = HeaderMap::new();
     let query = ConnectQuery {
       token: Some("query-token".to_string()),
+      v: None,
     };
     assert_eq!(
       token_from_request(&headers, &query),
@@ -708,7 +797,7 @@ mod tests {
   #[test]
   fn token_missing_is_none() {
     let headers = HeaderMap::new();
-    let query = ConnectQuery { token: None };
+    let query = ConnectQuery { token: None, v: None };
     assert_eq!(token_from_request(&headers, &query), None);
   }
 
