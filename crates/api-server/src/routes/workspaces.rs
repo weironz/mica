@@ -73,7 +73,15 @@ pub struct Workspace {
   ///
   /// Only populated by [`list`]; the single-workspace handlers leave it 0 because
   /// nothing reads it there.
+  ///
+  /// `sqlx(default)` is what actually makes that true. `serde(default)` alone
+  /// governs DESERIALIZING json, which nothing here does — the derived `FromRow`
+  /// still demanded the column, so every query that omits it (create / get /
+  /// update, via `fetch_workspace_for_user{,_in_tx}`) failed to decode and the
+  /// handler answered 500 "no column found for name: page_count". Creating a
+  /// workspace has been broken since the initial commit.
   #[serde(default)]
+  #[sqlx(default)]
   page_count: i64,
 }
 
@@ -325,8 +333,12 @@ pub async fn delete(
         // Same delete shape as the blob GC: a 404 is success (already gone).
         match http.delete(storage.presign_delete(key)).send().await {
           Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => {}
-          Ok(resp) => tracing::warn!(%workspace_id, object_key = %key, status = %resp.status(), "workspace delete: object delete rejected, leaving orphan"),
-          Err(error) => tracing::warn!(%workspace_id, object_key = %key, %error, "workspace delete: object delete failed, leaving orphan"),
+          Ok(resp) => {
+            tracing::warn!(%workspace_id, object_key = %key, status = %resp.status(), "workspace delete: object delete rejected, leaving orphan")
+          }
+          Err(error) => {
+            tracing::warn!(%workspace_id, object_key = %key, %error, "workspace delete: object delete failed, leaving orphan")
+          }
         }
       }
     }
@@ -665,4 +677,99 @@ fn normalize_member_role(role: &str) -> ApiResult<String> {
 
 fn can_update_workspace(role: &str) -> bool {
   matches!(role, "owner" | "admin")
+}
+
+#[cfg(test)]
+mod workspace_decode_pg {
+  use super::*;
+
+  async fn pool() -> Option<PgPool> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — the postgres service block regressed; \
+         these tests must not silently pass"
+      );
+      return None;
+    };
+    Some(
+      PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
+  }
+
+  /// `POST /api/workspaces` answered 500 from the initial commit until
+  /// 2026-07-30: `Workspace::page_count` carried `#[serde(default)]`, which says
+  /// nothing about sqlx, so the derived `FromRow` demanded a column the
+  /// single-workspace queries never select — "no column found for name:
+  /// page_count". Creating a workspace, opening one, renaming one: all 500.
+  ///
+  /// A unit test could not have caught it (the decode only happens against a
+  /// real row) and no existing DB test decoded `Workspace` from the short SELECT,
+  /// which is exactly how it survived every release. So decode both shapes here:
+  /// the one WITH `page_count` (list) and the one without (create/get/update).
+  #[tokio::test]
+  async fn a_workspace_decodes_from_queries_that_omit_page_count() {
+    let Some(db) = pool().await else { return };
+    let user = Uuid::new_v4();
+    let ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+      .bind(user)
+      .bind(format!("{user}@t.dev"))
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+      .bind(ws)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query(
+      "INSERT INTO workspace_members(workspace_id,user_id,role,position)
+       VALUES($1,$2,'owner','0000000010')",
+    )
+    .bind(ws)
+    .bind(user)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let short = fetch_workspace_for_user(&db, ws, user)
+      .await
+      .expect("the create/get/update SELECT must decode")
+      .expect("the row exists");
+    assert_eq!(short.page_count, 0, "absent column means 0, not an error");
+
+    let mut tx = db.begin().await.unwrap();
+    let in_tx = fetch_workspace_for_user_in_tx(&mut tx, ws, user)
+      .await
+      .expect("the create SELECT must decode")
+      .expect("the row exists");
+    tx.commit().await.unwrap();
+    assert_eq!(in_tx.page_count, 0);
+
+    let listed = sqlx::query_as::<_, Workspace>(LIST_WORKSPACES_SQL)
+      .bind(user)
+      .fetch_all(&db)
+      .await
+      .expect("the list SELECT must still decode");
+    assert_eq!(
+      listed.len(),
+      1,
+      "the default must not shadow the real column"
+    );
+
+    sqlx::query("DELETE FROM workspaces WHERE id=$1")
+      .bind(ws)
+      .execute(&db)
+      .await
+      .ok();
+    sqlx::query("DELETE FROM users WHERE id=$1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .ok();
+  }
 }
