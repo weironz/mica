@@ -77,7 +77,8 @@
 - ~~**REST/MCP 写路径从不落自动版本快照**~~ ✅ `apply_derived_operations` 复用 push_update 的 auto 版本 INSERT(同事务、10min cadence、30 天;只写版本归档表、不碰双表示红线,6612330;连真 PG 测试)。
 - ~~**删除 workspace 永久泄漏其全部 S3/RustFS 图片对象**~~ ✅ `workspaces::delete` 删库前枚举 `DISTINCT object_key` 逐个删存储对象(best-effort、objects-first,6612330)。
 - ~~🆕 **`purge_view`「永久删除」只删 views 行**~~ ✅ 已做(927d7f7)—— `purge_view_subtree` 一条原子 CTE 删 views 子树 + 对 document 型视图删 `documents` 行,DB `ON DELETE CASCADE` 随之清空所有 document_* 表(yrs base/快照/版本/op/**分享 token**);blob 靠 blob_gc 惰性回收(去重共享,不急删)。DB 门控测试锁级联。(`documents.rs` `purge_view_subtree`)
-- 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」的前置**已解除**(P2-M4 主干已上线)。退役分 6 步,**S0/S1 已完成(2026-07-29)**:
+- ~~🆕 **新建 / 打开 / 重命名 workspace 一律 500**~~ ✅ 已修(2026-07-30)—— **从首次提交起就坏的**:`Workspace::page_count` 上写的是 `#[serde(default)]`,而那管的是「从 json 反序列化」,这里没人这么用;派生的 `FromRow` 仍然要求这一列,于是所有不 SELECT 它的查询(create / get / update 走的 `fetch_workspace_for_user{,_in_tx}`)解码失败 → `database error: no column found for name: page_count`。只有 `list` 的 SQL 带这一列,所以列表页正常、单个工作区的三个接口全挂。补 `#[sqlx(default)]`。**为什么活了这么久**:单测抓不到(解码只在真行上发生),而已有的 PG 测试没有一个从「短 SELECT」解码 `Workspace`。新增 DB 门控测试 `a_workspace_decodes_from_queries_that_omit_page_count` 同时解两种形状,并已验证撤掉修复它就变红。(S4 端到端实测时撞出来的,与 op 模型退役无关)
+- 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」的前置**已解除**(P2-M4 主干已上线)。退役分 6 步,**S0–S4 已完成(2026-07-29/30),只剩 S5 删表**:
   - ~~**S0 删死代码**~~ ✅ —— 删掉 7 个零调用者函数(文档只点名了 `create_named_version`/`restore_snapshot`,实际排查还有 `list_updates`/`list_versions`/`fetch_version`/`fetch_snapshot`/`fetch_snapshot_by_version_seq`)+ 随之成为孤儿的 `VersionRecord`,共 ~245 行。
   - ~~**S1 补齐「只走 op 模型」的路径**~~ ✅ —— **这是退役真正的拦路虎**:`create_document`/`transfer_view`/`clone_view` 三条只写 op-model 快照、不建 yrs base,全靠 `ensure_base_tx` 的惰性桥在首次编辑时**从快照**现造 base。而那座桥正是退役要拆的东西 —— 直接停写快照,这些文档首次编辑就 404。现已在三处提交后补 `bootstrap_base`(best-effort,与 import 两条路径同款),新文档一出生就有 base。回归测试 `a_created_document_owns_a_yrs_base_immediately`(真 PG 门控)。
   - ~~**S2 存量体检 + 回填**~~ ✅ **已完成并在生产跑完**(v0.13.3,2026-07-29)——
@@ -93,9 +94,22 @@
     并发安全:`ensure_base_tx` 是 `ON CONFLICT DO NOTHING`,和惰性路径抢同一篇也不会重复或损坏。
     **部署时注意**:这是带数据改动的上线(会插 ~1428 行),按规矩先落还原点。
   - ~~**S3 协议版本门**~~ ✅ **已做(2026-07-29)** —— 见「可靠性与同步」同名条目。闸门**默认惰性**(地板 0,谁都不拒),S4 时把 `MICA_WS_MIN_PROTOCOL` 抬到 1 即生效。
-  - **S4 停写**(未做):`apply_derived_operations` 不再写两表、`current_payload` 去掉快照兜底。会挂一批用 `seed_document`(直插 `document_snapshots`)的测试夹具,需同批改造。
-  - **S5 删表**(未做,最危险):注意 `document_versions.snapshot_id` 是 `ON DELETE RESTRICT`,删表要先删它;加迁移后必须 `touch crates/infra/src/db.rs`。
-  退役完成前,两表仍按「文档大小×写入次数」增长。(M) `[需后端]`
+  - ~~**S4 停写**~~ ✅ **已做(2026-07-30)** —— `apply_derived_operations` 不再 INSERT
+    `document_updates`/`document_snapshots`(yrs base + `workspace_updates` 成为唯一记录),
+    `insert_initial_snapshot`/`insert_root_snapshot` 整个删掉,换成事务内的
+    `sync::seed_base_tx`:create / import / transfer / clone 四条路径**和 `documents` 行同一个
+    事务**建 base —— 比 S1 那个提交后 best-effort 更强,不存在「文档已存在但没内容可读」的窗口。
+    `current_payload` 翻成 base 优先、快照仅作兜底(生产已 `missing_base = 0`,该分支预计永不触发,
+    留到 S5 删表)。另外两处不改就会坏:`ensure_base_tx` 原先无快照即 404,现改为从
+    `documents.root_block_id` 种空页;WS `send_bootstrap` 原先 `latest_snapshot(...).ok_or(())?`
+    —— 停写后**每个新文档一连就断**,现发 `snapshot: null`(客户端本来就只取 `connection_id`)。
+    回归测试 `a_write_no_longer_grows_the_op_tables`(写前写后各数一次两表行数 + 确认内容真落了)、
+    `a_document_with_no_snapshot_builds_its_base_from_the_documents_row`。**实测**:本地跑 0.13.3
+    走完注册→建页→写→导出/大纲/搜索/重开→WS bootstrap→import→clone,全工作区
+    `docs=3 bases=3 snapshots=0 updates=0`。**注**:`seed_document` 那批夹具没挂 —— 快照兜底接住了,
+    它们现在测的是「遗留文档仍可读」这条路,故意留着。
+  - **S5 删表**(未做,最危险):注意 `document_versions.snapshot_id` 是 `ON DELETE RESTRICT`,删表要先删它;加迁移后必须 `touch crates/infra/src/db.rs`。同时可撤掉 `current_payload` 的快照兜底与 `ensure_base_tx` 的快照分支。
+  S4 之后两表**不再增长**(存量仍在,S5 才清)。(M) `[需后端]`
 - 🆕 **无任何容量配额**(medium) —— 唯一限制是单文件 25MB + 导入 1GiB body;无 workspace 总量/单文档大小/用户级上限,WS 路径默认可收 64MiB 单条消息,大文档写放大(每 push 全量 base 覆写 + 每 10min 全量版本)。开放注册单节点最易被无意/恶意打爆盘。(`storage.rs:50`, `ws.rs:60`, `sync.rs:244`)(M) `[需后端]`
 - ~~**`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**~~ ✅ blob_gc 6h 循环加全局 `DELETE ... expires_at IS NOT NULL AND < now()`(只命中 auto、不碰命名检查点,6612330)。**残留**:`list_yrs_versions` 仍不过滤 expires_at(6h 扫前的过期行可能短暂现于面板,极小)。
 - ⏸️ **回收站不做自动清空 —— 已拍板(2026-07-29),不是遗留 TODO**。现状:纯 `is_deleted` 标志,只有用户手动「恢复 / 永久删除 / 清空回收站」三个出口(`documents.rs` 的 trash/restore/purge + `mod.rs:164` 那条 DELETE),**没有任何定时任务**碰它;blob GC 刻意把回收站引用算存活(`blob_gc.rs` `referenced_file_ids` 不过滤 `is_deleted`),所以图片 blob 跟着一起留。**决定不做自动过期删除**,四条理由:

@@ -14,9 +14,7 @@ use axum::{
   http::HeaderMap,
 };
 use mica_app_core::{
-  AppState, ImportJob, ImportJobStatus,
-  documents::import_markdown,
-  store::{self, DocumentRecord},
+  AppState, ImportJob, ImportJobStatus, documents::import_markdown, store::DocumentRecord,
 };
 use mica_infra::{ApiError, ApiResult};
 use mica_interchange::{ImportMode, ImportPlan, plan_import, read_zip, resolve_ref};
@@ -521,7 +519,9 @@ async fn run_import(
       // Relative .md links become internal page links.
       if let Some(marks) = block.data.get_mut("marks").and_then(|m| m.as_array_mut()) {
         for mark in marks {
-          let Some(obj) = mark.as_object_mut() else { continue };
+          let Some(obj) = mark.as_object_mut() else {
+            continue;
+          };
           let Some(target) = obj
             .get("href")
             .and_then(|v| v.as_str())
@@ -672,7 +672,13 @@ async fn insert_page(
   .fetch_one(&mut *tx)
   .await?;
 
-  store::insert_root_snapshot(&mut tx, document.id, payload).await?;
+  // Seed the yrs base with the page's content, in the import's own transaction.
+  // `content_text` (the FTS index) is co-written with the base, so each imported
+  // page's BODY is searchable at once — batch import of a whole Notion workspace
+  // is the case that motivated this (100+ pages a user searches before opening
+  // any). Before S4 this wrote an op-model snapshot and built the base
+  // afterwards, best-effort and per page.
+  mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload.clone()).await?;
 
   let title = title.trim();
   let title = if title.is_empty() { "Untitled" } else { title };
@@ -696,18 +702,5 @@ async fn insert_page(
   .await?;
 
   tx.commit().await?;
-
-  // Eagerly build the yrs base so each imported page's BODY is searchable at
-  // once (batch import of a whole Notion workspace is the case that motivated
-  // this — 100+ pages a user searches before opening any). content_text lives on
-  // the base, built lazily on first open otherwise. Best-effort per page: the
-  // page is committed; no base degrades to "searchable on first open" (pre-M1),
-  // so one page's build failing must not abort the rest of the import.
-  if let Err(error) = mica_app_core::sync::bootstrap_base(&state.db, document.id).await {
-    tracing::warn!(
-      document_id = %document.id, %error,
-      "import: eager base build failed; page body searchable after first open"
-    );
-  }
   Ok(())
 }

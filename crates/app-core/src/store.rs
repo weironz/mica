@@ -85,12 +85,38 @@ pub struct FileRecord {
 #[derive(Debug, Clone)]
 pub struct AppliedUpdate {
   pub document: DocumentRecord,
-  pub snapshot: SnapshotRecord,
-  pub update: UpdateRecord,
+  pub snapshot: AppliedContent,
+  pub update: AppliedOperations,
   /// The SAME change expressed as a yrs update, folded into the document's
   /// base and appended to the workspace stream (see [`apply_derived_operations`]).
   /// Callers broadcast it so live editors converge without a rebootstrap.
   pub yrs: Option<AppliedYrs>,
+}
+
+/// The content a write produced, in the JSON shape REST clients already parse
+/// (`version_seq` / `schema_version` / `payload`).
+///
+/// Deliberately NOT a `document_snapshots` row: since S4 nothing writes that
+/// table, so there is no id and no `created_at` to report — and no row to look
+/// one up by. Reporting fields that address nothing would be the same
+/// double-representation lie the op model was retired for.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppliedContent {
+  pub version_seq: i64,
+  pub schema_version: i32,
+  pub payload: Value,
+}
+
+/// The operations a write derived, in the JSON shape REST/WS clients parse.
+/// Same reasoning as [`AppliedContent`]: no `document_updates` row backs it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppliedOperations {
+  pub seq: i64,
+  pub actor_id: Uuid,
+  /// Always `block_operations` — the only kind the op path ever emitted. Kept
+  /// on the wire because clients parse it.
+  pub update_kind: &'static str,
+  pub payload: Value,
 }
 
 /// The yrs half of an accepted op-model write: the stream `rid` it was assigned
@@ -101,8 +127,8 @@ pub struct AppliedYrs {
   pub update: Vec<u8>,
 }
 
-/// Apply structural operations against the latest snapshot under a row lock,
-/// append an immutable update, and store the resulting snapshot.
+/// Apply structural operations against the document's yrs base under a row lock,
+/// fold the result back into that base, and append it to the workspace stream.
 ///
 /// This is the single authoritative write path; REST and WebSocket callers both
 /// route through it so permission-checked sequencing stays consistent.
@@ -119,12 +145,12 @@ pub async fn apply_document_operations(
   .await
 }
 
-/// Like [`apply_document_operations`], but the ops are DERIVED from the document
-/// snapshot inside the same `FOR UPDATE` lock that applies them — so callers that
-/// compute ops from current state (e.g. the markdown write path: append after the
-/// end, insert after an anchor, delete existing) can't race a concurrent edit
-/// between reading and applying. `derive` gets the locked snapshot; its `Err`
-/// becomes a `BadRequest`.
+/// Like [`apply_document_operations`], but the ops are DERIVED from the document's
+/// current content inside the same `FOR UPDATE` lock that applies them — so
+/// callers that compute ops from current state (e.g. the markdown write path:
+/// append after the end, insert after an anchor, delete existing) can't race a
+/// concurrent edit between reading and applying. `derive` gets that locked
+/// content; its `Err` becomes a `BadRequest`.
 pub async fn apply_derived_operations<F>(
   db: &PgPool,
   workspace_id: Uuid,
@@ -153,20 +179,13 @@ where
       locked.current_seq
     )));
   }
-  let current_snapshot = latest_snapshot_tx(&mut tx, document_id)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-  let snapshot_payload = payload_from_value(current_snapshot.payload)
-    .map_err(|error| ApiError::BadRequest(format!("invalid document snapshot: {error}")))?;
-
-  // Derive from the YRS base, not the op-model snapshot: once a document has a
-  // yrs base (any document ever opened in the editor), [`current_payload`] —
-  // i.e. every read, export and MCP fetch — returns the yrs blocks and ignores
-  // the snapshot. Deriving from the snapshot meant ops were computed against a
-  // baseline nobody reads, then written somewhere nobody reads: writes returned
-  // ok, `current_seq` advanced, `document_snapshots` grew — and the content was
-  // invisible forever. `ensure_base_tx` folds the snapshot into a base on first
-  // touch, so documents that never had one keep working unchanged.
+  // Derive from the YRS base — the one representation every read consults.
+  // This used to derive from the op-model snapshot, which meant ops were
+  // computed against a baseline nobody reads, then written somewhere nobody
+  // reads: the write returned ok, `current_seq` advanced, `document_snapshots`
+  // grew — and the content was invisible forever. `ensure_base_tx` builds the
+  // base on first touch (folding a leftover snapshot, or empty), so documents
+  // from either era keep working unchanged.
   let base = crate::sync::ensure_base_tx(&mut tx, document_id).await?;
   let mut doc = mica_core::MicaDoc::from_update(&base.state)
     .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
@@ -174,18 +193,23 @@ where
   // A yrs base whose `meta.root` was wiped (see `MicaDoc::set_blocks`) reports an
   // empty root. Propagating that turns every read and write into
   // `block not found: ` with an empty id, and writes the empty value straight
-  // back out. The op-model snapshot still carries the document's real root, so
-  // prefer it over an empty one rather than failing the whole batch.
+  // back out. `documents.root_block_id` — already in hand from the FOR UPDATE
+  // lock — is the authoritative copy, so prefer it over an empty one rather
+  // than failing the whole batch.
   let yrs_root = doc.root_block_id();
   let root_block_id = if yrs_root.is_empty() {
-    snapshot_payload.root_block_id.clone()
+    locked.root_block_id.clone()
   } else {
     yrs_root
   };
   let mut current_payload = DocumentSnapshotPayload {
-    schema_version: snapshot_payload.schema_version,
+    schema_version: 1,
     root_block_id,
-    blocks: doc.to_blocks().into_iter().map(md_block_from_core).collect(),
+    blocks: doc
+      .to_blocks()
+      .into_iter()
+      .map(md_block_from_core)
+      .collect(),
   };
   // Heal a lost root before deriving ops against it, otherwise every write to a
   // damaged document fails the whole batch on `block not found`. Unlike the read
@@ -283,32 +307,24 @@ where
     serde_json::to_value(&operations).map_err(|error| ApiError::Internal(error.to_string()))?;
   let next_seq = locked.current_seq + 1;
 
-  let update = sqlx::query_as::<_, UpdateRecord>(
-    r#"
-      INSERT INTO document_updates (document_id, seq, actor_id, update_kind, payload)
-      VALUES ($1, $2, $3, 'block_operations', $4)
-      RETURNING id, document_id, seq, actor_id, update_kind, payload, created_at
-    "#,
-  )
-  .bind(document_id)
-  .bind(next_seq)
-  .bind(actor_id)
-  .bind(json!({ "operations": operations_value }))
-  .fetch_one(&mut *tx)
-  .await?;
-
-  let snapshot = sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      INSERT INTO document_snapshots (document_id, version_seq, schema_version, payload)
-      VALUES ($1, $2, 1, $3)
-      RETURNING id, document_id, version_seq, schema_version, payload, created_at
-    "#,
-  )
-  .bind(document_id)
-  .bind(next_seq)
-  .bind(next_payload_value)
-  .fetch_one(&mut *tx)
-  .await?;
+  // S4: the op-model tables are no longer written. `document_updates` and
+  // `document_snapshots` used to be INSERTed here alongside the yrs write above
+  // — a second representation of the same change, which is exactly how the two
+  // stores drifted apart (red line #1). The yrs base + `workspace_updates` are
+  // now the sole record; what the caller gets back is that same change reported
+  // in the shape REST/WS clients already parse, not a row read back from a
+  // table. `document_yrs_versions` (written above) carries version history.
+  let update = AppliedOperations {
+    seq: next_seq,
+    actor_id,
+    update_kind: "block_operations",
+    payload: json!({ "operations": operations_value }),
+  };
+  let snapshot = AppliedContent {
+    version_seq: next_seq,
+    schema_version: 1,
+    payload: next_payload_value,
+  };
 
   let document = sqlx::query_as::<_, DocumentRecord>(
     r#"
@@ -423,50 +439,66 @@ fn ensure_root_block(payload: &mut DocumentSnapshotPayload) {
 }
 
 /// The document's CURRENT block payload for *reads* — bootstrap, export, outline,
-/// search. Once a document is edited through the yrs sync path its live content
-/// lives in `document_yrs_base`, while the op-model `document_snapshots` stays
-/// frozen at the pre-yrs seed (P4①b dropped the periodic snapshot fold). Reading
-/// the raw snapshot therefore returns near-empty content for any doc that's been
-/// opened in the collaborative editor — the root cause of "cloud page exports
-/// blank / re-opens blank". Prefer the folded yrs base (materialize blocks from
-/// it) when present; fall back to the op-model snapshot for docs never touched
-/// via yrs. `None` only when the document has neither.
+/// search. The live content is the folded yrs base; that is the only
+/// representation anything writes since S4 retired the op model.
+///
+/// The `document_snapshots` fallback below is the reverse of what this function
+/// used to do (snapshot first, base overlaid on top). It survives only for
+/// pre-yrs documents that somehow still have no base — the 0.13.3 backfill drove
+/// that population to zero in production, and every write path now seeds a base
+/// in-transaction, so it should never fire. It costs one query on a path that
+/// already does one and it is what stands between a missed document and a page
+/// that reads back blank, so it stays until S5 drops the table. `None` only when
+/// the document has neither.
 ///
 /// Read-only: this never mutates state, so it can't corrupt data — it only
-/// changes which representation a read returns. The op-model write path
-/// ([`apply_derived_operations`]) deliberately still reads the raw snapshot; it
-/// operates in the op-model world and is a separate concern.
+/// changes which representation a read returns.
 pub async fn current_payload(
+  db: &PgPool,
+  document_id: Uuid,
+) -> ApiResult<Option<DocumentSnapshotPayload>> {
+  let Some(base) = crate::sync::document_base(db, document_id).await? else {
+    return legacy_snapshot_payload(db, document_id).await;
+  };
+  let doc = mica_core::MicaDoc::from_update(&base.state)
+    .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
+  // A base whose `meta.root` was wiped (see `MicaDoc::set_blocks`) reports an
+  // empty root, and an empty root makes every read fail with `block not found: `
+  // — an empty id in that message is this exact case. `documents.root_block_id`
+  // is the authoritative copy, so heal from it rather than propagate the hole.
+  let mut root_block_id = doc.root_block_id();
+  if root_block_id.is_empty() {
+    root_block_id = sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
+      .bind(document_id)
+      .fetch_optional(db)
+      .await?
+      .unwrap_or_default();
+  }
+  let mut payload = DocumentSnapshotPayload {
+    schema_version: 1,
+    root_block_id,
+    blocks: doc
+      .to_blocks()
+      .into_iter()
+      .map(md_block_from_core)
+      .collect(),
+  };
+  ensure_root_block(&mut payload);
+  Ok(Some(payload))
+}
+
+/// Pre-yrs content, straight out of `document_snapshots`. See [`current_payload`]
+/// for why this path is expected to be dead and kept anyway.
+async fn legacy_snapshot_payload(
   db: &PgPool,
   document_id: Uuid,
 ) -> ApiResult<Option<DocumentSnapshotPayload>> {
   let Some(snapshot) = latest_snapshot(db, document_id).await? else {
     return Ok(None);
   };
-  // op-model snapshot carries schema_version + the fallback content for docs
-  // never touched via yrs.
-  let mut payload = payload_from_value(snapshot.payload)
-    .map_err(|error| ApiError::Internal(format!("invalid document snapshot: {error}")))?;
-  if let Some(base) = crate::sync::document_base(db, document_id).await? {
-    let doc = mica_core::MicaDoc::from_update(&base.state).map_err(|error| {
-      ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}"))
-    })?;
-    // Only adopt the yrs root when it actually has one. A base whose `meta.root`
-    // was wiped (see `MicaDoc::set_blocks`) reports an empty id, and clobbering
-    // the snapshot's still-correct root with it makes every read fail with
-    // `block not found: ` — an empty id in the message is this exact case.
-    let yrs_root = doc.root_block_id();
-    if !yrs_root.is_empty() {
-      payload.root_block_id = yrs_root;
-    }
-    payload.blocks = doc
-      .to_blocks()
-      .into_iter()
-      .map(md_block_from_core)
-      .collect();
-    ensure_root_block(&mut payload);
-  }
-  Ok(Some(payload))
+  payload_from_value(snapshot.payload)
+    .map(Some)
+    .map_err(|error| ApiError::Internal(format!("invalid document snapshot: {error}")))
 }
 
 /// Decode a stored yrs version blob (from `document_yrs_versions.state`) into a
@@ -478,40 +510,12 @@ pub fn yrs_state_to_payload(state: &[u8]) -> ApiResult<DocumentSnapshotPayload> 
   Ok(DocumentSnapshotPayload {
     schema_version: 1,
     root_block_id: doc.root_block_id(),
-    blocks: doc.to_blocks().into_iter().map(md_block_from_core).collect(),
+    blocks: doc
+      .to_blocks()
+      .into_iter()
+      .map(md_block_from_core)
+      .collect(),
   })
-}
-
-/// Insert the empty starting snapshot (`version_seq = 0`) for a new document.
-pub async fn insert_initial_snapshot(
-  tx: &mut Transaction<'_, Postgres>,
-  document: &DocumentRecord,
-) -> ApiResult<SnapshotRecord> {
-  let payload = json!({
-    "schema_version": 1,
-    "root_block_id": document.root_block_id,
-    "blocks": [
-      {
-        "id": document.root_block_id,
-        "type": "paragraph",
-        "text": "",
-        "children": []
-      }
-    ]
-  });
-
-  sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      INSERT INTO document_snapshots (document_id, version_seq, schema_version, payload)
-      VALUES ($1, 0, 1, $2)
-      RETURNING id, document_id, version_seq, schema_version, payload, created_at
-    "#,
-  )
-  .bind(document.id)
-  .bind(payload)
-  .fetch_one(&mut **tx)
-  .await
-  .map_err(ApiError::from)
 }
 
 async fn lock_document_tx(
@@ -719,30 +723,6 @@ pub async fn create_named_yrs_version(
   .fetch_optional(db)
   .await?
   .ok_or(ApiError::NotFound)
-}
-
-/// Store an imported document's initial state as its `version_seq = 0` snapshot.
-pub async fn insert_root_snapshot(
-  tx: &mut Transaction<'_, Postgres>,
-  document_id: Uuid,
-  payload: &DocumentSnapshotPayload,
-) -> ApiResult<SnapshotRecord> {
-  let value =
-    serde_json::to_value(payload).map_err(|error| ApiError::Internal(error.to_string()))?;
-
-  sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      INSERT INTO document_snapshots (document_id, version_seq, schema_version, payload)
-      VALUES ($1, 0, $2, $3)
-      RETURNING id, document_id, version_seq, schema_version, payload, created_at
-    "#,
-  )
-  .bind(document_id)
-  .bind(payload.schema_version)
-  .bind(value)
-  .fetch_one(&mut **tx)
-  .await
-  .map_err(ApiError::from)
 }
 
 /// Record metadata for an uploaded object. The unique `object_key` makes a

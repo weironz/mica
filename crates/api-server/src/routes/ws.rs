@@ -263,17 +263,19 @@ async fn send_bootstrap(
     .await
     .map_err(|_| ())?
     .ok_or(())?;
-  let snapshot = store::latest_snapshot(&state.db, document_id)
-    .await
-    .map_err(|_| ())?
-    .ok_or(())?;
-
+  // `snapshot` is vestigial: this socket carries yrs updates, and the client
+  // reads only `connection_id` out of this frame (`sync_client.dart` — the
+  // session even comments that it ignores the op snapshot). Since S4 stopped
+  // writing `document_snapshots` there is usually nothing to put here, and
+  // failing the whole bootstrap over its absence — as this did — would close the
+  // socket on every document created from then on. Send null and move on;
+  // dropping the field outright is a wire change that buys nothing.
   let bootstrap = json!({
     "type": "document.bootstrap",
     "document_id": document_id,
     "connection_id": connection_id,
     "server_seq": document.current_seq,
-    "snapshot": snapshot.payload,
+    "snapshot": serde_json::Value::Null,
     "permissions": permissions,
   });
   socket
@@ -612,7 +614,7 @@ async fn send_all(socket: &mut WebSocket, messages: Vec<String>) -> Result<(), (
 mod tests {
   use super::*;
   use chrono::Utc;
-  use mica_app_core::store::{DocumentRecord, SnapshotRecord, UpdateRecord};
+  use mica_app_core::store::{self, DocumentRecord};
   use serde_json::json;
 
   /// The gate ships INERT: the default floor is 0, so every client — including
@@ -663,22 +665,16 @@ mod tests {
         created_at: now,
         updated_at: now,
       },
-      snapshot: SnapshotRecord {
-        id: Uuid::from_u128(4),
-        document_id,
+      snapshot: store::AppliedContent {
         version_seq: 5,
         schema_version: 1,
         payload: json!({ "schema_version": 1 }),
-        created_at: now,
       },
-      update: UpdateRecord {
-        id: Uuid::from_u128(5),
-        document_id,
+      update: store::AppliedOperations {
         seq: 5,
         actor_id: Uuid::from_u128(3),
-        update_kind: "block_operations".to_string(),
+        update_kind: "block_operations",
         payload: json!({ "operations": [] }),
-        created_at: now,
       },
       // These tests cover the op-model `accepted_event` shape only; the yrs
       // half is exercised against a real database in app-core's sync_pg.

@@ -889,3 +889,124 @@ async fn backfill_builds_a_base_for_a_snapshot_only_document() {
 
     cleanup(&db, ws, user).await;
 }
+
+/// Remove the op-model snapshot `seed_doc` writes, so the fixture matches what
+/// every write path produces now: nothing in `document_snapshots`.
+async fn drop_snapshot(db: &PgPool, doc: Uuid) {
+    sqlx::query("DELETE FROM document_snapshots WHERE document_id=$1")
+        .bind(doc)
+        .execute(db)
+        .await
+        .unwrap();
+}
+
+/// Seed a document the way the world looks AFTER S4: a `documents` row plus a
+/// yrs base, and no `document_snapshots` row at all.
+async fn seed_doc_post_s4(db: &PgPool) -> (Uuid, Uuid, Uuid) {
+    let (ws, doc, user) = seed_doc(db).await;
+    drop_snapshot(db, doc).await;
+    let mut tx = db.begin().await.unwrap();
+    sync::seed_base_tx(&mut tx, doc, sync::empty_payload("r"))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    (ws, doc, user)
+}
+
+async fn op_rows(db: &PgPool, doc: Uuid) -> (i64, i64) {
+    let updates: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM document_updates WHERE document_id=$1")
+            .bind(doc)
+            .fetch_one(db)
+            .await
+            .unwrap();
+    let snapshots: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM document_snapshots WHERE document_id=$1")
+            .bind(doc)
+            .fetch_one(db)
+            .await
+            .unwrap();
+    (updates, snapshots)
+}
+
+/// S4's whole point, stated as the thing that must STAY true: an accepted write
+/// adds no row to `document_updates` or `document_snapshots`.
+///
+/// This is a negative claim, and negative claims are the ones that rot in
+/// silence — re-adding an `INSERT INTO document_snapshots` breaks nothing and no
+/// test goes red, exactly the failure mode that left docs/roadmap.md full of
+/// stale "we don't have X" entries. So assert it directly: count before, write,
+/// count after. S5 (dropping the tables) is only safe while this holds.
+#[tokio::test]
+async fn a_write_no_longer_grows_the_op_tables() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc_post_s4(&db).await;
+    assert_eq!(op_rows(&db, doc).await, (0, 0), "fixture must start clean");
+
+    let applied = store::apply_document_operations(
+        &db,
+        ws,
+        doc,
+        user,
+        &[mica_app_core::documents::DocumentOperation::InsertBlock {
+            block: mica_markdown::Block {
+                id: "b1".to_string(),
+                kind: "paragraph".to_string(),
+                text: "written after S4".to_string(),
+                data: serde_json::Value::Null,
+                children: Vec::new(),
+            },
+            parent_id: "r".to_string(),
+            index: Some(0),
+        }],
+    )
+    .await
+    .expect("a document with no snapshot must still accept writes");
+
+    assert_eq!(
+        op_rows(&db, doc).await,
+        (0, 0),
+        "the op tables must not grow — S4 retired them as writers"
+    );
+
+    // ...and the write is genuinely there, in the one representation that is
+    // left. A test that only counted rows would also pass if writes had silently
+    // stopped working.
+    assert!(applied.yrs.is_some(), "the yrs half IS the write now");
+    let payload = store::current_payload(&db, doc)
+        .await
+        .unwrap()
+        .expect("a snapshot-less document must still read");
+    assert!(
+        payload.blocks.iter().any(|b| b.text == "written after S4"),
+        "content must round-trip through the yrs base alone, got {:?}",
+        payload.blocks
+    );
+    assert_eq!(payload.root_block_id, "r", "root survives with no snapshot");
+
+    cleanup(&db, ws, user).await;
+}
+
+/// `ensure_base_tx` used to fail with 404 when a document had no op-model
+/// snapshot to fold. Post-S4 that is the NORMAL state of every newly created
+/// document, so the fallback is `documents.root_block_id` — an empty page, not
+/// an error. Without it, opening any document created after the retirement
+/// would close the socket.
+#[tokio::test]
+async fn a_document_with_no_snapshot_builds_its_base_from_the_documents_row() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    drop_snapshot(&db, doc).await;
+
+    let base = sync::bootstrap_base(&db, doc)
+        .await
+        .expect("no snapshot is not an error any more");
+    let head = MicaDoc::from_update(&base.state).unwrap();
+    assert_eq!(
+        head.root_block_id(),
+        "r",
+        "the root must come from documents.root_block_id"
+    );
+
+    cleanup(&db, ws, user).await;
+}

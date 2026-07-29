@@ -296,9 +296,17 @@ pub async fn backfill_yrs_bases(db: &PgPool) -> ApiResult<usize> {
     Ok(built)
 }
 
-/// Load the document's folded yrs base, building it from the latest op-model
-/// snapshot on first access (the lazy migration bridge). Errors if the document
-/// has neither a yrs base nor a snapshot.
+/// Load the document's folded yrs base, building it on first access. Errors if
+/// the document row itself is gone.
+///
+/// Two ways to build it, in order:
+///  1. from a leftover op-model snapshot — the lazy migration bridge for
+///     documents that predate the yrs base and were never opened since;
+///  2. from `documents.root_block_id` — an empty page. Since S4 retired the op
+///     model nothing writes `document_snapshots` any more, so every document
+///     created from then on arrives here with no snapshot to fold. That is not
+///     an error: the `documents` row is the authoritative root, and the snapshot
+///     only ever held a copy of it.
 pub(crate) async fn ensure_base_tx(
     tx: &mut Transaction<'_, Postgres>,
     document_id: Uuid,
@@ -318,12 +326,54 @@ pub(crate) async fn ensure_base_tx(
         });
     }
 
-    // No yrs base yet — build one from the existing op-model snapshot.
-    let snapshot = latest_snapshot_tx(tx, document_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    let payload: DocumentSnapshotPayload = serde_json::from_value(snapshot.payload)
-        .map_err(|e| ApiError::Internal(format!("bad snapshot payload: {e}")))?;
+    let payload = match latest_snapshot_tx(tx, document_id).await? {
+        Some(snapshot) => serde_json::from_value::<DocumentSnapshotPayload>(snapshot.payload)
+            .map_err(|e| ApiError::Internal(format!("bad snapshot payload: {e}")))?,
+        None => {
+            let root: String =
+                sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
+                    .bind(document_id)
+                    .fetch_optional(&mut **tx)
+                    .await?
+                    .ok_or(ApiError::NotFound)?;
+            empty_payload(&root)
+        }
+    };
+    seed_base_tx(tx, document_id, payload).await
+}
+
+/// A brand-new page: a single empty paragraph that IS the root. This is the
+/// exact shape `store::insert_initial_snapshot` used to write into
+/// `document_snapshots`; since S4 it goes straight into the yrs base instead.
+pub fn empty_payload(root_block_id: &str) -> DocumentSnapshotPayload {
+    DocumentSnapshotPayload {
+        schema_version: 1,
+        root_block_id: root_block_id.to_string(),
+        blocks: vec![mica_markdown::Block {
+            id: root_block_id.to_string(),
+            kind: "paragraph".to_string(),
+            text: String::new(),
+            data: serde_json::Value::Null,
+            children: Vec::new(),
+        }],
+    }
+}
+
+/// Write a document's FIRST yrs base straight from `payload`, in the caller's
+/// transaction — the S4 replacement for `store::insert_root_snapshot`.
+///
+/// Runs in the same tx that inserts the `documents` row, so a created/imported/
+/// cloned document owns its base atomically. That is strictly stronger than the
+/// post-commit `bootstrap_base` best-effort it replaces: there is no window in
+/// which the document exists with no content to read.
+///
+/// A no-op when a base already exists (`ON CONFLICT DO NOTHING`), returning the
+/// stored one — see the race note below for why the stored winner and not ours.
+pub async fn seed_base_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    document_id: Uuid,
+    payload: DocumentSnapshotPayload,
+) -> ApiResult<YrsBase> {
     let blocks: Vec<CoreBlock> = payload.blocks.into_iter().map(to_core_block).collect();
     let doc = MicaDoc::from_blocks(&payload.root_block_id, &blocks);
     let state = doc.encode_state();

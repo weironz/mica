@@ -14,7 +14,7 @@ use mica_app_core::{
     DocumentOperation, DocumentSnapshotPayload, export_html, export_html_document,
     export_markdown_with_assets, import_markdown, set_image_srcs,
   },
-  store::{self, DocumentRecord, SnapshotRecord, UpdateRecord},
+  store::{self, DocumentRecord},
 };
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
@@ -108,14 +108,14 @@ pub struct DocumentCreateResponse {
 pub struct DocumentBootstrapResponse {
   document: DocumentRecord,
   view: View,
-  snapshot: SnapshotRecord,
+  snapshot: store::AppliedContent,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DocumentUpdateResponse {
   document: DocumentRecord,
-  snapshot: SnapshotRecord,
-  update: UpdateRecord,
+  snapshot: store::AppliedContent,
+  update: store::AppliedOperations,
 }
 
 #[derive(Debug, Serialize)]
@@ -468,7 +468,16 @@ pub async fn create_document(
   .fetch_one(&mut *tx)
   .await?;
 
-  store::insert_initial_snapshot(&mut tx, &document).await?;
+  // A new page owns its yrs base from birth, written in the same transaction as
+  // its `documents` row. Before S4 this wrote an op-model snapshot instead and
+  // the base was built afterwards, best-effort — so a document could exist for a
+  // moment with no content to read, and stayed unsearchable until first open.
+  mica_app_core::sync::seed_base_tx(
+    &mut tx,
+    document.id,
+    mica_app_core::sync::empty_payload(&document.root_block_id),
+  )
+  .await?;
 
   let position = Uuid::now_v7().to_string();
   let view = sqlx::query_as::<_, View>(
@@ -509,34 +518,7 @@ pub async fn create_document(
 
   tx.commit().await?;
 
-  bootstrap_bases_best_effort(&state.db, &[document.id], "create_document").await;
-
   Ok(Json(DocumentCreateResponse { document, view }))
-}
-
-/// Build the yrs base for documents that were just created from an op-model
-/// snapshot, so they are not left with only the legacy half.
-///
-/// Every write path other than these creates its base on first edit, through
-/// `ensure_base_tx`'s lazy bridge — which reads the op-model snapshot. That
-/// bridge is the thing op-model retirement removes, and a document whose only
-/// content lives in `document_snapshots` would then have nowhere to migrate
-/// from: its first edit 404s. Building the base at birth is what lets the old
-/// tables go.
-///
-/// Best-effort and post-commit, matching the import paths: the rows are already
-/// durable, and a document without a base still opens (it just takes the lazy
-/// path today, and its body is unsearchable until first open). Failing the
-/// request over this would trade a real user action for a background nicety.
-async fn bootstrap_bases_best_effort(db: &sqlx::PgPool, document_ids: &[Uuid], what: &str) {
-  for id in document_ids {
-    if let Err(error) = mica_app_core::sync::bootstrap_base(db, *id).await {
-      tracing::warn!(
-        document_id = %id, %error,
-        "{what}: eager yrs base build failed; falls back to lazy build on first open"
-      );
-    }
-  }
 }
 
 /// `POST /api/workspaces/{workspace_id}/folders`
@@ -641,7 +623,17 @@ pub async fn import_document_markdown(
 
   let mut imported = import_markdown(&payload.markdown, &root_block_id);
   rewire_blob_hrefs(&mut imported.blocks, workspace_id);
-  let snapshot = store::insert_root_snapshot(&mut tx, document.id, &imported).await?;
+  // Seed the yrs base with the imported content, in the import's own
+  // transaction. This also makes the body searchable immediately: `content_text`
+  // (the FTS index) is co-written with the base, so an imported-but-never-opened
+  // page is findable by its body, not just its title.
+  mica_app_core::sync::seed_base_tx(&mut tx, document.id, imported.clone()).await?;
+  let snapshot = store::AppliedContent {
+    version_seq: 0,
+    schema_version: imported.schema_version,
+    payload: serde_json::to_value(&imported)
+      .map_err(|error| ApiError::Internal(error.to_string()))?,
+  };
 
   let position = Uuid::now_v7().to_string();
   let view = sqlx::query_as::<_, View>(
@@ -681,21 +673,6 @@ pub async fn import_document_markdown(
   .await?;
 
   tx.commit().await?;
-
-  // Eagerly build the yrs base so the imported BODY is searchable immediately.
-  // Import writes only an op-model snapshot; `content_text` (the FTS index) lives
-  // on the yrs base, which is otherwise built lazily on first open — so without
-  // this an imported-but-never-opened page's body is unsearchable (title always
-  // is). Best-effort: the import already committed, and a doc with no base just
-  // degrades to "searchable on first open" (the pre-M1 behavior), so a hiccup
-  // here must never fail the import. Reuses the same builder the WS bootstrap and
-  // startup backfill use — no new write path.
-  if let Err(error) = mica_app_core::sync::bootstrap_base(&state.db, document.id).await {
-    tracing::warn!(
-      document_id = %document.id, %error,
-      "import: eager base build failed; body searchable after first open"
-    );
-  }
 
   Ok(Json(DocumentBootstrapResponse {
     document,
@@ -1139,16 +1116,20 @@ pub async fn bootstrap_document(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-  let mut snapshot = store::latest_snapshot(&state.db, document_id)
+  // Live content, materialized from the yrs base. `version_seq` reports the
+  // document's own seq rather than a `document_snapshots` row id: since S4 that
+  // table has no current row to report, and the client only ever used this
+  // number to tell one read apart from a later one — which `current_seq` does
+  // exactly, and honestly.
+  let payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  // Serve LIVE content: for a doc edited via yrs sync the op-model snapshot is
-  // frozen at the pre-yrs seed, so materialize the current blocks from the yrs
-  // base — otherwise re-opening the page renders a near-blank stub.
-  if let Some(payload) = store::current_payload(&state.db, document_id).await? {
-    snapshot.payload =
-      serde_json::to_value(&payload).map_err(|error| ApiError::Internal(error.to_string()))?;
-  }
+  let snapshot = store::AppliedContent {
+    version_seq: document.current_seq,
+    schema_version: payload.schema_version,
+    payload: serde_json::to_value(&payload)
+      .map_err(|error| ApiError::Internal(error.to_string()))?,
+  };
 
   Ok(Json(DocumentBootstrapResponse {
     document,
@@ -2280,8 +2261,9 @@ async fn workspace_markdown(
       // that silently reduces to its heading with the body gone is a backup that
       // LOOKS complete and isn't — the incident B shape. Matches the single-doc
       // export path (`export_markdown`) which already `?`s this. (P1-3.)
-      let markdown = export_markdown_with_assets(&payload, &assets)
-        .map_err(|error| ApiError::BadRequest(format!("export failed for page {}: {error}", view.name)))?;
+      let markdown = export_markdown_with_assets(&payload, &assets).map_err(|error| {
+        ApiError::BadRequest(format!("export failed for page {}: {error}", view.name))
+      })?;
       let body = markdown.trim();
       if !body.is_empty() {
         out.push_str(body);
@@ -3173,7 +3155,7 @@ pub async fn transfer_view(
       .bind(user_id)
       .fetch_one(&mut *tx)
       .await?;
-      store::insert_root_snapshot(&mut tx, document.id, &payload).await?;
+      mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload).await?;
       created_document_ids.push(document.id);
       sqlx::query(
         r#"
@@ -3229,8 +3211,6 @@ pub async fn transfer_view(
   }
 
   tx.commit().await?;
-
-  bootstrap_bases_best_effort(&state.db, &created_document_ids, "transfer_view").await;
 
   Ok(Json(TransferResponse {
     new_root_view_id: Some(view_map[&view_id]),
@@ -3424,7 +3404,7 @@ pub async fn clone_view(
       .bind(user_id)
       .fetch_one(&mut *tx)
       .await?;
-      store::insert_root_snapshot(&mut tx, document.id, &payload).await?;
+      mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload).await?;
       created_document_ids.push(document.id);
       sqlx::query(
         r#"
@@ -3460,8 +3440,6 @@ pub async fn clone_view(
     }
   }
   tx.commit().await?;
-
-  bootstrap_bases_best_effort(&state.db, &created_document_ids, "clone_view").await;
 
   Ok(Json(CloneResponse {
     new_root_view_id: Some(view_map[&view_id]),
@@ -4538,26 +4516,31 @@ mod tests {
 
       // Literal "100%" matches only the doc that actually contains "100%".
       let hits = search_views(&db, ws, "100%").await.unwrap();
-      assert_eq!(hits.len(), 1, "only the literal '100%' body, not '100 percent': {hits:?}");
+      assert_eq!(
+        hits.len(),
+        1,
+        "only the literal '100%' body, not '100 percent': {hits:?}"
+      );
       assert_eq!(hits[0].view_id, view_p);
     }
 
     /// S1 (op-model retirement): a document created through `create_document`
     /// must have its yrs base built at birth, not lazily on first edit.
     ///
-    /// Until now three paths — create / transfer / clone — wrote only the
-    /// op-model snapshot and relied on `ensure_base_tx`'s lazy bridge to build
-    /// the base out of it on the first write. That bridge is exactly what
-    /// retiring the op model removes; a document whose content lived only in
-    /// `document_snapshots` would then have nothing to migrate from and its
-    /// first edit would 404. This pins the invariant the retirement depends on:
-    /// **every new document owns a base immediately.**
+    /// Three paths — create / transfer / clone — used to write only the op-model
+    /// snapshot and rely on `ensure_base_tx`'s lazy bridge to build the base out
+    /// of it on the first write. S4 retired that writer, so the base is now
+    /// seeded in the SAME transaction as the `documents` row. This pins the
+    /// invariant the retirement depends on: **every new document owns a base
+    /// immediately** — and, because the seed is in-tx rather than a post-commit
+    /// best effort, with no window in between.
     #[tokio::test]
     async fn a_created_document_owns_a_yrs_base_immediately() {
       let Some(db) = pool().await else { return };
       let (ws, user) = seed_workspace(&db).await;
 
-      // Same shape create_document commits, then the same post-commit hook.
+      // The same two statements create_document commits, in one transaction.
+      let mut tx = db.begin().await.unwrap();
       let document = sqlx::query_as::<_, DocumentRecord>(
         r#"
           INSERT INTO documents (workspace_id, root_block_id, created_by)
@@ -4567,14 +4550,17 @@ mod tests {
       )
       .bind(ws)
       .bind(user)
-      .fetch_one(&db)
+      .fetch_one(&mut *tx)
       .await
       .unwrap();
-      let mut tx = db.begin().await.unwrap();
-      store::insert_initial_snapshot(&mut tx, &document).await.unwrap();
+      mica_app_core::sync::seed_base_tx(
+        &mut tx,
+        document.id,
+        mica_app_core::sync::empty_payload(&document.root_block_id),
+      )
+      .await
+      .unwrap();
       tx.commit().await.unwrap();
-
-      bootstrap_bases_best_effort(&db, &[document.id], "test").await;
 
       let bases: i64 =
         sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
@@ -4868,30 +4854,54 @@ mod tests {
       .await
       .unwrap();
 
-      let (views_deleted, docs_deleted) =
-        purge_view_subtree(&db, ws, view).await.unwrap();
+      let (views_deleted, docs_deleted) = purge_view_subtree(&db, ws, view).await.unwrap();
       assert!(views_deleted >= 1, "the view subtree was removed");
       assert_eq!(docs_deleted, 1, "the backing document was removed");
 
       // Nothing that referenced the document may survive — the view, the
       // document, and every cascaded child table (CRDT base, snapshot, share).
       async fn count(db: &PgPool, sql: &'static str, id: Uuid) -> i64 {
-        sqlx::query_scalar(sql).bind(id).fetch_one(db).await.unwrap()
+        sqlx::query_scalar(sql)
+          .bind(id)
+          .fetch_one(db)
+          .await
+          .unwrap()
       }
-      assert_eq!(count(&db, "SELECT count(*) FROM views WHERE id=$1", view).await, 0);
-      assert_eq!(count(&db, "SELECT count(*) FROM documents WHERE id=$1", doc).await, 0);
       assert_eq!(
-        count(&db, "SELECT count(*) FROM document_yrs_base WHERE document_id=$1", doc).await,
+        count(&db, "SELECT count(*) FROM views WHERE id=$1", view).await,
+        0
+      );
+      assert_eq!(
+        count(&db, "SELECT count(*) FROM documents WHERE id=$1", doc).await,
+        0
+      );
+      assert_eq!(
+        count(
+          &db,
+          "SELECT count(*) FROM document_yrs_base WHERE document_id=$1",
+          doc
+        )
+        .await,
         0,
         "CRDT content left behind after purge"
       );
       assert_eq!(
-        count(&db, "SELECT count(*) FROM document_snapshots WHERE document_id=$1", doc).await,
+        count(
+          &db,
+          "SELECT count(*) FROM document_snapshots WHERE document_id=$1",
+          doc
+        )
+        .await,
         0,
         "snapshot left behind after purge"
       );
       assert_eq!(
-        count(&db, "SELECT count(*) FROM document_shares WHERE document_id=$1", doc).await,
+        count(
+          &db,
+          "SELECT count(*) FROM document_shares WHERE document_id=$1",
+          doc
+        )
+        .await,
         0,
         "public share token left behind after purge"
       );
