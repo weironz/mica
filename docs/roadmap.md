@@ -80,7 +80,10 @@
 - 🆕 **op 模型表无界增长**(medium) —— 每次 REST/MCP 写入落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE;该路径还追加 `workspace_updates` 但没有 push_update 那套修剪。op 模型「随 P2-M4 退役」的前置**已解除**(P2-M4 主干已上线)。退役分 6 步,**S0/S1 已完成(2026-07-29)**:
   - ~~**S0 删死代码**~~ ✅ —— 删掉 7 个零调用者函数(文档只点名了 `create_named_version`/`restore_snapshot`,实际排查还有 `list_updates`/`list_versions`/`fetch_version`/`fetch_snapshot`/`fetch_snapshot_by_version_seq`)+ 随之成为孤儿的 `VersionRecord`,共 ~245 行。
   - ~~**S1 补齐「只走 op 模型」的路径**~~ ✅ —— **这是退役真正的拦路虎**:`create_document`/`transfer_view`/`clone_view` 三条只写 op-model 快照、不建 yrs base,全靠 `ensure_base_tx` 的惰性桥在首次编辑时**从快照**现造 base。而那座桥正是退役要拆的东西 —— 直接停写快照,这些文档首次编辑就 404。现已在三处提交后补 `bootstrap_base`(best-effort,与 import 两条路径同款),新文档一出生就有 base。回归测试 `a_created_document_owns_a_yrs_base_immediately`(真 PG 门控)。
-  - 🟡 **S2 存量体检 + 回填** —— **已量、已实现,待随发版生效**(2026-07-29)。生产实测:
+  - ~~**S2 存量体检 + 回填**~~ ✅ **已完成并在生产跑完**(v0.13.3,2026-07-29)——
+    上线后日志 `yrs base backfill: built 1428 base(s)`,复量 `missing_base = 0`、
+    `document_yrs_base` 2307 → **3735 = 文档总数**(1428+2307 一篇不差)。**S4 的前提
+    (每篇文档都有 base)现已成立。**原始量数与实现说明:
     **3735 篇文档里 1428 篇(38%)没有 yrs base**,但**全部都有快照**(0 篇两头皆空),
     所以全部可回填;`document_snapshots` 3973 行/22MB、`document_updates` 238 行/440kB、
     `document_yrs_base` 2307 行/24MB。实现 `sync::backfill_yrs_bases`(形状对齐已有的
