@@ -138,13 +138,13 @@ Future<JSString> _runWebSync(String apiBase) async {
     final readyA = Completer<void>();
     final readyB = Completer<void>();
     final a = CloudSyncSession(
-      uri: sock(),
+      uri: () async => sock(),
       clientId: BigInt.zero,
       onReady: (_, _) => readyA.isCompleted ? null : readyA.complete(),
       onRemoteBlocks: (_) {},
     );
     final b = CloudSyncSession(
-      uri: sock(),
+      uri: () async => sock(),
       clientId: BigInt.zero,
       onReady: (_, _) => readyB.isCompleted ? null : readyB.complete(),
       onRemoteBlocks: (_) {},

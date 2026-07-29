@@ -59,8 +59,19 @@ class CloudSyncSession {
     this.persistence,
   });
 
-  /// The document WebSocket URI (already carrying the auth token).
-  final Uri uri;
+  /// Builds the document WebSocket URI — called once per connection ATTEMPT,
+  /// never captured.
+  ///
+  /// It has to be a builder because the URI carries the access token and the
+  /// token lapses in an hour, while a session stays open as long as the page
+  /// does. Held as a plain `Uri`, every reconnect after that hour replayed a
+  /// dead token, got 401, and backed off again — the session went quiet and
+  /// nothing said so; only switching documents (a fresh session, fresh token)
+  /// brought sync back.
+  ///
+  /// Async on purpose: the host renews the token inside this callback, so a
+  /// reconnect *waits for* a fresh one instead of racing it.
+  final Future<Uri> Function() uri;
 
   /// This device's stable CRDT actor id. Desktop pins the replica to it (from
   /// the local store identity) so all of a device's edits share one actor
@@ -126,11 +137,23 @@ class CloudSyncSession {
   int _faultCount = 0;
   static const int _maxAutoReheal = 3;
 
+  /// How many un-acked pushes may be in flight at once. Picked to be large
+  /// enough that ordinary typing never touches the limit (each entry is one
+  /// debounced edit) and small enough that a long-offline reconnect paces
+  /// itself instead of arriving as one burst.
+  static const int _pushWindow = 64;
+
   /// Auto-reconnect (capped exponential backoff): a dropped socket / transient
   /// network loss re-syncs on its own instead of staying dead until the doc is
   /// reopened. No connectivity package — the backoff just retries until the
   /// network returns (in-house-first). Reset once a frame proves the link live.
   Timer? _reconnectTimer;
+
+  /// True while [_openSocket] is awaiting [uri]. `_channel` is still null in
+  /// that window, so without this a second connect() (backoff timer firing,
+  /// a manual reconnect) would slip past the `_channel != null` guard and
+  /// open two sockets for one session.
+  bool _connecting = false;
   int _reconnectAttempts = 0;
 
   /// Heartbeat. Without it, a half-open TCP (pulled cable / dropped Wi-Fi) never
@@ -256,7 +279,37 @@ class CloudSyncSession {
     // Local-first: render the persisted replica immediately (offline read),
     // BEFORE the socket — so a cold start with no network still shows the doc.
     _seedFromLocalOnce();
-    final channel = WebSocketChannel.connect(uri);
+    unawaited(_openSocket());
+  }
+
+  /// Resolve [uri] and open the socket.
+  ///
+  /// Split out of [connect] only because building the URI is async (it renews
+  /// the token). Everything [connect] does before this point is synchronous
+  /// bookkeeping that must land whether or not the socket ever opens.
+  Future<void> _openSocket() async {
+    if (_disposed || _channel != null || _connecting) return;
+    _connecting = true;
+    try {
+      final Uri target;
+      try {
+        target = await uri();
+      } catch (_) {
+        // Could not even build one: renewal failed, or the sign-in is over.
+        // That is the same shape as a dropped socket — stay offline and back
+        // off. Throwing here would take down the zone over being logged out.
+        if (!_disposed) _scheduleReconnect();
+        return;
+      }
+      if (_disposed || _channel != null) return;
+      _openChannel(target);
+    } finally {
+      _connecting = false;
+    }
+  }
+
+  void _openChannel(Uri target) {
+    final channel = WebSocketChannel.connect(target);
     _channel = channel;
     // Being unable to reach the server is a STATE, not a crash. The stream
     // listener below already turns it into one (onDone → offline badge →
@@ -484,6 +537,10 @@ class CloudSyncSession {
                 // forever while higher clocks keep acking.
                 _pushRejects = 0;
                 _updateSyncPhase(); // outbox drained a step → maybe now synced
+                // Window freed up: send the next slice. This is what makes the
+                // bounded flush above drain a long backlog instead of stopping
+                // at the first window.
+                _flushUnacked();
               }
             }
           }
@@ -690,9 +747,18 @@ class CloudSyncSession {
       final floor = resendAll || pushed > _sentThroughClock
           ? pushed
           : _sentThroughClock;
+      // Bounded window, not the whole outbox. A long offline stretch can leave
+      // thousands of entries, and the reconnect used to fire every one of them
+      // into the socket in one synchronous loop — a push storm the server
+      // answers by decoding+re-encoding the whole document per entry. The ack
+      // handler calls back here as `pushed_clock` advances, so the tail still
+      // drains, just paced by the server instead of by our for-loop.
+      var inFlight = 0;
       for (final e in persistence!.outboxAfter(floor)) {
+        if (inFlight >= _pushWindow) break;
         _sendPushRaw(e.clock.toString(), e.bytes);
         if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;
+        inFlight++;
       }
       return;
     }

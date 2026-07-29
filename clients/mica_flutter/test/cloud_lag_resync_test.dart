@@ -14,7 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 
 CloudSyncSession _session() => CloudSyncSession(
-      uri: Uri.parse('ws://example.invalid/doc'),
+      uri: () async => Uri.parse('ws://example.invalid/doc'),
       clientId: BigInt.from(1),
       onReady: (_, _) {},
       onRemoteBlocks: (_) {},

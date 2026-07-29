@@ -100,7 +100,7 @@ void main() {
     final session = CloudSyncSession(
       // A dead port: the socket never connects, so onReady can ONLY come from the
       // local seed — proving offline read needs no server.
-      uri: Uri.parse('ws://127.0.0.1:1/nope'),
+      uri: () async => Uri.parse('ws://127.0.0.1:1/nope'),
       clientId: store.clientId(),
       onReady: (root, blocks) {
         seededRoot = root;

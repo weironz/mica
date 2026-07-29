@@ -102,7 +102,7 @@ void main() {
     BigInt clientId,
   ) async {
     final s = CloudSyncSession(
-      uri: wsUri(token, ws, doc),
+      uri: () async => wsUri(token, ws, doc),
       clientId: clientId,
       onReady: (_, _) {},
       onRemoteBlocks: (_) {},

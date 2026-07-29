@@ -1079,12 +1079,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     }
     final yrs = CloudSyncSession(
-      uri: documentSocketUri(
-        _api.baseUri,
-        workspace.id,
-        documentId,
-        session.accessToken,
-      ),
+      // Rebuilt per connection attempt, and renewed first. This session lives as
+      // long as the document stays open — hours — while the access token lapses
+      // in one. Renewal is otherwise only driven by `_run()` (a user action), so
+      // an idle window longer than the TTL used to leave every reconnect
+      // replaying a dead token: 401, back off, repeat, silently forever.
+      uri: () async {
+        await _ensureFreshSession();
+        return documentSocketUri(
+          _api.baseUri,
+          workspace.id,
+          documentId,
+          _session?.accessToken ?? session.accessToken,
+        );
+      },
       clientId: clientId,
       onReady: (_, _) {
         _clearSyncBanner(); // B3: a fresh bootstrap means sync recovered.
@@ -3629,7 +3637,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
         // Faithfully replay the local tree onto the cloud doc's root.
         final yrs = CloudSyncSession(
-          uri: documentSocketUri(
+          // Short-lived (one migration), so the token cannot lapse under it.
+          uri: () async => documentSocketUri(
             _api.baseUri,
             cloudWs.id,
             created.document.id,
@@ -4618,6 +4627,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void _onCloudOnline() {
     _recoverOnlineNav();
     unawaited(_sweepPendingOutboxes());
+    // Images inserted offline, on the doc that is open right now. The sweep
+    // above only carries TEXT (each doc's append-log); blobs were left to
+    // `onReady`, which fires on a cold bootstrap — i.e. only when the document
+    // is next OPENED. Reconnecting while sitting on the page therefore restored
+    // text and left the pictures pending indefinitely.
+    final active = _selectedBootstrap?.document.id;
+    if (active != null) unawaited(_reconcilePendingUploads(active));
   }
 
   /// After coming online, drain the durable outbox of every cloud document that
@@ -4689,7 +4705,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     BigInt clientId,
   ) async {
     final session = CloudSyncSession(
-      uri: documentSocketUri(_api.baseUri, workspaceId, docId, token),
+      // Short-lived (drain one outbox, then dispose).
+      uri: () async =>
+          documentSocketUri(_api.baseUri, workspaceId, docId, token),
       clientId: clientId,
       onReady: (_, _) {},
       onRemoteBlocks: (_) {},

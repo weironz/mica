@@ -85,13 +85,13 @@ void main() {
     final readyA = Completer<void>();
     final readyB = Completer<void>();
     final a = CloudSyncSession(
-      uri: sockUri(),
+      uri: () async => sockUri(),
       clientId: BigInt.from(111),
       onReady: (_, _) => readyA.isCompleted ? null : readyA.complete(),
       onRemoteBlocks: (_) {},
     );
     final b = CloudSyncSession(
-      uri: sockUri(),
+      uri: () async => sockUri(),
       clientId: BigInt.from(222),
       onReady: (_, _) => readyB.isCompleted ? null : readyB.complete(),
       onRemoteBlocks: (_) {},

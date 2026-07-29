@@ -33,7 +33,7 @@ void main() {
     final faults = <String>[];
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(7),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -64,7 +64,7 @@ void main() {
     final persisted = <List<Uint8List>>[];
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(9),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -102,7 +102,7 @@ void main() {
     final persisted = <List<Uint8List>>[];
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(11),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -138,7 +138,7 @@ void main() {
     var applied = false;
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(13),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (blocks) {
@@ -165,7 +165,7 @@ void main() {
 
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(21),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -197,7 +197,7 @@ void main() {
 
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -250,7 +250,7 @@ void main() {
     final server1 = await _FakeSyncServer.start(_buildBase(), ackPushes: false);
     var ready1 = false;
     final s1 = CloudSyncSession(
-      uri: server1.uri,
+      uri: () async => server1.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
       onRemoteBlocks: (_) {},
@@ -272,7 +272,7 @@ void main() {
     final server2 = await _FakeSyncServer.start(_buildBase());
     var ready2 = false;
     final s2 = CloudSyncSession(
-      uri: server2.uri,
+      uri: () async => server2.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
       onRemoteBlocks: (_) {},
@@ -304,7 +304,7 @@ void main() {
 
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -349,7 +349,7 @@ void main() {
 
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -433,7 +433,7 @@ void main() {
     String textOfA = '';
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(31),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (blocks) {
@@ -479,7 +479,7 @@ void main() {
     var ready = false;
     final faults = <String>[];
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (_) {},
@@ -549,7 +549,7 @@ void main() {
     String? markerSeen;
     var ready = false;
     final session = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: BigInt.from(103),
       onReady: (_, _) => ready = true,
       onRemoteBlocks: (blocks) {

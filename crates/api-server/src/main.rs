@@ -61,6 +61,16 @@ async fn main() -> anyhow::Result<()> {
     .with_context(|| format!("failed to bind HTTP listener on {addr}"))?;
 
   info!("HTTP server listening on {addr}");
+  // Bound to something other than loopback means this port faces a network, and
+  // this server only ever speaks plaintext HTTP — TLS is the reverse proxy's
+  // job. Say so once at boot: the default (127.0.0.1) is safe and silent, so
+  // the warning only fires for the deployment that actually took the risk,
+  // which is the one where nobody wrote the proxy down anywhere.
+  if !addr.ip().is_loopback() {
+    tracing::warn!(
+      "listening on {addr}, which is not loopback — this server speaks        plaintext HTTP only. Terminate TLS in front of it; without a proxy the        auth tokens (including the one in the WebSocket URL) cross the network        in the clear."
+    );
+  }
 
   // `into_make_service_with_connect_info` so the rate-limit middleware can read
   // the socket peer (ConnectInfo) as the fallback when there's no usable XFF.

@@ -58,7 +58,7 @@ void main() {
     Future<void> editOffline(
         MicaStore store, BigInt cid, Map<String, dynamic> op) async {
       final s = CloudSyncSession(
-        uri: Uri.parse('ws://127.0.0.1:1/nope'), // dead — seed comes from local
+        uri: () async => Uri.parse('ws://127.0.0.1:1/nope'), // dead — seed comes from local
         clientId: cid,
         onReady: (_, _) {},
         onRemoteBlocks: (_) {},
@@ -86,14 +86,14 @@ void main() {
     void capA(List<Map<String, dynamic>> b) => blocksA = b;
     void capB(List<Map<String, dynamic>> b) => blocksB = b;
     final sessionA = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: cidA,
       onReady: (_, b) => capA(b),
       onRemoteBlocks: capA,
       persistence: StoreCloudDocStore(storeA, 'doc'),
     );
     final sessionB = CloudSyncSession(
-      uri: server.uri,
+      uri: () async => server.uri,
       clientId: cidB,
       onReady: (_, b) => capB(b),
       onRemoteBlocks: capB,

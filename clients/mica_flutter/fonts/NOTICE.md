@@ -9,6 +9,6 @@
 - **Noto Sans SC** — © The Noto Project Authors, licensed under the SIL Open Font
   License, Version 1.1 (<https://openfontlicense.org>). Source:
   <https://github.com/notofonts/noto-cjk>. The OFL requires this notice to travel
-  with the font; include the full `OFL.txt` alongside for strict compliance.
+  with the font: the full licence text ships beside it as `OFL.txt`.
 - **Droid Sans Fallback** / **Roboto Mono** — © Google, Apache License 2.0
   (<https://www.apache.org/licenses/LICENSE-2.0>).

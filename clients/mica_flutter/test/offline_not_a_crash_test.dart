@@ -35,7 +35,7 @@ void main() {
     final phases = <SyncPhase>[];
     await runZonedGuarded(() async {
       final session = CloudSyncSession(
-        uri: Uri.parse('ws://127.0.0.1:$port/ws/doc'),
+        uri: () async => Uri.parse('ws://127.0.0.1:$port/ws/doc'),
         clientId: BigInt.one,
         onReady: (_, _) {},
         onRemoteBlocks: (_) {},
@@ -71,7 +71,7 @@ void main() {
 
     await runZonedGuarded(() async {
       final session = CloudSyncSession(
-        uri: Uri.parse('ws://127.0.0.1:$port/ws/doc'),
+        uri: () async => Uri.parse('ws://127.0.0.1:$port/ws/doc'),
         clientId: BigInt.one,
         onReady: (_, _) {},
         onRemoteBlocks: (_) {},
