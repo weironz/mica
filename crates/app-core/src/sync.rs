@@ -1,4 +1,4 @@
-//! Server-side yrs CRDT sync (P2-M4), parallel to the op model.
+//! Server-side yrs CRDT sync (P2-M4) — since S5, the ONLY document storage.
 //!
 //! The cloud keeps a per-workspace monotonic update stream (`workspace_updates`,
 //! ordered by a global bigserial `rid`) plus a folded yrs base per document
@@ -7,9 +7,12 @@
 //! `rid`. CRDT merge makes pushes commutative + idempotent, so the same update
 //! arriving twice (or out of order) is harmless.
 //!
-//! The op model (`documents.rs`/`store.rs`) still runs; the first time a document
-//! is touched through this path its base is built lazily from the latest op-model
-//! snapshot, so existing data flows in without a separate migration pass.
+//! The op model used to run alongside this, keeping a second copy of every
+//! document in `document_snapshots`. That copy is what let a read and a write
+//! disagree about what a page contained; migration 0016 dropped it. The op
+//! *vocabulary* is still how REST/MCP callers express an edit — `store.rs` derives
+//! ops, applies them, and folds the result back into the base here — but there is
+//! only one place the result lands.
 
 use mica_core::{Block as CoreBlock, DocError, MicaDoc};
 use mica_infra::{ApiError, ApiResult};
@@ -18,7 +21,6 @@ use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::store::latest_snapshot_tx;
 
 /// `MicaDoc::from_update`, but a yrs PANIC on malformed bytes becomes a
 /// `DocError` instead of unwinding out of the request handler.
@@ -241,72 +243,19 @@ pub async fn backfill_content_text(db: &PgPool) -> ApiResult<usize> {
     Ok(filled)
 }
 
-/// Backfill `document_yrs_base` for documents that only ever got an op-model
-/// snapshot (op-model retirement, S2).
+/// Load the document's folded yrs base, seeding an EMPTY one if it has none.
+/// Errors only if the `documents` row itself is gone.
 ///
-/// Three write paths — create / transfer / clone — used to leave a document with
-/// nothing but its snapshot, and `ensure_base_tx`'s lazy bridge built the base
-/// out of that snapshot on first access. S1 closed those paths at the source, so
-/// no NEW document arrives base-less; this closes the stock that accumulated
-/// before it. Both halves are needed before the op model can stop being written:
-/// the bridge reads the very table S4 removes, so a document that never got a
-/// base would have nothing left to migrate from.
+/// This used to be the lazy migration bridge, folding a leftover op-model
+/// snapshot into a base on first touch. S5 dropped that table, and with it the
+/// ambiguity: a document with no base row has no content anywhere, because every
+/// write path seeds the base in the same transaction as the `documents` row. So
+/// there is nothing an empty page could overwrite — it IS the document's state,
+/// and `documents.root_block_id` is the authoritative root to hang it on.
 ///
-/// Idempotent and safe to run every boot — it only visits documents that have no
-/// base row, and `ensure_base_tx` inserts `ON CONFLICT DO NOTHING`, so racing the
-/// lazy path (or a second backfill) cannot corrupt or duplicate anything.
-/// Keyset-paginated by `documents.id` so each row is visited at most once per
-/// pass even when its build fails. A document whose snapshot cannot be decoded is
-/// warn-logged and skipped: it keeps today's behaviour (lazy build on next open)
-/// rather than blocking every other document behind it.
-///
-/// Returns how many bases were built (for the startup log line).
-pub async fn backfill_yrs_bases(db: &PgPool) -> ApiResult<usize> {
-    let mut built = 0usize;
-    let mut cursor = Uuid::nil();
-    loop {
-        let rows: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT d.id FROM documents d
-             WHERE NOT EXISTS (
-                     SELECT 1 FROM document_yrs_base b WHERE b.document_id = d.id
-                   )
-               AND d.id > $1
-             ORDER BY d.id
-             LIMIT $2",
-        )
-        .bind(cursor)
-        .bind(BACKFILL_BATCH)
-        .fetch_all(db)
-        .await?;
-        if rows.is_empty() {
-            break;
-        }
-        for (document_id,) in &rows {
-            cursor = *document_id;
-            match bootstrap_base(db, *document_id).await {
-                Ok(_) => built += 1,
-                Err(error) => tracing::warn!(
-                    document_id = %document_id,
-                    %error,
-                    "yrs base backfill: skipping document; it keeps the lazy build on next open"
-                ),
-            }
-        }
-    }
-    Ok(built)
-}
-
-/// Load the document's folded yrs base, building it on first access. Errors if
-/// the document row itself is gone.
-///
-/// Two ways to build it, in order:
-///  1. from a leftover op-model snapshot — the lazy migration bridge for
-///     documents that predate the yrs base and were never opened since;
-///  2. from `documents.root_block_id` — an empty page. Since S4 retired the op
-///     model nothing writes `document_snapshots` any more, so every document
-///     created from then on arrives here with no snapshot to fold. That is not
-///     an error: the `documents` row is the authoritative root, and the snapshot
-///     only ever held a copy of it.
+/// In practice this should never have to build anything. It exists so that a
+/// document which somehow lost its base opens as an empty page instead of 404ing
+/// forever.
 pub(crate) async fn ensure_base_tx(
     tx: &mut Transaction<'_, Postgres>,
     document_id: Uuid,
@@ -326,20 +275,12 @@ pub(crate) async fn ensure_base_tx(
         });
     }
 
-    let payload = match latest_snapshot_tx(tx, document_id).await? {
-        Some(snapshot) => serde_json::from_value::<DocumentSnapshotPayload>(snapshot.payload)
-            .map_err(|e| ApiError::Internal(format!("bad snapshot payload: {e}")))?,
-        None => {
-            let root: String =
-                sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
-                    .bind(document_id)
-                    .fetch_optional(&mut **tx)
-                    .await?
-                    .ok_or(ApiError::NotFound)?;
-            empty_payload(&root)
-        }
-    };
-    seed_base_tx(tx, document_id, payload).await
+    let root: String = sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
+        .bind(document_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    seed_base_tx(tx, document_id, empty_payload(&root)).await
 }
 
 /// A brand-new page: a single empty paragraph that IS the root. This is the

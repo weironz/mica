@@ -54,26 +54,10 @@ async fn main() -> anyhow::Result<()> {
   if let Some(storage) = state.storage.clone() {
     blob_gc::spawn(state.db.clone(), storage);
   }
-  // op-model retirement S2: build the yrs base for documents that only ever got
-  // an op-model snapshot. Backgrounded, unlike the content_text backfill above:
-  // that one is bounded by rows migration 0012 left empty, while this one walks
-  // every base-less document, and blocking the boot behind it would hold
-  // `/api/ready` down long enough for a deploy to look failed. Nothing waits on
-  // it either — the lazy bridge in `ensure_base_tx` still serves any document it
-  // has not reached yet, so this only shortens the list S4 will need to have
-  // emptied. Idempotent: a later boot re-walks whatever is still missing.
-  {
-    let db = state.db.clone();
-    tokio::spawn(async move {
-      match mica_app_core::sync::backfill_yrs_bases(&db).await {
-        Ok(built) if built > 0 => info!("yrs base backfill: built {built} base(s)"),
-        Ok(_) => {}
-        Err(error) => {
-          tracing::warn!(%error, "yrs base backfill failed; documents keep the lazy build")
-        }
-      }
-    });
-  }
+  // The yrs-base backfill that used to run here is gone with S5: it built bases
+  // out of `document_snapshots`, and migration 0016 dropped that table. It had
+  // already finished its job — 1428 bases built on 0.13.3, leaving 3735 bases for
+  // 3735 documents — which is exactly the precondition that made the drop safe.
   let app = app_router(state);
 
   let listener = TcpListener::bind(addr)

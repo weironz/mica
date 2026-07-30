@@ -6,7 +6,7 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::documents::{
-  DocumentOperation, DocumentSnapshotPayload, apply_operations, payload_from_value,
+  DocumentOperation, DocumentSnapshotPayload, apply_operations,
 };
 
 /// Persistent document row. Shared by the REST and WebSocket write paths so
@@ -22,26 +22,7 @@ pub struct DocumentRecord {
   pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct SnapshotRecord {
-  pub id: Uuid,
-  pub document_id: Uuid,
-  pub version_seq: i64,
-  pub schema_version: i32,
-  pub payload: Value,
-  pub created_at: DateTime<Utc>,
-}
 
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct UpdateRecord {
-  pub id: Uuid,
-  pub document_id: Uuid,
-  pub seq: i64,
-  pub actor_id: Uuid,
-  pub update_kind: String,
-  pub payload: Value,
-  pub created_at: DateTime<Utc>,
-}
 
 /// A yrs-native version-history row (see docs/version-history-plan.md). Metadata
 /// only — the `state` blob is fetched separately so timeline listings stay cheap.
@@ -372,22 +353,6 @@ pub async fn fetch_document(
   .map_err(ApiError::from)
 }
 
-pub async fn latest_snapshot(db: &PgPool, document_id: Uuid) -> ApiResult<Option<SnapshotRecord>> {
-  sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      SELECT id, document_id, version_seq, schema_version, payload, created_at
-      FROM document_snapshots
-      WHERE document_id = $1
-      ORDER BY version_seq DESC
-      LIMIT 1
-    "#,
-  )
-  .bind(document_id)
-  .fetch_optional(db)
-  .await
-  .map_err(ApiError::from)
-}
-
 /// Convert a yrs-core block into the op-model/markdown block shape. The two
 /// structs are field-identical; this is the inverse of `sync::to_core_block`.
 fn md_block_from_core(b: mica_core::Block) -> crate::documents::Block {
@@ -439,26 +404,20 @@ fn ensure_root_block(payload: &mut DocumentSnapshotPayload) {
 }
 
 /// The document's CURRENT block payload for *reads* — bootstrap, export, outline,
-/// search. The live content is the folded yrs base; that is the only
-/// representation anything writes since S4 retired the op model.
+/// search. Materialized from the folded yrs base, which since S5 is the ONE place
+/// a document's content lives.
 ///
-/// The `document_snapshots` fallback below is the reverse of what this function
-/// used to do (snapshot first, base overlaid on top). It survives only for
-/// pre-yrs documents that somehow still have no base — the 0.13.3 backfill drove
-/// that population to zero in production, and every write path now seeds a base
-/// in-transaction, so it should never fire. It costs one query on a path that
-/// already does one and it is what stands between a missed document and a page
-/// that reads back blank, so it stays until S5 drops the table. `None` only when
-/// the document has neither.
-///
-/// Read-only: this never mutates state, so it can't corrupt data — it only
-/// changes which representation a read returns.
+/// `None` means the document has no base. Before S5 that fell back to the
+/// op-model snapshot; there is no second copy to consult now, and there is
+/// nothing for one to hold either — a base-less document is a content-less
+/// document, because every write path seeds the base in the same transaction as
+/// the `documents` row.
 pub async fn current_payload(
   db: &PgPool,
   document_id: Uuid,
 ) -> ApiResult<Option<DocumentSnapshotPayload>> {
   let Some(base) = crate::sync::document_base(db, document_id).await? else {
-    return legacy_snapshot_payload(db, document_id).await;
+    return Ok(None);
   };
   let doc = mica_core::MicaDoc::from_update(&base.state)
     .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
@@ -487,19 +446,6 @@ pub async fn current_payload(
   Ok(Some(payload))
 }
 
-/// Pre-yrs content, straight out of `document_snapshots`. See [`current_payload`]
-/// for why this path is expected to be dead and kept anyway.
-async fn legacy_snapshot_payload(
-  db: &PgPool,
-  document_id: Uuid,
-) -> ApiResult<Option<DocumentSnapshotPayload>> {
-  let Some(snapshot) = latest_snapshot(db, document_id).await? else {
-    return Ok(None);
-  };
-  payload_from_value(snapshot.payload)
-    .map(Some)
-    .map_err(|error| ApiError::Internal(format!("invalid document snapshot: {error}")))
-}
 
 /// Decode a stored yrs version blob (from `document_yrs_versions.state`) into a
 /// renderable payload — blocks in tree order — for a read-only preview of that
@@ -537,26 +483,6 @@ async fn lock_document_tx(
   .await
   .map_err(ApiError::from)
 }
-
-pub(crate) async fn latest_snapshot_tx(
-  tx: &mut Transaction<'_, Postgres>,
-  document_id: Uuid,
-) -> ApiResult<Option<SnapshotRecord>> {
-  sqlx::query_as::<_, SnapshotRecord>(
-    r#"
-      SELECT id, document_id, version_seq, schema_version, payload, created_at
-      FROM document_snapshots
-      WHERE document_id = $1
-      ORDER BY version_seq DESC
-      LIMIT 1
-    "#,
-  )
-  .bind(document_id)
-  .fetch_optional(&mut **tx)
-  .await
-  .map_err(ApiError::from)
-}
-
 /// Maximum number of change-log entries returned in a single history page.
 pub const MAX_HISTORY_PAGE: i64 = 200;
 

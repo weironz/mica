@@ -63,29 +63,27 @@ async fn seed_doc(db: &PgPool) -> (Uuid, Uuid, Uuid) {
     .execute(db)
     .await
     .unwrap();
-    let payload = json!({
+    // Straight into the yrs base — since S5 the only place content lives. This
+    // used to insert an op-model snapshot and leave the base to the lazy bridge.
+    let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(json!({
         "schema_version": 1,
         "root_block_id": "r",
         "blocks": [
             {"id":"r","type":"page","children":["a"]},
             {"id":"a","type":"paragraph","text":"Hello"}
         ]
-    });
-    sqlx::query(
-        "INSERT INTO document_snapshots(id,document_id,version_seq,schema_version,payload)
-         VALUES($1,$2,0,1,$3)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(doc)
-    .bind(&payload)
-    .execute(db)
-    .await
+    }))
     .unwrap();
+    let mut tx = db.begin().await.unwrap();
+    mica_app_core::sync::seed_base_tx(&mut tx, doc, payload)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
     (ws, doc, user)
 }
 
 async fn cleanup(db: &PgPool, ws: Uuid, user: Uuid) {
-    // workspaces cascade to documents → snapshots/yrs_base/comment_threads → comments.
+    // workspaces cascade to documents → yrs_base/comment_threads → comments.
     sqlx::query("DELETE FROM workspaces WHERE id=$1")
         .bind(ws)
         .execute(db)

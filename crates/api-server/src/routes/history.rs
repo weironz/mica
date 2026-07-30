@@ -4,7 +4,8 @@
 //! is a NEW forward update (never a rewrite of the log), broadcast as a yrs
 //! `sync.update` so open editors converge — the same channel a normal edit uses.
 //!
-//! The old op-model history (document_versions / document_snapshots) froze with
+//! The old op-model history (document_versions / document_snapshots, both dropped
+//! by migration 0016) froze with
 //! P4①b and is intentionally no longer touched here (that was the split-brain
 //! trap that made restore silently blank yrs docs).
 

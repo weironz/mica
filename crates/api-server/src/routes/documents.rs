@@ -4263,8 +4263,14 @@ mod tests {
           "id": "blk_link",
           "type": "paragraph",
           "text": "see B",
+          // A mark needs a RANGE: marks live in the yrs base as text formatting,
+          // and `marks_from_data` drops any entry without start/end. The op-model
+          // snapshot stored `data` as jsonb and handed it back verbatim, so a
+          // range-less mark used to be visible to the backlink scan anyway — this
+          // fixture was leaning on that.
           "data": {"marks": [
-            {"type": "link", "href": format!("mica://page/{view_b}")}
+            {"type": "link", "start": 4, "end": 5,
+             "href": format!("mica://page/{view_b}")}
           ]}
         }]),
       )
@@ -4287,37 +4293,79 @@ mod tests {
       let Some(db) = pool().await else { return };
       let (ws, user) = seed_workspace(&db).await;
 
-      // Seed the page, then rewrite its snapshot to link to its own view id.
+      // Seed the page, then rewrite its base to link to its own view id — the
+      // view id only exists after seeding, hence the two steps.
       let (view_id, doc_id) = seed_document(&db, ws, user, "S", serde_json::json!([])).await;
-      let payload = serde_json::json!({
-        "schema_version": 1,
-        "root_block_id": "root",
-        "blocks": [{
+      reseed_base(
+        &db,
+        doc_id,
+        serde_json::json!([{
           "id": "root",
           "type": "paragraph",
           "text": "self",
           "data": {"marks": [
-            {"type": "link", "href": format!("mica://page/{view_id}")}
+            {"type": "link", "start": 0, "end": 4,
+             "href": format!("mica://page/{view_id}")}
           ]}
-        }]
-      });
-      sqlx::query(
-        "UPDATE document_snapshots SET payload = $1 WHERE document_id = $2 AND version_seq = 0",
+        }]),
       )
-      .bind(&payload)
-      .bind(doc_id)
-      .execute(&db)
-      .await
-      .unwrap();
+      .await;
 
       let links = collect_backlinks(&db, ws, view_id).await;
       assert!(links.is_empty(), "a self-link must not be a backlink, got {links:?}");
     }
 
-    /// Seed a document view (a leaf page) with a content snapshot. `blocks` is the
-    /// snapshot payload's `blocks` array; with no yrs base row `current_payload`
-    /// falls back to this snapshot verbatim, so link marks placed here are exactly
-    /// what the backlink scan sees. Returns (view_id, document_id).
+    /// Write `blocks` into a document's yrs base — since S5 the only place content
+    /// lives, so what is put here is exactly what every read returns.
+    ///
+    /// A `root` block listing `blocks` as its children is synthesized unless the
+    /// caller supplied one. That is not sugar: the op-model snapshot stored a FLAT
+    /// array and every read handed it back verbatim, so a block nothing pointed at
+    /// was still visible. A yrs doc is a tree walked from the root, and an
+    /// unreachable block is simply not in it — a fixture that passes a bare
+    /// `[{...}]` would seed an empty page and quietly assert nothing.
+    async fn seed_base(db: &PgPool, doc_id: Uuid, blocks: serde_json::Value) {
+      let mut blocks = blocks.as_array().cloned().unwrap_or_default();
+      if !blocks.iter().any(|b| b["id"] == "root") {
+        let children: Vec<_> = blocks.iter().map(|b| b["id"].clone()).collect();
+        blocks.insert(
+          0,
+          serde_json::json!({
+            "id": "root", "type": "paragraph", "text": "", "children": children,
+          }),
+        );
+      }
+      let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(
+        serde_json::json!({
+          "schema_version": 1,
+          "root_block_id": "root",
+          "blocks": blocks,
+        }),
+      )
+      .unwrap();
+      let mut tx = db.begin().await.unwrap();
+      mica_app_core::sync::seed_base_tx(&mut tx, doc_id, payload)
+        .await
+        .unwrap();
+      tx.commit().await.unwrap();
+    }
+
+    /// [`seed_base`] for a document that already has one: `seed_base_tx` is an
+    /// insert-or-keep, so the existing row has to go first or the new blocks are
+    /// silently dropped.
+    async fn reseed_base(db: &PgPool, doc_id: Uuid, blocks: serde_json::Value) {
+      sqlx::query("DELETE FROM document_yrs_base WHERE document_id = $1")
+        .bind(doc_id)
+        .execute(db)
+        .await
+        .unwrap();
+      seed_base(db, doc_id, blocks).await;
+    }
+
+    /// Seed a document view (a leaf page) with content. `blocks` is the payload's
+    /// `blocks` array, written straight into the document's yrs base, so link
+    /// marks placed here are exactly what the backlink scan sees.
+    /// Returns (view_id, document_id).
     async fn seed_document(
       db: &PgPool,
       ws: Uuid,
@@ -4335,20 +4383,7 @@ mod tests {
       .execute(db)
       .await
       .unwrap();
-      let payload = serde_json::json!({
-        "schema_version": 1,
-        "root_block_id": "root",
-        "blocks": blocks,
-      });
-      sqlx::query(
-        "INSERT INTO document_snapshots(document_id,version_seq,schema_version,payload) \
-         VALUES($1,0,1,$2)",
-      )
-      .bind(doc_id)
-      .bind(&payload)
-      .execute(db)
-      .await
-      .unwrap();
+      seed_base(db, doc_id, blocks).await;
       let view_id = Uuid::new_v4();
       sqlx::query(
         "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by) \
@@ -4399,7 +4434,8 @@ mod tests {
         "type": "paragraph",
         "text": "see T",
         "data": {"marks": [
-          {"type": "link", "href": format!("mica://page/{view_target}")}
+          {"type": "link", "start": 4, "end": 5,
+           "href": format!("mica://page/{view_target}")}
         ]}
       }]);
       // Seed three linking pages out of title order; the scan must still sort.
@@ -4574,19 +4610,21 @@ mod tests {
       );
     }
 
-    /// FTS M1 tail: a document with only an op-model snapshot and NO yrs base yet
-    /// — exactly the state right after import, before it is ever opened — is not
-    /// body-searchable, because `content_text` lives on the base. The import
-    /// handlers now call `bootstrap_base` eagerly to build that base (+content_text)
-    /// from the snapshot, so the imported body is searchable immediately. This
-    /// pins both halves: the gap without a base, and the fix that closes it.
+    /// FTS M1 tail: an imported page's BODY is searchable the moment it exists,
+    /// not only after someone opens it.
+    ///
+    /// This test used to pin two halves — the gap (a snapshot-only document has no
+    /// `content_text`, so its body is unfindable) and the eager `bootstrap_base`
+    /// that closed it. S5 deleted the gap rather than the fix: seeding the base is
+    /// now part of the import's own transaction and `content_text` is co-written
+    /// with it, so "imported but no base yet" is not a state a document can be in.
+    /// What survives is the half that ever mattered to a user.
     #[tokio::test]
-    async fn import_body_is_searchable_after_eager_base() {
+    async fn import_body_is_searchable_immediately() {
       let Some(db) = pool().await else { return };
       let (ws, user) = seed_workspace(&db).await;
 
-      // Snapshot-only doc (seed_document inserts document_snapshots, never a base).
-      let (view, doc) = seed_document(
+      let (view, _doc) = seed_document(
         &db,
         ws,
         user,
@@ -4600,25 +4638,16 @@ mod tests {
       )
       .await;
 
-      // Before a base exists, the body is unsearchable — the title still is.
-      assert!(
-        search_views(&db, ws, "正文内容").await.unwrap().is_empty(),
-        "no base yet → body not in content_text"
-      );
+      let hits = search_views(&db, ws, "正文内容").await.unwrap();
+      assert_eq!(hits.len(), 1, "body searchable at once: {hits:?}");
+      assert_eq!(hits[0].view_id, view);
+      assert!(!hits[0].title_match, "matched the body, not the title");
+
       assert_eq!(
         search_views(&db, ws, "导入页").await.unwrap().len(),
         1,
-        "title is always searchable, base or not"
+        "the title is searchable too"
       );
-
-      // What the import handlers now do post-commit: build the base eagerly.
-      mica_app_core::sync::bootstrap_base(&db, doc).await.unwrap();
-
-      // Now the imported body is searchable, resolving to the right view.
-      let hits = search_views(&db, ws, "正文内容").await.unwrap();
-      assert_eq!(hits.len(), 1, "body searchable after eager base: {hits:?}");
-      assert_eq!(hits[0].view_id, view);
-      assert!(!hits[0].title_match, "matched the body, not the title");
     }
 
     /// The export stats must describe the archive that would actually be
@@ -4884,16 +4913,6 @@ mod tests {
         .await,
         0,
         "CRDT content left behind after purge"
-      );
-      assert_eq!(
-        count(
-          &db,
-          "SELECT count(*) FROM document_snapshots WHERE document_id=$1",
-          doc
-        )
-        .await,
-        0,
-        "snapshot left behind after purge"
       );
       assert_eq!(
         count(

@@ -35,9 +35,34 @@ async fn pool() -> Option<PgPool> {
     )
 }
 
-/// Seed the FK chain (user → workspace → document → op snapshot) the sync layer
-/// builds a yrs base from. Returns (workspace, document, user).
+/// Seed the FK chain (user → workspace → document → yrs base) with a one-line
+/// document: root `r` holding paragraph `a` = "Hello". Returns (ws, doc, user).
+///
+/// Before S5 this inserted an op-model snapshot and left the base to the lazy
+/// bridge, so every test here was implicitly also exercising that bridge. The
+/// bridge and its table are gone; the base is now seeded directly, through the
+/// same `seed_base_tx` the create/import/clone handlers use.
 async fn seed_doc(db: &PgPool) -> (Uuid, Uuid, Uuid) {
+    let (ws, doc, user) = seed_doc_bare(db).await;
+    let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(json!({
+        "schema_version": 1,
+        "root_block_id": "r",
+        "blocks": [
+            {"id":"r","type":"page","children":["a"]},
+            {"id":"a","type":"paragraph","text":"Hello"}
+        ]
+    }))
+    .unwrap();
+    let mut tx = db.begin().await.unwrap();
+    sync::seed_base_tx(&mut tx, doc, payload).await.unwrap();
+    tx.commit().await.unwrap();
+    (ws, doc, user)
+}
+
+/// [`seed_doc`] without the base: user → workspace → `documents` row and nothing
+/// else. For the tests that insert their OWN base row — the first-bootstrap race
+/// and the content_text backfill both need to be the ones that create it.
+async fn seed_doc_bare(db: &PgPool) -> (Uuid, Uuid, Uuid) {
     let user = Uuid::new_v4();
     let ws = Uuid::new_v4();
     let doc = Uuid::new_v4();
@@ -63,29 +88,11 @@ async fn seed_doc(db: &PgPool) -> (Uuid, Uuid, Uuid) {
     .execute(db)
     .await
     .unwrap();
-    let payload = json!({
-        "schema_version": 1,
-        "root_block_id": "r",
-        "blocks": [
-            {"id":"r","type":"page","children":["a"]},
-            {"id":"a","type":"paragraph","text":"Hello"}
-        ]
-    });
-    sqlx::query(
-        "INSERT INTO document_snapshots(id,document_id,version_seq,schema_version,payload)
-         VALUES($1,$2,0,1,$3)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(doc)
-    .bind(&payload)
-    .execute(db)
-    .await
-    .unwrap();
     (ws, doc, user)
 }
 
 async fn cleanup(db: &PgPool, ws: Uuid, user: Uuid) {
-    // workspaces cascade to documents → snapshots, workspace_updates, yrs_base.
+    // workspaces cascade to documents → workspace_updates, yrs_base, versions.
     sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(db).await.ok();
     sqlx::query("DELETE FROM users WHERE id=$1").bind(user).execute(db).await.ok();
 }
@@ -139,7 +146,8 @@ async fn a_base_that_lost_its_root_still_reads() {
         .expect("read must not error on a damaged base")
         .expect("payload");
 
-    // The op-model snapshot still knows the real root — don't adopt the empty one.
+    // `documents.root_block_id` still knows the real root — don't adopt the empty
+    // one. (Before S5 this healed from the op-model snapshot's copy of it.)
     assert_eq!(payload.root_block_id, "r");
     // ...and the vanished root block is rebuilt over the orphans, in order, so
     // the document renders instead of erroring.
@@ -162,7 +170,7 @@ async fn push_pull_bootstrap_round_trip() {
     };
     let (ws, doc, user) = seed_doc(&db).await;
 
-    // Base is built lazily from the op snapshot on first access; rid 0 so far.
+    // The seeded base has taken no stream updates yet, so rid 0.
     let base = sync::bootstrap_base(&db, doc).await.unwrap();
     assert_eq!(base.base_rid, 0);
     let client = MicaDoc::from_update(&base.state).unwrap();
@@ -622,7 +630,7 @@ async fn op_write_captures_an_auto_version_on_cadence() {
 #[tokio::test]
 async fn concurrent_first_bootstrap_returns_one_universe() {
     let Some(db) = pool().await else { return };
-    let (ws, doc, user) = seed_doc(&db).await;
+    let (ws, doc, user) = seed_doc_bare(&db).await;
 
     // The winner: an open transaction that has inserted its base but not yet
     // committed — exactly what a concurrent bootstrapper races against.
@@ -772,7 +780,7 @@ async fn backfill_fills_valid_and_skips_corrupt() {
         eprintln!("skipping backfill_fills_valid_and_skips_corrupt: no DATABASE_URL");
         return;
     };
-    let (ws, doc, user) = seed_doc(&db).await;
+    let (ws, doc, user) = seed_doc_bare(&db).await;
 
     // A valid base inserted WITHOUT content_text (the pre-0012 shape → '').
     let good = MicaDoc::from_blocks("r", &[para("r", ""), para("a", "回填后的可搜索文本")]);
@@ -833,115 +841,38 @@ async fn backfill_fills_valid_and_skips_corrupt() {
     cleanup(&db, ws, user).await;
 }
 
-/// op-model retirement S2: the backfill must give a snapshot-only document a yrs
-/// base, and running it again must be a no-op.
+/// S5's invariant, in the strongest form it can take: the op-model tables are
+/// GONE, so "a write does not grow them" is enforced by the schema itself rather
+/// than by a count.
 ///
-/// `seed_doc` produces exactly the shape S2 exists for — a `documents` row plus a
-/// `document_snapshots` row and nothing else — which is what create/transfer/clone
-/// left behind before S1 closed those paths. Until the backfill has emptied that
-/// stock, S4 cannot stop writing snapshots: the lazy bridge those documents rely
-/// on reads the very table S4 removes.
+/// S4's version of this counted rows before and after a write, because a negative
+/// claim ("nothing writes these any more") is the kind that rots in silence —
+/// re-adding an INSERT would have broken nothing. Migration 0016 turns that claim
+/// into a structural fact, and this pins the fact: re-creating any of the three
+/// tables, in a migration or by hand, fails here.
 #[tokio::test]
-async fn backfill_builds_a_base_for_a_snapshot_only_document() {
+async fn the_op_model_tables_are_gone() {
+    let Some(db) = pool().await else { return };
+    for table in ["document_snapshots", "document_updates", "document_versions"] {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'public' AND table_name = $1)",
+        )
+        .bind(table)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(!exists, "{table} must not exist after migration 0016");
+    }
+}
+
+/// A write lands, and lands in the ONE place left. Counting rows in the dropped
+/// tables is no longer possible, so the assertion moves to what actually matters:
+/// the content reads back afterwards through the yrs base alone.
+#[tokio::test]
+async fn a_write_round_trips_through_the_base_alone() {
     let Some(db) = pool().await else { return };
     let (ws, doc, user) = seed_doc(&db).await;
-
-    let before: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
-            .bind(doc)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-    assert_eq!(before, 0, "fixture must start with no base");
-
-    let built = mica_app_core::sync::backfill_yrs_bases(&db).await.unwrap();
-    assert!(built >= 1, "the snapshot-only document should have been built");
-
-    let after: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
-            .bind(doc)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-    assert_eq!(after, 1, "backfill must leave exactly one base row");
-
-    // The base carries the snapshot's content, not an empty doc.
-    let text: String =
-        sqlx::query_scalar("SELECT content_text FROM document_yrs_base WHERE document_id = $1")
-            .bind(doc)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-    assert!(
-        text.contains("Hello"),
-        "the base must be built FROM the snapshot, got {text:?}"
-    );
-
-    // Idempotent: a second pass must not touch this document again.
-    let again = mica_app_core::sync::backfill_yrs_bases(&db).await.unwrap();
-    let rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM document_yrs_base WHERE document_id = $1")
-            .bind(doc)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-    assert_eq!(rows, 1, "a second pass must not duplicate (built={again})");
-
-    cleanup(&db, ws, user).await;
-}
-
-/// Remove the op-model snapshot `seed_doc` writes, so the fixture matches what
-/// every write path produces now: nothing in `document_snapshots`.
-async fn drop_snapshot(db: &PgPool, doc: Uuid) {
-    sqlx::query("DELETE FROM document_snapshots WHERE document_id=$1")
-        .bind(doc)
-        .execute(db)
-        .await
-        .unwrap();
-}
-
-/// Seed a document the way the world looks AFTER S4: a `documents` row plus a
-/// yrs base, and no `document_snapshots` row at all.
-async fn seed_doc_post_s4(db: &PgPool) -> (Uuid, Uuid, Uuid) {
-    let (ws, doc, user) = seed_doc(db).await;
-    drop_snapshot(db, doc).await;
-    let mut tx = db.begin().await.unwrap();
-    sync::seed_base_tx(&mut tx, doc, sync::empty_payload("r"))
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-    (ws, doc, user)
-}
-
-async fn op_rows(db: &PgPool, doc: Uuid) -> (i64, i64) {
-    let updates: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM document_updates WHERE document_id=$1")
-            .bind(doc)
-            .fetch_one(db)
-            .await
-            .unwrap();
-    let snapshots: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM document_snapshots WHERE document_id=$1")
-            .bind(doc)
-            .fetch_one(db)
-            .await
-            .unwrap();
-    (updates, snapshots)
-}
-
-/// S4's whole point, stated as the thing that must STAY true: an accepted write
-/// adds no row to `document_updates` or `document_snapshots`.
-///
-/// This is a negative claim, and negative claims are the ones that rot in
-/// silence — re-adding an `INSERT INTO document_snapshots` breaks nothing and no
-/// test goes red, exactly the failure mode that left docs/roadmap.md full of
-/// stale "we don't have X" entries. So assert it directly: count before, write,
-/// count after. S5 (dropping the tables) is only safe while this holds.
-#[tokio::test]
-async fn a_write_no_longer_grows_the_op_tables() {
-    let Some(db) = pool().await else { return };
-    let (ws, doc, user) = seed_doc_post_s4(&db).await;
-    assert_eq!(op_rows(&db, doc).await, (0, 0), "fixture must start clean");
 
     let applied = store::apply_document_operations(
         &db,
@@ -952,7 +883,7 @@ async fn a_write_no_longer_grows_the_op_tables() {
             block: mica_markdown::Block {
                 id: "b1".to_string(),
                 kind: "paragraph".to_string(),
-                text: "written after S4".to_string(),
+                text: "written after S5".to_string(),
                 data: serde_json::Value::Null,
                 children: Vec::new(),
             },
@@ -961,46 +892,48 @@ async fn a_write_no_longer_grows_the_op_tables() {
         }],
     )
     .await
-    .expect("a document with no snapshot must still accept writes");
+    .expect("the write must be accepted");
 
-    assert_eq!(
-        op_rows(&db, doc).await,
-        (0, 0),
-        "the op tables must not grow — S4 retired them as writers"
-    );
-
-    // ...and the write is genuinely there, in the one representation that is
-    // left. A test that only counted rows would also pass if writes had silently
-    // stopped working.
     assert!(applied.yrs.is_some(), "the yrs half IS the write now");
     let payload = store::current_payload(&db, doc)
         .await
         .unwrap()
-        .expect("a snapshot-less document must still read");
+        .expect("the document must read back");
     assert!(
-        payload.blocks.iter().any(|b| b.text == "written after S4"),
+        payload.blocks.iter().any(|b| b.text == "written after S5"),
         "content must round-trip through the yrs base alone, got {:?}",
         payload.blocks
     );
-    assert_eq!(payload.root_block_id, "r", "root survives with no snapshot");
+    // The pre-existing paragraph survives — a write must not clobber the base it
+    // was derived from.
+    assert!(payload.blocks.iter().any(|b| b.text == "Hello"));
+    assert_eq!(payload.root_block_id, "r");
 
     cleanup(&db, ws, user).await;
 }
 
-/// `ensure_base_tx` used to fail with 404 when a document had no op-model
-/// snapshot to fold. Post-S4 that is the NORMAL state of every newly created
-/// document, so the fallback is `documents.root_block_id` — an empty page, not
-/// an error. Without it, opening any document created after the retirement
-/// would close the socket.
+/// A document with no base at all must open as an EMPTY page rooted at
+/// `documents.root_block_id` — not a 404, not a crash.
+///
+/// `ensure_base_tx` used to fold an op-model snapshot here; with that table gone
+/// there is nothing to fold and nothing to lose, because a base-less document is
+/// a content-less one (every write path seeds the base in the same transaction as
+/// the `documents` row). This should never fire in practice — it is what stands
+/// between a document that somehow lost its base and a socket that closes on
+/// every attempt to open it, forever.
 #[tokio::test]
-async fn a_document_with_no_snapshot_builds_its_base_from_the_documents_row() {
+async fn a_document_with_no_base_opens_as_an_empty_page() {
     let Some(db) = pool().await else { return };
     let (ws, doc, user) = seed_doc(&db).await;
-    drop_snapshot(&db, doc).await;
+    sqlx::query("DELETE FROM document_yrs_base WHERE document_id=$1")
+        .bind(doc)
+        .execute(&db)
+        .await
+        .unwrap();
 
     let base = sync::bootstrap_base(&db, doc)
         .await
-        .expect("no snapshot is not an error any more");
+        .expect("a base-less document must not be an error");
     let head = MicaDoc::from_update(&base.state).unwrap();
     assert_eq!(
         head.root_block_id(),
