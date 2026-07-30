@@ -4940,8 +4940,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     for (final t in _commentThreads)
       if (t.isHighlightable && t.anchor != null)
         (
-          blockId: t.anchor!.startBlock,
+          startBlock: t.anchor!.startBlock,
           startOffset: t.anchor!.startOffset,
+          // Both ends, as the anchor gives them. This used to pass `startBlock`
+          // together with the END block's offset, so a cross-block comment
+          // painted a wrong-length run inside its first block — or nothing.
+          endBlock: t.anchor!.endBlock,
           endOffset: t.anchor!.endOffset,
           active: false,
         ),

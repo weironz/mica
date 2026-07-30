@@ -2800,20 +2800,40 @@ class RenderDocument extends RenderBox {
   void _paintCommentHighlights(Canvas canvas, Offset offset) {
     if (_commentHighlights.isEmpty) return;
     for (final h in _commentHighlights) {
-      for (var i = 0; i < _layouts.length; i++) {
+      final startIdx = _layouts.indexWhere((l) => l.nodeId == h.startBlock);
+      if (startIdx < 0)
+        continue; // the anchored block is gone → nothing to wash
+      // A single-block range is the common case and needs no search. For the rest
+      // the range runs from startBlock to endBlock in DOCUMENT order.
+      var endIdx = h.endBlock == h.startBlock
+          ? startIdx
+          : _layouts.indexWhere((l) => l.nodeId == h.endBlock);
+      // A stale anchor can name a block that has been deleted (-1) or name the
+      // two ends out of order. Neither is a reason to paint somewhere wrong:
+      // collapse to the first block, which is the range we can still trust.
+      if (endIdx < startIdx) endIdx = startIdx;
+
+      final paint = Paint()
+        ..color = h.active
+            ? _appearance.tokens.editor.commentHighlightActive
+            : _appearance.tokens.editor.commentHighlight;
+
+      for (var i = startIdx; i <= endIdx; i++) {
         final l = _layouts[i];
-        if (l.nodeId != h.blockId) continue;
         // Same viewport cull as every other layer, and atomic/renderer-claimed
-        // blocks have no text runs to wash.
+        // blocks have no text runs to wash. `continue`, not `break`: one image in
+        // the middle of a range must not cancel the blocks after it.
         if (!_nodeVisible(l) ||
             EditorNode.isAtomicKind(l.kind) ||
             l.renderedBy != null) {
-          break;
+          continue;
         }
         final textLen = i < _nodes.length ? _nodes[i].text.length : 0;
-        final from = h.startOffset.clamp(0, textLen);
-        final to = h.endOffset.clamp(from, textLen);
-        if (to <= from) break; // nothing left of the range → draw nothing
+        // Offsets belong to their OWN end. Interior blocks are washed whole —
+        // that is what selecting across them means.
+        final from = i == startIdx ? h.startOffset.clamp(0, textLen) : 0;
+        final to = i == endIdx ? h.endOffset.clamp(from, textLen) : textLen;
+        if (to <= from) continue; // nothing left of this block's slice
         final pFrom = l.fold?.docToPainter(from) ?? from;
         final pTo = l.fold?.docToPainter(to, ceilInsideAtom: true) ?? to;
         final boxes = l.painter.getBoxesForSelection(
@@ -2824,14 +2844,9 @@ class RenderDocument extends RenderBox {
             ? (_codeScroll[l.nodeId] ?? 0)
             : 0.0;
         final origin = offset + Offset(l.contentLeft - scroll, l.textTop);
-        final paint = Paint()
-          ..color = h.active
-              ? _appearance.tokens.editor.commentHighlightActive
-              : _appearance.tokens.editor.commentHighlight;
         for (final box in boxes) {
           canvas.drawRect(box.toRect().shift(origin), paint);
         }
-        break; // one layout per block id
       }
     }
   }
@@ -3366,9 +3381,18 @@ typedef RemoteCursor = ({
 ///
 /// Keyed by block id, not node index: comments are anchored to blocks, and an
 /// index shifts the moment a block above is inserted or removed.
+/// Both ENDS carry their own block, because a comment can span blocks — the
+/// server's anchor has always had distinct `start_block`/`end_block`, and
+/// `_addCommentOnSelection` deliberately builds cross-block quotes. This used to
+/// be one `blockId` plus two offsets, which cannot express that, so the producer
+/// had to pair `startBlock` with an `endOffset` belonging to a DIFFERENT block:
+/// the wash then either vanished (`endOffset < startOffset` → empty range) or
+/// covered a wrong-length run inside the first block. A type that cannot
+/// represent its domain forces its callers to lie.
 typedef CommentHighlight = ({
-  String blockId,
+  String startBlock,
   int startOffset,
+  String endBlock,
   int endOffset,
 
   /// The thread the user is focused on — drawn stronger than the rest.
