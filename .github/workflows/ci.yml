@@ -257,16 +257,15 @@ jobs:
         with:
           key: workspace
 
-      # psql over sqlx-cli, matching the `rust` job: the CLI would have to be
-      # compiled, psql already ships on the runner.
-      - name: Apply migrations
-        run: |
-          set -euo pipefail
-          for f in migrations/*.sql; do
-            echo "==> $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
-          done
-
+      # NO psql migration loop here, unlike the `rust` job — the api migrates itself
+      # on startup and the two collide. That loop applies the schema WITHOUT writing
+      # sqlx's `_sqlx_migrations` bookkeeping, so `run_migrations` then starts from
+      # migration 1 and dies on `relation "users" already exists`. That is exactly
+      # what this job did on its first real run.
+      #
+      # Letting the api do it is the better test anyway: it exercises the migration
+      # path production takes, including the compile-time embedding that silently
+      # omits a new file when `crates/infra/src/db.rs` was not touched.
       - name: Build the api
         run: cargo build -p mica-api-server
 
@@ -290,14 +289,15 @@ jobs:
       - name: Serve the bundle through the real nginx config
         run: |
           set -euo pipefail
+          # BEFORE nginx starts: flutter creates build/web mode 750 and the
+          # container runs a different uid, so it would 403 on everything.
+          chmod -R a+rX clients/mica_flutter/build/web
           docker run -d --name mica-web-e2e \
             --add-host host.docker.internal:host-gateway \
             -p 8090:80 \
             -v "$PWD/deploy/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro" \
             -v "$PWD/clients/mica_flutter/build/web:/usr/share/nginx/html:ro" \
             nginx:alpine
-          # flutter creates build/web 750; the nginx container runs a different uid.
-          chmod -R a+rX clients/mica_flutter/build/web
 
       - name: Start the api
         run: |
