@@ -209,6 +209,21 @@ services:
       OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
       OSS_SECRET_ACCESS_KEY: ${OSS_SECRET_ACCESS_KEY:-}
       OSS_ROOT: ${OSS_ROOT:-mica}
+      # ── Blob leg: RustFS S3 → OSS, mirrored by rclone, NOT through rustic
+      # (mica-backup.sh 4c explains why immutable blobs want a mirror, not
+      # snapshots). Any of these unset → that leg is skipped with a WARN and
+      # images stay covered only indirectly, via the content export.
+      # This block is an explicit ALLOW-LIST: a variable set in the node's .env
+      # but missing HERE never reaches the process — that is exactly how the
+      # workspace quota shipped unadjustable in 0.13.5.
+      RUSTFS_S3_ACCESS_KEY_ID: ${RUSTFS_S3_ACCESS_KEY_ID:-}
+      RUSTFS_S3_SECRET_ACCESS_KEY: ${RUSTFS_S3_SECRET_ACCESS_KEY:-}
+      RUSTFS_S3_ENDPOINT: ${RUSTFS_S3_ENDPOINT:-http://rustfs:9000}
+      RUSTFS_S3_BUCKET: ${RUSTFS_S3_BUCKET:-mica}
+      # Destination prefix in OSS. Kept under its own root so plain objects
+      # never mix with the rustic repo's internals.
+      OSS_BLOB_BUCKET: ${OSS_BLOB_BUCKET:-}
+      OSS_BLOB_ROOT: ${OSS_BLOB_ROOT:-mica-blobs}
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
       KEEP_DAILY: ${KEEP_DAILY:-7}
       KEEP_WEEKLY: ${KEEP_WEEKLY:-4}

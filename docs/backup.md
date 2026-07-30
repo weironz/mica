@@ -12,7 +12,8 @@ snapshotting to Aliyun OSS. `mica-cli` itself has no `backup` command anymore.
 ```
 [daily + on start]
   mica-cli export --out /export            # every workspace → Markdown + images (mirrored) + manifest.json
-  pg_dump $MICA_BACKUP_PGURL | gzip > /export/_pgdump/mica.sql.gz   # off-site DB image (if MICA_BACKUP_PGURL set)
+  pg_dump $MICA_BACKUP_PGURL > /export/_pgdump/mica.sql    # off-site DB image (if MICA_BACKUP_PGURL set)
+  rclone copy rustfs:<bucket> ossblob:<bucket>/mica-blobs  # object bytes, S3→S3, NOT through rustic
   per workspace (read from manifest.json):
     rustic backup /export/<dir> --label <workspace-id> --tag ws=<name> --tag mica
   rustic backup /export/_pgdump --label _pgdump --tag pgdump --tag mica   # DB dump as its own lineage
@@ -163,8 +164,12 @@ half-restored prod DB is worse than a down one.
 ```bash
 # 1) Pull the latest DB dump out of the repo (its own label):
 docker exec mica-backup-1 rustic restore latest /tmp/pg --filter-label _pgdump
-docker cp mica-backup-1:/tmp/pg/mica.sql.gz ./mica.sql.gz
-gzip -t ./mica.sql.gz                                   # prove it's not truncated
+docker cp mica-backup-1:/tmp/pg/mica.sql ./mica.sql
+# The _pgdump lineage is UNCOMPRESSED on purpose (rustic dedups plain SQL well,
+# gzip defeats it — see mica-backup.sh 3b). So there is no `gzip -t` here; the
+# integrity guarantee comes from rustic itself, which verifies chunk hashes on
+# restore. Sanity-check it looks like a dump instead:
+head -3 ./mica.sql && grep -c '^COPY public\.' ./mica.sql   # header + table count
 
 # 2) REHEARSE into a throwaway DB on the SAME server (no prod password leaves it).
 #    `just restore-drill <basename>` is this, with assertions — prefer it:
@@ -203,7 +208,7 @@ docker compose up -d --no-deps --scale api=0 api || docker compose stop api
 # b) Drop + recreate the database, then load the dump.
 docker exec -i mica-postgres-1 psql -U mica -d postgres \
   -c 'DROP DATABASE mica' -c 'CREATE DATABASE mica'
-zcat ./mica.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica
+docker exec -i mica-postgres-1 psql -q -U mica -d mica < ./mica.sql
 
 # c) Pin MICA_VERSION to the tag the dump's SCHEMA matches, THEN bring api up.
 #    sqlx::migrate! is forward-only: a NEWER api meeting an OLDER restored schema
