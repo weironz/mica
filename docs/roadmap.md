@@ -55,16 +55,18 @@
 - ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
 - **开放注册无验证 + 弱口令(仅 ≥8)** —— 公网可无限刷号(`auth.rs`)。(M) `[需后端]`
-- 🔴 **未闭环(待用户拍板):compose 把注册强行打开,与代码的 fail-safe 默认相反**(2026-07-30 发现)——
-  `config.rs` 自 0.13.5 起**默认关闭**注册,只认显式 `true/1/yes/on`(拼错保持关闭),CLAUDE.md 也这么写。
-  但 `deploy/docker-compose.yml` 那行是 `MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"` ——
-  **节点 `.env` 不设它,compose 就注入字面量 `true`**,于是生产的实际状态是「注册开着」,除非 `.env` 明确关掉。
-  旁边的注释还写着「Defaults open (current behaviour)」,那是代码翻转默认**之前**写的,现已过期。
-  **本轮没有动它**:把一个已上公网实例的公开注册关掉是对外行为变更,该由用户决定,不该由 agent 顺手做掉。
-  两个选项:① 改成 `${MICA_REGISTRATION_ENABLED:-}`(让代码的 fail-safe 默认生效 = **关**),
-  在 `.env` 里显式写 `true` 才开;② 保持现状但把注释改成如实的「这里刻意覆盖代码默认」。
-  推荐 ①,因为「默认关」这条规则现在只在代码里成立,在**真实部署里是假的** —— 这正是 lessons 里
-  「不变量只写在一处等于没写」的同一种形状。(S)
+- 🟡 **compose 的注册默认与代码的 fail-safe 默认相反(潜伏陷阱,不是活着的洞)**(2026-07-30,
+  同日在生产核实后降级)—— `config.rs` 自 0.13.5 起注册**默认关闭**,只认显式 `true/1/yes/on`
+  (拼错保持关闭)。但 `deploy/docker-compose.yml` 那行是
+  `MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"`,`.env` 不设它就注入字面量 `true`。
+  **生产当前是安全的**:节点 `/data/mica/.env` 明确写了 `MICA_REGISTRATION_ENABLED=false`,
+  容器里实测 `MICA_REGISTRATION_ENABLED=false`(0.13.6 部署后查的),注册是关的。
+  **所以这条不是「注册开着」,而是「那道防线只剩 `.env` 一层」** —— 谁哪天清理 `.env`、或换台机器
+  重建节点忘了这一行,注册就会**静默打开**,而代码的 fail-safe 默认本该在那时接住它,却被 compose 覆盖掉。
+  修法:① 改成 `${MICA_REGISTRATION_ENABLED:-}`,让代码默认(关)生效,要开就在 `.env` 里显式写 `true`;
+  ② 或至少把旁边那句过期注释(「Defaults open (current behaviour)」——写在代码翻转默认**之前**)
+  改成如实的「这里刻意覆盖代码默认」。推荐 ①。**没有顺手改**:改完下次部署会让「注册开关」的实际来源
+  发生变化,属于对外行为的边界,留给用户拍板。(S)
 - 🆕 **安全清单卫生**(low) —— 上面两条已勾除即本轮校准;后续改动请同步勾选,避免半真半假的清单掩盖真未修项。
 
 ## 生产运维与备份 🆕
@@ -137,7 +139,15 @@
     会丢弃无区间的条目 —— 补上真实区间后,`a_self_link_is_not_a_backlink`(断言「为空」)才从**空转通过**
     变成真的在测那条过滤。
   退役完成。(M) `[需后端]`
-- 🔴 **未闭环:配额在生产还不可调,等 0.13.6** —— `MICA_WORKSPACE_QUOTA_BYTES` **没有**进
+- ~~🔴 **未闭环:配额在生产还不可调**~~ ✅ **已闭环(0.13.6,2026-07-30 上线并在节点核实)** ——
+  `deploy-prod` 从 tag 取 compose + sha256 指纹校验,所以 `81276a2` 那行必须发一版才生效;0.13.6 就是那一版。
+  **生产实测**:容器里 `MICA_WORKSPACE_QUOTA_BYTES=` 已存在(空 = 走代码默认 1 GiB),
+  即「设了到不了进程」这个根因消失。同批把允许清单缺的另外 8 个变量也补齐了(见「开发者体验」小节
+  catch-up 常量那条),**`MICA_WS_MIN_PROTOCOL` 从此才真的可设** —— S4 那句「抬到 1 即生效」在这之前是空话。
+  **仍未在生产实测的一半**:极小配额→拒绝→带 `workspace_quota_exceeded` 的三态,需要一个已登录账号发真上传,
+  agent 手上没有凭据;本地三态实测过(3000 放行 / 6000 拒 / 边界 4500 放行)。要在生产补这一刀,就是
+  `.env` 临时设小值 → `docker compose up -d --no-deps api` → 用自己的账号传个超限文件 → 复原,窗口内会误伤真实上传。
+  原文如下 —— `MICA_WORKSPACE_QUOTA_BYTES` **没有**进
   `deploy/docker-compose.yml` 的 api `environment:` 块,而那是一份**显式允许清单**:没列进去的
   变量到不了进程。0.13.5 冒烟时抓到 —— 节点 `.env` 把配额设成 5000,一个 6000 字节的上传仍被
   接受。**当前生产状态**:配额在生效,但锁在代码默认的 1 GiB、不可调(不算失去保护,只是没有
