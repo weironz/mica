@@ -56,6 +56,50 @@ Markdown 和图片，形态是「新实例 + 重新导入 + 所有人重新注�
 
 一句话：**导出救得回「文字和图片」，救不回「这是谁的、谁改过、谁评论过」。**
 
+### 2.1 分类：两类数据源 + 一类凭据，Markdown 导出不在其中
+
+容易搞错的一点：**Markdown 导出不是「要备份的东西」，它是当前唯一在跑的备份手段**（一个有损投影）。
+真正持有状态的是节点上的卷，而其中只有两个算数据源：
+
+| 卷 | 装什么 | 要不要备 | 异地现状 |
+| --- | --- | --- | --- |
+| `mica-prod-postgres` | 一切关系型状态（账号 / 关系 / CRDT / 版本 / 评论 / 分享 token） | ✅ **要** | 🔴 **没有** —— `MICA_BACKUP_PGURL` 未设 |
+| `mica-prod-rustfs` | 图片字节 | ✅ **要** | 🟡 **间接**：只靠导出里的图片 |
+| `mica-prod-backup` | 导出暂存区 `/var/lib/mica/export` | ❌ 派生产物 | — |
+
+**图片那格是「间接」不是「有」**：没有任何东西直接备 `mica-prod-rustfs`，图片能回来纯粹因为导出把
+它们一起写出去了。这意味着覆盖范围由**导出规则**（`is_deleted=false`）决定，而不由盘上有什么决定 ——
+孤儿 blob 与回收站页面独有的图片都不在。要覆盖完整，得直接备那个卷，或者接受这个边界并写明。
+
+### 2.2 第三类：凭据（不备这类，前两类备得再好也白搭）
+
+节点 `/data/mica/.env`，里面有 `POSTGRES_PASSWORD`、JWT secret、S3 / RustFS keys、邮件 AK、
+`MICA_BACKUP_TOKEN`，以及 **`RUSTIC_PASSWORD`**。
+
+**它现在哪儿都没备，且与数据同一块盘。** 丢了它 = 拿到一个完好但**永远打不开**的仓库。
+这一类的恢复成本是无穷大而备份成本是零（抄进密码管理器），所以它排在 WAL 归档之前（见 5.2）。
+
+### 2.3 Traefik / ACME 证书（2026-07-30 查实）
+
+- **Traefik 不在 mica 的 compose 里。** compose 第 218 行那个 `traefik:` 是 `networks:` 段的
+  `external: true` 网络（`traefik-network`），**不是 service**。反代是独立的一套栈
+  （容器 `traefik-traefik-1`），印证 roadmap 那句「Traefik 配置本体在仓库外未纳管」。
+- **证书是持久化的**：`traefik_traefik-certificates/_data → /etc/traefik/acme`，重启不丢。
+- **但它不在任何 mica 备份里**（属于另一套栈的卷）。份量轻：丢了可重新签发，只需注意
+  Let's Encrypt 的频率限制。真正的残留仍是**配置本体没纳管**。
+
+### 2.4 别把邻居的备份当成自己的（2026-07-30 查实）
+
+同一台节点上还跑着一套无关的 `neostor-*` 栈，里面有 `neostor-pgbackup-1`
+（`prodrigestivill/postgres-backup-local:16`，`@daily`）和 `neostor-oss-offsite-1`
+（rclone `sync /backups oss-crypt:`）。**它们不覆盖 mica**：那个 pgbackup 的
+`POSTGRES_DB=neostor` / `POSTGRES_USER=neostor`，连的是它自己那套栈的 postgres。
+
+记在这里是因为「机器上有个 pgbackup 容器在跑」很容易被下一个人（或未来的我）当成
+"数据库有备份"。**mica 是这台机器上唯一没有自动异地 DB 备份的应用。**
+顺带一句：邻居用 `postgres-backup-local` + rclone→OSS 把同一个问题解决了，而 mica 只差
+一个已经写好的开关没打开（5.1）。
+
 ## 3. RPO / RTO
 
 分两套算，因为它们的备份状况天差地别。
