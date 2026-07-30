@@ -82,3 +82,8 @@ password.txt
 *credential*
 *.pem
 *.key
+
+# The web e2e harness installs Playwright locally; the pinned dependency is in
+# tool/web_e2e/package.json and the browser download is machine-specific.
+clients/mica_flutter/tool/web_e2e/node_modules/
+clients/mica_flutter/tool/web_e2e/package-lock.json

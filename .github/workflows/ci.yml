@@ -210,3 +210,124 @@ jobs:
       # moves them, runtime font fallback would silently 404. Fail here instead.
       - name: gfonts mirror matches this engine's fallback tables
         run: bash tool/gfonts/mirror.sh --check
+
+  # The web half of the product had ZERO end-to-end coverage. Not an oversight in
+  # thoroughness: every one of the 14 integration tests in flutter-integration.yml
+  # imports `frb_generated.dart` or `LocalOffline`, neither of which exists on web,
+  # so none can be pointed at a browser. Meanwhile the web build is a categorically
+  # different binary — yjs in JS instead of Rust yrs, IndexedDB instead of SQLite,
+  # release-only so every `assert` is compiled out.
+  #
+  # Its own job, not a step in `flutter`: this one needs a database and a running
+  # api, and a browser harness failing must not be reported as "analyze failed".
+  web-e2e:
+    name: Web e2e (browser against a real stack)
+    runs-on: ubuntu-latest
+
+    # Same block as the `rust` job above, for the same reason: the assertions are
+    # about the real server folding real CRDT updates into real Postgres.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mica
+          POSTGRES_PASSWORD: mica
+          POSTGRES_DB: mica
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U mica"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
+      # A seeded, already-verified account. The harness CANNOT register one:
+      # registration is closed by default and, when open, answers 204 pending an
+      # emailed confirmation — and a browser has no inbox. `MICA_SEED_TEST_USER`
+      # exists for exactly this and is hard-ignored in production.
+      E2E_EMAIL: e2e@mica.test
+      E2E_PASSWORD: e2epassword123
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+      # Same cache key as the `rust` job so this reuses that build rather than
+      # compiling the workspace a second time.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: workspace
+
+      # psql over sqlx-cli, matching the `rust` job: the CLI would have to be
+      # compiled, psql already ships on the runner.
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          for f in migrations/*.sql; do
+            echo "==> $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - name: Build the api
+        run: cargo build -p mica-api-server
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      # Same flags as the release build. A bundle built differently from the one we
+      # ship would make the CDN and caching assertions meaningless.
+      - name: Build the web bundle
+        working-directory: clients/mica_flutter
+        run: |
+          flutter pub get
+          flutter build web --release --no-web-resources-cdn
+
+      # nginx, not a plain static server: two of the assertions are ABOUT nginx —
+      # that /verify-email, /reset-password and /s/ beat the SPA fallback, and that
+      # the fixed-name entry files are not cacheable. A different server would test
+      # a routing table nobody deploys. The dev config points at
+      # host.docker.internal, which resolves on the runner via --add-host.
+      - name: Serve the bundle through the real nginx config
+        run: |
+          set -euo pipefail
+          docker run -d --name mica-web-e2e \
+            --add-host host.docker.internal:host-gateway \
+            -p 8090:80 \
+            -v "$PWD/deploy/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "$PWD/clients/mica_flutter/build/web:/usr/share/nginx/html:ro" \
+            nginx:alpine
+          # flutter creates build/web 750; the nginx container runs a different uid.
+          chmod -R a+rX clients/mica_flutter/build/web
+
+      - name: Start the api
+        run: |
+          set -euo pipefail
+          APP_ENV=test \
+          HTTP_ADDR=0.0.0.0:8080 \
+          JWT_SECRET=ci-only-not-a-secret \
+          MICA_SEED_TEST_USER="${E2E_EMAIL}:${E2E_PASSWORD}" \
+          MICA_APP_BASE_URL=http://127.0.0.1:8090 \
+            ./target/debug/mica-api-server > /tmp/api.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/api/health && break
+            sleep 2
+          done
+          # The whole stack, through nginx — if this cannot be reached the run must
+          # fail here rather than let the harness report a convergence problem.
+          curl -fsS http://127.0.0.1:8090/api/health
+
+      - name: Web end-to-end assertions
+        working-directory: clients/mica_flutter/tool/web_e2e
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          node web_e2e.mjs --base http://127.0.0.1:8090 \
+                           --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
+
+      # The api's own log is the only place a server-side cause shows up; without
+      # this a failure reads as "the browser did not see convergence" with no way
+      # to tell whether the server ever accepted the push.
+      - name: api log (on failure)
+        if: failure()
+        run: tail -100 /tmp/api.log

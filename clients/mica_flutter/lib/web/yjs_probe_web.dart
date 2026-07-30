@@ -2,7 +2,8 @@
 // browser harness (playwright) can drive them:
 //   micaYjsSelfTest(b64)      W1: Dart-in-browser reads a real yrs base
 //   micaYjsW2Test(b64)        W2: write side — apply ops+marks, return new state
-//   micaYjsWebSyncTest(apiUrl) W4: two web sessions converge via the real server
+//   micaYjsWebSyncTest(apiUrl, email, password) W4: two web sessions converge
+//     via the real server
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
@@ -92,29 +93,43 @@ void registerYjsSelfTest() {
 
   // W4: two web sessions editing the same cloud doc converge through the real
   // server (mirrors the desktop cloud_sync_test, in-browser). Returns a Promise.
-  _webSyncTest = ((JSString apiBase) {
-    return _runWebSync(apiBase.toDart).toJS;
+  //
+  // Credentials come from the CALLER rather than being registered here. It used
+  // to POST /api/auth/register and read `access_token` out of the reply, which
+  // stopped working twice over: registration is closed by default now, and even
+  // when open it answers 204 with no body because the address has to be confirmed
+  // first. A browser harness has no inbox. The server's own
+  // `MICA_SEED_TEST_USER` exists for exactly this — it upserts a known,
+  // already-verified account at startup — so the harness passes that pair in and
+  // this signs in with it. Nothing is hardcoded: no credential ships in the
+  // bundle.
+  _webSyncTest = ((JSString apiBase, JSString email, JSString password) {
+    return _runWebSync(apiBase.toDart, email.toDart, password.toDart).toJS;
   }).toJS;
 }
 
-Future<JSString> _runWebSync(String apiBase) async {
+Future<JSString> _runWebSync(String apiBase, String email, String password) async {
   try {
     final base = Uri.parse(apiBase);
     Map<String, String> jh([String? t]) => {
       'content-type': 'application/json',
       if (t != null) 'authorization': 'Bearer $t',
     };
-    final stamp = DateTime.now().microsecondsSinceEpoch;
-    final reg = await http.post(
-      base.replace(path: '/api/auth/register'),
+    final signIn = await http.post(
+      base.replace(path: '/api/auth/login'),
       headers: jh(),
-      body: jsonEncode({
-        'email': 'web$stamp@test.dev',
-        'display_name': 'Web',
-        'password': 'password123',
-      }),
+      body: jsonEncode({'email': email, 'password': password}),
     );
-    final token = (jsonDecode(reg.body) as Map)['access_token'] as String;
+    if (signIn.statusCode != 200) {
+      // Fail loudly with the server's own words. A harness that cannot sign in
+      // must not look like a convergence failure — that would send whoever reads
+      // the CI log hunting through the CRDT layer for a configuration problem.
+      return jsonEncode({
+        'ok': false,
+        'error': 'sign-in failed (${signIn.statusCode}): ${signIn.body}',
+      }).toJS;
+    }
+    final token = (jsonDecode(signIn.body) as Map)['access_token'] as String;
     final ws = await http.post(
       base.replace(path: '/api/workspaces'),
       headers: jh(token),

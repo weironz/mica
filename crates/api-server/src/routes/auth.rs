@@ -888,11 +888,18 @@ pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
 pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> anyhow::Result<()> {
   let password_hash =
     hash_password(password).map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
+  // Seeded already-verified, and this is not optional: a seeded account has no
+  // inbox anyone can check, so leaving `email_verified_at` NULL would make the
+  // whole mechanism useless — the account would exist and be unable to sign in.
+  // `coalesce` on the conflict path so re-seeding an existing account keeps its
+  // original confirmation time rather than rewriting it on every boot.
   sqlx::query(
     r#"
-      INSERT INTO users (email, display_name, password_hash)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+      INSERT INTO users (email, display_name, password_hash, email_verified_at)
+      VALUES ($1, $2, $3, now())
+      ON CONFLICT (email) DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
+        email_verified_at = coalesce(users.email_verified_at, now())
     "#,
   )
   .bind(email)

@@ -362,3 +362,27 @@ restore-drill dump:
 [doc("List the restore points on the node, newest last")]
 restore-points:
     ssh {{node}} "ls -lah /data/mica/*.sql.gz 2>/dev/null | tail -20 || echo '(none)'"
+
+# The web half had zero end-to-end coverage: all 14 integration tests import native
+# FFI and structurally cannot be pointed at a browser. This asserts what only a
+# browser against a real stack can — same-origin engine load, yjs↔yrs convergence
+# over a real WebSocket, server-rendered routes beating the SPA fallback, and
+# entry-file caching.
+#
+# Needs the dev stack up (`just dev`) with the api started against a seeded
+# account: MICA_SEED_TEST_USER=e2e@mica.test:e2epassword123. Registration cannot
+# be used to make one — it is closed by default and answers 204 pending email
+# confirmation, and a browser harness has no inbox.
+[doc("Run the web end-to-end assertions against the dev stack (needs `just dev`)")]
+web-e2e email="e2e@mica.test" password="e2epassword123":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd clients/mica_flutter/tool/web_e2e
+    # `npm ci` wants a lockfile; install is fine for one pinned dependency.
+    [ -d node_modules ] || npm install --no-audit --no-fund
+    # From CN this download is blocked; the script falls back to system Chrome, so
+    # a failure here is not fatal.
+    npx playwright install chromium \
+      || echo "note: bundled Chromium unavailable — the script will use system Chrome"
+    node web_e2e.mjs --base http://127.0.0.1:8090 \
+                     --email '{{email}}' --password '{{password}}'

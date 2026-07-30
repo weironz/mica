@@ -1,0 +1,13 @@
+{
+  "name": "mica-web-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Playwright harness for the web end-to-end assertions. Not shipped and not imported by the app — see web_e2e.mjs.",
+  "scripts": {
+    "e2e": "node web_e2e.mjs"
+  },
+  "comment-on-pinning": "Exact version, no caret. ci.yml:155-162 records nine hours of red main from letting @modelcontextprotocol/inspector float to @latest; a browser-automation dependency is worse to let drift, because a Chromium bump can change what the assertions see.",
+  "devDependencies": {
+    "@playwright/test": "1.49.1"
+  }
+}

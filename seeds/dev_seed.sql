@@ -26,12 +26,17 @@ BEGIN;
 -- argon2id hash of 'password123', produced by the server's own `hash_password`
 -- (crates/api-server/src/routes/auth.rs) so it verifies through the normal
 -- login path rather than needing a special case.
-INSERT INTO users (id, email, display_name, password_hash)
+-- `email_verified_at` is set, and it has to be: sign-in refuses an unconfirmed
+-- address (migration 0018), and a seeded demo account has no inbox anyone can
+-- check. Without it a freshly created dev environment hands you credentials that
+-- cannot log in — a failure that only surfaces when someone actually runs it.
+INSERT INTO users (id, email, display_name, password_hash, email_verified_at)
 VALUES (
   '11111111-1111-4111-8111-111111111111',
   'demo@mica.dev',
   'Demo User',
-  '$argon2id$v=19$m=19456,t=2,p=1$m1Eq47TM45lBHJX5SJH5SA$wp0OqiBOp6mVUxWsvl64RvVl8scVXH+j0pSX7Lpnkqk'
+  '$argon2id$v=19$m=19456,t=2,p=1$m1Eq47TM45lBHJX5SJH5SA$wp0OqiBOp6mVUxWsvl64RvVl8scVXH+j0pSX7Lpnkqk',
+  now()
 )
 ON CONFLICT (email) DO NOTHING;
 
