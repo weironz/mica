@@ -225,6 +225,26 @@ web release 把它吞了,差点漏到发版。
 对策:抽 `LocalOfflineApi` 抽象接口,两个变体都 `implements` 它(少一个方法就编译不过);
 CI 加 `flutter build web --release` 关卡。
 
+### web 上「应用完全没起来」可以是**零错误输出**的
+
+2026-07-30 新建 web e2e,第一次真跑就抓到:headless Chromium(未指定 locale)下页面加载后
+抛 `Error: Invalid argument(s): Incorrect locale information provided`,发生在**引擎层的
+locale 探测、`runZonedGuarded` 之前**。于是 `main()` 走不到 `registerYjsSelfTest()`,
+`window.micaYjs*` 全 undefined,`document.body.children` 只剩 1 个(canvas 外壳)——
+**整个应用没起来**。
+
+而当时 **console 里一条错误都没有**:
+
+> **未捕获异常不是 console message。** Playwright 里 `page.on('console')` 收不到它,
+> 要 `page.on('pageerror')`。只监听 console 的 web 检查,对「启动就抛」这一整类是瞎的。
+
+两条推论:
+- `main()` 里那一串启动步骤是**串行且脆弱**的:任何一步抛,后面全部不执行。本仓库的
+  `registerYjsSelfTest()` 排在 `loadPersistedLocale()` 之后,所以一个 locale 问题连带
+  让**测试钩子也消失**——症状于是变成「探针不存在」,离真因很远。
+- 上游/引擎层的错误逃出你自己的 zone 是**正常的**,`runZonedGuarded` 不是全能网。
+  它捕不到的东西,只有浏览器级的 `pageerror` 能看见。
+
 ---
 
 ## 5. 图片解码:dispose 时序是承重的
@@ -355,6 +375,43 @@ CI 加 `flutter build web --release` 关卡。
   结论:**要测"守卫把 panic 收成错误",就直接喂一个会 panic 的闭包**
   (`contain_yrs_panic("d", || panic!(...))`),别绕道构造畸形字节;
   端到端那条只断言"返回 Err 而非 unwind"这个真正要守的契约。
+
+#### 「本地跑不了」不等于「本地验不了」—— 别拿 CI 当编译器
+
+新增 `web-e2e` job 那次**连红四轮,四个根因全是我的**,而且**前三个本机都能验**:
+
+1. 照抄了 `rust` job 的 psql 迁移循环 → 那步只建 schema、**不写 `_sqlx_migrations`**,
+   api 启动时 `run_migrations` 于是从头重放,撞 `relation "users" already exists`。
+   (`rust` job 没事,因为 `cargo test` 从不调 `run_migrations`。)
+2. 就绪等待写成 `curl … && break`,配 `set -euo pipefail` + `shell: bash -e` →
+   **失败的 curl 把整个脚本带崩,「轮询 60 次」实际只跑了一轮**。日志里 api 的 "ok"
+   出现在错误的下一行 —— 它只是还没起来。
+3. `nginx.dev.conf` 挂到了 `conf.d/default.conf` → 它是**整份** nginx.conf(开头就是
+   `worker_processes 1;`),nginx 拒绝启动;而我的轮询把这件事报成「nginx 连不上 api」,
+   误导六十秒。**而 `docker-compose.yml` 里一直写着正确的挂载点,我只是没照抄。**
+4. headless Chromium 的 locale 让应用启动即崩 —— 这一个确实只有真跑才知道。
+
+能在本地验的部分:
+
+```sh
+# 挂载方式与 job 完全一致,验配置本身
+docker run --rm -v "$PWD/deploy/nginx.dev.conf:/etc/nginx/nginx.conf:ro" nginx:alpine nginx -t
+# 步骤脚本的 shell 语义(尤其 set -e 与 && 的相互作用)
+bash -n <<<'<该步骤 run 的内容>'
+# YAML 用拒绝重复键的 loader —— safe_load 漏重复键而 GHA 严格拒绝
+```
+
+第三轮之后我才改成先在本机 `nginx -t`,一次通过。
+
+一般化,而且比「多测测」更可执行:
+> 改 CI 时,先把每一步**能在本机复现的那部分**单独跑一遍:配置文件语法、挂载路径、
+> 步骤脚本的 shell 语义。真正只有 CI 能暴露的通常只有**环境**(runner 的 locale、网络、
+> 预装工具),那一类才值得用一次 push 去换。
+
+**推论:让 harness 会解释自己。** 第四轮之前脚本超时后**一个字的诊断都没打**,下一次尝试
+只能靠猜。加上「超时就把 url / title / `window` 上各钩子的 typeof / pageerror / console /
+失败请求 / 请求过的 host 全部打出来」之后,**下一轮 CI 直接给出了根因**。一次诊断改动省掉
+的往返,比它自己贵得多。
 
 ### 用 computer-use 测桌面版
 
