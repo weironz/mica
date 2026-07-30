@@ -188,7 +188,21 @@
 - ~~🆕 `blob_gc.rs` 注释预设了一个不存在的「回收站保留期」~~ ✅ 已修(2026-07-29)—— 原文写 effective margin 是 "recycle-bin retention + this",而回收站根本没有 retention 这个量;改成如实说明它是 [0, 用户手动清空) 的不定时长。
 - ~~**`refresh_tokens` 只增不删**~~ ✅ blob_gc 6h 循环加 `DELETE ... expires_at < now()-7d`(6612330)。
 - ~~🟡 **账号删除功能不存在**~~ ✅ 已做(18300d1,2026-07-23)—— `delete_account` 事务级联(密码门控 + 跨他人 workspace RESTRICT 阻塞回滚 409),详见「产品与公开发布合规」小节;级联顺序备忘 deploy.md 早有(0d9c404)。
-- 🟡 **导出不含回收站;备份已含其文本、独有 blob 仍漏**(2026-07-29 更正)—— 导出确实过滤 `is_deleted=false`;但 2026-07-22 起每日备份走**全库 pg_dump**(`mica-backup.sh`,label=_pgdump),回收站页面的文本+CRDT 历史**在备份里**,原「备份里最后副本被 prune」的推演已不成立。**残留**:回收站页面独有的图片 blob(第二对象存储,pg_dump 不含)。(S)
+- 🔴 **异地备份里根本没有数据库 —— 每日备份是「只有内容」的**(2026-07-30 生产实测,**推翻本条原表述**)——
+  原文说「2026-07-22 起每日备份走全库 pg_dump(label=_pgdump),回收站页面的文本+CRDT 历史在备份里」,
+  **是假的**:机制在 `mica-backup.sh` 里写好了,但节点 `.env` **从来没设过 `MICA_BACKUP_PGURL`**,
+  脚本因此按设计降级、打一条 WARN、只备内容。取证:今天备份日志原文
+  `WARN: MICA_BACKUP_PGURL unset — skipping pg_dump (content-only backup, no DB disaster recovery)`,
+  且 `rustic snapshots --filter-label _pgdump` = **`total: 0 snapshot(s)`**(全仓 170 个快照)——
+  不是最近坏的,是一次都没跑过。**后果**:异地只有 22 个工作区的 Markdown+图片;账号、成员关系、
+  CRDT 编辑历史、版本检查点、**评论**(独立表,正文里一个字都没有)、分享 token 全都只存在于
+  节点本地盘,而 DB 的唯一副本是**发版前手工落的** `/data/mica/pre-*.sql.gz`(与 DB 同盘)。
+  节点盘一坏 = 这些永久消失。**为什么活这么久**:死人开关对它是**绿的** —— 跳过 pg_dump 是一次
+  *成功*的运行,监控抓得住「备份没跑」,抓不住「备份少备了一半」。**修法一行**(节点 `.env` 加
+  `MICA_BACKUP_PGURL`,不需发版)+ 配套让降级不再算成功。完整方案、威胁模型、RPO/RTO 见
+  **`docs/dr-plan.md`**。
+- 🟡 **导出不含回收站,回收站页面独有的图片 blob 也不在任何备份里** —— 导出过滤 `is_deleted=false`;
+  blob 在第二对象存储,`pg_dump` 本来也不含。等上面那条修完(DB 进异地备份)再重新评估这条的份量。(S)
 
 ## 编辑器与功能广度
 
@@ -320,7 +334,9 @@
 > 数据安全里程碑已收口后,重心转向「公网自托管的硬底线」——发出去前一次事故就不可挽回的类型。
 
 1. ~~**分享页安全三件套**~~ ✅ 完成(200c3b1/81ff653)—— export_html 白名单净化(strip_unsafe_attrs)+ 分享响应 CSP + 渲染前校验 view 存活。存储型 XSS→token 接管 与「删了还在公网」两个高危都堵上。
-2. ~~**备份可信化**~~ ✅ 完成(死人开关 + pg_dump 异地 DR + `/api/ready` 探活)—— 仅 `rustic check`/恢复演练排期这一件 S 未做(见「生产运维」小节)。
+2. 🟡 **备份可信化 —— 原标「✅ 完成」不成立**(2026-07-30 更正)。死人开关 ✅、`/api/ready` 探活 ✅、
+   `rustic check` + 恢复演练 ✅(已实跑),但当时那句「pg_dump 异地 DR」**是假的**:节点从未设
+   `MICA_BACKUP_PGURL`,异地一份 DB 快照都没有。见「数据生命周期」小节的 🔴 与 `docs/dr-plan.md`。
 3. ~~**AI 配置授权 + 收口 base_url**~~ ✅ 完成(200c3b1)—— base_url 钉死服务端配置,密钥外泄 + SSRF 堵上。
 4. ~~**CI 锁住数据面回归**~~ ✅ 完成 —— api-server 测进 CI(postgres service)+ auth.rs `pool()` CI-assert(缺库即 fail)+ 页树守卫补测 + real_store_smoke。
 5. ~~**客户端兜底三件**~~ ✅ 完成 —— 崩溃上报(runZonedGuarded)+ 单实例守卫(CreateMutexW)+ 本地损坏兜底(LocalDocCorruptException,不再自毁恢复点)。
