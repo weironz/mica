@@ -132,7 +132,7 @@ docker exec mica-backup-1 mica-backup.sh
 # List snapshots grouped by workspace (label = workspace id, tag ws=<name>):
 docker exec mica-backup-1 rustic snapshots --group-by label
 
-# Verify repository integrity:
+# Verify repository integrity (also run by `just restore-drill`, see 恢复演练 below):
 docker exec mica-backup-1 rustic check
 
 # Restore one workspace's latest snapshot. SNAPSHOT + DESTINATION are POSITIONAL
@@ -166,12 +166,31 @@ docker exec mica-backup-1 rustic restore latest /tmp/pg --filter-label _pgdump
 docker cp mica-backup-1:/tmp/pg/mica.sql.gz ./mica.sql.gz
 gzip -t ./mica.sql.gz                                   # prove it's not truncated
 
-# 2) REHEARSE into a throwaway DB on the SAME server (no prod password leaves it):
-docker exec -i mica-postgres-1 psql -U mica -d postgres -c 'CREATE DATABASE mica_restest'
-zcat ./mica.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica_restest
-docker exec -i mica-postgres-1 psql -U mica -d mica_restest -c '\dt' # assert tables are there
-docker exec -i mica-postgres-1 psql -U mica -d postgres -c 'DROP DATABASE mica_restest'
+# 2) REHEARSE into a throwaway DB on the SAME server (no prod password leaves it).
+#    `just restore-drill <basename>` is this, with assertions — prefer it:
+just restore-points                                     # what's on the node
+just restore-drill pre-0.13.4-20260730-100443.sql.gz    # restore → assert → drop
 ```
+
+### 恢复演练(`just restore-drill`)
+
+`deploy/restore-drill.sh`,一条命令跑完:恢复进一次性库 → 断言 → `DROP`(trap 兜底),
+`mica` 生产库全程不碰、不重启任何容器,输出只有计数(不打印正文/用户字段)。
+顺带跑 `rustic check`(对象存储那半的静默损坏,只能靠问才发现)。
+
+`\dt` 那种「表在不在」的断言不够 —— 一次产出空 `state` blob 的恢复能通过所有计数。
+所以它有三条**硬门槛**,不满足就非零退出:恢复错误数 = 0、`documents` > 0、
+**可读页数 > 0**(走 `views → documents → document_yrs_base` 那个每次读都要走的 join,
+且要求 `length(state) > 0 AND content_text <> ''`)。
+
+**首次实跑(2026-07-30,`pre-0.13.4-20260730-100443.sql.gz`)**:恢复错误 0、
+`_sqlx_migrations` = 15(正确的 pre-0016 世界)、被 S5 删掉的三张表都回来了、行数与备份时
+记录的一致(snapshots 3975 / updates 239 / versions 3 / docs 3736 / bases 3736 /
+views 4572 / users 9)、32 个 FK + 19 个 PK、**3331 个可读页**;`rustic check` 170 个
+snapshot 全部通过。**在这之前,这条恢复路径从未被真正走过一次。**
+
+> 为什么突然重要:S5(migration 0016)是本 schema 第一个不可逆迁移,它删掉了 op 模型
+> 三张表 —— 对早于它的数据,这个 dump 就是唯一的回头路。`gzip -t` 只证明文件没截断。
 
 **Restore over prod** (destructive — the rehearsal must have passed):
 

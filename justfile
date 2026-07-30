@@ -339,3 +339,26 @@ verify-prod version:
     echo "mcp:   $(curl -s -o /dev/null -w '%{http_code}' {{site}}/mcp)"
     echo "index: $(curl -s -o /dev/null -w '%{http_code}' {{site}}/)"
     echo "bundle: $(curl -fsS {{site}}/main.dart.js | md5sum | cut -c1-12)…"
+
+# `gzip -t` proves an archive is not truncated; it proves nothing about whether
+# `psql < dump` yields a working database. S5 (migration 0016) made that gap
+# load-bearing — it dropped three tables, so for anything predating it the dump is
+# the only way back. Restores into a throwaway database beside the live one and
+# drops it again; `mica` is never touched.
+# Takes the BASENAME, not a path: on the Windows dev box Git Bash rewrites a
+# leading-slash argument into a Windows path before just ever sees it
+# (`/data/mica/x.sql.gz` → `C:/Program Files/Git/data/mica/x.sql.gz`), and that
+# happens on the command line, too early for the recipe to undo. Naming the
+# directory here sidesteps it and shortens the call.
+[doc("Prove a restore point really restores, e.g. `just restore-drill pre-0.13.4-….sql.gz`")]
+restore-drill dump:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Ship the repo's copy each run, same as deploy-prod does with mica-deploy.sh:
+    # a drill script that has drifted from the repo is one more thing to distrust.
+    cat deploy/restore-drill.sh | ssh {{node}} "cat > /tmp/mica-restore-drill.sh"
+    ssh {{node}} "bash /tmp/mica-restore-drill.sh /data/mica/$(basename '{{dump}}')"
+
+[doc("List the restore points on the node, newest last")]
+restore-points:
+    ssh {{node}} "ls -lah /data/mica/*.sql.gz 2>/dev/null | tail -20 || echo '(none)'"
