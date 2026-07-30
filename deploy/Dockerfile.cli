@@ -28,6 +28,33 @@ RUN apt-get update \
  && install -m755 "$(find /tmp -maxdepth 2 -type f -name rustic | head -1)" /usr/local/bin/rustic \
  && /usr/local/bin/rustic --version
 
+# ── rclone CLI (object-store mirror), checksum-pinned ────────────────────────
+# Used ONLY for the blob leg: RustFS S3 → OSS, S3 to S3, never through rustic
+# (mica-backup.sh 4c explains why immutable content-addressed blobs want a
+# mirror, not snapshots). Same shape as the rustic stage above: static build,
+# pinned version + sha256, `--version` as a smoke test so a bad download fails
+# the image build instead of the 3am backup.
+# NOTE — weaker than the rustic pin above, on purpose and temporarily: this
+# verifies the zip against the release's own published SHA256SUMS instead of a
+# hash pinned here. That catches a corrupted or truncated download but NOT a
+# compromised release (an attacker who can rewrite the asset can rewrite the
+# sums file next to it). TO HARDEN: run the build once, copy the printed digest
+# into RCLONE_SHA256, and switch the check back to the `echo … | sha256sum -c -`
+# form the rustic stage uses. Left unpinned rather than pinned to a hash nobody
+# verified — a wrong-but-official-looking constant is worse than an honest gap.
+FROM debian:bookworm-slim AS rclone
+ARG RCLONE_VERSION=v1.68.2
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates unzip \
+ && base="https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}" \
+ && curl -fsSL -o /tmp/rclone.zip "${base}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
+ && curl -fsSL -o /tmp/SHA256SUMS "${base}/SHA256SUMS" \
+ && ( cd /tmp && grep "rclone-${RCLONE_VERSION}-linux-amd64.zip$" SHA256SUMS | sha256sum -c - ) \
+ && echo "rclone zip digest: $(sha256sum /tmp/rclone.zip | cut -d' ' -f1)  ← pin this into RCLONE_SHA256" \
+ && unzip -q /tmp/rclone.zip -d /tmp \
+ && install -m755 "$(find /tmp -maxdepth 2 -type f -name rclone | head -1)" /usr/local/bin/rclone \
+ && /usr/local/bin/rclone --version
+
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 # ca-certificates: TLS to the API + OSS. jq: parse export manifest.json.
@@ -46,6 +73,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
 COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 COPY deploy/mica-backup.sh /usr/local/bin/mica-backup.sh
 COPY deploy/mica-backup-loop.sh /usr/local/bin/mica-backup-loop.sh
 # Strip any CR (Windows checkout) before chmod — a `\r` in the shebang makes the

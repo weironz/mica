@@ -74,12 +74,23 @@ log "export all workspaces → ${EXPORT_DIR}"
 PGDUMP_DIR="${EXPORT_DIR}/_pgdump"
 if [ -n "${MICA_BACKUP_PGURL:-}" ]; then
   mkdir -p "$PGDUMP_DIR"
-  log "pg_dump → ${PGDUMP_DIR}/mica.sql.gz"
+  log "pg_dump → ${PGDUMP_DIR}/mica.sql (uncompressed on purpose, see below)"
+  # UNCOMPRESSED on purpose. gzip scrambles content similarity, so two
+  # consecutive dumps of a barely-changed database dedup to almost nothing and
+  # every day costs a full copy. Handing rustic the plain SQL lets its
+  # content-defined chunking see that most of today's dump is yesterday's, and
+  # rustic compresses the chunks itself — a fraction of the bytes at rest.
+  # The hand-taken `pre-*.sql.gz` restore points are a DIFFERENT path and stay
+  # gzipped: they are one-off files, not a lineage, so dedup buys them nothing.
+  #
   # pipefail (set -o above) makes a failed pg_dump abort the whole run — a broken
-  # dump must fail loudly, not ship a truncated .sql.gz. Dump to a temp file and
+  # dump must fail loudly, not ship a truncated one. Dump to a temp file and
   # rename, so an interrupted run never leaves a half-written dump behind.
-  pg_dump --no-owner --no-privileges "$MICA_BACKUP_PGURL" | gzip > "${PGDUMP_DIR}/mica.sql.gz.tmp"
-  mv "${PGDUMP_DIR}/mica.sql.gz.tmp" "${PGDUMP_DIR}/mica.sql.gz"
+  pg_dump --no-owner --no-privileges "$MICA_BACKUP_PGURL" > "${PGDUMP_DIR}/mica.sql.tmp"
+  mv "${PGDUMP_DIR}/mica.sql.tmp" "${PGDUMP_DIR}/mica.sql"
+  # Drop any stale gzip from before this switch, or 4b snapshots both and the
+  # restore runbook has two files to choose between.
+  rm -f "${PGDUMP_DIR}/mica.sql.gz"
 else
   log "WARN: MICA_BACKUP_PGURL unset — skipping pg_dump (content-only backup, no DB disaster recovery)"
 fi
@@ -103,9 +114,62 @@ log "snapshotted ${count} workspace(s)"
 # 4b) Snapshot the DB dump as its own retention lineage (stable label _pgdump,
 #     never a workspace id), so `forget --group-by label` below keeps/prunes it
 #     on the same keep-daily/weekly/monthly policy as each workspace.
-if [ -f "${PGDUMP_DIR}/mica.sql.gz" ]; then
+if [ -f "${PGDUMP_DIR}/mica.sql" ]; then
   log "snapshot pg_dump → label=_pgdump"
   "$RUSTIC" backup "$PGDUMP_DIR" --label _pgdump --tag pgdump --tag mica
+fi
+
+# 4c) Object bytes (images), S3 → S3, DELIBERATELY NOT THROUGH RUSTIC.
+#     Blobs are content-addressed and immutable: the app never rewrites a key,
+#     it adds new ones and lets blob_gc reap orphans. There is no "the version
+#     from three days ago" to restore, so a mirror IS a backup here and the
+#     point-in-time machinery rustic exists for buys nothing.
+#
+#     Three things fall out of doing it this way:
+#       - no local staging copy (bytes never touch this container's disk)
+#       - content-type and the rest of the object metadata ride along, which a
+#         download-then-reupload would drop — and blob serving 302-redirects to
+#         the store, so content-type is what decides how a browser renders it
+#       - restorable with ANY S3 client, no rustic and no repo password
+#
+#     `copy`, NOT `sync`: sync mirrors deletions, so one bad `blob_gc` (or one
+#     fat-fingered bucket op) would replicate straight into the backup. copy is
+#     append-only. The cost is that GC'd orphans linger off-site forever, which
+#     at image volumes is not worth caring about.
+#
+#     Unset remote → skip and WARN, same shape as the pg_dump leg above. A
+#     backup that silently covers less than you think is the whole reason this
+#     file has a WARN branch at all (see docs/dr-plan.md §1.1).
+if [ -n "${RUSTFS_S3_ACCESS_KEY_ID:-}" ] && [ -n "${OSS_BLOB_BUCKET:-}" ]; then
+  # Credentials go in a 0600 file, never on the command line — argv is world
+  # readable via /proc, and this container shares a host with other stacks.
+  RCLONE_CONF=/etc/rclone/rclone.conf
+  mkdir -p /etc/rclone
+  ( umask 077
+    cat > "$RCLONE_CONF" <<RCLONE_EOF
+[rustfs]
+type = s3
+provider = Other
+access_key_id = ${RUSTFS_S3_ACCESS_KEY_ID}
+secret_access_key = ${RUSTFS_S3_SECRET_ACCESS_KEY}
+endpoint = ${RUSTFS_S3_ENDPOINT}
+force_path_style = true
+
+[ossblob]
+type = s3
+provider = Alibaba
+access_key_id = ${OSS_ACCESS_KEY_ID}
+secret_access_key = ${OSS_SECRET_ACCESS_KEY}
+endpoint = ${OSS_ENDPOINT}
+RCLONE_EOF
+  )
+  src="rustfs:${RUSTFS_S3_BUCKET:-mica}"
+  dst="ossblob:${OSS_BLOB_BUCKET}/${OSS_BLOB_ROOT:-mica-blobs}"
+  log "rclone copy ${src} → ${dst} (objects, no rustic)"
+  rclone --config "$RCLONE_CONF" copy "$src" "$dst" \
+    --transfers 4 --stats-one-line --stats 30s
+else
+  log "WARN: RUSTFS_S3_REMOTE/OSS_BLOB_REMOTE unset — skipping object backup (images only covered indirectly, via the content export)"
 fi
 
 # 5) Retention PER workspace (group by the stable label = id), then prune once.
