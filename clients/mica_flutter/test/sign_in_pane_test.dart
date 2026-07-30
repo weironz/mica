@@ -15,6 +15,7 @@ void main() {
     serversLabel: '服务器',
     addServer: '添加服务器',
     removeServer: '删除',
+    retry: '重试',
     localTitle: '在此设备上使用',
     localBody: '无需账户',
     localAction: '开始使用',
@@ -223,5 +224,100 @@ void main() {
     await tester.tap(find.byIcon(Icons.delete_outline).last);
     await tester.pumpAndSettle();
     expect(removed, ['https://b.example']);
+  });
+
+  // ── A failed probe must not be permanent ──────────────────────────────────
+  //
+  // The bug, as reported: the row says 「连不上服务器」 and the very same screen
+  // signs in fine. `_probe()` ran once in `initState` and the only way to ask
+  // again was to switch to the local tab and back — so a first check that lost a
+  // race with the network (cold start, cold DNS) stuck for the whole session.
+  // Worse than no dot: it contradicts something the user can see working.
+
+  testWidgets('a failed probe re-checks itself, without being asked', (
+    tester,
+  ) async {
+    await pump(tester, probe: (_) async => false);
+    await tester.pump();
+    expect(find.text('连不上服务器'), findsOneWidget);
+    expect(probed.length, 1, reason: 'the first check has happened');
+
+    // Nothing yet — the retry is delayed, not a busy loop.
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(probed.length, 1);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(probed.length, 2, reason: 'it asked again on its own');
+  });
+
+  testWidgets('the automatic re-checks are bounded, not forever', (
+    tester,
+  ) async {
+    await pump(tester, probe: (_) async => false);
+    await tester.pump();
+
+    // Walk well past the whole backoff schedule.
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+    }
+    expect(
+      probed.length,
+      4,
+      reason:
+          'first check + 3 backed-off retries, then it stops '
+          '(a login screen must not probe forever)',
+    );
+  });
+
+  testWidgets('a recovered server flips to connected and stops retrying', (
+    tester,
+  ) async {
+    var up = false;
+    await pump(tester, probe: (_) async => up);
+    await tester.pump();
+    expect(find.text('连不上服务器'), findsOneWidget);
+
+    // The server comes up between retries — exactly the reported situation.
+    up = true;
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(find.text('已连接到服务器'), findsOneWidget);
+
+    final after = probed.length;
+    await tester.pump(const Duration(seconds: 30));
+    await tester.pump();
+    expect(after, probed.length, reason: 'reachable = no more retries');
+  });
+
+  // Two tests, not one with two `pump`s: re-pumping the same widget at the same
+  // position is `didUpdateWidget`, not a fresh `initState`, and that only
+  // re-probes when `active` changed — so a second pump with a different probe
+  // would silently keep the first verdict. (Caught by this test failing.)
+  testWidgets('a reachable server shows no retry affordance', (tester) async {
+    await pump(tester, probe: (_) async => true);
+    await tester.pump();
+    expect(
+      find.byTooltip('重试'),
+      findsNothing,
+      reason: 'a refresh button next to a green dot invites poking at nothing',
+    );
+  });
+
+  testWidgets('the retry affordance is there while unreachable, and asks now', (
+    tester,
+  ) async {
+    await pump(tester, probe: (_) async => false);
+    await tester.pump();
+    expect(find.byTooltip('重试'), findsOneWidget);
+
+    // Tapping asks again NOW. The point of having it as WELL as the backoff:
+    // "I just started the server", and once the budget is spent it is the only
+    // way back.
+    final before = probed.length;
+    await tester.tap(find.byTooltip('重试'));
+    await tester.pump();
+    expect(probed.length, before + 1);
   });
 }

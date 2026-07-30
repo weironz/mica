@@ -27,6 +27,8 @@
 //
 // **All copy arrives already localized** (the `status_kit.dart` contract).
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../editor/model.dart' show kMonoFont;
@@ -51,6 +53,7 @@ class SignInPaneStrings {
     required this.serversLabel,
     required this.addServer,
     required this.removeServer,
+    required this.retry,
     required this.localTitle,
     required this.localBody,
     required this.localAction,
@@ -69,6 +72,9 @@ class SignInPaneStrings {
 
   final String addServer;
   final String removeServer;
+
+  /// Tooltip on the re-check affordance, shown only while unreachable.
+  final String retry;
 
   final String localTitle;
   final String localBody;
@@ -130,6 +136,27 @@ class _SignInPaneState extends State<SignInPane> {
   ServerReach? _reach;
   String? _probed;
 
+  /// Automatic re-checks after a failed probe, and how many have been used.
+  ///
+  /// A single probe at `initState` was the whole story, and it made a failure
+  /// PERMANENT: the app launches, the very first check loses a race with the
+  /// network (or a cold DNS lookup), and the row says 「连不上服务器」 for the rest
+  /// of the session — while signing in seconds later works perfectly. That is
+  /// exactly what a user reported, and it is worse than no dot at all, because it
+  /// contradicts something they can see working.
+  ///
+  /// Bounded on purpose. These delays cover a slow start (and "I started the
+  /// backend just now"), then stop: a login screen that re-probes forever is a
+  /// background task nobody asked for. After the last one the manual affordance
+  /// is the way back — hence both halves, not either.
+  static const List<Duration> _retryBackoff = [
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 12),
+  ];
+  Timer? _retry;
+  int _retriesUsed = 0;
+
   @override
   void initState() {
     super.initState();
@@ -142,11 +169,24 @@ class _SignInPaneState extends State<SignInPane> {
     if (old.active != widget.active) _probe();
   }
 
+  @override
+  void dispose() {
+    // Without this a pending retry outlives the screen and calls setState on a
+    // dead State — the login screen is exactly the one that gets popped while a
+    // network call is in flight.
+    _retry?.cancel();
+    super.dispose();
+  }
+
   /// Ask the current server whether it is there.
   ///
   /// The answer is dropped unless it is still about the origin we asked about, so
   /// switching servers quickly cannot show the previous one's verdict.
-  void _probe() {
+  ///
+  /// [fresh] restarts the backoff budget — for a new origin, or a person clicking
+  /// retry because they just fixed whatever was wrong.
+  void _probe({bool fresh = true}) {
+    _retry?.cancel();
     final probe = widget.probeHealth;
     final origin = widget.active;
     if (probe == null || origin == kLocalOrigin) {
@@ -157,6 +197,7 @@ class _SignInPaneState extends State<SignInPane> {
       return;
     }
     setState(() {
+      if (fresh) _retriesUsed = 0;
       _reach = ServerReach.checking;
       _probed = origin;
     });
@@ -166,11 +207,26 @@ class _SignInPaneState extends State<SignInPane> {
           setState(
             () => _reach = ok ? ServerReach.reachable : ServerReach.unreachable,
           );
+          if (!ok) _scheduleRetry(origin);
         })
         .catchError((_) {
           if (!mounted || _probed != origin) return;
           setState(() => _reach = ServerReach.unreachable);
+          _scheduleRetry(origin);
         });
+  }
+
+  /// Queue the next automatic re-check, if the budget has any left.
+  void _scheduleRetry(String origin) {
+    if (_retriesUsed >= _retryBackoff.length) return;
+    final delay = _retryBackoff[_retriesUsed];
+    _retriesUsed++;
+    _retry = Timer(delay, () {
+      // Re-read `widget.active`: the origin may have changed while we waited, in
+      // which case that switch already started its own probe.
+      if (!mounted || widget.active != origin) return;
+      _probe(fresh: false);
+    });
   }
 
   @override
@@ -357,6 +413,23 @@ class _SignInPaneState extends State<SignInPane> {
                     ],
                   ),
                 ),
+                // Only while unreachable. A permanent refresh button would invite
+                // poking at a green dot, and the automatic backoff already covers
+                // the common case — this is for "I started the server just now",
+                // and for after the backoff budget is spent.
+                if (_reach == ServerReach.unreachable)
+                  IconButton(
+                    onPressed: _probe,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    color: MicaTheme.of(context).text.muted,
+                    tooltip: widget.strings.retry,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                  ),
                 AnimatedRotation(
                   turns: _serversOpen ? 0.5 : 0,
                   duration: const Duration(milliseconds: 180),

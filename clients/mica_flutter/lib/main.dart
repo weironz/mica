@@ -2030,6 +2030,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       serversLabel: l10n.serversSectionLabel,
       addServer: l10n.serverAddTitle,
       removeServer: l10n.commonDelete,
+      retry: l10n.commonRetry,
       localTitle: l10n.signInLocalTitle,
       localBody: l10n.signInLocalBody,
       localAction: l10n.signInLocalAction,
