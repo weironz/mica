@@ -72,7 +72,18 @@ async function launch() {
 }
 
 const browser = await launch();
-const page = await browser.newPage();
+// Pin the locale and timezone. An e2e should not inherit whatever the machine
+// happens to report — but this one is also load-bearing: headless Chromium on the
+// CI runner reports locale information that makes the Flutter engine throw
+// `ArgumentError: Incorrect locale information provided` before `main()` gets far
+// enough to register anything, so the app never starts at all. Pinning makes the
+// harness deterministic; the app's own fragility there is a separate finding, filed
+// in docs/roadmap.md rather than papered over here.
+const context = await browser.newContext({
+  locale: 'en-US',
+  timezoneId: 'UTC',
+});
+const page = await context.newPage();
 const ownHost = new URL(BASE).host;
 
 const consoleErrors = [];
