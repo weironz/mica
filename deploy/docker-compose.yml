@@ -94,6 +94,12 @@ services:
       # MICA_REGISTRATION_ENABLED=false in the node's .env to lock this instance
       # to its existing accounts (POST /auth/register then 403s).
       MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"
+      # Per-workspace byte ceiling; unset = the code's 1 GiB default, `0` = no
+      # limit. Named here because this block is an explicit ALLOW-LIST: a variable
+      # in the node's .env that is not listed never reaches the process. Found by
+      # smoke-testing 0.13.5 — the quota was set to 5000 on the node and an
+      # over-limit upload was still accepted, because the setting went nowhere.
+      MICA_WORKSPACE_QUOTA_BYTES: "${MICA_WORKSPACE_QUOTA_BYTES:-}"
       # Public origin used to build the emailed password-reset link
       # ({base}/reset-password?token=…). Defaults to https://<DOMAIN>.
       MICA_APP_BASE_URL: "${MICA_APP_BASE_URL:-https://${DOMAIN}}"
