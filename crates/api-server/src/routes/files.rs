@@ -82,7 +82,7 @@ pub async fn presign(
   let storage = storage(&state)?;
 
   validate_mime(&payload.mime_type)?;
-  validate_byte_size(payload.byte_size, storage.max_upload_bytes)?;
+  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
 
   let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
   let upload = storage.presign_put(&object_key);
@@ -111,7 +111,9 @@ pub async fn complete(
   let storage = storage(&state)?;
 
   validate_mime(&payload.mime_type)?;
-  validate_byte_size(payload.byte_size, storage.max_upload_bytes)?;
+  // Checked again here, not just at presign: presign is advisory (a client can
+  // skip it, or reuse one URL) and this is the call that creates the row.
+  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
 
   let file = store::insert_file(
@@ -291,7 +293,7 @@ pub(crate) async fn fetch_and_store_image_url(
     .await
     .map_err(|_| ApiError::BadRequest("could not read the image url".to_string()))?;
   let byte_size = bytes.len() as i64;
-  validate_byte_size(byte_size, storage.max_upload_bytes)?;
+  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
 
   // Determine MIME + extension (header first, else the URL's extension).
   let ext = mime_to_ext(&header_mime)
@@ -445,7 +447,7 @@ pub(crate) async fn store_bytes(
 ) -> ApiResult<store::FileRecord> {
   let storage = storage(state)?;
   let byte_size = bytes.len() as i64;
-  validate_byte_size(byte_size, storage.max_upload_bytes)?;
+  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
 
   // The name is the first guess at the type; the BYTES are the authority when it
   // gives nothing usable (an extension-less name used to land as
@@ -498,6 +500,49 @@ fn validate_mime(mime_type: &str) -> ApiResult<()> {
     return Err(ApiError::BadRequest("mime_type is required".to_string()));
   }
 
+  Ok(())
+}
+
+/// May this workspace store `byte_size` more bytes?
+///
+/// Two limits answering different questions: `max_upload_bytes` caps ONE file (a
+/// 4 GB upload is a mistake whoever sends it), the quota caps the workspace total
+/// (a thousand legal 50 MB files is not a mistake — it is a full disk). Neither
+/// implies the other, which is why the per-file check alone left the node with no
+/// bound at all.
+///
+/// Every path that stores bytes goes through here — presign, complete, import-url
+/// and the workspace-import re-host. One function rather than a check pasted at
+/// four sites: the fourth is precisely the one that gets forgotten.
+///
+/// Refuses with a machine-readable `workspace_quota_exceeded` so the client can
+/// say something specific ("this workspace is full") rather than relay a sentence.
+/// `quota <= 0` means unlimited and skips the query — an operator who turned the
+/// limit off should not pay for it on every upload.
+async fn ensure_storable(
+  state: &AppState,
+  workspace_id: Uuid,
+  byte_size: i64,
+  max_upload_bytes: i64,
+) -> ApiResult<()> {
+  validate_byte_size(byte_size, max_upload_bytes)?;
+
+  let quota = state.config.workspace_quota_bytes;
+  if quota <= 0 {
+    return Ok(());
+  }
+  let used = store::workspace_bytes_used(&state.db, workspace_id).await?;
+  // `saturating_add`: both sides are i64 from the wire or the database, and an
+  // overflow here would wrap negative and PASS the check.
+  if used.saturating_add(byte_size) > quota {
+    return Err(ApiError::BadRequestCode(
+      "workspace_quota_exceeded",
+      format!(
+        "workspace storage is full: {used} of {quota} bytes used, \
+         this upload needs {byte_size} more"
+      ),
+    ));
+  }
   Ok(())
 }
 
@@ -802,5 +847,155 @@ mod tests {
       let ip: IpAddr = s.parse().unwrap();
       assert!(!is_blocked_addr(ip), "{s} should be allowed");
     }
+  }
+}
+
+/// The quota's accounting, against a real database.
+///
+/// `ensure_storable` needs an `AppState` (config + pool + storage), so what gets
+/// pinned here is the part that can be wrong in a way nobody notices: what
+/// `workspace_bytes_used` COUNTS. The refusal itself is a `>` on two integers; the
+/// interesting question is whether those integers describe the disk.
+#[cfg(test)]
+mod quota_pg {
+  use mica_app_core::store;
+  use sqlx::PgPool;
+  use uuid::Uuid;
+
+  /// Skipping without a database is a local convenience; skipping WITH one is a
+  /// lie, and in CI a missing one means the workflow regressed.
+  async fn pool() -> Option<PgPool> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — the postgres service block regressed; \
+         these tests must not silently pass"
+      );
+      return None;
+    };
+    Some(
+      PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
+  }
+
+  async fn seed_workspace(db: &PgPool) -> (Uuid, Uuid) {
+    let user = Uuid::new_v4();
+    let ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+      .bind(user)
+      .bind(format!("{user}@quota.test"))
+      .execute(db)
+      .await
+      .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'Q',$2)")
+      .bind(ws)
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+    (ws, user)
+  }
+
+  async fn put(db: &PgPool, ws: Uuid, user: Uuid, key: &str, bytes: i64) {
+    store::insert_file(db, ws, user, key, "f.png", "image/png", bytes)
+      .await
+      .unwrap();
+  }
+
+  /// Remove only what this test created (workspaces cascade to their files).
+  async fn cleanup(db: &PgPool, workspaces: &[Uuid], users: &[Uuid]) {
+    for w in workspaces {
+      sqlx::query("DELETE FROM workspaces WHERE id=$1")
+        .bind(w)
+        .execute(db)
+        .await
+        .ok();
+    }
+    for u in users {
+      sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(u)
+        .execute(db)
+        .await
+        .ok();
+    }
+  }
+
+  #[tokio::test]
+  async fn usage_sums_this_workspace_only_and_dedups() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let (other, other_user) = seed_workspace(&db).await;
+
+    assert_eq!(
+      store::workspace_bytes_used(&db, ws).await.unwrap(),
+      0,
+      "a fresh workspace occupies nothing"
+    );
+
+    let k1 = format!("ws/{ws}/a-{}", Uuid::new_v4());
+    let k2 = format!("ws/{ws}/b-{}", Uuid::new_v4());
+    put(&db, ws, user, &k1, 1000).await;
+    put(&db, ws, user, &k2, 2500).await;
+    assert_eq!(store::workspace_bytes_used(&db, ws).await.unwrap(), 3500);
+
+    // Content-addressed keys dedup: the same bytes uploaded twice are ONE row, so
+    // re-uploading an identical image must not consume quota twice. Otherwise the
+    // quota would punish the case dedup exists to make free.
+    put(&db, ws, user, &k1, 1000).await;
+    assert_eq!(
+      store::workspace_bytes_used(&db, ws).await.unwrap(),
+      3500,
+      "a duplicate upload adds a reference, not size"
+    );
+
+    // Another workspace's files are not this workspace's problem — a per-instance
+    // sum here would let one workspace exhaust everyone else.
+    put(
+      &db,
+      other,
+      other_user,
+      &format!("ws/{other}/c-{}", Uuid::new_v4()),
+      9_000_000,
+    )
+    .await;
+    assert_eq!(
+      store::workspace_bytes_used(&db, ws).await.unwrap(),
+      3500,
+      "the quota is per workspace, not per instance"
+    );
+
+    // The arithmetic `ensure_storable` performs, stated once so the intent is
+    // pinned even though building its `AppState` is out of reach here.
+    let used = store::workspace_bytes_used(&db, ws).await.unwrap();
+    assert!(used + 1000 > 4000, "a 1000-byte upload must not fit in 4000");
+    assert!(used + 500 <= 4000, "but 500 bytes must");
+
+    cleanup(&db, &[ws, other], &[user, other_user]).await;
+  }
+
+  /// Unreferenced-but-not-yet-swept files still occupy the disk, so they still
+  /// count. Otherwise trash-and-reupload is an unbounded loop that never trips the
+  /// quota while the bytes pile up until the GC's grace period lapses.
+  #[tokio::test]
+  async fn bytes_awaiting_the_blob_gc_still_count() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let key = format!("ws/{ws}/dead-{}", Uuid::new_v4());
+    put(&db, ws, user, &key, 4242).await;
+    sqlx::query("UPDATE files SET unreferenced_since = now() WHERE object_key = $1")
+      .bind(&key)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    assert_eq!(
+      store::workspace_bytes_used(&db, ws).await.unwrap(),
+      4242,
+      "the bytes are still on the disk until the sweep removes them"
+    );
+
+    cleanup(&db, &[ws], &[user]).await;
   }
 }

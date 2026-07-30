@@ -126,7 +126,23 @@
     会丢弃无区间的条目 —— 补上真实区间后,`a_self_link_is_not_a_backlink`(断言「为空」)才从**空转通过**
     变成真的在测那条过滤。
   退役完成。(M) `[需后端]`
-- 🆕 **无任何容量配额**(medium) —— 唯一限制是单文件 25MB + 导入 1GiB body;无 workspace 总量/单文档大小/用户级上限,WS 路径默认可收 64MiB 单条消息,大文档写放大(每 push 全量 base 覆写 + 每 10min 全量版本)。开放注册单节点最易被无意/恶意打爆盘。(`storage.rs:50`, `ws.rs:60`, `sync.rs:244`)(M) `[需后端]`
+- 🟡 **容量配额:blob 已封,其余仍无**(2026-07-30)—— ~~无任何容量配额~~ 部分已做:
+  **每工作区字节配额**上线,`MICA_WORKSPACE_QUOTA_BYTES` 默认 **1 GiB**(`0` = 不限)。
+  四个存字节的入口全部经过 `files.rs` 的 `ensure_storable` —— presign / complete /
+  import-url / 工作区导入的图片 re-host;`complete` 也查,因为 presign 只是建议(客户端可以
+  跳过它、或复用一个 URL),真正建行的是 complete。用量 = 按 workspace 的 `sum(byte_size)`,
+  **含已标记 unreferenced 但还没被 GC 扫掉的** —— 那些字节还在盘上,不算的话「删了再传」是个
+  永不触顶的循环;dedup 已自然体现(同样字节 `insert_file` 返回既有行,只加引用不加体积)。
+  拒绝时返回机器可读的 `workspace_quota_exceeded`。配套 migration 0017 建
+  `idx_files_workspace_bytes`(带 `INCLUDE (byte_size)`,走 index-only scan)—— 这个求和进了
+  上传热路径,不加索引就是全实例顺序扫,成本随**别人**的上传增长。**默认值按实测选**:生产
+  最大工作区 57 MB,1 GiB 是 ~18 倍余量。解析上有一处刻意的反常:**乱码保留默认值而不是变成
+  「不限」** —— 对一个安全上限,不可解析绝不能解析成「没有上限」。
+  **仍然没有的**:单文档大小上限、用户级/实例级总量上限;WS 路径默认仍可收 64MiB 单条消息;
+  大文档写放大照旧(每 push 全量 base 覆写 + 每 10min 全量版本)。**未实测的一处**:import-url
+  的配额检查没能端到端验到 —— SSRF 守卫先拒了 loopback 测试 URL(顺序正确),代码路径与另三条
+  一致但只经代码核实。
+  (`files.rs` `ensure_storable`, `store.rs` `workspace_bytes_used`, `ws.rs:60`, `sync.rs`)(M) `[需后端]`
 - ~~**`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**~~ ✅ blob_gc 6h 循环加全局 `DELETE ... expires_at IS NOT NULL AND < now()`(只命中 auto、不碰命名检查点,6612330)。**残留**:`list_yrs_versions` 仍不过滤 expires_at(6h 扫前的过期行可能短暂现于面板,极小)。
 - ⏸️ **回收站不做自动清空 —— 已拍板(2026-07-29),不是遗留 TODO**。现状:纯 `is_deleted` 标志,只有用户手动「恢复 / 永久删除 / 清空回收站」三个出口(`documents.rs` 的 trash/restore/purge + `mod.rs:164` 那条 DELETE),**没有任何定时任务**碰它;blob GC 刻意把回收站引用算存活(`blob_gc.rs` `referenced_file_ids` 不过滤 `is_deleted`),所以图片 blob 跟着一起留。**决定不做自动过期删除**,四条理由:
   1. **同类一致**:AFFiNE、AppFlowy、Notion、Obsidian 在「用户自己是唯一管理员」这个相同约束下**都没有**做"回收站到期自动永久删除"。AFFiNE 的 blob 宽限期只针对已失活 blob,页面本身不过期;AppFlowy 干脆没有 blob GC。这是跨产品收敛的答案,不是巧合。

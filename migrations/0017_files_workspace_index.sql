@@ -1,0 +1,14 @@
+-- Index `files` by workspace, for the per-workspace byte quota.
+--
+-- The quota asks `sum(byte_size) WHERE workspace_id = $1` on every upload —
+-- presign, complete, import-url and re-host — so it sits on the hot path of the
+-- one operation already slow enough for a user to notice. Without this it is a
+-- sequential scan of every file in the instance, and its cost grows with OTHER
+-- people's uploads rather than with the workspace being checked.
+--
+-- Small today (750 rows on production), which is exactly why it is cheap to add
+-- now instead of after the table is the reason uploads feel slow.
+--
+-- `byte_size` is INCLUDEd so the sum is answered from the index alone: the query
+-- never needs the heap row, so Postgres can use an index-only scan.
+CREATE INDEX idx_files_workspace_bytes ON files (workspace_id) INCLUDE (byte_size);

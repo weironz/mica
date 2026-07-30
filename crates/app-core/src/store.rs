@@ -653,6 +653,23 @@ pub async fn create_named_yrs_version(
 
 /// Record metadata for an uploaded object. The unique `object_key` makes a
 /// duplicate completion a conflict rather than a silent overwrite.
+/// Bytes of stored files this workspace already occupies, for the quota check.
+///
+/// Counts every `files` row, including ones the blob GC has marked unreferenced:
+/// those bytes are still on the disk until the sweep removes them, and a quota
+/// that ignored them would let a delete-and-reupload loop exceed it indefinitely.
+/// Deduplication is already reflected — `insert_file` returns the existing row for
+/// identical bytes, so re-uploading the same image adds a reference and no size.
+pub async fn workspace_bytes_used(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
+  sqlx::query_scalar::<_, i64>(
+    "SELECT coalesce(sum(byte_size), 0)::bigint FROM files WHERE workspace_id = $1",
+  )
+  .bind(workspace_id)
+  .fetch_one(db)
+  .await
+  .map_err(ApiError::from)
+}
+
 pub async fn insert_file(
   db: &PgPool,
   workspace_id: Uuid,

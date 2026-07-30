@@ -60,6 +60,19 @@ pub struct AppConfig {
   /// are untouched, and `auth::register` still lets a brand-new instance create
   /// its very first account.
   pub registration_enabled: bool,
+  /// Ceiling on the total bytes of stored files per WORKSPACE. `0` = unlimited.
+  /// Set `MICA_WORKSPACE_QUOTA_BYTES`; defaults to 1 GiB.
+  ///
+  /// Per workspace rather than per instance because that is the unit a person
+  /// owns and can clean up — an instance-wide cap gives whoever fills it first
+  /// the power to stop everyone else. It bounds the damage one workspace can do;
+  /// bounding the NUMBER of workspaces is [`registration_enabled`]'s job, and
+  /// neither limit means much without the other.
+  ///
+  /// 1 GiB is chosen against measured reality, not taste: the largest workspace
+  /// on the production node holds 57 MB, so this is ~18× headroom for real use
+  /// while still capping a single workspace far below a disk.
+  pub workspace_quota_bytes: i64,
   /// Public origin the app is reached at, e.g. `https://mica.example.com` — used
   /// to build the password-reset link that goes in the email (`{base}/reset-
   /// password?token=…`). Set `MICA_APP_BASE_URL`; defaults to
@@ -160,6 +173,9 @@ impl AppConfig {
     // self-hosted install usable.
     let registration_enabled = registration_open(env::var("MICA_REGISTRATION_ENABLED").ok());
 
+    let workspace_quota_bytes =
+      workspace_quota(env::var("MICA_WORKSPACE_QUOTA_BYTES").ok().as_deref());
+
     // Where the emailed reset link points. Trailing slash trimmed so
     // `{base}/reset-password` never doubles up.
     let app_base_url = env::var("MICA_APP_BASE_URL")
@@ -180,6 +196,7 @@ impl AppConfig {
       cors_allowed_origins,
       seed_test_user,
       registration_enabled,
+      workspace_quota_bytes,
       app_base_url,
     })
   }
@@ -197,6 +214,27 @@ pub fn registration_open(raw: Option<String>) -> bool {
       "true" | "1" | "yes" | "on"
     )
   })
+}
+
+/// Per-workspace byte ceiling from the raw `MICA_WORKSPACE_QUOTA_BYTES`.
+///
+/// Default 1 GiB. `0` means unlimited — spelled out so an operator who genuinely
+/// wants no cap says so, instead of discovering that a typo removed it.
+///
+/// **Garbage keeps the default rather than removing the limit.** That is the
+/// opposite of how most parsing here works (`unwrap_or` on a bad value usually
+/// means "behave as if unset"), and deliberately so: for a quota, "unparseable"
+/// must never resolve to "unlimited", or a stray character in a deploy env is a
+/// silently disabled safety limit. Negative is treated the same way.
+pub fn workspace_quota(raw: Option<&str>) -> i64 {
+  const DEFAULT: i64 = 1024 * 1024 * 1024;
+  match raw.map(str::trim) {
+    None | Some("") => DEFAULT,
+    Some(v) => match v.parse::<i64>() {
+      Ok(n) if n >= 0 => n,
+      _ => DEFAULT,
+    },
+  }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -241,6 +279,42 @@ mod registration_switch {
       assert!(
         !registration_open(Some(off.to_string())),
         "{off:?} must NOT open registration"
+      );
+    }
+  }
+}
+
+#[cfg(test)]
+mod quota_parse {
+  use super::workspace_quota;
+
+  const GIB: i64 = 1024 * 1024 * 1024;
+
+  #[test]
+  fn unset_or_blank_is_one_gib() {
+    assert_eq!(workspace_quota(None), GIB);
+    assert_eq!(workspace_quota(Some("")), GIB);
+    assert_eq!(workspace_quota(Some("   ")), GIB);
+  }
+
+  #[test]
+  fn a_number_is_taken_literally_and_zero_means_unlimited() {
+    assert_eq!(workspace_quota(Some("0")), 0, "0 = no limit, spelled out");
+    assert_eq!(workspace_quota(Some("5000")), 5000);
+    assert_eq!(workspace_quota(Some(" 5000 ")), 5000);
+  }
+
+  /// The important one, and the opposite of how most parsing here behaves:
+  /// garbage keeps the DEFAULT, it does not fall through to "unlimited". For a
+  /// safety limit, an unparseable value must never resolve to "no limit" — a
+  /// stray character in a deploy environment would silently disable it.
+  #[test]
+  fn garbage_and_negatives_keep_the_default_rather_than_removing_the_limit() {
+    for bad in ["abc", "1GiB", "1_000", "-1", "-99999", "1.5", "∞"] {
+      assert_eq!(
+        workspace_quota(Some(bad)),
+        GIB,
+        "{bad:?} must fall back to the default, never to unlimited"
       );
     }
   }
