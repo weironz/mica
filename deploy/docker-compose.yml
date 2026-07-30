@@ -100,6 +100,33 @@ services:
       # smoke-testing 0.13.5 — the quota was set to 5000 on the node and an
       # over-limit upload was still accepted, because the setting went nowhere.
       MICA_WORKSPACE_QUOTA_BYTES: "${MICA_WORKSPACE_QUOTA_BYTES:-}"
+      # The rest of what config.rs reads, passed through empty so "unset in .env"
+      # means "use the code default". Listed even though nothing sets them today,
+      # because the allow-list above is the trap: a knob that is not named here
+      # DOES NOT EXIST in production, and the way that surfaces is an operator
+      # setting it, restarting, and watching nothing change (0.13.5, the quota).
+      # MICA_SEED_TEST_USER is deliberately absent — production must never be able
+      # to seed an account, and config.rs hard-ignores it there anyway.
+      #
+      # MICA_WS_MIN_PROTOCOL is the WS version floor (`client_too_old` below it).
+      # It ships inert at 0; raising it is a planned step, and until now that step
+      # had nowhere to happen.
+      MICA_WS_MIN_PROTOCOL: "${MICA_WS_MIN_PROTOCOL:-}"
+      # Stream window + prune cadence (defaults 1000 / 64 / 32). Worth moving only
+      # on a node whose documents are unusually large or unusually chatty.
+      MICA_CATCH_UP_LIMIT: "${MICA_CATCH_UP_LIMIT:-}"
+      MICA_STREAM_KEEP_MARGIN: "${MICA_STREAM_KEEP_MARGIN:-}"
+      MICA_STREAM_PRUNE_EVERY: "${MICA_STREAM_PRUNE_EVERY:-}"
+      # Cross-origin browser reads. Empty in production = deny all (the bundled
+      # web app is same-origin with /api and needs no grant); comma-separated
+      # origins opt in. This is the documented way to grant one — it just could
+      # not be done from the node.
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
+      # Token lifetimes (defaults 1h access / 30d refresh) and the PG pool size
+      # (default 10).
+      ACCESS_TOKEN_TTL_SECONDS: "${ACCESS_TOKEN_TTL_SECONDS:-}"
+      REFRESH_TOKEN_TTL_SECONDS: "${REFRESH_TOKEN_TTL_SECONDS:-}"
+      DATABASE_MAX_CONNECTIONS: "${DATABASE_MAX_CONNECTIONS:-}"
       # Public origin used to build the emailed password-reset link
       # ({base}/reset-password?token=…). Defaults to https://<DOMAIN>.
       MICA_APP_BASE_URL: "${MICA_APP_BASE_URL:-https://${DOMAIN}}"

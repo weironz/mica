@@ -73,6 +73,8 @@ pub struct AppConfig {
   /// on the production node holds 57 MB, so this is ~18× headroom for real use
   /// while still capping a single workspace far below a disk.
   pub workspace_quota_bytes: i64,
+  /// Window + cadence knobs for the yrs update stream. See [`SyncTuning`].
+  pub sync_tuning: SyncTuning,
   /// Public origin the app is reached at, e.g. `https://mica.example.com` — used
   /// to build the password-reset link that goes in the email (`{base}/reset-
   /// password?token=…`). Set `MICA_APP_BASE_URL`; defaults to
@@ -84,6 +86,75 @@ pub struct AppConfig {
 pub struct SeedTestUser {
   pub email: String,
   pub password: String,
+}
+
+/// Window + cadence of the yrs update stream (`workspace_updates`).
+///
+/// These were hardcoded constants in `app_core::sync`. They are here because
+/// they are the two numbers that decide how much stream a node keeps and how
+/// often it pays to trim it — the sort of thing that wants moving on a node with
+/// unusually large or unusually chatty documents, and the sort of thing nobody
+/// wants to rebuild a binary for. Defaults are exactly the old constants, so an
+/// unconfigured node behaves as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncTuning {
+  /// Most updates one catch-up pull may return (`MICA_CATCH_UP_LIMIT`). A client
+  /// further behind than this pulls again from its advanced cursor.
+  pub catch_up_limit: i64,
+  /// How many already-folded updates stay on the stream so a briefly offline
+  /// client can catch up incrementally (`MICA_STREAM_KEEP_MARGIN`). Below this
+  /// margin a client re-bootstraps from the base instead — correct either way,
+  /// just more bytes.
+  pub keep_margin: i64,
+  /// Prune roughly once every this-many rid draws (`MICA_STREAM_PRUNE_EVERY`),
+  /// which keeps the DELETE off the hot path. Counts TABLE-wide draws, not one
+  /// document's pushes — see the prune site in `app_core::sync::push_update`.
+  pub prune_every: i64,
+}
+
+impl Default for SyncTuning {
+  fn default() -> Self {
+    Self {
+      catch_up_limit: 1000,
+      keep_margin: 64,
+      prune_every: 32,
+    }
+  }
+}
+
+impl SyncTuning {
+  fn from_env() -> Self {
+    let d = Self::default();
+    Self {
+      catch_up_limit: positive_or(env::var("MICA_CATCH_UP_LIMIT").ok().as_deref(), d.catch_up_limit),
+      keep_margin: positive_or(
+        env::var("MICA_STREAM_KEEP_MARGIN").ok().as_deref(),
+        d.keep_margin,
+      ),
+      prune_every: positive_or(
+        env::var("MICA_STREAM_PRUNE_EVERY").ok().as_deref(),
+        d.prune_every,
+      ),
+    }
+  }
+}
+
+/// A strictly positive integer from `raw`, or `default` for anything else.
+///
+/// "Anything else" deliberately includes `0` and negatives, for two different
+/// reasons that happen to point the same way: `prune_every = 0` would evaluate
+/// `rid % 0` and panic on the push path, and `keep_margin = 0` would delete the
+/// very update just inserted. Neither is a state an operator can want, so there
+/// is no spelling for them — same principle as [`workspace_quota`], where an
+/// unparseable value must not resolve to "no limit".
+pub fn positive_or(raw: Option<&str>, default: i64) -> i64 {
+  match raw.map(str::trim) {
+    None | Some("") => default,
+    Some(v) => match v.parse::<i64>() {
+      Ok(n) if n > 0 => n,
+      _ => default,
+    },
+  }
 }
 
 impl AppConfig {
@@ -176,6 +247,8 @@ impl AppConfig {
     let workspace_quota_bytes =
       workspace_quota(env::var("MICA_WORKSPACE_QUOTA_BYTES").ok().as_deref());
 
+    let sync_tuning = SyncTuning::from_env();
+
     // Where the emailed reset link points. Trailing slash trimmed so
     // `{base}/reset-password` never doubles up.
     let app_base_url = env::var("MICA_APP_BASE_URL")
@@ -197,6 +270,7 @@ impl AppConfig {
       seed_test_user,
       registration_enabled,
       workspace_quota_bytes,
+      sync_tuning,
       app_base_url,
     })
   }
@@ -281,6 +355,42 @@ mod registration_switch {
         "{off:?} must NOT open registration"
       );
     }
+  }
+}
+
+#[cfg(test)]
+mod sync_tuning_parse {
+  use super::{SyncTuning, positive_or};
+
+  /// An unconfigured node must behave exactly as it did when these were
+  /// constants in `app_core::sync` — that is the whole contract of moving them.
+  #[test]
+  fn the_defaults_are_the_old_constants() {
+    let d = SyncTuning::default();
+    assert_eq!(d.catch_up_limit, 1000);
+    assert_eq!(d.keep_margin, 64);
+    assert_eq!(d.prune_every, 32);
+  }
+
+  #[test]
+  fn a_positive_number_is_taken_literally() {
+    assert_eq!(positive_or(Some("7"), 32), 7);
+    assert_eq!(positive_or(Some(" 7 "), 32), 7);
+  }
+
+  /// The one that matters: `0` has no spelling here. `prune_every = 0` would
+  /// evaluate `rid % 0` and panic on every push; `keep_margin = 0` would delete
+  /// the update just inserted. A typo must not reach either.
+  #[test]
+  fn zero_negatives_and_garbage_keep_the_default() {
+    for bad in ["0", "-1", "-64", "abc", "1_000", "1.5", "64x", ""] {
+      assert_eq!(
+        positive_or(Some(bad), 32),
+        32,
+        "{bad:?} must fall back to the default"
+      );
+    }
+    assert_eq!(positive_or(None, 32), 32);
   }
 }
 

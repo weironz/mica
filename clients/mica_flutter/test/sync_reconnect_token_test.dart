@@ -15,6 +15,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
+import 'package:mica_flutter/swallowed.dart';
 
 void main() {
   /// 一个没人监听的端口:先绑定拿一个空闲的,再放掉。
@@ -80,5 +81,12 @@ void main() {
     }, (error, _) => uncaught.add(error));
 
     expect(uncaught, isEmpty, reason: '登出不是崩溃 —— 它不该出现在 crash.log 里');
+    // 但"不炸"不等于"看不见":这条路被走过多少次要留下痕迹,否则一个卡在这里
+    // 无限重连的会话,从徽标上看跟普通离线一模一样(死 token 重放就是这样藏住的)。
+    expect(
+      swallowedCounts()['cloud_ws_uri'],
+      isNotNull,
+      reason: '丢弃可以,不计数不行 —— 接线断了这条会变红',
+    );
   });
 }

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../swallowed.dart';
 import '../upload/sha256.dart';
 import 'models.dart';
 
@@ -562,7 +563,7 @@ class ApiClient {
     final channel = WebSocketChannel.connect(uri);
     // The caller sees the failure through the stream below; `ready` carries the
     // same error and would otherwise go unobserved (uncaught zone error).
-    unawaited(channel.ready.catchError((_) {}));
+    unawaited(channel.ready.catchError((_) => swallowed('ai_ws_ready')));
     try {
       channel.sink.add(jsonEncode({'prompt': prompt, 'system': ?system}));
       await for (final raw in channel.stream) {

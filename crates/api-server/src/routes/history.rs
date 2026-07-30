@@ -136,8 +136,15 @@ pub async fn restore(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-  let (rid, update) =
-    sync::restore_yrs_version(&state.db, workspace_id, document_id, user_id, &state_blob).await?;
+  let (rid, update) = sync::restore_yrs_version(
+    &state.db,
+    workspace_id,
+    document_id,
+    user_id,
+    &state_blob,
+    &state.config.sync_tuning,
+  )
+  .await?;
 
   // Fan the restore out to open editors on the same yrs channel a live edit
   // uses — nil origin so every socket (including none, if idle) receives it.

@@ -25,6 +25,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../swallowed.dart';
 import 'cloud_doc_store.dart';
 import 'sync_doc_replica.dart';
 import 'sync_status.dart';
@@ -298,6 +299,10 @@ class CloudSyncSession {
         // Could not even build one: renewal failed, or the sign-in is over.
         // That is the same shape as a dropped socket — stay offline and back
         // off. Throwing here would take down the zone over being logged out.
+        // Counted: a session stuck here reconnects forever and looks identical
+        // to plain "offline" from the badge, which is how the dead-token replay
+        // loop hid for as long as it did.
+        swallowed('cloud_ws_uri');
         if (!_disposed) _scheduleReconnect();
         return;
       }
@@ -318,10 +323,10 @@ class CloudSyncSession {
     // wrote a WebSocketChannelException into crash.log, which is where real
     // faults are supposed to stand out. Observed and dropped here — the
     // handling lives in _onDone.
-    unawaited(channel.ready.catchError((_) {}));
+    unawaited(channel.ready.catchError((_) => swallowed('cloud_ws_ready')));
     _sub = channel.stream.listen(
       _onMessage,
-      onError: (_) {},
+      onError: (_) => swallowed('cloud_ws_stream'),
       onDone: _onDone,
       cancelOnError: false,
     );

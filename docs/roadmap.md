@@ -16,7 +16,7 @@
 
 - ~~**P2-M4 云同步流未真正建**~~ ✅ **主干早已上线**(2026-07-29 对代码核实,此条整条过期)—— `sync.rs` push_update 写流+fold、`catch_up_document` 按 since_rid 续传+剪枝缺口自动 Rebootstrap、`diff_from_base` SV 兜底;WS `sync.bootstrap/pull/push` 三 handler(`ws.rs:336-440`)+ 客户端 `_pullPayload(since_rid+sv)` 消费;真 PG 集成测试 `sync_pg.rs`。**它一直被记成未建,把整棵依赖树都记歪了** —— 实际解锁的下一步是 op 模型退役(见「数据生命周期」)。
 - **实时字符级并发协同未落地**(2026-07-29 措辞修正)—— 传输/应用层是**真 yrs merge**(`sync.rs` guarded_apply、客户端 applyUpdate),不是 last-write;真实缺陷在编辑器 op 粒度:`update_block` 整段换文本(`doc.rs` set_text_and_marks = remove_range+insert),两端并发编辑同块合并成**重复/拼接**而非字符交织。字符级 API 已在(`text_insert`/`text_delete`)但编辑器热路径不用;细粒度化 = delta↔marks 映射,phase2 §12 明言的最大风险区。(L) `[需后端]`
-- 🟡 **M-R 收尾**(2026-07-29 核实:4 项里 3 项早已落地)—— ~~C3 坏更新自愈+schema 版本~~ ✅(`store.rs` SCHEMA_VERSION=6 + 太新拒开 + 每 blob CRC-32 + yrs panic 包成 CorruptDoc;客户端坏副本冷 bootstrap 自愈、坏 remote 封顶熔断);~~D2 同步健康态~~ ✅(`sync_status.dart` → _SyncBadge + fault banner);~~A3 会话持久化 e2e~~ ✅(`cloud_sync_integrity_test.dart`:未 ack 编辑跨重启重推)。**残留仅 D1 尾巴**:关键故障已计数上报(onFault/_faultCount/_persistFails/_pushRejects),但 `onError:(_){}` 等带注释静默吞仍无通用计数设施。(S)
+- 🟡 **M-R 收尾**(2026-07-29 核实:4 项里 3 项早已落地)—— ~~C3 坏更新自愈+schema 版本~~ ✅(`store.rs` SCHEMA_VERSION=6 + 太新拒开 + 每 blob CRC-32 + yrs panic 包成 CorruptDoc;客户端坏副本冷 bootstrap 自愈、坏 remote 封顶熔断);~~D2 同步健康态~~ ✅(`sync_status.dart` → _SyncBadge + fault banner);~~A3 会话持久化 e2e~~ ✅(`cloud_sync_integrity_test.dart`:未 ack 编辑跨重启重推)。~~D1 尾巴~~ ✅ **已做(2026-07-30),M-R 整条关闭** —— `lib/swallowed.dart`:`swallowed(tag)` 累加、`swallowedCounts()` 出不可写快照、`swallowedSummary()` 出一行给 bug 报告。5 处带注释的故意丢弃接上了(`cloud_ws_ready`/`cloud_ws_stream`/`cloud_ws_uri`/`presence_ws_ready`/`presence_ws_stream`/`ai_ws_ready`),**丢弃行为一个字没改** —— 改的只是「丢了多少次」不再无从得知。**刻意不接 `onFault`**:那是同步故障横幅的入口,而连不上服务器是**状态不是故障**,把普通离线送进去等于给一个 app 已经处理正确的状态贴红标。可见面在 Settings → 诊断,**仅在非零时出现**(每次都显示「无」只会训练眼睛跳过它,而那一行不在本身就是同一个意思),且**不受诊断开关门控** —— 没有内容要记录,价值全在「事后能回头看」,而那恰恰是提前打开开关不可能的场合。测试:`swallowed_test.dart` 5 条(含快照不可写穿),外加在 `sync_reconnect_token_test.dart` 那条既有测试上挂了**接线断言** —— 纯模块单测证明不了接线,已实测撤掉 `swallowed('cloud_ws_uri')` 它立刻变红。**已知空白**:web 上 Settings 的诊断区整段隐藏(`diagnosticsSupported=false`,没有文件系统),所以 web 目前**没有**读回计数的地方 —— 与既有诊断故事一致,不另开口子。
 - ~~**离线→在线 blob 自动 reconcile**~~ ✅ 已做(2026-07-29,核实于 2026-07-30)—— 原文「`_reconcilePendingUploads` 全仓唯一调用点在 onReady」已假:现在 3 个调用点,`_onCloudOnline` 那一侧也扫 blob 了(`main.dart` 里 onReady、活动文档重连、`_sweepPendingOutboxes`)。
 - ~~🆕 **重连复用过期 token → 永久退避循环**~~ ✅ 已修(2026-07-29,核实于 2026-07-30)—— `uri` 由 `final Uri` 改成 `final Future<Uri> Function()`,每次连接尝试重新求值,3 处构造点全部迁移;长开会话那一处会先 `await _ensureFreshSession()`。回归测试 `test/sync_reconnect_token_test.dart`(钉的是「每次尝试都重新问一次 URI」,不是「能连上」)。**服务端那半仍未做**:socket 建立后不再校验 exp,没有「exp 到期 close(4401)」心跳 —— 见安全小节「长连 WS 超 token TTL 不再认证」。
 - ~~🆕 **web 端在浏览器不报 locale 时启动即崩**~~ ✅ **已修(2026-07-30)** —— 触发条件定位到 `navigator.language === "C"`(POSIX 风格,非合法 BCP-47)。逐一遍历确认:`C` **CRASHED**,而未指定 / `''` / `en` / `en-US` / `zh-CN` / `en_US` 六种全部 BOOTED —— CI runner 的系统 locale 恰是 `C`。抛点在**引擎内部**的 `new Locale`(`RangeError`),Flutter 的 Dart 源码与 pub cache 里都搜不到这句原文,所以 Dart 侧根本捕不到。于是修在能修的那一层:`web/index.html` 里、`flutter_bootstrap.js` **之前**一段内联脚本,**仅当 `navigator.languages`/`language` 里没有任何合法标签时**才用 `en` 兜底;已经像语言标签的值原样保留,所以不会改变真实用户拿到的语言(实测那六种一个都没被改动)。web e2e 第 7 组断言守着,并实测过:从产物里摘掉守卫它立刻变红并打出原始错误。原文如下 —— headless Chromium(CI runner 上未指定 locale)加载页面后抛 `Error: Invalid argument(s): Incorrect locale information provided`,以 JS `pageerror` 形式逃出 —— 即发生在 `runZonedGuarded` **之前**、引擎层的 locale 解析阶段。后果:`main()` 走不到 `registerYjsSelfTest()`,`window.micaYjs*` 三个钩子全是 undefined,`document.body.children` 只剩 1 个(canvas 外壳)—— **整个应用没起来,而 console 里一条错误都没有**(未捕获异常不是 console message,是加了 `page.on('pageerror')` 才看见的)。本机 Chrome 撞不到,它带正常 locale。**尚未定位到具体哪一行**:`loadPersistedLocale` 只做 `Locale('zh'|'en')`,抛不出这个;`ArgumentError` 以 JS 异常形式出现,指向引擎 / `intl` 的系统 locale 探测。e2e 侧已用 `newContext({locale:'en-US', timezoneId:'UTC'})` 钉死 —— **那是给 harness 的确定性,不是这个 bug 的修复**。真实影响面待评估:locale 被隐私工具剥掉或环境异常的用户,可能只看到一个白页且无任何提示。(S-M,纯客户端)
@@ -48,13 +48,23 @@
 - ~~**无 refresh / 无撤销的 24h JWT**~~ ✅ refresh + rotation + reuse-detection + `revoke_family`/`revoke_user_sessions` 已落地;access JWT TTL 默认 **24h→1h**(`config.rs`,4a3042a),把「本该失效的 token 仍可用」窗口从 24h 压到 1h(客户端透明续期,无感)。更强的即时吊销(per-user token-version 表)仍可选,但收益已大幅下降。
 - ~~**改密不失效旧令牌**~~ ✅ `change_password` 已 `revoke_user_sessions`(`auth.rs:246`);唯一残留是被盗 access JWT 在剩余 TTL 内仍活(同上,靠缩 TTL/token-version 收口)。
 - ~~**登录/注册/refresh 无限流**~~ ✅ per-IP 令牌桶 + 全局 Argon2 并发门(`rate_limit.rs`);反代后取真实 IP 走「XFF 从右跳私网」对双跳(Traefik+nginx)/单机都对,自研无依赖。refresh 也纳入 per-IP 限流(但不占 Argon2 门——它不 hash,占了会饿死登录)。**WS 建连有意不限**:已 token 鉴权、低威胁,共享桶会误伤「同时开多文档」——按「不要过度设计」先不做并记因(CLAUDE.md 协作约定)。
-- **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文** —— 叠加 query token,未配 TLS 即明文泄露,且无启动告警(`config.rs`)。(M) `[需后端]`
+- 🟡 **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文**(2026-07-30 核实:「无启动告警」已假)—— ~~无启动告警~~ ✅ 早在 `9289ecf` 就有:`main.rs` 绑定后判 `!addr.ip().is_loopback()`,非环回即 warn「本进程只说明文 HTTP,请在前面终止 TLS,否则连 WS URL 里那个 token 都在网上裸奔」。默认 `127.0.0.1` 安全且**静默** —— 只有真承担了风险的部署才看到告警。(2026-07-30 顺手修了那条字符串:它被压成一行、中间留了三段连续空格,打出来有大段空白。)**残留**:TLS 本体仍全靠运维,且告警只是告警 —— 没有「prod + 非环回 + 无 TLS 即拒启动」的硬闸门(要拒得先能看见前面有没有反代,单机上看不见)。(M) `[需后端]`
 - ~~**鉴权逐 handler 手写、非中间件**~~ ✅ 已做(校准复核)—— `auth.rs:618` `scope_guard` 是 router-wide **默认拒绝**中间件 + `is_public` 白名单;新路由默认已鉴权。
 - **WS token 走 query string** —— 明文 JWT 落反代日志/浏览器历史(`ws.rs`)。(M) `[需后端]`
 - **长连 WS 超 token TTL 不再认证** —— 过期前建的 socket 可授权数小时,无 re-auth 心跳(`ws.rs`)。(M) `[需后端]`
 - ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
 - **开放注册无验证 + 弱口令(仅 ≥8)** —— 公网可无限刷号(`auth.rs`)。(M) `[需后端]`
+- 🔴 **未闭环(待用户拍板):compose 把注册强行打开,与代码的 fail-safe 默认相反**(2026-07-30 发现)——
+  `config.rs` 自 0.13.5 起**默认关闭**注册,只认显式 `true/1/yes/on`(拼错保持关闭),CLAUDE.md 也这么写。
+  但 `deploy/docker-compose.yml` 那行是 `MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"` ——
+  **节点 `.env` 不设它,compose 就注入字面量 `true`**,于是生产的实际状态是「注册开着」,除非 `.env` 明确关掉。
+  旁边的注释还写着「Defaults open (current behaviour)」,那是代码翻转默认**之前**写的,现已过期。
+  **本轮没有动它**:把一个已上公网实例的公开注册关掉是对外行为变更,该由用户决定,不该由 agent 顺手做掉。
+  两个选项:① 改成 `${MICA_REGISTRATION_ENABLED:-}`(让代码的 fail-safe 默认生效 = **关**),
+  在 `.env` 里显式写 `true` 才开;② 保持现状但把注释改成如实的「这里刻意覆盖代码默认」。
+  推荐 ①,因为「默认关」这条规则现在只在代码里成立,在**真实部署里是假的** —— 这正是 lessons 里
+  「不变量只写在一处等于没写」的同一种形状。(S)
 - 🆕 **安全清单卫生**(low) —— 上面两条已勾除即本轮校准;后续改动请同步勾选,避免半真半假的清单掩盖真未修项。
 
 ## 生产运维与备份 🆕
@@ -238,14 +248,25 @@
 - 🟡 **CI 补 Windows 集成测试**(2026-07-23:离线子集已进)—— 新 `.github/workflows/flutter-integration.yml`:windows-latest **串行**跑 **14 个离线/客户端**集成测试(文件间杀 `mica_flutter.exe`,化解单实例守卫导致的 debug-connection race——已复现:残留进程锁住下次启动)。**残留**:4 个需活的 dev 栈(postgres+rustfs+api)的测试仍排除(`cloud_sync_test`/`migration_sync_test`/`offline_image_reconcile_test`/`page_switch_fidelity_test`,含那对 race 文件)——CI 里起全栈超范围。且 12/14 是读文件头判定离线(实跑了 2)、首次 CI 真跑确认。(M) `[需后端]`(残留部分)
 - 🟡 **e2e:桌面已进 CI,web 仍为零**(2026-07-29 更正:「全项目零 e2e」失实)—— 桌面 14 个离线集成测试已在 windows-latest **真 app 实跑**(flutter-integration.yml,2026-07-23 起,那就是 e2e);web 端仍零(无 spec,CI 只验能编译;playwright 截图是人工手段)。(web 侧 L)
 - 🟡 **不可信输入解析面 fuzz**(2026-07-23:markdown + interchange 已上,yrs 待)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**已做**:proptest 属性 fuzz 覆盖前两个自家解析面——`markdown/tests/proptest_parse.rs`(`import_markdown` 灌任意字节 + markdown-ish 片段,never-panic)+ `interchange/tests/proptest_zip.rs`(`read_zip→normalize_entries→expand_nested_zips` 灌任意/PK-前缀字节)。本轮**未挖出 panic**(解析器稳),但落成**快回归门**(各 ~2–5s,随 `cargo test` 进 CI;`PROPTEST_CASES=100000` 可本机长跑)。**残留**:yrs 二进制更新那面——手写 xor 已实证挖出远程可达(需认证)UB,但 UB 要 **cargo-fuzz + sanitizer(ASan)** 才抓得住,proptest(只抓 panic)不够 → 留 Linux/CI 的 cargo-fuzz。(`store.rs:2202`)(M)
-- 🆕 **本地 SQLite 真库升级冒烟不在发版清单**(medium) —— `upgrade_real_store_smoke`(`#[ignore]`+需手动设 `MICA_REAL_STORE`)是发版前手动步骤,但 `release.md` 全篇不含其字样 → 发版流程不会触发任何人想起它;而桌面自动更新后首启就地迁移本地库,迁移写坏=用户笔记不可见。(`store.rs:2083`, `local-first-p3-design.md:288`)(S)
+- ~~🆕 **本地 SQLite 真库升级冒烟不在发版清单**~~ ✅ 已做(核实于 2026-07-30)—— `release.md` 步骤 4 已写进去,连命令带理由:「它默认 `#[ignore]`、要手动设环境变量,所以不写进这里就等于不存在」,并钉住触发条件(改过 `crates/mica-core` 的 store schema / `SCHEMA_VERSION` 时必跑)。
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
 - ~~🆕 **`just test` 漏 `--features store`**~~ ✅ 已做(校准复核)—— `justfile:133` 已有 `cargo test -p mica-core --features store`。
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
 - **仅结构化日志,无 /metrics/telemetry** —— 同步后端生产盲飞(`telemetry.rs`)。(M) `[需后端]`
 - **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
 - **自研 parser vs 采用 comrak(读侧)未决** —— Milestone 8 决策点(editor-engine)。(M)
-- **catch-up limit / stream 常量硬编码** —— 1000、KEEP_MARGIN/PRUNE_EVERY 应入 AppConfig(`ws.rs`)。(S) `[需后端]`
+- ~~**catch-up limit / stream 常量硬编码**~~ ✅ 已做(2026-07-30)—— `SyncTuning{catch_up_limit, keep_margin, prune_every}` 进 `AppConfig`
+  (`MICA_CATCH_UP_LIMIT` / `MICA_STREAM_KEEP_MARGIN` / `MICA_STREAM_PRUNE_EVERY`,默认 1000/64/32 = 原常量值),
+  `push_update` / `restore_yrs_version` 收 `&SyncTuning`,`app-core` 的两个 `pub const` 删除。**解析上有一处不给面子的地方**:
+  `0`、负数、乱码一律回落默认,**没有任何拼法能把它们设成 0** —— `prune_every=0` 会让 `rid % 0` 在 push 热路径上 panic,
+  `keep_margin=0` 会把刚插进去的那条更新删掉;两者都不是运维会想要的状态,于是不给入口(同 `workspace_quota` 那条原则)。
+  单测 `sync_tuning_parse` 三条钉住:默认值 == 老常量、正数原样、0/负/乱码回落。
+  **顺带修掉一整类同款陷阱**:`deploy/docker-compose.yml` 的 api `environment:` 是显式允许清单,
+  比对 `config.rs` 读的 16 个变量后发现**有 9 个没列进去、在生产等于不存在** —— 其中
+  **`MICA_WS_MIN_PROTOCOL` 最要命**:本文件 S3 条目写着「S4 时把它抬到 1 即生效」,而它**根本没法在生产设置**。
+  已补齐 8 个(`MICA_WS_MIN_PROTOCOL` / 三个 sync 旋钮 / `CORS_ALLOWED_ORIGINS` / 两个 token TTL /
+  `DATABASE_MAX_CONNECTIONS`),全以 `${VAR:-}` 透传(空 = 走代码默认);**刻意不加 `MICA_SEED_TEST_USER`** ——
+  生产必须永不可达。YAML 用拒绝重复键的 loader 验过。
 - ~~**过时注释/文档批量清理**~~ ✅ 大部分(2026-07-23)—— 改了 4 处确认为 stale 的:`model.dart`×2(表格/void 节点/marks 已落地)、`preview_raster.dart`(web mermaid 已 JS interop)、`mica-core/lib.rs`(本地 SQLite store 已在 `store` feature 落地)。`main.dart` 的 M4/M5 保留——它们是准确的里程碑出处标注,非"没做"声明。
 
 ## 产品与公开发布合规 🆕
@@ -261,7 +282,7 @@
 - ~~🆕 **无密码找回/重置,忘密码=永久锁死**~~ ✅ 已做(5680547,2026-07-23)—— `POST /auth/password/forgot`(恒 204,不做账号枚举 oracle)+ 服务端渲染无 JS `/reset-password` 页(token 单次性、存 sha256、1h 过期、条件 UPDATE 花掉、改密撤销全会话)。**邮件底座就此建立**:`infra::Mailer` trait(默认 LogMailer,把链接打日志、无服务商也能跑)+ 阿里云 DirectMail 实现(SingleSendMail v1 RPC HMAC-SHA1 签名,复用 reqwest,不引 lettre),`MICA_MAIL_BACKEND=directmail` 切换、缺项 WARN 回退。端到端实测收信 + 重置通过。见 `docs/password-reset.md`。
 - ~~🆕 **开放注册无法关闭**~~ ✅ 已做(39ac1ee,2026-07-23)—— `MICA_REGISTRATION_ENABLED=false` 让 `/auth/register` 返 403(login/refresh 不受影响);默认开、只认显式 off 值(`false/0/no/off`)防误锁。运营者一个开关把公网节点转私有。**残留**:邮箱验证/验证码/邀请制仍无(找回已带来邮件底座,验证可后续叠)。
 - 🆕 **已上线实例无隐私声明/服务条款**(low) —— 正面:诊断 opt-in 默认关、无 telemetry 回传,产品内隐私姿态好;缺口是外部合规面,仓库无任何面向用户的隐私政策/条款文本。(M)
-- 🆕 **打包 Noto Sans SC 走 OFL 1.1 但没随附 OFL.txt**(low) —— `fonts/NOTICE.md` 自写「include the full OFL.txt alongside for strict compliance」,但 fonts/ 只有 NOTICE.md,OFL 要求许可证正文与字体一同分发。(`fonts/NOTICE.md:9`)(S)
+- ~~🆕 **打包 Noto Sans SC 走 OFL 1.1 但没随附 OFL.txt**~~ ✅ 已做(核实于 2026-07-30)—— `clients/mica_flutter/fonts/OFL.txt` 在库里,`NOTICE.md:11-12` 也从「应当随附」改成了如实陈述「the full licence text ships beside it as `OFL.txt`」。
 
 ## 接下来最该做的(2026-07-29 重排)
 
@@ -270,7 +291,11 @@
 1. **同步「离线→在线」闭环三小件**(各 S/S-M)—— ① 修重连过期 token 死循环(bug);② blob 重传挂上重连(现只在重开文档时);③ outbox 分批背压(重连风暴)。全是小活,合起来把离线体验真正关上门。
 2. **op 模型退役启动**(M)`[需后端]` —— P2-M4 主干已上线,阻塞解除:先删死写入器(S),再拍修剪/退役;这是库里唯一无界增长的大头。
 3. **协议版本门**(S-M)`[需后端]` —— 桌面自装包版本天然漂;退役 op 模型(现在的 REST 兜底)之前先把 WS min-version 闸门立好,退役才敢做。
-4. **快赢打包**(合计约一个下午)—— OFL.txt 附上、0.0.0.0 明文绑定启动告警、`upgrade_real_store_smoke` 写进 release.md 清单、catch-up 常量进 AppConfig、残余静默 catch 接计数。
+4. ~~**快赢打包**~~ ✅ **整条清空(2026-07-30)** —— 五件里**三件核实为早已做完、只是没勾**(OFL.txt 在库、
+   非环回明文绑定告警在 `main.rs`、`upgrade_real_store_smoke` 在 release.md 步骤 4);真正动手的两件是
+   catch-up/stream 常量进 AppConfig(顺带挖出 compose 允许清单漏了 9 个变量)和 D1 静默吞接计数。
+   **这轮最该记住的不是那两件活,而是「五分之三是幻影」** —— roadmap 上一条 `-` 只说明它当初被写下过,
+   不说明它今天还成立;否定式条目(「无 X」「不校验 Y」)只会**静默变假**,而清单本身不会告诉你哪几条烂了。
 5. **拍板项(先决策不写码)**—— ~~回收站保留期~~ ✅ 已拍板不做(见「数据生命周期」);~~toggle 要不要新 kind~~ ✅ 已拍板分两步(见「编辑器与功能广度」);~~MCP inspector v2~~ ✅ 已拍板**暂不升**(官方迁移指南 #1822 未完成、v2 当天 tree-swap 上线自家 CI 都在抖;`@1` 仍收安全补丁,改法已备:命令里补 `-e KEY=VALUE` 且必须放在 target 之后);**剩** M8 comrak 取舍。
 
 **中期(用户挑)**:安全三件(token DPAPI / 邮箱验证 / WS token 出 query string);平台两件(Authenticode 签名 / Linux CI 出包);产品大件(同块字符级协同 L / 本地全文搜索 M-L / 本地反链 / 视口虚拟化 L / 触屏选择 L)。

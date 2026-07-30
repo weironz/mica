@@ -1147,6 +1147,7 @@
   "settingsDiagnosticsToggleSub": "Off by default. Turn it on, reproduce the problem, then send the folder below — it records what the app received (e.g. the exact clipboard markup of a paste), which is usually the missing piece.",
   "settingsDiagnosticsFolder": "Open folder",
   "settingsDiagnosticsPrivacy": "Captures include the content you pasted or opened. Keeps the last 20; delete the folder any time.",
+  "settingsDiagnosticsDropped": "Errors dropped on purpose, this run",
   "@settingsDiagnostics": {
     "description": "Settings tab: diagnostics capture."
   },
@@ -1161,6 +1162,9 @@
   },
   "@settingsDiagnosticsPrivacy": {
     "description": "Warns that captures contain user content."
+  },
+  "@settingsDiagnosticsDropped": {
+    "description": "Label for the tally of errors the app deliberately swallows (offline WebSocket failures and the like). Shown only when at least one has fired; an absent row means none did."
   },
   "propertyAdd": "Add property",
   "@propertyAdd": {

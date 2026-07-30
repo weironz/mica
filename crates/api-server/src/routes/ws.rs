@@ -412,7 +412,8 @@ async fn handle_client_message(
       // P4-3: the optional client state vector turns a prune-forced re-bootstrap
       // into a minimal diff instead of a full-doc download.
       let client_sv = client_sv(&envelope.payload);
-      match sync::catch_up_document(&state.db, document_id, since_rid, 1000).await {
+      let limit = state.config.sync_tuning.catch_up_limit;
+      match sync::catch_up_document(&state.db, document_id, since_rid, limit).await {
         // Cursor fell behind the pruned window → re-bootstrap from the base.
         Ok(sync::CatchUp::Rebootstrap(base)) => {
           vec![base_message(&base, client_sv.as_deref(), ack_id, document_id)]
@@ -467,7 +468,16 @@ async fn handle_client_message(
           return vec![error_message(ack_id, "invalid_payload", "update is not valid base64")];
         }
       };
-      match sync::push_update(&state.db, workspace_id, document_id, user_id, &update).await {
+      match sync::push_update(
+        &state.db,
+        workspace_id,
+        document_id,
+        user_id,
+        &update,
+        &state.config.sync_tuning,
+      )
+      .await
+      {
         Ok(rid) => {
           // Fan the update out to the rest of the room (already-have-it sender
           // gets only the rid in its ack, below).

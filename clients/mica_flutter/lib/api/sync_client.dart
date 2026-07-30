@@ -6,6 +6,7 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../swallowed.dart';
 import 'models.dart';
 
 typedef RemoteSeqCallback = void Function(String documentId, int serverSeq);
@@ -41,11 +42,12 @@ class DocumentSyncClient {
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
     // See cloud_sync_session.connect: the connect failure lands on `ready` too,
-    // and an unobserved future error becomes an uncaught zone error.
-    unawaited(channel.ready.catchError((_) {}));
+    // and an unobserved future error becomes an uncaught zone error. Dropped, but
+    // counted — swallowed.dart explains why these are not faults.
+    unawaited(channel.ready.catchError((_) => swallowed('presence_ws_ready')));
     _subscription = channel.stream.listen(
       _onMessage,
-      onError: (_) {},
+      onError: (_) => swallowed('presence_ws_stream'),
       onDone: () {},
       cancelOnError: false,
     );

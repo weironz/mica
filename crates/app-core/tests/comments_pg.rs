@@ -151,7 +151,7 @@ async fn an_anchor_survives_a_real_edit_pushed_through_the_database() {
     let sv = editing.state_vector();
     editing.text_insert("a", 0, ">> ");
     let update = editing.encode_diff(&sv).unwrap();
-    sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+    sync::push_update(&db, ws, doc, user, &update, &sync::SyncTuning::default()).await.unwrap();
 
     let after = comments::load_doc(&db, doc).await.unwrap();
     let stored = comments::list_threads(&db, doc).await.unwrap().remove(0);
@@ -182,7 +182,7 @@ async fn deleting_the_anchored_text_leaves_an_orphan() {
     let sv = editing.state_vector();
     editing.text_delete("a", 0, 5); // delete "Hello"
     let update = editing.encode_diff(&sv).unwrap();
-    sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+    sync::push_update(&db, ws, doc, user, &update, &sync::SyncTuning::default()).await.unwrap();
 
     let after = comments::load_doc(&db, doc).await.unwrap();
     let live = after

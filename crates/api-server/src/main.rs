@@ -72,7 +72,10 @@ async fn main() -> anyhow::Result<()> {
   // which is the one where nobody wrote the proxy down anywhere.
   if !addr.ip().is_loopback() {
     tracing::warn!(
-      "listening on {addr}, which is not loopback — this server speaks        plaintext HTTP only. Terminate TLS in front of it; without a proxy the        auth tokens (including the one in the WebSocket URL) cross the network        in the clear."
+      "listening on {addr}, which is not loopback — this server speaks \
+       plaintext HTTP only. Terminate TLS in front of it; without a proxy the \
+       auth tokens (including the one in the WebSocket URL) cross the network \
+       in the clear."
     );
   }
 

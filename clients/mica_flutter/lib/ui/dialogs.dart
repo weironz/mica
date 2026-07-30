@@ -2098,6 +2098,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// it. Off by default and stated plainly, because it records real content.
   List<Widget> _diagnosticsSection(BuildContext context) {
     final l = context.l10n;
+    // Errors the app drops by design (an unreachable WebSocket is a state, not a
+    // crash — see swallowed.dart). Shown ONLY when something has fired: a row
+    // reading "none" every time trains the eye to skip it, and the absent row
+    // already says as much. Not gated on the capture switch — there is nothing to
+    // record, and the value is being able to look AFTER the fact, which is
+    // exactly when arming a switch in advance was not an option.
+    final dropped = swallowedSummary();
     return [
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
@@ -2127,6 +2134,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           ),
         ],
       ),
+      if (dropped != null) ...[
+        const SizedBox(height: 12),
+        SelectableText(
+          '${l.settingsDiagnosticsDropped}: $dropped',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
       const SizedBox(height: 12),
       Text(
         l.settingsDiagnosticsPrivacy,

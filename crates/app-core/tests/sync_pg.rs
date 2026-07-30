@@ -20,6 +20,13 @@ use uuid::Uuid;
 /// Now a set-but-unusable DATABASE_URL panics, and in CI a MISSING one panics
 /// too, because there the database is always provisioned: its absence means the
 /// workflow regressed, not that these assertions may quietly stop running.
+/// The shipped stream window + prune cadence. These tests assert sync BEHAVIOUR,
+/// not tuning, so they run on the defaults — which are the values that used to be
+/// `sync::STREAM_KEEP_MARGIN` / `STREAM_PRUNE_EVERY` constants here.
+fn tuning() -> sync::SyncTuning {
+    sync::SyncTuning::default()
+}
+
 async fn pool() -> Option<PgPool> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         assert!(
@@ -185,7 +192,7 @@ async fn push_pull_bootstrap_round_trip() {
     let sv = editing.state_vector();
     editing.text_insert("a", 5, " world");
     let update = editing.encode_diff(&sv).unwrap();
-    let rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+    let rid = sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
     assert!(rid > 0, "push assigns a positive rid");
 
     // A fresh bootstrap now folds the edit into the base, current to `rid`.
@@ -224,7 +231,7 @@ async fn stream_prunes_and_stale_cursor_rebootstraps() {
     let mut editing = MicaDoc::from_update(&base.state).unwrap();
 
     // "Push N times" cannot guarantee a prune: the cadence check is
-    // `rid % STREAM_PRUNE_EVERY == 0` on the pushing row's rid, and rid comes
+    // `rid % prune_every == 0` on the pushing row's rid, and rid comes
     // from the TABLE-wide sequence — a concurrently running test that draws
     // the cadence rid prunes ITS document, not ours (2026-07-21 CI: 90 rows
     // for 90 pushes, zero prunes). So push until one of OUR pushes draws a
@@ -237,12 +244,12 @@ async fn stream_prunes_and_stale_cursor_rebootstraps() {
         let sv = editing.state_vector();
         editing.text_insert("a", 5, "x");
         let update = editing.encode_diff(&sv).unwrap();
-        let rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+        let rid = sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
         pushes += 1;
         if first_rid == 0 {
             first_rid = rid;
         }
-        if rid % sync::STREAM_PRUNE_EVERY == 0 && rid - first_rid > sync::STREAM_KEEP_MARGIN {
+        if rid % tuning().prune_every == 0 && rid - first_rid > tuning().keep_margin {
             last_rid = rid;
             break;
         }
@@ -300,7 +307,7 @@ async fn version_history_converges_and_names() {
         let sv = editing.state_vector();
         editing.text_insert("a", 5, "x");
         let update = editing.encode_diff(&sv).unwrap();
-        sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+        sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
     }
     let autos = store::list_yrs_versions(&db, doc).await.unwrap();
     assert_eq!(autos.len(), 1, "burst converges to one auto version");
@@ -359,7 +366,7 @@ async fn version_retention_prunes_expired_autos_keeps_named() {
         let sv = editing.state_vector();
         editing.text_insert("a", 5, "y");
         let update = editing.encode_diff(&sv).unwrap();
-        let rid = sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+        let rid = sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
         if rid % 32 == 0 {
             break;
         }
@@ -401,7 +408,7 @@ async fn restore_reverts_document_and_converges_replicas() {
     let sv = editing.state_vector();
     editing.text_insert("a", 5, " there");
     let up = editing.encode_diff(&sv).unwrap();
-    sync::push_update(&db, ws, doc, user, &up).await.unwrap();
+    sync::push_update(&db, ws, doc, user, &up, &tuning()).await.unwrap();
     let version = store::create_named_yrs_version(&db, doc, "v-there", user)
         .await
         .unwrap();
@@ -410,7 +417,7 @@ async fn restore_reverts_document_and_converges_replicas() {
     let sv2 = editing.state_vector();
     editing.text_insert("a", 11, ", world");
     let up2 = editing.encode_diff(&sv2).unwrap();
-    sync::push_update(&db, ws, doc, user, &up2).await.unwrap();
+    sync::push_update(&db, ws, doc, user, &up2, &tuning()).await.unwrap();
     let head = MicaDoc::from_update(&sync::bootstrap_base(&db, doc).await.unwrap().state).unwrap();
     assert_eq!(
         head.to_blocks().iter().find(|x| x.id == "a").unwrap().text,
@@ -422,7 +429,7 @@ async fn restore_reverts_document_and_converges_replicas() {
         .await
         .unwrap()
         .unwrap();
-    let (rid, update) = sync::restore_yrs_version(&db, ws, doc, user, &vstate)
+    let (rid, update) = sync::restore_yrs_version(&db, ws, doc, user, &vstate, &tuning())
         .await
         .unwrap();
     assert!(rid > 0 && !update.is_empty(), "restore is a real forward update");
@@ -457,7 +464,7 @@ async fn rejects_garbage_update() {
     let (ws, doc, user) = seed_doc(&db).await;
     // A non-decodable update must be rejected (the §10 integrity gate) and leave
     // no row on the stream.
-    let err = sync::push_update(&db, ws, doc, user, &[9, 9, 9, 9]).await;
+    let err = sync::push_update(&db, ws, doc, user, &[9, 9, 9, 9], &tuning()).await;
     assert!(err.is_err(), "garbage update is rejected");
     assert_eq!(sync::document_head(&db, doc).await.unwrap(), 0, "nothing persisted");
     cleanup(&db, ws, user).await;
@@ -491,7 +498,7 @@ async fn op_write_lands_in_the_yrs_base_a_reader_actually_sees() {
     let sv = editing.state_vector();
     editing.text_insert("a", 5, " world");
     let edit = editing.encode_diff(&sv).unwrap();
-    let head_before = sync::push_update(&db, ws, doc, user, &edit).await.unwrap();
+    let head_before = sync::push_update(&db, ws, doc, user, &edit, &tuning()).await.unwrap();
 
     // An op-model write (the MCP/REST markdown path) appends a block.
     let applied = store::apply_document_operations(
@@ -712,7 +719,7 @@ async fn push_update_maintains_content_text() {
     // Replace "Hello" with a Chinese sentence.
     editing.text_insert("a", 5, "，全文搜索索引化");
     let update = editing.encode_diff(&sv).unwrap();
-    sync::push_update(&db, ws, doc, user, &update).await.unwrap();
+    sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
 
     let stored = stored_content_text(&db, doc).await;
     let base2 = sync::document_base(&db, doc).await.unwrap().unwrap();
@@ -730,7 +737,7 @@ async fn push_update_maintains_content_text() {
     let sv2 = editing2.state_vector();
     editing2.text_insert("a", 0, "追加：");
     let update2 = editing2.encode_diff(&sv2).unwrap();
-    sync::push_update(&db, ws, doc, user, &update2).await.unwrap();
+    sync::push_update(&db, ws, doc, user, &update2, &tuning()).await.unwrap();
     let base3 = sync::document_base(&db, doc).await.unwrap().unwrap();
     assert_eq!(
         stored_content_text(&db, doc).await,

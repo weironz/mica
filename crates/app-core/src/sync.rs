@@ -51,20 +51,12 @@ fn guarded_apply(doc: &mut MicaDoc, update: &[u8]) -> Result<(), DocError> {
         .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while applying an update".into())))
 }
 
-/// Keep at least this many already-folded updates on the stream so a briefly
-/// offline client can catch up incrementally; older ones are pruned (they live
-/// in the base). A client further behind re-bootstraps from the base instead.
-///
-/// `pub` (with [`STREAM_PRUNE_EVERY`]) so the pruning integration test can
-/// drive the cadence deterministically instead of guessing at rid alignment —
-/// see stream_prunes_and_stale_cursor_rebootstraps.
-pub const STREAM_KEEP_MARGIN: i64 = 64;
-/// Prune roughly once every this-many pushes (keeps the prune off the hot
-/// path). "This-many" counts TABLE-wide rid draws, not this document's pushes:
-/// the check is `rid % STREAM_PRUNE_EVERY == 0` on the pushing row's rid from
-/// the shared sequence, so under concurrent writers a given document prunes
-/// only when one of ITS OWN pushes happens to draw a cadence rid.
-pub const STREAM_PRUNE_EVERY: i64 = 32;
+/// The stream window + prune cadence, re-exported so callers of [`push_update`]
+/// have one import for both. These used to be `pub const STREAM_KEEP_MARGIN` /
+/// `STREAM_PRUNE_EVERY` right here; they moved into config so a node with
+/// unusually large or chatty documents can move them without a rebuild. The
+/// defaults are the old values, and `SyncTuning::default()` is what tests pass.
+pub use mica_infra::SyncTuning;
 
 /// Result of catching a client up from its cursor: either the incremental
 /// updates, or a base to re-bootstrap from when the cursor fell behind the
@@ -412,6 +404,7 @@ pub async fn push_update(
     document_id: Uuid,
     actor_id: Uuid,
     update: &[u8],
+    tuning: &SyncTuning,
 ) -> ApiResult<i64> {
     let mut tx = db.begin().await?;
     let base = ensure_base_tx(&mut tx, document_id).await?;
@@ -479,10 +472,10 @@ pub async fn push_update(
 
     // Periodically prune updates already folded into the base (keep a margin for
     // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
-    if rid % STREAM_PRUNE_EVERY == 0 {
+    if rid % tuning.prune_every == 0 {
         sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
             .bind(document_id)
-            .bind(rid - STREAM_KEEP_MARGIN)
+            .bind(rid - tuning.keep_margin)
             .execute(&mut *tx)
             .await?;
         // Same cadence, retention pass: drop expired auto versions. Named
@@ -512,6 +505,7 @@ pub async fn restore_yrs_version(
     document_id: Uuid,
     actor_id: Uuid,
     version_state: &[u8],
+    tuning: &SyncTuning,
 ) -> ApiResult<(i64, Vec<u8>)> {
     let base = bootstrap_base(db, document_id).await?;
     let mut doc = guarded_from_update(&base.state)
@@ -527,7 +521,7 @@ pub async fn restore_yrs_version(
     if update.is_empty() {
         return Ok((base.base_rid, Vec::new()));
     }
-    let rid = push_update(db, workspace_id, document_id, actor_id, &update).await?;
+    let rid = push_update(db, workspace_id, document_id, actor_id, &update, tuning).await?;
     Ok((rid, update))
 }
 
