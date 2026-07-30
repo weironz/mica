@@ -13,7 +13,8 @@ use uuid::Uuid;
 /// Skipping without a database is a local convenience; skipping WITH one is a
 /// lie. This used to be `PgPool::connect(&url).await.ok()?`, which turned a
 /// failed connection into a skip: you could export DATABASE_URL, watch
-/// `8 passed`, and never have touched Postgres. docs/lessons.md:84 recorded
+/// `8 passed`, and never have touched Postgres. docs/lessons.md「测试可以"真空通过"」
+/// recorded
 /// exactly that ("测试真空通过") after it hid a red test — and the code stayed.
 ///
 /// Now a set-but-unusable DATABASE_URL panics, and in CI a MISSING one panics
