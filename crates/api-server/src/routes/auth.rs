@@ -97,32 +97,48 @@ pub async fn register(
   State(state): State<AppState>,
   Json(payload): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-  // A self-hosted operator can lock the node to its current accounts by setting
-  // MICA_REGISTRATION_ENABLED=false — the public register endpoint then refuses
-  // rather than minting accounts. Login/refresh for existing users is unaffected.
-  if !state.config.registration_enabled {
-    return Err(ApiError::Forbidden);
-  }
-
+  // Registration is CLOSED unless the operator opened it
+  // (`MICA_REGISTRATION_ENABLED=true`). Login and refresh for existing users are
+  // unaffected — this gate is only about minting NEW accounts.
+  //
+  // The one exception is a brand-new instance with no users at all. Without it,
+  // defaulting to closed would make a fresh self-hosted install unusable: nothing
+  // to log in as, and no way to create the first account short of knowing to set
+  // an env var first. So the very first account is always allowed, and the door
+  // shuts behind it.
   let email = normalize_email(&payload.email)?;
   let display_name = normalize_display_name(&payload.display_name)?;
   validate_password(&payload.password)?;
 
   let password_hash = hash_password(&payload.password)?;
 
+  // One statement, so "is this the first account?" cannot be answered stale.
+  // Counting first and then inserting would let two concurrent requests on a
+  // fresh instance both pass the check — the guard has to be part of the write,
+  // not a look before it. The `WHERE` is evaluated against the same snapshot as
+  // the insert, so the loser gets zero rows instead of a second account.
   let user = sqlx::query_as::<_, UserRow>(
     r#"
       INSERT INTO users (email, display_name, password_hash)
-      VALUES ($1, $2, $3)
+      SELECT $1, $2, $3
+      WHERE $4 OR NOT EXISTS (SELECT 1 FROM users)
       RETURNING id, email, display_name, password_hash, created_at, avatar_key
     "#,
   )
   .bind(email)
   .bind(display_name)
   .bind(password_hash)
-  .fetch_one(&state.db)
+  .bind(state.config.registration_enabled)
+  .fetch_optional(&state.db)
   .await
   .map_err(map_insert_user_error)?;
+
+  // No row = the `WHERE` refused it: registration is closed and this instance
+  // already has an account. Same 403 as before, and deliberately no hint about
+  // whether the address was taken — a closed door should not answer questions.
+  let Some(user) = user else {
+    return Err(ApiError::Forbidden);
+  };
 
   Ok(Json(auth_response(&state, user).await?))
 }
@@ -1415,5 +1431,122 @@ mod refresh_pg {
       1,
       "exactly one of two concurrent rotations may win"
     );
+  }
+
+  /// The registration gate lives INSIDE the insert, and this pins both arms of
+  /// its `WHERE`: closed + an existing account refuses; closed + an empty
+  /// instance still lets the first account through.
+  ///
+  /// Asserting the SQL rather than the handler is deliberate — the handler needs
+  /// a whole `AppState`, and the interesting part is not the `if` (there isn't
+  /// one any more) but whether the guard can be answered stale. It can't, because
+  /// it is evaluated in the same statement and the same snapshot as the write.
+  /// A count-then-insert would pass a test like this and still mint two "first"
+  /// accounts under concurrency.
+  async fn try_register(db: &PgPool, email: &str, open: bool) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+      r#"
+        INSERT INTO users (email, display_name, password_hash)
+        SELECT $1, 'T', 'x'
+        WHERE $2 OR NOT EXISTS (SELECT 1 FROM users)
+        RETURNING id
+      "#,
+    )
+    .bind(email)
+    .bind(open)
+    .fetch_optional(db)
+    .await
+    .unwrap()
+  }
+
+  #[tokio::test]
+  async fn registration_closed_refuses_once_the_instance_has_an_account() {
+    let Some(db) = pool().await else { return };
+    // The real database always has accounts by this point (this test suite seeds
+    // plenty), which is exactly the state being asserted.
+    let existing: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert!(existing > 0, "precondition: the instance is not empty");
+
+    let email = format!("{}@closed.test", Uuid::new_v4());
+    assert!(
+      try_register(&db, &email, false).await.is_none(),
+      "closed registration must not create an account"
+    );
+    let landed: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email = $1")
+      .bind(&email)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!(landed, 0, "and must not have written a row either");
+
+    // Open, same statement, same instance: the account appears. Without this half
+    // the test above would also pass if the INSERT were simply broken.
+    let id = try_register(&db, &email, true)
+      .await
+      .expect("open registration must create an account");
+    sqlx::query("DELETE FROM users WHERE id = $1")
+      .bind(id)
+      .execute(&db)
+      .await
+      .ok();
+  }
+
+  /// A fresh self-hosted install has to be able to create its first account, or
+  /// closing registration by default would make it unusable — nothing to log in
+  /// as, and no way in without knowing to set an env var first. Verified on an
+  /// EMPTY database, since that is the only state where the exception applies.
+  #[tokio::test]
+  async fn a_brand_new_instance_may_create_its_first_account() {
+    let Some(db) = pool().await else { return };
+    // A throwaway database: the shared dev one has users, and emptying it to
+    // prove a point about emptiness would be a poor trade.
+    // `AssertSqlSafe` because sqlx 0.9 only accepts `&'static str` otherwise, and
+    // CREATE/DROP DATABASE cannot take a bind parameter. The name is a UUID this
+    // test just minted — no external input reaches it.
+    let name = format!("mica_firstrun_{}", Uuid::new_v4().simple());
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+      "CREATE DATABASE {name}"
+    )))
+    .execute(&db)
+    .await
+    .unwrap();
+    let url = std::env::var("DATABASE_URL").unwrap();
+    let scratch_url = url.rsplit_once('/').map(|(base, _)| format!("{base}/{name}")).unwrap();
+    let scratch = PgPool::connect(&scratch_url).await.unwrap();
+    sqlx::query(
+      "CREATE TABLE users (
+         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+         email text NOT NULL UNIQUE,
+         display_name text NOT NULL,
+         password_hash text NOT NULL,
+         created_at timestamptz NOT NULL DEFAULT now(),
+         avatar_key text
+       )",
+    )
+    .execute(&scratch)
+    .await
+    .unwrap();
+
+    // Closed — and it still goes through, because there is nobody here yet.
+    assert!(
+      try_register(&scratch, "first@new.test", false).await.is_some(),
+      "the first account must be creatable on an empty instance"
+    );
+    // ...and the door shuts behind it.
+    assert!(
+      try_register(&scratch, "second@new.test", false).await.is_none(),
+      "the second account must be refused while registration is closed"
+    );
+
+    scratch.close().await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+      "DROP DATABASE {name}"
+    )))
+    .execute(&db)
+    .await
+    .ok();
   }
 }

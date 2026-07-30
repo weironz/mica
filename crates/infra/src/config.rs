@@ -52,11 +52,13 @@ pub struct AppConfig {
   /// upserts this account at startup (creating it or resetting its password)
   /// so E2E runs always have known credentials. Hard-ignored in production.
   pub seed_test_user: Option<SeedTestUser>,
-  /// Whether public self-registration (`POST /auth/register`) is open. Default
-  /// true (the existing behaviour). Set `MICA_REGISTRATION_ENABLED=false` to lock
-  /// a self-hosted instance to its current accounts — the endpoint then refuses
-  /// with 403 instead of creating accounts. The operator's one switch to run a
-  /// public node privately.
+  /// Whether public self-registration (`POST /auth/register`) is open.
+  /// **Default false.** Set `MICA_REGISTRATION_ENABLED=true` (or `1`/`yes`/`on`)
+  /// to open it; anything else — including a typo — keeps it closed, which is the
+  /// safe direction for a switch whose failure mode is "strangers can mint
+  /// accounts on my node". Refuses with 403; login and refresh for existing users
+  /// are untouched, and `auth::register` still lets a brand-new instance create
+  /// its very first account.
   pub registration_enabled: bool,
   /// Public origin the app is reached at, e.g. `https://mica.example.com` — used
   /// to build the password-reset link that goes in the email (`{base}/reset-
@@ -145,17 +147,18 @@ impl AppConfig {
       })
     };
 
-    // Open by default; an operator sets it false to keep a public node private.
-    // Anything but an explicit off-value ("false"/"0"/"no"/"off") stays open, so
-    // a typo never silently locks everyone out.
-    let registration_enabled = env::var("MICA_REGISTRATION_ENABLED")
-      .map(|v| {
-        !matches!(
-          v.trim().to_ascii_lowercase().as_str(),
-          "false" | "0" | "no" | "off"
-        )
-      })
-      .unwrap_or(true);
+    // CLOSED by default, and the polarity of the parse flips with it: only an
+    // explicit on-value opens registration, so a typo leaves the node private
+    // rather than open. That is the safe direction for this switch specifically —
+    // what it guards is "anyone on the internet can mint accounts here", and an
+    // unbounded account count is the multiplier that makes every other limit
+    // (upload size, per-workspace quota) meaningless.
+    //
+    // It used to default OPEN and production never set the variable, so
+    // registering on the public instance needed nothing but a well-formed email.
+    // See `auth::register` for the first-run exception that keeps a fresh
+    // self-hosted install usable.
+    let registration_enabled = registration_open(env::var("MICA_REGISTRATION_ENABLED").ok());
 
     // Where the emailed reset link points. Trailing slash trimmed so
     // `{base}/reset-password` never doubles up.
@@ -182,6 +185,20 @@ impl AppConfig {
   }
 }
 
+/// Is public self-registration open, given the raw `MICA_REGISTRATION_ENABLED`?
+///
+/// A free function so the polarity is testable without constructing a whole
+/// [`Config`] (which needs a DATABASE_URL and a JWT secret to exist at all). The
+/// polarity is the entire point of this code, so it gets to be asserted directly.
+pub fn registration_open(raw: Option<String>) -> bool {
+  raw.is_some_and(|v| {
+    matches!(
+      v.trim().to_ascii_lowercase().as_str(),
+      "true" | "1" | "yes" | "on"
+    )
+  })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
   #[error("DATABASE_URL is required")]
@@ -192,4 +209,39 @@ pub enum ConfigError {
 
   #[error("HTTP_ADDR is invalid")]
   InvalidSocketAddr { source: std::net::AddrParseError },
+}
+
+#[cfg(test)]
+mod registration_switch {
+  use super::registration_open;
+
+  /// The default, and the reason this function exists. It used to default OPEN
+  /// with production never setting the variable, so anyone could mint an account
+  /// on the public instance. An unbounded account count is what makes every other
+  /// limit — upload size, per-workspace quota — multipliable.
+  #[test]
+  fn unset_means_closed() {
+    assert!(!registration_open(None));
+  }
+
+  #[test]
+  fn only_an_explicit_on_value_opens_it() {
+    for on in ["true", "1", "yes", "on", "TRUE", " On "] {
+      assert!(registration_open(Some(on.to_string())), "{on:?} must open");
+    }
+  }
+
+  /// Fail-safe polarity: a typo leaves the node private rather than open. The old
+  /// parse was the other way round ("anything but false/0/no/off stays open"),
+  /// which is the right default for a convenience flag and the wrong one for a
+  /// switch guarding who may create accounts.
+  #[test]
+  fn anything_else_including_a_typo_stays_closed() {
+    for off in ["", " ", "false", "0", "no", "off", "ture", "enabled", "maybe"] {
+      assert!(
+        !registration_open(Some(off.to_string())),
+        "{off:?} must NOT open registration"
+      );
+    }
+  }
 }
