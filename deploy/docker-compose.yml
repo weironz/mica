@@ -90,10 +90,14 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
-      # Public self-registration. Defaults open (current behaviour); set
-      # MICA_REGISTRATION_ENABLED=false in the node's .env to lock this instance
-      # to its existing accounts (POST /auth/register then 403s).
-      MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"
+      # Public self-registration. Passed through EMPTY when the node's .env does
+      # not set it, so the code's fail-safe default governs: config.rs opens the
+      # gate only for an explicit true/1/yes/on, and an empty string matches none
+      # of those, so unset here == CLOSED. Do NOT restore a `:-true` default: it
+      # would override that fail-safe from the layer an operator is least likely
+      # to read, and an instance that loses its .env line would silently reopen
+      # to public signup. Set MICA_REGISTRATION_ENABLED=true in .env to open it.
+      MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-}"
       # Per-workspace byte ceiling; unset = the code's 1 GiB default, `0` = no
       # limit. Named here because this block is an explicit ALLOW-LIST: a variable
       # in the node's .env that is not listed never reaches the process. Found by

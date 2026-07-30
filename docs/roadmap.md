@@ -55,8 +55,13 @@
 - ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
 - **开放注册无验证 + 弱口令(仅 ≥8)** —— 公网可无限刷号(`auth.rs`)。(M) `[需后端]`
-- 🟡 **compose 的注册默认与代码的 fail-safe 默认相反(潜伏陷阱,不是活着的洞)**(2026-07-30,
-  同日在生产核实后降级)—— `config.rs` 自 0.13.5 起注册**默认关闭**,只认显式 `true/1/yes/on`
+- 🟠 **compose 的注册默认已改对,但要下一版才到生产**(2026-07-30)—— 改动已在 main:compose 那行
+  改成 `${MICA_REGISTRATION_ENABLED:-}`(透传空 → 代码 fail-safe 默认 = 关;已核实
+  `registration_open` 对空串返回 false),`deploy/.env.prod.example` 里那段「Unset/true = open」
+  同批改掉(它自 0.13.5 翻转默认起就已经是假的)。**和配额那条同一个形状**:compose 变了 →
+  `deploy-prod` 的 sha256 指纹校验会拒 → **必须发一版才生效**(且 Deploy workflow 会先失败一次,
+  得走 `just deploy-prod`)。生产当前仍是「靠 `.env` 那一行关着」,发版后才变成「代码默认关着」。
+  原文如下 —— `config.rs` 自 0.13.5 起注册**默认关闭**,只认显式 `true/1/yes/on`
   (拼错保持关闭)。但 `deploy/docker-compose.yml` 那行是
   `MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"`,`.env` 不设它就注入字面量 `true`。
   **生产当前是安全的**:节点 `/data/mica/.env` 明确写了 `MICA_REGISTRATION_ENABLED=false`,
