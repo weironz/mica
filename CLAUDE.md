@@ -60,8 +60,17 @@
 merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_svg_inline.dart` 把 CSS 拍平进属性
 (merman 文档把这列为 host 边界)。
 
-## 当前状态(2026-07-29,v0.13.2)
+## 当前状态(2026-07-30,v0.13.5)
 
+- **注册默认关闭**(`MICA_REGISTRATION_ENABLED`,只有显式 `true/1/yes/on` 才开;拼错保持关闭)。
+  开启时注册返回 **204 而非 session** —— 需邮箱验证后才能登录。空实例的**第一个账号**永远放行
+  且直接标记为已验证(否则全新自托管装不起来)。每工作区字节配额默认 **1 GiB**
+  (`MICA_WORKSPACE_QUOTA_BYTES`)。**注意**:节点 `.env` 里设了还不够 ——
+  `deploy/docker-compose.yml` 的 `environment:` 是显式允许清单,没列进去的变量到不了进程。
+- **op 模型已完全退役**(S0–S5,migration 0016):`document_snapshots` / `document_updates` /
+  `document_versions` 三表已删,文档内容只存在于 `document_yrs_base`。
+- **web 端有 e2e 了**(`just web-e2e` + CI `web-e2e` job):浏览器里的 yjs 与服务端 yrs 经真 WS
+  收敛、服务端渲染路由压过 SPA 兜底、入口文件缓存头、POSIX locale 下仍能启动。
 - **Web 稳定**,Markdown 规范线已闭环;桌面端 **Windows 优先**。
 - **深色主题已完成**:语义色 token 层贯穿外壳 / 自绘画布 / 语法高亮 / mermaid,跟随系统或手动切换。
 - 登录页与首页按设计稿重做,桌面与 web 同一屏。
