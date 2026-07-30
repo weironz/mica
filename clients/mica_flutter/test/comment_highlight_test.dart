@@ -320,6 +320,39 @@ void main() {
     );
   });
 
+  testWidgets('a focused thread paints with the ACTIVE wash', (tester) async {
+    // `editor.commentHighlightActive` was unreachable: defined, lerped, given
+    // separate light and dark values — and the only producer hardcoded
+    // `active: false`, so no pixel could ever carry it. Now that the panel can
+    // focus a thread, pin that the stronger colour actually reaches the canvas.
+    final activeWash =
+        const EditorAppearance().tokens.editor.commentHighlightActive;
+    expect(
+      activeWash.toARGB32(),
+      isNot(wash.toARGB32()),
+      reason: 'the two washes must differ or this test proves nothing',
+    );
+
+    final render = await pump(
+      tester,
+      highlights: const [
+        (
+          startBlock: 'a',
+          startOffset: 0,
+          endBlock: 'a',
+          endOffset: 5,
+          active: true,
+        ),
+      ],
+    );
+    expect(washRects(render, activeWash), isNotEmpty);
+    expect(
+      washRects(render, wash),
+      isEmpty,
+      reason: 'a focused range is drawn ONLY in the active colour',
+    );
+  });
+
   testWidgets('an end block that no longer exists collapses to the start', (
     tester,
   ) async {

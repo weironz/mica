@@ -51,6 +51,7 @@ void main() {
     void Function(String id, String body)? onReply,
     void Function(String id, bool resolved)? onSetResolved,
     void Function(String id)? onDelete,
+    void Function(CommentThread thread)? onFocusThread,
     String? currentUserId,
   }) async {
     await tester.pumpWidget(
@@ -67,6 +68,7 @@ void main() {
               onSetResolved: (id, resolved) async =>
                   onSetResolved?.call(id, resolved),
               onDelete: (id) async => onDelete?.call(id),
+              onFocusThread: onFocusThread,
             ),
           ),
         ),
@@ -195,5 +197,43 @@ void main() {
     final open = tester.getTopLeft(find.text('OPEN'));
     final resolved = tester.getTopLeft(find.text('RESOLVED'));
     expect(open.dy, lessThan(resolved.dy));
+  });
+
+  // ── Focusing a thread ─────────────────────────────────────────────────────
+  //
+  // `onFocusThread` was declared, wired to the quote's InkWell, and never passed
+  // by main.dart — so `onTap` was always null and tapping a quote did nothing.
+  // Untested, which is why nobody noticed. These pin both the callback and the
+  // gate on it.
+
+  testWidgets('tapping the quote of a live thread asks the host to focus it', (
+    tester,
+  ) async {
+    final focused = <String>[];
+    await pumpPanel(
+      tester,
+      threads: [thread(id: 't1')],
+      onFocusThread: (t) => focused.add(t.id),
+    );
+    await tester.tap(find.textContaining('Hello'));
+    await tester.pumpAndSettle();
+    expect(focused, ['t1']);
+  });
+
+  testWidgets('a resolved thread offers no focus — there is no wash to point at', (
+    tester,
+  ) async {
+    // The panel gates the tap on `isHighlightable`, and it has to: a resolved or
+    // orphaned thread paints nothing, so emphasising it would highlight nowhere
+    // and leave the reader looking for something that is not there.
+    final focused = <String>[];
+    await pumpPanel(
+      tester,
+      threads: [thread(id: 't1', status: 'resolved')],
+      onFocusThread: (t) => focused.add(t.id),
+    );
+    await tester.tap(find.textContaining('Hello'));
+    await tester.pumpAndSettle();
+    expect(focused, isEmpty);
   });
 }

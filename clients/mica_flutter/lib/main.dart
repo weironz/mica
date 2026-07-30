@@ -4994,6 +4994,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// it (docs/comments-plan.md).
   List<CommentThread> _commentThreads = const [];
 
+  /// The thread the reader is currently looking at, drawn stronger than the rest.
+  ///
+  /// Both halves of this feature were half-built and dead: `CommentPanel` declared
+  /// an `onFocusThread` nobody passed (so tapping a quote did nothing), and the
+  /// highlight producer hardcoded `active: false` (so the
+  /// `editor.commentHighlightActive` token — defined, lerped, given light AND dark
+  /// values — could never be painted). They were the same missing idea: there was
+  /// no notion of a focused thread for either to refer to.
+  String? _focusedCommentThreadId;
+
   /// Ranges for render.dart to wash: unresolved, still-anchored threads only.
   /// A resolved or orphaned thread must not paint over the text.
   List<CommentHighlight> get _commentHighlights => [
@@ -5007,18 +5017,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           // painted a wrong-length run inside its first block — or nothing.
           endBlock: t.anchor!.endBlock,
           endOffset: t.anchor!.endOffset,
-          active: false,
+          active: t.id == _focusedCommentThreadId,
         ),
   ];
 
   /// Load (or clear) the open document's comments. Additive by design: if this
   /// fails the document still opens — comments are never allowed to be the reason
   /// someone cannot read their page.
+  /// Emphasise one thread's wash, or clear it with a null id.
+  ///
+  /// Only a state flip — the highlight list is derived, so the repaint follows. A
+  /// resolved or orphaned thread is not in that list at all, which is why focusing
+  /// one is a no-op rather than a special case here.
+  void _focusCommentThread(String? threadId) {
+    if (!mounted || _focusedCommentThreadId == threadId) return;
+    setState(() => _focusedCommentThreadId = threadId);
+  }
+
   Future<void> _loadComments(String documentId) async {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null || _activeIsLocal) {
-      if (mounted) setState(() => _commentThreads = const []);
+      if (mounted) {
+        setState(() {
+          _commentThreads = const [];
+          // A focused id from the previous document would otherwise linger and,
+          // on the small chance of an id collision, emphasise the wrong thread.
+          _focusedCommentThreadId = null;
+        });
+      }
       return;
     }
     try {
@@ -5030,7 +5057,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (!mounted || _selectedBootstrap?.document.id != documentId) return;
       setState(() => _commentThreads = threads);
     } catch (_) {
-      if (mounted) setState(() => _commentThreads = const []);
+      if (mounted) {
+        setState(() {
+          _commentThreads = const [];
+          // A focused id from the previous document would otherwise linger and,
+          // on the small chance of an id collision, emphasise the wrong thread.
+          _focusedCommentThreadId = null;
+        });
+      }
     }
   }
 
@@ -5181,6 +5215,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onReplyComment: _replyToComment,
       onSetCommentResolved: _setCommentResolved,
       onDeleteCommentThread: _deleteCommentThread,
+      onFocusCommentThread: _focusCommentThread,
       selectedRef: _selectedEntry?.ref,
       onSelectEntry: _selectEntry,
       onRenameEntry: _renameEntry,
@@ -5831,6 +5866,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onReplyComment,
     required this.onSetCommentResolved,
     required this.onDeleteCommentThread,
+    required this.onFocusCommentThread,
     required this.session,
     required this.entries,
     required this.activeOrigin,
@@ -5976,6 +6012,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String threadId, bool resolved)
   onSetCommentResolved;
   final Future<void> Function(String threadId) onDeleteCommentThread;
+
+  /// Tapping a thread's quote in the panel emphasises its wash in the document.
+  /// Null id clears the emphasis.
+  final void Function(String? threadId) onFocusCommentThread;
   final AuthSession? session;
 
   /// Where this world's server lives — the base every avatar URL resolves
@@ -6320,6 +6360,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               await widget.onDeleteCommentThread(id);
               refresh(() {});
             },
+            onFocusThread: (thread) => widget.onFocusCommentThread(thread.id),
           ),
           actions: [
             TextButton(
@@ -6330,6 +6371,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ),
       ),
     );
+    // Closing the panel drops the emphasis: it marks "the thread I am reading in
+    // the panel", and once the panel is gone there is no such thing. Leaving it on
+    // would strand a stronger wash on the page with nothing explaining why.
+    widget.onFocusCommentThread(null);
   }
 
   // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
