@@ -95,10 +95,39 @@ page.on('response', (r) => {
   }
 });
 
+// Uncaught exceptions are NOT console messages; without this a Dart error during
+// startup is invisible and the only symptom is the probe never appearing.
+const pageErrors = [];
+page.on('pageerror', (e) => pageErrors.push(String(e)));
+
 await page.goto(BASE, { waitUntil: 'load' });
-await page.waitForFunction(() => typeof window.micaYjsWebSyncTest === 'function', null, {
-  timeout: 60_000,
-});
+try {
+  await page.waitForFunction(() => typeof window.micaYjsWebSyncTest === 'function', null, {
+    timeout: 60_000,
+  });
+} catch (timeout) {
+  // A harness that times out without saying what it saw makes the next attempt a
+  // guess. Everything known about the page goes to the log before giving up.
+  console.error('the app never registered its probes — what the page reported:');
+  console.error(`  url        : ${page.url()}`);
+  console.error(`  title      : ${await page.title().catch(() => '(unavailable)')}`);
+  const present = await page
+    .evaluate(() => ({
+      selfTest: typeof window.micaYjsSelfTest,
+      w2: typeof window.micaYjsW2Test,
+      webSync: typeof window.micaYjsWebSyncTest,
+      flutterReady: typeof window._flutter,
+      bodyChildren: document.body ? document.body.children.length : -1,
+    }))
+    .catch((e) => ({ evaluateFailed: String(e) }));
+  console.error(`  window     : ${JSON.stringify(present)}`);
+  console.error(`  pageerrors : ${pageErrors.length ? pageErrors.join(' | ') : '(none)'}`);
+  console.error(`  console    : ${consoleErrors.length ? consoleErrors.join(' | ') : '(none)'}`);
+  console.error(`  bad reqs   : ${badResponses.length ? badResponses.join(' | ') : '(none)'}`);
+  console.error(`  hosts      : ${[...requestedHosts].join(', ')}`);
+  await browser.close();
+  throw timeout;
+}
 
 // Snapshot the load-time observations BEFORE anything below deliberately asks for
 // a 400 or a 404. The first version of this asserted console cleanliness at the
