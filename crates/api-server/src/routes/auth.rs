@@ -13,6 +13,8 @@ use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use mica_app_core::AppState;
 use mica_infra::{ApiError, ApiResult};
+
+use super::email_verify;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
@@ -85,6 +87,9 @@ struct UserRow {
   password_hash: String,
   created_at: DateTime<Utc>,
   avatar_key: Option<String>,
+  /// NULL = the address was never confirmed, so this account cannot sign in.
+  /// Every account that predates migration 0018 was grandfathered as verified.
+  email_verified_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,10 +98,15 @@ struct Claims {
   exp: usize,
 }
 
+/// `POST /api/auth/register`
+///
+/// Answers `204 No Content`, not a session: the account cannot be signed in to
+/// until its address is confirmed, so handing back tokens would contradict the
+/// gate in [`login`]. The client's next step is "check your email".
 pub async fn register(
   State(state): State<AppState>,
   Json(payload): Json<RegisterRequest>,
-) -> ApiResult<Json<AuthResponse>> {
+) -> ApiResult<StatusCode> {
   // Registration is CLOSED unless the operator opened it
   // (`MICA_REGISTRATION_ENABLED=true`). Login and refresh for existing users are
   // unaffected — this gate is only about minting NEW accounts.
@@ -122,7 +132,7 @@ pub async fn register(
       INSERT INTO users (email, display_name, password_hash)
       SELECT $1, $2, $3
       WHERE $4 OR NOT EXISTS (SELECT 1 FROM users)
-      RETURNING id, email, display_name, password_hash, created_at, avatar_key
+      RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
     "#,
   )
   .bind(email)
@@ -140,7 +150,31 @@ pub async fn register(
     return Err(ApiError::Forbidden);
   };
 
-  Ok(Json(auth_response(&state, user).await?))
+  // The first-run account is verified on the spot, and this is not a shortcut.
+  // It is the operator, on a fresh instance they just started, with nobody to
+  // prove anything to — and quite possibly with no mail backend configured yet
+  // (`build_mailer` falls back to logging). Requiring them to receive an email
+  // from a server that may be unable to send one would turn the bootstrap
+  // exception into a locked door, which is the opposite of its purpose.
+  if !state.config.registration_enabled {
+    sqlx::query("UPDATE users SET email_verified_at = now() WHERE id = $1")
+      .bind(user.id)
+      .execute(&state.db)
+      .await?;
+    return Ok(StatusCode::NO_CONTENT);
+  }
+
+  // Otherwise: the account exists but cannot be signed in to until the address is
+  // confirmed. Best-effort mail — the row is already committed, so a mail outage
+  // must not fail the request and leave someone holding an account they were told
+  // was never created. `resend-verification` is the way back.
+  if !email_verify::mint_and_send(&state, user.id, &user.email).await {
+    tracing::warn!(user_id = %user.id, "registered but the verification email did not go out");
+  }
+
+  // 204, not a session: handing back tokens here would contradict the login gate
+  // two lines below. Same shape as `forgot` — "we sent you mail" carries no body.
+  Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn login(
@@ -151,7 +185,7 @@ pub async fn login(
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at, avatar_key
+      SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
       WHERE email = $1
     "#,
@@ -162,6 +196,10 @@ pub async fn login(
   .ok_or(ApiError::Unauthorized)?;
 
   verify_password(&payload.password, &user.password_hash)?;
+  // AFTER the password check, on purpose: answering "confirm your email" to a
+  // wrong password would tell a stranger the address is registered. Reaching this
+  // line means the caller already knows the credentials.
+  email_verify::ensure_verified(user.email_verified_at)?;
 
   Ok(Json(auth_response(&state, user).await?))
 }
@@ -171,7 +209,7 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at, avatar_key
+      SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
       WHERE id = $1
     "#,
@@ -205,7 +243,7 @@ pub async fn update_me(
       UPDATE users
       SET display_name = $1, updated_at = now()
       WHERE id = $2
-      RETURNING id, email, display_name, password_hash, created_at, avatar_key
+      RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
     "#,
   )
   .bind(display_name)
@@ -241,7 +279,7 @@ pub async fn change_password(
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at, avatar_key
+      SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
       WHERE id = $1
     "#,
@@ -296,7 +334,7 @@ pub async fn delete_account(
   let user_id = user_id_from_headers(&state, &headers).await?;
 
   let user = sqlx::query_as::<_, UserRow>(
-    "SELECT id, email, display_name, password_hash, created_at, avatar_key FROM users WHERE id = $1",
+    "SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at FROM users WHERE id = $1",
   )
   .bind(user_id)
   .fetch_optional(&state.db)
@@ -520,7 +558,7 @@ pub async fn refresh(
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      SELECT id, email, display_name, password_hash, created_at, avatar_key
+      SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
       WHERE id = $1
     "#,
@@ -759,6 +797,12 @@ fn is_public(path: &str) -> bool {
     // email address in the body is all it takes; the reset itself happens on the
     // server-rendered /reset-password page (mounted outside /api entirely).
     || path.ends_with("/auth/password/forgot")
+    // Resend a verification link: by definition the caller CANNOT sign in yet, so
+    // requiring a session would make the endpoint unreachable exactly when it is
+    // needed. Found by testing, not by reading — it answered 401 to every call
+    // until this line existed, which is the same way the blob endpoint was
+    // silently broken for a month (see below).
+    || path.ends_with("/auth/resend-verification")
     // You refresh precisely BECAUSE the access token is dead — demanding a live
     // one here would be a deadlock, and the endpoint's own credential is the
     // refresh token in its body. The same router-wide `scope_guard` already
@@ -1018,6 +1062,15 @@ mod tests {
     // client is locked out at the 24h mark with no way back except a re-login,
     // which is the exact bug refresh exists to kill.
     assert!(is_public("/api/auth/refresh"));
+  }
+
+  #[test]
+  fn resending_a_verification_link_is_public_or_it_could_never_be_called() {
+    // Same shape as refresh, and it shipped broken until an end-to-end probe
+    // caught it: whoever needs another confirmation link is, by definition,
+    // someone who cannot sign in — so requiring a session makes the endpoint
+    // unreachable exactly when it matters. It answered 401 to every call.
+    assert!(is_public("/api/auth/resend-verification"));
   }
 }
 

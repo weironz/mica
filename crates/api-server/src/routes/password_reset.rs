@@ -230,7 +230,7 @@ pub fn router() -> axum::Router<AppState> {
 
 // ---- HTML (server-rendered, no JavaScript) -------------------------------
 
-fn html_response(status: StatusCode, body: String) -> Response {
+pub(super) fn html_response(status: StatusCode, body: String) -> Response {
   (
     status,
     [
@@ -242,7 +242,7 @@ fn html_response(status: StatusCode, body: String) -> Response {
     .into_response()
 }
 
-fn page_shell(title: &str, inner: &str) -> String {
+pub(super) fn page_shell(title: &str, inner: &str) -> String {
   format!(
     "<!doctype html><html lang=en><head><meta charset=utf-8>\
      <meta name=viewport content=\"width=device-width, initial-scale=1\">\
@@ -337,7 +337,7 @@ fn reset_email_html(link: &str) -> String {
 }
 
 /// Escape for HTML text content.
-fn escape_html(input: &str) -> String {
+pub(super) fn escape_html(input: &str) -> String {
   input
     .replace('&', "&amp;")
     .replace('<', "&lt;")
@@ -348,7 +348,7 @@ fn escape_html(input: &str) -> String {
 
 /// Escape for a double-quoted attribute value (`href`, hidden input). Same set;
 /// named apart so the intent at each call site is explicit.
-fn escape_attr(input: &str) -> String {
+pub(super) fn escape_attr(input: &str) -> String {
   escape_html(input)
 }
 

@@ -1357,11 +1357,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _authenticate(AuthMode mode, AuthFormValue form) {
     return _run(() async {
+      // Registering no longer signs you in: the address has to be confirmed
+      // first, so there is no session to take. Say so and stop here — navigating
+      // into the app would be a lie about what just happened.
+      if (mode == AuthMode.register) {
+        await _api.register(form);
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.l10n.authVerifySent)));
+        return;
+      }
       final AuthSession session;
       try {
-        session = mode == AuthMode.register
-            ? await _api.register(form)
-            : await _api.login(form);
+        session = await _api.login(form);
       } on ApiException catch (error) {
         // Translate the two failures a person can actually act on. Done HERE and
         // not in `_apiMessage`, because these codes mean different things
@@ -1374,6 +1383,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         }
         if (error.statusCode == 409) {
           throw ApiException(context.l10n.loginEmailTaken);
+        }
+        // The server distinguishes "confirm your email" from "wrong password" with
+        // a code precisely so this branch can exist: one of them has a next step
+        // the person can take, and it is not the same next step.
+        if (error.code == 'email_not_verified') {
+          if (mounted) _offerResendVerification(form.email);
+          throw ApiException(context.l10n.loginEmailNotVerified);
         }
         rethrow;
       }
@@ -2107,6 +2123,36 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         password: context.l10n.loginPasswordLabel,
         forgotPassword: context.l10n.loginForgotPassword,
       );
+
+  /// Offer a fresh confirmation link after a sign-in was refused for an
+  /// unconfirmed address. A snackbar ACTION rather than a second dialog: the
+  /// person is staring at a form that just failed, and the only useful next step
+  /// is one tap away.
+  void _offerResendVerification(String email) {
+    final l10n = context.l10n;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(l10n.loginEmailNotVerified),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: l10n.authResendVerification,
+          onPressed: () async {
+            // Swallow failures on purpose: the endpoint answers 204 for an
+            // unknown address, an already-confirmed one and a mail outage alike,
+            // so there is nothing here worth distinguishing — and claiming
+            // failure would be as misleading as claiming success.
+            try {
+              await _api.resendVerification(email);
+            } catch (_) {}
+            messenger.showSnackBar(
+              SnackBar(content: Text(l10n.authResendSent)),
+            );
+          },
+        ),
+      ),
+    );
+  }
 
   /// The forgot-password flow, shared by both platforms' forms. The form hands up
   /// whatever is typed; the copy for "nothing typed" belongs here.
@@ -3453,9 +3499,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final creds = await _promptCloudAuth(migrateWorkspace: localWs.name);
       if (creds == null || !mounted) return;
       await _run(() async {
-        final s = creds.$1 == AuthMode.register
-            ? await _api.register(creds.$2)
-            : await _api.login(creds.$2);
+        // A registration cannot continue into the migration: there is no session
+        // until the address is confirmed. Tell them, and let them come back.
+        if (creds.$1 == AuthMode.register) {
+          await _api.register(creds.$2);
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(context.l10n.authVerifySent)));
+          return;
+        }
+        final s = await _api.login(creds.$2);
         _persistSession(s);
         setState(() => _session = s);
       });
@@ -4871,9 +4925,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final creds = await _promptCloudAuth();
     if (creds == null || !mounted) return;
     await _run(() async {
-      final session = creds.$1 == AuthMode.register
-          ? await _api.register(creds.$2)
-          : await _api.login(creds.$2);
+      if (creds.$1 == AuthMode.register) {
+        await _api.register(creds.$2);
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.l10n.authVerifySent)));
+        return;
+      }
+      final session = await _api.login(creds.$2);
       final workspaces = await _api.listWorkspaces(session.accessToken);
       setState(() {
         _session = session;

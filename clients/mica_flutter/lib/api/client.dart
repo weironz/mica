@@ -35,13 +35,25 @@ class ApiClient {
   /// --dart-define=MICA_API_BASE_URL override).
   static Uri defaultBaseUri() => _resolveBaseUri();
 
-  Future<AuthSession> register(AuthFormValue form) async {
-    final response = await _post('/api/auth/register', {
+  /// Create an account. Returns NOTHING, and that is the contract: the server
+  /// answers 204 because the address must be confirmed before the account can be
+  /// signed in to, so there is no session to hand back. The caller's next step is
+  /// telling the user to check their email — not navigating into the app.
+  ///
+  /// This used to return an `AuthSession` and sign the user straight in.
+  Future<void> register(AuthFormValue form) async {
+    await _post('/api/auth/register', {
       'email': form.email,
       'display_name': form.displayName,
       'password': form.password,
     });
-    return AuthSession.fromJson(response);
+  }
+
+  /// Ask for another confirmation link. Always succeeds — the server answers 204
+  /// for an unknown address, an already-confirmed one and a mail failure alike, so
+  /// this cannot be used to discover whether an address is registered.
+  Future<void> resendVerification(String email) async {
+    await _post('/api/auth/resend-verification', {'email': email});
   }
 
   Future<AuthSession> login(AuthFormValue form) async {

@@ -14,6 +14,7 @@ mod files;
 mod health;
 mod history;
 mod import;
+mod email_verify;
 mod password_reset;
 mod tokens;
 mod workspaces;
@@ -36,12 +37,16 @@ pub fn share_router() -> Router<AppState> {
   Router::new().route("/s/{token}", get(documents::public_share_page))
 }
 
-/// The password-reset page (`GET/POST /reset-password`), mounted OUTSIDE `/api`
-/// like the share page — the reset token in the form is the only credential, so
-/// it must not sit behind the auth scope-guard. nginx proxies `/reset-password`
-/// to the backend.
+/// The server-rendered inbox-proof pages, mounted OUTSIDE `/api` like the share
+/// page: `GET/POST /reset-password` and `GET /verify-email`. The token in the URL
+/// or form is the only credential, so neither may sit behind the auth scope-guard.
+///
+/// **Both need an nginx rule.** They are exact-match `location`s proxied to the
+/// backend ahead of the SPA fallback (deploy/nginx.conf, nginx.dev.conf); without
+/// one, the link lands on index.html and the user sees the app instead of the
+/// page. Adding a third page here means adding it there too.
 pub fn reset_router() -> Router<AppState> {
-  password_reset::router()
+  password_reset::router().merge(email_verify::router())
 }
 
 pub fn api_router() -> Router<AppState> {
@@ -49,6 +54,10 @@ pub fn api_router() -> Router<AppState> {
     .route("/health", get(health::health))
     .route("/ready", get(health::ready))
     .route("/auth/register", post(auth::register))
+    .route(
+      "/auth/resend-verification",
+      post(email_verify::resend),
+    )
     .route("/auth/login", post(auth::login))
     .route("/auth/refresh", post(auth::refresh))
     .route("/auth/logout", post(auth::logout))
