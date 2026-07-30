@@ -225,6 +225,37 @@ for (const [f, value] of Object.entries(cache)) {
   check(`${f} refuses stale caching`, /no-store|no-cache/.test(value ?? ''), value ?? '(none)');
 }
 
+// ── 7. A POSIX locale does not stop the app from starting ─────────────────────
+// The engine throws `RangeError: Incorrect locale information provided` from
+// `new Locale` when the browser reports "C" — inside its own startup, before
+// `main()`, so `runZonedGuarded` never sees it and the console stays clean. The
+// only symptom is a blank page. `web/index.html` sanitises the value before
+// flutter_bootstrap.js runs; this assertion is what keeps that guard honest.
+//
+// Its own context, because a context's locale is fixed at creation. Runs last so a
+// failure here cannot be confused with the assertions above.
+{
+  const odd = await browser.newContext({ locale: 'C', timezoneId: 'UTC' });
+  const oddPage = await odd.newPage();
+  const oddErrors = [];
+  oddPage.on('pageerror', (e) => oddErrors.push(String(e)));
+  await oddPage.goto(BASE, { waitUntil: 'load' });
+  let booted = true;
+  try {
+    await oddPage.waitForFunction(() => typeof window.micaYjsSelfTest === 'function', null, {
+      timeout: 30_000,
+    });
+  } catch {
+    booted = false;
+  }
+  check(
+    'the app still starts when the browser reports a POSIX locale ("C")',
+    booted,
+    oddErrors[0] ?? (booted ? 'booted' : 'no pageerror captured'),
+  );
+  await odd.close();
+}
+
 await browser.close();
 
 if (failures.length) {

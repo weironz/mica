@@ -27,6 +27,56 @@
         body { background: #0F1419; }
       }
     </style>
+    <!-- A browser reporting a POSIX locale name ("C", "POSIX") makes the Flutter
+         engine throw `RangeError: Incorrect locale information provided` from
+         `new Locale`, INSIDE its own startup — before `main()` runs, so
+         `runZonedGuarded` never sees it and the console stays empty. The result is
+         a blank page with no diagnostic whatsoever.
+
+         Reproduced with `newContext({locale: 'C'})`: the app does not boot at all,
+         while 'en', 'en-US', 'zh-CN' and an unset locale are all fine. `C` is the
+         default on minimal Linux images and CI runners, and reachable for a user
+         whose environment or privacy tooling strips the real value.
+
+         The throw is inside the engine, so it cannot be caught from Dart. What CAN
+         be fixed is the input: sanitise it here, before flutter_bootstrap.js runs.
+         Deliberately narrow — anything that already looks like a language tag is
+         left exactly as it is, so this cannot change the language a real user
+         gets. -->
+    <script>
+      (function () {
+        // BCP-47 shape only: 2–3 letter primary subtag, optional -SUBTAG parts.
+        var TAG = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/;
+        var FALLBACK = 'en';
+        function clean(tag) {
+          return typeof tag === 'string' && TAG.test(tag) ? tag : null;
+        }
+        try {
+          var list = (navigator.languages || []).map(clean).filter(Boolean);
+          var single = clean(navigator.language);
+          if (single && list.indexOf(single) === -1) list.unshift(single);
+          // Only intervene when NOTHING usable was reported. A browser with one odd
+          // entry among valid ones needs no help from us.
+          if (list.length === 0) {
+            list = [FALLBACK];
+            Object.defineProperty(navigator, 'language', {
+              get: function () {
+                return FALLBACK;
+              },
+              configurable: true,
+            });
+          }
+          Object.defineProperty(navigator, 'languages', {
+            get: function () {
+              return list;
+            },
+            configurable: true,
+          });
+        } catch (e) {
+          // Never let the guard itself become the reason the app does not start.
+        }
+      })();
+    </script>
     <!-- P2-M4 web→yjs: the browser-side CRDT engine (yjs), wire-compatible with
          the Rust yrs core/server. Loaded before Flutter so js_interop can use it. -->
     <script src="yjs_bundle.js"></script>
