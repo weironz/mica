@@ -299,22 +299,45 @@ jobs:
             -v "$PWD/clients/mica_flutter/build/web:/usr/share/nginx/html:ro" \
             nginx:alpine
 
+      # Deliberately NO `set -e` in this step, and the polling is written out longhand.
+      # The first version used `set -euo pipefail` with `curl … && break` inside the
+      # loop, and a failing curl in a `&&` list took the whole script down: the wait
+      # ran exactly one iteration, the nginx check then failed against an api that
+      # had not started yet, and the api's own "ok" landed in the log one line AFTER
+      # the error. A readiness wait that aborts on the first not-ready is not a wait.
       - name: Start the api
         run: |
-          set -euo pipefail
           APP_ENV=test \
           HTTP_ADDR=0.0.0.0:8080 \
           JWT_SECRET=ci-only-not-a-secret \
           MICA_SEED_TEST_USER="${E2E_EMAIL}:${E2E_PASSWORD}" \
           MICA_APP_BASE_URL=http://127.0.0.1:8090 \
             ./target/debug/mica-api-server > /tmp/api.log 2>&1 &
+
+          up=""
           for i in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:8080/api/health && break
+            if curl -fsS http://127.0.0.1:8080/api/health > /dev/null 2>&1; then
+              up="yes"; echo "api up after $((i * 2))s"; break
+            fi
             sleep 2
           done
-          # The whole stack, through nginx — if this cannot be reached the run must
-          # fail here rather than let the harness report a convergence problem.
-          curl -fsS http://127.0.0.1:8090/api/health
+          if [ -z "$up" ]; then
+            echo "the api never became healthy"; exit 1
+          fi
+
+          # And the same through nginx. If the stack is unreachable the run must fail
+          # HERE — otherwise the harness reports it as a convergence problem and
+          # whoever reads the log goes hunting in the CRDT layer for a wiring fault.
+          routed=""
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/api/health > /dev/null 2>&1; then
+              routed="yes"; echo "reachable through nginx after $((i * 2))s"; break
+            fi
+            sleep 2
+          done
+          if [ -z "$routed" ]; then
+            echo "nginx cannot reach the api"; docker logs mica-web-e2e; exit 1
+          fi
 
       - name: Web end-to-end assertions
         working-directory: clients/mica_flutter/tool/web_e2e
