@@ -54,6 +54,7 @@ class AuthFormCard extends StatefulWidget {
     this.note,
     this.errorText,
     this.isBusy = false,
+    this.allowRegister = true,
     super.key,
   });
 
@@ -75,6 +76,16 @@ class AuthFormCard extends StatefulWidget {
   /// One explanatory line under the title (the migrate flow explains itself).
   final String? note;
 
+  /// Whether this instance will accept a new account. False hides the mode
+  /// toggle and leaves a sign-in-only form.
+  ///
+  /// Defaults to TRUE, and callers that cannot find out must leave it that way.
+  /// The failure directions are not symmetric: showing the entry on a closed
+  /// instance costs one 403 at the end of a form, while hiding it on an open
+  /// one — or on a brand-new instance, which always accepts its first account
+  /// however the flag is set — leaves someone with no way in at all.
+  final bool allowRegister;
+
   /// Why the last attempt failed, shown under the button.
   ///
   /// It has to live HERE. The app parks failures in a shell-level banner, and the
@@ -92,6 +103,13 @@ class AuthFormCard extends StatefulWidget {
 
 class _AuthFormCardState extends State<AuthFormCard> {
   AuthMode _mode = AuthMode.login;
+
+  /// The mode actually in force. Derived rather than synced, so a server that
+  /// turns out to have registration closed cannot strand this form in a
+  /// register mode the user can no longer see or leave — which is exactly what
+  /// resetting `_mode` from `didUpdateWidget` would have to race against.
+  AuthMode get _effectiveMode =>
+      widget.allowRegister ? _mode : AuthMode.login;
   final _email = TextEditingController();
   final _displayName = TextEditingController();
   final _password = TextEditingController();
@@ -113,7 +131,7 @@ class _AuthFormCardState extends State<AuthFormCard> {
   @override
   Widget build(BuildContext context) {
     final s = widget.strings;
-    final registering = _mode == AuthMode.register;
+    final registering = _effectiveMode == AuthMode.register;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -128,25 +146,30 @@ class _AuthFormCardState extends State<AuthFormCard> {
           ),
         ],
         const SizedBox(height: 16),
-        SegmentedButton<AuthMode>(
-          segments: [
-            ButtonSegment(
-              value: AuthMode.login,
-              icon: const Icon(Icons.login),
-              label: Text(s.login),
-            ),
-            ButtonSegment(
-              value: AuthMode.register,
-              icon: const Icon(Icons.person_add),
-              label: Text(s.register),
-            ),
-          ],
-          selected: {_mode},
-          onSelectionChanged: widget.isBusy
-              ? null
-              : (selection) => setState(() => _mode = selection.single),
-        ),
-        const SizedBox(height: 18),
+        // With registration closed there is nothing to toggle BETWEEN, so the
+        // whole control goes rather than shipping a one-segment switch or a
+        // disabled half that invites a click and answers with a 403.
+        if (widget.allowRegister) ...[
+          SegmentedButton<AuthMode>(
+            segments: [
+              ButtonSegment(
+                value: AuthMode.login,
+                icon: const Icon(Icons.login),
+                label: Text(s.login),
+              ),
+              ButtonSegment(
+                value: AuthMode.register,
+                icon: const Icon(Icons.person_add),
+                label: Text(s.register),
+              ),
+            ],
+            selected: {_effectiveMode},
+            onSelectionChanged: widget.isBusy
+                ? null
+                : (selection) => setState(() => _mode = selection.single),
+          ),
+          const SizedBox(height: 18),
+        ],
         TextField(
           controller: _email,
           enabled: !widget.isBusy,
@@ -156,7 +179,7 @@ class _AuthFormCardState extends State<AuthFormCard> {
           // one that has focus when the screen opens — did nothing at all.
           onSubmitted: widget.isBusy
               ? null
-              : (_) => widget.onSubmit(_mode, _value),
+              : (_) => widget.onSubmit(_effectiveMode, _value),
           decoration: InputDecoration(
             labelText: s.email,
             prefixIcon: const Icon(Icons.alternate_email),
@@ -172,7 +195,7 @@ class _AuthFormCardState extends State<AuthFormCard> {
             enabled: !widget.isBusy,
             onSubmitted: widget.isBusy
                 ? null
-                : (_) => widget.onSubmit(_mode, _value),
+                : (_) => widget.onSubmit(_effectiveMode, _value),
             decoration: InputDecoration(
               labelText: s.displayName,
               prefixIcon: const Icon(Icons.badge),
@@ -187,7 +210,7 @@ class _AuthFormCardState extends State<AuthFormCard> {
           obscureText: true,
           onSubmitted: widget.isBusy
               ? null
-              : (_) => widget.onSubmit(_mode, _value),
+              : (_) => widget.onSubmit(_effectiveMode, _value),
           decoration: InputDecoration(
             labelText: s.password,
             prefixIcon: const Icon(Icons.lock),
@@ -200,7 +223,7 @@ class _AuthFormCardState extends State<AuthFormCard> {
           child: FilledButton.icon(
             onPressed: widget.isBusy
                 ? null
-                : () => widget.onSubmit(_mode, _value),
+                : () => widget.onSubmit(_effectiveMode, _value),
             icon: Icon(registering ? Icons.person_add : Icons.login),
             label: Text(
               widget.actionLabelOverride ??

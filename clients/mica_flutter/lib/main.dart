@@ -2094,14 +2094,55 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Does this server answer? Straight to `/api/health`, unauthenticated — the
   /// point is to tell "wrong address / not running" apart from "wrong password",
   /// which is the failure a first-time user actually hits.
+  /// Whether the server at [_regOrigin] accepts new registrations, as of the
+  /// last probe. Null — including "we asked a server too old to answer" — means
+  /// DON'T KNOW, and the registration entry then stays exactly as it was.
+  /// Guessing "closed" would hide the only way into a fresh instance; guessing
+  /// "open" would show a door that 403s.
+  bool? _registrationOpen;
+
+  /// Which origin [_registrationOpen] describes. Kept beside it so switching
+  /// servers cannot show the previous server's answer: the getter below only
+  /// trusts it while the two still agree.
+  String? _regOrigin;
+
+  bool? get _activeRegistrationOpen =>
+      _regOrigin == _activeOrigin ? _registrationOpen : null;
+
   Future<bool> _probeServer(String origin) async {
     final base = Uri.tryParse(origin);
     if (base == null || base.host.isEmpty) return false;
     try {
+      // `/api/ready`, not `/api/health`. The sign-in screen's real question is
+      // "can you serve me", not "is your process alive" — an instance whose
+      // database is down cannot sign anyone in. And only the readiness probe
+      // touches the database, which is exactly what answering
+      // `registration_open` requires (a brand-new instance with no users still
+      // accepts its first account, however the flag is set).
       final r = await http
-          .get(base.resolve('/api/health'))
+          .get(base.resolve('/api/ready'))
           .timeout(const Duration(seconds: 4));
-      return r.statusCode == 200;
+      if (r.statusCode != 200) return false;
+      bool? open;
+      try {
+        final body = jsonDecode(r.body);
+        if (body is Map && body['registration_open'] is bool) {
+          open = body['registration_open'] as bool;
+        }
+      } catch (_) {
+        // A 200 with a body we cannot read still proves reachability, and a
+        // server older than this field simply doesn't send it. Either way the
+        // answer is "don't know", never "closed".
+      }
+      // setState only on the way OUT: this runs inside the pane's probe, and
+      // touching parent state on the way in would land during its build.
+      if (mounted) {
+        setState(() {
+          _regOrigin = origin;
+          _registrationOpen = open;
+        });
+      }
+      return true;
     } catch (_) {
       return false;
     }
@@ -2137,6 +2178,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                     errorText: _message,
                     onSubmit: _authenticate,
                     onForgotPassword: _forgotPassword,
+                    // Null (not probed yet, or a server too old to say) keeps
+                    // the entry — see AuthFormCard.allowRegister for why the
+                    // unknown case must not hide it.
+                    allowRegister: _activeRegistrationOpen ?? true,
                   ),
                 )
               : AuthFormCard(
@@ -2145,6 +2190,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   errorText: _message,
                   onSubmit: _authenticate,
                   onForgotPassword: _forgotPassword,
+                  allowRegister: _activeRegistrationOpen ?? true,
                 ),
         ),
       ),
@@ -3879,6 +3925,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                     }
                   },
                   authForm: AuthFormCard(
+                    allowRegister: _activeRegistrationOpen ?? true,
                     strings: _authFormStrings(
                       context,
                       title: migrate ? l10n.worldMigrateSignInTitle : null,

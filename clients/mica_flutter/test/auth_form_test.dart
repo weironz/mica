@@ -24,6 +24,7 @@ void main() {
     String? note,
     String? errorText,
     bool isBusy = false,
+    bool allowRegister = true,
   }) async {
     final submitted = <(AuthMode, AuthFormValue)>[];
     await tester.binding.setSurfaceSize(const Size(500, 900));
@@ -38,6 +39,7 @@ void main() {
             errorText: errorText,
             actionLabelOverride: actionLabelOverride,
             onForgotPassword: onForgot,
+            allowRegister: allowRegister,
             onSubmit: (m, f) async => submitted.add((m, f)),
           ),
         ),
@@ -45,6 +47,66 @@ void main() {
     );
     return submitted;
   }
+
+  // Registration being CLOSED is a server fact the form has to be told. It used
+  // to be told nothing at all, so a locked-down instance still advertised
+  // 「注册」 and answered a filled-in form with a bare 403.
+  testWidgets('a closed instance shows no way to register', (tester) async {
+    await pump(tester, allowRegister: false);
+    expect(find.text('注册'), findsNothing);
+    // ...and what remains is a usable sign-in form, not a stump.
+    expect(find.text('邮箱'), findsOneWidget);
+    expect(find.text('密码'), findsOneWidget);
+    expect(find.text('登录'), findsWidgets);
+  });
+
+  testWidgets('an open instance still offers both modes', (tester) async {
+    // The other direction matters just as much: defaulting to hidden would lock
+    // a brand-new instance out of creating its first account.
+    await pump(tester);
+    expect(find.text('注册'), findsWidgets);
+  });
+
+  testWidgets('a form left in register mode submits a LOGIN once the probe '
+      'reports registration closed', (tester) async {
+    // The real hazard, and the reason the mode is derived instead of synced:
+    // the flag arrives ASYNCHRONOUSLY, from a health probe that lands after the
+    // form is already on screen. Someone can be sitting in register mode when
+    // the answer comes back "closed". Pumping straight to `allowRegister: false`
+    // would prove nothing — the form starts in login mode anyway — so this
+    // enters register mode FIRST and then flips the flag under it, keeping the
+    // same State.
+    final submitted = <(AuthMode, AuthFormValue)>[];
+    await tester.binding.setSurfaceSize(const Size(500, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    Widget build({required bool allowRegister}) => MaterialApp(
+      home: Scaffold(
+        body: AuthFormCard(
+          strings: strings,
+          allowRegister: allowRegister,
+          onSubmit: (m, f) async => submitted.add((m, f)),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(build(allowRegister: true));
+    await tester.tap(find.text('注册').last);
+    await tester.pumpAndSettle();
+    expect(find.text('显示名称'), findsOneWidget, reason: 'now in register mode');
+
+    // The probe comes back: this instance is closed.
+    await tester.pumpWidget(build(allowRegister: false));
+    await tester.pumpAndSettle();
+    expect(find.text('显示名称'), findsNothing, reason: 'fell back to sign-in');
+
+    await tester.enterText(find.byType(TextField).first, 'a@example.com');
+    await tester.enterText(find.byType(TextField).last, 'password123');
+    await tester.tap(find.byType(FilledButton));
+    await tester.pump();
+    expect(submitted, hasLength(1));
+    expect(submitted.single.$1, AuthMode.login);
+  });
 
   testWidgets('logging in asks for email + password, not a display name', (
     tester,
