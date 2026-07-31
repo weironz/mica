@@ -1,0 +1,106 @@
+# The reverse proxy in front of Mica — TLS termination, ACME certificates, and
+# the `traefik-network` the app stack attaches to.
+#
+# CAPTURED FROM THE RUNNING NODE on 2026-07-31, not designed from scratch: this
+# stack predates the repo and lived only on the server (`/data/traefik`), which
+# meant a fresh machine could bring Mica up and still have no way to serve it.
+# Functionally identical to what production runs; commented-out blocks for an
+# unrelated app sharing that host were dropped, nothing live was changed.
+#
+# BRING-UP ORDER MATTERS — see docs/dr-plan.md:
+#   1. DNS A records for the app and S3 hostnames must ALREADY point here. ACME
+#      below uses the TLS-ALPN-01 challenge on :443, so a name that does not
+#      resolve to this machine cannot be issued a certificate — get this wrong
+#      and the first boot quietly burns retries instead of failing loudly.
+#   2. `docker network create traefik-network` — the app stack declares that
+#      network `external: true` and refuses to start without it.
+#   3. This stack.
+#   4. The Mica stack (deploy/docker-compose.yml).
+name: traefik
+
+services:
+  traefik:
+    # The WHOLE image reference, not just the tag, despite the variable's name —
+    # e.g. `traefik:v3.6.10`. Mirrored as-is from the node.
+    image: ${TRAEFIK_IMAGE_TAG}
+    command:
+      - "--log.level=${TRAEFIK_LOG_LEVEL}"
+      - "--accesslog=true"
+      - "--api.dashboard=true"
+      # NOTE: this serves the API on :8080 with NO authentication. It is not
+      # published to the host, and the dashboard ROUTE below sits behind basic
+      # auth — but any container on `traefik-network` (which is every Mica
+      # service) can still reach `http://traefik:8080/api/` directly. Left as
+      # production has it rather than silently changed; the dashboard route
+      # depends on the API being enabled, so read the roadmap entry before
+      # turning it off.
+      - "--api.insecure=true"
+      # Docker Provider
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      # Opt-in routing: a container is exposed only if it says so with
+      # `traefik.enable=true`. Keeps a newly added service off the public
+      # internet by default rather than by remembering.
+      - "--providers.docker.exposedByDefault=false"
+      # health check
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+      - "--entryPoints.ping.address=:8082"
+      # letsencrypt
+      - "--entryPoints.websecure.address=:443"
+      # TLS-ALPN-01, so issuance rides :443 and needs no HTTP path carve-out —
+      # but it still requires the name to resolve HERE.
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      # Certificates live in the named volume below. Losing it is survivable
+      # (they get re-issued) but it counts against Let's Encrypt rate limits, so
+      # the volume is not disposable.
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      - "--entryPoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      # prometheus
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--global.checkNewVersion=true"
+      - "--global.sendAnonymousUsage=false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping", "--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "traefik.enable=true"
+      # dashboard with https
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+      # basic auth
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+    restart: unless-stopped
+
+networks:
+  # Created OUT OF BAND, on purpose: this stack and the Mica stack both attach
+  # to it and neither may own it — whichever came down last would take the
+  # other's networking with it.
+  #   docker network create traefik-network
+  traefik-network:
+    external: true
+
+volumes:
+  traefik-certificates:
