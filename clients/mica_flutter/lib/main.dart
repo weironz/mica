@@ -19,6 +19,7 @@ import 'diagnostics.dart';
 import 'swallowed.dart';
 import 'local/local_offline.dart';
 import 'web/yjs_probe.dart';
+import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
@@ -1932,6 +1933,42 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       throw ApiException(context.l10n.exportEmptyContent);
     }
     return result;
+  }
+
+  /// The open page's Markdown TEXT, for the clipboard (CLOUD world).
+  ///
+  /// Separate from [_exportPage] on purpose: that one is content-aware and
+  /// hands back a `.zip` once the page has images, which a clipboard has no use
+  /// for. Here image references stay inline as Markdown.
+  Future<String> _pageMarkdownText() async {
+    final session = _requireSession();
+    final workspace = _requireWorkspace();
+    final bootstrap = _selectedBootstrap;
+    if (bootstrap == null) {
+      throw ApiException(context.l10n.pageOpenFirst);
+    }
+    return _api.exportMarkdown(
+      session.accessToken,
+      workspace.id,
+      bootstrap.document.id,
+    );
+  }
+
+  /// Local mirror of [_pageMarkdownText].
+  ///
+  /// Reads `_localBootstrap`, NOT the cloud `_selectedBootstrap` — the same trap
+  /// [_localExportPageHtml] documents, where reading the wrong one silently
+  /// exported an unrelated, stale document.
+  Future<String> _localPageMarkdownText() async {
+    final bootstrap = _localBootstrap;
+    if (bootstrap == null) {
+      throw ApiException(context.l10n.pageOpenFirst);
+    }
+    final markdown = _local.exportDocMarkdownText(bootstrap.document.id);
+    if (markdown == null) {
+      throw ApiException(context.l10n.exportEmptyContent);
+    }
+    return markdown;
   }
 
   Future<Uint8List> _exportFolderZip(DocumentView folder) async {
@@ -5445,6 +5482,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // content — now in BOTH worlds: local goes through the FFI engine +
       // in-house ZIP writer (see _localExportPage), matching the cloud output.
       onExportPage: local ? _localExportPage : _exportPage,
+      onCopyPageMarkdown: local ? _localPageMarkdownText : _pageMarkdownText,
       // HTML export works in BOTH worlds — local goes through the FFI engine
       // (see _localExportPageHtml), so unlike the ZIP it isn't gated off local.
       onExportPageHtml: local ? _localExportPageHtml : _exportPageHtml,
@@ -5963,6 +6001,7 @@ class WorkspaceView extends StatefulWidget {
     this.onLoadBacklinks,
     required this.onExportPageZip,
     required this.onExportPage,
+    required this.onCopyPageMarkdown,
     required this.onExportPageHtml,
     required this.onExportPagePdf,
     required this.onImportMarkdown,
@@ -6246,6 +6285,9 @@ class WorkspaceView extends StatefulWidget {
     String title,
   )
   onExportPage;
+  /// The open page as Markdown TEXT, for the clipboard. Distinct from
+  /// [onExportPage], which packages images into a ZIP — see `_pageMarkdownText`.
+  final Future<String> Function() onCopyPageMarkdown;
   final Future<String> Function(String title) onExportPageHtml;
   final Future<Uint8List?> Function(String html) onExportPagePdf;
   final Future<void> Function(String fileName, String markdown)
@@ -8255,6 +8297,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         icon: const Icon(Icons.expand_more),
                         onSelected: _onPageMenu,
                         itemBuilder: (context) => [
+                          // Copy sits above the exports and gets its own group:
+                          // it is the cheap, frequent one (grab the text, paste
+                          // it somewhere), while everything below produces a
+                          // file. Grouping it with the exports would bury it.
+                          PopupMenuItem(
+                            value: 'copy-md',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.copy_all_outlined),
+                              title: Text(context.l10n.pageCopyContent),
+                            ),
+                          ),
+                          const PopupMenuDivider(),
                           // One export, always a ZIP. The old "Export Markdown"
                           // handed back a lone .md whose images pointed at
                           // `![](photo.png)` — a file that was nowhere in the
@@ -9020,6 +9076,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Page title menu: Markdown export/import + ZIP export.
   Future<void> _onPageMenu(String value) async {
     switch (value) {
+      case 'copy-md':
+        await _copyPageMarkdown();
       case 'export-zip':
         await _exportPageFile();
       case 'export-html':
@@ -9151,6 +9209,33 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       }
       final base = title.isEmpty ? 'page' : title;
       downloadImage(bytes, '$base.pdf', 'application/pdf');
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
+      }
+    }
+  }
+
+  /// Put the open page's Markdown on the clipboard.
+  ///
+  /// Reports BOTH outcomes. `copyTextToClipboard` returns false rather than
+  /// throwing when the platform refuses (the web path can be denied outright),
+  /// and a copy that silently did nothing is worse than one that failed loudly:
+  /// the user walks away and pastes whatever was on the clipboard before.
+  Future<void> _copyPageMarkdown() async {
+    final l10n = context.l10n;
+    try {
+      final markdown = await widget.onCopyPageMarkdown();
+      if (markdown.trim().isEmpty) throw ApiException(l10n.exportEmptyContent);
+      final ok = await copyTextToClipboard(markdown);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(ok ? l10n.pageCopyContentDone : l10n.pageCopyFailed),
+        ),
+      );
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(

@@ -884,6 +884,26 @@ class LocalOffline implements LocalOfflineApi {
     return (bytes: zip, name: '$base.zip', mime: 'application/zip');
   }
 
+  /// The page's Markdown TEXT, with no packaging decision — the clipboard
+  /// sibling of [exportDocMarkdown].
+  ///
+  /// Deliberately does NOT switch to a ZIP when the page has images, which is
+  /// the one thing separating it from the export above. A download can carry an
+  /// `assets/` folder; a clipboard cannot, and the caller is pasting text
+  /// somewhere else anyway. So image references travel as plain Markdown and
+  /// dangle on the far side — the same trade every other "copy as Markdown"
+  /// makes, and the reason this is a separate method instead of a flag.
+  ///
+  /// Returns null if the store isn't open or the doc isn't in it.
+  String? exportDocMarkdownText(String docId) {
+    final store = _store;
+    if (store == null) return null;
+    if (_active?.docId == docId) _active!.flush(); // flush pending edits first
+    final doc = store.loadDoc(docId: docId);
+    if (doc == null) return null;
+    return doc.exportMarkdown();
+  }
+
   /// Export a LOCAL folder's subtree as a Markdown ZIP, through the SAME shared
   /// Rust builder + ZIP writer the cloud uses (so it's the same format and
   /// round-trips). The store reads views + document payloads itself; here we
