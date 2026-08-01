@@ -139,6 +139,7 @@
   "searchHintOpen": "打开",
   "searchHintInPage": "页内查找",
   "searchTitleMatch": "标题匹配",
+  "searchFolderMatch": "文件夹 —— 在侧栏中定位",
   "accountSaved": "已保存",
   "accountPasswordTooShort": "新密码至少需要 8 个字符",
   "accountPasswordChanged": "密码已修改。所有设备(含这台)都需要重新登录。",

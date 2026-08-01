@@ -212,6 +212,7 @@
   "searchHintOpen": "open",
   "searchHintInPage": "find in page",
   "searchTitleMatch": "Title match",
+  "searchFolderMatch": "Folder — shown in the sidebar",
   "accountSaved": "Saved",
   "accountPasswordTooShort": "New password must be at least 8 characters",
   "accountPasswordChanged": "Password changed. All devices (including this one) need to sign in again.",

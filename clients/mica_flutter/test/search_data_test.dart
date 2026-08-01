@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/api/models.dart' show SearchResult;
 import 'package:mica_flutter/ui/search_data.dart';
 
 /// Two things here are easy to get subtly wrong, and both fail *quietly*:
@@ -7,6 +8,41 @@ import 'package:mica_flutter/ui/search_data.dart';
 /// and treating the query as a regex (a search for `50%` or `(` either crashes or
 /// matches the wrong thing).
 void main() {
+  // A hit now says WHAT it is and WHERE it lives, and the dialog sends folders
+  // somewhere different (locate in the tree) than pages (open). The dangerous
+  // direction is a server too old to send `is_folder`: read that silence as
+  // "folder" and every real page gets routed to the handler that refuses to
+  // open it.
+  group('SearchResult.fromJson', () {
+    Map<String, dynamic> hit(Map<String, dynamic> extra) => {
+      'view_id': 'v1',
+      'object_id': 'o1',
+      'name': '部署资料',
+      'snippet': '',
+      'title_match': true,
+      ...extra,
+    };
+
+    test('a missing is_folder means PAGE, never folder', () {
+      final r = SearchResult.fromJson(hit({}));
+      expect(r.isFolder, isFalse);
+      expect(r.parentViewId, isNull);
+    });
+
+    test('reads a folder hit and its parent', () {
+      final r = SearchResult.fromJson(
+        hit({'is_folder': true, 'parent_view_id': 'p9'}),
+      );
+      expect(r.isFolder, isTrue);
+      expect(r.parentViewId, 'p9');
+    });
+
+    test('a null parent is the workspace root, not an error', () {
+      final r = SearchResult.fromJson(hit({'parent_view_id': null}));
+      expect(r.parentViewId, isNull);
+    });
+  });
+
   group('highlightRuns', () {
     String joined(List<HighlightRun> runs) =>
         runs.map((r) => r.hit ? '[${r.text}]' : r.text).join();

@@ -587,8 +587,13 @@ class ApiClient {
     String workspaceId,
     String query,
   ) async {
+    // include_folders: the server withholds folders by default so a caller that
+    // opens every hit as a page cannot be handed one. This client CAN tell them
+    // apart (`SearchResult.isFolder`) and reveals a folder in the tree instead,
+    // so it opts in.
     final response = await _get(
-      '/api/workspaces/$workspaceId/search?q=${Uri.encodeQueryComponent(query)}',
+      '/api/workspaces/$workspaceId/search'
+      '?q=${Uri.encodeQueryComponent(query)}&include_folders=true',
       token,
     );
     final items = response['results'] as List<dynamic>;

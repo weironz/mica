@@ -59,6 +59,7 @@ class _SearchDialog extends StatefulWidget {
   const _SearchDialog({
     required this.onSearch,
     required this.onOpen,
+    required this.onReveal,
     this.initialQuery,
   });
 
@@ -68,6 +69,12 @@ class _SearchDialog extends StatefulWidget {
   /// 「x」匹配的内容」 — the app stating as fact that the page isn't there.
   final Future<List<SearchResult>> Function(String query)? onSearch;
   final void Function(String viewId) onOpen;
+
+  /// A FOLDER hit. Folders cannot be opened — there is no document behind one —
+  /// so they get their own exit: locate the folder in the sidebar tree instead.
+  /// Routing them through [onOpen] silently did nothing at all, because the
+  /// open path already refuses folders.
+  final void Function(String viewId) onReveal;
 
   /// Pre-filled query, run immediately on open — e.g. clicking a page-property
   /// tag opens search already looking for that tag.
@@ -302,10 +309,23 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
   }
 
-  /// Open the keyboard-selected result, if there is one.
+  /// Act on a hit: pages open, folders get located in the tree.
+  ///
+  /// The ONE place that decides, because there are two ways to trigger a hit —
+  /// Enter on the keyboard selection and a tap on the row — and a rule that
+  /// lives in both is a rule that will eventually only be true in one.
+  void _activate(SearchResult result) {
+    if (result.isFolder) {
+      widget.onReveal(result.viewId);
+    } else {
+      widget.onOpen(result.viewId);
+    }
+  }
+
+  /// Act on the keyboard-selected result, if there is one.
   void _openSelected() {
     if (_selected < 0 || _selected >= _results.length) return;
-    widget.onOpen(_results[_selected].viewId);
+    _activate(_results[_selected]);
   }
 
   /// The snippet with query matches tinted.
@@ -406,14 +426,25 @@ class _SearchDialogState extends State<_SearchDialog> {
                     : null,
                 child: ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                  leading: const Icon(Icons.description_outlined, size: 18),
+                  // The icon is the only thing telling you this row will take
+                  // you somewhere different — a folder locates, a page opens.
+                  leading: Icon(
+                    result.isFolder
+                        ? Icons.folder_outlined
+                        : Icons.description_outlined,
+                    size: 18,
+                  ),
                   title: Text(result.name, overflow: TextOverflow.ellipsis),
+                  // A folder has no body, so it can only ever have matched on
+                  // its name — say that rather than leaving the row bare.
                   subtitle: result.snippet.isEmpty
-                      ? (result.titleMatch
+                      ? (result.isFolder
+                            ? Text(context.l10n.searchFolderMatch)
+                            : result.titleMatch
                             ? Text(context.l10n.searchTitleMatch)
                             : null)
                       : _snippet(context, result.snippet),
-                  onTap: () => widget.onOpen(result.viewId),
+                  onTap: () => _activate(result),
                 ),
               );
             },

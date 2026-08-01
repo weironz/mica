@@ -7905,6 +7905,40 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     });
   }
 
+  /// Land on a FOLDER that came back from search.
+  ///
+  /// A folder is not openable — `_selectView` refuses them outright — so a
+  /// folder hit routed through the page path did nothing at all, silently. What
+  /// "take me to that folder" means here is exactly what tapping it in the tree
+  /// means: focus it (which also makes it the target of the New page / New
+  /// folder buttons) and open it up.
+  ///
+  /// Reuses `_focusedNavId` rather than inventing a second notion of "the
+  /// current folder" — two of those would drift, and the tree already has one.
+  void _revealFolder(String viewId) {
+    final byId = {for (final view in widget.views) view.id: view};
+    // Not in this workspace's tree (a stale result, or it was moved away): do
+    // nothing rather than focus an id that renders nowhere.
+    if (!byId.containsKey(viewId)) return;
+    setState(() {
+      _focusedNavId = viewId;
+      _rootFocused = false;
+      _expandedViewIds.add(viewId);
+      // Every ancestor too, or the row stays hidden inside a collapsed parent
+      // and "locating" it shows the user nothing. The `seen` guard is
+      // belt-and-braces — the page tree forbids cycles (folder-only parents,
+      // enforced server-side and by a DB trigger) — but this walk should not be
+      // the thing that hangs if one ever appears.
+      final seen = <String>{viewId};
+      var cursor = byId[viewId]?.parentViewId;
+      while (cursor != null && seen.add(cursor)) {
+        _expandedViewIds.add(cursor);
+        cursor = byId[cursor]?.parentViewId;
+      }
+      _saveExpanded();
+    });
+  }
+
   /// Pref key for the active workspace's expanded set. Per-workspace so each
   /// remembers its own shape (node ids are only unique within a workspace).
   String? get _expandedPrefKey {
@@ -9318,6 +9352,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onOpen: (viewId) {
           Navigator.of(context).pop();
           widget.onOpenSearchResult(viewId);
+        },
+        onReveal: (viewId) {
+          Navigator.of(context).pop();
+          _revealFolder(viewId);
         },
       ),
     );

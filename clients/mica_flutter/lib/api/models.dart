@@ -353,6 +353,8 @@ class SearchResult {
     required this.name,
     required this.snippet,
     required this.titleMatch,
+    this.isFolder = false,
+    this.parentViewId,
   });
 
   factory SearchResult.fromJson(Map<String, dynamic> json) {
@@ -362,6 +364,11 @@ class SearchResult {
       name: json['name'] as String? ?? 'Untitled',
       snippet: json['snippet'] as String? ?? '',
       titleMatch: json['title_match'] == true,
+      // Absent on a server older than this field — and absent has to read as
+      // "page", because guessing "folder" would route a real page to the
+      // handler that refuses to open it.
+      isFolder: json['is_folder'] == true,
+      parentViewId: json['parent_view_id'] as String?,
     );
   }
 
@@ -370,6 +377,13 @@ class SearchResult {
   final String name;
   final String snippet;
   final bool titleMatch;
+
+  /// A folder rather than a page. Folders match on their NAME only — they carry
+  /// no body — so a folder hit never has a snippet.
+  final bool isFolder;
+
+  /// The containing folder, or null at the workspace root.
+  final String? parentViewId;
 }
 
 /// One page that links TO the page being viewed — the source of a reverse
