@@ -197,7 +197,10 @@ backup 容器与 postgres 共享默认网络，所以主机名就是 `postgres`�
 **加不加 rclone crypt：倾向不加**，以保住「任何 S3 客户端都能恢复」这个属性；
 威胁只剩 AK 泄露，而那种情况下 rustic 那两条腿一样暴露（AK 能删仓库）。
 
-**待做**：`Dockerfile.cli` 加 rclone、`mica-backup.sh` 加这一段。**要发版**（脚本烤在 cli 镜像里）。
+**已写完，等发版**：`Dockerfile.cli` 装了 rclone，编排本身也从 shell 收进了
+`mica-cli backup`（`crates/cli/src/backup.rs`）。**要发版才到生产**——它在 cli 镜像里。
+顺带：这条腿未配置时现在会**让整次备份失败**，除非显式 `MICA_BACKUP_ALLOW_PARTIAL=1`。
+让「备得比你以为的少」不再可能悄悄发生，正是把这段从 bash 搬走的理由。
 
 **顺带一并改**：现在是 `pg_dump | gzip`，而 **gzip 会把内容相似性打散，rustic 的 dedup 因此几乎失效**。
 应改成不压缩、交给 rustic 自己压 —— 同一批每日全库快照会从「每天一份 24 MiB」变成「增量」。

@@ -194,12 +194,13 @@ services:
       # backup container shares the default network with postgres, so point it at
       # the internal host, e.g. in .env:
       #   MICA_BACKUP_PGURL=postgres://mica:<POSTGRES_PASSWORD>@postgres:5432/mica
-      # Unset → mica-backup.sh skips pg_dump and warns (content-only backup).
+      # Unset → the database leg is SKIPPED, and `mica-cli backup` then fails
+      # the run rather than exiting 0 on a content-only backup.
       MICA_BACKUP_PGURL: ${MICA_BACKUP_PGURL:-}
-      # Dead man's switch: mica-backup-loop.sh pings this on success and
+      # Dead man's switch: `mica-cli backup daemon` pings this on success and
       # <URL>/fail on a failed run. Unset → no ping. e.g. a healthchecks.io URL.
       HEALTHCHECK_URL: ${HEALTHCHECK_URL:-}
-      # opendal S3 backend → Aliyun OSS. mica-backup.sh renders these into
+      # opendal S3 backend → Aliyun OSS. mica-cli renders these into
       # /etc/rustic/rustic.toml (virtual-host style is forced on, required for
       # OSS). Each value stands alone so the AccessKey rotates without touching
       # the rest; use a fresh OSS_ROOT prefix to share a bucket with another repo.
@@ -210,7 +211,7 @@ services:
       OSS_SECRET_ACCESS_KEY: ${OSS_SECRET_ACCESS_KEY:-}
       OSS_ROOT: ${OSS_ROOT:-mica}
       # ── Blob leg: RustFS S3 → OSS, mirrored by rclone, NOT through rustic
-      # (mica-backup.sh 4c explains why immutable blobs want a mirror, not
+      # (crates/cli/src/backup.rs explains why immutable blobs want a mirror, not
       # snapshots). Any of these unset → that leg is skipped with a WARN and
       # images stay covered only indirectly, via the content export.
       # This block is an explicit ALLOW-LIST: a variable set in the node's .env

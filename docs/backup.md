@@ -107,13 +107,13 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    ```bash
    docker compose --profile backup up -d --no-deps backup   # starts + renders the rustic config
    docker exec mica-backup-1 rustic init                     # create the repo (once)
-   docker exec mica-backup-1 mica-backup.sh                  # first backup now (else it waits for BACKUP_HOUR)
+   docker exec mica-backup-1 mica-cli backup run                  # first backup now (else it waits for BACKUP_HOUR)
    docker logs -f mica-backup-1
    ```
    > Sharing a bucket with an existing repo? Give this one its own prefix via
    > `OSS_ROOT=<prefix>` in `.env` (else init fails, "config file already exists").
 
-The container runs `mica-backup.sh` (export → per-workspace snapshot → forget
+The container runs `mica-cli backup daemon` (export → per-workspace snapshot → forget
 --prune) at `${BACKUP_HOUR}:00` daily and once on (re)start; the staging tree
 lives in the `mica-prod-backup` volume.
 
@@ -128,7 +128,7 @@ the repo config (rendered from env on start), so plain `rustic` works. (Don't us
 docker exec mica-backup-1 rustic init
 
 # Run a backup right now (what the daily loop calls; export → snapshot → forget):
-docker exec mica-backup-1 mica-backup.sh
+docker exec mica-backup-1 mica-cli backup run
 
 # List snapshots grouped by workspace (label = workspace id, tag ws=<name>):
 docker exec mica-backup-1 rustic snapshots --group-by label
@@ -166,7 +166,7 @@ half-restored prod DB is worse than a down one.
 docker exec mica-backup-1 rustic restore latest /tmp/pg --filter-label _pgdump
 docker cp mica-backup-1:/tmp/pg/mica.sql ./mica.sql
 # The _pgdump lineage is UNCOMPRESSED on purpose (rustic dedups plain SQL well,
-# gzip defeats it — see mica-backup.sh 3b). So there is no `gzip -t` here; the
+# gzip defeats it — see crates/cli/src/backup.rs). So there is no `gzip -t` here; the
 # integrity guarantee comes from rustic itself, which verifies chunk hashes on
 # restore. Sanity-check it looks like a dump instead:
 head -3 ./mica.sql && grep -c '^COPY public\.' ./mica.sql   # header + table count
@@ -227,7 +227,7 @@ PITR. Two mitigations before you drop prod: (1) if the old volume is still
 readable, take a fresh `pg_dump` off it first and restore THAT instead; (2)
 announce the restore point so users know which edits to redo. Widen the window by
 lowering `BACKUP_HOUR` cadence or adding manual `docker exec mica-backup-1
-mica-backup.sh` runs before risky changes.
+mica-cli backup run` runs before risky changes.
 
 ### Roll back a bad migration (the `pre-*.sql.gz` restore point)
 
