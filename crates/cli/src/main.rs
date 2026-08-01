@@ -11,6 +11,7 @@
 //! into a mirrored directory that an external tool (e.g. restic → Aliyun OSS) can
 //! then snapshot incrementally.
 
+mod backup;
 mod client;
 mod config;
 
@@ -47,6 +48,14 @@ enum Command {
   /// Export workspaces to a directory of Markdown + images (mirrored) — point an
   /// external backup tool (restic / rclone / borg) at the output.
   Export(ExportArgs),
+  /// The scheduled backup: content + database + object bytes, off-site.
+  ///
+  /// Replaces the `mica-backup.sh` / `mica-backup-loop.sh` pair. The reason it
+  /// is code and not shell is in `backup.rs`: a shell run is an exit code, so
+  /// "backed up less than you think" and "backed up everything" looked the same
+  /// — and did, in production, for months.
+  #[command(subcommand)]
+  Backup(BackupCmd),
   /// Serve the Mica MCP server over stdio (for Claude Code / Desktop and any
   /// MCP client): list, read, create and write documents through the REST API.
   ///
@@ -137,6 +146,17 @@ enum WsCmd {
   List,
 }
 
+#[derive(Subcommand)]
+enum BackupCmd {
+  /// Run one backup now and exit non-zero if it covered less than it should.
+  Run,
+  /// Run one on start, then once a day at BACKUP_HOUR. The container entrypoint.
+  ///
+  /// A failed run is logged and pinged to the dead man's switch, never fatal —
+  /// the loop has to survive a bad night to try again the next one.
+  Daemon,
+}
+
 #[derive(Args)]
 struct ExportArgs {
   /// Output directory (mirrored: unchanged files kept, removed content pruned).
@@ -174,6 +194,8 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
+    Command::Backup(BackupCmd::Run) => cmd_backup_run(&cli, &cfg),
+    Command::Backup(BackupCmd::Daemon) => cmd_backup_daemon(&cli, &cfg),
     Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
     Command::RehostImages(args) => cmd_rehost_images(&cli, &cfg, args),
   }
@@ -388,6 +410,70 @@ fn cmd_ws_list(cli: &Cli, cfg: &Config) -> Result<()> {
 }
 
 // ---------------------------------------------------------------- export
+
+/// One scheduled backup, then a verdict on what it actually covered.
+///
+/// The export runs IN PROCESS — this binary already is the exporter, so the old
+/// arrangement (a shell script shelling out to `mica-cli export`) had a Rust
+/// program being conducted by bash. Now it is the other way round.
+fn cmd_backup_run(cli: &Cli, cfg: &Config) -> Result<()> {
+  let settings = backup::Settings::from_env()?;
+  let report = backup::run_once(&settings, |dir| {
+    cmd_export(
+      cli,
+      cfg,
+      &ExportArgs {
+        out: dir.to_path_buf(),
+        ws: None,
+        no_prune: false,
+      },
+    )
+  })?;
+  backup::log(&format!("run finished:\n{}", report.summary()));
+  // The verdict is separate from the run on purpose: everything below the
+  // failure line still happened, and the operator needs to be told what DID get
+  // backed up even when the answer is "not enough".
+  backup::verdict(&report, settings.allow_partial)
+}
+
+/// The container entrypoint: one run on start, then daily at `BACKUP_HOUR`.
+///
+/// A failed run must never kill the loop — tonight's outage is not a reason to
+/// stop trying tomorrow — so failures are logged and pinged, not propagated.
+fn cmd_backup_daemon(cli: &Cli, cfg: &Config) -> Result<()> {
+  let hour: u32 = std::env::var("BACKUP_HOUR")
+    .ok()
+    .and_then(|h| h.parse().ok())
+    .filter(|h| *h < 24)
+    .unwrap_or(3);
+  let on_start = std::env::var("BACKUP_ON_START").as_deref() != Ok("0");
+
+  let mut run = |first: bool| {
+    if !first {
+      backup::log("starting scheduled run");
+    }
+    match cmd_backup_run(cli, cfg) {
+      Ok(()) => {
+        backup::log("run ok");
+        backup::ping_healthcheck("");
+      }
+      Err(error) => {
+        eprintln!("[{}] mica-backup: run FAILED — {error:#}", chrono::Local::now().to_rfc3339());
+        backup::ping_healthcheck("/fail");
+      }
+    }
+  };
+
+  if on_start {
+    run(true);
+  }
+  loop {
+    let wait = backup::seconds_until(chrono::Local::now(), hour);
+    backup::log(&format!("sleeping {wait}s until {hour:02}:00"));
+    std::thread::sleep(std::time::Duration::from_secs(wait as u64));
+    run(false);
+  }
+}
 
 fn cmd_export(cli: &Cli, cfg: &Config, args: &ExportArgs) -> Result<()> {
   let client = authed_client(cli, cfg)?;

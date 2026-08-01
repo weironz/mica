@@ -57,14 +57,16 @@ RUN apt-get update \
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
-# ca-certificates: TLS to the API + OSS. jq: parse export manifest.json.
-# curl: the dead man's switch ping in mica-backup-loop.sh (kept in the image).
+# ca-certificates: TLS to the API + OSS. curl: needed right below to fetch the
+# PGDG signing key at build time. (jq is gone — the export manifest is parsed by
+# serde_json now, and the dead man's switch pings through reqwest; both moved
+# into mica-cli when the backup scripts did.)
 # postgresql-client-16: pg_dump for the off-site DB snapshot (mica-backup.sh).
 # It must be v16+ to dump the prod postgres:16 server — a pg_dump older than the
 # server aborts on a version mismatch — so pull it from PGDG rather than
 # bookworm's stock 15.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl jq \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && curl -fsSL -o /usr/share/keyrings/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
  && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \
@@ -74,12 +76,9 @@ RUN apt-get update \
 COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
 COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
-COPY deploy/mica-backup.sh /usr/local/bin/mica-backup.sh
-COPY deploy/mica-backup-loop.sh /usr/local/bin/mica-backup-loop.sh
-# Strip any CR (Windows checkout) before chmod — a `\r` in the shebang makes the
-# container fail with `/usr/bin/env: 'bash\r': No such file or directory`.
-RUN sed -i 's/\r$//' /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh \
- && chmod +x /usr/local/bin/mica-backup.sh /usr/local/bin/mica-backup-loop.sh
 ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
-# The loop runs mica-backup.sh (export → per-workspace snapshot → forget) daily.
-ENTRYPOINT ["/usr/local/bin/mica-backup-loop.sh"]
+# The backup orchestration used to be two shell scripts copied in here. It is
+# now `mica-cli backup` — the same external tools (rustic / rclone / pg_dump),
+# but the run reports which legs actually ran and refuses to exit 0 having
+# quietly covered less than a full instance. See crates/cli/src/backup.rs.
+ENTRYPOINT ["/usr/local/bin/mica-cli", "backup", "daemon"]
