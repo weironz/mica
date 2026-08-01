@@ -107,14 +107,14 @@ Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏�
 cp deploy/.env.prod.example .env.prod
 vi .env.prod          # 填 SERVER_IP,以及足够强的 JWT_SECRET 和各种口令
                       #   openssl rand -hex 32
-./deploy/deploy.sh    # 构建 Flutter bundle + API 镜像,然后全部启动
+./deploy/deploy-from-source.sh    # 构建 Flutter bundle + API 镜像,然后全部启动
 ```
 
 然后打开 `http://<SERVER_IP>/`。对外端口是 **80**(应用)和 **9000**(RustFS——
 浏览器直接对它做预签名上传下载,所以 `S3_ENDPOINT` **必须是浏览器可达的地址**)。
 Postgres 只在 compose 网络内部可达。
 
-`./deploy/deploy.sh --web-only` 只重建 Flutter bundle;nginx 直接读目录,不用重启。
+`./deploy/deploy-from-source.sh --web-only` 只重建 Flutter bundle;nginx 直接读目录,不用重启。
 
 </details>
 

@@ -2,7 +2,7 @@
 # the Rust API, PostgreSQL, and RustFS object storage.
 #
 #   cp deploy/.env.prod.example .env.prod   # then edit (SERVER_IP, secrets!)
-#   ./deploy/deploy.sh                      # build + (re)start everything
+#   ./deploy/deploy-from-source.sh                      # build + (re)start everything
 #
 # Only ports 80 (app) and 9000 (S3, presigned browser access) are public.
 

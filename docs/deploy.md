@@ -29,7 +29,7 @@ reachable only inside the compose network.
 ```bash
 cp deploy/.env.prod.example .env.prod
 vi .env.prod          # SERVER_IP + strong JWT_SECRET / passwords (openssl rand -hex 32)
-./deploy/deploy.sh    # builds web bundle + api image, starts the stack
+./deploy/deploy-from-source.sh    # builds web bundle + api image, starts the stack
 ```
 
 Then open `http://<SERVER_IP>/`. Database migrations are embedded in the
@@ -43,8 +43,8 @@ binary and run automatically at startup.
 
 ```bash
 git pull
-./deploy/deploy.sh              # full: web + api image + restart
-./deploy/deploy.sh --web-only   # frontend-only change: atomic bundle swap, no restart
+./deploy/deploy-from-source.sh              # full: web + api image + restart
+./deploy/deploy-from-source.sh --web-only   # frontend-only change: atomic bundle swap, no restart
 ```
 
 `index.html` / the service worker are served with `no-cache`, so a plain

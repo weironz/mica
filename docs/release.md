@@ -35,7 +35,7 @@
 - 它的 `authorized_keys` 是
   `restrict,command="/usr/bin/sudo /usr/local/sbin/mica-deploy"` —— `restrict` 关掉
   端口转发/PTY/agent 转发,`command=` 钉死入口。
-- 那个脚本([`deploy/mica-deploy.sh`](../deploy/mica-deploy.sh))只接受
+- 那个脚本([`deploy/node-deploy-policy.sh`](../deploy/node-deploy-policy.sh))只接受
   `deploy X.Y.Z [compose-sha256]`,版本号必须是不可变的三段式。
 
 **所以这把密钥泄露了能做什么?** 把生产滚到一个**已经发布到 registry 的版本**。仅此
@@ -65,7 +65,7 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 > `exec bash` 就拿到了 root shell。`authorized_keys` 和 `sudoers` 同理。CI 只能**读**
 > 部署输出里的 `script_sha=` 来发现漂移。
 >
-> **漂移自愈**:`just deploy-prod` 现在会**从 tag 同步 `mica-deploy.sh`**(和它同步 compose
+> **漂移自愈**:`just deploy-prod` 现在会**从 tag 同步 `node-deploy-policy.sh`**(和它同步 compose
 > 一样,`bash -n` 校验 + 原子替换),所以脚本改动后的首次完整部署会自动清掉漂移 —— 不用
 > 记着单独跑 `sync-deploy-script`。gh-Deploy(受限 key)路径按设计**仍只能 WARN 不能装**,
 > 所以看到 `deploy policy … drift` warning 时,跑一次 `just deploy-prod` 即消。

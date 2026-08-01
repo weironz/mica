@@ -42,7 +42,7 @@ tag="v$version"
 cd "$NODE_DIR" || fail "$NODE_DIR missing"
 
 # Announce which build of THIS script is running. CI compares it against
-# `git show <tag>:deploy/mica-deploy.sh | sha256sum` and fails the deploy on a
+# `git show <tag>:deploy/node-deploy-policy.sh | sha256sum` and fails the deploy on a
 # mismatch — which turns "the node quietly runs an older policy than the repo
 # describes" into a loud refusal.
 #

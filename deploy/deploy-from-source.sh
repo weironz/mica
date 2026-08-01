@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and (re)deploy the whole stack on this machine.
-#   ./deploy/deploy.sh            # full build + up
-#   ./deploy/deploy.sh --web-only # only rebuild/replace the Flutter bundle
+#   ./deploy/deploy-from-source.sh            # full build + up
+#   ./deploy/deploy-from-source.sh --web-only # only rebuild/replace the Flutter bundle
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

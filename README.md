@@ -118,14 +118,14 @@ need to bring your own.
 cp deploy/.env.prod.example .env.prod
 vi .env.prod          # SERVER_IP, plus a strong JWT_SECRET and passwords
                       #   openssl rand -hex 32
-./deploy/deploy.sh    # builds the Flutter bundle + API image, starts everything
+./deploy/deploy-from-source.sh    # builds the Flutter bundle + API image, starts everything
 ```
 
 Then open `http://<SERVER_IP>/`. Public ports are **80** (app) and **9000**
 (RustFS, because the browser presigns straight against it — so `S3_ENDPOINT`
 must be browser-reachable). Postgres stays inside the compose network.
 
-`./deploy/deploy.sh --web-only` rebuilds just the Flutter bundle; nginx serves it
+`./deploy/deploy-from-source.sh --web-only` rebuilds just the Flutter bundle; nginx serves it
 live, no restart needed.
 
 </details>

@@ -85,10 +85,10 @@ jobs:
           # actually matched main exactly. A false alarm teaches people to ignore
           # the alarm.
           git fetch -q --depth 1 origin main 2>/dev/null || true
-          want=$(git show FETCH_HEAD:deploy/mica-deploy.sh 2>/dev/null | sha256sum | cut -c1-16)
+          want=$(git show FETCH_HEAD:deploy/node-deploy-policy.sh 2>/dev/null | sha256sum | cut -c1-16)
           got=$(grep -oP 'script_sha=\K\S+' /tmp/deploy.log || true)
           if [ -z "$want" ]; then
-            echo "::warning::could not read deploy/mica-deploy.sh from the default branch — drift check skipped"
+            echo "::warning::could not read deploy/node-deploy-policy.sh from the default branch — drift check skipped"
           elif [ -n "$got" ] && [ "$got" != "$want" ]; then
             echo "::warning::node runs deploy policy $got, default branch has $want — run 'just sync-deploy-script'"
           fi

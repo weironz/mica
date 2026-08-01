@@ -241,21 +241,25 @@ docker-push tag:
 # so a truncated transfer can never leave a half-written policy behind.
 # Defaults to `main`, not to a release tag: the deploy policy and the application
 # version are independent timelines. Pinning it to a tag also breaks for every
-# tag older than the script itself — v0.12.8 has no deploy/mica-deploy.sh at all.
-[doc("Install deploy/mica-deploy.sh on the node from a ref (root, manual)")]
+# tag older than the script itself — v0.12.8 has no deploy/node-deploy-policy.sh at all.
+[doc("Install deploy/node-deploy-policy.sh on the node from a ref (root, manual)")]
 sync-deploy-script ref="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
     tag="{{ref}}"
     git fetch -q origin main
-    git show "$tag:deploy/mica-deploy.sh" \
+    # Same fallback as deploy-prod: tags older than the 2026-07-31 rename carry
+    # it as deploy/mica-deploy.sh.
+    policy=deploy/node-deploy-policy.sh
+    git cat-file -e "$tag:$policy" 2>/dev/null || policy=deploy/mica-deploy.sh
+    git show "$tag:$policy" \
       | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
           && chown root:root /usr/local/sbin/mica-deploy.new \
           && chmod 0755 /usr/local/sbin/mica-deploy.new \
           && bash -n /usr/local/sbin/mica-deploy.new \
           && mv /usr/local/sbin/mica-deploy.new /usr/local/sbin/mica-deploy \
           && sha256sum /usr/local/sbin/mica-deploy"
-    echo "want: $(git show "$tag:deploy/mica-deploy.sh" | sha256sum)"
+    echo "want: $(git show "$tag:$policy" | sha256sum)"
 
 [doc("Roll prod to an already-published version, e.g. `just deploy-prod 0.5.1`")]
 deploy-prod version:
@@ -290,13 +294,18 @@ deploy-prod version:
       && sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=$tag|' .env \
       && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
     # Self-heal the deploy policy the same way as compose: install the tag's
-    # mica-deploy.sh so the node script never drifts from the repo (the gh-Deploy
+    # node-deploy-policy.sh so the node script never drifts from the repo (the gh-Deploy
     # path can only WARN on drift by design — the restricted key must not install
     # the policy that restricts it; this root path is the blessed out-of-band
     # installer, so doing it here means a full deploy always clears any drift).
     # `bash -n` syntax-checks before the atomic mv, so a broken script can't land.
-    echo "==> syncing deploy policy (mica-deploy.sh from $tag)"
-    git show "$tag:deploy/mica-deploy.sh" \
+    echo "==> syncing deploy policy (node-deploy-policy.sh from $tag)"
+    # Tags cut before the 2026-07-31 rename carry this as deploy/mica-deploy.sh.
+    # Fall back instead of failing: THIS recipe is the fallback deploy path, and
+    # it has to keep working for versions that are already published.
+    policy=deploy/node-deploy-policy.sh
+    git cat-file -e "$tag:$policy" 2>/dev/null || policy=deploy/mica-deploy.sh
+    git show "$tag:$policy" \
       | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
           && chown root:root /usr/local/sbin/mica-deploy.new \
           && chmod 0755 /usr/local/sbin/mica-deploy.new \
@@ -354,7 +363,7 @@ verify-prod version:
 restore-drill dump:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Ship the repo's copy each run, same as deploy-prod does with mica-deploy.sh:
+    # Ship the repo's copy each run, same as deploy-prod does with node-deploy-policy.sh:
     # a drill script that has drifted from the repo is one more thing to distrust.
     cat deploy/restore-drill.sh | ssh {{node}} "cat > /tmp/mica-restore-drill.sh"
     ssh {{node}} "bash /tmp/mica-restore-drill.sh /data/mica/$(basename '{{dump}}')"
