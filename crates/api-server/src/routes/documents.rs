@@ -160,6 +160,14 @@ pub async fn list_views(
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
   q: String,
+  /// Also match FOLDERS (by name — they carry no body). Off by default, and the
+  /// default is the whole point: the app's search dialog opens a hit as a page,
+  /// so a folder among those results would send it to open a document that does
+  /// not exist. Callers that can tell the two apart opt in — the MCP layer does,
+  /// because an agent's reason to look for a folder is to file something under
+  /// it.
+  #[serde(default)]
+  include_folders: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,6 +177,16 @@ struct SearchResult {
   name: String,
   snippet: String,
   title_match: bool,
+  /// The containing folder, or null at the workspace root.
+  ///
+  /// Here because finding a page and then acting NEAR it — filing a sibling
+  /// beside it, saying where it lives — otherwise costs a full workspace tree
+  /// listing, orders of magnitude more than the hit itself on a large
+  /// workspace. It is one column that was already on the row.
+  parent_view_id: Option<Uuid>,
+  /// True when the hit is a folder rather than a page. Can only be true if the
+  /// caller passed `include_folders`.
+  is_folder: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -192,7 +210,7 @@ pub async fn search_workspace(
     return Ok(Json(SearchResponse { results: vec![] }));
   }
 
-  let results = search_views(&state.db, workspace_id, needle).await?;
+  let results = search_views(&state.db, workspace_id, needle, query.include_folders).await?;
   Ok(Json(SearchResponse { results }))
 }
 
@@ -204,6 +222,8 @@ struct SearchRow {
   object_id: Uuid,
   name: String,
   content_text: Option<String>,
+  parent_view_id: Option<Uuid>,
+  object_type: String,
 }
 
 /// The full-text search behind [`search_workspace`], extracted so a DB test can
@@ -229,16 +249,22 @@ async fn search_views(
   db: &PgPool,
   workspace_id: Uuid,
   needle: &str,
+  include_folders: bool,
 ) -> ApiResult<Vec<SearchResult>> {
   let pattern = like_pattern(needle);
+  // Folders ride the SAME statement rather than getting their own: they have no
+  // `document_yrs_base` row, so the LEFT JOIN already leaves `content_text` NULL
+  // and the body half of the predicate is simply never true for them. A folder
+  // therefore matches by name only, which is the whole of what a folder is.
   let rows = sqlx::query_as::<_, SearchRow>(
     r#"
-      SELECT v.id AS view_id, v.object_id, v.name, yb.content_text
+      SELECT v.id AS view_id, v.object_id, v.name, yb.content_text,
+             v.parent_view_id, v.object_type::text AS object_type
       FROM views v
       LEFT JOIN document_yrs_base yb ON yb.document_id = v.object_id
       WHERE v.workspace_id = $1
         AND v.is_deleted = false
-        AND v.object_type::text = 'document'
+        AND ($3 OR v.object_type::text = 'document')
         AND (v.name ILIKE $2 ESCAPE '\' OR yb.content_text ILIKE $2 ESCAPE '\')
       ORDER BY v.updated_at DESC
       LIMIT 50
@@ -246,6 +272,7 @@ async fn search_views(
   )
   .bind(workspace_id)
   .bind(&pattern)
+  .bind(include_folders)
   .fetch_all(db)
   .await?;
 
@@ -269,6 +296,8 @@ async fn search_views(
           name: row.name,
           snippet,
           title_match,
+          parent_view_id: row.parent_view_id,
+          is_folder: row.object_type != "document",
         }
       })
       .collect(),
@@ -4497,6 +4526,64 @@ mod tests {
       .unwrap();
     }
 
+    /// Folders are findable only on request, and every hit says where it lives.
+    ///
+    /// Both halves come from the same complaint: an agent that had found a page
+    /// and wanted to file a new one BESIDE it had no way to learn the parent
+    /// short of listing the entire workspace tree — hundreds of pages fetched to
+    /// read one id. `parent_view_id` is that id, and folder hits let the same
+    /// one call answer "where is the folder called X".
+    ///
+    /// The opt-in is not decoration: the app's search dialog opens a hit as a
+    /// page, so folders arriving unasked would send it after a document that
+    /// does not exist.
+    #[tokio::test]
+    async fn search_finds_folders_only_on_request_and_always_reports_the_parent() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let folder = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$1,'folder'::object_type,'部署资料','0',$3)",
+      )
+      .bind(folder)
+      .bind(ws)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let (page, _doc) =
+        seed_document(&db, ws, user, "部署流程自动化", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(folder)
+        .bind(page)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      // Default: the folder is invisible even though its name matches.
+      let hits = search_views(&db, ws, "部署", false).await.unwrap();
+      assert_eq!(hits.len(), 1, "pages only by default: {hits:?}");
+      assert_eq!(hits[0].view_id, page);
+      assert!(!hits[0].is_folder);
+      assert_eq!(
+        hits[0].parent_view_id,
+        Some(folder),
+        "a hit must say which folder it sits in — that is the whole point"
+      );
+
+      // Opt in: the folder shows up, flagged, and matched by NAME.
+      let hits = search_views(&db, ws, "部署", true).await.unwrap();
+      assert_eq!(hits.len(), 2, "page + folder: {hits:?}");
+      let f = hits.iter().find(|h| h.view_id == folder).expect("folder hit");
+      assert!(f.is_folder);
+      assert!(f.title_match, "folders can only ever match on their name");
+      assert!(f.snippet.is_empty(), "a folder has no body to snippet");
+      assert_eq!(f.parent_view_id, None, "this folder sits at the root");
+    }
+
     /// FTS M1 end-to-end over the real query: title hits, CJK body substrings
     /// (3-char and 2-char), a body-only hit's snippet + title_match=false, and
     /// LIKE-metacharacter escaping.
@@ -4511,31 +4598,31 @@ mod tests {
       set_content_text(&db, doc_b, "no chinese here, just english text").await;
 
       // 3+ char CJK body hit → doc A only, title_match=false, snippet has the hit.
-      let hits = search_views(&db, ws, "全文搜索").await.unwrap();
+      let hits = search_views(&db, ws, "全文搜索", false).await.unwrap();
       assert_eq!(hits.len(), 1, "one body hit: {hits:?}");
       assert_eq!(hits[0].view_id, view_a);
       assert!(!hits[0].title_match, "matched the body, not the title");
       assert!(hits[0].snippet.contains("全文搜索"), "snippet: {}", hits[0].snippet);
 
       // 2-char CJK substring still matches (substring fallback, no tokenizer).
-      let hits = search_views(&db, ws, "索引").await.unwrap();
+      let hits = search_views(&db, ws, "索引", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
 
       // Title hit → title_match=true (body may or may not also match).
-      let hits = search_views(&db, ws, "会议").await.unwrap();
+      let hits = search_views(&db, ws, "会议", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
       assert!(hits[0].title_match);
 
       // A latin title hit resolves the other doc.
-      let hits = search_views(&db, ws, "roadmap").await.unwrap();
+      let hits = search_views(&db, ws, "roadmap", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_b);
       assert!(hits[0].title_match);
 
       // A query matching neither returns nothing.
-      assert!(search_views(&db, ws, "缺失关键词").await.unwrap().is_empty());
+      assert!(search_views(&db, ws, "缺失关键词", false).await.unwrap().is_empty());
     }
 
     /// A `%` in the query is a LITERAL, not a wildcard: a search for `100%` must
@@ -4551,7 +4638,7 @@ mod tests {
       set_content_text(&db, doc_q, "confident to 100 percent sure").await;
 
       // Literal "100%" matches only the doc that actually contains "100%".
-      let hits = search_views(&db, ws, "100%").await.unwrap();
+      let hits = search_views(&db, ws, "100%", false).await.unwrap();
       assert_eq!(
         hits.len(),
         1,
@@ -4638,13 +4725,13 @@ mod tests {
       )
       .await;
 
-      let hits = search_views(&db, ws, "正文内容").await.unwrap();
+      let hits = search_views(&db, ws, "正文内容", false).await.unwrap();
       assert_eq!(hits.len(), 1, "body searchable at once: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
 
       assert_eq!(
-        search_views(&db, ws, "导入页").await.unwrap().len(),
+        search_views(&db, ws, "导入页", false).await.unwrap().len(),
         1,
         "the title is searchable too"
       );

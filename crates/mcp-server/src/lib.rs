@@ -803,11 +803,16 @@ impl MicaMcp {
   // index did not exist and fell back to reading whole pages to find a
   // phrase. Say what it actually does, and say what it costs.
   #[tool(
-    description = "Find pages by TITLE **and body text**. Returns each hit's view_id, \
-                       object_id, page name, and a snippet of the matching body text \
-                       (`title_match` tells you which side matched). Prefer this over reading \
-                       pages when looking for something: a hit costs a fraction of a whole \
-                       document, and the snippet is often answer enough on its own.",
+    description = "Find pages AND FOLDERS by TITLE **and body text**. Returns each hit's \
+                       view_id, object_id, name, a snippet of the matching body text \
+                       (`title_match` tells you which side matched), `parent_view_id` (the \
+                       containing folder, null at the workspace root), and `is_folder`. Prefer \
+                       this over reading pages when looking for something: a hit costs a \
+                       fraction of a whole document, and the snippet is often answer enough on \
+                       its own. ALSO reach for it instead of mica_list_pages when you need to \
+                       FILE a page somewhere — search for anything already sitting in that spot \
+                       and reuse its `parent_view_id`, which costs one hit instead of a whole \
+                       workspace tree. Folders match by name only (they carry no body).",
     annotations(read_only_hint = true)
   )]
   async fn mica_search(
@@ -818,9 +823,14 @@ impl MicaMcp {
     }): Parameters<SearchArgs>,
   ) -> Result<CallToolResult, McpError> {
     let q = urlencode(&query);
+    // Folders are opt-in server-side because the APP's search dialog opens a hit
+    // as a page. An agent is the caller that both wants them and can tell them
+    // apart (`is_folder`), so this layer is where the opt-in belongs.
     tool_result(
       self
-        .get(&format!("/api/workspaces/{workspace_id}/search?q={q}"))
+        .get(&format!(
+          "/api/workspaces/{workspace_id}/search?q={q}&include_folders=true"
+        ))
         .await,
     )
   }
@@ -1859,8 +1869,15 @@ impl ServerHandler for MicaMcp {
         "Mica note-workspace MCP. Documents are Markdown — the server derives block ops, so \
          you write Markdown, not block JSON.\n\
          \n\
-         Navigate: mica_list_workspaces -> mica_list_pages -> mica_read_document / \
-         mica_get_outline.\n\
+         Navigate: mica_list_workspaces -> mica_search -> mica_read_document / \
+         mica_get_outline. Reach for mica_list_pages only when you genuinely need the SHAPE of \
+         the whole workspace; on a large one it is the most expensive call here.\n\
+         \n\
+         LOCATING things, including where to PUT a new page: mica_search matches pages AND \
+         folders by name (plus page body text), and every hit carries `parent_view_id` and \
+         `is_folder`. To file a page beside an existing one, search for that one and reuse its \
+         `parent_view_id` — one hit instead of a whole tree. Only fall back to mica_list_pages \
+         when a name is not enough to find the spot.\n\
          \n\
          READ efficiently, do not pull whole pages: mica_list_pages returns the WHOLE \
          workspace tree (folders + pages, ids + names) in ONE call. mica_read_document takes \
