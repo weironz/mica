@@ -178,6 +178,9 @@ impl AppConfig {
       .unwrap_or(10);
 
     let jwt_secret = env::var("JWT_SECRET").map_err(|_| ConfigError::MissingJwtSecret)?;
+    // Refuse to start rather than serve forgeable tokens. See
+    // [`validate_jwt_secret`] for why this is strict only in production.
+    validate_jwt_secret(&jwt_secret, environment)?;
 
     // 1h default (was 24h). Because the client refreshes transparently, a
     // shorter access token shrinks the window in which a token that SHOULD be
@@ -319,8 +322,104 @@ pub enum ConfigError {
   #[error("JWT_SECRET is required")]
   MissingJwtSecret,
 
+  /// Set, but to something that must never sign a token in production.
+  ///
+  /// A separate variant from [`ConfigError::MissingJwtSecret`] on purpose: the
+  /// operator's next move differs. Missing means "add the line"; weak means
+  /// "the line you copied from the template is still there".
+  #[error("JWT_SECRET {reason}")]
+  WeakJwtSecret { reason: &'static str },
+
   #[error("HTTP_ADDR is invalid")]
   InvalidSocketAddr { source: std::net::AddrParseError },
+}
+
+/// Is this `JWT_SECRET` fit to sign tokens?
+///
+/// A free function so the policy is testable without building a whole
+/// [`AppConfig`] — same shape as [`registration_open`], and for the same reason:
+/// the polarity IS the feature.
+///
+/// The hole this closes: `deploy/.env.prod.example` shipped `JWT_SECRET=change-me`
+/// and nothing checked it, so an operator who copied the template and missed one
+/// line got a working instance whose token signing key is a constant published in
+/// a public repository — anyone could mint a token for any user, and no revocation
+/// reaches a forged one because access tokens are verified without a database.
+///
+/// Strict only in production. Development keeps its throwaway value: making
+/// `just dev` demand a real secret would buy nothing and cost the fast path.
+/// EMPTY fails everywhere, because `FOO=` reads as set (`env::var` returns
+/// `Ok("")`) and an empty signing key is indefensible in any environment.
+pub fn validate_jwt_secret(raw: &str, environment: Environment) -> Result<(), ConfigError> {
+  if raw.trim().is_empty() {
+    return Err(ConfigError::WeakJwtSecret {
+      reason: "is empty — an empty signing key signs anything",
+    });
+  }
+  if environment != Environment::Production {
+    return Ok(());
+  }
+  // Substring, not equality: the shipped placeholders are `change-me` and
+  // `change-me-in-development`, and someone who "edits" one by appending is not
+  // meaningfully better off.
+  let lowered = raw.to_ascii_lowercase();
+  const PLACEHERS: [&str; 4] = ["change-me", "changeme", "your-secret", "secret-key"];
+  if PLACEHERS.iter().any(|p| lowered.contains(p)) {
+    return Err(ConfigError::WeakJwtSecret {
+      reason: "is still the template placeholder — generate one with `openssl rand -hex 32`",
+    });
+  }
+  if raw.trim().len() < 32 {
+    return Err(ConfigError::WeakJwtSecret {
+      reason: "is shorter than 32 characters — generate one with `openssl rand -hex 32`",
+    });
+  }
+  Ok(())
+}
+
+#[cfg(test)]
+mod jwt_secret_strength {
+  use super::*;
+
+  const GOOD: &str = "9f2c1e7a4b8d6053f1a9c2e8b7d40615aa39c7e21d8b46f0";
+
+  #[test]
+  fn production_refuses_the_shipped_placeholder() {
+    // The exact string deploy/.env.prod.example used to carry.
+    let err = validate_jwt_secret("change-me", Environment::Production).unwrap_err();
+    assert!(err.to_string().contains("placeholder"), "{err}");
+  }
+
+  #[test]
+  fn production_refuses_a_decorated_placeholder() {
+    // "I edited it" — by appending. Substring matching is why this is caught.
+    assert!(validate_jwt_secret("change-me-in-development", Environment::Production).is_err());
+  }
+
+  #[test]
+  fn production_refuses_something_too_short_to_matter() {
+    assert!(validate_jwt_secret("hunter2", Environment::Production).is_err());
+  }
+
+  #[test]
+  fn production_accepts_a_real_one() {
+    assert!(validate_jwt_secret(GOOD, Environment::Production).is_ok());
+  }
+
+  // `just dev` must keep working with the committed throwaway value; a check
+  // that breaks the fast local path gets disabled, and then it protects nothing.
+  #[test]
+  fn development_keeps_its_throwaway_value() {
+    assert!(validate_jwt_secret("change-me-in-development", Environment::Development).is_ok());
+  }
+
+  // `JWT_SECRET=` reads as SET — env::var returns Ok(""). That is the one shape
+  // that has to fail even in development.
+  #[test]
+  fn empty_is_refused_in_every_environment() {
+    assert!(validate_jwt_secret("", Environment::Development).is_err());
+    assert!(validate_jwt_secret("   ", Environment::Production).is_err());
+  }
 }
 
 #[cfg(test)]
