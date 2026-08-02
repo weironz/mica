@@ -404,24 +404,42 @@ jobs:
 
       # The quickstart stack pulls published images; the parity overlay swaps the
       # api for the one just built. --env-file carries committed throwaway values.
+      # --wait blocks until every service with a healthcheck reports healthy, so
+      # a stack that never comes up fails HERE, with compose naming the service,
+      # instead of as an opaque timeout in the curl below. deploy/Dockerfile.api
+      # carries the api's healthcheck, so this covers it.
+      #
+      # --renew-anon-volumes --force-recreate: start from a clean state instead
+      # of inheriting whatever a previous run left behind.
       - name: Boot the stack
         run: |
           docker compose --project-directory . --env-file deploy/.env.parity \
             -f deploy/docker-compose.single.yml \
-            -f deploy/docker-compose.parity.yml up -d
+            -f deploy/docker-compose.parity.yml \
+            up -d --renew-anon-volumes --force-recreate --wait --wait-timeout 300
 
       # /api/ready, not /api/health: ready touches the database, so this asserts
       # the api reached postgres rather than merely that its process is alive.
-      - name: Wait for the stack to serve
+      # NOT redundant with --wait above, and this is the whole point of the job.
+      #
+      # The image's healthcheck curls 127.0.0.1:8080 from INSIDE the container,
+      # so an api bound to loopback — unreachable from anywhere else — passes it.
+      # Only a request from OUT HERE, through the published port and nginx,
+      # proves the stack is actually serving. That is the bug class this job
+      # exists to catch, so the check has to live outside the container.
+      #
+      # /api/ready rather than /api/health: ready touches the database, so a pass
+      # means the api reached postgres, not merely that its process is up.
+      - name: Reach the stack from outside
         run: |
           set -euo pipefail
-          for i in $(seq 1 60); do
+          for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1/api/ready > /dev/null 2>&1; then
-              echo "ready after $((i * 3))s"; exit 0
+              echo "served from outside after $((i * 3))s"; exit 0
             fi
             sleep 3
           done
-          echo "the containerised stack never became ready"
+          echo "the stack reports healthy but is not reachable from outside"
           exit 1
 
       - name: Container logs (on failure)
