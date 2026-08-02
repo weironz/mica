@@ -492,3 +492,28 @@ bash -n <<<'<该步骤 run 的内容>'
   和 curl 都测不出来。
 - 一并的教训:文案要说清**动作**,不只是数字。镜像里没有图片时「已释放 0 B」读起来像什么
   都没干,而页面确实清了 → 「已清理云端镜像,释放 {size}」。
+
+### 只改了一个平台变体,分析器不会告诉你另一个断了
+
+- 2026-08-02:给本地世界加了 `exportDocMarkdownText`,只写进 `local_offline_io.dart`。
+  `flutter analyze lib` 一路绿、`flutter test` 1034 全过、桌面跑得好好的 —— 因为
+  **分析器只解析条件导入里当前平台那一个变体**。web 编译解析 `local_offline_web.dart`,
+  当场 `The method 'exportDocMarkdownText' isn't defined`。CI 连红五次。
+- `lessons.md` 里原本记的是「web 通过≠桌面通过」。这次是**它的反面**,而且更隐蔽:
+  桌面侧的所有本地检查都不可能发现,不是"忘了测",是**结构性看不见**。
+- 规则:**动了 `clients/mica_flutter/lib/local/` 或任何 `_io`/`_web`/`_stub` 变体,
+  提交前必须跑一次**
+  `flutter build web --release --no-web-resources-cdn`(本机约 110s)。
+- 三份要一起改:`local_offline_api.dart` 声明、`_io` 真实现、`_web` 返回 null。漏掉接口
+  那份的话,两个实现会各自漂移而没人拦。
+
+### `cargo check` 不跑 clippy,而 CI 是 `-D warnings`
+
+- 同一天同一批提交:写完 Rust 只跑了 `cargo check`,绿。CI 的
+  `cargo clippy --workspace --all-targets -- -D warnings` 挂在一个多余的 `mut` 上。
+- 一个 `mut` 让整条流水线红了五次 —— 因为 `-D warnings` 把**任何** clippy 提示变成错误,
+  而 `check` 一条都不报。
+- 规则:提交 Rust 前跑 **CI 的原样命令**,不是 `cargo check`,也不是不带 `-D warnings`
+  的 clippy(那样只会打印告警然后退出 0,看着像过了)。
+- 更一般的一条,这两条都是它的实例:**本地跑的命令和 CI 跑的命令不一样时,"本地绿"
+  什么都不证明。** 要么跑同一条,要么别声称验证过。
