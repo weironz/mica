@@ -1817,6 +1817,7 @@ class _PageBreadcrumb extends StatefulWidget {
     required this.onSelect,
     required this.trailing,
     this.onRename,
+    this.onCopyPath,
   });
 
   final List<DocumentView> views;
@@ -1828,6 +1829,11 @@ class _PageBreadcrumb extends StatefulWidget {
   /// page cannot be renamed — a viewer's read-only workspace — and then the tail
   /// stays plain text rather than offering an edit that would 403.
   final Future<void> Function(DocumentView view, String name)? onRename;
+
+  /// Copy the page's path, from a button sitting immediately AFTER the last
+  /// crumb — where GitHub puts it, next to the path rather than off in the
+  /// row's trailing utilities. Null hides the button.
+  final VoidCallback? onCopyPath;
 
   @override
   State<_PageBreadcrumb> createState() => _PageBreadcrumbState();
@@ -1906,6 +1912,25 @@ class _PageBreadcrumbState extends State<_PageBreadcrumb> {
                       ),
                     ),
                   _crumb(path[i], isLast: i == path.length - 1),
+                ],
+                // Right after the last crumb, inside the scrollable path — the
+                // spot GitHub uses. Putting it in `trailing` would park it at
+                // the far right with the sync badge and the properties toggle,
+                // where it reads as another page utility instead of "copy THIS".
+                if (widget.onCopyPath case final copy?) ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: copy,
+                    icon: const Icon(Icons.content_copy_outlined, size: 13),
+                    tooltip: context.l10n.pageCopyPath,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 22,
+                      height: 22,
+                    ),
+                    color: MicaTheme.of(context).text.faint,
+                  ),
                 ],
               ],
             ),

@@ -8347,6 +8347,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       // and an edit affordance that cannot succeed is worse than
                       // none — same rule as everywhere else here.
                       onRename: canEdit ? widget.onRenameView : null,
+                      onCopyPath: _copyPagePath,
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -8441,15 +8442,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.copy_all_outlined),
                               title: Text(context.l10n.pageCopyContent),
-                            ),
-                          ),
-                          PopupMenuItem(
-                            value: 'copy-path',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.link_outlined),
-                              title: Text(context.l10n.pageCopyPath),
                             ),
                           ),
                           const PopupMenuDivider(),
@@ -9220,8 +9212,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     switch (value) {
       case 'copy-md':
         await _copyPageMarkdown();
-      case 'copy-path':
-        await _copyPagePath();
       case 'export-zip':
         await _exportPageFile();
       case 'export-html':
