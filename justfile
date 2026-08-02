@@ -107,7 +107,7 @@ app target="windows":
 parity-check: build-web
     docker compose down 2>/dev/null || true
     docker compose --project-directory . --env-file deploy/.env.parity \
-        -f deploy/docker-compose.single.yml up -d --build
+        -f deploy/docker-compose.single.yml -f deploy/docker-compose.parity.yml up -d --build
     @echo "waiting for the prod stack on :80"
     @for i in $(seq 1 60); do \
         curl -fsS http://127.0.0.1/api/health >/dev/null 2>&1 && break; \
@@ -121,7 +121,7 @@ parity-check: build-web
 [doc("Stop the parity stack (and free :80 for the dev stack)")]
 parity-down:
     docker compose --project-directory . --env-file deploy/.env.parity \
-        -f deploy/docker-compose.single.yml down
+        -f deploy/docker-compose.single.yml -f deploy/docker-compose.parity.yml down
 
 [doc("Run all tests (Rust workspace + Flutter)")]
 test:

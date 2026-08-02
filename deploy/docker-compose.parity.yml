@@ -1,0 +1,34 @@
+# Overlay that makes the quickstart stack build FROM SOURCE, for `just parity-check`.
+#
+#   docker compose --env-file deploy/.env.parity \
+#     -f deploy/docker-compose.single.yml -f deploy/docker-compose.parity.yml up -d --build
+#
+# Why this exists: parity-check runs the production container stack locally
+# BEFORE a release — and before a release the images are not published yet, so it
+# cannot pull them. It has to build what is in the working tree.
+#
+# docker-compose.single.yml stopped being able to do that on purpose (2026-07-31):
+# as the self-host quickstart it now pulls published images, so nobody needs a
+# Rust or Flutter toolchain to run a notes app. That is right for the quickstart
+# and wrong for parity-check — hence an overlay, rather than one file trying to
+# be both. Compose merges by service name; only the keys that differ are here.
+services:
+  api:
+    # Build the working tree instead of pulling. `build:` wins over the inherited
+    # `image:`, which then only names the tag the build gets.
+    # Paths here are relative to the PROJECT directory, not to this file:
+    # parity-check passes `--project-directory .` from the repo root. Writing
+    # `..` looked right and resolved one level too high, which `docker compose
+    # config` caught immediately — run it after touching this.
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+
+  # The published web image bakes in nginx.conf plus a built Flutter bundle. An
+  # unreleased tree has no such image, so mount both from the repo — and
+  # `just parity-check` depends on `build-web`, which stages deploy/web first.
+  web:
+    image: nginx:alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/web:/usr/share/nginx/html:ro
