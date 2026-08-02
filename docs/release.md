@@ -96,7 +96,8 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 3. `just test` 全绿。**跑测试时要带 `DATABASE_URL`** —— 否则 `sync_pg` 这类 DB 集成
    测试会**静默跳过**,整套 0.00s「全过」,那是真空通过不是验证(见 `docs/lessons.md`)。
    本地栈起着的话:`$env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"`,
-   跑完看耗时 —— 秒级才说明真跑了。想更稳再跑 `just parity-check`(容器形态,见下)。
+   跑完看耗时 —— 秒级才说明真跑了。容器形态由 CI 的 `container` job 每次推送自动验,
+   不再需要手动跑什么。
 4. **桌面端带本地库迁移时**,先跑一次真库升级冒烟:
    `MICA_REAL_STORE=<一份真 store.db 的拷贝> cargo test -p mica-core --features store -- --ignored upgrade_real_store_smoke`。
    它默认 `#[ignore]`、要手动设环境变量,所以不写进这里就等于不存在 —— 而桌面
@@ -161,7 +162,9 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 **Docker Desktop 仍然必需**(它不是只为发版而装):
 
 - `just dev` —— 本地开发全栈(postgres + rustfs + api + web)
-- `just parity-check` —— 发版前跑**真镜像**,抓容器专属 bug(如 loopback 绑定)
+- 容器专属 bug(如 loopback 绑定、Dockerfile 坏掉)由 CI 的 `container` job 抓 —— 它
+  构建 api 镜像并把单机栈起起来验 `/api/ready`。以前这是 `just parity-check`,手动且
+  可选,所以几乎没人跑
 - `just docker-build` / `docker-push` —— **CI 挂掉时的兜底**,正常发版用不到
 
 前置:

@@ -18,7 +18,7 @@ node     := "root@mica.cloudcele.com"
 node_dir := "/data/mica"
 site     := "https://mica.cloudcele.com"
 
-# Registry for LOCAL image builds (parity-check / a CI outage fallback).
+# Registry for LOCAL image builds (a CI outage fallback).
 # Prod's own registry lives in {{node_dir}}/.env as MICA_REGISTRY.
 hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 
@@ -88,41 +88,10 @@ dev-web:
 app target="windows":
     cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 
-# Catches container-only bugs (e.g. loopback binds) that host dev can't.
-# Stops the dev stack first — both bind :80/:9000/:5432.
-#
-# Two things used to keep this from running at all:
-#
-# 1. It read `.env.prod`, the file holding REAL production credentials, so a
-#    local check demanded a full production secret set. Nobody set that up, so
-#    the check nobody could run also caught nothing. Now it reads
-#    deploy/.env.parity — committed throwaway values.
-# 2. It depended on `docker-build`, which built three TAGGED images that
-#    single.yml never looks at: that file `build:`s the api from
-#    deploy/Dockerfile.api and contains no ${MICA_VERSION} at all. The only
-#    thing it needed from that chain was `build-web`, which stages deploy/web
-#    for the nginx mount — so depend on that directly and skip building two
-#    images for nothing.
-[doc("Run the prod container stack locally before a release (container parity)")]
-parity-check: build-web
-    docker compose down 2>/dev/null || true
-    docker compose --project-directory . --env-file deploy/.env.parity \
-        -f deploy/docker-compose.single.yml -f deploy/docker-compose.parity.yml up -d --build
-    @echo "waiting for the prod stack on :80"
-    @for i in $(seq 1 60); do \
-        curl -fsS http://127.0.0.1/api/health >/dev/null 2>&1 && break; \
-        sleep 3; \
-    done
-    @curl -fsS http://127.0.0.1/api/health \
-        && echo " <- parity OK (deploy/docker-compose.single.yml)" \
-        || (echo "parity FAILED — docker compose -f deploy/docker-compose.single.yml logs" && exit 1)
-    @echo "stop it with:  just parity-down"
-
-[doc("Stop the parity stack (and free :80 for the dev stack)")]
-parity-down:
-    docker compose --project-directory . --env-file deploy/.env.parity \
-        -f deploy/docker-compose.single.yml -f deploy/docker-compose.parity.yml down
-
+# Container-only bugs (a loopback bind, a broken Dockerfile) used to be caught
+# here by `just parity-check`. They are now caught by the `container` job in
+# ci.yml, on every push — that check was manual and optional, so it was rarely
+# run, and a check nobody runs catches nothing.
 [doc("Run all tests (Rust workspace + Flutter)")]
 test:
     # The Postgres-backed tests (`pool()` in documents.rs / password_reset.rs)
@@ -202,11 +171,11 @@ build-all: build-cli build-web build-api
 
 # ---------------------------------------------------------------- docker
 
-# Release images come from CI; this is for `parity-check` and as a fallback
+# Release images come from CI; this is the fallback for when CI is down
 # if CI is down. --provenance/--sbom off: buildx defaults attach an OCI
 # attestation manifest, turning the image into a multi-manifest index that
 # some registries / `docker save | docker load` cannot resolve.
-[doc("Build the prod images locally (parity-check / CI-outage fallback)")]
+[doc("Build the prod images locally (CI-outage fallback)")]
 docker-build tag: build-web
     docker build --provenance=false --sbom=false -f deploy/Dockerfile.api -t {{hub_acr}}/mica-api:{{tag}} .
     docker build --provenance=false --sbom=false -f deploy/Dockerfile.web -t {{hub_acr}}/mica-web:{{tag}} .
