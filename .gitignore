@@ -2,6 +2,10 @@
 /.env
 /.env.*
 !.env.example
+# Committed ON PURPOSE: throwaway values the CI container job needs. Negated
+# here because this is the layer where a future `.env*` rule would silently
+# drop it, and a check that cannot start is a check nobody notices is gone.
+!e2e/.env.ci
 *.log
 *.tmp
 

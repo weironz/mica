@@ -1,0 +1,39 @@
+# An OVERLAY on deploy/docker-compose.single.yml that builds the api FROM SOURCE
+# instead of pulling it. Not a stack on its own — it names only the keys that
+# differ, and compose merges the two by service name:
+#
+#   docker compose --project-directory . --env-file e2e/.env.ci \
+#     -f deploy/docker-compose.single.yml \
+#     -f e2e/docker-compose.from-source.yml up -d --wait
+#
+# Why it exists: the `container` job in ci.yml checks that the production
+# container shape actually comes up — and on a pull request the images for that
+# commit are not published yet, so it cannot pull them. It has to build what is
+# in the working tree.
+#
+# docker-compose.single.yml stopped being able to do that on purpose (2026-07-31):
+# as the self-host quickstart it now pulls published images, so nobody needs a
+# Rust or Flutter toolchain to run a notes app. That is right for the quickstart
+# and wrong for the CI container check — hence an overlay, rather than one file trying to
+# be both. Compose merges by service name; only the keys that differ are here.
+services:
+  api:
+    # Build the working tree instead of pulling. `build:` wins over the inherited
+    # `image:`, which then only names the tag the build gets.
+    # Paths here are relative to the PROJECT directory, not to this file:
+    # ci.yml passes `--project-directory .` from the repo root. Writing
+    # `..` looked right and resolved one level too high, which `docker compose
+    # config` caught immediately — run it after touching this.
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+
+  # The published web image bakes in nginx.conf plus a built Flutter bundle. An
+  # unreleased tree has no such image, so mount both from the repo. ci.yml puts
+  # a stub in deploy/web rather than building a real bundle: the routing half is
+  # already covered by the web-e2e job, and a Flutter build costs minutes here.
+  web:
+    image: nginx:alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/web:/usr/share/nginx/html:ro

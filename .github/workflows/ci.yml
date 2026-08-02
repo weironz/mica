@@ -373,8 +373,8 @@ jobs:
   # first surfaced during a release — after the tag was already cut, because
   # release.yml is the only workflow that builds images and it runs `on: tags`.
   #
-  # This replaces `just parity-check`, which covered exactly this and was manual
-  # and optional, so it was rarely run. A check nobody runs catches nothing.
+  # This replaces `just parity-check`, a manual and optional recipe that covered
+  # exactly this and was therefore rarely run. A check nobody runs catches nothing.
   container:
     name: Container (api image + stack boots)
     runs-on: ubuntu-latest
@@ -392,7 +392,7 @@ jobs:
           context: .
           file: deploy/Dockerfile.api
           load: true
-          tags: willdockerhub/mica-api:parity-local
+          tags: willdockerhub/mica-api:ci-local
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
@@ -400,9 +400,9 @@ jobs:
       # proves nothing here — the routing half is already covered by web-e2e —
       # so a stub is enough to let nginx start and proxy /api.
       - name: Stub the web bundle
-        run: mkdir -p deploy/web && echo 'parity' > deploy/web/index.html
+        run: mkdir -p deploy/web && echo 'ci stub' > deploy/web/index.html
 
-      # The quickstart stack pulls published images; the parity overlay swaps the
+      # The quickstart stack pulls published images; the from-source overlay swaps the
       # api for the one just built. --env-file carries committed throwaway values.
       # --wait blocks until every service with a healthcheck reports healthy, so
       # a stack that never comes up fails HERE, with compose naming the service,
@@ -413,9 +413,9 @@ jobs:
       # of inheriting whatever a previous run left behind.
       - name: Boot the stack
         run: |
-          docker compose --project-directory . --env-file deploy/.env.parity \
+          docker compose --project-directory . --env-file e2e/.env.ci \
             -f deploy/docker-compose.single.yml \
-            -f deploy/docker-compose.parity.yml \
+            -f e2e/docker-compose.from-source.yml \
             up -d --renew-anon-volumes --force-recreate --wait --wait-timeout 300
 
       # /api/ready, not /api/health: ready touches the database, so this asserts
@@ -445,6 +445,6 @@ jobs:
       - name: Container logs (on failure)
         if: failure()
         run: |
-          docker compose --project-directory . --env-file deploy/.env.parity \
+          docker compose --project-directory . --env-file e2e/.env.ci \
             -f deploy/docker-compose.single.yml \
-            -f deploy/docker-compose.parity.yml logs --tail 120
+            -f e2e/docker-compose.from-source.yml logs --tail 120
