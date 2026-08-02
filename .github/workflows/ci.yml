@@ -349,7 +349,7 @@ jobs:
           fi
 
       - name: Web end-to-end assertions
-        working-directory: clients/mica_flutter/tool/web_e2e
+        working-directory: e2e
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund

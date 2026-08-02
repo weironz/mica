@@ -355,7 +355,7 @@ restore-points:
 web-e2e email="e2e@mica.test" password="e2epassword123":
     #!/usr/bin/env bash
     set -euo pipefail
-    cd clients/mica_flutter/tool/web_e2e
+    cd e2e
     # `npm ci` wants a lockfile; install is fine for one pinned dependency.
     [ -d node_modules ] || npm install --no-audit --no-fund
     # From CN this download is blocked; the script falls back to system Chrome, so
