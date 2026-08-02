@@ -84,9 +84,21 @@ dev-web:
 # a demo account against 127.0.0.1:8080, dumping a raw connection error banner.
 #   just app          # desktop (windows)
 #   just app chrome   # web
+# Any running Mica — the installed one included — is closed first. The
+# single-instance mutex in windows/runner/main.cpp makes a second instance exit
+# immediately, and flutter reports that as "Error waiting for a debug
+# connection: The log reader stopped unexpectedly", which names neither the
+# guard nor the app that is holding it. Worse, that app may only be minimised to
+# the tray, so there is nothing on screen to close.
+#
+# ASKED to close before being killed, in that order and on purpose: WM_CLOSE
+# runs the app's own exit path, which flushes the editor's 400 ms debounce. A
+# straight `Stop-Process -Force` skips it and eats the last words typed into a
+# real workspace. The force kill is still there as the fallback, because closing
+# the window may just send Mica to the tray rather than exit it.
 [doc("Launch the app to eyeball a change (target: windows | chrome)")]
 app target="windows":
-    @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { if ($p.Path -and $p.Path -like "*\clients\mica_flutter\build\windows\*") { Write-Host "==> killing our own leftover build (PID $($p.Id))"; Stop-Process -Id $p.Id -Force } else { Write-Host "Mica is ALREADY RUNNING from $($p.Path) (PID $($p.Id))."; Write-Host "The single-instance guard makes this run exit at once, which flutter reports as a debug-connection failure."; Write-Host "Close it first - it may only be minimised to the tray - or run: just app chrome"; exit 1 } }' || exit 1; fi
+    @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { Write-Host "==> closing the running Mica (PID $($p.Id)) $($p.Path)"; $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Write-Host "    it did not exit (it may have gone to the tray) - forcing"; Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(3000) } }'; fi
     cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 
 # Container-only bugs (a loopback bind, a broken Dockerfile) used to be caught
