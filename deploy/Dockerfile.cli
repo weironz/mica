@@ -30,30 +30,36 @@ RUN apt-get update \
 
 # ── rclone CLI (object-store mirror), checksum-pinned ────────────────────────
 # Used ONLY for the blob leg: RustFS S3 → OSS, S3 to S3, never through rustic
-# (mica-backup.sh 4c explains why immutable content-addressed blobs want a
-# mirror, not snapshots). Same shape as the rustic stage above: static build,
+# (crates/cli/src/backup.rs explains why immutable content-addressed blobs want
+# a mirror, not snapshots). Same shape as the rustic stage above: static build,
 # pinned version + sha256, `--version` as a smoke test so a bad download fails
 # the image build instead of the 3am backup.
-# NOTE — weaker than the rustic pin above, on purpose and temporarily: this
-# verifies the zip against the release's own published SHA256SUMS instead of a
-# hash pinned here. That catches a corrupted or truncated download but NOT a
-# compromised release (an attacker who can rewrite the asset can rewrite the
-# sums file next to it). TO HARDEN: run the build once, copy the printed digest
-# into RCLONE_SHA256, and switch the check back to the `echo … | sha256sum -c -`
-# form the rustic stage uses. Left unpinned rather than pinned to a hash nobody
-# verified — a wrong-but-official-looking constant is worse than an honest gap.
+# Checksum-pinned like the rustic stage above. The hash was taken from a build
+# that first verified the download against rclone's own published SHA256SUMS, so
+# it is a hash someone actually checked rather than a constant copied from
+# nowhere — and pinning it here means a rewritten release asset fails the build
+# instead of being trusted because the sums file next to it agrees.
+#
+# The zip is saved under the RELEASE'S OWN filename, not something shorter.
+# `sha256sum -c` reads the name out of the checksum line and opens THAT exact
+# path — downloading to `rclone.zip` made it hunt for a file that did not exist
+# and fail with "No such file or directory", which reads like a corrupt download
+# rather than a naming mistake. It broke the 0.13.7 release.
 FROM debian:bookworm-slim AS rclone
 ARG RCLONE_VERSION=v1.68.2
+ARG RCLONE_SHA256=0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates unzip \
  && base="https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}" \
- && curl -fsSL -o /tmp/rclone.zip "${base}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
- && curl -fsSL -o /tmp/SHA256SUMS "${base}/SHA256SUMS" \
- && ( cd /tmp && grep "rclone-${RCLONE_VERSION}-linux-amd64.zip$" SHA256SUMS | sha256sum -c - ) \
- && echo "rclone zip digest: $(sha256sum /tmp/rclone.zip | cut -d' ' -f1)  ← pin this into RCLONE_SHA256" \
- && unzip -q /tmp/rclone.zip -d /tmp \
+ && zip="rclone-${RCLONE_VERSION}-linux-amd64.zip" \
+ && curl -fsSL -o "/tmp/${zip}" "${base}/${zip}" \
+ && echo "${RCLONE_SHA256}  /tmp/${zip}" | sha256sum -c - \
+ && unzip -q "/tmp/${zip}" -d /tmp \
  && install -m755 "$(find /tmp -maxdepth 2 -type f -name rclone | head -1)" /usr/local/bin/rclone \
- && /usr/local/bin/rclone --version
+ # `env -u`: rclone maps RCLONE_<FLAG> environment variables onto flags, and the
+ # ARG above IS one during this stage — so a bare `rclone --version` tries to set
+ # the boolean --version to "v1.68.2" and dies. Not hypothetical; it broke a build.
+ && env -u RCLONE_VERSION /usr/local/bin/rclone --version
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -61,7 +67,7 @@ FROM debian:bookworm-slim
 # PGDG signing key at build time. (jq is gone — the export manifest is parsed by
 # serde_json now, and the dead man's switch pings through reqwest; both moved
 # into mica-cli when the backup scripts did.)
-# postgresql-client-16: pg_dump for the off-site DB snapshot (mica-backup.sh).
+# postgresql-client-16: pg_dump for the off-site DB snapshot (crates/cli/src/backup.rs).
 # It must be v16+ to dump the prod postgres:16 server — a pg_dump older than the
 # server aborts on a version mismatch — so pull it from PGDG rather than
 # bookworm's stock 15.
