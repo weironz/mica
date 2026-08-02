@@ -21,6 +21,19 @@
 #
 # Exits non-zero on: unreadable archive, any restore error, or a database that
 # comes back structurally complete but empty of readable content.
+#
+# WHY THIS ONE STAYS SHELL (2026-08-02). The backup orchestration moved into
+# `mica-cli backup` because "partial success" had no type in bash: a missing leg
+# logged a WARN and still exited 0, and production went months with no off-site
+# copy of its database. There is no such shape here — three assertions, each
+# either true or false, with no middle state to lose.
+#
+# And it runs on the HOST, driving `docker exec` + `psql` against a throwaway
+# database beside the live one. mica-cli lives inside the backup container, so
+# folding this in would mean shipping another binary to the node to buy type
+# safety over "run three queries, compare three numbers". Same reasoning that
+# keeps node-deploy-policy.sh in shell: those two are the deliberate exceptions,
+# and deploy/ holds no other scripts.
 set -euo pipefail
 
 DUMP=${1:?usage: restore-drill.sh /data/mica/<dump>.sql.gz}
