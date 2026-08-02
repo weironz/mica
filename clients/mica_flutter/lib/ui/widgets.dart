@@ -1818,6 +1818,7 @@ class _PageBreadcrumb extends StatefulWidget {
     required this.trailing,
     this.onRename,
     this.onCopyPath,
+    this.workspaceName,
   });
 
   final List<DocumentView> views;
@@ -1834,6 +1835,14 @@ class _PageBreadcrumb extends StatefulWidget {
   /// crumb — where GitHub puts it, next to the path rather than off in the
   /// row's trailing utilities. Null hides the button.
   final VoidCallback? onCopyPath;
+
+  /// Shown as the FIRST crumb, so what you read matches what [onCopyPath]
+  /// copies — the copied path has always led with the workspace, and a
+  /// breadcrumb that started one level lower made the two disagree.
+  ///
+  /// Not a link: there is no "open the workspace" destination here the way
+  /// there is for a folder. Null hides it.
+  final String? workspaceName;
 
   @override
   State<_PageBreadcrumb> createState() => _PageBreadcrumbState();
@@ -1901,6 +1910,29 @@ class _PageBreadcrumbState extends State<_PageBreadcrumb> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // The workspace leads the path, matching what "copy path" puts
+                // on the clipboard. Plain text, not a crumb: `_crumb` takes a
+                // DocumentView and links to it, and a workspace is neither.
+                if (widget.workspaceName case final ws?
+                    when ws.trim().isNotEmpty) ...[
+                  Text(
+                    ws,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: MicaTheme.of(context).text.faint,
+                      fontSize: 12,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: Icon(
+                      Icons.chevron_right,
+                      size: 14,
+                      color: MicaTheme.of(context).text.faint,
+                    ),
+                  ),
+                ],
                 for (var i = 0; i < path.length; i++) ...[
                   if (i > 0)
                     Padding(

@@ -8348,6 +8348,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       // none — same rule as everywhere else here.
                       onRename: canEdit ? widget.onRenameView : null,
                       onCopyPath: _copyPagePath,
+                      workspaceName: widget.selectedWorkspace?.name,
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
