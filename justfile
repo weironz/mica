@@ -91,6 +91,12 @@ dev-web:
 # guard nor the app that is holding it. Worse, that app may only be minimised to
 # the tray, so there is nothing on screen to close.
 #
+# The trailing `exit 0` is load-bearing. `Get-Process -ErrorAction
+# SilentlyContinue` with nothing to match suppresses the error OUTPUT but still
+# leaves `$?` false, and `powershell -Command` turns that into exit 1 — so the
+# common case (no Mica running) failed the recipe with a completely blank
+# terminal: no message, no hint, just "failed on line N".
+#
 # ASKED to close before being killed, in that order and on purpose: WM_CLOSE
 # runs the app's own exit path, which flushes the editor's 400 ms debounce. A
 # straight `Stop-Process -Force` skips it and eats the last words typed into a
@@ -98,7 +104,7 @@ dev-web:
 # the window may just send Mica to the tray rather than exit it.
 [doc("Launch the app to eyeball a change (target: windows | chrome)")]
 app target="windows":
-    @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { Write-Host "==> closing the running Mica (PID $($p.Id)) $($p.Path)"; $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Write-Host "    it did not exit (it may have gone to the tray) - forcing"; Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(3000) } }'; fi
+    @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { Write-Host "==> closing the running Mica (PID $($p.Id)) $($p.Path)"; $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Write-Host "    it did not exit (it may have gone to the tray) - forcing"; Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(3000) } }; exit 0'; fi
     cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 
 # Container-only bugs (a loopback bind, a broken Dockerfile) used to be caught
