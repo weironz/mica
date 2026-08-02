@@ -947,6 +947,7 @@
   "tableDelete": "Delete table",
   "tableCopied": "Table copied",
   "pageCopyContent": "Copy page content",
+  "pageCopyPath": "Copy path",
   "pageCopyContentDone": "Page content copied",
   "pageCopyFailed": "Could not copy to the clipboard",
   "tableInsertRowAbove": "Insert row above",

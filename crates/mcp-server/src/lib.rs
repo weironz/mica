@@ -1879,6 +1879,12 @@ impl ServerHandler for MicaMcp {
          `parent_view_id` — one hit instead of a whole tree. Only fall back to mica_list_pages \
          when a name is not enough to find the spot.\n\
          \n\
+         A user may hand you a PATH like `workspace/folder/page` (the app's \"copy path\", whose \
+         first segment is the WORKSPACE). There is no resolve-a-path tool and you do not need \
+         one: search the LAST segment, then confirm the hit by walking `parent_view_id` upward \
+         and checking those names against the earlier segments. Do that check rather than \
+         trusting a lone hit — page names repeat, and a name may itself contain a slash.\n\
+         \n\
          READ efficiently, do not pull whole pages: mica_list_pages returns the WHOLE \
          workspace tree (folders + pages, ids + names) in ONE call. mica_read_document takes \
          offset+limit (a line window) or section (a heading name) to return just a slice. \

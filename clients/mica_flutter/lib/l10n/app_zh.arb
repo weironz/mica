@@ -542,6 +542,7 @@
   "tableDelete": "删除表格",
   "tableCopied": "已复制表格",
   "pageCopyContent": "复制页面内容",
+  "pageCopyPath": "复制路径",
   "pageCopyContentDone": "已复制页面内容",
   "pageCopyFailed": "无法写入剪贴板",
   "tableInsertRowAbove": "在上方插入行",

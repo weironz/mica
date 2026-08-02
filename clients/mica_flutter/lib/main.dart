@@ -7905,6 +7905,58 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     });
   }
 
+  /// `workspace/folder/.../page` for the open page — GitHub's "copy path", for
+  /// telling someone (or an agent) WHERE something is.
+  ///
+  /// The workspace is the first segment because a path without it is ambiguous
+  /// the moment there is more than one workspace, and whoever you paste it to
+  /// cannot guess which you meant. Returns null when nothing is open.
+  ///
+  /// Separator is `/`, like a file path. A name containing a slash makes the
+  /// string ambiguous — accepted deliberately: this is for a human to read, and
+  /// for an agent to resolve by SEARCHING the last segment and checking the
+  /// chain with `parent_view_id`, not by splitting on a delimiter. Escaping
+  /// would buy an exactness nothing downstream relies on, at the price of a path
+  /// you cannot read.
+  String? _pagePath() {
+    final workspace = widget.selectedWorkspace;
+    final view = widget.selectedView;
+    if (workspace == null || view == null) return null;
+    final byId = {for (final v in widget.views) v.id: v};
+    final segments = <String>[view.name];
+    // Same `seen` guard as _revealFolder: the tree forbids cycles, but walking
+    // it should not be the thing that hangs if one ever appears.
+    final seen = <String>{view.id};
+    var cursor = view.parentViewId;
+    while (cursor != null && seen.add(cursor)) {
+      final parent = byId[cursor];
+      if (parent == null) break; // not loaded — stop rather than invent a gap
+      segments.add(parent.name);
+      cursor = parent.parentViewId;
+    }
+    segments.add(workspace.name);
+    return segments.reversed.join('/');
+  }
+
+  /// Put [_pagePath] on the clipboard.
+  Future<void> _copyPagePath() async {
+    final l10n = context.l10n;
+    final path = _pagePath();
+    if (path == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.pageOpenFirst)));
+      return;
+    }
+    final ok = await copyTextToClipboard(path);
+    if (!mounted) return;
+    // Echo the path itself on success: it is short, and seeing it is how you
+    // notice you copied the wrong page before pasting it somewhere.
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(ok ? path : l10n.pageCopyFailed)));
+  }
+
   /// Land on a FOLDER that came back from search.
   ///
   /// A folder is not openable — `_selectView` refuses them outright — so a
@@ -8389,6 +8441,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.copy_all_outlined),
                               title: Text(context.l10n.pageCopyContent),
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'copy-path',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.link_outlined),
+                              title: Text(context.l10n.pageCopyPath),
                             ),
                           ),
                           const PopupMenuDivider(),
@@ -9159,6 +9220,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     switch (value) {
       case 'copy-md':
         await _copyPageMarkdown();
+      case 'copy-path':
+        await _copyPagePath();
       case 'export-zip':
         await _exportPageFile();
       case 'export-html':
