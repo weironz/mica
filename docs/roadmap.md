@@ -55,13 +55,15 @@
 - ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
 - **开放注册无验证 + 弱口令(仅 ≥8)** —— 公网可无限刷号(`auth.rs`)。(M) `[需后端]`
-- ~~🟠 **compose 的注册默认已改对,但要下一版才到生产**~~ ✅ **0.13.7 上线**(2026-08-02)——
+- ~~🟠 **compose 的注册默认已改对,但要下一版才到生产**~~ ✅ **0.13.8 上线**(2026-08-02)——
   同一版还带上:`JWT_SECRET` 生产环境拒绝占位/过短的值(模板不再发一个能用的 `change-me`)、
   备份编排从 shell 收进 `mica-cli backup`(部分成功不再静默 —— 缺一条腿默认让整次备份失败)、
   对象字节 rclone 直传 OSS、`pg_dump` 去 gzip 让 rustic 能去重、搜索能找到文件夹并回传
   `parent_view_id`、页面菜单的「复制页面内容」与「复制路径」、CI 新增 container job。
-  **发版后必须做**:节点 `.env` 补 `RUSTFS_S3_*` / `OSS_BLOB_BUCKET`,否则对象腿缺配置会
-  让整次备份失败 —— 那是设计意图,不是 bug。下面留档原文 ——
+  **已做**:节点 `.env` 补了 `RUSTFS_S3_*` / `OSS_BLOB_BUCKET`;上线后首跑三条腿全部 `ran`
+  (database / content / objects),对象字节第一次有了异地副本。**0.13.7 作废**——它的
+  `images (cli)` job 挂在我写的 rclone 阶段上(见 `deploy/Dockerfile.cli` 注释),那一版
+  只出了 api/web 镜像,修好后重发 0.13.8。下面留档原文 ——
 - 🟠 原文:**compose 的注册默认已改对,但要下一版才到生产**(2026-07-30)—— 改动已在 main:compose 那行
   改成 `${MICA_REGISTRATION_ENABLED:-}`(透传空 → 代码 fail-safe 默认 = 关;已核实
   `registration_open` 对空串返回 false),`deploy/.env.prod.example` 里那段「Unset/true = open」
