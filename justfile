@@ -86,6 +86,7 @@ dev-web:
 #   just app chrome   # web
 [doc("Launch the app to eyeball a change (target: windows | chrome)")]
 app target="windows":
+    @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { if ($p.Path -and $p.Path -like "*\clients\mica_flutter\build\windows\*") { Write-Host "==> killing our own leftover build (PID $($p.Id))"; Stop-Process -Id $p.Id -Force } else { Write-Host "Mica is ALREADY RUNNING from $($p.Path) (PID $($p.Id))."; Write-Host "The single-instance guard makes this run exit at once, which flutter reports as a debug-connection failure."; Write-Host "Close it first - it may only be minimised to the tray - or run: just app chrome"; exit 1 } }' || exit 1; fi
     cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 
 # Container-only bugs (a loopback bind, a broken Dockerfile) used to be caught
