@@ -448,7 +448,7 @@ fn cmd_backup_daemon(cli: &Cli, cfg: &Config) -> Result<()> {
     .unwrap_or(3);
   let on_start = std::env::var("BACKUP_ON_START").as_deref() != Ok("0");
 
-  let mut run = |first: bool| {
+  let run = |first: bool| {
     if !first {
       backup::log("starting scheduled run");
     }

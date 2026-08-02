@@ -181,6 +181,11 @@ abstract interface class LocalOfflineApi {
     String docId,
     String base,
   );
+
+  /// The page's Markdown TEXT, with no packaging decision — for the clipboard.
+  /// Distinct from [exportDocMarkdown], which switches to a ZIP once the page
+  /// has images: a clipboard cannot carry an assets folder.
+  String? exportDocMarkdownText(String docId);
   Uint8List? exportFolderZip(String workspaceId, String folderId);
   Future<Uint8List?> htmlToPdf(String html);
 }
