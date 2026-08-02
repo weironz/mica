@@ -1,10 +1,26 @@
-# Production single-server deployment: nginx (static web + reverse proxy),
-# the Rust API, PostgreSQL, and RustFS object storage.
+# QUICKSTART: one server, reached by IP, no reverse proxy to set up.
 #
-#   cp deploy/.env.prod.example .env.prod   # then edit (SERVER_IP, secrets!)
-#   ./deploy/deploy-from-source.sh                      # build + (re)start everything
+#   cp deploy/.env.prod.example .env.prod   # then edit (SERVER_IP, MICA_VERSION, secrets!)
+#   docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
 #
-# Only ports 80 (app) and 9000 (S3, presigned browser access) are public.
+# Then open http://<SERVER_IP>/. Migrations are embedded in the API binary and
+# run at startup, so there is no separate migrate step.
+#
+# NOTHING IS BUILT HERE — every image is pulled. This used to build the API from
+# source and stage a Flutter bundle into ./deploy/web with a shell script, which
+# meant a machine needed the Rust and Flutter toolchains just to run a notes app,
+# and the build path silently drifted from the real one because nobody ran it.
+# The published `mica-web` image already carries nginx, its config and the
+# bundle; `mica-api` is the same binary the maintainer's own server runs.
+#
+# The only difference from deploy/docker-compose.yml (that server's stack) is the
+# front door: it publishes no host ports and is routed by an existing Traefik
+# with TLS, this one publishes :80 directly. Same images, same versions.
+#
+# Public ports: 80 (app) and 9000 (S3 — browsers presign against it directly).
+# HTTP, not HTTPS: no one can issue a certificate for a bare IP. Put this behind
+# a reverse proxy with a real hostname before it carries anything you would mind
+# being read off the wire.
 
 # Bound every container's logs: json-file defaults to unlimited, so one chatty
 # service (or a crash loop) can fill the disk and take the node down. Cap at
@@ -51,10 +67,15 @@ services:
     volumes:
       - mica-prod-rustfs:/data
 
+  # MICA_VERSION has no default on purpose: a quickstart that silently installs
+  # whatever version happened to be pinned here months ago is worse than one that
+  # asks. Pick a tag from https://github.com/weironz/mica/releases.
+  #
+  # MICA_REGISTRY defaults to Docker Hub, which is the reachable one from most of
+  # the world. The maintainer's own stack defaults to Aliyun ACR instead, because
+  # it runs in CN where Docker Hub is not dependable.
   api:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.api
+    image: ${MICA_REGISTRY:-willdockerhub}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env.prod, e.g. v0.13.6}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -79,15 +100,17 @@ services:
       rustfs:
         condition: service_started
 
+  # Self-contained: the image is nginx plus deploy/nginx.conf plus the built
+  # Flutter bundle (see deploy/Dockerfile.web). It serves the app AND proxies
+  # /api and /ws to api:8080 — which is why this stack needs no Traefik and no
+  # mounted config. Nothing here reads the repo, so the compose file is the only
+  # file you need on the server.
   web:
-    image: nginx:alpine
+    image: ${MICA_REGISTRY:-willdockerhub}/mica-web:${MICA_VERSION:?set MICA_VERSION in .env.prod, e.g. v0.13.6}
     restart: unless-stopped
     logging: *default-logging
     ports:
       - "80:80"
-    volumes:
-      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./deploy/web:/usr/share/nginx/html:ro
     depends_on:
       - api
 

@@ -105,16 +105,20 @@ Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏�
 
 ```sh
 cp deploy/.env.prod.example .env.prod
-vi .env.prod          # 填 SERVER_IP,以及足够强的 JWT_SECRET 和各种口令
-                      #   openssl rand -hex 32
-./deploy/deploy-from-source.sh    # 构建 Flutter bundle + API 镜像,然后全部启动
+vi .env.prod          # 填 SERVER_IP 和 MICA_VERSION,以及足够强的
+                      # JWT_SECRET 和各种口令:  openssl rand -hex 32
+docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
 ```
 
-然后打开 `http://<SERVER_IP>/`。对外端口是 **80**(应用)和 **9000**(RustFS——
-浏览器直接对它做预签名上传下载,所以 `S3_ENDPOINT` **必须是浏览器可达的地址**)。
-Postgres 只在 compose 网络内部可达。
+**什么都不用构建** —— 镜像全部是拉的,服务器上只需要 Docker。然后打开
+`http://<SERVER_IP>/`;数据库迁移在 API 启动时自动跑。
 
-`./deploy/deploy-from-source.sh --web-only` 只重建 Flutter bundle;nginx 直接读目录,不用重启。
+对外端口是 **80**(应用)和 **9000**(RustFS —— 浏览器直接对它做预签名上传下载,
+所以 `SERVER_IP` **必须是浏览器可达的地址**)。Postgres 只在 compose 网络内部可达。
+
+升级:改 `.env.prod` 里的 `MICA_VERSION`,再用 `--pull always` 跑同一条命令。
+这是明文 HTTP —— 没人能给一个裸 IP 签发证书,所以在它承载你不希望被路上读到的
+东西之前,先在前面放一个带真实域名的反向代理。
 
 </details>
 

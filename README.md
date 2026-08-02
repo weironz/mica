@@ -116,17 +116,22 @@ need to bring your own.
 
 ```sh
 cp deploy/.env.prod.example .env.prod
-vi .env.prod          # SERVER_IP, plus a strong JWT_SECRET and passwords
-                      #   openssl rand -hex 32
-./deploy/deploy-from-source.sh    # builds the Flutter bundle + API image, starts everything
+vi .env.prod          # SERVER_IP and MICA_VERSION, plus a strong JWT_SECRET
+                      # and passwords:  openssl rand -hex 32
+docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
 ```
 
-Then open `http://<SERVER_IP>/`. Public ports are **80** (app) and **9000**
-(RustFS, because the browser presigns straight against it — so `S3_ENDPOINT`
-must be browser-reachable). Postgres stays inside the compose network.
+Nothing is built — every image is pulled, so the server needs Docker and
+nothing else. Then open `http://<SERVER_IP>/`; migrations run at API startup.
 
-`./deploy/deploy-from-source.sh --web-only` rebuilds just the Flutter bundle; nginx serves it
-live, no restart needed.
+Public ports are **80** (app) and **9000** (RustFS, because the browser
+presigns straight against it — so `SERVER_IP` must be browser-reachable).
+Postgres stays inside the compose network.
+
+To upgrade, change `MICA_VERSION` in `.env.prod` and re-run the same command
+with `--pull always`. This is plain HTTP: nobody can issue a certificate for a
+bare IP, so put a reverse proxy with a real hostname in front before it carries
+anything you would mind being read off the wire.
 
 </details>
 

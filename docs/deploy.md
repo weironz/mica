@@ -28,9 +28,14 @@ reachable only inside the compose network.
 
 ```bash
 cp deploy/.env.prod.example .env.prod
-vi .env.prod          # SERVER_IP + strong JWT_SECRET / passwords (openssl rand -hex 32)
-./deploy/deploy-from-source.sh    # builds web bundle + api image, starts the stack
+vi .env.prod          # SERVER_IP + MICA_VERSION + strong JWT_SECRET / passwords
+                      # (openssl rand -hex 32)
+docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
 ```
+
+Nothing is built: `mica-api` and `mica-web` are pulled, and the web image
+already carries nginx, its config and the Flutter bundle. The server needs
+Docker and nothing else — no Rust toolchain, no Flutter SDK.
 
 Then open `http://<SERVER_IP>/`. Database migrations are embedded in the
 binary and run automatically at startup.
@@ -42,10 +47,12 @@ binary and run automatically at startup.
 ## Upgrades
 
 ```bash
-git pull
-./deploy/deploy-from-source.sh              # full: web + api image + restart
-./deploy/deploy-from-source.sh --web-only   # frontend-only change: atomic bundle swap, no restart
+vi .env.prod          # bump MICA_VERSION to the release you want
+docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d --pull always
 ```
+
+No `git pull` — the compose file is the only repo file this stack needs, and
+the version it runs is the tag in `.env.prod`, not whatever your checkout is at.
 
 `index.html` / the service worker are served with `no-cache`, so a plain
 reload picks up new releases (asset files are content-hashed).
