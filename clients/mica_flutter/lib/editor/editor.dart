@@ -194,6 +194,7 @@ class MicaEditor extends StatefulWidget {
     this.remoteCursors = const [],
     this.commentHighlights = const [],
     this.onAddComment,
+    this.countsSink,
     this.onAiStream,
     this.onUploadImage,
     this.onImportImageUrl,
@@ -254,6 +255,9 @@ class MicaEditor extends StatefulWidget {
     String quote,
   )?
   onAddComment;
+
+  /// Where to publish the live words·chars count. Null → nobody is showing it.
+  final ValueNotifier<DocCounts>? countsSink;
 
   /// Streams Markdown from a prompt for the in-editor "Ask AI" command (deltas
   /// shown live). When null, the AI slash entry is hidden.
@@ -448,6 +452,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // (a full-document rune walk is wasted work on every keystroke); the badge
   // just reads whatever is latest — a fraction-of-a-second lag is invisible.
   DocCounts _counts = DocCounts.zero;
+
+  /// Published for the shell, which draws the words·chars readout pinned to the
+  /// PANE rather than to the end of the content.
+  ///
+  /// A notifier, not a callback into `setState`: counts change on every edit,
+  /// and rebuilding the whole editor pane per keystroke to move a 12px label is
+  /// the wrong trade for a self-drawn canvas. Only the label listens.
   Timer? _countDebounce;
   static const Duration _countDebounceDelay = Duration(milliseconds: 400);
   // Active table column resize: node, right-column index, start x, start
@@ -679,34 +690,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _findMatches = const [];
       _findIndex = 0;
     });
-  }
-
-  /// A muted words·chars badge in the bottom-right corner. [IgnorePointer] so it
-  /// never eats clicks meant for the document beneath it; sits inside the
-  /// content-height surface, so it reads as a footer stat at the page's end.
-  Widget _buildWordCount() {
-    return IgnorePointer(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: MicaTheme.of(
-            context,
-          ).surface.raised.withValues(alpha: 0.95), // slate-50, near-opaque
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0x14000000)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          child: Text(
-            context.l10n.editorWordCount(_counts.words, _counts.chars),
-            style: TextStyle(
-              fontSize: 12,
-              height: 1.0,
-              color: MicaTheme.of(context).text.muted, // slate-500
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _buildFindBar() {
@@ -1127,7 +1110,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!mounted) return;
     final next = countBlocks(_controller.nodes.map((n) => n.text));
     if (next == _counts) return;
-    setState(() => _counts = next);
+    _counts = next;
+    widget.countsSink?.value = next;
   }
 
   void _onFocusChange() {
@@ -5712,8 +5696,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 ),
                 if (_findOpen)
                   Positioned(top: 6, right: 6, child: _buildFindBar()),
-                if (_counts.chars > 0)
-                  Positioned(bottom: 6, right: 8, child: _buildWordCount()),
+
               ],
             ),
           ),

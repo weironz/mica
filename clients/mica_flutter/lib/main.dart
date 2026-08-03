@@ -18,6 +18,7 @@ import 'cloud/workspace_migration.dart';
 import 'diagnostics.dart';
 import 'swallowed.dart';
 import 'local/local_offline.dart';
+import 'editor/word_count.dart';
 import 'web/yjs_probe.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show kMonoFont;
@@ -5933,6 +5934,40 @@ class _HomeNavRow extends StatelessWidget {
   }
 }
 
+/// The muted words·chars readout. Lives in the shell now, pinned to the pane's
+/// bottom-right; it used to be drawn by the editor at the end of the CONTENT,
+/// which on a short page put it in the middle of the screen with nothing around
+/// it. `IgnorePointer` so it never eats a click meant for the page beneath.
+class _WordCountBadge extends StatelessWidget {
+  const _WordCountBadge({required this.counts});
+
+  final DocCounts counts;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: MicaTheme.of(context).surface.raised.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0x14000000)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          child: Text(
+            context.l10n.editorWordCount(counts.words, counts.chars),
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.0,
+              color: MicaTheme.of(context).text.muted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CommentsButton extends StatelessWidget {
   const _CommentsButton({
     required this.openCount,
@@ -6586,6 +6621,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// — and reading the text while reading the note on it is the whole activity.
   /// A rail keeps both on screen (same shape AFFiNE settled on).
   bool _commentRailOpen = false;
+
+  /// Live words·chars, published by the editor.
+  ///
+  /// Held here because the readout is pinned to the PANE: it used to sit at the
+  /// end of the CONTENT, which on a short page is the middle of the screen —
+  /// a lone floating chip with nothing around it.
+  final ValueNotifier<DocCounts> _counts = ValueNotifier(DocCounts.zero);
 
   /// Open the comments panel for this document.
   ///
@@ -8207,11 +8249,128 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // The editor column is capped at widget.pageWidth (a fixed page-width
           // step) inside _editorScroll, and the window caps it below that on a
           // narrow pane — so no measured max is needed here.
+          // STICKY. It used to be the first child inside the scroll view, so
+          // scrolling a long page carried away the one line that says WHERE you
+          // are — exactly when a long page makes you want to know. AppFlowy
+          // keeps it pinned for the same reason.
+          //
+          // Same `Center` + `ConstrainedBox(pageWidth)` + gutter inset as the
+          // body below, so the pinned row stays on the page's text column
+          // instead of drifting to the window edge.
+          if (widget.selectedView != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 28, left: 28, right: 28),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: widget.pageWidth),
+                  child: Padding(
+                    padding: const EdgeInsets.only(
+                      left: EditorTheme.gutter,
+                      bottom: 2,
+                    ),
+                    child: PageBreadcrumb(
+                      views: widget.views,
+                      current: widget.selectedView!,
+                      onSelect: widget.onSelectView,
+                      // Renaming from the breadcrumb tail (AppFlowy does this).
+                      // Gated on the editor role: a viewer's rename would 403,
+                      // and an edit affordance that cannot succeed is worse than
+                      // none — same rule as everywhere else here.
+                      onRename: canEdit ? widget.onRenameView : null,
+                      onCopyPath: _copyPagePath,
+                      workspaceName: widget.selectedWorkspace?.name,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Quiet sync status (nothing when synced) sits just
+                          // left of the properties toggle, SiYuan-style top-right.
+                          if (widget.syncPhase != null)
+                            _SyncBadge(widget.syncPhase!),
+                          // Comments entry: only for cloud documents, and only
+                          // shows a count when something is actually open.
+                          if (widget.onAddComment != null)
+                            _CommentsButton(
+                              openCount: widget.commentThreads
+                                  .where((t) => !t.isResolved)
+                                  .length,
+                              active: _commentRailOpen,
+                              onTap: () {
+                                setState(
+                                  () => _commentRailOpen = !_commentRailOpen,
+                                );
+                                // Closing drops the emphasis: it means "the
+                                // thread I am reading", and with the rail gone
+                                // there is no such thing — leaving it on would
+                                // strand a stronger wash with nothing to explain
+                                // it.
+                                if (!_commentRailOpen) {
+                                  widget.onFocusCommentThread(null);
+                                }
+                              },
+                            ),
+                          // The right-hand twin of the sidebar collapse button.
+                          // It used to live one row lower, on the title row, so
+                          // the "symmetric pair" the old comment claimed was
+                          // visibly off — different row, different size. Same
+                          // line, same density, same icon size as the left one.
+                          IconButton(
+                            tooltip: _toolsExpanded
+                                ? context.l10n.pageHideSidePanel
+                                : context.l10n.pageShowSidePanel,
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => setState(
+                              () => _toolsExpanded = !_toolsExpanded,
+                            ),
+                            icon: Transform.flip(
+                              flipX: true,
+                              child: const Icon(
+                                Icons.view_sidebar_outlined,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                          _PropertiesToggle(
+                            active: _showProperties,
+                            hasProperties: bootstrap.rootFrontMatter
+                                .trim()
+                                .isNotEmpty,
+                            onTap: () => setState(
+                              () => _showProperties = !_showProperties,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           Expanded(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(child: _editorScroll(context, canEdit, bootstrap)),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: _editorScroll(context, canEdit, bootstrap),
+                      ),
+                      // Bottom-right of the PANE, so it reads as a status
+                      // readout that is always where you left it — not a chip
+                      // that lands wherever the text happens to stop.
+                      Positioned(
+                        right: 12,
+                        bottom: 8,
+                        child: ValueListenableBuilder<DocCounts>(
+                          valueListenable: _counts,
+                          builder: (context, counts, _) => counts.chars == 0
+                              ? const SizedBox.shrink()
+                              : _WordCountBadge(counts: counts),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 // Beside the page, under the format bar — the bar spans the
                 // whole pane because it acts on the document, the rail does not.
                 if (_commentRailOpen && widget.onAddComment != null)
@@ -8451,75 +8610,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         }
       },
       child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+        // Top padding moved to the pinned breadcrumb above; keeping it here too
+        // would open a gap between the pinned row and the page it belongs to.
+        padding: const EdgeInsets.fromLTRB(28, 4, 28, 28),
         child: Center(
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: widget.pageWidth),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Breadcrumb path (AppFlowy-style) with a trailing properties
-                // toggle (AFFiNE-style info button). Properties stay hidden
-                // behind the icon so they never occupy the page until asked for.
-                if (widget.selectedView != null)
-                  Padding(
-                    padding: const EdgeInsets.only(
-                      left: EditorTheme.gutter,
-                      bottom: 2,
-                    ),
-                    child: PageBreadcrumb(
-                      views: widget.views,
-                      current: widget.selectedView!,
-                      onSelect: widget.onSelectView,
-                      // Renaming from the breadcrumb tail (AppFlowy does this).
-                      // Gated on the editor role: a viewer's rename would 403,
-                      // and an edit affordance that cannot succeed is worse than
-                      // none — same rule as everywhere else here.
-                      onRename: canEdit ? widget.onRenameView : null,
-                      onCopyPath: _copyPagePath,
-                      workspaceName: widget.selectedWorkspace?.name,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Quiet sync status (nothing when synced) sits just
-                          // left of the properties toggle, SiYuan-style top-right.
-                          if (widget.syncPhase != null)
-                            _SyncBadge(widget.syncPhase!),
-                          // Comments entry: only for cloud documents, and only
-                          // shows a count when something is actually open.
-                          if (widget.onAddComment != null)
-                            _CommentsButton(
-                              openCount: widget.commentThreads
-                                  .where((t) => !t.isResolved)
-                                  .length,
-                              active: _commentRailOpen,
-                              onTap: () {
-                                setState(
-                                  () => _commentRailOpen = !_commentRailOpen,
-                                );
-                                // Closing drops the emphasis: it means "the
-                                // thread I am reading", and with the rail gone
-                                // there is no such thing — leaving it on would
-                                // strand a stronger wash with nothing to explain
-                                // it.
-                                if (!_commentRailOpen) {
-                                  widget.onFocusCommentThread(null);
-                                }
-                              },
-                            ),
-                          _PropertiesToggle(
-                            active: _showProperties,
-                            hasProperties: bootstrap.rootFrontMatter
-                                .trim()
-                                .isNotEmpty,
-                            onTap: () => setState(
-                              () => _showProperties = !_showProperties,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
                 // The editor canvas reserves EditorTheme.gutter on the left
                 // for the block drag handles, so its text starts at x=gutter.
                 // Inset the title + meta rows by the same amount to keep the
@@ -8673,20 +8772,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                           ],
                         ],
                       ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        tooltip: _toolsExpanded
-                            ? context.l10n.pageHideSidePanel
-                            : context.l10n.pageShowSidePanel,
-                        onPressed: () =>
-                            setState(() => _toolsExpanded = !_toolsExpanded),
-                        // Mirror of the left sidebar's icon → a symmetric pair
-                        // (panel bar on the right), matching AFFiNE.
-                        icon: Transform.flip(
-                          flipX: true,
-                          child: const Icon(Icons.view_sidebar_outlined),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -8744,6 +8829,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   key: _editorSurfaceKey,
                   padding: const EdgeInsets.only(top: 4),
                   child: MicaEditor(
+                    countsSink: _counts,
                     key: ValueKey(
                       '${bootstrap.document.id}#${widget.editorEpoch}',
                     ),
