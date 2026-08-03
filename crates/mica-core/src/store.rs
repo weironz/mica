@@ -2286,10 +2286,30 @@ mod tests {
                 return;
             }
         };
-        let before_views: i64 = {
+        // Per ORIGIN, not a single total. The original compared
+        // `COUNT(*) FROM local_view` (every origin) against `list_views("local")`
+        // (one origin) — fine when a real store held only local pages, and wrong
+        // from the moment the app began mirroring the cloud page tree into the
+        // same table under the server URL as origin. On this machine that is 153
+        // mirrored rows against 9 local ones, so the gate failed for everyone who
+        // had ever signed in — and failed saying «view rows lost in the upgrade»,
+        // which sends whoever hits it hunting a corruption bug that is not there.
+        //
+        // Comparing every origin to itself is also strictly stronger than the
+        // total ever was: it catches rows moving BETWEEN origins, which a sum
+        // would hide.
+        let counts_by_origin = |conn: &Connection| -> Vec<(String, i64)> {
+            let mut stmt = conn
+                .prepare("SELECT origin, COUNT(*) FROM local_view GROUP BY origin ORDER BY origin")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        let before_by_origin = {
             let conn = Connection::open(&p).unwrap();
-            conn.query_row("SELECT COUNT(*) FROM local_view", [], |r| r.get(0))
-                .unwrap()
+            counts_by_origin(&conn)
         };
         let store = LocalStore::open(&p).unwrap();
         for table in ["local_view", "local_workspace"] {
@@ -2303,11 +2323,16 @@ mod tests {
                 .unwrap();
             assert_eq!(pk, 2, "{table} migrated to the (origin,id) composite PK");
         }
+        assert_eq!(
+            counts_by_origin(&store.conn),
+            before_by_origin,
+            "no view rows lost in the upgrade (compared per origin)"
+        );
         let after = store.list_views("local").unwrap();
-        assert_eq!(after.len() as i64, before_views, "no view rows lost in the upgrade");
         eprintln!(
-            "real store upgraded OK: {} views, workspaces={:?}",
+            "real store upgraded OK: {} local views, origins={:?}, workspaces={:?}",
             after.len(),
+            before_by_origin,
             store.list_workspaces("local").unwrap().iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
         );
     }
