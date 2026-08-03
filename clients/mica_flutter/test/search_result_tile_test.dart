@@ -114,7 +114,7 @@ void main() {
   // Where a hit LIVES. Two pages called 「问题记录」 under different projects is
   // the normal case, and a list showing only names makes you open both to find
   // out which is which.
-  group('the path beside the name', () {
+  group('the path line', () {
     testWidgets('reads workspace first, folders after', (tester) async {
       await tester.pumpWidget(
         _host(
@@ -148,11 +148,12 @@ void main() {
       expect(find.textContaining('/'), findsNothing);
     });
 
-    // Collapsing must eat the MIDDLE. Dropping the tail would hide the folder
-    // the page is actually in — the one segment you were looking for.
-    testWidgets('a deep path keeps the workspace and the direct parent', (
-      tester,
-    ) async {
+    // A deep path is shown WHOLE. An earlier cut collapsed the middle out
+    // (`tools / … / reasonix`) because the path shared the title line and had
+    // no room; on its own line it does, and a path with a hole in it is not the
+    // path — you cannot tell 「问题记录」 under two projects apart from an
+    // ellipsis.
+    testWidgets('a deep path is not abbreviated', (tester) async {
       await tester.pumpWidget(
         _host(
           SearchResultTile(
@@ -165,24 +166,34 @@ void main() {
         ),
       );
 
-      expect(find.text('tools / … / reasonix'), findsOneWidget);
+      expect(find.text('tools / AI工具 / deepseek / reasonix'), findsOneWidget);
+      expect(find.textContaining('…'), findsNothing);
     });
+  });
 
-    testWidgets('three segments still fit whole', (tester) async {
-      await tester.pumpWidget(
-        _host(
-          SearchResultTile(
-            result: _hit(),
-            query: '部署',
-            path: const ['tools', 'AI工具', 'deepseek'],
-            selected: false,
-            onTap: () {},
-          ),
+  // The three lines answer three different questions, and each needs its own:
+  // what it is, where it lives, why it matched.
+  testWidgets('name, path and matched text are three separate lines', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        SearchResultTile(
+          result: _hit(name: '部署流程', snippet: '一段命中的正文'),
+          query: '命中',
+          path: const ['greenstor', '基础信息'],
+          selected: false,
+          onTap: () {},
         ),
-      );
+      ),
+    );
 
-      expect(find.text('tools / AI工具 / deepseek'), findsOneWidget);
-    });
+    expect(find.text('部署流程'), findsOneWidget);
+    expect(find.text('greenstor / 基础信息'), findsOneWidget);
+    // The snippet is rich text (the query is tinted inside it), so it is found
+    // by its runs rather than as one string.
+    expect(find.textContaining('一段'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('tapping the row reaches the host', (tester) async {

@@ -38,7 +38,13 @@ class _KeyCap extends StatelessWidget {
 ///
 /// Fixed so the keyboard selection can be scrolled into view by arithmetic
 /// (`index * extent`) rather than hanging a GlobalKey off every row.
-const double _searchRowHeight = 64;
+///
+/// Three lines now — name / path / matched text — so it is taller than the two
+/// it held before. Fixed also means every row is the SAME height whether or not
+/// it has a path or a snippet, which is what keeps the list from looking ragged
+/// (Notion's rows vary; ours cannot, and evenness is the better trade at a fixed
+/// extent).
+const double _searchRowHeight = 82;
 
 /// Move the search result selection by [delta] rows.
 ///
@@ -452,23 +458,20 @@ class SearchResultTile extends StatelessWidget {
   final String query;
 
   /// Where the hit lives: workspace first, then folders, WITHOUT the hit itself
-  /// (its name is the title right next to this). Empty draws nothing.
+  /// (its name is on the line above this). Empty draws nothing.
   ///
   /// Two names in a workspace can read identically — "问题记录" under three
   /// different projects is the normal case, not the exotic one — and a hit list
   /// that shows only names makes you open pages to find out which is which.
+  ///
+  /// Shown WHOLE. An earlier cut of this collapsed the middle out of deep paths
+  /// (`tools / … / reasonix`, which is what AppFlowy does on its one-line
+  /// layout); on a line of its own there is room for the real thing, and a path
+  /// with a hole in it is not the path.
   final List<String> path;
 
   final bool selected;
   final VoidCallback onTap;
-
-  /// Deep paths collapse in the MIDDLE, keeping the two segments that actually
-  /// locate you: the workspace and the folder the page is directly in. Dropping
-  /// the tail instead (a plain ellipsis) would keep the segments you already
-  /// guessed and hide the one you were looking for. Same call AppFlowy makes.
-  List<String> get _display => path.length > 3
-      ? [path.first, '…', path.last]
-      : path;
 
   /// The snippet with query matches tinted.
   ///
@@ -492,7 +495,7 @@ class SearchResultTile extends StatelessWidget {
             ),
         ],
       ),
-      maxLines: 2,
+      maxLines: 1,
       overflow: TextOverflow.ellipsis,
     );
   }
@@ -508,39 +511,52 @@ class SearchResultTile extends StatelessWidget {
         result.isFolder ? Icons.folder_outlined : Icons.description_outlined,
         size: 18,
       ),
-      // Path rides the title row rather than taking a third line: the list has a
-      // fixed 64px extent, and a taller row would mean fewer hits on screen —
-      // paying for context with the thing the context was for.
-      title: Row(
+      // Three lines, Notion's shape: WHAT it is, WHERE it lives, WHY it matched.
+      // Each answer gets its own line — squeezing the path onto the title row
+      // (the earlier cut of this) reads as one run-on line, and the eye has to
+      // find the boundary before it can use either half.
+      isThreeLine: true,
+      title: Text(result.name, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(child: Text(result.name, overflow: TextOverflow.ellipsis)),
-          if (_display.isNotEmpty) ...[
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                _display.join(' / '),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: MicaTheme.of(context).text.faint,
-                ),
+          if (path.isNotEmpty)
+            Text(
+              path.join(' / '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                color: MicaTheme.of(context).text.faint,
               ),
             ),
-          ],
+          // One line, not two. With the path above it the row is already three
+          // deep, and a snippet free to wrap is what made the old list look
+          // busy — the window around the hit is the point, not the paragraph.
+          _matchLine(context),
         ],
       ),
-      // A folder has no body, so it can only ever have matched on its name —
-      // say that rather than leaving the row bare.
-      subtitle: result.snippet.isEmpty
-          ? (result.isFolder
-                ? Text(context.l10n.searchFolderMatch)
-                : result.titleMatch
-                ? Text(context.l10n.searchTitleMatch)
-                : null)
-          : _snippet(context, result.snippet),
       onTap: onTap,
     );
+  }
+
+  /// WHY this row is here: the matched text, or — for a hit with no body to
+  /// quote — what it matched on instead. A folder has no body at all, so
+  /// leaving this blank would make the row look like a mistake.
+  Widget _matchLine(BuildContext context) {
+    if (result.snippet.isNotEmpty) return _snippet(context, result.snippet);
+    final style = TextStyle(
+      fontSize: 12,
+      color: MicaTheme.of(context).text.faint,
+    );
+    if (result.isFolder) {
+      return Text(context.l10n.searchFolderMatch, style: style, maxLines: 1);
+    }
+    if (result.titleMatch) {
+      return Text(context.l10n.searchTitleMatch, style: style, maxLines: 1);
+    }
+    return const SizedBox.shrink();
   }
 }
 
