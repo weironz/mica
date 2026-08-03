@@ -27,23 +27,7 @@
 > SSRF 等此前漏网的高危项。
 
 - 🆕 **可上传携带脚本的 SVG,直开 blob 链接执行脚本**(**降级 low**,2026-07-22 复核)—— 允许 `image/svg+xml`,blob 端点(`blob_inner`)**302 跳存储的 `download_url`**(`public_base_url`/CDN 或 presigned GET,都是**存储源、非 app 源**)→ SVG 脚本跑在存储源、**碰不到 app 的 token,不是账号接管 XSS**。**仅当**运营者把 `public_base_url` 配成与 app 同源才成洞(部署误配)。且 302-跳存储架构下 app 不发字节,强制 attachment 别扭(要么上传即拒 SVG / 存成 text/plain,要么 presigned 加 `response-content-disposition`)。作为「防误配」的纵深项保留,非活跃洞。(`files.rs:350/364/537`)(S) `[需后端]`
-- 🟡 **客户端令牌明文存储:桌面已加密,web 仍是明文**(2026-08-03)—— ~~桌面明文存 prefs~~ ✅
-  Windows 上过 DPAPI(`secret_store_stub.dart`,`dart:ffi` 直绑 crypt32,无新依赖);
-  实测本机迁移前 access/refresh 各 165/72 字符明文,迁移后为 `dpapi1:` 密文且登录态不变。
-  **残留 = web**:`authToken`+`refreshToken` 明文写 localStorage,任意同源 JS 可读 ——
-  它**直接放大分享页 XSS**,所以比桌面那半更值钱。浏览器里没有 DPAPI 的对等物,可选路子是
-  只存在内存 + 用 httpOnly cookie 承载 refresh(要服务端配合),或干脆缩短 access TTL 认了。
-  **注意别被桌面那半的 ✅ 骗过去** —— 剩下的这半才是威胁模型更严重的一边。(`prefs_web.dart:6`)(M)
 - 🟡 **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文**(2026-07-30 核实:「无启动告警」已假)—— ~~无启动告警~~ ✅ 早在 `9289ecf` 就有:`main.rs` 绑定后判 `!addr.ip().is_loopback()`,非环回即 warn「本进程只说明文 HTTP,请在前面终止 TLS,否则连 WS URL 里那个 token 都在网上裸奔」。默认 `127.0.0.1` 安全且**静默** —— 只有真承担了风险的部署才看到告警。(2026-07-30 顺手修了那条字符串:它被压成一行、中间留了三段连续空格,打出来有大段空白。)**残留**:TLS 本体仍全靠运维,且告警只是告警 —— 没有「prod + 非环回 + 无 TLS 即拒启动」的硬闸门(要拒得先能看见前面有没有反代,单机上看不见)。(M) `[需后端]`
-- 🟡 **WS token 走 query string:桌面已修,web 仍在 URL 里**(2026-08-03)—— ~~桌面~~ ✅
-  `connectAuthedSocket`(`ws_connect_stub.dart`)把 token 从 query 摘出来放进
-  `Authorization: Bearer`;服务端的 `token_from_request` 本就先认 header,所以这半是**纯客户端
-  改动**(原条目标着 `[需后端]`,是**工作量标反** —— 那比条目过期更坑,它让人以为是件大活而绕开)。
-  活栈实测:`connected with Authorization: Bearer (no ?token=)`。
-  **残留 = web**:浏览器 `WebSocket` 按规范不能设请求头,所以 URL 是握手唯一的通道。修它要**改协议**
-  —— 连上后第一帧发 token,或用 HTTPS 换一次性短命 ticket 连上即焚;两者都要服务端跟着改,
-  所以没有夹带在桌面那半里。这条平台差异写成了测试(`ws_connect_test.dart` 最后一条),
-  把 web 改对时**必须删掉它**才能通过。(M) `[需后端]`
 - **弱口令:唯一校验是 `len() >= 8`**(2026-08-03 核实,**原条目「开放注册无验证」那半已假**)——
   邮箱验证**早就做了**:`auth.rs` 有 `email_verified_at`、注册返 **204 而非 session**、
   另有 `resend-verification`(空实例的第一个账号例外放行,否则自托管装不起来)。
@@ -202,9 +186,9 @@
    ② ~~长连 WS 超 token TTL 无 re-auth 心跳~~ ✅ **已做(2026-08-03)**;
    ③ ~~桌面 token DPAPI~~ ✅ **已做(2026-08-03,`13d7dfa`)**。
    ①②**同一个提交做完了**(`fd509f2`):它们都在 `ws.rs`,分开做要读两遍同一段代码。
-   **这一档只剩两处,而且都在 web**:①的 web 那半(WS token 出 URL,要改协议)、
-   ③的 web 那半(localStorage 明文)。**桌面侧这三件已经关完了** —— 但别把这读成
-   「安全三件做完了」:留下的那两处恰好是威胁模型更重的一边(同源 JS 可读 + 放大分享页 XSS)。
+   **①③的 web 那半也在 2026-08-03 关掉了**(`264d018` / `537422d`):凭据改走 HttpOnly
+   cookie,一个机制同时解决「localStorage 明文」和「WS token 出 URL」—— 详见存档。
+   **这一档现在只剩 ④ 弱口令(S)**,而它是四件里最小的一件。
 2. **发布可信度:Windows Authenticode 签名**(M)—— 更新器已校验 size+sha256,但用户装的
    仍是一个 SmartScreen 会告警的包。这是新用户看到的**第一样**东西,而它现在说「不可信」。
 3. **成熟度大件(用户挑一个)** —— 长文档虚拟化(L)/ 表格补齐 / 反链面板 / 同块字符级协同(L)。

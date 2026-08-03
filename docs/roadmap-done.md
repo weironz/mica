@@ -87,6 +87,24 @@
   单测 7 条在真 DPAPI 上跑过;端到端实测:迁移后为密文(527/399)、键数不变、**登录态完好**
   (工作区 733 页加载)—— 只加密而读不回来等于把用户踢下线,两半都要成立。
 
+- ~~**web 凭据:localStorage 明文 + WS token 出 URL**~~ ✅ **两处一起关掉(2026-08-03,`264d018`/`537422d`)**
+  —— 它们是同一个问题的两面,一个机制解决:**HttpOnly cookie**。**推翻的前提**:此前的条目和
+  代码注释都写着「web 只能把 token 放 URL,因为浏览器 WebSocket API 设不了 header」——
+  前半句对,结论错。**WS 握手就是一个普通 HTTP 请求**,同源 cookie 自动跟着走;「设不了自定义
+  header」被当成了「没法鉴权」。扒 AFFiNE 源码(`affine_session` cookie,其 WS gateway 测试
+  就是从 cookie 取 session)才撞破 —— 正是原则 #6 说的那类假前提。**落地**:服务端 cookie 成为
+  token 第三来源(header > cookie > `?token=` 兼容尾巴;头赢 cookie 是有意的 —— 显式的头是
+  一次决定,cookie 是环境自带的),login/refresh 下发 `mica_session`+`mica_refresh`,logout 清除
+  (**即使 token 已不认识也要清**,否则「退出登录」在最要紧那种情况下是句假话);web 侧机密键
+  只进内存并**主动删掉旧版留在 localStorage 的副本**(否则升级只是装样子),WS URL 里不再有任何
+  凭据,刷新页面用 refresh cookie 换回内存 token。**CSRF 是本方案引入的新风险**,按最小充分解
+  做单层 `SameSite=Strict`(token 只从 cookie 读取、不与环境状态组合);**边界写进注释**:哪天
+  API 与 app 不同源,这套推理要重做而不是往上加。**活栈端到端抓到一个单测抓不到的缺口**:
+  cookie 只加进了 `scope_guard`,而 `user_id_from_headers` / `ai_ws::token_from` 自己取 token、
+  不走中间件 —— **一半端点认、一半不认比全都不认更糟**,故障是逐端点的,读起来像服务器时好时坏
+  (`537422d` 修)。冒烟 `tool/web_cookie_smoke.dart` 14 条断言全过(含「WS 只靠 cookie 建连」)。
+  **刻意不测** Chrome 会不会带 cookie:那是同源规范行为,测它要驱动登录表单即自动输密码。
+
 ## 生产运维与备份 🆕
 
 > 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
