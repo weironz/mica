@@ -8,6 +8,7 @@ use tracing::info;
 
 mod blob_gc;
 mod mail;
+mod password_strength;
 mod rate_limit;
 mod routes;
 

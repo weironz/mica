@@ -18,6 +18,7 @@ use mica_app_core::AppState;
 use mica_infra::{ApiError, ApiResult, Environment};
 
 use super::email_verify;
+use crate::password_strength;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
@@ -125,7 +126,9 @@ pub async fn register(
   // shuts behind it.
   let email = normalize_email(&payload.email)?;
   let display_name = normalize_display_name(&payload.display_name)?;
-  validate_password(&payload.password)?;
+  // The email and display name go in: the cheapest guess against a specific
+  // account is that the password is made out of its own name.
+  validate_password(&payload.password, &[&email, &display_name])?;
 
   let password_hash = hash_password(&payload.password)?;
 
@@ -279,12 +282,6 @@ pub async fn change_password(
 ) -> ApiResult<StatusCode> {
   let user_id = user_id_from_headers(&state, &headers).await?;
 
-  if payload.new_password.len() < 8 {
-    return Err(ApiError::BadRequest(
-      "new password must be at least 8 characters".to_string(),
-    ));
-  }
-
   let user = sqlx::query_as::<_, UserRow>(
     r#"
       SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
@@ -298,6 +295,10 @@ pub async fn change_password(
   .ok_or(ApiError::Unauthorized)?;
 
   verify_password(&payload.current_password, &user.password_hash)?;
+  // AFTER the current password is proven, and with this user's own identifiers:
+  // the row had to be fetched anyway, and checking first would let an
+  // unauthenticated caller probe which passwords the policy accepts.
+  validate_password(&payload.new_password, &[&user.email, &user.display_name])?;
   let password_hash = hash_password(&payload.new_password)?;
 
   sqlx::query(
@@ -1012,14 +1013,9 @@ fn normalize_display_name(display_name: &str) -> ApiResult<String> {
   Ok(display_name)
 }
 
-fn validate_password(password: &str) -> ApiResult<()> {
-  if password.len() < 8 {
-    return Err(ApiError::BadRequest(
-      "password must be at least 8 characters".to_string(),
-    ));
-  }
-
-  Ok(())
+fn validate_password(password: &str, identifiers: &[&str]) -> ApiResult<()> {
+  password_strength::check(password, identifiers)
+    .map_err(|weak| ApiError::BadRequest(weak.message().to_string()))
 }
 
 pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
