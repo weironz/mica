@@ -3236,6 +3236,32 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Next sibling position under [parentViewId] (zero-padded, 10-spaced).
   /// Open the on-device store, load the page tree, and select (or seed) a page.
+  /// Index documents saved before the search projection existed.
+  ///
+  /// Every save writes the projection from now on, so this only ever runs
+  /// through the backlog once — but that backlog is every page the user already
+  /// had (588 snapshots on this machine), and none of them would be findable by
+  /// body text until something walked them.
+  ///
+  /// **Batched, off the first frame, and never surfaced as an error.** Search
+  /// being briefly incomplete is invisible; a startup that stalls decoding
+  /// hundreds of CRDT documents is not. The yields between batches are the whole
+  /// point — without them this is one long block with extra steps.
+  Future<void> _backfillLocalSearchIndex() async {
+    const batch = 25;
+    try {
+      while (mounted) {
+        final done = await _local.backfillSearchIndex(batch);
+        if (done < batch) return; // caught up
+        await Future<void>.delayed(Duration.zero);
+      }
+    } catch (_) {
+      // An index that did not finish building costs body matches on some pages.
+      // It is not worth a message, and it is certainly not worth failing local
+      // mode over — the notes open either way.
+    }
+  }
+
   Future<void> _initLocalOffline() async {
     if (_localReady) return;
     final l10n = context.l10n;
@@ -3254,6 +3280,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     _reloadLocalWorkspaces();
     _reloadLocalViews();
+    unawaited(_backfillLocalSearchIndex());
     if (_localViews.isEmpty) {
       await _localCreateDocument(l10n.pageWelcomeName);
     } else {

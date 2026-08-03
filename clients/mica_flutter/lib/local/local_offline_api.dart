@@ -90,6 +90,10 @@ abstract interface class LocalOfflineApi {
   /// them apart (see `onSearch: null` in main.dart).
   Future<List<SearchResult>> searchLocal(String query, {int limit});
 
+  /// Index up to [limit] documents saved before the search projection existed.
+  /// Returns how many it did; fewer than [limit] means the backlog is done.
+  Future<int> backfillSearchIndex(int limit);
+
   /// What the on-device store is holding, split into re-downloadable mirrors and
   /// local-only originals. See `cache_stats.dart` for why the split matters.
   ///

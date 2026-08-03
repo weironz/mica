@@ -216,6 +216,12 @@ class LocalOffline implements LocalOfflineApi {
     ];
   }
 
+  Future<int> backfillSearchIndex(int limit) async {
+    final store = _store;
+    if (store == null) return 0;
+    return store.backfillSearchIndex(limit: limit);
+  }
+
   void saveView(ViewData v, {String origin = 'local'}) {
     _store?.saveView(
       view: LocalView(

@@ -114,6 +114,9 @@ class LocalOffline implements LocalOfflineApi {
   Future<List<SearchResult>> searchLocal(String query, {int limit = 50}) async =>
       const [];
 
+  @override
+  Future<int> backfillSearchIndex(int limit) async => 0;
+
   /// Web has no on-device store at all, so there is nothing cached and nothing
   /// local-only — all zeros rather than a thrown "unsupported".
   @override
