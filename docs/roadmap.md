@@ -155,7 +155,6 @@
   **另一条约束**:`content_text` 是 `state` 的纯投影、同语句 co-write(红线#1)。base 一旦
   改成惰性重建,搜索索引就会在两次 squash 之间陈旧 —— 那是个**产品取舍**,必须摆到台面上
   决定,不能顺手做掉。(M) `[需后端]`
-- ~~**本地持久化:云文档已增量,纯本地文档仍全量**~~ ✅ **已做(2026-08-03)** —— 纯本地(离线)文档从「400ms debounce 全量 `saveDoc`」改成 append + 定期折叠,与云端同一套机制(`append_update` / `load_doc` 重放 base+log)。**「接线即可」是错的**:`squash` 刻意保留 `clock > pushed_clock`(那些还欠服务端),`trim_updates_through` 也钳在同一个标记上,而**纯本地文档永远没有服务端、`pushed_clock` 恒为 0** → 两条裁剪路径对它都是空操作,照原计划直接改追加会把「有界的全量写」换成**无界日志 + 每次开文档全量重放**,正是本文件 yrs base 那条踩过的形状。所以补了 Rust 原语 `compact_local`(折叠 + 清空全部日志),**守卫写在 store 里而非调用方**:任何有云同步痕迹的文档(sync cursor 非零、或有 remote log 行)一律拒绝——删掉未推送的 outbox 就是静默的服务端数据丢失(红线#1)。顺带两个非性能收益:① **400ms 窗口消失**,编辑在 `applyOps` 返回时就已落盘(此前崩在窗口内静默丢失);② **`loadDoc` 不再会陈旧**,读之前不必记得先 `flush()`(`local_offline_io.dart` 里有 4 处正是为此而 flush,忘一处就导出比屏幕上更旧的文档)。另注意 `compact_local` 必须走 `capture_auto_version`——本地版本历史原本挂在那个全量 `saveDoc` 上,不接就会静默停摆。(`store.rs` `compact_local`, `local_doc.dart`;Rust 3 测 + 集成测试 3 条)
 - **frb v2 热路径 FFI 基准待测** —— IME/逐字输入若过慢,热路径留 Dart(phase2 §12)。(M)
 
 ## 开发者体验 / CI / Markdown

@@ -295,6 +295,7 @@
 
 ## 性能
 
+- ~~**本地持久化:云文档已增量,纯本地文档仍全量**~~ ✅ **已做(2026-08-03)** —— 纯本地(离线)文档从「400ms debounce 全量 `saveDoc`」改成 append + 定期折叠,与云端同一套机制(`append_update` / `load_doc` 重放 base+log)。**「接线即可」是错的**:`squash` 刻意保留 `clock > pushed_clock`(那些还欠服务端),`trim_updates_through` 也钳在同一个标记上,而**纯本地文档永远没有服务端、`pushed_clock` 恒为 0** → 两条裁剪路径对它都是空操作,照原计划直接改追加会把「有界的全量写」换成**无界日志 + 每次开文档全量重放**,正是本文件 yrs base 那条踩过的形状。所以补了 Rust 原语 `compact_local`(折叠 + 清空全部日志),**守卫写在 store 里而非调用方**:任何有云同步痕迹的文档(sync cursor 非零、或有 remote log 行)一律拒绝——删掉未推送的 outbox 就是静默的服务端数据丢失(红线#1)。顺带两个非性能收益:① **400ms 窗口消失**,编辑在 `applyOps` 返回时就已落盘(此前崩在窗口内静默丢失);② **`loadDoc` 不再会陈旧**,读之前不必记得先 `flush()`(`local_offline_io.dart` 里有 4 处正是为此而 flush,忘一处就导出比屏幕上更旧的文档)。另注意 `compact_local` 必须走 `capture_auto_version`——本地版本历史原本挂在那个全量 `saveDoc` 上,不接就会静默停摆。(`store.rs` `compact_local`, `local_doc.dart`;Rust 3 测 + 集成测试 3 条)
 - ~~**长文档性能**~~ ✅ **性能线已闭环**(2026-07-23)—— 设计 `docs/editor-virtualization-plan.md`。三刀叠加后每击键 = O(改动块)真推导 + O(N) 平凡重定位:**Phase 1**(da25075)painter 缓存复用,干掉逐帧 dispose+重建全部 TextPainter;**代码高亮记忆化**(7fe1997)未变代码块不再重新分词;**Phase 2**(b750d88)整块 layout 缓存 `_layoutCache`,未变块跳过 marks/span/高亮/rect 全部推导只 `shiftBy` 重定位,dirty 判定用 identity(实证 controller 只重赋值不原地改 text/data)。回归 `test/{painter_cache,code_span_memo,layout_reuse}_test.dart`,全量 728 通过。**残留(L,有意不做)**:真·视口虚拟化(屏外跳过排版)——两条架构约束(performLayout 无滚动偏移、编辑器不自管视口)使其为独立架构项,ROI 仅万级块/超长档,剧本留档待需。
 - ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
 
