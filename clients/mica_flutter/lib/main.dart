@@ -5968,6 +5968,68 @@ class _WordCountBadge extends StatelessWidget {
   }
 }
 
+/// The right sidebar's tabs.
+enum _ToolsTab { outline, comments }
+
+/// One tab in the right sidebar's header. Icon + label + optional count.
+class _ToolsTabButton extends StatelessWidget {
+  const _ToolsTabButton({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.onTap,
+    this.badge = 0,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  /// Unresolved count, shown on the tab so you do not have to open it to learn
+  /// there is something in it. Zero draws nothing.
+  final int badge;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = MicaTheme.of(context);
+    final color = active ? tokens.accent.primary : tokens.text.muted;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? tokens.accent.wash : null,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                color: color,
+              ),
+            ),
+            if (badge > 0) ...[
+              const SizedBox(width: 5),
+              Text(
+                '$badge',
+                style: TextStyle(fontSize: 11, color: tokens.text.faint),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CommentsButton extends StatelessWidget {
   const _CommentsButton({
     required this.openCount,
@@ -6615,12 +6677,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // the body down until you ask for it.
   bool _showProperties = false;
 
-  /// Is the comment rail docked open?
+  /// Which tab the right sidebar is showing.
   ///
-  /// It used to be a modal dialog, which hid the passage the comments are ABOUT
-  /// — and reading the text while reading the note on it is the whole activity.
-  /// A rail keeps both on screen (same shape AFFiNE settled on).
-  bool _commentRailOpen = false;
+  /// One sidebar, not two: the outline and the comments used to be separate
+  /// surfaces that could both be open, and together they left the text column
+  /// about 300px on a normal window.
+  _ToolsTab _toolsTab = _ToolsTab.outline;
 
   /// Live words·chars, published by the editor.
   ///
@@ -8293,19 +8355,28 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               openCount: widget.commentThreads
                                   .where((t) => !t.isResolved)
                                   .length,
-                              active: _commentRailOpen,
+                              active:
+                                  _toolsExpanded &&
+                                  _toolsTab == _ToolsTab.comments,
                               onTap: () {
-                                setState(
-                                  () => _commentRailOpen = !_commentRailOpen,
-                                );
+                                final showing =
+                                    _toolsExpanded &&
+                                    _toolsTab == _ToolsTab.comments;
+                                setState(() {
+                                  // From anywhere else this means "show me the
+                                  // comments", not "toggle the sidebar" — so it
+                                  // opens the sidebar AND selects the tab. Only
+                                  // a second press on an already-showing comment
+                                  // tab closes it.
+                                  _toolsExpanded = !showing;
+                                  _toolsTab = _ToolsTab.comments;
+                                });
                                 // Closing drops the emphasis: it means "the
-                                // thread I am reading", and with the rail gone
+                                // thread I am reading", and with the panel gone
                                 // there is no such thing — leaving it on would
                                 // strand a stronger wash with nothing to explain
                                 // it.
-                                if (!_commentRailOpen) {
-                                  widget.onFocusCommentThread(null);
-                                }
+                                if (showing) widget.onFocusCommentThread(null);
                               },
                             ),
                           // The right-hand twin of the sidebar collapse button.
@@ -8346,11 +8417,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ),
             ),
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: Stack(
+            child: Stack(
                     children: [
                       Positioned.fill(
                         child: _editorScroll(context, canEdit, bootstrap),
@@ -8368,24 +8435,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               : _WordCountBadge(counts: counts),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                // Beside the page, under the format bar — the bar spans the
-                // whole pane because it acts on the document, the rail does not.
-                if (_commentRailOpen && widget.onAddComment != null)
-                  CommentPanel(
-                    threads: widget.commentThreads,
-                    currentUserId: widget.session?.user.id,
-                    onReply: widget.onReplyComment,
-                    onSetResolved: widget.onSetCommentResolved,
-                    onDelete: widget.onDeleteCommentThread,
-                    onFocusThread: (t) => widget.onFocusCommentThread(t.id),
-                    onClose: () {
-                      setState(() => _commentRailOpen = false);
-                      widget.onFocusCommentThread(null);
-                    },
-                  ),
               ],
             ),
           ),
@@ -8857,7 +8906,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             // opening because a collaborator commented would be
                             // an interruption, not a convenience.
                             if (mounted) {
-                              setState(() => _commentRailOpen = true);
+                              setState(() {
+                                _toolsExpanded = true;
+                                _toolsTab = _ToolsTab.comments;
+                              });
                             }
                           },
                     remoteCursors: [
@@ -8997,7 +9049,70 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// Right panel — the current page's outline (table of contents). Rebuilds
   /// off [_outlineHook] so headings track live edits, not just navigation.
+  /// The ONE right sidebar: outline and comments as tabs, not two competing
+  /// panels.
+  ///
+  /// They used to be separate surfaces — the outline lived here, the comment
+  /// rail was mounted inside the editor pane — so opening both squeezed the
+  /// text column to ~300px on a normal window. Two auxiliary views fighting the
+  /// document for width is the wrong trade every time; AFFiNE puts them in one
+  /// rail behind icon tabs for the same reason.
   Widget _workspaceTools(BuildContext context) {
+    final canComment = widget.onAddComment != null;
+    final tab = (!canComment) ? _ToolsTab.outline : _toolsTab;
+    return ColoredBox(
+      color: MicaTheme.of(context).surface.base,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (canComment)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 8, 4),
+              child: Row(
+                children: [
+                  _ToolsTabButton(
+                    icon: Icons.toc,
+                    label: context.l10n.pageOutlineTitle,
+                    active: tab == _ToolsTab.outline,
+                    onTap: () =>
+                        setState(() => _toolsTab = _ToolsTab.outline),
+                  ),
+                  const SizedBox(width: 4),
+                  _ToolsTabButton(
+                    icon: Icons.chat_bubble_outline,
+                    label: context.l10n.commentsTitle,
+                    active: tab == _ToolsTab.comments,
+                    // The unresolved count rides the tab now: with the panel
+                    // behind a tab you would otherwise have to open it to learn
+                    // there is anything in it.
+                    badge: widget.commentThreads
+                        .where((t) => !t.isResolved)
+                        .length,
+                    onTap: () =>
+                        setState(() => _toolsTab = _ToolsTab.comments),
+                  ),
+                  const Spacer(),
+                ],
+              ),
+            ),
+          Expanded(
+            child: tab == _ToolsTab.comments
+                ? CommentPanel(
+                    threads: widget.commentThreads,
+                    currentUserId: widget.session?.user.id,
+                    onReply: widget.onReplyComment,
+                    onSetResolved: widget.onSetCommentResolved,
+                    onDelete: widget.onDeleteCommentThread,
+                    onFocusThread: (t) => widget.onFocusCommentThread(t.id),
+                  )
+                : _outlineTab(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _outlineTab(BuildContext context) {
     return ListenableBuilder(
       listenable: _outlineHook,
       builder: (context, _) {
@@ -9015,17 +9130,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.toc, size: 18),
-                          const SizedBox(width: 8),
-                          Text(
-                            context.l10n.pageOutlineTitle,
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
                       ...outline,
                     ],
                   ),
