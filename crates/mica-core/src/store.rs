@@ -1251,6 +1251,68 @@ impl LocalStore {
         }
     }
 
+    /// Fold every logged update into the base and clear the log — the
+    /// local-only counterpart of [`Self::squash`].
+    ///
+    /// [`Self::squash`] deliberately KEEPS the un-pushed outbox tail
+    /// (`clock > pushed_clock`), because those updates still owe the server, and
+    /// [`Self::trim_updates_through`] clamps to the same mark. A document with no
+    /// cloud counterpart owes nothing and its `pushed_clock` stays 0 forever — so
+    /// neither of them can ever bound its log. Without this, moving the local
+    /// backend from "re-snapshot on a debounce" to "append" would trade a bounded
+    /// full write for an UNBOUNDED log that [`Self::load_doc`] replays on every
+    /// open: strictly worse, and invisible until someone's file got slow.
+    ///
+    /// Returns whether it compacted. It REFUSES on any document showing evidence
+    /// of cloud sync — a non-zero sync cursor, or any remote-log row. Safe by
+    /// construction rather than by caller discipline: dropping an un-pushed
+    /// outbox entry is silent server-side data loss (red line #1), and this is
+    /// the one operation in the store that deletes updates the base might not
+    /// have folded.
+    ///
+    /// Captures an auto version like [`Self::save_doc`] does. Local version
+    /// history rode on the debounced full save; without this line it would stop
+    /// the moment the caller stopped calling `save_doc`, and nothing would say so.
+    pub fn compact_local(&self, doc_id: &str, client_id: u64) -> Result<bool, StoreError> {
+        let cursor = self.sync_cursor(doc_id)?;
+        if cursor.pushed_clock != 0 || cursor.last_synced_rid != 0 {
+            return Ok(false);
+        }
+        let remote_rows: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM doc_remote_update WHERE doc_id=?1",
+            params![doc_id],
+            |r| r.get(0),
+        )?;
+        if remote_rows != 0 {
+            return Ok(false);
+        }
+        let doc = match self.load_doc(doc_id, client_id)? {
+            Some(d) => d,
+            None => return Ok(false),
+        };
+        let state = doc.encode_state();
+        let crc = blob_crc(&state);
+        // One transaction: the fold and the clear commit together. Replay is
+        // idempotent so a crash between them would be survivable anyway, but a
+        // reader shouldn't have to reconstruct that argument to trust the file.
+        self.conn.execute_batch("BEGIN;")?;
+        let result: Result<(), StoreError> = (|| {
+            self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
+            self.conn
+                .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                return Err(e);
+            }
+        }
+        self.capture_auto_version(doc_id, &state, crc)?;
+        Ok(true)
+    }
+
     /// A document's cloud sync high-water marks (zeroed if never synced).
     pub fn sync_cursor(&self, doc_id: &str) -> Result<SyncCursor, StoreError> {
         Ok(self
@@ -1915,6 +1977,114 @@ mod tests {
             store.updates_after("d", 1).unwrap().into_iter().map(|(c, _)| c).collect::<Vec<_>>(),
             vec![2, 3],
             "outbox still holds the un-pushed edits",
+        );
+    }
+
+    /// A local-only document has no server, so `pushed_clock` stays 0 forever —
+    /// which means `squash` (keeps `clock > pushed_clock`) and
+    /// `trim_updates_through` (clamps to it) can BOTH never delete a single row
+    /// of its log. This is the test that makes that concrete: without
+    /// `compact_local`, switching the offline backend to an append-log would
+    /// have produced an unbounded log replayed on every open.
+    #[test]
+    fn a_local_only_doc_cannot_be_bounded_by_squash_or_trim() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        store
+            .save_doc("d", &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)))
+            .unwrap();
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        for i in 0..3 {
+            let sv = working.state_vector();
+            working.text_insert("a", 5, &format!(" {i}"));
+            store.append_update("d", &working.encode_diff(&sv).unwrap()).unwrap();
+        }
+        assert_eq!(store.doc_updates("d").unwrap().len(), 3);
+
+        store.squash("d", cid).unwrap();
+        store.trim_updates_through("d", 999).unwrap();
+        assert_eq!(
+            store.doc_updates("d").unwrap().len(),
+            3,
+            "both cloud-shaped trims are no-ops when pushed_clock is 0",
+        );
+
+        assert!(store.compact_local("d", cid).unwrap());
+        assert_eq!(store.doc_updates("d").unwrap().len(), 0, "log cleared");
+        assert_eq!(
+            store.load_doc("d", cid).unwrap().unwrap().to_blocks().iter()
+                .find(|b| b.id == "a").unwrap().text,
+            "Hello 2 1 0",
+            "every edit survives in the folded base",
+        );
+    }
+
+    /// The guard, and the reason it is in the store rather than in the caller:
+    /// clearing the log of a doc that still owes the server is silent
+    /// server-side loss. Caller discipline is not a guarantee — this is.
+    #[test]
+    fn compact_local_refuses_anything_that_smells_of_cloud() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+
+        // ① a doc with an un-pushed outbox and a live sync cursor
+        store
+            .save_doc("cloud", &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)))
+            .unwrap();
+        let mut working = store.load_doc("cloud", cid).unwrap().unwrap();
+        let sv = working.state_vector();
+        working.text_insert("a", 5, " edit");
+        store.append_update("cloud", &working.encode_diff(&sv).unwrap()).unwrap();
+        store
+            .set_sync_cursor("cloud", SyncCursor { last_synced_rid: 7, pushed_clock: 0 })
+            .unwrap();
+        assert!(!store.compact_local("cloud", cid).unwrap(), "synced cursor → refuse");
+        assert_eq!(store.doc_updates("cloud").unwrap().len(), 1, "outbox untouched");
+
+        // ② a doc that has received remote updates (cursor still zero)
+        store
+            .save_doc("remote", &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)))
+            .unwrap();
+        let mut w2 = store.load_doc("remote", cid).unwrap().unwrap();
+        let sv2 = w2.state_vector();
+        w2.text_insert("a", 5, " r");
+        let diff = w2.encode_diff(&sv2).unwrap();
+        store.append_remote_update("remote", 1, &diff).unwrap();
+        store.append_update("remote", &diff).unwrap();
+        assert!(!store.compact_local("remote", cid).unwrap(), "remote log → refuse");
+        assert_eq!(store.doc_updates("remote").unwrap().len(), 1, "outbox untouched");
+
+        // ③ a doc that does not exist at all
+        assert!(!store.compact_local("nope", cid).unwrap());
+    }
+
+    /// Local version history rode on the debounced full `save_doc`. Once the
+    /// backend stops calling it, the only thing that can keep history alive is
+    /// this — and a missing auto-version is exactly the kind of loss that says
+    /// nothing at the time.
+    #[test]
+    fn compact_local_still_captures_a_version() {
+        let store = LocalStore::open_in_memory().unwrap();
+        let cid = store.identity().unwrap().client_id;
+        let (root, blocks) = sample();
+        store
+            .save_doc("d", &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)))
+            .unwrap();
+        let before = store.list_local_versions("d").unwrap().len();
+
+        let mut working = store.load_doc("d", cid).unwrap().unwrap();
+        let sv = working.state_vector();
+        working.text_insert("a", 5, " more");
+        store.append_update("d", &working.encode_diff(&sv).unwrap()).unwrap();
+        assert!(store.compact_local("d", cid).unwrap());
+
+        // The cadence is min-interval, so this is "history did not go dead",
+        // not "one version per compaction".
+        assert!(
+            store.list_local_versions("d").unwrap().len() >= before,
+            "compaction must go through the same version capture save_doc uses",
         );
     }
 

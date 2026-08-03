@@ -39,8 +39,12 @@ class LocalDocBackend {
   // local and cloud interpret edits identically.
   final DocOpMirror _mirror = DocOpMirror();
 
-  Timer? _saveTimer;
-  static const _saveDebounce = Duration(milliseconds: 400);
+  /// Appends since the last compaction check. Same shape and same numbers as
+  /// the cloud store's `_maybeCompact` — this file and that one now persist the
+  /// same way, which is the point of the change.
+  int _appendsSinceCheck = 0;
+  static const _compactCheckEvery = 32;
+  static const _compactThreshold = 256;
 
   /// Open the local document `docId` from `store`, seeding an empty one-paragraph
   /// page if it doesn't exist yet. `rootId`/`seedBlocks` only matter on first
@@ -63,6 +67,12 @@ class LocalDocBackend {
       throw LocalDocCorruptException(docId);
     }
     if (existing != null) {
+      // Fold whatever the last session left in the log BEFORE checkpointing.
+      // The checkpoint copies only the base row, and `rollbackDoc` restores that
+      // base AND drops the log — so without this the recovery point would sit
+      // before the previous session's edits and a rollback would take them with
+      // it. It also means every session starts with an empty log.
+      store.compactLocal(docId: docId);
       // Snapshot the last-good base before this session mutates it (§10 recovery
       // point — rollback restores it if an edit/merge later corrupts the doc).
       store.checkpointDoc(docId: docId);
@@ -118,27 +128,59 @@ class LocalDocBackend {
     return {for (final b in all) b['id'] as String: b};
   }
 
-  /// Mirror the editor's op batch into the on-device yrs doc, then persist
-  /// (debounced). Returning a Future satisfies the editor's `ApplyOps` contract;
-  /// the FFI calls are synchronous so this resolves immediately.
+  /// Mirror the editor's op batch into the on-device yrs doc and append the
+  /// resulting CRDT diff to the store's log. Returning a Future satisfies the
+  /// editor's `ApplyOps` contract; the FFI calls are synchronous so this
+  /// resolves immediately.
+  ///
+  /// This used to re-encode and rewrite the WHOLE document on a 400 ms
+  /// debounce — cost O(document) per burst of typing, on a file that only grows.
+  /// The cloud path has been append + periodic squash since P4-1; this is the
+  /// same machinery (`append_update`, `load_doc` replays base + log), so both
+  /// worlds now persist one way instead of two.
+  ///
+  /// Two things fall out of it that are not about speed:
+  ///   * **The 400 ms window is gone.** An edit was not on disk until the timer
+  ///     fired; a crash inside that window lost it silently. An append is
+  ///     durable at the moment of the edit.
+  ///   * **`loadDoc` is never stale.** It replays the log, so a reader no longer
+  ///     has to remember to [flush] first (several callers in
+  ///     `local_offline_io.dart` did exactly that, and forgetting produced an
+  ///     export of an older document than the one on screen).
   Future<void> applyOps(List<DocOp> ops) async {
+    final sv = _doc.stateVector();
     for (final op in ops) {
       _mirror.apply(_doc, op);
     }
-    _scheduleSave();
+    final diff = _doc.encodeDiffSince(stateVector: sv);
+    if (diff.isEmpty) return; // a no-op batch writes nothing
+    _store.appendUpdate(docId: docId, update: diff);
+    _maybeCompact();
   }
 
-  void _scheduleSave() {
-    _saveTimer?.cancel();
-    _saveTimer = Timer(_saveDebounce, flush);
+  /// Bound the log without a timer: every [_compactCheckEvery] appends, check
+  /// its size and fold past [_compactThreshold].
+  ///
+  /// `compactLocal`, not `squash`: squash keeps `clock > pushed_clock` because
+  /// those updates still owe the server, and a local-only doc's `pushed_clock`
+  /// is 0 forever — so squash (and `trimUpdatesThrough`, clamped to the same
+  /// mark) would be permanent no-ops here and the log would grow without bound.
+  void _maybeCompact() {
+    if (++_appendsSinceCheck < _compactCheckEvery) return;
+    _appendsSinceCheck = 0;
+    final (local, remote) = _store.logSizes(docId: docId);
+    if (local + remote > _compactThreshold) _store.compactLocal(docId: docId);
   }
 
-  /// Persist the current document snapshot to the store immediately. Safe to
-  /// call any time (on app pause, doc close, or to force a pending debounce).
+  /// Fold the log into the base now. Safe to call any time (app pause, doc
+  /// close, before an export).
+  ///
+  /// No longer a save: edits are already durable when [applyOps] returns, so
+  /// nothing is lost if this never runs. It is compaction, and it leaves a
+  /// closed document as a single clean base.
   void flush() {
-    _saveTimer?.cancel();
-    _saveTimer = null;
-    _store.saveDoc(docId: docId, doc: _doc);
+    _appendsSinceCheck = 0;
+    _store.compactLocal(docId: docId);
   }
 
   /// Current document as the full blocks list (tree order) — for export/debug.

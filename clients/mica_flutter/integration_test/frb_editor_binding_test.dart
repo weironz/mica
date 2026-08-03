@@ -140,6 +140,113 @@ void main() {
     _bestEffortDelete(dir);
   });
 
+  /// The local backend used to re-encode and rewrite the WHOLE document on a
+  /// 400 ms debounce. It appends a CRDT diff per op batch now, so an edit is on
+  /// disk when `applyOps` returns — no window, and no `flush()` required.
+  ///
+  /// Written as "reopen WITHOUT flushing" on purpose: every other test here
+  /// calls `backend.flush()` first, which would have passed under the old
+  /// behaviour too and so proves nothing about the change.
+  test('an edit is durable without flush', () async {
+    final dir = Directory.systemTemp.createTempSync('mica_append');
+    final path = '${dir.path}/append.db';
+
+    final store1 = MicaStore.open(path: path)!;
+    final backend1 = LocalDocBackend.open(store1, 'doc1');
+    final c = controllerFor(backend1);
+    c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
+    c.setFocusedText('durable', 7, 7);
+    await c.flushPending();
+    await drain();
+    // Deliberately NO backend1.flush() here.
+
+    final store2 = MicaStore.open(path: path)!;
+    expect(
+      LocalDocBackend.open(store2, 'doc1').childBlocks().first['text'],
+      'durable',
+      reason: 'the append must already be on disk when applyOps returned',
+    );
+    _bestEffortDelete(dir);
+  });
+
+  /// A local-only doc has no server, so `pushed_clock` is 0 forever and both
+  /// cloud-shaped trims (`squash`, `trimUpdatesThrough`) are no-ops on it. If
+  /// compaction were wired to either of those, this log would only grow — and
+  /// `loadDoc` replays the whole thing on every open, so the cost would land on
+  /// exactly the person with the longest edit history.
+  test('the append log stays bounded and the content survives compaction', () async {
+    final dir = Directory.systemTemp.createTempSync('mica_compact');
+    final path = '${dir.path}/compact.db';
+
+    final store = MicaStore.open(path: path)!;
+    final backend = LocalDocBackend.open(store, 'doc1');
+    final c = controllerFor(backend);
+    // Past the 256-ROW threshold (logSizes counts rows, not bytes) so the
+    // every-32-appends check actually fires.
+    const edits = 300;
+    c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
+    for (var i = 0; i < edits; i++) {
+      c.setFocusedText('x' * (i + 1), i + 1, i + 1);
+      await c.flushPending();
+    }
+    await drain();
+
+    final (localLog, _) = store.logSizes(docId: 'doc1');
+    expect(
+      localLog,
+      lessThan(edits),
+      reason: 'compaction must fold the log, not let it track the edit count',
+    );
+
+    backend.flush();
+    expect(
+      store.logSizes(docId: 'doc1').$1,
+      0,
+      reason: 'flush leaves a clean base',
+    );
+    final store2 = MicaStore.open(path: path)!;
+    expect(
+      LocalDocBackend.open(store2, 'doc1').childBlocks().first['text'],
+      'x' * edits,
+      reason: 'every edit survives the folding',
+    );
+    _bestEffortDelete(dir);
+  });
+
+  /// `rollbackDoc` restores the checkpointed BASE and drops the log. With an
+  /// append log that makes the open-time ordering load-bearing: compact first,
+  /// then checkpoint — otherwise the recovery point sits before the previous
+  /// session's edits and rolling back silently takes them too.
+  test('the §10 recovery point includes the previous session', () async {
+    final dir = Directory.systemTemp.createTempSync('mica_rollback');
+    final path = '${dir.path}/rollback.db';
+
+    final store1 = MicaStore.open(path: path)!;
+    final backend1 = LocalDocBackend.open(store1, 'doc1');
+    final c = controllerFor(backend1);
+    c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
+    c.setFocusedText('session one', 11, 11);
+    await c.flushPending();
+    await drain();
+    // No flush: the edit is in the log, not the base.
+
+    // A new session checkpoints — which is where the fold has to have happened.
+    final store2 = MicaStore.open(path: path)!;
+    LocalDocBackend.open(store2, 'doc1');
+
+    final rolled = store2.rollbackDoc(docId: 'doc1');
+    expect(rolled, isNotNull);
+    final blocks = (jsonDecode(rolled!.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
+    final body = blocks.firstWhere((b) => b['type'] == 'paragraph');
+    expect(
+      body['text'],
+      'session one',
+      reason: 'rolling back must not undo a session that had already ended',
+    );
+    _bestEffortDelete(dir);
+  });
+
   test('a freshly opened local doc seeds one empty paragraph', () {
     final dir = Directory.systemTemp.createTempSync('mica_edit3');
     final store = MicaStore.open(path: '${dir.path}/edit.db')!;

@@ -948,6 +948,19 @@ impl MicaStore {
         let _ = self.store().squash(&doc_id, self.client_id);
     }
 
+    /// Fold the log into the base and clear it — for a document with NO cloud
+    /// counterpart, where [`Self::squash`] and [`Self::trim_updates_through`]
+    /// are both permanent no-ops (they are bounded by `pushed_clock`, which
+    /// stays 0 forever without a server). Returns whether it compacted; it
+    /// refuses on any doc showing evidence of sync, so the offline backend
+    /// cannot accidentally drop an un-pushed outbox.
+    #[frb(sync)]
+    pub fn compact_local(&self, doc_id: String) -> bool {
+        self.store()
+            .compact_local(&doc_id, self.client_id)
+            .unwrap_or(false)
+    }
+
     /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
     /// bounding the append-log while leaving the un-pushed tail intact. The base
     /// snapshot already folds these, so reads are unchanged; the clock stays

@@ -69,6 +69,14 @@ abstract class MicaStore implements RustOpaqueInterface {
     required String rootName,
   });
 
+  /// Fold the log into the base and clear it — for a document with NO cloud
+  /// counterpart, where [`Self::squash`] and [`Self::trim_updates_through`]
+  /// are both permanent no-ops (they are bounded by `pushed_clock`, which
+  /// stays 0 forever without a server). Returns whether it compacted; it
+  /// refuses on any doc showing evidence of sync, so the offline backend
+  /// cannot accidentally drop an un-pushed outbox.
+  bool compactLocal({required String docId});
+
   /// Pin the current saved state as a NAMED version (never auto-pruned). Null
   /// if the document has no saved snapshot yet.
   LocalVersion? createLocalVersion({
