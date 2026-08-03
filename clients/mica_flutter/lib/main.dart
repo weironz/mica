@@ -5934,10 +5934,19 @@ class _HomeNavRow extends StatelessWidget {
 }
 
 class _CommentsButton extends StatelessWidget {
-  const _CommentsButton({required this.openCount, required this.onTap});
+  const _CommentsButton({
+    required this.openCount,
+    required this.onTap,
+    this.active = false,
+  });
 
   final int openCount;
   final VoidCallback onTap;
+
+  /// The rail is docked open. Shown because the button is now a TOGGLE, not a
+  /// "show me" action — without the state it is the only control on the row
+  /// whose effect you cannot see from the control itself.
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
@@ -5954,7 +5963,9 @@ class _CommentsButton extends StatelessWidget {
               Icon(
                 Icons.chat_bubble_outline,
                 size: 15,
-                color: MicaTheme.of(context).text.muted,
+                color: active
+                    ? MicaTheme.of(context).accent.primary
+                    : MicaTheme.of(context).text.muted,
               ),
               if (openCount > 0) ...[
                 const SizedBox(width: 3),
@@ -6569,49 +6580,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // the body down until you ask for it.
   bool _showProperties = false;
 
+  /// Is the comment rail docked open?
+  ///
+  /// It used to be a modal dialog, which hid the passage the comments are ABOUT
+  /// — and reading the text while reading the note on it is the whole activity.
+  /// A rail keeps both on screen (same shape AFFiNE settled on).
+  bool _commentRailOpen = false;
+
   /// Open the comments panel for this document.
   ///
   /// Wrapped in a StatefulBuilder so a reply/resolve/delete inside the dialog
   /// re-reads `widget.commentThreads` after the host refetches — the server stays
   /// the single source of truth for anchors and orphan status, and the panel just
   /// shows whatever it last returned.
-  Future<void> _openCommentPanel() async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, refresh) => AlertDialog(
-          title: Text(dialogContext.l10n.commentsTitle),
-          content: CommentPanel(
-            threads: widget.commentThreads,
-            currentUserId: widget.session?.user.id,
-            onReply: (id, body) async {
-              await widget.onReplyComment(id, body);
-              refresh(() {});
-            },
-            onSetResolved: (id, resolved) async {
-              await widget.onSetCommentResolved(id, resolved);
-              refresh(() {});
-            },
-            onDelete: (id) async {
-              await widget.onDeleteCommentThread(id);
-              refresh(() {});
-            },
-            onFocusThread: (thread) => widget.onFocusCommentThread(thread.id),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: Text(dialogContext.l10n.commonClose),
-            ),
-          ],
-        ),
-      ),
-    );
-    // Closing the panel drops the emphasis: it marks "the thread I am reading in
-    // the panel", and once the panel is gone there is no such thing. Leaving it on
-    // would strand a stronger wash on the page with nothing explaining why.
-    widget.onFocusCommentThread(null);
-  }
 
   // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
   // default). The tree opens collapsed and remembers what the user expanded;
@@ -8226,7 +8207,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // The editor column is capped at widget.pageWidth (a fixed page-width
           // step) inside _editorScroll, and the window caps it below that on a
           // narrow pane — so no measured max is needed here.
-          Expanded(child: _editorScroll(context, canEdit, bootstrap)),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: _editorScroll(context, canEdit, bootstrap)),
+                // Beside the page, under the format bar — the bar spans the
+                // whole pane because it acts on the document, the rail does not.
+                if (_commentRailOpen && widget.onAddComment != null)
+                  CommentPanel(
+                    threads: widget.commentThreads,
+                    currentUserId: widget.session?.user.id,
+                    onReply: widget.onReplyComment,
+                    onSetResolved: widget.onSetCommentResolved,
+                    onDelete: widget.onDeleteCommentThread,
+                    onFocusThread: (t) => widget.onFocusCommentThread(t.id),
+                    onClose: () {
+                      setState(() => _commentRailOpen = false);
+                      widget.onFocusCommentThread(null);
+                    },
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -8489,7 +8492,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               openCount: widget.commentThreads
                                   .where((t) => !t.isResolved)
                                   .length,
-                              onTap: _openCommentPanel,
+                              active: _commentRailOpen,
+                              onTap: () {
+                                setState(
+                                  () => _commentRailOpen = !_commentRailOpen,
+                                );
+                                // Closing drops the emphasis: it means "the
+                                // thread I am reading", and with the rail gone
+                                // there is no such thing — leaving it on would
+                                // strand a stronger wash with nothing to explain
+                                // it.
+                                if (!_commentRailOpen) {
+                                  widget.onFocusCommentThread(null);
+                                }
+                              },
                             ),
                           _PropertiesToggle(
                             active: _showProperties,
@@ -8746,7 +8762,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     canEdit: canEdit,
                     onSelectionChanged: widget.onCursorChanged,
                     commentHighlights: widget.commentHighlights,
-                    onAddComment: widget.onAddComment,
+                    onAddComment: widget.onAddComment == null
+                        ? null
+                        : (sb, so, eb, eo, quote) async {
+                            await widget.onAddComment!(sb, so, eb, eo, quote);
+                            // You just wrote it; showing it should not cost
+                            // another click. Only for a comment THIS user made:
+                            // opening because a collaborator commented would be
+                            // an interruption, not a convenience.
+                            if (mounted) {
+                              setState(() => _commentRailOpen = true);
+                            }
+                          },
                     remoteCursors: [
                       for (final p in widget.presence)
                         if (p.hasCursor)

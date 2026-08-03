@@ -77,6 +77,77 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// The rail form. `onClose` is what turns the bare list into a docked panel,
+  /// so it is also the switch these tests flip.
+  Future<void> pumpRail(
+    WidgetTester tester, {
+    required List<CommentThread> threads,
+    VoidCallback? onClose,
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
+        home: Scaffold(
+          body: SizedBox(
+            height: 600,
+            child: CommentPanel(
+              threads: threads,
+              onReply: (_, _) async {},
+              onSetResolved: (_, _) async {},
+              onDelete: (_) async {},
+              onClose: onClose ?? () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  // The panel used to be a modal `AlertDialog`, which covered the passage the
+  // comments are about — and reading the text while reading the note on it is
+  // the entire activity. These pin the rail form so a future refactor cannot
+  // quietly put it back inside a dialog.
+  group('the rail', () {
+    testWidgets('carries its own title and close, which a dialog used to supply',
+        (tester) async {
+      var closed = false;
+      await pumpRail(
+        tester,
+        threads: [thread()],
+        onClose: () => closed = true,
+      );
+
+      expect(find.text('评论'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.close));
+      expect(closed, isTrue);
+    });
+
+    /// Without `onClose` it stays the bare list — the shape the older tests
+    /// pump, and the one an embedded use would want. Keeping both means the
+    /// rail chrome is additive, not a rewrite of the list.
+    testWidgets('is bare without a close handler', (tester) async {
+      await pumpPanel(tester, threads: [thread()]);
+
+      expect(find.byIcon(Icons.close), findsNothing);
+    });
+
+    /// Same 380 either way: the width was reviewed on a real window, and the
+    /// rail must not quietly become a different size than what was looked at.
+    testWidgets('is 380 wide, docked or bare', (tester) async {
+      await pumpRail(tester, threads: [thread()]);
+      final railWidth = tester.getSize(find.byType(CommentPanel)).width;
+
+      await pumpPanel(tester, threads: [thread()]);
+      final bareWidth = tester.getSize(find.byType(CommentPanel)).width;
+
+      expect(railWidth, 380);
+      expect(bareWidth, 380);
+    });
+  });
+
   testWidgets('an empty document explains how to start a comment', (
     tester,
   ) async {

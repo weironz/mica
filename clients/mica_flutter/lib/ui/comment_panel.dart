@@ -23,6 +23,7 @@ class CommentPanel extends StatefulWidget {
     required this.onDelete,
     this.onFocusThread,
     this.currentUserId,
+    this.onClose,
     super.key,
   });
 
@@ -33,6 +34,10 @@ class CommentPanel extends StatefulWidget {
 
   /// Highlight this thread on the canvas. Null → threads are not focusable.
   final void Function(CommentThread thread)? onFocusThread;
+
+  /// Dismiss the rail. Null renders the list bare (the shape a test or a future
+  /// embedded use wants); non-null adds the header with the close affordance.
+  final VoidCallback? onClose;
 
   /// Only decides whether "delete thread" is offered — the server is the real
   /// authority (author, or write access).
@@ -88,9 +93,7 @@ class _CommentPanelState extends State<CommentPanel> {
         return at.compareTo(bt);
       });
 
-    return SizedBox(
-      width: 380,
-      child: threads.isEmpty
+    final list = threads.isEmpty
           ? Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
@@ -101,12 +104,68 @@ class _CommentPanelState extends State<CommentPanel> {
                 ),
               ),
             )
-          : ListView.separated(
-              shrinkWrap: true,
-              itemCount: threads.length,
-              separatorBuilder: (_, _) => const Divider(height: 20),
-              itemBuilder: (context, i) => _threadTile(context, threads[i]),
+        : ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            // Kept: inside the rail's `Expanded` this still scrolls once the
+            // discussion outgrows the height, and without it the bare form
+            // (no `onClose`) has no bounded parent to size against.
+            shrinkWrap: true,
+            itemCount: threads.length,
+            separatorBuilder: (_, _) => const Divider(height: 20),
+            itemBuilder: (context, i) => _threadTile(context, threads[i]),
+          );
+
+    final close = widget.onClose;
+    if (close == null) return SizedBox(width: 380, child: list);
+
+    // A RAIL, not a dialog. It used to be a modal `AlertDialog`, which covered
+    // the very text the comments are about — and reading the passage while
+    // reading the note on it is the entire activity. AFFiNE reaches the same
+    // shape (`components/comment/sidebar`), and its rail is what makes room for
+    // things a dialog has nowhere to put, like collapsing long reply chains.
+    return Container(
+      width: 380,
+      decoration: BoxDecoration(
+        color: MicaTheme.of(context).surface.base,
+        border: Border(
+          left: BorderSide(color: MicaTheme.of(context).border.subtle),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    l10n.commentsTitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: MicaTheme.of(context).text.primary,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: close,
+                  icon: const Icon(Icons.close, size: 16),
+                  tooltip: l10n.commonClose,
+                  visualDensity: VisualDensity.compact,
+                  color: MicaTheme.of(context).text.faint,
+                ),
+              ],
             ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: list,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
