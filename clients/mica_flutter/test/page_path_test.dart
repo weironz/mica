@@ -123,6 +123,110 @@ void main() {
     expect(_rendered(tester), ['基础信息', 'BOI']);
   });
 
+  // A real path that did not fit: `tools › 笔记软件 › mica › 单机手动部署（IP
+  // 直连，不用 Traefik）`. Three segments deep, so the old segment-COUNT rule
+  // (`> 3` collapses the middle) never fired — and the row lived in a
+  // horizontally scrolling box, where width is unbounded and
+  // `TextOverflow.ellipsis` therefore never fires either. The title was
+  // hard-cut mid-character with no ellipsis, and the copy button, which
+  // scrolled with the path, was pushed clean out of the viewport.
+  group('a long title in a narrow row', () {
+    final deep = [
+      _view(id: 'f1', name: '笔记软件', type: 'folder'),
+      _view(id: 'f2', name: 'mica', parent: 'f1', type: 'folder'),
+      _view(
+        id: 'p1',
+        name: '单机手动部署（IP 直连，不用 Traefik）',
+        parent: 'f2',
+      ),
+    ];
+
+    Future<void> pumpNarrow(WidgetTester tester) => tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            // The real budget the top row gives it.
+            child: SizedBox(
+              width: 260,
+              child: PageBreadcrumb(
+                views: deep,
+                current: deep.last,
+                workspaceName: 'tools',
+                onSelect: (_) async {},
+                onCopyPath: () async => true,
+                trailing: const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    testWidgets('the copy button survives — it is about the page, not the name',
+        (tester) async {
+      await pumpNarrow(tester);
+      expect(find.byType(InlineCopyButton), findsOneWidget);
+    });
+
+    /// What must be on screen is the page you are looking at. Ancestors are
+    /// guessable from context and one click away on copy path; the title is
+    /// neither.
+    testWidgets('the page title survives, and dropped ancestors say so', (
+      tester,
+    ) async {
+      await pumpNarrow(tester);
+
+      expect(
+        find.text('单机手动部署（IP 直连，不用 Traefik）'),
+        findsOneWidget,
+        reason: 'the tail is laid out (ellipsized in place, not cut away)',
+      );
+      expect(
+        find.text('…'),
+        findsOneWidget,
+        reason: 'something was dropped and the row has to admit it',
+      );
+      expect(
+        find.text('tools'),
+        findsNothing,
+        reason: 'the workspace is the first thing to go, not the last',
+      );
+    });
+
+    /// Given room, nothing is dropped — the narrow case must not become the
+    /// permanent case.
+    testWidgets('a wide row still shows the whole path', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          locale: const Locale('zh'),
+          home: Scaffold(
+            body: PageBreadcrumb(
+              views: deep,
+              current: deep.last,
+              workspaceName: 'tools',
+              onSelect: (_) async {},
+              onCopyPath: () async => true,
+              trailing: const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('…'), findsNothing);
+      expect(_rendered(tester), [
+        'tools',
+        '笔记软件',
+        'mica',
+        '单机手动部署（IP 直连，不用 Traefik）',
+      ]);
+    });
+  });
+
   // The copy button reports where the click was, instead of throwing a black
   // bar across the bottom of the window to say the expected thing happened.
   group('the copy button confirms itself', () {

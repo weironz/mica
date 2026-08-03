@@ -1914,92 +1914,125 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
       v = (pid == null) ? null : byId[pid];
     }
     final full = chain.reversed.toList(); // root … current
-    // Deep paths collapse in the MIDDLE. The breadcrumb now shares the top row
-    // with the format toolbar, and the toolbar is a strip of fixed-size click
-    // targets — shrink those and they stop being hittable, while a path is text
-    // that degrades readably. So the path yields, and it yields by dropping the
-    // segments you already guessed rather than the one you were looking for:
-    // workspace and immediate parent survive. Same rule as the search results
-    // list, and the full path is always one click away on "copy path".
-    final path = full.length > 3 ? [full.first, full.last] : full;
-    final collapsed = path.length != full.length;
 
     return Row(
       children: [
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // The workspace leads the path, matching what "copy path" puts
-                // on the clipboard. Plain text, not a crumb: `_crumb` takes a
-                // DocumentView and links to it, and a workspace is neither.
-                if (widget.workspaceName case final ws?
-                    when ws.trim().isNotEmpty) ...[
-                  Text(
-                    ws,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: MicaTheme.of(context).text.faint,
-                      fontSize: 12,
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
-                    child: Icon(
-                      Icons.chevron_right,
-                      size: 14,
-                      color: MicaTheme.of(context).text.faint,
-                    ),
-                  ),
-                ],
-                for (var i = 0; i < path.length; i++) ...[
-                  if (i > 0 && collapsed) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: Icon(
-                        Icons.chevron_right,
-                        size: 14,
-                        color: MicaTheme.of(context).text.faint,
-                      ),
-                    ),
-                    Text(
-                      '…',
-                      style: TextStyle(
-                        color: MicaTheme.of(context).text.faint,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                  if (i > 0)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: Icon(
-                        Icons.chevron_right,
-                        size: 14,
-                        color: MicaTheme.of(context).text.faint,
-                      ),
-                    ),
-                  _crumb(path[i], isLast: i == path.length - 1),
-                ],
-                // Right after the last crumb, inside the scrollable path — the
-                // spot GitHub uses. Putting it in `trailing` would park it at
-                // the far right with the sync badge and the properties toggle,
-                // where it reads as another page utility instead of "copy THIS".
-                if (widget.onCopyPath case final copy?) ...[
-                  const SizedBox(width: 4),
-                  InlineCopyButton(
-                    onCopy: copy,
-                    tooltip: context.l10n.pageCopyPath,
-                  ),
-                ],
-              ],
-            ),
+        // The path measures itself against the width it actually got. It used
+        // to scroll horizontally inside a fixed budget instead, which failed
+        // twice on the same page: inside a scroll view the width is unbounded,
+        // so `TextOverflow.ellipsis` never fires and a long title was HARD-CUT
+        // with no ellipsis (reads as a rendering bug, not as "there is more"),
+        // and the copy button — which scrolled with the path — was pushed out
+        // of the viewport entirely.
+        // Flexible, not Expanded: a short path shrink-wraps so the copy button
+        // hugs the last crumb instead of floating off in the leftover budget.
+        Flexible(
+          child: LayoutBuilder(
+            builder: (context, box) => _path(context, full, box.maxWidth),
           ),
         ),
+        // PINNED, outside the flexible path: it is about the page, so it must
+        // not disappear because the page's name is long. Still immediately
+        // after the crumbs (the spot GitHub uses) rather than off in `trailing`
+        // with the sync badge, where it would read as another page utility
+        // instead of "copy THIS".
+        if (widget.onCopyPath case final copy?) ...[
+          const SizedBox(width: 4),
+          InlineCopyButton(onCopy: copy, tooltip: context.l10n.pageCopyPath),
+        ],
         widget.trailing,
+      ],
+    );
+  }
+
+  static const _sepWidth = 20.0; // chevron 14 + 3px either side
+  static const _crumbPad = 4.0; // _crumb's horizontal padding
+  static const _ellipsisWidth = 12.0;
+
+  double _measure(String label) {
+    final tp = TextPainter(
+      text: TextSpan(text: label, style: const TextStyle(fontSize: 12)),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    final w = tp.width;
+    tp.dispose();
+    return w + _crumbPad;
+  }
+
+  /// The crumbs that fit in [avail], tail first.
+  ///
+  /// The old rule was a segment COUNT (`> 3` collapses the middle), which says
+  /// nothing about whether the thing fits: `tools › 笔记软件 › mica › 单机手动
+  /// 部署（IP 直连，不用 Traefik）` is only three segments deep and still ran
+  /// off the end. So the decision is made in pixels now.
+  ///
+  /// The tail is guaranteed room before any ancestor gets any — it is the page
+  /// you are looking at, and the one segment you cannot reconstruct from
+  /// context. Ancestors are then added back from the RIGHT (nearest parent
+  /// first) while they fit, so what survives is what you are most likely to
+  /// click. A `…` marks that something was dropped; the whole path stays one
+  /// click away on the copy button.
+  Widget _path(BuildContext context, List<DocumentView> full, double avail) {
+    final faint = MicaTheme.of(context).text.faint;
+    final ws = widget.workspaceName?.trim();
+    final hasWs = ws != null && ws.isNotEmpty;
+    // Leading labels, in order: the workspace (plain text — `_crumb` links a
+    // DocumentView and a workspace is neither) then every ancestor.
+    final leading = <String>[
+      if (hasWs) ws,
+      for (final v in full.take(full.length - 1)) v.name,
+    ];
+
+    final tail = full.last;
+    final tailNeed = _measure(tail.name.trim().isEmpty ? '—' : tail.name);
+    // Never let ancestors squeeze the tail to nothing: it gets what it needs,
+    // or a majority of the row, whichever is smaller.
+    var used = math.min(tailNeed, math.max(avail * 0.55, 90.0));
+
+    final keep = <int>[];
+    for (var i = leading.length - 1; i >= 0; i--) {
+      final w = _measure(leading[i]) + _sepWidth;
+      if (used + w > avail) break;
+      used += w;
+      keep.insert(0, i);
+    }
+    // The `…` costs width too. Rather than let it push the row over, buy it
+    // back from the leftmost ancestor still standing.
+    while (keep.length < leading.length &&
+        keep.isNotEmpty &&
+        used + _ellipsisWidth + _sepWidth > avail) {
+      used -= _measure(leading[keep.removeAt(0)]) + _sepWidth;
+    }
+    final dropped = keep.length < leading.length;
+
+    Widget sep() => Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: Icon(Icons.chevron_right, size: 14, color: faint),
+    );
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (dropped) ...[
+          Text('…', style: TextStyle(color: faint, fontSize: 12)),
+          sep(),
+        ],
+        for (final i in keep) ...[
+          if (i == 0 && hasWs)
+            Text(
+              ws,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: faint, fontSize: 12),
+            )
+          else
+            _crumb(full[hasWs ? i - 1 : i], isLast: false),
+          sep(),
+        ],
+        // Flexible, so the tail takes every pixel the ancestors left and
+        // ellipsizes inside it instead of running off the edge.
+        Flexible(child: _crumb(tail, isLast: true)),
       ],
     );
   }
