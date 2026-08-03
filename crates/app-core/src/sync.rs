@@ -873,3 +873,56 @@ mod tests {
         assert!(diff_from_base(&base, b"not a state vector").is_none());
     }
 }
+
+#[cfg(test)]
+mod base_compaction {
+    use mica_core::{Block, MicaDoc};
+
+    /// The base does NOT keep deleted content — and that is load-bearing.
+    ///
+    /// roadmap carried «yrs base has no squash/GC, grows without bound: only the
+    /// stream is pruned, the base just keeps rolling up» as an open item. Measured
+    /// 2026-08-03, it is false: 40 000 deleted characters leave the encoded base
+    /// at 150 bytes, not 40 KB. yrs collects deleted content on load (the doc is
+    /// built with `Options::default()`, i.e. `skip_gc = false`), so the full
+    /// decode→encode round trip `push_update` performs on EVERY write is itself a
+    /// squash.
+    ///
+    /// Which sets up the trap this test exists to spring. The *other* open item —
+    /// «every push rebuilds and re-encodes the whole document» — is real, and the
+    /// obvious fix is to stop rebuilding the base on every push (append updates,
+    /// squash later). **That fix would create the unbounded growth the first item
+    /// wrongly claimed already existed.** The two are not one root cause; one is
+    /// the reason the other does not happen. Anyone changing the write path will
+    /// see this go red and read the paragraph above before deciding.
+    #[test]
+    fn deleted_content_does_not_survive_in_the_base() {
+        let mut doc = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
+        let empty = doc.encode_state().len();
+
+        doc.text_insert("root", 0, &"x".repeat(40_000));
+        let grown = doc.encode_state().len();
+        assert!(
+            grown > 40_000,
+            "40k characters should be in there before we delete them, got {grown}"
+        );
+
+        doc.text_delete("root", 0, 40_000);
+        let after_delete = doc.encode_state().len();
+
+        // A tombstone range costs a few bytes; the TEXT must be gone. The margin
+        // is deliberately loose — this pins "collected", not an exact encoding.
+        assert!(
+            after_delete < empty + 1_000,
+            "deleted text is still in the base: {after_delete} bytes vs {empty} empty.              If yrs GC was turned off (`skip_gc`), the base now grows without bound              and the roadmap entry that says so becomes true."
+        );
+
+        // And the round trip on the write path keeps it that way, rather than
+        // re-inflating from the stored blob.
+        let round_tripped = MicaDoc::from_update(&doc.encode_state())
+            .expect("the base must decode")
+            .encode_state()
+            .len();
+        assert_eq!(round_tripped, after_delete);
+    }
+}

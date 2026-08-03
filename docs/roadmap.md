@@ -143,8 +143,18 @@
 
 ## 性能
 
-- **每次 push 重建+重编码+重写整档(写放大)** —— `from_update`→全档 `encode_state`+upsert,成本 O(文档) 而非 O(更新)(`sync.rs`)。(M) `[需后端]`
-- **yrs base 无 squash/GC,无界增长** —— 只裁 stream 不压 base,长寿文档 base 越滚越大(`sync.rs`)。(L) `[需后端]`
+- **每次 push 重建+重编码+重写整档(写放大)**(2026-08-03 核实:成立,**但它的「同根」条目是假的**)——
+  `push_update` 每次:`from_update` 全档解码 → apply → `encode_state` 全档重编码 →
+  重新派生 `content_text` → upsert 整行。成本 O(文档) 而非 O(更新)。
+  **动手前必读**:隔壁那条「yrs base 无 GC、无界增长」经实测为**假**(已归档),而它之所以
+  为假,**正是因为这趟昂贵的 round trip 本身就是一次 squash**(yrs 默认 `skip_gc=false`,
+  加载即回收已删内容)。所以「别每次都重建 base,改成追加 + 定期 squash」这个显而易见的修法
+  **会把那条不存在的无界增长真造出来** —— 两条不是同一个根因,一个是另一个不发生的原因。
+  回归测试 `base_compaction::deleted_content_does_not_survive_in_the_base` 守着这条,
+  改写路径时它会红。
+  **另一条约束**:`content_text` 是 `state` 的纯投影、同语句 co-write(红线#1)。base 一旦
+  改成惰性重建,搜索索引就会在两次 squash 之间陈旧 —— 那是个**产品取舍**,必须摆到台面上
+  决定,不能顺手做掉。(M) `[需后端]`
 - 🟡 **本地持久化:云文档已增量,纯本地文档仍全量**(2026-07-29 更正)—— 云端(在线)文档早已 append+squash(`store_cloud_doc_store.dart` appendOutbox/appendUpdate/compact,每 32 次 append 检查、日志 >256 squash;store 层 `append_update`/`squash` 全备)。「仅全量快照」只剩**纯本地(离线)文档**的 `local_doc.dart` debounce saveDoc 路径,接线即可。(S/M)
 - **frb v2 热路径 FFI 基准待测** —— IME/逐字输入若过慢,热路径留 Dart(phase2 §12)。(M)
 
