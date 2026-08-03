@@ -10,12 +10,18 @@ too).
 
 The SHIPPED dispatch differs from Decision 1's sketch below (kept as the
 historical record): registration is a const `List<AtomicBlockRenderer>`
-flattened into a kind-keyed `Map`, and a renderer declines by returning
-null from `layout()` — not `canHandle` order. Consequence: **one renderer
-per kind**; a second registration for the same kind (e.g. Graphviz sharing
-`code_block` with Mermaid) silently replaces the first, with no compile
-error. That is the real constraint to solve when a second same-kind
-renderer arrives (code-review 2026-07-20, P3-1).
+and a renderer declines by returning null from `layout()` — not
+`canHandle` order.
+
+**P3-1 closed (2026-08-03).** The registry used to flatten into a
+kind→renderer `Map`, so a second registration for a kind silently
+REPLACED the first with no compile error. `DetailsRenderer` is that second
+`code_block` renderer, so the map became kind→`List`: within a kind the
+renderers are tried in registration order and the first non-null `layout()`
+wins. Order is a tie-breaker, not a design — two renderers that could both
+claim one node is still a bug, and the fix is to be strict in `layout()`.
+`test/details_fold_test.dart` pins that both `code_block` renderers survive
+registration.
 
 Still open: collapsing _NodeLayout's per-kind fields into a rendererData
 slot (still unneeded); hit-test dispatch is NOT "unneeded" anymore —

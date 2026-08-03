@@ -159,6 +159,7 @@
   "aboutTitle": "关于",
   "aboutSourceCode": "源代码（AGPL-3.0）",
   "tokenCreated": "令牌已创建",
+  "detailsDefaultSummary": "详情",
   "commonCopied": "已复制",
   "tokenCopyNow": "立即复制 —— 密钥不会再次显示。",
   "tokenTitle": "API 令牌",

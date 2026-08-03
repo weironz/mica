@@ -9,6 +9,7 @@ import '../ui/copy_button.dart' show kCopyDoneColor;
 import '../ui/theme_tokens.dart';
 import '../l10n/locale_controller.dart';
 import 'chrome_layout.dart';
+import 'details_html.dart';
 import 'highlight.dart';
 import 'marks.dart';
 import 'model.dart';
@@ -345,6 +346,11 @@ class _NodeLayout {
   Rect? moreButton; // code-block ⋯ overflow-menu rect (local), if any
   Rect? viewCodeTab; // mermaid view switch: source tab (local), if any
   Rect? viewPreviewTab; // mermaid view switch: preview tab (local), if any
+
+  /// The `<details>` fold header (triangle + summary) — clicking it toggles.
+  /// Null on every other block, including a `<details>` shown as raw source.
+  Rect? detailsToggle;
+  bool detailsOpen = false;
   String langText = ''; // resolved code language
   bool langAuto = false; // resolved by detection, not pinned by the author
 
@@ -597,17 +603,31 @@ class RenderDocument extends RenderBox {
 
   /// Registered atomic-block renderers, dispatched by kind in the layout and
   /// paint passes. New block types register here (docs/render-architecture.md).
+  ///
+  /// **Order matters within a kind**: several renderers may claim the same
+  /// `kind` and the first one whose `layout()` returns non-null wins. That is
+  /// how `code_block` carries both a Mermaid diagram and a `<details>` fold —
+  /// each recognizes its own shape and declines the rest. Until 2026-08-03 the
+  /// registry was a kind→renderer Map, so a second registration for a kind
+  /// silently REPLACED the first with no compile error (render-architecture.md
+  /// P3-1). Two renderers that could both claim one node is still a bug — the
+  /// resolution is "be strict in layout()", not "rely on this order".
   static const List<AtomicBlockRenderer> atomicRenderers = [
     DividerRenderer(),
     ImageRenderer(),
     MathBlockRenderer(),
     MermaidRenderer(),
+    DetailsRenderer(),
     TableRenderer(),
   ];
 
-  static final Map<String, AtomicBlockRenderer> _renderersByKind = {
-    for (final r in atomicRenderers) r.kind: r,
-  };
+  static final Map<String, List<AtomicBlockRenderer>> _renderersByKind = () {
+    final byKind = <String, List<AtomicBlockRenderer>>{};
+    for (final r in atomicRenderers) {
+      (byKind[r.kind] ??= <AtomicBlockRenderer>[]).add(r);
+    }
+    return byKind;
+  }();
 
   final List<_NodeLayout> _layouts = [];
 
@@ -1128,17 +1148,18 @@ class RenderDocument extends RenderBox {
       // Atomic blocks dispatch to their registered renderer; a null return
       // (math waiting on its raster, empty source) falls through to the text
       // pipeline so the source stays visible and editable.
-      final renderer = _renderersByKind[node.kind];
-      if (renderer != null) {
+      var claimed = false;
+      for (final renderer in _renderersByKind[node.kind] ?? const []) {
         final layout = renderer.layout(this, node, nodeIndex, y, maxWidth);
-        if (layout != null) {
-          layout.renderedBy = renderer;
-          _layouts.add(layout);
-          y += layout.boxHeight;
-          prevKind = node.kind;
-          continue;
-        }
+        if (layout == null) continue;
+        layout.renderedBy = renderer;
+        _layouts.add(layout);
+        y += layout.boxHeight;
+        prevKind = node.kind;
+        claimed = true;
+        break;
       }
+      if (claimed) continue;
 
       // Ordinal / indent context (numbered-list counters) is stateful across
       // blocks, so it MUST run for every text block whether or not the block is
@@ -1963,7 +1984,13 @@ class RenderDocument extends RenderBox {
       if (!_nodeVisible(l)) continue;
       // Atomic-block backdrops dispatch by kind: a block's identity tint
       // (math's lavender) shows on its fallen-through source form too.
-      _renderersByKind[l.kind]?.paintBackground(this, canvas, offset, l, i);
+      // Every renderer of the kind gets the call: the backdrop marks block
+      // IDENTITY, so it must also show on a form that fell through to the text
+      // pipeline (math's lavender behind its editable source). Only renderers
+      // that recognize the node should paint here.
+      for (final r in _renderersByKind[l.kind] ?? const []) {
+        r.paintBackground(this, canvas, offset, l, i);
+      }
       if (l.kind == 'code_block') {
         final bgLeft = l.boxLeft + 16.0 * l.quoteDepth;
         // The title caption sits OUTSIDE the panel (centered below it), so the
@@ -2425,6 +2452,18 @@ class RenderDocument extends RenderBox {
   int? codeLanguageAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       if (_layouts[i].langLabel?.contains(local) ?? false) return i;
+    }
+    return null;
+  }
+
+  /// Node index whose `<details>` fold header contains [local], or null.
+  ///
+  /// Only the header row — clicking the body must not fold what you are
+  /// reading, and must still reach the text pipeline so the caret can land in
+  /// the block (which is what brings the raw source back).
+  int? detailsToggleAt(Offset local) {
+    for (var i = 0; i < _layouts.length; i++) {
+      if (_layouts[i].detailsToggle?.contains(local) ?? false) return i;
     }
     return null;
   }
@@ -3306,6 +3345,15 @@ class RenderDocument extends RenderBox {
   @visibleForTesting
   String debugLangChipAt(int i) => _layouts[i].langChipText;
 
+  /// The text node [i] actually PAINTS — which is not the node's text when a
+  /// renderer claimed it (a `<details>` fold shows its summary, not its tags).
+  @visibleForTesting
+  String debugTextAt(int i) => _layouts[i].painter.plainText;
+
+  /// Node [i]'s `<details>` fold header rect, or null when it isn't a fold.
+  @visibleForTesting
+  Rect? debugDetailsHeaderAt(int i) => _layouts[i].detailsToggle;
+
   /// The code block currently showing the "copied" check, or null.
   @visibleForTesting
   int? get debugCopiedCode => _copiedCode;
@@ -3332,9 +3380,8 @@ class RenderDocument extends RenderBox {
   int? blockSelectAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
-      if (!(_renderersByKind[l.kind]?.selectsWholeBlockOnClick ?? false)) {
-        continue;
-      }
+      final claimers = _renderersByKind[l.kind] ?? const <AtomicBlockRenderer>[];
+      if (!claimers.any((r) => r.selectsWholeBlockOnClick)) continue;
       final box = Rect.fromLTWH(
         l.boxLeft,
         l.boxTop,

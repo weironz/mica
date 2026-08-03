@@ -1016,6 +1016,157 @@ class MermaidRenderer extends AtomicBlockRenderer {
 }
 
 // -----------------------------------------------------------------------------
+// <details> fold (a raw-HTML code_block wearing a disclosure triangle)
+// -----------------------------------------------------------------------------
+
+/// Renders a self-contained `<details>` element as a fold instead of four
+/// lines of HTML source.
+///
+/// The node stays a `code_block` with `data.raw == true` and its tags intact —
+/// parsing and serialization are untouched, so Markdown round-trip is
+/// byte-identical. Only the drawing changes, and only when [parseDetailsBlock]
+/// recognizes the whole element (see that file for what it deliberately
+/// refuses, and why the blank-line form GitHub recommends is out of scope).
+///
+/// Declines while the caret is in the block, so the raw source stays editable —
+/// that is the escape hatch for anything the fold cannot express.
+class DetailsRenderer extends AtomicBlockRenderer {
+  const DetailsRenderer();
+
+  @override
+  String get kind => 'code_block';
+
+  static const _padH = 12.0;
+  static const _padV = 9.0;
+  static const _triangle = 20.0;
+
+  /// The fold state actually in effect: `data.collapsed` is the user's choice
+  /// (tri-state, same convention as a long code block), and `<details open>`
+  /// only supplies the default for a block they have never touched.
+  static bool collapsedFor(EditorNode node, DetailsShape shape) =>
+      (node.data['collapsed'] as bool?) ?? !shape.openByDefault;
+
+  @override
+  _NodeLayout? layout(
+    RenderDocument host,
+    EditorNode node,
+    int index,
+    double y,
+    double maxWidth,
+  ) {
+    if (node.data['raw'] != true) return null;
+    final shape = parseDetailsBlock(node.text);
+    if (shape == null) return null;
+    // Caret in the block → show the source. Checked across the whole selection
+    // so a range that merely passes through still opens the source it covers.
+    final sel = host._selection;
+    if (sel != null) {
+      final lo = sel.anchor.node < sel.focus.node
+          ? sel.anchor.node
+          : sel.focus.node;
+      final hi = sel.anchor.node > sel.focus.node
+          ? sel.anchor.node
+          : sel.focus.node;
+      if (index >= lo && index <= hi) return null;
+    }
+
+    final collapsed = collapsedFor(node, shape);
+    final tokens = host._appearance.tokens;
+    const left = EditorTheme.gutter;
+    const textLeft = left + _padH + _triangle;
+    final avail = (maxWidth - textLeft - _padH).clamp(40.0, double.infinity);
+
+    // Body text, not the code_block's monospace: the point of the fold is
+    // that it stops looking like source.
+    final base = host._appearance.applyTo(
+      TextStyle(color: tokens.text.primary, fontSize: 16, height: 1.65),
+      isCode: false,
+    );
+    final summary = shape.summary.isEmpty
+        ? l10nNoContext.detailsDefaultSummary
+        : shape.summary;
+    final painter = TextPainter(
+      text: TextSpan(
+        children: [
+          TextSpan(
+            text: summary,
+            style: base.copyWith(fontWeight: FontWeight.w600),
+          ),
+          // The body is raw HTML, not Markdown (the tight form has no blank
+          // line, so the parser never looked inside). Showing it verbatim is
+          // the honest option — pretending to have rendered it would be a lie
+          // the moment someone writes a tag.
+          if (!collapsed && shape.body.isNotEmpty)
+            TextSpan(
+              text: '\n${shape.body}',
+              style: base.copyWith(color: tokens.text.muted),
+            ),
+        ],
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: avail);
+
+    // The header row is the first line only, so clicking the body does not
+    // fold the thing you are reading.
+    final firstLineH =
+        painter.computeLineMetrics().firstOrNull?.height ?? painter.height;
+
+    return _NodeLayout(painter)
+      ..kind = 'code_block'
+      ..nodeId = node.id
+      ..boxLeft = left
+      ..contentLeft = textLeft
+      ..boxTop = y
+      ..textTop = y + _padV
+      ..textHeight = painter.height
+      ..boxHeight = painter.height + _padV * 2
+      ..detailsOpen = !collapsed
+      ..detailsToggle = Rect.fromLTWH(
+        left,
+        y,
+        (maxWidth - left).clamp(0.0, double.infinity),
+        firstLineH + _padV * 2,
+      );
+  }
+
+  @override
+  void paint(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l,
+    int index,
+  ) {
+    final tokens = host._appearance.tokens;
+    final icon = l.detailsOpen ? Icons.arrow_drop_down : Icons.arrow_right;
+    final glyph = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: 20,
+          color: tokens.text.muted,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final header = l.detailsToggle;
+    final cy = offset.dy + (header?.center.dy ?? l.boxTop + l.boxHeight / 2);
+    glyph.paint(
+      canvas,
+      Offset(offset.dx + l.boxLeft + _padH, cy - glyph.height / 2),
+    );
+    glyph.dispose();
+
+    l.painter.paint(
+      canvas,
+      Offset(offset.dx + l.contentLeft, offset.dy + l.textTop),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Divider
 // -----------------------------------------------------------------------------
 

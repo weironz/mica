@@ -232,6 +232,7 @@
   "aboutTitle": "About",
   "aboutSourceCode": "Source code (AGPL-3.0)",
   "tokenCreated": "Token created",
+  "detailsDefaultSummary": "Details",
   "commonCopied": "Copied",
   "tokenCopyNow": "Copy it now — the secret is not shown again.",
   "tokenTitle": "API Tokens",

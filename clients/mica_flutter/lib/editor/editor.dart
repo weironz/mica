@@ -2395,6 +2395,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _openLanguageMenu(langNode, d.globalPosition);
       return;
     }
+    // A <details> fold header. Ahead of the code-block buttons because a
+    // folded block wears neither — its own header owns the whole first row.
+    final detailsNode = r.detailsToggleAt(local);
+    if (detailsNode != null) {
+      _controller.toggleCollapsed(detailsNode);
+      return;
+    }
     final copyNode = r.codeCopyAt(local);
     if (copyNode != null) {
       _copyCode(copyNode);
@@ -3873,6 +3880,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final clickable =
         r.codeLanguageAt(local) != null ||
+        r.detailsToggleAt(local) != null ||
         r.codeCopyAt(local) != null ||
         r.codeAskAiAt(local) != null ||
         r.codeMoreAt(local) != null ||

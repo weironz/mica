@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'details_html.dart';
 import 'highlight.dart' show kCodeLanguages, detectLanguage;
 import 'marks.dart';
 import 'model.dart';
@@ -2058,6 +2059,23 @@ class EditorController extends ChangeNotifier {
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
+    // A `<details>` fold shares the key but not the default: its resting state
+    // is what the HTML says (`<details open>` = expanded), not a line count.
+    // Reading the wrong default makes the FIRST click a no-op — it would write
+    // the state the block was already in.
+    final details = node.data['raw'] == true
+        ? parseDetailsBlock(node.text)
+        : null;
+    if (details != null) {
+      final wasCollapsed =
+          (node.data['collapsed'] as bool?) ?? !details.openByDefault;
+      node.data = {...node.data}..['collapsed'] = !wasCollapsed;
+      _sendNow([
+        {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+      ]);
+      notifyListeners();
+      return;
+    }
     final lineCount = node.text.split('\n').length;
     final effective = (node.data['collapsed'] as bool?) ?? (lineCount > 20);
     final data = {...node.data}..['collapsed'] = !effective;
