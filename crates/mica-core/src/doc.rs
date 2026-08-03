@@ -594,13 +594,42 @@ fn split_marks(all: &[Mark], at: u32) -> (Vec<Mark>, Vec<Mark>) {
 
 fn set_text_and_marks(txn: &mut TransactionMut, bm: &MapRef, text: &str, block_marks: &[Mark]) {
     if let Some(t) = get_text(txn, bm) {
-        let len = t.len(txn);
-        if len > 0 {
-            t.remove_range(txn, 0, len);
+        // Write only what changed. This used to be "remove the whole range,
+        // insert the whole string", which is correct for one writer and wrong
+        // for two: a whole-range replacement is not something the CRDT can
+        // interleave, so two people typing into one paragraph converged on a
+        // DUPLICATE — "Hello" + A at the front + B at the end became
+        // "AHelloHelloB" (measured; tests/sync.rs). A minimal splice puts the
+        // two writers on disjoint ranges, which is the whole trick.
+        if let Some(d) = crate::text_diff::utf16_text_diff(&t.get_string(txn), text) {
+            if d.del > 0 {
+                t.remove_range(txn, d.at, d.del);
+            }
+            if !d.ins.is_empty() {
+                // Explicitly UNformatted: an insert inherits the attributes of
+                // the character it lands after, so appending to bold text made
+                // the new text bold. The old whole-range replace never hit this
+                // because deleting everything took the formatting with it.
+                t.insert_with_attributes(txn, d.at, &d.ins, marks::clear_all_attrs());
+            }
         }
-        t.insert(txn, 0, text);
-        for (start, l, attrs) in marks::marks_to_format_ops(block_marks) {
-            t.format(txn, start, l, attrs);
+        // Marks are still written COARSELY — clear the whole text, re-apply —
+        // because `marks_to_format_ops` only ever adds, so nothing else can
+        // express "this got un-bolded". That is the half of this problem that
+        // is still open (the delta↔marks mapping phase2 §12 calls the risk
+        // area); it is not a regression, since the code this replaced deleted
+        // the entire text on every keystroke, which is strictly more
+        // destructive.
+        //
+        // Guarded by a comparison so the common case — typing, no formatting
+        // change — emits ONLY the text splice, instead of a whole-block format
+        // op per keystroke.
+        let len = t.len(txn);
+        if len > 0 && marks::marks_from_runs(&text_runs(txn, &t)) != block_marks {
+            t.format(txn, 0, len, marks::clear_all_attrs());
+            for (start, l, attrs) in marks::marks_to_format_ops(block_marks) {
+                t.format(txn, start, l, attrs);
+            }
         }
     }
 }

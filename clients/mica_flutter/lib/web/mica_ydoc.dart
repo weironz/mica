@@ -16,6 +16,8 @@ import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:typed_data';
 
+import '../editor/marks.dart' show Mark;
+import 'text_diff.dart';
 import 'yjs_interop.dart';
 
 /// Open mark while reconstructing from a delta: (startOffset, href, title).
@@ -352,10 +354,53 @@ class MicaYDoc {
       return;
     }
     final text0 = t as JSObject;
+    // Write only what changed. This used to be "delete the whole range, insert
+    // the whole string", which is correct for one writer and wrong for two: a
+    // whole-range replacement is not something the CRDT can interleave, so two
+    // people typing into one paragraph converged on a DUPLICATE — "Hello" plus
+    // a character at each end became "AHelloHelloB". A minimal splice puts the
+    // two writers on disjoint ranges. Mirrors `text_diff::utf16_text_diff`.
+    final d = textDiffUtf16(micaYjs.textToString(text0), text);
+    if (d != null) {
+      if (d.del > 0) micaYjs.textDelete(text0, d.at, d.del);
+      if (d.ins.isNotEmpty) {
+        micaYjs.textInsert(text0, d.at, d.ins);
+        // An insert INHERITS the attributes of the character it lands after,
+        // so appending to bold text would come out bold. The old whole-range
+        // delete never hit this because it took the formatting with it.
+        micaYjs.textFormatJson(text0, d.at, d.ins.length, _clearAllAttrsJson);
+      }
+    }
+    // Marks are still written coarsely (clear-all + re-apply): `_applyMarks`
+    // only ever adds, so nothing else can express "this got un-bolded". Same
+    // remaining half as the Rust side. Guarded by a comparison so ordinary
+    // typing emits only the splice, not a whole-block format op per keystroke.
     final len = micaYjs.textLength(text0);
-    if (len > 0) micaYjs.textDelete(text0, 0, len);
-    micaYjs.textInsert(text0, 0, text);
-    _applyMarks(text0, marks);
+    if (len > 0 && !_sameMarks(_marksFromText(text0), marks)) {
+      micaYjs.textFormatJson(text0, 0, len, _clearAllAttrsJson);
+      _applyMarks(text0, marks);
+    }
+  }
+
+  static final String _clearAllAttrsJson = jsonEncode({
+    for (final t in Mark.types) t: null,
+  });
+
+  static bool _sameMarks(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i]['start'] != b[i]['start'] ||
+          a[i]['end'] != b[i]['end'] ||
+          a[i]['type'] != b[i]['type'] ||
+          a[i]['href'] != b[i]['href'] ||
+          a[i]['title'] != b[i]['title']) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _insertBlock(String parentId, int index, Map<String, dynamic> block) {

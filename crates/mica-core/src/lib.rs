@@ -14,10 +14,12 @@ pub mod doc;
 pub mod marks;
 #[cfg(feature = "store")]
 pub mod store;
+pub mod text_diff;
 
 pub use block::Block;
 pub use doc::{DocError, MicaDoc};
 pub use marks::{marks_from_data, Mark};
+pub use text_diff::{utf16_text_diff, TextDiff};
 #[cfg(feature = "store")]
 pub use store::{
   Identity, LocalSearchHit, LocalStore, LocalVersion, LocalView, LocalWorkspace, StoreError,

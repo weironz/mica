@@ -72,6 +72,100 @@ fn concurrent_text_into_same_block_converges() {
     assert!(text.starts_with("Hello"));
 }
 
+/// Two people typing into ONE paragraph, through the path the editor actually
+/// uses.
+///
+/// The tests above call `text_insert` — the fine-grained API, which always
+/// interleaved correctly. The editor's hot path does not touch it: typing
+/// emits `update_block` carrying the block's WHOLE new text, which lands in
+/// [`MicaDoc::set_block_text`]. That used to mean "remove the entire Text
+/// range, insert the new string", and a whole-range replacement is not
+/// something a CRDT can interleave — both replicas' inserts survived while
+/// only one of the two deletions had anything to delete, so `"Hello"` plus a
+/// character at each end converged on **`"AHelloHelloB"`**: the paragraph
+/// duplicated. (Measured, 2026-08-04, before the fix.)
+///
+/// `set_text_and_marks` now writes the minimal splice
+/// (`text_diff::utf16_text_diff`), which puts the two writers on disjoint
+/// ranges. Convergence was never the broken part — what they converged ON was.
+#[test]
+fn concurrent_typing_in_one_block_interleaves_not_duplicates() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+
+    // Each editor sends its block's full new text, exactly as `update_block`
+    // does: A typed at the front, B typed at the end.
+    a.set_block_text("a", "AHello", &[]);
+    b.set_block_text("a", "HelloB", &[]);
+
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+    let text = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
+    assert_eq!(text, "AHelloB", "both edits, once each");
+
+    // The fine-grained path agrees — the two are no longer two behaviours.
+    let mut c = replica(&state, 10);
+    let mut d = replica(&state, 20);
+    c.text_insert("a", 0, "A");
+    d.text_insert("a", 5, "B");
+    sync(&mut c, &mut d);
+    assert_eq!(
+        c.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text,
+        text,
+        "coarse update_block and text_insert now land the same thing",
+    );
+}
+
+/// The same, with the edits INSIDE the word and with CJK — the offsets are
+/// UTF-16 units, and a splice computed in the wrong unit would cut a character
+/// in half rather than merge.
+#[test]
+fn concurrent_typing_survives_cjk_and_interior_edits() {
+    let state = MicaDoc::from_blocks_with_client_id(
+        "r",
+        &[page(&["a"]), para("a", "笔记软件")],
+        Some(1),
+    )
+    .encode_state();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+
+    a.set_block_text("a", "笔记好软件", &[]); // insert at 2
+    b.set_block_text("a", "笔记软件很棒", &[]); // append at 4
+
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks());
+    let text = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
+    assert_eq!(text, "笔记好软件很棒");
+}
+
+/// A concurrent edit must not be swallowed by the OTHER replica's re-format.
+/// Marks are still written coarsely (clear-all + re-apply), so this pins that
+/// the coarse half cannot eat the fine half's text.
+#[test]
+fn a_concurrent_format_does_not_eat_a_concurrent_keystroke() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+
+    // A bolds the whole word without changing a character; B types.
+    // Built the way the editor does: marks arrive inside the block's `data`.
+    let bold = mica_core::marks_from_data(&json!({
+        "marks": [{"start": 0, "end": 5, "type": "bold"}]
+    }));
+    a.set_block_text("a", "Hello", &bold);
+    b.set_block_text("a", "Hello!", &[]);
+
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks());
+    let out = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap();
+    assert_eq!(out.text, "Hello!", "the keystroke survives the re-format");
+}
+
 #[test]
 fn concurrent_props_fields_converge() {
     // A block whose data already has one prop key.
