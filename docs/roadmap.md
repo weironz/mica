@@ -1,37 +1,24 @@
 # Mica 路线图 — 剩余功能与优化点
 
-> 2026-07-08 生成。来源:多代理系统扫过 `crates/` + `clients/mica_flutter/lib/` 的
-> TODO/未做标记、`docs/` 的 pending 项、编辑器里程碑、后端硬化面,综合排优先级。
+> **这份文件只放没做完的事。** 做完的整条搬去 [`roadmap-done.md`](roadmap-done.md)
+> —— 不是删,那些条目里写着「当初为什么必须这么排」(op 模型退役那六步是最好的例子),
+> 那是判断依据,不是流水账。但把它们留在待办清单里,每次盘点都要重付一遍阅读成本:
+> 2026-08-03 那轮核实,29 条未做项里有 3 条是幻影、1 条工作量标反 —— 而那还是在
+> **只扫未做项**的前提下。
+>
 > 影响力从高到低;`(S/M/L)` = 工作量;`[需后端]` = 要动 Rust。
+> `🟡` = 部分完成(条目里写清楚了哪半还欠);`⏸️` = 已拍板不做,不是遗留 TODO。
 >
-> 背景:v0.1.4。**M-R 云端数据安全里程碑已完成**(崩溃/切页/坏 update/流截断四类
-> 丢数据 + 熔断可见,见 `phase2-offline-crdt.md` §13),自动重连见 §13.1。
->
-> **2026-07-22 盲区扫描增补**:多维度只读审计(安全/运维/数据生命周期/客户端/测试/
-> 同步/合规七维,每条经二轮怀疑者核实)补入了原清单未覆盖的项,以 `🆕` 标记;同时
-> 勾掉了此前误记为待办、实则已实现的安全项。新增了「生产运维与备份」「数据生命周期与
-> 增长」「产品与公开发布合规」三个小节。
+> **维护规矩(否则它会再烂一遍)**:
+> 1. **一条做完了就当场整条搬走**,别只加 ✅ —— 发版流程里有这一步(`release.md` 步骤 5)。
+> 2. **否定式条目(「无 X」「不校验 Y」)只会静默变假**:代码删个函数会编译报错,
+>    文档说「没有」而实际有了,什么都不会响。所以它们要定期对着代码核,而不是靠记性。
+> 3. **核实结论写进条目本身**(日期 + 依据文件),下一个人才知道这条是新鲜的还是祖传的。
 
 ## 可靠性与同步
 
-- ~~**P2-M4 云同步流未真正建**~~ ✅ **主干早已上线**(2026-07-29 对代码核实,此条整条过期)—— `sync.rs` push_update 写流+fold、`catch_up_document` 按 since_rid 续传+剪枝缺口自动 Rebootstrap、`diff_from_base` SV 兜底;WS `sync.bootstrap/pull/push` 三 handler(`ws.rs:336-440`)+ 客户端 `_pullPayload(since_rid+sv)` 消费;真 PG 集成测试 `sync_pg.rs`。**它一直被记成未建,把整棵依赖树都记歪了** —— 实际解锁的下一步是 op 模型退役(见「数据生命周期」)。
 - **实时字符级并发协同未落地**(2026-07-29 措辞修正)—— 传输/应用层是**真 yrs merge**(`sync.rs` guarded_apply、客户端 applyUpdate),不是 last-write;真实缺陷在编辑器 op 粒度:`update_block` 整段换文本(`doc.rs` set_text_and_marks = remove_range+insert),两端并发编辑同块合并成**重复/拼接**而非字符交织。字符级 API 已在(`text_insert`/`text_delete`)但编辑器热路径不用;细粒度化 = delta↔marks 映射,phase2 §12 明言的最大风险区。(L) `[需后端]`
-- 🟡 **M-R 收尾**(2026-07-29 核实:4 项里 3 项早已落地)—— ~~C3 坏更新自愈+schema 版本~~ ✅(`store.rs` SCHEMA_VERSION=6 + 太新拒开 + 每 blob CRC-32 + yrs panic 包成 CorruptDoc;客户端坏副本冷 bootstrap 自愈、坏 remote 封顶熔断);~~D2 同步健康态~~ ✅(`sync_status.dart` → _SyncBadge + fault banner);~~A3 会话持久化 e2e~~ ✅(`cloud_sync_integrity_test.dart`:未 ack 编辑跨重启重推)。~~D1 尾巴~~ ✅ **已做(2026-07-30),M-R 整条关闭** —— `lib/swallowed.dart`:`swallowed(tag)` 累加、`swallowedCounts()` 出不可写快照、`swallowedSummary()` 出一行给 bug 报告。5 处带注释的故意丢弃接上了(`cloud_ws_ready`/`cloud_ws_stream`/`cloud_ws_uri`/`presence_ws_ready`/`presence_ws_stream`/`ai_ws_ready`),**丢弃行为一个字没改** —— 改的只是「丢了多少次」不再无从得知。**刻意不接 `onFault`**:那是同步故障横幅的入口,而连不上服务器是**状态不是故障**,把普通离线送进去等于给一个 app 已经处理正确的状态贴红标。可见面在 Settings → 诊断,**仅在非零时出现**(每次都显示「无」只会训练眼睛跳过它,而那一行不在本身就是同一个意思),且**不受诊断开关门控** —— 没有内容要记录,价值全在「事后能回头看」,而那恰恰是提前打开开关不可能的场合。测试:`swallowed_test.dart` 5 条(含快照不可写穿),外加在 `sync_reconnect_token_test.dart` 那条既有测试上挂了**接线断言** —— 纯模块单测证明不了接线,已实测撤掉 `swallowed('cloud_ws_uri')` 它立刻变红。**已知空白**:web 上 Settings 的诊断区整段隐藏(`diagnosticsSupported=false`,没有文件系统),所以 web 目前**没有**读回计数的地方 —— 与既有诊断故事一致,不另开口子。
-- ~~**离线→在线 blob 自动 reconcile**~~ ✅ 已做(2026-07-29,核实于 2026-07-30)—— 原文「`_reconcilePendingUploads` 全仓唯一调用点在 onReady」已假:现在 3 个调用点,`_onCloudOnline` 那一侧也扫 blob 了(`main.dart` 里 onReady、活动文档重连、`_sweepPendingOutboxes`)。
-- ~~🆕 **重连复用过期 token → 永久退避循环**~~ ✅ 已修(2026-07-29,核实于 2026-07-30)—— `uri` 由 `final Uri` 改成 `final Future<Uri> Function()`,每次连接尝试重新求值,3 处构造点全部迁移;长开会话那一处会先 `await _ensureFreshSession()`。回归测试 `test/sync_reconnect_token_test.dart`(钉的是「每次尝试都重新问一次 URI」,不是「能连上」)。**服务端那半仍未做**:socket 建立后不再校验 exp,没有「exp 到期 close(4401)」心跳 —— 见安全小节「长连 WS 超 token TTL 不再认证」。
-- ~~🆕 **web 端在浏览器不报 locale 时启动即崩**~~ ✅ **已修(2026-07-30)** —— 触发条件定位到 `navigator.language === "C"`(POSIX 风格,非合法 BCP-47)。逐一遍历确认:`C` **CRASHED**,而未指定 / `''` / `en` / `en-US` / `zh-CN` / `en_US` 六种全部 BOOTED —— CI runner 的系统 locale 恰是 `C`。抛点在**引擎内部**的 `new Locale`(`RangeError`),Flutter 的 Dart 源码与 pub cache 里都搜不到这句原文,所以 Dart 侧根本捕不到。于是修在能修的那一层:`web/index.html` 里、`flutter_bootstrap.js` **之前**一段内联脚本,**仅当 `navigator.languages`/`language` 里没有任何合法标签时**才用 `en` 兜底;已经像语言标签的值原样保留,所以不会改变真实用户拿到的语言(实测那六种一个都没被改动)。web e2e 第 7 组断言守着,并实测过:从产物里摘掉守卫它立刻变红并打出原始错误。原文如下 —— headless Chromium(CI runner 上未指定 locale)加载页面后抛 `Error: Invalid argument(s): Incorrect locale information provided`,以 JS `pageerror` 形式逃出 —— 即发生在 `runZonedGuarded` **之前**、引擎层的 locale 解析阶段。后果:`main()` 走不到 `registerYjsSelfTest()`,`window.micaYjs*` 三个钩子全是 undefined,`document.body.children` 只剩 1 个(canvas 外壳)—— **整个应用没起来,而 console 里一条错误都没有**(未捕获异常不是 console message,是加了 `page.on('pageerror')` 才看见的)。本机 Chrome 撞不到,它带正常 locale。**尚未定位到具体哪一行**:`loadPersistedLocale` 只做 `Locale('zh'|'en')`,抛不出这个;`ArgumentError` 以 JS 异常形式出现,指向引擎 / `intl` 的系统 locale 探测。e2e 侧已用 `newContext({locale:'en-US', timezoneId:'UTC'})` 钉死 —— **那是给 harness 的确定性,不是这个 bug 的修复**。真实影响面待评估:locale 被隐私工具剥掉或环境异常的用户,可能只看到一个白页且无任何提示。(S-M,纯客户端)
-- ~~🆕 **登录页「连不上服务器」会永久粘住**~~ ✅ 已修(2026-07-30)—— 两半都做了:**自动**有界退避重探(2s / 5s / 12s,够覆盖冷启动和「我刚把后端起起来」,然后停 —— 登录页无限探测是没人要的后台任务),**手动**在 `unreachable` 时才出现一个重探按钮(绿点旁边挂刷新按钮只会招人乱点;预算用完后它是唯一的回头路)。`dispose` 里取消定时器 —— 登录页恰恰是最容易在网络调用途中被 pop 的那一屏。复用已有 i18n key `commonRetry`,不新增。5 个回归测试(`sign_in_pane_test.dart`),并实测:撤掉 `_scheduleRetry` 后其中 3 个立刻变红。原文如下—— `SignInPane._probe()` 只在 `initState` 跑一次,失败后唯一的重试出口是「切到本地模式页再切回来」(`sign_in_pane.dart` 那段注释自己记了半个:「在真机上撞到过:开着这个屏才启动后端,行里一直说连不上」,当时只补了切 tab 这一路)。冷启动那一下网络/DNS 未就绪就会红着不动,而几秒后登录完全正常 —— 用户看到的就是「说连不上但我能登进去」。生产侧无关:连续 6 次 `GET /api/health` 全 200,DNS 5–9ms、总耗时 42–366ms,对 4s 超时有两个数量级余量。修法:给那行状态一个重试出口(点一下重测)+ 失败后退避重试;别再依赖运气。(S,纯客户端)
-- ~~**双向 state-vector 协商**~~ ✅ 已做(校准复核)—— P4-3:`ws.rs:508` `client_sv.and_then(|sv| sync::diff_from_base(base, sv))` 按 client SV 发最小 diff,base_message delta 分支 + 单测 `base_message_sends_delta_only_when_sv_yields_one`。
-- ~~**broadcast lag 触发整档重载**~~ ✅ 已做(校准复核)—— 客户端 `_resyncFromLag` 发 `sync.pull` 带 cursor+SV 增量续拉,非整档重载。(`cloud_sync_session.dart`)
-- ~~🆕 **`client_out_of_date` 客户端零处理 → 被跳过的更新永久静默丢失**~~ ✅ 已做(校准复核)—— `cloud_sync_session.dart:467` 收到 `code:'client_out_of_date'`(无 ack_id)即 `_resyncFromLag()` 触发 pull/bootstrap 补洞;server 侧 `ws.rs:170` 发 notice。
-- ~~🆕 **离线 outbox 按文档滞留:重连后只有当前打开的文档会推送**~~ ✅ 已做(5b7536a)—— 上线/重连(`onServerConnected → _onCloudOnline`)跑 `_sweepPendingOutboxes`:枚举云视图,跳活跃文档,对每个有非空 outbox 的云文档起短命 headless `CloudSyncSession`(persistence=该 doc 的 store)connect→drainOutbox→dispose。桌面 only;串行 + 单例锁 + best-effort + 双检跳活跃 + 空 outbox 不连;blast radius 有界(mis-drain=幂等/超时不损坏)。**注**:纯客户端编排、组合已测原语,无新增自动化测试(端到端需真 WS+多文档集成环境),待实机冒烟。(`main.dart` `_sweepPendingOutboxes`)
 - 🟡 **长离线重连 = 推送风暴**(2026-07-30 核实:原描述「无分批/背压/合并」已半假)—— **桌面已修**:`_flushUnacked` 在 append-log 路径上按 `_pushWindow = 64` 开窗,尾巴由 ack 回调驱动继续排空 —— 这既是分批也是背压(节奏由服务端定,不由 for 循环定)。**残留两处**:① **web 仍然无界** —— 窗口只在 `_useAppendLog`(即 `persistence != null`)那条路上,而 web 没有本地 store,走的是 `_unacked` 那个内存 outbox,`resendAll` 一次性全发;② **合并未做**(两条路径都没有):可先用 yrs merge 把尾巴合成一条再推。服务端那半仍然成立:每条 push 全档 decode+encode+upsert = O(条数×文档大小),见本文件「每次 push 重建+重编码+重写整档」。(`cloud_sync_session.dart` `_flushUnacked`, `sync.rs` `push_update`)(M) `[需后端]`
-- ~~🆕 **协议无版本协商 / 无最低版本闸门**~~ ✅ **已做(2026-07-29)** —— 客户端在 WS URL 上声明 `v=<版本>`(`kSyncProtocolVersion`,现为 1),服务端 `check_protocol` 对照 `MICA_WS_MIN_PROTOCOL` 判定,太老的拒以 `client_too_old`(稳定机器码,客户端据此提示"请更新"而不是"请重新登录")。
-  **三个刻意的设计点**:① **默认地板 0,谁都不拒** —— 闸门必须在需要它之前就存在,上线当天就开始拒会打死所有还没更新的桌面安装;要挡的恰恰是那批**不带版本**的老客户端,等到 S4 再加声明就晚了。② **判定排在鉴权之前** —— 否则一个 token 恰好过期的老客户端会先拿到 `unauthorized`、被支去重新登录,登录完重连再被同样拒掉,循环;版本是公开参数,不必等在密钥后面(端到端实测:不带 v + 坏 token 返回 `client_too_old` 而非 `unauthorized`)。③ **加性演进不许 bump** —— 版本号只标记"老客户端活不下去"的破坏性变更,为兼容改动动它会逼出没必要的升级。
-  两端各有一条对称断言钉住版本号一致(`the_current_version_is_one` / 「版本号跟服务端对齐」),防它们在两种语言里无声漂移。(`ws.rs` `check_protocol`, `sync_client.dart`)
-- ~~🆕 **Web IndexedDB 被驱逐 → 未推送离线编辑静默蒸发**~~ ✅ 已做(60b8b67)—— `WebIdbDocStore.open` 首次打开时 best-effort 调 `navigator.storage.persist()`(js_interop 绑定 StorageManager),请求持久化存储、显著降低驱逐概率;guarded 每会话一次、fire-and-forget、缺 API/拒绝均降级。(`web_idb_doc_store.dart` `_requestPersistentStorage`)
-- **M-R 收尾:更细的「离线/重连中」状态提示** —— 见「客户端质量」小节的同步状态可见性条目。
-- ~~客户端自动重连~~ ✅ 已做(branch `feat/cloud-auto-reconnect`,退避重连,§13.1)。
 
 ## 安全
 
@@ -39,31 +26,23 @@
 > 2026-07-22:refresh/rotation/改密撤销已落地(勾除);新增分享页 XSS、AI 密钥外泄、
 > SSRF 等此前漏网的高危项。
 
-- ~~🆕 **公开分享页存储型 XSS → 窃 token → 账号接管**~~ ✅ 已做(200c3b1)—— 分享响应加严格 CSP(`SHARE_CSP`:`default-src 'none'`、无 `script-src` → 内联 script + `on*` 处理器全挡)+ raw HTML 纵深净化(`strip_unsafe_attrs` 剥 `on*`/中和 `javascript:` URI,81ff653)。双层。(`documents.rs:2235/2244`, `markdown/lib.rs:3600`)
-- ~~🆕 **分享链接在页面进回收站/「永久删除」后仍对外可读**~~ ✅ 已做(200c3b1)—— `public_share_page` 渲染前 `fetch_document_view`(过 `is_deleted=false`)→ 删/purge 后返回 None → 统一 404。(`documents.rs:2211`)
-- ~~🆕 **任意登录用户可改全局 AI 配置 base_url → 服务端密钥外泄 + SSRF**~~ ✅ 已做(200c3b1)—— base_url 钉死服务端配置 / 忽略用户输入。(`ai.rs`)
-- ~~🆕 **`files/import-url` 服务端抓取任意 URL —— 盲 SSRF**~~ ✅ 已做(200c3b1)—— 私网/元数据地址黑名单 + 解析后校验(测试 `ssrf_guard_blocks_private_and_metadata_addresses`,files.rs:670)。(`files.rs`)
 - 🆕 **可上传携带脚本的 SVG,直开 blob 链接执行脚本**(**降级 low**,2026-07-22 复核)—— 允许 `image/svg+xml`,blob 端点(`blob_inner`)**302 跳存储的 `download_url`**(`public_base_url`/CDN 或 presigned GET,都是**存储源、非 app 源**)→ SVG 脚本跑在存储源、**碰不到 app 的 token,不是账号接管 XSS**。**仅当**运营者把 `public_base_url` 配成与 app 同源才成洞(部署误配)。且 302-跳存储架构下 app 不发字节,强制 attachment 别扭(要么上传即拒 SVG / 存成 text/plain,要么 presigned 加 `response-content-disposition`)。作为「防误配」的纵深项保留,非活跃洞。(`files.rs:350/364/537`)(S) `[需后端]`
 - 🆕 **客户端令牌明文存储放大 XSS 后果**(medium / 部分记录) —— web `authToken`+`refreshToken` 明文写 localStorage(任意同源 JS 可读,直接放大分享页 XSS);桌面明文存 prefs(无 DPAPI/secure_storage)。(`prefs_web.dart:6`, `main.dart:475`)(M)(桌面部分见下方「桌面 token DPAPI」)
-- ~~**无 refresh / 无撤销的 24h JWT**~~ ✅ refresh + rotation + reuse-detection + `revoke_family`/`revoke_user_sessions` 已落地;access JWT TTL 默认 **24h→1h**(`config.rs`,4a3042a),把「本该失效的 token 仍可用」窗口从 24h 压到 1h(客户端透明续期,无感)。更强的即时吊销(per-user token-version 表)仍可选,但收益已大幅下降。
-- ~~**改密不失效旧令牌**~~ ✅ `change_password` 已 `revoke_user_sessions`(`auth.rs:246`);唯一残留是被盗 access JWT 在剩余 TTL 内仍活(同上,靠缩 TTL/token-version 收口)。
-- ~~**登录/注册/refresh 无限流**~~ ✅ per-IP 令牌桶 + 全局 Argon2 并发门(`rate_limit.rs`);反代后取真实 IP 走「XFF 从右跳私网」对双跳(Traefik+nginx)/单机都对,自研无依赖。refresh 也纳入 per-IP 限流(但不占 Argon2 门——它不 hash,占了会饿死登录)。**WS 建连有意不限**:已 token 鉴权、低威胁,共享桶会误伤「同时开多文档」——按「不要过度设计」先不做并记因(CLAUDE.md 协作约定)。
 - 🟡 **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文**(2026-07-30 核实:「无启动告警」已假)—— ~~无启动告警~~ ✅ 早在 `9289ecf` 就有:`main.rs` 绑定后判 `!addr.ip().is_loopback()`,非环回即 warn「本进程只说明文 HTTP,请在前面终止 TLS,否则连 WS URL 里那个 token 都在网上裸奔」。默认 `127.0.0.1` 安全且**静默** —— 只有真承担了风险的部署才看到告警。(2026-07-30 顺手修了那条字符串:它被压成一行、中间留了三段连续空格,打出来有大段空白。)**残留**:TLS 本体仍全靠运维,且告警只是告警 —— 没有「prod + 非环回 + 无 TLS 即拒启动」的硬闸门(要拒得先能看见前面有没有反代,单机上看不见)。(M) `[需后端]`
-- ~~**鉴权逐 handler 手写、非中间件**~~ ✅ 已做(校准复核)—— `auth.rs:618` `scope_guard` 是 router-wide **默认拒绝**中间件 + `is_public` 白名单;新路由默认已鉴权。
-- **WS token 走 query string** —— 明文 JWT 落反代日志/浏览器历史(`ws.rs`)。(M) `[需后端]`
+- **WS token 走 query string**(2026-08-03 核实:**工作量原先标反了**)—— 明文 JWT 落反代日志/
+  浏览器历史。**服务端那半早就在**:`ws.rs` 的 `token_from_request` 先认 `Authorization: Bearer`,
+  query 只是回落。真正在用 query 的是**客户端** —— `sync_client.dart` 走
+  `WebSocketChannel.connect(uri)`,不带 header。所以桌面侧大概率是纯客户端改动;
+  web 那半仍需别的办法(浏览器 `WebSocket` API 本来就不能设 header,同类产品多走
+  「连上后第一帧发 token」或短命一次性 ticket)。**原先标着 `[需后端]`,这类「工作量标反」
+  比条目过期更坑:它让人一直以为是件大活而绕开。**(S-M 桌面 / M web)
 - **长连 WS 超 token TTL 不再认证** —— 过期前建的 socket 可授权数小时,无 re-auth 心跳(`ws.rs`)。(M) `[需后端]`
-- ~~**CORS 全放行**~~ ✅ prod 默认拒跨源(`cors_layer`,4a3042a),`CORS_ALLOWED_ORIGINS` 放行指定 origin,dev 仍 permissive;顺带修了「prod 一直以 Development 运行」(compose 缺 `APP_ENV`,727ebab)——否则收紧在 prod 不生效。
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
-- **开放注册无验证 + 弱口令(仅 ≥8)** —— 公网可无限刷号(`auth.rs`)。(M) `[需后端]`
-- ~~🟠 **compose 的注册默认已改对,但要下一版才到生产**~~ ✅ **0.13.8 上线**(2026-08-02)——
-  同一版还带上:`JWT_SECRET` 生产环境拒绝占位/过短的值(模板不再发一个能用的 `change-me`)、
-  备份编排从 shell 收进 `mica-cli backup`(部分成功不再静默 —— 缺一条腿默认让整次备份失败)、
-  对象字节 rclone 直传 OSS、`pg_dump` 去 gzip 让 rustic 能去重、搜索能找到文件夹并回传
-  `parent_view_id`、页面菜单的「复制页面内容」与「复制路径」、CI 新增 container job。
-  **已做**:节点 `.env` 补了 `RUSTFS_S3_*` / `OSS_BLOB_BUCKET`;上线后首跑三条腿全部 `ran`
-  (database / content / objects),对象字节第一次有了异地副本。**0.13.7 作废**——它的
-  `images (cli)` job 挂在我写的 rclone 阶段上(见 `deploy/Dockerfile.cli` 注释),那一版
-  只出了 api/web 镜像,修好后重发 0.13.8。下面留档原文 ——
+- **弱口令:唯一校验是 `len() >= 8`**(2026-08-03 核实,**原条目「开放注册无验证」那半已假**)——
+  邮箱验证**早就做了**:`auth.rs` 有 `email_verified_at`、注册返 **204 而非 session**、
+  另有 `resend-verification`(空实例的第一个账号例外放行,否则自托管装不起来)。
+  剩下的是口令强度:注册与改密两处都只判 `password.len() < 8`,没有字典/常见口令检查。
+  **拆成两条是因为它们混在一起时,做完一半的那条会让整条看起来还没动。**(S) `[需后端]`
 - 🟠 原文:**compose 的注册默认已改对,但要下一版才到生产**(2026-07-30)—— 改动已在 main:compose 那行
   改成 `${MICA_REGISTRATION_ENABLED:-}`(透传空 → 代码 fail-safe 默认 = 关;已核实
   `registration_open` 对空串返回 false),`deploy/.env.prod.example` 里那段「Unset/true = open」
@@ -87,15 +66,8 @@
 
 > 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
 
-- ~~🆕 **备份 sidecar 静默失败无任何告警**~~ ✅ 已做(校准复核)—— `mica-backup-loop.sh:16` 死人开关:成功/失败分别 ping `${HEALTHCHECK_URL}`(healthchecks.io 式),compose 已布线。
-- ~~🆕 **Postgres 全库无自动异地备份**~~ ✅ 已做(校准复核)—— `mica-backup.sh:70` `pg_dump|gzip` 进 PGDUMP_DIR、rustic 顺带异地;`Dockerfile.cli` 装 postgresql-client-16。
-- ~~🆕 **生产无任何外部探活**~~ ✅ 已做(校准复核)—— `.github/workflows/uptime.yml` cron `*/15` 打 `/api/ready`。
-- ~~🆕 **容器 HEALTHCHECK 用不摸库的静态 `/api/health`**~~ ✅ 已做(校准复核)—— `Dockerfile.api:22` HEALTHCHECK + 部署验证均改打摸库的 `/api/ready`。
 - 🆕 **磁盘慢渗(降级 low,2026-07-23 复核)** —— 原列 medium,核对后大半已做:① ✅ **日志上限**——compose 5 个服务全走 `*default-logging`(10m×3),最吓人的"日志无限涨"已堵;② ✅ **悬空镜像 prune**——`node-deploy-policy.sh:139` 每次部署 `docker image prune -f --filter until=168h`。**残留(慢渗、低危)**:③ 旧的**带 tag** 版本镜像累积(上面 prune 故意 NO `-a`、只清悬空、留回滚,每版多 3 个带 tag 镜像几百 MB);④ `/data/mica/pre-*.sql.gz` 手动还原点不自动清;⑤ 无磁盘水位告警。云盘几十 GB、慢渗不急。要做就是 `node-deploy-policy.sh` 尾部再加"保留最近 N 版镜像 + N 个还原点"。(S)
-- ~~**坏迁移的「恢复」流程无文档**~~ ✅ backup.md 加「从 pg_dump 恢复/回滚坏迁移」runbook(停 api→drop/create→zcat|psql→钉旧 tag→health/ready 验证,0d9c404)。
 - 🟡 **备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**(2026-07-30)—— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,而它被一条刻意的安全边界挡着**:CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练,得在节点上装一条新的 pinned 命令 + 一把新 key —— 那是生产侧的凭据/策略变更(deploy.yml 自己写着 CI「may READ the fence that limits it, never install it」),**该由用户决定并执行**,不该由 agent 代办。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)
-- ~~🆕 **单机兜底部署脚本 `deploy/deploy-from-source.sh` 已漂移**~~ ✅ 已做(2026-07-23)—— 对齐 justfile 权威版:`flutter build web` 补 `--no-web-resources-cdn`(修 CN 运行时拉 gstatic CanvasKit 不可用)、删 stale `--no-tree-shake-icons`、rsync→`rm -rf + cp -r`(Windows 无 rsync);`bash -n` 过。
-- ~~🆕 **Postgres 大版本升级路径无文档**~~ ✅ 已做(deploy.md 早有升级 section,0d9c404;2026-07-23 补「PG16 上游支持到 ~2028、这是主动维护任务非顺手改 tag」)。
 - 🟡 **Traefik:证书监控已做,配置仍不在仓库**(2026-07-29 核实)—— ~~过期无监控~~ ✅:`uptime.yml` 每 15 分钟对两域名(app + s3)openssl 查证书剩余有效期,< 10 天(CERT_MIN_DAYS)即 fail → Actions 失败邮件。**残留**:Traefik 配置本体在仓库外未纳管;ACME 卡死那类故障仍靠 `deploy.md:86` 的手动 runbook。(S,external)
 - 🆕 **provisioning 层不存在:「给台新机器就能起全套」今天做不到**(2026-08-02 写下方案,未实施)——
   仓库里只有 `deploy/docker-compose.yml`;Traefik、`/data/mica` 目录、`.env`、受限部署账号与
@@ -110,74 +82,6 @@
 
 > 2026-07-22 新增小节。多处「删除不真删」+「无界追加」,单节点小盘上会慢慢暴雷。
 
-- ~~**REST/MCP 写路径从不落自动版本快照**~~ ✅ `apply_derived_operations` 复用 push_update 的 auto 版本 INSERT(同事务、10min cadence、30 天;只写版本归档表、不碰双表示红线,6612330;连真 PG 测试)。
-- ~~**删除 workspace 永久泄漏其全部 S3/RustFS 图片对象**~~ ✅ `workspaces::delete` 删库前枚举 `DISTINCT object_key` 逐个删存储对象(best-effort、objects-first,6612330)。
-- ~~🆕 **`purge_view`「永久删除」只删 views 行**~~ ✅ 已做(927d7f7)—— `purge_view_subtree` 一条原子 CTE 删 views 子树 + 对 document 型视图删 `documents` 行,DB `ON DELETE CASCADE` 随之清空所有 document_* 表(yrs base/快照/版本/op/**分享 token**);blob 靠 blob_gc 惰性回收(去重共享,不急删)。DB 门控测试锁级联。(`documents.rs` `purge_view_subtree`)
-- ~~🆕 **新建 / 打开 / 重命名 workspace 一律 500**~~ ✅ 已修(2026-07-30)—— **从首次提交起就坏的**:`Workspace::page_count` 上写的是 `#[serde(default)]`,而那管的是「从 json 反序列化」,这里没人这么用;派生的 `FromRow` 仍然要求这一列,于是所有不 SELECT 它的查询(create / get / update 走的 `fetch_workspace_for_user{,_in_tx}`)解码失败 → `database error: no column found for name: page_count`。只有 `list` 的 SQL 带这一列,所以列表页正常、单个工作区的三个接口全挂。补 `#[sqlx(default)]`。**为什么活了这么久**:单测抓不到(解码只在真行上发生),而已有的 PG 测试没有一个从「短 SELECT」解码 `Workspace`。新增 DB 门控测试 `a_workspace_decodes_from_queries_that_omit_page_count` 同时解两种形状,并已验证撤掉修复它就变红。(S4 端到端实测时撞出来的,与 op 模型退役无关)
-- ~~🆕 **op 模型表无界增长**~~ ✅ **整条关闭(2026-07-30,v0.13.4)** —— 曾经每次 REST/MCP 写入都落一整份 jsonb 全量快照进 `document_snapshots` + 一条 `document_updates`,两表全仓无 DELETE。**六步退役全部做完,三张表已从 schema 删除**(migration 0016),文档内容如今只存在于 `document_yrs_base` 一处。六步留档如下 —— 值得留着,因为每一步都有一个「不这么排就会坏」的理由:
-  - ~~**S0 删死代码**~~ ✅ —— 删掉 7 个零调用者函数(文档只点名了 `create_named_version`/`restore_snapshot`,实际排查还有 `list_updates`/`list_versions`/`fetch_version`/`fetch_snapshot`/`fetch_snapshot_by_version_seq`)+ 随之成为孤儿的 `VersionRecord`,共 ~245 行。
-  - ~~**S1 补齐「只走 op 模型」的路径**~~ ✅ —— **这是退役真正的拦路虎**:`create_document`/`transfer_view`/`clone_view` 三条只写 op-model 快照、不建 yrs base,全靠 `ensure_base_tx` 的惰性桥在首次编辑时**从快照**现造 base。而那座桥正是退役要拆的东西 —— 直接停写快照,这些文档首次编辑就 404。现已在三处提交后补 `bootstrap_base`(best-effort,与 import 两条路径同款),新文档一出生就有 base。回归测试 `a_created_document_owns_a_yrs_base_immediately`(真 PG 门控)。
-  - ~~**S2 存量体检 + 回填**~~ ✅ **已完成并在生产跑完**(v0.13.3,2026-07-29)——
-    上线后日志 `yrs base backfill: built 1428 base(s)`,复量 `missing_base = 0`、
-    `document_yrs_base` 2307 → **3735 = 文档总数**(1428+2307 一篇不差)。**S4 的前提
-    (每篇文档都有 base)现已成立。**原始量数与实现说明:
-    **3735 篇文档里 1428 篇(38%)没有 yrs base**,但**全部都有快照**(0 篇两头皆空),
-    所以全部可回填;`document_snapshots` 3973 行/22MB、`document_updates` 238 行/440kB、
-    `document_yrs_base` 2307 行/24MB。实现 `sync::backfill_yrs_bases`(形状对齐已有的
-    `backfill_content_text`:keyset 分页、可重入、坏行 warn 跳过)。**放后台 spawn 而不是
-    阻塞启动** —— content_text 那条只走 migration 0012 留空的行,这条要走每一篇缺 base 的
-    文档,阻塞会把 `/api/ready` 压到部署误判失败;而且它只是给 S4 铺路,惰性桥今天照常工作。
-    并发安全:`ensure_base_tx` 是 `ON CONFLICT DO NOTHING`,和惰性路径抢同一篇也不会重复或损坏。
-    **部署时注意**:这是带数据改动的上线(会插 ~1428 行),按规矩先落还原点。
-  - ~~**S3 协议版本门**~~ ✅ **已做(2026-07-29)** —— 见「可靠性与同步」同名条目。闸门**默认惰性**(地板 0,谁都不拒),S4 时把 `MICA_WS_MIN_PROTOCOL` 抬到 1 即生效。
-  - ~~**S4 停写**~~ ✅ **已做(2026-07-30)** —— `apply_derived_operations` 不再 INSERT
-    `document_updates`/`document_snapshots`(yrs base + `workspace_updates` 成为唯一记录),
-    `insert_initial_snapshot`/`insert_root_snapshot` 整个删掉,换成事务内的
-    `sync::seed_base_tx`:create / import / transfer / clone 四条路径**和 `documents` 行同一个
-    事务**建 base —— 比 S1 那个提交后 best-effort 更强,不存在「文档已存在但没内容可读」的窗口。
-    `current_payload` 翻成 base 优先、快照仅作兜底(生产已 `missing_base = 0`,该分支预计永不触发,
-    留到 S5 删表)。另外两处不改就会坏:`ensure_base_tx` 原先无快照即 404,现改为从
-    `documents.root_block_id` 种空页;WS `send_bootstrap` 原先 `latest_snapshot(...).ok_or(())?`
-    —— 停写后**每个新文档一连就断**,现发 `snapshot: null`(客户端本来就只取 `connection_id`)。
-    回归测试 `a_write_no_longer_grows_the_op_tables`(写前写后各数一次两表行数 + 确认内容真落了)、
-    `a_document_with_no_snapshot_builds_its_base_from_the_documents_row`。**实测**:本地跑 0.13.3
-    走完注册→建页→写→导出/大纲/搜索/重开→WS bootstrap→import→clone,全工作区
-    `docs=3 bases=3 snapshots=0 updates=0`。**注**:`seed_document` 那批夹具没挂 —— 快照兜底接住了,
-    它们现在测的是「遗留文档仍可读」这条路,故意留着。
-  - ~~**S5 删表**~~ ✅ **已做(2026-07-30)** —— migration `0016_drop_op_model.sql`。删前量到的生产存量:
-    `document_snapshots` 3973 行 / **22 MB**(整库 71 MB 的三分之一)、`document_updates` 238 行、
-    `document_versions` **3 行**。三者都不含可达数据:快照是 base 的冗余副本(S2 回填已把每一份折进
-    base);`document_updates` **零读者**(`sync::pull_document_updates` 读的是 `workspace_updates`,
-    同名不同表);`document_versions` 是 op 时代的命名检查点,被 0009 的 `document_yrs_versions`
-    取代后**再没有任何代码读过**,那 3 个名字在产品里早就看不见了。**DROP 顺序固定**:
-    `document_versions` 必须先删,它的 `snapshot_id` 是 `ON DELETE RESTRICT`,不然删快照表会被依赖挡住;
-    刻意不用 `CASCADE` —— 本 schema 最具破坏性的一次迁移,不该带「静默」这个属性。
-    读侧同批撤掉:`current_payload` 的快照兜底、`ensure_base_tx` 的快照分支、`latest_snapshot{,_tx}`、
-    两个 DB 行结构,以及 `backfill_yrs_bases`(它的源表就是被删的那张,留着只会给无 base 的文档造空页)。
-    回归测试 `the_op_model_tables_are_gone`(直接查 `information_schema`,谁再把表建回来就红)+
-    `a_write_round_trips_through_the_base_alone` + `a_document_with_no_base_opens_as_an_empty_page`。
-    **改造夹具时挖出两个哑测试**:op 快照把 `data` 当 jsonb 逐字返回,所以 backlink 夹具里那些
-    **没有 `start`/`end` 的 link mark** 照样能被扫到;yrs 把 marks 存成文本 format,`marks_from_data`
-    会丢弃无区间的条目 —— 补上真实区间后,`a_self_link_is_not_a_backlink`(断言「为空」)才从**空转通过**
-    变成真的在测那条过滤。
-  退役完成。(M) `[需后端]`
-- ~~🔴 **未闭环:配额在生产还不可调**~~ ✅ **已闭环(0.13.6,2026-07-30 上线并在节点核实)** ——
-  `deploy-prod` 从 tag 取 compose + sha256 指纹校验,所以 `81276a2` 那行必须发一版才生效;0.13.6 就是那一版。
-  **生产实测**:容器里 `MICA_WORKSPACE_QUOTA_BYTES=` 已存在(空 = 走代码默认 1 GiB),
-  即「设了到不了进程」这个根因消失。同批把允许清单缺的另外 8 个变量也补齐了(见「开发者体验」小节
-  catch-up 常量那条),**`MICA_WS_MIN_PROTOCOL` 从此才真的可设** —— S4 那句「抬到 1 即生效」在这之前是空话。
-  **仍未在生产实测的一半**:极小配额→拒绝→带 `workspace_quota_exceeded` 的三态,需要一个已登录账号发真上传,
-  agent 手上没有凭据;本地三态实测过(3000 放行 / 6000 拒 / 边界 4500 放行)。要在生产补这一刀,就是
-  `.env` 临时设小值 → `docker compose up -d --no-deps api` → 用自己的账号传个超限文件 → 复原,窗口内会误伤真实上传。
-  原文如下 —— `MICA_WORKSPACE_QUOTA_BYTES` **没有**进
-  `deploy/docker-compose.yml` 的 api `environment:` 块,而那是一份**显式允许清单**:没列进去的
-  变量到不了进程。0.13.5 冒烟时抓到 —— 节点 `.env` 把配额设成 5000,一个 6000 字节的上传仍被
-  接受。**当前生产状态**:配额在生效,但锁在代码默认的 1 GiB、不可调(不算失去保护,只是没有
-  可调性)。修复已在 main(`81276a2`),但**重启不生效** —— `deploy-prod` 从 tag 取 compose,
-  且 deploy 有 sha256 指纹校验(一个版本不能配着不属于它的 compose 部署),所以必须发 0.13.6。
-  另外**生产侧只验证了「1 GiB 默认在生效」这一半**,极小配额那次因这个 bug 没跑成;本地是三态
-  实测过的(3000 放行 / 6000 拒并带 `workspace_quota_exceeded` / 边界 4500 放行)。
-  一般化教训:**加配置项要同时接三处** —— `config.rs` 读、compose 透传、文档写。
 - 🟡 **容量配额:blob 已封,其余仍无**(2026-07-30)—— ~~无任何容量配额~~ 部分已做:
   **每工作区字节配额**上线,`MICA_WORKSPACE_QUOTA_BYTES` 默认 **1 GiB**(`0` = 不限)。
   四个存字节的入口全部经过 `files.rs` 的 `ensure_storable` —— presign / complete /
@@ -195,37 +99,12 @@
   的配额检查没能端到端验到 —— SSRF 守卫先拒了 loopback 测试 URL(顺序正确),代码路径与另三条
   一致但只经代码核实。
   (`files.rs` `ensure_storable`, `store.rs` `workspace_bytes_used`, `ws.rs:60`, `sync.rs`)(M) `[需后端]`
-- ~~**`document_yrs_versions` 过期清理只挂在「该文档自己 push 撞 cadence」**~~ ✅ blob_gc 6h 循环加全局 `DELETE ... expires_at IS NOT NULL AND < now()`(只命中 auto、不碰命名检查点,6612330)。**残留**:`list_yrs_versions` 仍不过滤 expires_at(6h 扫前的过期行可能短暂现于面板,极小)。
 - ⏸️ **回收站不做自动清空 —— 已拍板(2026-07-29),不是遗留 TODO**。现状:纯 `is_deleted` 标志,只有用户手动「恢复 / 永久删除 / 清空回收站」三个出口(`documents.rs` 的 trash/restore/purge + `mod.rs:164` 那条 DELETE),**没有任何定时任务**碰它;blob GC 刻意把回收站引用算存活(`blob_gc.rs` `referenced_file_ids` 不过滤 `is_deleted`),所以图片 blob 跟着一起留。**决定不做自动过期删除**,四条理由:
   1. **同类一致**:AFFiNE、AppFlowy、Notion、Obsidian 在「用户自己是唯一管理员」这个相同约束下**都没有**做"回收站到期自动永久删除"。AFFiNE 的 blob 宽限期只针对已失活 blob,页面本身不过期;AppFlowy 干脆没有 blob GC。这是跨产品收敛的答案,不是巧合。
   2. **它解决不了真正的风险**。真风险是"单节点小盘 + 开放注册被撑爆",根源是**没有容量配额**(见本小节「无任何容量配额」条)。用一个会误伤用户数据的机制去掩盖一个该用配额解决的运维问题,是治标且引入新的不可逆风险。
   3. **代价不对称,且备份补不上**。每日全库 `pg_dump` 含回收站的文本与 CRDT 历史,但**不含 blob**(第二对象存储)。自动清空后就算靠备份找回文字,配图也真的没了 —— 对自托管的单管理员,这个恢复成本大概率承担不起。
   4. **手动出口已经齐备**:`_confirmPurgeAll` / 单条永久删除都带二次确认,要腾空间今天就能腾,不需要系统替用户决定。
   **配套(小,未做)**:回收站占用可见性 —— 照 `export_all_stats` 现成模式统计"回收站里几页 / 独有 blob 多少字节",显示在回收站对话框标题栏,让用户自己看见再决定。这比替他自动删更符合上面四条。(S)
-- ~~🆕 `blob_gc.rs` 注释预设了一个不存在的「回收站保留期」~~ ✅ 已修(2026-07-29)—— 原文写 effective margin 是 "recycle-bin retention + this",而回收站根本没有 retention 这个量;改成如实说明它是 [0, 用户手动清空) 的不定时长。
-- ~~**`refresh_tokens` 只增不删**~~ ✅ blob_gc 6h 循环加 `DELETE ... expires_at < now()-7d`(6612330)。
-- ~~🟡 **账号删除功能不存在**~~ ✅ 已做(18300d1,2026-07-23)—— `delete_account` 事务级联(密码门控 + 跨他人 workspace RESTRICT 阻塞回滚 409),详见「产品与公开发布合规」小节;级联顺序备忘 deploy.md 早有(0d9c404)。
-- ~~🔴 **异地备份里根本没有数据库**~~ ✅ **当天补上(2026-07-30)** —— 节点 `.env` 接上
-  `MICA_BACKUP_PGURL`(不需发版)、重建 backup 容器、手动跑一次完整备份;
-  `rustic snapshots --filter-label _pgdump` 从 **`total: 0`** 变成 **1 个快照(23.7 MiB)**。
-  数据库第一次有了节点之外的副本,DB 的 RPO 从 **∞ → ≤24h**。
-  **残留**(均已在 `docs/dr-plan.md` 立项):① 对象字节仍只靠内容导出间接覆盖,定了走 rclone
-  直传 S3(要发版);② `pg_dump | gzip` 让 rustic 的 dedup 几乎失效,该改成不压缩交给 rustic 压;
-  ③ **端到端恢复演练没人走过,RTO 至今无答案**;④ 跨账号第二份**已拍板不做**(用户判断概率够低)。
-  下面留档原始发现,因为它是「机制写好了但没人接线 + 监控对此是绿的」这类失败的标本 ——
-- ~~🔴 原始发现:**每日备份是「只有内容」的**~~(2026-07-30 生产实测,**推翻了本条更早的表述**)——
-  原文说「2026-07-22 起每日备份走全库 pg_dump(label=_pgdump),回收站页面的文本+CRDT 历史在备份里」,
-  **是假的**:机制在 `mica-backup.sh` 里写好了,但节点 `.env` **从来没设过 `MICA_BACKUP_PGURL`**,
-  脚本因此按设计降级、打一条 WARN、只备内容。取证:今天备份日志原文
-  `WARN: MICA_BACKUP_PGURL unset — skipping pg_dump (content-only backup, no DB disaster recovery)`,
-  且 `rustic snapshots --filter-label _pgdump` = **`total: 0 snapshot(s)`**(全仓 170 个快照)——
-  不是最近坏的,是一次都没跑过。**后果**:异地只有 22 个工作区的 Markdown+图片;账号、成员关系、
-  CRDT 编辑历史、版本检查点、**评论**(独立表,正文里一个字都没有)、分享 token 全都只存在于
-  节点本地盘,而 DB 的唯一副本是**发版前手工落的** `/data/mica/pre-*.sql.gz`(与 DB 同盘)。
-  节点盘一坏 = 这些永久消失。**为什么活这么久**:死人开关对它是**绿的** —— 跳过 pg_dump 是一次
-  *成功*的运行,监控抓得住「备份没跑」,抓不住「备份少备了一半」。**修法一行**(节点 `.env` 加
-  `MICA_BACKUP_PGURL`,不需发版)+ 配套让降级不再算成功。完整方案、威胁模型、RPO/RTO 见
-  **`docs/dr-plan.md`**。
 - 🟡 **导出不含回收站,回收站页面独有的图片 blob 也不在任何备份里** —— 导出过滤 `is_deleted=false`;
   blob 在第二对象存储,`pg_dump` 本来也不含。等上面那条修完(DB 进异地备份)再重新评估这条的份量。(S)
 
@@ -243,10 +122,9 @@
   6668976 一批),真做需要本地 store 侧同样维护一份正文投影并给 FFI 查询接口 ——
   和云端那条是同一套设计,不是两套。(M)
 - 🟡 **结构块 callout/toggle/embed/columns** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— **已拍板(2026-07-29):分两步,先做渲染层折叠 UI**。关键区分:`<details><summary>` 是**合法的 CommonMark/GFM raw-HTML block**(GitHub 官方推荐写法),属于"我们的解析器没接住",**不是**像合并单元格/多列那样"标准 md 表达不了"——所以**不适用**那两条的「红线不做」先例。现状比参照产品还弱一档:AppFlowy(原生 `toggle_list` block)和 AFFiNE(`collapsed` 做成 list/heading 通用属性)**编辑器里都有可点的折叠 UI**,只在导出 md 时降级;我们是连折叠 UI 都没有,`<details>` 源码当代码块摆着。**第一步(S,建议先做)**:纯渲染层——`code_block`+`raw:true` 的解析/序列化**一个字不改**,只在渲染层认出规范形态的 `<details>` 就换折叠外观,走 `AtomicBlockRenderer` 注册表(不堆 if,守渲染红线);折叠态复用现有 `data.collapsed` 那条路。round-trip 零改动。**第二步(M–L,另议)**:规范子集结构化成新 kind(summary 富文本 + body 复用 `data.li` 扁平容器),非规范形态退回现状直通;成本大头在教导入器反解析真实世界五花八门的 `<details>`。**顺带定论**:折叠状态**是文档数据不是视图状态**——AppFlowy(`updateNode` 事务)、AFFiNE(`store.updateBlock`)、以及本仓库自己的代码块折叠先例(`controller.dart` `toggleCollapsed` 走 `update_block`,但 `collapsed` **从不进 md 字节**)三方一致;`<details open>` 让我们有机会比前两家更彻底(折叠态也能 round-trip),但那意味着"点一下折叠"变成一次真实文本编辑,留到第二步再定;② **columns** —— **红线不做**(标准 md 无多列表示,同表格合并;要做只能显式有损方言);③ embed 未做。附:render 注册表 P3-1 对这三种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
-- **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;10+ 处硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
-- ~~无暗色模式~~ ✅ **已做**(v0.13.2,2026-07-29):语义色 token 层(`ui/theme_tokens.dart`,AppFlowy 式角色分组)贯穿外壳 / 自绘画布(挂 `EditorAppearance.tokens`)/ 语法高亮(`_Rule` 存角色,emit 时解析)/ mermaid(merman host theme + mermaid.js themeVariables);跟随系统或设置手切,冷启动在 runApp 前就位。**位图与记忆化缓存的 key 都带调色板**(公式/mermaid 栅格、代码 span memo),否则浅色下烤出的产物会画到深色页上。
-- ~~**文档内查找/替换缺失**~~ ✅ Ctrl+F 查找栏(导航/计数/当前匹配高亮)原已具备;2026-07-22 补齐**替换**(`replaceRange`/`replaceAll` 走既有 op 路径,9fe9ae8)+ F3/Shift+F3。**全部匹配高亮**有意不做(要动 render.dart 加第二遍选区叠绘,超 MVP)。
-- ~~**行内数学未排版**~~ ✅ 2026-07-16:`$…$` 真排进行里(基线对齐、随字号缩放),公式为不可进入的原子(`inline_atoms.dart`,render-architecture.md Decision 4)。
+- **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。
+  **2026-08-03 核实:比原文写的更糟** —— 编辑器目录里 `Semantics` **0 处**(不是「少」,是没有),
+  `TextDirection.ltr` **32 处**(原文写「10+」)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
 - **Web IME/光标滚动实况调优** —— Milestone 1 遗留(合成态/游离换行、caret scroll-into-view)。(M)
 - **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
 - 🆕 **集成 AI 升级为「能操作文档的 agent」(候选,已调研背书,2026-07-23)** —— 现
@@ -276,19 +154,10 @@
 
 > 2026-07-22 新增小节。离线功能面做得全,但崩溃/损坏/双开几处兜底缺失会真丢数据。
 
-- ~~🆕 **客户端零崩溃/错误上报**~~ ✅ 已做(校准复核)—— `main.dart:149` `runZonedGuarded` + `FlutterError.onError`,未捕获异常落盘 diagnosticsDir。
-- ~~🆕 **本地世界文档损坏 → 静默变空白且自毁恢复检查点**~~ ✅ 已做(校准复核)—— FFI `store.rs` `load_doc` 区分 None/corrupt(throw);`local_doc.dart:56` 捕获即 rethrow `LocalDocCorruptException`,不再 seed+saveDoc+checkpoint(§10 回滚网不再被冲)。
-- ~~🆕 **桌面无单实例守卫,双开丢本地文档**~~ ✅ 已做(校准复核)—— `windows/runner/main.cpp:24` `CreateMutexW("Local\\MicaSingleInstance")` + `ERROR_ALREADY_EXISTS` 守卫(fail-open)。
-- ~~🆕 **退出路径漏掉编辑器 400ms 防抖文本**~~ ✅ 已做(校准复核)—— `main.dart:1016` `_flushForExit` 先 `await _activeEditorFlush()` 再冲会话/后端。
-- ~~🆕 **`prefs.json` 非原子写 + 损坏静默清空**~~ ✅ 已做(校准复核)—— `prefs_stub.dart:64` 写 `.tmp` 后 `renameSync`(同卷原子,含 Windows 覆盖处理)。
-- ~~🆕 **编辑器 op 管道 `catchError((_){})` 吞掉本应浮出的 outbox 写失败**~~ ✅ 已做(校准复核)—— `controller.dart` 现 `opFaultCount++` + `onOpFault?.call` 上浮,不再吞(红线 #1)。
-- ~~🆕 **云文档离线/未同步状态零指示**~~ ✅ 2026-07-26 完成(69ff98f 地基+信号 / 8e1318d 徽标 / 6832dea 心跳)—— 扒了 8 家(AFFiNE/SiYuan/Logseq/Anytype/Google Docs/Notion/Obsidian/AppFlowy)后定**最小形态**:三态克制徽标(已同步→**什么都不画**、同步中→faint 慢转圈、离线→cloud-off + tooltip),摆文档面包屑右上、**仅云工作区**显示。**不做数字计数**(同类无一家做)、**不可点击/不做手动同步**(AFFiNE/AppFlowy/Anytype 同样没有;mica 本就自动重连 + 自动 flush)。信号从 `CloudSyncSession` 四个真实转移点 emit,推导是纯函数 `deriveSyncPhase`(`sync_status.dart`,4 单测)。**关键补丁**:加了**心跳**(8s ping + 20s 帧静默看门狗)——否则拔网线是 TCP 半开、不发 WS close 帧,`_onDone` 永不触发 → 一直误判在线(用户实测拔线发现徽标不动才暴露);服务端 `ws.rs:267` 本就 `ping→pong`,零改动。〔"别人都没做"的印象来自 AppFlowy:它的 `sync_indicator.dart` 当前是**死代码**(重构后未挂载),且有未关闭的需求 #5729 求做回。〕
 - 🆕 **i18n 漏网**(low) —— 默认页名 `kUntitledPage='未命名页面'` 硬编码中文并持久化(英文用户新建页得到中文标题、且与 'Untitled' 双轨),代码块 AI 动作 prompt 全中文;语言仅 en+zh。(`models.dart:667`, `editor.dart:5109`)(S)
 
 ## 性能
 
-- ~~**长文档性能**~~ ✅ **性能线已闭环**(2026-07-23)—— 设计 `docs/editor-virtualization-plan.md`。三刀叠加后每击键 = O(改动块)真推导 + O(N) 平凡重定位:**Phase 1**(da25075)painter 缓存复用,干掉逐帧 dispose+重建全部 TextPainter;**代码高亮记忆化**(7fe1997)未变代码块不再重新分词;**Phase 2**(b750d88)整块 layout 缓存 `_layoutCache`,未变块跳过 marks/span/高亮/rect 全部推导只 `shiftBy` 重定位,dirty 判定用 identity(实证 controller 只重赋值不原地改 text/data)。回归 `test/{painter_cache,code_span_memo,layout_reuse}_test.dart`,全量 728 通过。**残留(L,有意不做)**:真·视口虚拟化(屏外跳过排版)——两条架构约束(performLayout 无滚动偏移、编辑器不自管视口)使其为独立架构项,ROI 仅万级块/超长档,剧本留档待需。
-- ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
 - **每次 push 重建+重编码+重写整档(写放大)** —— `from_update`→全档 `encode_state`+upsert,成本 O(文档) 而非 O(更新)(`sync.rs`)。(M) `[需后端]`
 - **yrs base 无 squash/GC,无界增长** —— 只裁 stream 不压 base,长寿文档 base 越滚越大(`sync.rs`)。(L) `[需后端]`
 - 🟡 **本地持久化:云文档已增量,纯本地文档仍全量**(2026-07-29 更正)—— 云端(在线)文档早已 append+squash(`store_cloud_doc_store.dart` appendOutbox/appendUpdate/compact,每 32 次 append 检查、日志 >256 squash;store 层 `append_update`/`squash` 全备)。「仅全量快照」只剩**纯本地(离线)文档**的 `local_doc.dart` debounce saveDoc 路径,接线即可。(S/M)
@@ -296,32 +165,13 @@
 
 ## 开发者体验 / CI / Markdown
 
-- ~~🆕 **api-server 全部测试不进 CI;DB 测试本地也静默跳过**~~ ✅ 已做(校准复核)—— `ci.yml` 已有 postgres service + `-p mica-api-server`(测在 CI 实跑);`auth.rs:895` `pool()` **已带 sync_pg.rs 同款 CI-assert**(`assert!(env CI is_err, "DATABASE_URL unset in CI...")`)→ 缺库在 CI 里 panic、本地才 return None 跳过,那些 `else{return}` 在 CI 不会假绿。(校准注:审计曾误判为残留,因只看了 `else{return}` 调用点、未读 `pool()` 定义——同其 #1 的错。)
-- ~~🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**~~ ✅ 已做(校准复核)—— `documents.rs` `parent_guard_pg` 测 folder 接受/page 拒绝/缺失父 + 触发器 backstop(真 PG 门控)。
-- ~~**Release 出的 Windows 安装包从未被自动安装-启动验证**~~ ✅ release.yml 加「安装-启动冒烟」(/VERYSILENT 装 + 启动 + 存活 10s + finally 清理,发布前拦,0d9c404)。**2026-07-23 根治 flaky**:冒烟测撞单实例 mutex 竞态偶发假失败(安装器 `[Run]` 自启一个 + 测试又自启一个,谁后抢到 `Local\MicaSingleInstance` 谁 `exit 0`;`[Run]` 触发时机随机)。结构性解法(ShareX 同款):`mica.iss` 的 `[Run]` 加 `Check: not CmdLineParamExists('/SKIPRUN')`,CI 安装传 `/SKIPRUN` → 安装器不自启 → 测试是唯一启动方 → mutex 永不争用,竞态从结构上消失(9c006e6),0.12.16 真 CI 跑绿实证。〔sccache 曾加在 windows job(b5e7f04)后于 v0.12.18 撤除:tag 触发的 job 命中率恒 0%(GHA cache 按 ref 隔离、release 只在 tag 上跑),且长杆是 Flutter 构建非 Rust——详见 `docs/lessons.md`。〕
 - 🟡 **CI 补 Windows 集成测试**(2026-07-23:离线子集已进)—— 新 `.github/workflows/flutter-integration.yml`:windows-latest **串行**跑 **14 个离线/客户端**集成测试(文件间杀 `mica_flutter.exe`,化解单实例守卫导致的 debug-connection race——已复现:残留进程锁住下次启动)。**残留**:4 个需活的 dev 栈(postgres+rustfs+api)的测试仍排除(`cloud_sync_test`/`migration_sync_test`/`offline_image_reconcile_test`/`page_switch_fidelity_test`,含那对 race 文件)——CI 里起全栈超范围。且 12/14 是读文件头判定离线(实跑了 2)、首次 CI 真跑确认。(M) `[需后端]`(残留部分)
-- 🟡 **e2e:桌面已进 CI,web 仍为零**(2026-07-29 更正:「全项目零 e2e」失实)—— 桌面 14 个离线集成测试已在 windows-latest **真 app 实跑**(flutter-integration.yml,2026-07-23 起,那就是 e2e);web 端仍零(无 spec,CI 只验能编译;playwright 截图是人工手段)。(web 侧 L)
 - 🟡 **不可信输入解析面 fuzz**(2026-07-23:markdown + interchange 已上,yrs 待)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**已做**:proptest 属性 fuzz 覆盖前两个自家解析面——`markdown/tests/proptest_parse.rs`(`import_markdown` 灌任意字节 + markdown-ish 片段,never-panic)+ `interchange/tests/proptest_zip.rs`(`read_zip→normalize_entries→expand_nested_zips` 灌任意/PK-前缀字节)。本轮**未挖出 panic**(解析器稳),但落成**快回归门**(各 ~2–5s,随 `cargo test` 进 CI;`PROPTEST_CASES=100000` 可本机长跑)。**残留**:yrs 二进制更新那面——手写 xor 已实证挖出远程可达(需认证)UB,但 UB 要 **cargo-fuzz + sanitizer(ASan)** 才抓得住,proptest(只抓 panic)不够 → 留 Linux/CI 的 cargo-fuzz。(`store.rs:2202`)(M)
-- ~~🆕 **本地 SQLite 真库升级冒烟不在发版清单**~~ ✅ 已做(核实于 2026-07-30)—— `release.md` 步骤 4 已写进去,连命令带理由:「它默认 `#[ignore]`、要手动设环境变量,所以不写进这里就等于不存在」,并钉住触发条件(改过 `crates/mica-core` 的 store schema / `SCHEMA_VERSION` 时必跑)。
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
-- ~~🆕 **`just test` 漏 `--features store`**~~ ✅ 已做(校准复核)—— `justfile:133` 已有 `cargo test -p mica-core --features store`。
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
 - **仅结构化日志,无 /metrics/telemetry** —— 同步后端生产盲飞(`telemetry.rs`)。(M) `[需后端]`
 - **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
 - **自研 parser vs 采用 comrak(读侧)未决** —— Milestone 8 决策点(editor-engine)。(M)
-- ~~**catch-up limit / stream 常量硬编码**~~ ✅ 已做(2026-07-30)—— `SyncTuning{catch_up_limit, keep_margin, prune_every}` 进 `AppConfig`
-  (`MICA_CATCH_UP_LIMIT` / `MICA_STREAM_KEEP_MARGIN` / `MICA_STREAM_PRUNE_EVERY`,默认 1000/64/32 = 原常量值),
-  `push_update` / `restore_yrs_version` 收 `&SyncTuning`,`app-core` 的两个 `pub const` 删除。**解析上有一处不给面子的地方**:
-  `0`、负数、乱码一律回落默认,**没有任何拼法能把它们设成 0** —— `prune_every=0` 会让 `rid % 0` 在 push 热路径上 panic,
-  `keep_margin=0` 会把刚插进去的那条更新删掉;两者都不是运维会想要的状态,于是不给入口(同 `workspace_quota` 那条原则)。
-  单测 `sync_tuning_parse` 三条钉住:默认值 == 老常量、正数原样、0/负/乱码回落。
-  **顺带修掉一整类同款陷阱**:`deploy/docker-compose.yml` 的 api `environment:` 是显式允许清单,
-  比对 `config.rs` 读的 16 个变量后发现**有 9 个没列进去、在生产等于不存在** —— 其中
-  **`MICA_WS_MIN_PROTOCOL` 最要命**:本文件 S3 条目写着「S4 时把它抬到 1 即生效」,而它**根本没法在生产设置**。
-  已补齐 8 个(`MICA_WS_MIN_PROTOCOL` / 三个 sync 旋钮 / `CORS_ALLOWED_ORIGINS` / 两个 token TTL /
-  `DATABASE_MAX_CONNECTIONS`),全以 `${VAR:-}` 透传(空 = 走代码默认);**刻意不加 `MICA_SEED_TEST_USER`** ——
-  生产必须永不可达。YAML 用拒绝重复键的 loader 验过。
-- ~~**过时注释/文档批量清理**~~ ✅ 大部分(2026-07-23)—— 改了 4 处确认为 stale 的:`model.dart`×2(表格/void 节点/marks 已落地)、`preview_raster.dart`(web mermaid 已 JS interop)、`mica-core/lib.rs`(本地 SQLite store 已在 `store` feature 落地)。`main.dart` 的 M4/M5 保留——它们是准确的里程碑出处标注,非"没做"声明。
 
 ## 产品与公开发布合规 🆕
 
@@ -331,43 +181,26 @@
 > 建起邮件底座)已全部落地并发版 0.12.16 上线端到端验证。剩下均为 low:AGPL 源码入口、
 > 隐私声明·条款、OFL.txt 随附。
 
-- ~~🆕 **AGPL-3.0 但客户端无「获取源代码」入口**~~ ✅ 已做(2026-07-23)—— About 弹窗加「源代码(AGPL-3.0)」链接,点开 github.com/weironz/mica(版本号已在弹窗上方,可对到 tag);复用 in-house `openUrl`(无 url_launcher 依赖),web/桌面同一 About 段共享故两端都覆盖。满足 AGPL §13 向远程交互用户显著提供 Corresponding Source。(`dialogs.dart` `_showAboutDialog`)
-- ~~🆕 **无账号自助注销/数据删除入口**~~ ✅ 已做(18300d1 后端 + 43b4dae 客户端,2026-07-23)—— `DELETE /auth/me`(密码门控)事务级联删本人拥有的全部 workspace(内容随 `workspace_id` CASCADE)+ tokens/成员;跨他人 workspace 的协作内容(RESTRICT)阻塞时整事务回滚返 409。设置里危险按钮 + 密码确认弹窗 + 成功后登出。DB 门控测试锁级联(方案 A 全删,被遗忘权)。
-- ~~🆕 **无密码找回/重置,忘密码=永久锁死**~~ ✅ 已做(5680547,2026-07-23)—— `POST /auth/password/forgot`(恒 204,不做账号枚举 oracle)+ 服务端渲染无 JS `/reset-password` 页(token 单次性、存 sha256、1h 过期、条件 UPDATE 花掉、改密撤销全会话)。**邮件底座就此建立**:`infra::Mailer` trait(默认 LogMailer,把链接打日志、无服务商也能跑)+ 阿里云 DirectMail 实现(SingleSendMail v1 RPC HMAC-SHA1 签名,复用 reqwest,不引 lettre),`MICA_MAIL_BACKEND=directmail` 切换、缺项 WARN 回退。端到端实测收信 + 重置通过。见 `docs/password-reset.md`。
-- ~~🆕 **开放注册无法关闭**~~ ✅ 已做(39ac1ee,2026-07-23)—— `MICA_REGISTRATION_ENABLED=false` 让 `/auth/register` 返 403(login/refresh 不受影响);默认开、只认显式 off 值(`false/0/no/off`)防误锁。运营者一个开关把公网节点转私有。**残留**:邮箱验证/验证码/邀请制仍无(找回已带来邮件底座,验证可后续叠)。
 - 🆕 **已上线实例无隐私声明/服务条款**(low) —— 正面:诊断 opt-in 默认关、无 telemetry 回传,产品内隐私姿态好;缺口是外部合规面,仓库无任何面向用户的隐私政策/条款文本。(M)
-- ~~🆕 **打包 Noto Sans SC 走 OFL 1.1 但没随附 OFL.txt**~~ ✅ 已做(核实于 2026-07-30)—— `clients/mica_flutter/fonts/OFL.txt` 在库里,`NOTICE.md:11-12` 也从「应当随附」改成了如实陈述「the full licence text ships beside it as `OFL.txt`」。
 
-## 接下来最该做的(2026-07-29 重排)
+## 接下来最该做的(2026-08-03 重排)
 
-> 本轮 7 路并行对代码逐条核实 53 项候选:翻掉 **5 个整条误报**(P2-M4 云同步流、撤销/重做按钮、版本富预览、登录页服务器选择器、证书监控)+ **6 处部分失实**,挖出 **1 个真 bug**(重连复用过期 token)。排序原则:先闭环、再立规、后大件。
+> 上一版(2026-07-29)排的前三项**已全部关闭**:op 模型退役 ✅(三表已删,migration 0016)、
+> 协议版本门 ✅(`check_protocol` 上线)、离线闭环三小件做完两件(剩 web 侧 outbox 背压)。
+> 本轮(2026-08-03)对着代码核了 29 条未做项:翻掉 **3 条幻影**(开放注册无验证、web e2e
+> 为零、以及上面那两项)、**改写 1 条工作量标反的**(WS token)、**1 条比写的更糟**
+> (a11y:`Semantics` 0 处、硬编码 `TextDirection.ltr` 32 处而非「10+」)。
 
-1. **同步「离线→在线」闭环三小件**(各 S/S-M)—— ① 修重连过期 token 死循环(bug);② blob 重传挂上重连(现只在重开文档时);③ outbox 分批背压(重连风暴)。全是小活,合起来把离线体验真正关上门。
-2. **op 模型退役启动**(M)`[需后端]` —— P2-M4 主干已上线,阻塞解除:先删死写入器(S),再拍修剪/退役;这是库里唯一无界增长的大头。
-3. **协议版本门**(S-M)`[需后端]` —— 桌面自装包版本天然漂;退役 op 模型(现在的 REST 兜底)之前先把 WS min-version 闸门立好,退役才敢做。
-4. ~~**快赢打包**~~ ✅ **整条清空(2026-07-30)** —— 五件里**三件核实为早已做完、只是没勾**(OFL.txt 在库、
-   非环回明文绑定告警在 `main.rs`、`upgrade_real_store_smoke` 在 release.md 步骤 4);真正动手的两件是
-   catch-up/stream 常量进 AppConfig(顺带挖出 compose 允许清单漏了 9 个变量)和 D1 静默吞接计数。
-   **这轮最该记住的不是那两件活,而是「五分之三是幻影」** —— roadmap 上一条 `-` 只说明它当初被写下过,
-   不说明它今天还成立;否定式条目(「无 X」「不校验 Y」)只会**静默变假**,而清单本身不会告诉你哪几条烂了。
-5. **拍板项(先决策不写码)**—— ~~回收站保留期~~ ✅ 已拍板不做(见「数据生命周期」);~~toggle 要不要新 kind~~ ✅ 已拍板分两步(见「编辑器与功能广度」);~~MCP inspector v2~~ ✅ 已拍板**暂不升**(官方迁移指南 #1822 未完成、v2 当天 tree-swap 上线自家 CI 都在抖;`@1` 仍收安全补丁,改法已备:命令里补 `-e KEY=VALUE` 且必须放在 target 之后);**剩** M8 comrak 取舍。
+1. **安全三件 —— 公网自托管的剩余底线**(合计 S-M + M + M)
+   ① WS token 出 query string(**本轮降级:服务端 `Authorization` 路径早就在,是客户端没走**);
+   ② 长连 WS 超 token TTL 无 re-auth 心跳;③ 桌面 token DPAPI。
+2. **发布可信度:Windows Authenticode 签名**(M)—— 更新器已校验 size+sha256,但用户装的
+   仍是一个 SmartScreen 会告警的包。这是新用户看到的**第一样**东西,而它现在说「不可信」。
+3. **成熟度大件(用户挑一个)** —— 长文档虚拟化(L)/ 表格补齐 / 反链面板 / 同块字符级协同(L)。
+   这几件决定它「像不像一个成熟笔记」,但都不是底线问题,所以排在底线之后。
+4. **待拍板(不写码)** —— M8:读侧自研 parser vs 采用 comrak。这是上一版清单里唯一没拍的。
+5. **基建欠账** —— provisioning 层(L,方案已写在 `docs/cd-plan.md`,**刻意不含实施**:
+   手工走一遍还没人做过,没走过就写 IaC 等于把猜测固化)、yrs base squash/GC(L)、无 `/metrics`(M)。
 
-**中期(用户挑)**:安全三件(token DPAPI / 邮箱验证 / WS token 出 query string);平台两件(Authenticode 签名 / Linux CI 出包);产品大件(同块字符级协同 L / 本地全文搜索 M-L / 本地反链 / 视口虚拟化 L / 触屏选择 L)。
-
-## 上一批「最该做」(2026-07-22 排,当批已全部完成)
-
-> 数据安全里程碑已收口后,重心转向「公网自托管的硬底线」——发出去前一次事故就不可挽回的类型。
-
-1. ~~**分享页安全三件套**~~ ✅ 完成(200c3b1/81ff653)—— export_html 白名单净化(strip_unsafe_attrs)+ 分享响应 CSP + 渲染前校验 view 存活。存储型 XSS→token 接管 与「删了还在公网」两个高危都堵上。
-2. 🟡 **备份可信化 —— 原标「✅ 完成」不成立**(2026-07-30 更正)。死人开关 ✅、`/api/ready` 探活 ✅、
-   `rustic check` + 恢复演练 ✅(已实跑),但当时那句「pg_dump 异地 DR」**是假的**:节点从未设
-   `MICA_BACKUP_PGURL`,异地一份 DB 快照都没有。见「数据生命周期」小节的 🔴 与 `docs/dr-plan.md`。
-3. ~~**AI 配置授权 + 收口 base_url**~~ ✅ 完成(200c3b1)—— base_url 钉死服务端配置,密钥外泄 + SSRF 堵上。
-4. ~~**CI 锁住数据面回归**~~ ✅ 完成 —— api-server 测进 CI(postgres service)+ auth.rs `pool()` CI-assert(缺库即 fail)+ 页树守卫补测 + real_store_smoke。
-5. ~~**客户端兜底三件**~~ ✅ 完成 —— 崩溃上报(runZonedGuarded)+ 单实例守卫(CreateMutexW)+ 本地损坏兜底(LocalDocCorruptException,不再自毁恢复点)。
-6. ~~**限流 + 收紧 CORS + Token 撤销收口**~~ ✅ 2026-07-22 完成:认证端点(含 refresh)per-IP 令牌桶 + Argon2 并发门、CORS prod 拒跨源、access JWT 24h→1h、修 prod 误认作 dev。WS 建连限流有意不做(已鉴权低威胁,见 CLAUDE.md「不要过度设计」);per-user token-version 即时吊销可选。
-7. ~~**文档内查找/替换**~~ ✅ 2026-07-22 完成(9fe9ae8):查找侧原已具备,补齐替换 + F3。至此本「最该做」清单全部清空——下一批优先级见下方各小节(反链、表格、虚拟化等)。
-
----
-
-**整体判断**(2026-07-22 校准后):上面「发出去前必须补的底线」——安全(分享页/AI 密钥/限流)、备份可信化、CI 回归网、客户端桌面丢数据三路径——**均已落地**(本轮对着代码逐条核实,勾除了 18+ 项 roadmap 陈旧误报的已做项)。剩的高价值真·未做偏「基建/成熟度」:更新器 Authenticode 签名、协议版本协商、恢复演练排期、op 模型表 GC、长文档虚拟化;产品广度上**虚拟化 + 表格 + 反链**决定它像不像一个成熟笔记。
+**下一轮核实的重点**:本轮**未核实的 2 条**(fuzz 覆盖面、隐私声明/ToS),以及所有 🟡 条目
+的「剩下那半」—— 部分完成的条目最容易整条烂掉:它已经有了一个 ✅,看上去就像做完了。
