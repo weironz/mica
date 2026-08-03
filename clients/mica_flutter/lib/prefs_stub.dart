@@ -11,7 +11,25 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'secret_store_stub.dart';
+
 Map<String, String>? _cache;
+
+/// Which preferences are secrets, and therefore encrypted at rest.
+///
+/// A rule over key NAMES rather than an explicit `saveSecret` call, on purpose:
+/// the opt-in version protects the keys somebody remembered to opt in, and the
+/// next token key added — for a second server, a PAT, whatever — would sit in
+/// plaintext until someone noticed. Here it is protected by default, and
+/// forgetting fails in the safe direction.
+///
+/// Kept narrow: credentials only. Encrypting the whole file would make the
+/// appearance toggles unreadable for no gain, and turn every prefs bug into an
+/// opaque one.
+bool _isSecret(String key) =>
+    key == 'authToken' || // pre-multi-server single token
+    key.startsWith('authToken:') ||
+    key.startsWith('refreshToken:');
 
 /// The per-user config directory (`{appdata}/mica`). Public so anything that
 /// needs to sit beside the preferences — the diagnostics capture — uses this
@@ -50,7 +68,37 @@ Map<String, String> _store() {
   } catch (_) {
     // Corrupt or unreadable file: start empty rather than crash on launch.
   }
-  return _cache = map;
+  _cache = map;
+  _encryptSecretsWrittenBeforeThisExisted();
+  return map;
+}
+
+/// Upgrade tokens that were stored before encryption existed.
+///
+/// Done once at first read rather than lazily on next write, because the write
+/// that would do it is a login or a token refresh — so a user who simply stays
+/// signed in could keep a plaintext token on disk for as long as the session
+/// lives, which is precisely the window this is meant to close.
+///
+/// A no-op where DPAPI is unavailable: rewriting the file to store the same
+/// plaintext would be pure churn, and — worse — would make the mtime say
+/// something happened.
+void _encryptSecretsWrittenBeforeThisExisted() {
+  if (!secretsAreEncrypted) return;
+  final map = _cache!;
+  var changed = false;
+  for (final key in map.keys.toList()) {
+    if (!_isSecret(key)) continue;
+    final value = map[key]!;
+    if (value.isEmpty) continue;
+    final protectedValue = protect(value);
+    // `protect` returns its input unchanged when it could not encrypt; compare
+    // rather than assume, so a failure does not get recorded as a migration.
+    if (protectedValue == value) continue;
+    map[key] = protectedValue;
+    changed = true;
+  }
+  if (changed) _flush();
 }
 
 void _flush() {
@@ -77,10 +125,18 @@ void _flush() {
   }
 }
 
-String? loadPref(String key) => _store()[key];
+String? loadPref(String key) {
+  final stored = _store()[key];
+  if (stored == null || !_isSecret(key)) return stored;
+  // null here means "there is no usable token" — a ciphertext this user cannot
+  // open (copied profile, different account). The caller's own "no token" path
+  // sends you to sign in, which is the right answer; returning the raw
+  // ciphertext instead would put garbage in an `Authorization` header.
+  return unprotect(stored);
+}
 
 void savePref(String key, String value) {
-  _store()[key] = value;
+  _store()[key] = _isSecret(key) ? protect(value) : value;
   _flush();
 }
 
