@@ -328,33 +328,6 @@ class _SearchDialogState extends State<_SearchDialog> {
     _activate(_results[_selected]);
   }
 
-  /// The snippet with query matches tinted.
-  ///
-  /// Case-insensitive to match the server's `ILIKE` — see [highlightRuns]; a
-  /// case-sensitive version would return real hits with nothing marked in them.
-  Widget _snippet(BuildContext context, String text) {
-    final runs = highlightRuns(text, _lastQuery);
-    return Text.rich(
-      TextSpan(
-        children: [
-          for (final r in runs)
-            TextSpan(
-              text: r.text,
-              style: r.hit
-                  ? TextStyle(
-                      backgroundColor: MicaTheme.of(
-                        context,
-                      ).editor.commentHighlight,
-                    )
-                  : null,
-            ),
-        ],
-      ),
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-    );
-  }
-
   Widget _buildResults(BuildContext context) {
     // Say the true thing: this world has no workspace search yet, and point at
     // the tool that does work here (in-page find). The old stub claimed instead
@@ -418,39 +391,99 @@ class _SearchDialogState extends State<_SearchDialog> {
             // arithmetic instead of hanging a GlobalKey off every row.
             itemExtent: _searchRowHeight,
             itemCount: _results.length,
-            itemBuilder: (context, i) {
-              final result = _results[i];
-              return Container(
-                color: i == _selected
-                    ? MicaTheme.of(context).accent.wash
-                    : null,
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                  // The icon is the only thing telling you this row will take
-                  // you somewhere different — a folder locates, a page opens.
-                  leading: Icon(
-                    result.isFolder
-                        ? Icons.folder_outlined
-                        : Icons.description_outlined,
-                    size: 18,
-                  ),
-                  title: Text(result.name, overflow: TextOverflow.ellipsis),
-                  // A folder has no body, so it can only ever have matched on
-                  // its name — say that rather than leaving the row bare.
-                  subtitle: result.snippet.isEmpty
-                      ? (result.isFolder
-                            ? Text(context.l10n.searchFolderMatch)
-                            : result.titleMatch
-                            ? Text(context.l10n.searchTitleMatch)
-                            : null)
-                      : _snippet(context, result.snippet),
-                  onTap: () => _activate(result),
-                ),
-              );
-            },
+            itemBuilder: (context, i) => SearchResultTile(
+              result: _results[i],
+              query: _lastQuery,
+              selected: i == _selected,
+              onTap: () => _activate(_results[i]),
+            ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// One row of the search results list.
+///
+/// Public (and therefore testable) only because the dialog around it is not:
+/// the invariant below has no other seam to be pinned through.
+///
+/// **The selected row's background must be [ListTile.tileColor], never a
+/// `Container(color:)` around the tile.** A ListTile paints its background AND
+/// its ink splash onto the nearest [Material] ancestor; a coloured box wedged
+/// between the two covers the splash, so the one row you are most likely to
+/// click is the one row that answers a click with nothing. Flutter says so out
+/// loud in debug ("ListTile background color or ink splashes may be invisible")
+/// — but only in debug, and only into a log nobody reads, which is how this
+/// survived to 0.13.9. `tileColor` paints through [Ink], i.e. *under* the
+/// splash, which is what it exists for.
+class SearchResultTile extends StatelessWidget {
+  const SearchResultTile({
+    required this.result,
+    required this.query,
+    required this.selected,
+    required this.onTap,
+    super.key,
+  });
+
+  final SearchResult result;
+
+  /// The query these hits came back for — what gets tinted inside the snippet.
+  final String query;
+
+  final bool selected;
+  final VoidCallback onTap;
+
+  /// The snippet with query matches tinted.
+  ///
+  /// Case-insensitive to match the server's `ILIKE` — see [highlightRuns]; a
+  /// case-sensitive version would return real hits with nothing marked in them.
+  Widget _snippet(BuildContext context, String text) {
+    final runs = highlightRuns(text, query);
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final r in runs)
+            TextSpan(
+              text: r.text,
+              style: r.hit
+                  ? TextStyle(
+                      backgroundColor: MicaTheme.of(
+                        context,
+                      ).editor.commentHighlight,
+                    )
+                  : null,
+            ),
+        ],
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+      tileColor: selected ? MicaTheme.of(context).accent.wash : null,
+      // The icon is the only thing telling you this row will take you somewhere
+      // different — a folder locates, a page opens.
+      leading: Icon(
+        result.isFolder ? Icons.folder_outlined : Icons.description_outlined,
+        size: 18,
+      ),
+      title: Text(result.name, overflow: TextOverflow.ellipsis),
+      // A folder has no body, so it can only ever have matched on its name —
+      // say that rather than leaving the row bare.
+      subtitle: result.snippet.isEmpty
+          ? (result.isFolder
+                ? Text(context.l10n.searchFolderMatch)
+                : result.titleMatch
+                ? Text(context.l10n.searchTitleMatch)
+                : null)
+          : _snippet(context, result.snippet),
+      onTap: onTap,
     );
   }
 }
