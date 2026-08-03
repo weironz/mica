@@ -270,6 +270,13 @@
 
 ## 编辑器与功能广度
 
+- 🟡 **评论**(2026-07-26:**服务端 + 渲染 + API 三层已闭环,剩面板 UI**)—— 锚点=yrs sticky index 存独立表(`comment_threads`/`comments`,migration 0014),**正文 Markdown 一字不动 → round-trip 红线零改动、评论永不进导出**。已落地:锚点原语 `sticky_for_range`/`resolve_range`(2672201,8 单测)+ store 层与 5 个端点(354f946,gated on `commenter`——能评论但不能改正文)+ **Postgres 集成测试 8 项 CI 真跑**(736639c,含"锚点经 push_update 落库后仍随文字位移")+ 客户端 API 层(af03743,6 单测)+ **渲染期高亮**(08f221d,**纯 paint、绝不 relayout**,5 widget 测证明 caret 几何不变)。**Phase 1 已闭环**(f3bf181):评论面板(`ui/comment_panel.dart`,9 widget 测)+ 右键「添加评论」(offset 用 UTF-16、只看 `onAddComment` 不看 `canEdit`,故 commenter 能评论不能改正文)+ main.dart 接线(`onReady` 拉取 → 过滤 `isHighlightable` → `commentHighlights`;变更后重拉,服务端是锚点/orphan 唯一真相源;拉取失败只是没评论、文档照常打开)。**残留仅观感**:Dialog 形态/面板宽度/图标位置/高亮浓度/跨块高亮 需 `just app` 或发版后真机看一眼(清单见 `docs/comments-plan.md`「待真机确认」)。**实测修正了设计假设**:yrs 保留 tombstone,删掉锚定文字后锚点**仍能解析、只是塌缩成零长** → orphan 判定必须"解不出 **或** 塌缩"两者同等对待(只信 None 会漏掉最常见的删除情形)。**建议(suggest mode)**仍有意另立项(正文内 overlay,与评论不共用存储)。(残留 M)`[需后端]`
+  **2026-08-03 整条关闭**:残留的「仅观感」五条真机清单跑完(`cdf4aec`),两条结论与原文相反——
+  跨块高亮**横跨所有块都画了**(原文写「只画起始块」),跨块评论也能正常创建;我第一次测出的
+  「跨块做不出来」是**右键点在了行间空白**,三项菜单统一门控在 `insideSelection`。面板形态由此
+  从模态 Dialog 改成**右侧常驻栏**(`d345b6a`,照 AFFiNE),再与大纲合并成同一右侧栏的标签页
+  (`6a8b1e1`);0.13.11 发版实测。Phase 2 与建议另立新条,见 `roadmap.md`。
+
 - ~~无暗色模式~~ ✅ **已做**(v0.13.2,2026-07-29):语义色 token 层(`ui/theme_tokens.dart`,AppFlowy 式角色分组)贯穿外壳 / 自绘画布(挂 `EditorAppearance.tokens`)/ 语法高亮(`_Rule` 存角色,emit 时解析)/ mermaid(merman host theme + mermaid.js themeVariables);跟随系统或设置手切,冷启动在 runApp 前就位。**位图与记忆化缓存的 key 都带调色板**(公式/mermaid 栅格、代码 span memo),否则浅色下烤出的产物会画到深色页上。
 - ~~**文档内查找/替换缺失**~~ ✅ Ctrl+F 查找栏(导航/计数/当前匹配高亮)原已具备;2026-07-22 补齐**替换**(`replaceRange`/`replaceAll` 走既有 op 路径,9fe9ae8)+ F3/Shift+F3。**全部匹配高亮**有意不做(要动 render.dart 加第二遍选区叠绘,超 MVP)。
 - ~~**行内数学未排版**~~ ✅ 2026-07-16:`$…$` 真排进行里(基线对齐、随字号缩放),公式为不可进入的原子(`inline_atoms.dart`,render-architecture.md Decision 4)。
