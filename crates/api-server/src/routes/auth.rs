@@ -762,13 +762,19 @@ async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
   })
 }
 
+/// Same two sources as [`scope_guard`], and it has to stay that way.
+///
+/// A handful of handlers read the token themselves instead of leaning on the
+/// middleware. When the cookie was added to the middleware alone, THOSE went on
+/// rejecting it — half the API accepting a credential and half refusing it is
+/// worse than none of it accepting: it fails per-endpoint, which reads as a
+/// flaky server rather than a missing case. (Caught by the live smoke; no unit
+/// test was ever going to notice a handler it did not know existed.)
 pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) -> ApiResult<Uuid> {
-  let token = headers
-    .get(AUTHORIZATION)
-    .and_then(|value| value.to_str().ok())
-    .and_then(|value| value.strip_prefix("Bearer "))
+  let token = bearer_token(headers)
+    .or_else(|| cookie_value(headers, SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
-  Ok(resolve_token(state, token).await?.user_id)
+  Ok(resolve_token(state, &token).await?.user_id)
 }
 
 /// Decode a bare JWT access token into a user id. Used by the WebSocket handler,

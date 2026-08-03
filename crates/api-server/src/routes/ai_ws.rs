@@ -3,7 +3,7 @@ use axum::{
     Query, State,
     ws::{Message, WebSocket, WebSocketUpgrade},
   },
-  http::{HeaderMap, header::AUTHORIZATION},
+  http::HeaderMap,
   response::Response,
 };
 use futures_util::StreamExt;
@@ -12,7 +12,7 @@ use mica_infra::{AiConfig, AiProvider, ApiError, ApiResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::routes::auth::user_id_from_token;
+use crate::routes::auth::{SESSION_COOKIE, bearer_token, cookie_value, user_id_from_token};
 
 #[derive(Debug, Deserialize)]
 pub struct AiConnectQuery {
@@ -209,13 +209,15 @@ async fn send_error(socket: &mut WebSocket, message: &str) {
     .await;
 }
 
+/// Header, then cookie, then the query tail — the same order as the document
+/// socket (`ws.rs` `token_from_request`). The AI stream is a WebSocket too, so
+/// web reaches it with a cookie and nothing in the URL.
 fn token_from(headers: &HeaderMap, query: &AiConnectQuery) -> Option<String> {
-  if let Some(token) = headers
-    .get(AUTHORIZATION)
-    .and_then(|value| value.to_str().ok())
-    .and_then(|value| value.strip_prefix("Bearer "))
-  {
-    return Some(token.to_string());
+  if let Some(token) = bearer_token(headers) {
+    return Some(token);
+  }
+  if let Some(token) = cookie_value(headers, SESSION_COOKIE) {
+    return Some(token);
   }
   query
     .token
