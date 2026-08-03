@@ -60,8 +60,20 @@ class _SearchDialog extends StatefulWidget {
     required this.onSearch,
     required this.onOpen,
     required this.onReveal,
+    this.views = const [],
+    this.workspaceName,
     this.initialQuery,
   });
+
+  /// The workspace tree, for turning a hit's `parent_view_id` into the trail
+  /// shown beside its name. Resolved locally on purpose: the tree is already in
+  /// memory here, so asking the server per row (AppFlowy runs a bloc + cache per
+  /// result because its frontend does NOT hold the tree) would be inventing a
+  /// problem we do not have.
+  final List<DocumentView> views;
+
+  /// Leads the trail, same as in the breadcrumb and in "copy path".
+  final String? workspaceName;
 
   /// Null when the active world has no workspace search at all (本地模式), which
   /// is not the same thing as a search that finds nothing. It used to be wired
@@ -394,6 +406,12 @@ class _SearchDialogState extends State<_SearchDialog> {
             itemBuilder: (context, i) => SearchResultTile(
               result: _results[i],
               query: _lastQuery,
+              path: ancestorPathSegments(
+                workspaceName: widget.workspaceName,
+                parentViewId: _results[i].parentViewId,
+                views: widget.views,
+                startedAt: _results[i].viewId,
+              ),
               selected: i == _selected,
               onTap: () => _activate(_results[i]),
             ),
@@ -424,6 +442,7 @@ class SearchResultTile extends StatelessWidget {
     required this.query,
     required this.selected,
     required this.onTap,
+    this.path = const [],
     super.key,
   });
 
@@ -432,8 +451,24 @@ class SearchResultTile extends StatelessWidget {
   /// The query these hits came back for — what gets tinted inside the snippet.
   final String query;
 
+  /// Where the hit lives: workspace first, then folders, WITHOUT the hit itself
+  /// (its name is the title right next to this). Empty draws nothing.
+  ///
+  /// Two names in a workspace can read identically — "问题记录" under three
+  /// different projects is the normal case, not the exotic one — and a hit list
+  /// that shows only names makes you open pages to find out which is which.
+  final List<String> path;
+
   final bool selected;
   final VoidCallback onTap;
+
+  /// Deep paths collapse in the MIDDLE, keeping the two segments that actually
+  /// locate you: the workspace and the folder the page is directly in. Dropping
+  /// the tail instead (a plain ellipsis) would keep the segments you already
+  /// guessed and hide the one you were looking for. Same call AppFlowy makes.
+  List<String> get _display => path.length > 3
+      ? [path.first, '…', path.last]
+      : path;
 
   /// The snippet with query matches tinted.
   ///
@@ -473,7 +508,28 @@ class SearchResultTile extends StatelessWidget {
         result.isFolder ? Icons.folder_outlined : Icons.description_outlined,
         size: 18,
       ),
-      title: Text(result.name, overflow: TextOverflow.ellipsis),
+      // Path rides the title row rather than taking a third line: the list has a
+      // fixed 64px extent, and a taller row would mean fewer hits on screen —
+      // paying for context with the thing the context was for.
+      title: Row(
+        children: [
+          Flexible(child: Text(result.name, overflow: TextOverflow.ellipsis)),
+          if (_display.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                _display.join(' / '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: MicaTheme.of(context).text.faint,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
       // A folder has no body, so it can only ever have matched on its name —
       // say that rather than leaving the row bare.
       subtitle: result.snippet.isEmpty

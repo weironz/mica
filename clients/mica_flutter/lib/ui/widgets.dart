@@ -1810,8 +1810,8 @@ class _UpdateCheckerState extends State<UpdateChecker> {
 /// AppFlowy-style breadcrumb: the current page's folder path, each ancestor
 /// segment clickable to jump there. A [trailing] widget (the properties toggle)
 /// sits at the end. `part of main.dart`, so it shares its imports / `context.l10n`.
-class _PageBreadcrumb extends StatefulWidget {
-  const _PageBreadcrumb({
+class PageBreadcrumb extends StatefulWidget {
+  const PageBreadcrumb({
     required this.views,
     required this.current,
     required this.onSelect,
@@ -1845,10 +1845,10 @@ class _PageBreadcrumb extends StatefulWidget {
   final String? workspaceName;
 
   @override
-  State<_PageBreadcrumb> createState() => _PageBreadcrumbState();
+  State<PageBreadcrumb> createState() => PageBreadcrumbState();
 }
 
-class _PageBreadcrumbState extends State<_PageBreadcrumb> {
+class PageBreadcrumbState extends State<PageBreadcrumb> {
   final MenuController _renameMenu = MenuController();
   final TextEditingController _renameField = TextEditingController();
   final FocusNode _renameFocus = FocusNode();
@@ -2023,7 +2023,7 @@ class _PageBreadcrumbState extends State<_PageBreadcrumb> {
 }
 
 /// The rename popover: page glyph + a field, anchored under the breadcrumb tail.
-extension _PageBreadcrumbPopover on _PageBreadcrumbState {
+extension _PageBreadcrumbPopover on PageBreadcrumbState {
   Widget _renamePopover(BuildContext context) {
     return SizedBox(
       width: 260,

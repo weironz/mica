@@ -5940,6 +5940,75 @@ class _SyncBadge extends StatelessWidget {
   }
 }
 
+/// The page's path, workspace first, one name per segment.
+///
+/// This is the single source for BOTH things that show a path: "copy path"
+/// joins it with `/`, and [PageBreadcrumb] renders the same list left to right.
+/// They were computed separately once, and drifted — the clipboard led with the
+/// workspace while the breadcrumb started one level below it, so you could not
+/// tell what the button next to it was about to copy. Nothing failed when they
+/// disagreed; only a human reading both at once could notice. Hence one
+/// function, and `test/page_path_test.dart` pinning the two against each other.
+///
+/// Returns null when there is no open page (or no workspace) — the caller says
+/// "open a page first" rather than showing half a path.
+///
+/// Names are NOT escaped: a `/` inside a page name is ambiguous here on
+/// purpose. The path is for a human to read and for an agent to resolve by
+/// searching the last segment and checking the chain with `parent_view_id`, not
+/// by splitting on a delimiter.
+List<String>? pagePathSegments({
+  required String? workspaceName,
+  required DocumentView? view,
+  required List<DocumentView> views,
+}) {
+  if (workspaceName == null || view == null) return null;
+  return [
+    ...ancestorPathSegments(
+      workspaceName: workspaceName,
+      parentViewId: view.parentViewId,
+      views: views,
+      startedAt: view.id,
+    ),
+    view.name,
+  ];
+}
+
+/// Where something LIVES: workspace first, then each folder down to (and
+/// including) [parentViewId]. The thing itself is not in here.
+///
+/// Split out of [pagePathSegments] for the search results list, which shows the
+/// trail beside a hit's name. Walking the tree a second time there would put two
+/// implementations of "the path" back in the codebase — which is the exact shape
+/// of the bug this pair exists to prevent.
+///
+/// Returns empty (never a placeholder) when there is nothing to say: a page at
+/// the workspace root with no workspace name has no trail, and the caller draws
+/// nothing rather than a lone separator.
+List<String> ancestorPathSegments({
+  required String? workspaceName,
+  required String? parentViewId,
+  required List<DocumentView> views,
+  String? startedAt,
+}) {
+  final byId = {for (final v in views) v.id: v};
+  final folders = <String>[];
+  // Same `seen` guard as _revealFolder: the tree forbids cycles, but walking it
+  // should not be the thing that hangs if one ever appears.
+  final seen = <String>{?startedAt};
+  var cursor = parentViewId;
+  while (cursor != null && seen.add(cursor)) {
+    final parent = byId[cursor];
+    if (parent == null) break; // not loaded — stop rather than invent a gap
+    folders.add(parent.name);
+    cursor = parent.parentViewId;
+  }
+  return [
+    if (workspaceName != null && workspaceName.trim().isNotEmpty) workspaceName,
+    ...folders.reversed,
+  ];
+}
+
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.apiBase,
@@ -7908,35 +7977,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// `workspace/folder/.../page` for the open page — GitHub's "copy path", for
   /// telling someone (or an agent) WHERE something is.
   ///
-  /// The workspace is the first segment because a path without it is ambiguous
-  /// the moment there is more than one workspace, and whoever you paste it to
-  /// cannot guess which you meant. Returns null when nothing is open.
-  ///
-  /// Separator is `/`, like a file path. A name containing a slash makes the
-  /// string ambiguous — accepted deliberately: this is for a human to read, and
-  /// for an agent to resolve by SEARCHING the last segment and checking the
-  /// chain with `parent_view_id`, not by splitting on a delimiter. Escaping
-  /// would buy an exactness nothing downstream relies on, at the price of a path
-  /// you cannot read.
-  String? _pagePath() {
-    final workspace = widget.selectedWorkspace;
-    final view = widget.selectedView;
-    if (workspace == null || view == null) return null;
-    final byId = {for (final v in widget.views) v.id: v};
-    final segments = <String>[view.name];
-    // Same `seen` guard as _revealFolder: the tree forbids cycles, but walking
-    // it should not be the thing that hangs if one ever appears.
-    final seen = <String>{view.id};
-    var cursor = view.parentViewId;
-    while (cursor != null && seen.add(cursor)) {
-      final parent = byId[cursor];
-      if (parent == null) break; // not loaded — stop rather than invent a gap
-      segments.add(parent.name);
-      cursor = parent.parentViewId;
-    }
-    segments.add(workspace.name);
-    return segments.reversed.join('/');
-  }
+  /// The workspace leads because a path without it is ambiguous the moment
+  /// there is more than one, and whoever you paste it to cannot guess which you
+  /// meant. Segments and separator rationale live on [pagePathSegments], which
+  /// the breadcrumb reads too.
+  String? _pagePath() => pagePathSegments(
+    workspaceName: widget.selectedWorkspace?.name,
+    view: widget.selectedView,
+    views: widget.views,
+  )?.join('/');
 
   /// Put [_pagePath] on the clipboard.
   Future<void> _copyPagePath() async {
@@ -8338,7 +8387,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       left: EditorTheme.gutter,
                       bottom: 2,
                     ),
-                    child: _PageBreadcrumb(
+                    child: PageBreadcrumb(
                       views: widget.views,
                       current: widget.selectedView!,
                       onSelect: widget.onSelectView,
@@ -9402,6 +9451,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       context: context,
       builder: (context) => _SearchDialog(
         onSearch: widget.onSearch,
+        views: widget.views,
+        workspaceName: widget.selectedWorkspace?.name,
         initialQuery: initialQuery,
         onOpen: (viewId) {
           Navigator.of(context).pop();

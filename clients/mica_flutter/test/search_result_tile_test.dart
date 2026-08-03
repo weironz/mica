@@ -111,6 +111,80 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  // Where a hit LIVES. Two pages called 「问题记录」 under different projects is
+  // the normal case, and a list showing only names makes you open both to find
+  // out which is which.
+  group('the path beside the name', () {
+    testWidgets('reads workspace first, folders after', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          SearchResultTile(
+            result: _hit(),
+            query: '部署',
+            path: const ['greenstor', '基础信息'],
+            selected: false,
+            onTap: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('greenstor / 基础信息'), findsOneWidget);
+    });
+
+    testWidgets('no path means nothing is drawn, not an empty separator', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          SearchResultTile(
+            result: _hit(),
+            query: '部署',
+            selected: false,
+            onTap: () {},
+          ),
+        ),
+      );
+
+      expect(find.textContaining('/'), findsNothing);
+    });
+
+    // Collapsing must eat the MIDDLE. Dropping the tail would hide the folder
+    // the page is actually in — the one segment you were looking for.
+    testWidgets('a deep path keeps the workspace and the direct parent', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          SearchResultTile(
+            result: _hit(),
+            query: '部署',
+            path: const ['tools', 'AI工具', 'deepseek', 'reasonix'],
+            selected: false,
+            onTap: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('tools / … / reasonix'), findsOneWidget);
+    });
+
+    testWidgets('three segments still fit whole', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          SearchResultTile(
+            result: _hit(),
+            query: '部署',
+            path: const ['tools', 'AI工具', 'deepseek'],
+            selected: false,
+            onTap: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('tools / AI工具 / deepseek'), findsOneWidget);
+    });
+  });
+
   testWidgets('tapping the row reaches the host', (tester) async {
     var taps = 0;
     await tester.pumpWidget(
