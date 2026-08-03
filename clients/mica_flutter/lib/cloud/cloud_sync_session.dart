@@ -44,7 +44,46 @@ class _Pending {
   _Pending(this.id, this.bytes);
   final String id;
   final Uint8List bytes;
+
+  /// On the wire and not yet answered — this is what the push window counts.
   bool sent = false;
+
+  /// The server answered this push with `error` instead of `ack`. It stays in
+  /// the outbox (it must still reach the server) and it stays [sent] so a live
+  /// flush won't re-flood it, but it must NOT keep occupying a window slot:
+  /// without this, a handful of rejected pushes would each hold a slot forever
+  /// and the backlog behind them would never drain. Cleared on reconnect,
+  /// which is where this path retries.
+  bool rejected = false;
+}
+
+/// The slice of an in-memory outbox that may go on the wire right now.
+///
+/// Pure, and generic over the entry type, on purpose: the pacing is the part
+/// that has to be right, and a unit test cannot reach the session's real send
+/// path — that needs a bootstrap, which needs the CRDT engine and a live
+/// server (`integration_test/cloud_sync_*` are the tests that have both, and
+/// they are excluded from CI for exactly that reason).
+///
+/// [occupiesSlot] is deliberately narrower than [alreadySent]: a REJECTED push
+/// has been sent (so don't send it again on a live flush) but will never be
+/// acked (so it must not hold a slot).
+@visibleForTesting
+List<T> pushSlice<T>(
+  List<T> queue, {
+  required bool Function(T) alreadySent,
+  required bool Function(T) occupiesSlot,
+  required int window,
+}) {
+  var used = queue.where(occupiesSlot).length;
+  final out = <T>[];
+  for (final entry in queue) {
+    if (alreadySent(entry)) continue;
+    if (used >= window) break;
+    out.add(entry);
+    used++;
+  }
+  return out;
 }
 
 class CloudSyncSession {
@@ -143,6 +182,11 @@ class CloudSyncSession {
   /// enough that ordinary typing never touches the limit (each entry is one
   /// debounced edit) and small enough that a long-offline reconnect paces
   /// itself instead of arriving as one burst.
+  ///
+  /// Applies to BOTH outboxes — the durable append-log (desktop) and the
+  /// in-memory queue (web, which has no local store). It was desktop-only from
+  /// 2026-07 until 2026-08-03, so the platform with the least to fall back on
+  /// was the one still sending the storm.
   static const int _pushWindow = 64;
 
   /// Auto-reconnect (capped exponential backoff): a dropped socket / transient
@@ -556,6 +600,10 @@ class CloudSyncSession {
           if (_unacked.length != before) {
             _persistSoon();
             _updateSyncPhase(); // outbox drained → maybe now synced
+            // A window slot just freed up: send the next slice. This is what
+            // makes the bounded flush drain a long backlog instead of stopping
+            // at the first window's worth.
+            _flushUnacked();
           }
         }
         if (rid != null && rid > _cursor) {
@@ -584,8 +632,17 @@ class CloudSyncSession {
         // server-side contention, or a permanent permission error. The rejected
         // clock stays in the outbox (contiguous pushed_clock never passed it);
         // re-enable and retry it, bounded so a permanent rejection can't spin,
-        // then surface via onFault. (The legacy path keeps its per-id
-        // retry-on-reconnect; nothing to do here.)
+        // then surface via onFault.
+        //
+        // The in-memory path still retries on reconnect rather than in place,
+        // but it has to release the window slot now — a rejected push is never
+        // acked, so counting it as in-flight forever would wedge the drain.
+        if (!_useAppendLog && errId is String) {
+          for (final p in _unacked) {
+            if (p.id == errId) p.rejected = true;
+          }
+          _flushUnacked();
+        }
         if (_useAppendLog && errId is String) {
           final clock = int.tryParse(errId);
           if (clock != null) {
@@ -700,6 +757,14 @@ class CloudSyncSession {
   @visibleForTesting
   void debugHandleFrame(String raw) => _onMessage(raw);
 
+  /// The in-memory outbox as data — what is queued, what went out, what came
+  /// back rejected. Read-only; the only way to see the queue react to acks and
+  /// rejections without a socket.
+  @visibleForTesting
+  List<({String id, bool sent, bool rejected})> get debugOutbox => [
+    for (final p in _unacked) (id: p.id, sent: p.sent, rejected: p.rejected),
+  ];
+
   /// Apply the editor's op batch to the local replica and push the resulting
   /// CRDT diff to the cloud. The same op stream the offline backend consumes, so
   /// local and cloud editing behave identically.
@@ -768,8 +833,26 @@ class CloudSyncSession {
       }
       return;
     }
-    for (final p in _unacked) {
-      if (resendAll || !p.sent) _sendPush(p);
+    // In-memory outbox (no local store — this is the WEB path). Same bounded
+    // window as the append-log branch above, and for the same reason: a long
+    // offline stretch leaves a queue that used to go out in ONE synchronous
+    // for-loop, and the server answers each push by decoding + re-encoding the
+    // whole document. The tail drains from the ack handler as slots free up.
+    if (resendAll) {
+      // A new connection: nothing we sent on the old one is still in flight,
+      // and a rejection there is worth one more try here.
+      for (final p in _unacked) {
+        p.sent = false;
+        p.rejected = false;
+      }
+    }
+    for (final p in pushSlice(
+      _unacked,
+      alreadySent: (p) => p.sent,
+      occupiesSlot: (p) => p.sent && !p.rejected,
+      window: _pushWindow,
+    )) {
+      _sendPush(p);
     }
   }
 
