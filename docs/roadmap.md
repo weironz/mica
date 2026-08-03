@@ -97,6 +97,14 @@
 - ~~🆕 **单机兜底部署脚本 `deploy/deploy-from-source.sh` 已漂移**~~ ✅ 已做(2026-07-23)—— 对齐 justfile 权威版:`flutter build web` 补 `--no-web-resources-cdn`(修 CN 运行时拉 gstatic CanvasKit 不可用)、删 stale `--no-tree-shake-icons`、rsync→`rm -rf + cp -r`(Windows 无 rsync);`bash -n` 过。
 - ~~🆕 **Postgres 大版本升级路径无文档**~~ ✅ 已做(deploy.md 早有升级 section,0d9c404;2026-07-23 补「PG16 上游支持到 ~2028、这是主动维护任务非顺手改 tag」)。
 - 🟡 **Traefik:证书监控已做,配置仍不在仓库**(2026-07-29 核实)—— ~~过期无监控~~ ✅:`uptime.yml` 每 15 分钟对两域名(app + s3)openssl 查证书剩余有效期,< 10 天(CERT_MIN_DAYS)即 fail → Actions 失败邮件。**残留**:Traefik 配置本体在仓库外未纳管;ACME 卡死那类故障仍靠 `deploy.md:86` 的手动 runbook。(S,external)
+- 🆕 **provisioning 层不存在:「给台新机器就能起全套」今天做不到**(2026-08-02 写下方案,未实施)——
+  仓库里只有 `deploy/docker-compose.yml`;Traefik、`/data/mica` 目录、`.env`、受限部署账号与
+  `/usr/local/sbin/mica-deploy`、ACR 登录全是当年手工装的,没有一条能重放的路径(上面 Traefik
+  那条是它的一个切片)。同源的第二个症状:**一个 `vX.Y.Z` tag 焊住三条节奏不同的发布线** ——
+  0.13.6 为送一行 compose 配置付了一次完整 Windows 构建 + 给所有桌面用户推了个空更新,
+  0.13.7 因单个 `images (cli)` job 挂掉整版作废。症状、拆分方案与优先级在 `docs/cd-plan.md`。
+  **刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
+  没走过就写 IaC 等于把猜测固化。(L)
 
 ## 数据生命周期与增长 🆕
 
