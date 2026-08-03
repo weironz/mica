@@ -14,7 +14,7 @@
 - ~~**P2-M4 云同步流未真正建**~~ ✅ **主干早已上线**(2026-07-29 对代码核实,此条整条过期)—— `sync.rs` push_update 写流+fold、`catch_up_document` 按 since_rid 续传+剪枝缺口自动 Rebootstrap、`diff_from_base` SV 兜底;WS `sync.bootstrap/pull/push` 三 handler(`ws.rs:336-440`)+ 客户端 `_pullPayload(since_rid+sv)` 消费;真 PG 集成测试 `sync_pg.rs`。**它一直被记成未建,把整棵依赖树都记歪了** —— 实际解锁的下一步是 op 模型退役(见「数据生命周期」)。
 - 🟡 **M-R 收尾**(2026-07-29 核实:4 项里 3 项早已落地)—— ~~C3 坏更新自愈+schema 版本~~ ✅(`store.rs` SCHEMA_VERSION=6 + 太新拒开 + 每 blob CRC-32 + yrs panic 包成 CorruptDoc;客户端坏副本冷 bootstrap 自愈、坏 remote 封顶熔断);~~D2 同步健康态~~ ✅(`sync_status.dart` → _SyncBadge + fault banner);~~A3 会话持久化 e2e~~ ✅(`cloud_sync_integrity_test.dart`:未 ack 编辑跨重启重推)。~~D1 尾巴~~ ✅ **已做(2026-07-30),M-R 整条关闭** —— `lib/swallowed.dart`:`swallowed(tag)` 累加、`swallowedCounts()` 出不可写快照、`swallowedSummary()` 出一行给 bug 报告。5 处带注释的故意丢弃接上了(`cloud_ws_ready`/`cloud_ws_stream`/`cloud_ws_uri`/`presence_ws_ready`/`presence_ws_stream`/`ai_ws_ready`),**丢弃行为一个字没改** —— 改的只是「丢了多少次」不再无从得知。**刻意不接 `onFault`**:那是同步故障横幅的入口,而连不上服务器是**状态不是故障**,把普通离线送进去等于给一个 app 已经处理正确的状态贴红标。可见面在 Settings → 诊断,**仅在非零时出现**(每次都显示「无」只会训练眼睛跳过它,而那一行不在本身就是同一个意思),且**不受诊断开关门控** —— 没有内容要记录,价值全在「事后能回头看」,而那恰恰是提前打开开关不可能的场合。测试:`swallowed_test.dart` 5 条(含快照不可写穿),外加在 `sync_reconnect_token_test.dart` 那条既有测试上挂了**接线断言** —— 纯模块单测证明不了接线,已实测撤掉 `swallowed('cloud_ws_uri')` 它立刻变红。**已知空白**:web 上 Settings 的诊断区整段隐藏(`diagnosticsSupported=false`,没有文件系统),所以 web 目前**没有**读回计数的地方 —— 与既有诊断故事一致,不另开口子。
 - ~~**离线→在线 blob 自动 reconcile**~~ ✅ 已做(2026-07-29,核实于 2026-07-30)—— 原文「`_reconcilePendingUploads` 全仓唯一调用点在 onReady」已假:现在 3 个调用点,`_onCloudOnline` 那一侧也扫 blob 了(`main.dart` 里 onReady、活动文档重连、`_sweepPendingOutboxes`)。
-- ~~🆕 **重连复用过期 token → 永久退避循环**~~ ✅ 已修(2026-07-29,核实于 2026-07-30)—— `uri` 由 `final Uri` 改成 `final Future<Uri> Function()`,每次连接尝试重新求值,3 处构造点全部迁移;长开会话那一处会先 `await _ensureFreshSession()`。回归测试 `test/sync_reconnect_token_test.dart`(钉的是「每次尝试都重新问一次 URI」,不是「能连上」)。**服务端那半仍未做**:socket 建立后不再校验 exp,没有「exp 到期 close(4401)」心跳 —— 见安全小节「长连 WS 超 token TTL 不再认证」。
+- ~~🆕 **重连复用过期 token → 永久退避循环**~~ ✅ 已修(2026-07-29,核实于 2026-07-30)—— `uri` 由 `final Uri` 改成 `final Future<Uri> Function()`,每次连接尝试重新求值,3 处构造点全部迁移;长开会话那一处会先 `await _ensureFreshSession()`。回归测试 `test/sync_reconnect_token_test.dart`(钉的是「每次尝试都重新问一次 URI」,不是「能连上」)。~~**服务端那半仍未做**:socket 建立后不再校验 exp,没有「exp 到期 close(4401)」心跳~~ —— ✅ **2026-08-03 已做**(`fd509f2`,见本文件安全小节「长连 WS 超 token TTL 不再认证」)。〔存档是原文留档,但一句已经变假的「仍未做」正是本次整顿要消灭的东西,所以补标注而不是改写。〕
 - ~~🆕 **web 端在浏览器不报 locale 时启动即崩**~~ ✅ **已修(2026-07-30)** —— 触发条件定位到 `navigator.language === "C"`(POSIX 风格,非合法 BCP-47)。逐一遍历确认:`C` **CRASHED**,而未指定 / `''` / `en` / `en-US` / `zh-CN` / `en_US` 六种全部 BOOTED —— CI runner 的系统 locale 恰是 `C`。抛点在**引擎内部**的 `new Locale`(`RangeError`),Flutter 的 Dart 源码与 pub cache 里都搜不到这句原文,所以 Dart 侧根本捕不到。于是修在能修的那一层:`web/index.html` 里、`flutter_bootstrap.js` **之前**一段内联脚本,**仅当 `navigator.languages`/`language` 里没有任何合法标签时**才用 `en` 兜底;已经像语言标签的值原样保留,所以不会改变真实用户拿到的语言(实测那六种一个都没被改动)。web e2e 第 7 组断言守着,并实测过:从产物里摘掉守卫它立刻变红并打出原始错误。原文如下 —— headless Chromium(CI runner 上未指定 locale)加载页面后抛 `Error: Invalid argument(s): Incorrect locale information provided`,以 JS `pageerror` 形式逃出 —— 即发生在 `runZonedGuarded` **之前**、引擎层的 locale 解析阶段。后果:`main()` 走不到 `registerYjsSelfTest()`,`window.micaYjs*` 三个钩子全是 undefined,`document.body.children` 只剩 1 个(canvas 外壳)—— **整个应用没起来,而 console 里一条错误都没有**(未捕获异常不是 console message,是加了 `page.on('pageerror')` 才看见的)。本机 Chrome 撞不到,它带正常 locale。**尚未定位到具体哪一行**:`loadPersistedLocale` 只做 `Locale('zh'|'en')`,抛不出这个;`ArgumentError` 以 JS 异常形式出现,指向引擎 / `intl` 的系统 locale 探测。e2e 侧已用 `newContext({locale:'en-US', timezoneId:'UTC'})` 钉死 —— **那是给 harness 的确定性,不是这个 bug 的修复**。真实影响面待评估:locale 被隐私工具剥掉或环境异常的用户,可能只看到一个白页且无任何提示。(S-M,纯客户端)
 - ~~🆕 **登录页「连不上服务器」会永久粘住**~~ ✅ 已修(2026-07-30)—— 两半都做了:**自动**有界退避重探(2s / 5s / 12s,够覆盖冷启动和「我刚把后端起起来」,然后停 —— 登录页无限探测是没人要的后台任务),**手动**在 `unreachable` 时才出现一个重探按钮(绿点旁边挂刷新按钮只会招人乱点;预算用完后它是唯一的回头路)。`dispose` 里取消定时器 —— 登录页恰恰是最容易在网络调用途中被 pop 的那一屏。复用已有 i18n key `commonRetry`,不新增。5 个回归测试(`sign_in_pane_test.dart`),并实测:撤掉 `_scheduleRetry` 后其中 3 个立刻变红。原文如下—— `SignInPane._probe()` 只在 `initState` 跑一次,失败后唯一的重试出口是「切到本地模式页再切回来」(`sign_in_pane.dart` 那段注释自己记了半个:「在真机上撞到过:开着这个屏才启动后端,行里一直说连不上」,当时只补了切 tab 这一路)。冷启动那一下网络/DNS 未就绪就会红着不动,而几秒后登录完全正常 —— 用户看到的就是「说连不上但我能登进去」。生产侧无关:连续 6 次 `GET /api/health` 全 200,DNS 5–9ms、总耗时 42–366ms,对 4s 超时有两个数量级余量。修法:给那行状态一个重试出口(点一下重测)+ 失败后退避重试;别再依赖运气。(S,纯客户端)
 - ~~**双向 state-vector 协商**~~ ✅ 已做(校准复核)—— P4-3:`ws.rs:508` `client_sv.and_then(|sv| sync::diff_from_base(base, sv))` 按 client SV 发最小 diff,base_message delta 分支 + 单测 `base_message_sends_delta_only_when_sv_yields_one`。
@@ -55,6 +55,19 @@
   (database / content / objects),对象字节第一次有了异地副本。**0.13.7 作废**——它的
   `images (cli)` job 挂在我写的 rclone 阶段上(见 `deploy/Dockerfile.cli` 注释),那一版
   只出了 api/web 镜像,修好后重发 0.13.8。下面留档原文 ——
+
+- ~~**长连 WS 超 token TTL 不再认证**~~ ✅ **已做(2026-08-03,`fd509f2`)** —— 过期前建的 socket
+  曾可授权数小时:每个 HTTP 请求都重读一次 token 所以每次都校验 `exp`,而 WebSocket 在 upgrade
+  时认证一次就再也不看。现在 `session_from_token` 一次解出 `(user_id, exp)`,socket 自带一个
+  到期即关的定时器,关闭码 **4401**。三个刻意的点:①**定时器只装一次、不被流量重置** ——
+  忙碌的 socket 不能靠「一直在说话」把过期会话续命;②`time_left` 已过期返回 `None` 而非巨大
+  duration —— `u64` 反向相减会环绕,环绕出的 deadline 就是「永不关闭」,恰好把这个 bug 原样
+  复活,测试专钉它;③**4401 而非 1008** —— 4000–4999 是应用自己的区间,客户端必须能把「换新
+  token」和「服务器连不上」分开,后者该退避,前者等再久也不会自己回来。**客户端无需新分支**:
+  `_reconnectAttempts` 收到有效帧即归零、重连时 URI 供应器先 `await _ensureFreshSession()`,
+  这条路本就通。活栈实测(`tool/ws_expiry_smoke.dart`,TTL=20s):第 19 秒收到
+  `4401 "token expired"` —— 单测证明不了定时器有没有装在活路径上,`run_connection` 只有经过
+  真 upgrade 才到得了。
 
 ## 生产运维与备份 🆕
 

@@ -29,14 +29,15 @@
 - 🆕 **可上传携带脚本的 SVG,直开 blob 链接执行脚本**(**降级 low**,2026-07-22 复核)—— 允许 `image/svg+xml`,blob 端点(`blob_inner`)**302 跳存储的 `download_url`**(`public_base_url`/CDN 或 presigned GET,都是**存储源、非 app 源**)→ SVG 脚本跑在存储源、**碰不到 app 的 token,不是账号接管 XSS**。**仅当**运营者把 `public_base_url` 配成与 app 同源才成洞(部署误配)。且 302-跳存储架构下 app 不发字节,强制 attachment 别扭(要么上传即拒 SVG / 存成 text/plain,要么 presigned 加 `response-content-disposition`)。作为「防误配」的纵深项保留,非活跃洞。(`files.rs:350/364/537`)(S) `[需后端]`
 - 🆕 **客户端令牌明文存储放大 XSS 后果**(medium / 部分记录) —— web `authToken`+`refreshToken` 明文写 localStorage(任意同源 JS 可读,直接放大分享页 XSS);桌面明文存 prefs(无 DPAPI/secure_storage)。(`prefs_web.dart:6`, `main.dart:475`)(M)(桌面部分见下方「桌面 token DPAPI」)
 - 🟡 **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文**(2026-07-30 核实:「无启动告警」已假)—— ~~无启动告警~~ ✅ 早在 `9289ecf` 就有:`main.rs` 绑定后判 `!addr.ip().is_loopback()`,非环回即 warn「本进程只说明文 HTTP,请在前面终止 TLS,否则连 WS URL 里那个 token 都在网上裸奔」。默认 `127.0.0.1` 安全且**静默** —— 只有真承担了风险的部署才看到告警。(2026-07-30 顺手修了那条字符串:它被压成一行、中间留了三段连续空格,打出来有大段空白。)**残留**:TLS 本体仍全靠运维,且告警只是告警 —— 没有「prod + 非环回 + 无 TLS 即拒启动」的硬闸门(要拒得先能看见前面有没有反代,单机上看不见)。(M) `[需后端]`
-- **WS token 走 query string**(2026-08-03 核实:**工作量原先标反了**)—— 明文 JWT 落反代日志/
-  浏览器历史。**服务端那半早就在**:`ws.rs` 的 `token_from_request` 先认 `Authorization: Bearer`,
-  query 只是回落。真正在用 query 的是**客户端** —— `sync_client.dart` 走
-  `WebSocketChannel.connect(uri)`,不带 header。所以桌面侧大概率是纯客户端改动;
-  web 那半仍需别的办法(浏览器 `WebSocket` API 本来就不能设 header,同类产品多走
-  「连上后第一帧发 token」或短命一次性 ticket)。**原先标着 `[需后端]`,这类「工作量标反」
-  比条目过期更坑:它让人一直以为是件大活而绕开。**(S-M 桌面 / M web)
-- **长连 WS 超 token TTL 不再认证** —— 过期前建的 socket 可授权数小时,无 re-auth 心跳(`ws.rs`)。(M) `[需后端]`
+- 🟡 **WS token 走 query string:桌面已修,web 仍在 URL 里**(2026-08-03)—— ~~桌面~~ ✅
+  `connectAuthedSocket`(`ws_connect_stub.dart`)把 token 从 query 摘出来放进
+  `Authorization: Bearer`;服务端的 `token_from_request` 本就先认 header,所以这半是**纯客户端
+  改动**(原条目标着 `[需后端]`,是**工作量标反** —— 那比条目过期更坑,它让人以为是件大活而绕开)。
+  活栈实测:`connected with Authorization: Bearer (no ?token=)`。
+  **残留 = web**:浏览器 `WebSocket` 按规范不能设请求头,所以 URL 是握手唯一的通道。修它要**改协议**
+  —— 连上后第一帧发 token,或用 HTTPS 换一次性短命 ticket 连上即焚;两者都要服务端跟着改,
+  所以没有夹带在桌面那半里。这条平台差异写成了测试(`ws_connect_test.dart` 最后一条),
+  把 web 改对时**必须删掉它**才能通过。(M) `[需后端]`
 - **桌面 token 明文存 prefs**(无 DPAPI)(`main.dart`)。(M)
 - **弱口令:唯一校验是 `len() >= 8`**(2026-08-03 核实,**原条目「开放注册无验证」那半已假**)——
   邮箱验证**早就做了**:`auth.rs` 有 `email_verified_at`、注册返 **204 而非 session**、
@@ -193,7 +194,9 @@
 
 1. **安全三件 —— 公网自托管的剩余底线**(合计 S-M + M + M)
    ① WS token 出 query string(**本轮降级:服务端 `Authorization` 路径早就在,是客户端没走**);
-   ② 长连 WS 超 token TTL 无 re-auth 心跳;③ 桌面 token DPAPI。
+   ② ~~长连 WS 超 token TTL 无 re-auth 心跳~~ ✅ **已做(2026-08-03)**;③ 桌面 token DPAPI。
+   ①②**同一个提交做完了**(`fd509f2`):它们都在 `ws.rs`,分开做要读两遍同一段代码。
+   **剩下的**:①的 web 那半(要改协议)、③ DPAPI。
 2. **发布可信度:Windows Authenticode 签名**(M)—— 更新器已校验 size+sha256,但用户装的
    仍是一个 SmartScreen 会告警的包。这是新用户看到的**第一样**东西,而它现在说「不可信」。
 3. **成熟度大件(用户挑一个)** —— 长文档虚拟化(L)/ 表格补齐 / 反链面板 / 同块字符级协同(L)。
