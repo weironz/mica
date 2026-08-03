@@ -19,6 +19,7 @@ import 'cache_stats.dart';
 import '../cloud/cloud_doc_store.dart';
 import '../prefs.dart';
 import 'local_offline_api.dart';
+import '../api/models.dart';
 
 // The shared plain-data types (ViewData & co.) live in the contract file; keep
 // re-exporting them so `import 'local_offline.dart'` users see them as before.
@@ -108,6 +109,10 @@ class LocalOffline implements LocalOfflineApi {
   void forgetOrigin(String origin) {}
 
   List<ViewData> listViews({String origin = 'local'}) => const [];
+
+  @override
+  Future<List<SearchResult>> searchLocal(String query, {int limit = 50}) async =>
+      const [];
 
   /// Web has no on-device store at all, so there is nothing cached and nothing
   /// local-only — all zeros rather than a thrown "unsupported".

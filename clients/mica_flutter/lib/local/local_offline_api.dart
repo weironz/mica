@@ -15,6 +15,7 @@ import 'cache_stats.dart';
 import 'dart:typed_data';
 
 import '../cloud/cloud_doc_store.dart';
+import '../api/models.dart';
 
 /// Thrown by the local backend when a document's on-device snapshot is PRESENT
 /// but corrupt/unreadable (distinct from simply absent). The app surfaces it
@@ -79,6 +80,15 @@ abstract interface class LocalOfflineApi {
   void deleteWorkspace(String id);
   void forgetOrigin(String origin);
   List<ViewData> listViews({String origin});
+
+  /// Search this device's pages by title and body.
+  ///
+  /// Async where most of this facade is sync: it reads every indexed document,
+  /// and the one thing a search box must not do is freeze the frame being typed
+  /// into. Empty on web — there is no on-device store there at all, which is a
+  /// different thing from "found nothing" and the caller has to keep telling
+  /// them apart (see `onSearch: null` in main.dart).
+  Future<List<SearchResult>> searchLocal(String query, {int limit});
 
   /// What the on-device store is holding, split into re-downloadable mirrors and
   /// local-only originals. See `cache_stats.dart` for why the split matters.

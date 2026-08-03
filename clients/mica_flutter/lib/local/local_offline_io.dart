@@ -23,6 +23,7 @@ import '../src/rust/frb_generated.dart';
 import '../upload/sha256.dart';
 import 'local_doc.dart';
 import 'local_offline_api.dart';
+import '../api/models.dart';
 
 // The shared plain-data types (ViewData & co.) live in the contract file; keep
 // re-exporting them so `import 'local_offline.dart'` users see them as before.
@@ -193,6 +194,24 @@ class LocalOffline implements LocalOfflineApi {
           position: v.position,
           trashed: v.trashed,
           objectType: v.objectType,
+        ),
+    ];
+  }
+
+  Future<List<SearchResult>> searchLocal(String query, {int limit = 50}) async {
+    final store = _store;
+    if (store == null) return const [];
+    final hits = await store.searchLocal(query: query, limit: limit);
+    return [
+      for (final h in hits)
+        SearchResult(
+          viewId: h.viewId,
+          objectId: h.objectId,
+          name: h.name,
+          snippet: h.snippet,
+          titleMatch: h.titleMatch,
+          isFolder: h.isFolder,
+          parentViewId: h.parentViewId,
         ),
     ];
   }

@@ -8,7 +8,7 @@ import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `set_trashed`, `store`, `subtree_ids`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
@@ -39,6 +39,13 @@ abstract class MicaStore implements RustOpaqueInterface {
     required String docId,
     required List<int> update,
   });
+
+  /// Index documents stored before the text projection existed. Returns how
+  /// many it did; the caller loops until it returns 0.
+  ///
+  /// Batched and caller-driven on purpose — see the store-side note: a big
+  /// library must not turn the first launch after an update into a stall.
+  Future<int> backfillSearchIndex({required int limit});
 
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
@@ -216,6 +223,15 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Upsert a workspace (create / rename / reorder).
   void saveWorkspace({required LocalWorkspace workspace});
 
+  /// Search this device's documents by title and body.
+  ///
+  /// NOT `#[frb(sync)]`: it touches every indexed document, and the one thing a
+  /// search box must never do is freeze the frame you are typing into.
+  Future<List<LocalSearchHit>> searchLocal({
+    required String query,
+    required int limit,
+  });
+
   /// Persist this doc's sync progress.
   void setSyncCursor({required String docId, required SyncCursor cursor});
 
@@ -325,6 +341,53 @@ class FolderExportImage {
           bytes == other.bytes;
 }
 
+/// A local workspace mirrored to Dart (P2-M3).
+/// One local search hit. Same fields the cloud's `SearchResult` carries, so the
+/// Dart side keeps one model for both worlds instead of branching on which world
+/// it is in.
+class LocalSearchHit {
+  final String viewId;
+  final String objectId;
+  final String name;
+  final String? parentViewId;
+  final bool isFolder;
+  final bool titleMatch;
+  final String snippet;
+
+  const LocalSearchHit({
+    required this.viewId,
+    required this.objectId,
+    required this.name,
+    this.parentViewId,
+    required this.isFolder,
+    required this.titleMatch,
+    required this.snippet,
+  });
+
+  @override
+  int get hashCode =>
+      viewId.hashCode ^
+      objectId.hashCode ^
+      name.hashCode ^
+      parentViewId.hashCode ^
+      isFolder.hashCode ^
+      titleMatch.hashCode ^
+      snippet.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalSearchHit &&
+          runtimeType == other.runtimeType &&
+          viewId == other.viewId &&
+          objectId == other.objectId &&
+          name == other.name &&
+          parentViewId == other.parentViewId &&
+          isFolder == other.isFolder &&
+          titleMatch == other.titleMatch &&
+          snippet == other.snippet;
+}
+
 /// One entry in a local page's version timeline, mirrored to Dart. `label` is
 /// null for an auto snapshot, set for a named checkpoint; `created_at` is unix
 /// millis.
@@ -406,7 +469,6 @@ class LocalView {
           objectType == other.objectType;
 }
 
-/// A local workspace mirrored to Dart (P2-M3).
 class LocalWorkspace {
   final String id;
   final String name;

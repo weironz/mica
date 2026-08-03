@@ -2042,11 +2042,28 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
+  /// Local-world search: straight to the on-device index.
+  ///
+  /// No session, no workspace id — a local world is one device's store, and
+  /// there is nothing to scope to.
+  Future<List<SearchResult>> _searchLocalWorkspace(String query) =>
+      _local.searchLocal(query);
+
   Future<List<SearchResult>> _searchWorkspace(String query) async {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return const [];
     return _api.searchWorkspace(session.accessToken, workspace.id, query);
+  }
+
+  /// Open a local search hit.
+  ///
+  /// Without this, local search finds pages and clicking one does nothing —
+  /// which is a worse state than not searching at all: the list proves the page
+  /// exists and then refuses to go there.
+  Future<void> _openLocalViewById(String viewId) async {
+    final view = _localViews.where((v) => v.id == viewId).firstOrNull;
+    if (view != null) await _localSelectView(view);
   }
 
   Future<void> _openViewById(String viewId) async {
@@ -5542,11 +5559,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         });
         _savePrefs();
       },
-      // Null, not a stub returning `const []`: 本地模式 genuinely has no
-      // workspace search (no index on device), and a stub made the dialog
-      // answer 「没有找到匹配的内容」 to every local query.
-      onSearch: local ? null : _searchWorkspace,
-      onOpenSearchResult: local ? (_) async {} : _openViewById,
+      // Desktop local mode now has a real index (`doc_snapshot.content_text`),
+      // so it searches for real. Web local mode still has no on-device store at
+      // all, and there `null` is still the honest answer — «this world cannot
+      // search» is a different statement from «nothing matched», and the dialog
+      // says a different thing for each. A stub returning `const []` used to
+      // collapse the two, telling every local user their page was not there.
+      onSearch: local ? (kIsWeb ? null : _searchLocalWorkspace) : _searchWorkspace,
+      onOpenSearchResult: local ? _openLocalViewById : _openViewById,
       // Cloud only: null in 本地模式 hides the backlinks panel entirely.
       onLoadBacklinks: local ? null : _loadBacklinks,
       // Local workspaces have no server to bundle the zip; SAY so rather than

@@ -9,8 +9,8 @@ use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
 use mica_core::{
-    LocalStore, LocalVersion as CoreVersion, LocalView as CoreView,
-    LocalWorkspace as CoreWorkspace, SyncCursor as CoreSyncCursor,
+    LocalSearchHit as CoreSearchHit, LocalStore, LocalVersion as CoreVersion,
+    LocalView as CoreView, LocalWorkspace as CoreWorkspace, SyncCursor as CoreSyncCursor,
 };
 
 use crate::api::document::MicaDocument;
@@ -168,6 +168,33 @@ impl From<LocalView> for CoreView {
 }
 
 /// A local workspace mirrored to Dart (P2-M3).
+/// One local search hit. Same fields the cloud's `SearchResult` carries, so the
+/// Dart side keeps one model for both worlds instead of branching on which world
+/// it is in.
+pub struct LocalSearchHit {
+    pub view_id: String,
+    pub object_id: String,
+    pub name: String,
+    pub parent_view_id: Option<String>,
+    pub is_folder: bool,
+    pub title_match: bool,
+    pub snippet: String,
+}
+
+impl From<CoreSearchHit> for LocalSearchHit {
+    fn from(h: CoreSearchHit) -> Self {
+        LocalSearchHit {
+            view_id: h.view_id,
+            object_id: h.object_id,
+            name: h.name,
+            parent_view_id: h.parent_id,
+            is_folder: h.is_folder,
+            title_match: h.title_match,
+            snippet: h.snippet,
+        }
+    }
+}
+
 pub struct LocalWorkspace {
     pub id: String,
     pub name: String,
@@ -338,6 +365,30 @@ impl MicaStore {
     }
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
+
+    /// Search this device's documents by title and body.
+    ///
+    /// NOT `#[frb(sync)]`: it touches every indexed document, and the one thing a
+    /// search box must never do is freeze the frame you are typing into.
+    pub fn search_local(&self, query: String, limit: u32) -> Vec<LocalSearchHit> {
+        self.store()
+            .search_local(&query, limit as usize)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// Index documents stored before the text projection existed. Returns how
+    /// many it did; the caller loops until it returns 0.
+    ///
+    /// Batched and caller-driven on purpose — see the store-side note: a big
+    /// library must not turn the first launch after an update into a stall.
+    pub fn backfill_search_index(&self, limit: u32) -> u32 {
+        self.store()
+            .backfill_content_text(limit as usize)
+            .unwrap_or(0) as u32
+    }
 
     /// All views (including trashed) for `origin` ("local" or a server URL),
     /// ordered by position. The client builds the tree from `parent_id` and

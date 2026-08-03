@@ -133,6 +133,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<LocalSearchHit> dco_decode_list_local_search_hit(dynamic raw);
+
+  @protected
   List<LocalVersion> dco_decode_list_local_version(dynamic raw);
 
   @protected
@@ -158,6 +161,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ZipAsset> dco_decode_list_zip_asset(dynamic raw);
+
+  @protected
+  LocalSearchHit dco_decode_local_search_hit(dynamic raw);
 
   @protected
   LocalVersion dco_decode_local_version(dynamic raw);
@@ -344,6 +350,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<LocalSearchHit> sse_decode_list_local_search_hit(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<LocalVersion> sse_decode_list_local_version(
     SseDeserializer deserializer,
   );
@@ -377,6 +388,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ZipAsset> sse_decode_list_zip_asset(SseDeserializer deserializer);
+
+  @protected
+  LocalSearchHit sse_decode_local_search_hit(SseDeserializer deserializer);
 
   @protected
   LocalVersion sse_decode_local_version(SseDeserializer deserializer);
@@ -604,6 +618,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_local_search_hit(
+    List<LocalSearchHit> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_local_version(
     List<LocalVersion> self,
     SseSerializer serializer,
@@ -650,6 +670,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_zip_asset(List<ZipAsset> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_local_search_hit(
+    LocalSearchHit self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_local_version(LocalVersion self, SseSerializer serializer);
