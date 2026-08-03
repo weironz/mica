@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/ui/copy_button.dart';
 
 DocumentView _view({
   required String id,
@@ -42,7 +43,7 @@ Widget _host({required String? workspaceName, required DocumentView current}) =>
           current: current,
           workspaceName: workspaceName,
           onSelect: (_) async {},
-          onCopyPath: () {},
+          onCopyPath: () async => true,
           trailing: const SizedBox.shrink(),
         ),
       ),
@@ -91,7 +92,7 @@ void main() {
             current: loose,
             workspaceName: 'greenstor',
             onSelect: (_) async {},
-            onCopyPath: () {},
+            onCopyPath: () async => true,
             trailing: const SizedBox.shrink(),
           ),
         ),
@@ -120,6 +121,57 @@ void main() {
   testWidgets('a blank workspace name is treated as none', (tester) async {
     await tester.pumpWidget(_host(workspaceName: '   ', current: _page));
     expect(_rendered(tester), ['基础信息', 'BOI']);
+  });
+
+  // The copy button reports where the click was, instead of throwing a black
+  // bar across the bottom of the window to say the expected thing happened.
+  group('the copy button confirms itself', () {
+    Future<void> pumpCopy(WidgetTester tester, Future<bool> Function() onCopy) =>
+        tester.pumpWidget(
+          MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            locale: const Locale('zh'),
+            home: Scaffold(
+              body: InlineCopyButton(onCopy: onCopy, tooltip: 'copy'),
+            ),
+          ),
+        );
+
+    testWidgets('a successful copy turns the icon into a check', (tester) async {
+      await pumpCopy(tester, () async => true);
+
+      expect(find.byIcon(Icons.content_copy_outlined), findsOneWidget);
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+
+      expect(find.byIcon(Icons.check), findsOneWidget);
+      expect(find.byIcon(Icons.content_copy_outlined), findsNothing);
+    });
+
+    /// It must go back on its own. A button stuck on "done" stops being a
+    /// button you can press again — and the next copy would look like nothing
+    /// happened.
+    testWidgets('the check reverts by itself', (tester) async {
+      await pumpCopy(tester, () async => true);
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+      expect(find.byIcon(Icons.check), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byIcon(Icons.content_copy_outlined), findsOneWidget);
+    });
+
+    /// A refused clipboard must NOT look like a success. The check is the only
+    /// signal the user gets here, so it has to mean exactly one thing.
+    testWidgets('a failed copy leaves the icon alone', (tester) async {
+      await pumpCopy(tester, () async => false);
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+
+      expect(find.byIcon(Icons.check), findsNothing);
+      expect(find.byIcon(Icons.content_copy_outlined), findsOneWidget);
+    });
   });
 
   // The search results list shows the same path beside each hit. That makes

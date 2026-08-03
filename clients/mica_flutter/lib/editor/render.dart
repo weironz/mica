@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../cjk_fonts.dart';
+import '../ui/copy_button.dart' show kCopyDoneColor;
 import '../ui/theme_tokens.dart';
 import '../l10n/locale_controller.dart';
 import 'chrome_layout.dart';
@@ -830,6 +831,22 @@ class RenderDocument extends RenderBox {
   set editingCell(({int node, int row, int col})? value) {
     if (_editingCell == value) return;
     _editingCell = value;
+    markNeedsPaint();
+  }
+
+  // The code block whose copy button just fired. Its toolbar icon becomes a
+  // green check for a moment — the same confirmation the widget-side copy
+  // buttons give — instead of a snackbar across the bottom of the window. The
+  // host clears it on a timer; this is paint state, nothing else reads it.
+  int? _copiedCode;
+
+  /// The one place that decides whether a code block's toolbar is drawn. Paint
+  /// and the test-facing getter both read it, so they cannot drift.
+  bool _codeToolbarVisible(int i) => _hoverCode == i || _copiedCode == i;
+
+  set copiedCode(int? value) {
+    if (_copiedCode == value) return;
+    _copiedCode = value;
     markNeedsPaint();
   }
 
@@ -2016,8 +2033,11 @@ class RenderDocument extends RenderBox {
         _paintAlertTitle(canvas, offset, l);
       }
       // Toolbar (language left, wrap + copy right) — only while hovering the block.
-      if (l.kind == 'code_block' && _hoverCode == i) {
-        _paintCodeToolbar(canvas, offset, l);
+      // `_copiedCode` keeps the strip up for its own beat: the click itself
+      // can drop the hover (the pointer lands, the caret moves), and a
+      // confirmation you cannot see is the same as no confirmation.
+      if (l.kind == 'code_block' && _codeToolbarVisible(i)) {
+        _paintCodeToolbar(canvas, offset, l, i);
       }
     }
     // Drag handle (⠿) on the hovered block's gutter rail.
@@ -2188,7 +2208,12 @@ class RenderDocument extends RenderBox {
     tp.dispose();
   }
 
-  void _paintCodeToolbar(Canvas canvas, Offset offset, _NodeLayout l) {
+  void _paintCodeToolbar(
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l,
+    int index,
+  ) {
     final label = l.langLabel;
     if (label != null) {
       final r = label.shift(offset);
@@ -2224,13 +2249,15 @@ class RenderDocument extends RenderBox {
 
     final copy = l.copyButton;
     if (copy != null) {
+      final copied = _copiedCode == index;
       _paintIconButton(
         canvas,
         copy.shift(offset),
-        Icons.content_copy,
+        copied ? Icons.check : Icons.content_copy,
         hovered: _hoverIcon == _CodeIcon.copy,
         active: false,
-        tooltip: l10nNoContext.commonCopy,
+        tooltip: copied ? l10nNoContext.commonCopied : l10nNoContext.commonCopy,
+        color: copied ? kCopyDoneColor : null,
       );
     }
 
@@ -2318,6 +2345,10 @@ class RenderDocument extends RenderBox {
     required bool hovered,
     required bool active,
     required String tooltip,
+    // Overrides the hover/active colouring outright. Only the transient
+    // "copied" check uses it, and it must stay green whether or not the
+    // pointer happens to be over the button.
+    Color? color,
   }) {
     if (hovered) {
       canvas.drawRRect(
@@ -2325,11 +2356,13 @@ class RenderDocument extends RenderBox {
         Paint()..color = _appearance.tokens.border.strong,
       );
     }
-    final color = active
-        ? _appearance.tokens.editor.caret
-        : (hovered
-              ? _appearance.tokens.text.primary
-              : _appearance.tokens.text.muted);
+    final glyphColor =
+        color ??
+        (active
+            ? _appearance.tokens.editor.caret
+            : (hovered
+                  ? _appearance.tokens.text.primary
+                  : _appearance.tokens.text.muted));
     final glyph = TextPainter(
       text: TextSpan(
         text: String.fromCharCode(icon.codePoint),
@@ -2337,7 +2370,7 @@ class RenderDocument extends RenderBox {
           fontFamily: icon.fontFamily,
           package: icon.fontPackage,
           fontSize: 15,
-          color: color,
+          color: glyphColor,
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -3272,6 +3305,21 @@ class RenderDocument extends RenderBox {
   /// only ever painted onto the canvas, so a test has no other way to read it.
   @visibleForTesting
   String debugLangChipAt(int i) => _layouts[i].langChipText;
+
+  /// The code block currently showing the "copied" check, or null.
+  @visibleForTesting
+  int? get debugCopiedCode => _copiedCode;
+
+  /// Whether node [i]'s code toolbar is being drawn — the same condition the
+  /// paint pass uses, so a confirmation that has nothing to sit on is visible
+  /// to a test.
+  @visibleForTesting
+  bool debugCodeToolbarVisible(int i) => _codeToolbarVisible(i);
+
+  /// The code copy button's rect for node [i] in local coordinates, or null
+  /// when the block isn't hovered (the toolbar only lays out while hovering).
+  @visibleForTesting
+  Rect? debugCopyButtonAt(int i) => _layouts[i].copyButton;
 
   /// Node index of an atomic block whose renderer takes a click as "select me"
   /// and whose box contains [local], or null.

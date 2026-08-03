@@ -232,7 +232,7 @@
   "aboutTitle": "About",
   "aboutSourceCode": "Source code (AGPL-3.0)",
   "tokenCreated": "Token created",
-  "tokenCopied": "Token copied",
+  "commonCopied": "Copied",
   "tokenCopyNow": "Copy it now — the secret is not shown again.",
   "tokenTitle": "API Tokens",
   "tokenDescription": "Long-lived tokens for the API, the CLI, and scheduled backups. The secret is shown once — copy it then. Read-only by default.",
@@ -412,7 +412,6 @@
       }
     }
   },
-  "shareLinkCopied": "Link copied",
   "shareLoadFailed": "Load failed: {error}",
   "@shareLoadFailed": {
     "placeholders": {
@@ -893,7 +892,6 @@
   "editorUntitled": "Untitled",
   "editorCut": "Cut",
   "editorPaste": "Paste",
-  "editorCodeCopied": "Code copied",
   "codeMenuWrap": "Wrap lines",
   "codeMenuNoWrap": "Stop wrapping",
   "codeMenuLineNumbers": "Show line numbers",

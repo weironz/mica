@@ -33,6 +33,7 @@ import 'ui/auth_form.dart';
 import 'ui/autoscroll.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
+import 'ui/copy_button.dart';
 import 'ui/destructive_confirm.dart';
 import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
@@ -8154,22 +8155,31 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   )?.join('/');
 
   /// Put [_pagePath] on the clipboard.
-  Future<void> _copyPagePath() async {
+  Future<bool> _copyPagePath() async {
     final l10n = context.l10n;
     final path = _pagePath();
     if (path == null) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(l10n.pageOpenFirst)));
-      return;
+      return false;
     }
     final ok = await copyTextToClipboard(path);
-    if (!mounted) return;
-    // Echo the path itself on success: it is short, and seeing it is how you
-    // notice you copied the wrong page before pasting it somewhere.
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(ok ? path : l10n.pageCopyFailed)));
+    if (!mounted) return ok;
+    // SUCCESS says nothing here. The button that was just pressed turns into a
+    // green check where the cursor already is (GitHub's "Copied!" affordance) —
+    // a snackbar for a working copy throws a black bar across the bottom of the
+    // window to report that the expected thing happened, which is the loudest
+    // possible way to say the least.
+    //
+    // FAILURE still speaks: it is unexpected, it needs words, and there is no
+    // icon state that can carry "the clipboard refused".
+    if (!ok) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.pageCopyFailed)));
+    }
+    return ok;
   }
 
   /// Land on a FOLDER that came back from search.
@@ -8420,7 +8430,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   // Same density as its neighbours — it used to sit alone
                   // on the title row at the default size.
                   padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.expand_more, size: 20),
+                  icon: const Icon(Icons.more_horiz, size: 20),
                   onSelected: _onPageMenu,
                   itemBuilder: (context) => [
                     // Copy sits above the exports and gets its own group:

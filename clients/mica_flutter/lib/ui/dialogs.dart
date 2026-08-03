@@ -1250,17 +1250,16 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           ),
         ),
         actions: [
-          TextButton.icon(
-            icon: const Icon(Icons.copy, size: 18),
-            label: Text(context.l10n.commonCopy),
-            onPressed: () async {
+          // The secret is unrecoverable, so "did that work?" is a question
+          // worth answering — but the button answers it in place. A snackbar
+          // here had to crawl out from under the dialog to be seen at all.
+          InlineCopyButton(
+            label: context.l10n.commonCopy,
+            tooltip: context.l10n.commonCopy,
+            size: 18,
+            onCopy: () async {
               await Clipboard.setData(ClipboardData(text: token));
-              if (!ctx.mounted) return;
-              // Confirm the copy happened: the secret is unrecoverable, so
-              // "did that work?" is a question worth answering.
-              ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(
-                SnackBar(content: Text(context.l10n.tokenCopied)),
-              );
+              return true;
             },
           ),
           FilledButton(
@@ -2848,11 +2847,11 @@ class _ShareDialogState extends State<_ShareDialog> {
     }
   }
 
-  void _copy() {
+  Future<bool> _copy() async {
     final url = _url;
-    if (url == null) return;
-    Clipboard.setData(ClipboardData(text: url));
-    _snack(context.l10n.shareLinkCopied);
+    if (url == null) return false;
+    await Clipboard.setData(ClipboardData(text: url));
+    return true;
   }
 
   void _snack(String message) {
@@ -2911,10 +2910,10 @@ class _ShareDialogState extends State<_ShareDialog> {
                               style: const TextStyle(fontSize: 13),
                             ),
                           ),
-                          IconButton(
+                          InlineCopyButton(
                             tooltip: context.l10n.shareCopyLink,
-                            icon: const Icon(Icons.copy, size: 18),
-                            onPressed: _copy,
+                            size: 18,
+                            onCopy: _copy,
                           ),
                         ],
                       ),

@@ -27,6 +27,7 @@ import 'cell_edit_controller.dart';
 import 'table.dart';
 import 'word_count.dart';
 import '../l10n/locale_controller.dart';
+import '../ui/copy_button.dart';
 import '../ui/theme_tokens.dart';
 
 export 'controller.dart' show DocOp, ApplyOps;
@@ -491,6 +492,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Timer? _linkBarHide;
   int _linkBarNode = -1;
   Mark? _linkBarMark;
+  bool _linkBarCopied = false;
+  Timer? _linkBarCopiedReset;
+  Timer? _codeCopiedReset;
   bool _pointerOverLinkBar = false;
 
   // Multi-tap tracking for word (double) / block (triple) selection. The
@@ -986,6 +990,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _pageEntry?.remove();
     _pageEntry = null;
     _linkBarHide?.cancel();
+    _linkBarCopiedReset?.cancel();
+    _codeCopiedReset?.cancel();
     _linkBar?.remove();
     _linkBar = null;
     _cellEntry?.remove();
@@ -3552,14 +3558,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final nodes = _controller.nodes;
     if (nodeIndex < 0 || nodeIndex >= nodes.length) return;
     copyTextToClipboard(nodes[nodeIndex].text);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.editorCodeCopied),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    }
+    // The button you just pressed is still on screen, hovering over the block —
+    // so it says "copied" itself, in place, instead of a black bar sliding up
+    // over the bottom of the document.
+    _render?.copiedCode = nodeIndex;
+    _codeCopiedReset?.cancel();
+    _codeCopiedReset = Timer(kCopyDoneDuration, () {
+      if (mounted) _render?.copiedCode = null;
+    });
   }
 
   void _onHover(PointerHoverEvent event) {
@@ -3604,6 +3610,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
+  /// The bar lives in an Overlay, so `setState` on the editor does not reach
+  /// it — the entry has to be told to rebuild itself.
+  void _setLinkBarCopied(bool value) {
+    _linkBarCopied = value;
+    _linkBar?.markNeedsBuild();
+  }
+
   void _scheduleLinkBarHide() {
     _linkBarHide?.cancel();
     _linkBarHide = Timer(const Duration(milliseconds: 350), () {
@@ -3614,6 +3627,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _closeLinkBar() {
     _linkBarHide?.cancel();
     _linkBarHide = null;
+    _linkBarCopiedReset?.cancel();
+    _linkBarCopiedReset = null;
+    _linkBarCopied = false;
     _linkBar?.remove();
     _linkBar = null;
     _linkBarMark = null;
@@ -3632,7 +3648,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final left = origin.dx.clamp(8.0, screen.width - 320);
     final top = (origin.dy + 4).clamp(8.0, screen.height - 48);
 
-    Widget action(IconData icon, String label, VoidCallback onTap) {
+    Widget action(
+      IconData icon,
+      String label,
+      VoidCallback onTap, {
+      bool done = false,
+    }) {
       return InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
@@ -3641,13 +3662,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 15, color: MicaTheme.of(context).text.muted),
+              Icon(
+                done ? Icons.check : icon,
+                size: 15,
+                color: done ? kCopyDoneColor : MicaTheme.of(context).text.muted,
+              ),
               const SizedBox(width: 6),
               Text(
-                label,
+                done ? context.l10n.commonCopied : label,
                 style: TextStyle(
                   fontSize: 13,
-                  color: MicaTheme.of(context).text.primary,
+                  color: done
+                      ? kCopyDoneColor
+                      : MicaTheme.of(context).text.primary,
                 ),
               ),
             ],
@@ -3681,6 +3708,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     Icons.copy_outlined,
                     context.l10n.linkCopy,
                     _copyLinkFromBar,
+                    done: _linkBarCopied,
                   ),
                   if (widget.canEdit) ...[
                     Container(
@@ -3713,12 +3741,29 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
   }
 
+  /// Copy the hovered link WITHOUT closing the bar.
+  ///
+  /// It used to close immediately and say nothing, which is indistinguishable
+  /// from a misclick. Keeping the bar up for a beat gives the check somewhere
+  /// to appear; the usual pointer-exit hide takes it away afterwards.
   void _copyLinkFromBar() {
     final href = _linkBarMark?.href;
-    _closeLinkBar();
-    if (href == null) return;
-    copyTextToClipboard(href).then((_) {
-      if (mounted) _focus.requestFocus();
+    if (href == null) {
+      _closeLinkBar();
+      return;
+    }
+    copyTextToClipboard(href).then((ok) {
+      if (!mounted) return;
+      _focus.requestFocus();
+      if (!ok) {
+        _closeLinkBar();
+        return;
+      }
+      _setLinkBarCopied(true);
+      _linkBarCopiedReset?.cancel();
+      _linkBarCopiedReset = Timer(kCopyDoneDuration, () {
+        if (mounted) _setLinkBarCopied(false);
+      });
     });
   }
 
@@ -6298,11 +6343,17 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
               ),
               Align(
                 alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  icon: const Icon(Icons.copy, size: 16),
-                  label: Text(context.l10n.linkCopy),
-                  onPressed: () =>
-                      Clipboard.setData(ClipboardData(text: widget.link)),
+                // This one used to report nothing at all — you pressed it and
+                // the dialog sat there unchanged. The check is its first
+                // feedback, not a replacement for a snackbar.
+                child: InlineCopyButton(
+                  label: context.l10n.linkCopy,
+                  tooltip: context.l10n.linkCopy,
+                  size: 16,
+                  onCopy: () async {
+                    await Clipboard.setData(ClipboardData(text: widget.link));
+                    return true;
+                  },
                 ),
               ),
               const Divider(),

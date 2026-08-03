@@ -1810,6 +1810,17 @@ class _UpdateCheckerState extends State<UpdateChecker> {
 /// AppFlowy-style breadcrumb: the current page's folder path, each ancestor
 /// segment clickable to jump there. A [trailing] widget (the properties toggle)
 /// sits at the end. `part of main.dart`, so it shares its imports / `context.l10n`.
+/// A copy button that answers where it was pressed: the icon becomes a green
+/// check for a moment, with a "Copied" tooltip.
+///
+/// Replaces a snackbar. A working copy is the EXPECTED outcome, and throwing a
+/// black bar across the bottom of the window to announce it is the loudest
+/// possible way to say the least — it also lands far from the cursor, so the eye
+/// has to travel to read that nothing went wrong. GitHub's copy affordance does
+/// it this way, and the confirmation arrives where the click did.
+///
+/// Failure is NOT reported here: it is unexpected, it needs words, and the
+/// caller still shows those. This widget only ever says "yes, done".
 class PageBreadcrumb extends StatefulWidget {
   const PageBreadcrumb({
     required this.views,
@@ -1834,7 +1845,9 @@ class PageBreadcrumb extends StatefulWidget {
   /// Copy the page's path, from a button sitting immediately AFTER the last
   /// crumb — where GitHub puts it, next to the path rather than off in the
   /// row's trailing utilities. Null hides the button.
-  final VoidCallback? onCopyPath;
+  /// Returns whether the copy actually happened — the button turns into a
+  /// check only on true, so a refused clipboard cannot look like a success.
+  final Future<bool> Function()? onCopyPath;
 
   /// Shown as the FIRST crumb, so what you read matches what [onCopyPath]
   /// copies — the copied path has always led with the workspace, and a
@@ -1977,17 +1990,9 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
                 // where it reads as another page utility instead of "copy THIS".
                 if (widget.onCopyPath case final copy?) ...[
                   const SizedBox(width: 4),
-                  IconButton(
-                    onPressed: copy,
-                    icon: const Icon(Icons.content_copy_outlined, size: 13),
+                  InlineCopyButton(
+                    onCopy: copy,
                     tooltip: context.l10n.pageCopyPath,
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 22,
-                      height: 22,
-                    ),
-                    color: MicaTheme.of(context).text.faint,
                   ),
                 ],
               ],
