@@ -49,6 +49,68 @@ pub enum StoreError {
 /// `load_doc` at startup. A corrupt local blob is recoverable — this store is a
 /// cache and the cloud holds the document — so it must degrade to an error the
 /// caller can re-seed from, not take the process down.
+/// Plain text of a stored state, for search. Same projection the cloud keeps in
+/// `document_yrs_base.content_text`, so a page reads the same either side.
+///
+/// Returns `None` — never an error — when the state cannot be decoded. See
+/// [`LocalStore::upsert_snapshot`]: the index is allowed to miss a document, the
+/// save is not allowed to fail because of it.
+/// One local search result. Mirrors the cloud's hit shape so the Dart side has
+/// one model, not two.
+#[derive(Debug, Clone)]
+pub struct LocalSearchHit {
+    pub view_id: String,
+    pub object_id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub is_folder: bool,
+    /// Matched on the title rather than the body — the row says so, the same way
+    /// the server's `title_match` does, so a bodyless hit does not read as noise.
+    pub title_match: bool,
+    /// A window of body text around the match. Empty when the hit was on the
+    /// title only.
+    pub snippet: String,
+}
+
+/// A readable window around the first match, not the whole document.
+fn snippet_around(body: &str, needle_lower: &str) -> String {
+    if body.is_empty() || needle_lower.is_empty() {
+        return String::new();
+    }
+    let lower = body.to_lowercase();
+    let Some(at) = lower.find(needle_lower) else {
+        return String::new();
+    };
+    // Character-based, not byte-based: slicing a UTF-8 string at a byte offset
+    // that lands mid-codepoint panics, and CJK bodies hit that immediately.
+    let chars: Vec<char> = body.chars().collect();
+    let char_at = body[..at].chars().count();
+    let start = char_at.saturating_sub(30);
+    let end = (char_at + needle_lower.chars().count() + 60).min(chars.len());
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(&chars[start..end]);
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
+fn derive_content_text(doc_id: &str, state: &[u8]) -> Option<String> {
+    let doc = contain_yrs_panic(doc_id, || Ok(MicaDoc::from_update(state)?)).ok()?;
+    let text = doc
+        .to_blocks()
+        .iter()
+        .map(|b| b.text.trim_end_matches('\n'))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("
+");
+    Some(text)
+}
+
 fn contain_yrs_panic<T>(
     doc_id: &str,
     work: impl FnOnce() -> Result<T, StoreError>,
@@ -216,10 +278,23 @@ impl LocalStore {
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              CREATE TABLE IF NOT EXISTS doc_snapshot(
-                 doc_id     TEXT PRIMARY KEY,
-                 state      BLOB NOT NULL,
-                 updated_at INTEGER NOT NULL,
-                 state_crc  INTEGER
+                 doc_id       TEXT PRIMARY KEY,
+                 state        BLOB NOT NULL,
+                 updated_at   INTEGER NOT NULL,
+                 state_crc    INTEGER,
+                 -- Plain text of `state`, for workspace search. A pure projection:
+                 -- `state` is the authority, this is derived from it and never read
+                 -- back into a document. NULL = not derived yet (a row written by an
+                 -- older build, or a doc whose decode failed) — searchable-or-not,
+                 -- never wrong.
+                 --
+                 -- Purely additive → no SCHEMA_VERSION bump, same as `doc_version`:
+                 -- an older app ignores the column, and a newer app treats the NULLs
+                 -- an older app leaves behind as not-yet-indexed. That matters more
+                 -- than it sounds: bumping the version turns first launch after an
+                 -- auto-update into a migration of the user's only copy of their
+                 -- notes, and this feature is not worth that risk.
+                 content_text TEXT
              );
              CREATE TABLE IF NOT EXISTS local_meta(
                  key   TEXT PRIMARY KEY,
@@ -326,6 +401,20 @@ impl LocalStore {
                 "ALTER TABLE local_view ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local'",
                 [],
             )?;
+        }
+        // `content_text` on an existing store. Additive and nullable, so this is the
+        // whole migration: no rewrite, no version bump, and an older build that
+        // opens the file afterwards simply never selects the column.
+        let has_content_text = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('doc_snapshot') WHERE name='content_text'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_content_text {
+            conn.execute("ALTER TABLE doc_snapshot ADD COLUMN content_text TEXT", [])?;
         }
         // Always have a default workspace so migrated views resolve and a fresh
         // store starts usable.
@@ -565,6 +654,129 @@ impl LocalStore {
     }
 
     /// Persist a document as its full snapshot (upsert).
+    /// The ONLY place `doc_snapshot` is written.
+    ///
+    /// Four call sites used to carry the same UPSERT, and `content_text` has to
+    /// move with `state` or search starts answering about a document that no
+    /// longer exists in that shape. The cloud side keeps that invariant by
+    /// co-writing the projection in the same statement at each of its write
+    /// paths; here it is stronger and cheaper — there is one statement, so the
+    /// two columns *cannot* drift, and a fifth write path would have to go out of
+    /// its way to bypass this.
+    ///
+    /// **Deriving the text must never fail a save.** A document whose text cannot
+    /// be derived stores NULL and is simply not searchable: the note is the
+    /// user's, the index is ours, and losing an edit to protect a search feature
+    /// is the wrong trade. That is also why the derive is contained rather than
+    /// propagated.
+    fn upsert_snapshot(&self, doc_id: &str, state: &[u8], crc: Option<i64>) -> Result<(), StoreError> {
+        let content_text = derive_content_text(doc_id, state);
+        self.conn.execute(
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc,content_text) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 state=excluded.state, updated_at=excluded.updated_at,
+                 state_crc=excluded.state_crc, content_text=excluded.content_text",
+            params![doc_id, state, now_millis(), crc, content_text],
+        )?;
+        Ok(())
+    }
+
+    /// Workspace search over local documents: title and body, one SQL statement.
+    ///
+    /// The shape the cloud arrived at the hard way — it used to decode every
+    /// stored document per query, N full CRDT decodes for one search, and the fix
+    /// was exactly this projection column. Doing the same here means a local
+    /// workspace answers the same question the same way instead of growing a
+    /// second, slower search.
+    ///
+    /// `LIKE` with the wildcards escaped: a query containing `%` must look for a
+    /// percent sign, not match everything. CJK works because this is a substring
+    /// match with no tokenizer — the same deliberate choice as the server.
+    ///
+    /// Rows whose `content_text` is NULL (written before the column existed, or
+    /// undecodable) still match on their NAME. Not being indexed costs a page its
+    /// body matches, never its existence.
+    pub fn search_local(&self, query: &str, limit: usize) -> Result<Vec<LocalSearchHit>, StoreError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let escaped = trimmed
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+
+        let mut stmt = self.conn.prepare(
+            "SELECT v.id, v.object_id, v.name, v.parent_id, v.object_type,
+                    COALESCE(s.content_text, '')
+             FROM local_view v
+             LEFT JOIN doc_snapshot s ON s.doc_id = v.object_id
+             WHERE v.trashed = 0
+               AND (v.name LIKE ?1 ESCAPE '\\' OR s.content_text LIKE ?1 ESCAPE '\\')
+             ORDER BY (v.name LIKE ?1 ESCAPE '\\') DESC, v.name
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit as i64], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+
+        let needle = trimmed.to_lowercase();
+        let mut hits = Vec::new();
+        for row in rows {
+            let (view_id, object_id, name, parent_id, object_type, body) = row?;
+            let title_match = name.to_lowercase().contains(&needle);
+            hits.push(LocalSearchHit {
+                view_id,
+                object_id,
+                snippet: snippet_around(&body, &needle),
+                name,
+                parent_id,
+                is_folder: object_type == "folder",
+                title_match,
+            });
+        }
+        Ok(hits)
+    }
+
+    /// Fill in `content_text` for documents stored before the column existed.
+    ///
+    /// Returns how many rows it filled. Bounded per call and driven by the
+    /// caller: a store with thousands of documents must not turn the first launch
+    /// after an update into a stall, and a search that is briefly incomplete is a
+    /// far smaller problem than an app that appears hung.
+    pub fn backfill_content_text(&self, limit: usize) -> Result<usize, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT doc_id, state FROM doc_snapshot WHERE content_text IS NULL LIMIT ?1",
+        )?;
+        let pending: Vec<(String, Vec<u8>)> = stmt
+            .query_map(params![limit as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<Result<_, _>>()?;
+
+        let mut filled = 0usize;
+        for (doc_id, state) in pending {
+            // An undecodable row writes an empty string rather than staying NULL:
+            // NULL means "not tried yet", and leaving it would make every backfill
+            // pass pick the same broken row forever.
+            let text = derive_content_text(&doc_id, &state).unwrap_or_default();
+            self.conn.execute(
+                "UPDATE doc_snapshot SET content_text=?2 WHERE doc_id=?1",
+                params![doc_id, text],
+            )?;
+            filled += 1;
+        }
+        Ok(filled)
+    }
+
     pub fn save_doc(&self, doc_id: &str, doc: &MicaDoc) -> Result<(), StoreError> {
         let state = doc.encode_state();
         // Fresh checksum over the freshly-encoded bytes. `state_crc=excluded.state_crc`
@@ -572,12 +784,7 @@ impl LocalStore {
         // and every LATER save (this is an UPSERT — every debounced edit) updates
         // `state` but leaves the crc stale → a false CorruptDoc on a healthy doc.
         let crc = blob_crc(&state);
-        self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
-             ON CONFLICT(doc_id) DO UPDATE SET
-                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
-            params![doc_id, state, now_millis(), crc],
-        )?;
+        self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
         // Version history: archive this folded state as an AUTO snapshot, but only
         // if none was captured in the last VERSION_AUTO_INTERVAL — so a burst of
         // debounced saves converges to one version per window (AFFiNE min-interval).
@@ -732,12 +939,7 @@ impl LocalStore {
                 params![uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur, cur_crc],
             )?;
         }
-        self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
-             ON CONFLICT(doc_id) DO UPDATE SET
-                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
-            params![doc_id, &bytes, now_millis(), crc],
-        )?;
+        self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
         self.conn
             .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
         // Unwind guard too, not just the crc: a legacy version blob (crc NULL) still
@@ -1024,12 +1226,7 @@ impl LocalStore {
         // cheaper to reason about than a CRDT argument).
         self.conn.execute_batch("BEGIN;")?;
         let result: Result<(), StoreError> = (|| {
-            self.conn.execute(
-                "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
-                 ON CONFLICT(doc_id) DO UPDATE SET
-                     state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
-                params![doc_id, state, now_millis(), crc],
-            )?;
+            self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
             self.conn.execute(
                 "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
                 params![doc_id, pushed],
@@ -1150,12 +1347,7 @@ impl LocalStore {
         // The other previously-unguarded decode path (P0-0): verify the backup
         // before it becomes the live base or reaches yrs.
         verify_blob_crc(doc_id, &bytes, crc)?;
-        self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc) VALUES(?1,?2,?3,?4)
-             ON CONFLICT(doc_id) DO UPDATE SET
-                 state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
-            params![doc_id, &bytes, now_millis(), crc],
-        )?;
+        self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
         self.conn
             .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
         let doc = contain_yrs_panic(doc_id, || {
@@ -2464,6 +2656,148 @@ mod tests {
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION.to_string(), "no version bump");
         let _ = std::fs::remove_file(p);
+    }
+
+    /// Local search exists at all — a local workspace used to answer every query
+    /// with "nothing matches", stating as fact that the page was not there.
+    ///
+    /// These pin BEHAVIOUR, not the column: what a user typed, and what came
+    /// back. A test that asserted `content_text` exists would pass with a search
+    /// that never returns anything.
+    mod local_search {
+        use super::super::*;
+        use crate::block::Block;
+
+        fn seeded() -> LocalStore {
+            let store = LocalStore::open_in_memory().unwrap();
+            for (view, doc, name, body) in [
+                ("v1", "d1", "部署流程", "先装 Docker,再起 compose"),
+                ("v2", "d2", "会议记录", "讨论了部署节奏与回滚"),
+                ("v3", "d3", "读书笔记", "与运维无关的内容"),
+            ] {
+                let mut d = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
+                d.text_insert("root", 0, body);
+                store.save_doc(doc, &d).unwrap();
+                store
+                    .save_view(&LocalView {
+                        id: view.into(),
+                        workspace_id: "local".into(),
+                        parent_id: None,
+                        object_id: doc.into(),
+                        name: name.into(),
+                        position: "0000000010".into(),
+                        trashed: false,
+                        origin: "local".into(),
+                        object_type: "document".into(),
+                    })
+                    .unwrap();
+            }
+            store
+        }
+
+        #[test]
+        fn finds_pages_by_title_and_by_body() {
+            let store = seeded();
+            let hits = store.search_local("部署", 20).unwrap();
+            let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+
+            assert!(names.contains(&"部署流程"), "title hit missing: {names:?}");
+            assert!(names.contains(&"会议记录"), "body hit missing: {names:?}");
+            assert!(!names.contains(&"读书笔记"), "matched something it should not");
+        }
+
+        /// A title hit sorts first and says so, so a hit with no quotable body
+        /// does not read as an empty row.
+        #[test]
+        fn a_title_hit_comes_first_and_is_labelled() {
+            let store = seeded();
+            let hits = store.search_local("部署", 20).unwrap();
+
+            assert_eq!(hits[0].name, "部署流程");
+            assert!(hits[0].title_match);
+            assert!(!hits.iter().find(|h| h.name == "会议记录").unwrap().title_match);
+        }
+
+        #[test]
+        fn the_snippet_is_a_window_not_the_whole_document() {
+            let store = seeded();
+            let hit = store
+                .search_local("Docker", 20)
+                .unwrap()
+                .into_iter()
+                .find(|h| h.name == "部署流程")
+                .unwrap();
+
+            assert!(hit.snippet.contains("Docker"), "{:?}", hit.snippet);
+            assert!(hit.snippet.chars().count() <= 95, "{:?}", hit.snippet);
+        }
+
+        /// `%` is a LIKE wildcard. Unescaped, searching for it returns the whole
+        /// workspace — a "search" that matches everything is worse than one that
+        /// finds nothing, because it looks like it worked.
+        #[test]
+        fn wildcards_in_the_query_are_literal() {
+            let store = seeded();
+            assert!(store.search_local("%", 20).unwrap().is_empty());
+            assert!(store.search_local("_", 20).unwrap().is_empty());
+        }
+
+        #[test]
+        fn trashed_pages_do_not_come_back() {
+            let store = seeded();
+            store
+                .save_view(&LocalView {
+                    id: "v1".into(),
+                    workspace_id: "local".into(),
+                    parent_id: None,
+                    object_id: "d1".into(),
+                    name: "部署流程".into(),
+                    position: "0000000010".into(),
+                    trashed: true,
+                    origin: "local".into(),
+                    object_type: "document".into(),
+                })
+                .unwrap();
+
+            let names: Vec<String> = store
+                .search_local("部署", 20)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.name)
+                .collect();
+            assert!(!names.contains(&"部署流程".to_string()), "{names:?}");
+        }
+
+        #[test]
+        fn an_empty_query_returns_nothing_rather_than_everything() {
+            let store = seeded();
+            assert!(store.search_local("   ", 20).unwrap().is_empty());
+        }
+
+        /// A row written before the column existed still matches on its name, and
+        /// the backfill makes its body searchable without a schema migration.
+        #[test]
+        fn rows_from_an_older_build_backfill() {
+            let store = seeded();
+            store
+                .conn
+                .execute("UPDATE doc_snapshot SET content_text=NULL", [])
+                .unwrap();
+
+            assert_eq!(
+                store.search_local("部署", 20).unwrap().len(),
+                1,
+                "the title hit must survive an un-indexed store"
+            );
+
+            assert_eq!(store.backfill_content_text(100).unwrap(), 3);
+            assert_eq!(store.search_local("部署", 20).unwrap().len(), 2);
+            assert_eq!(
+                store.backfill_content_text(100).unwrap(),
+                0,
+                "a second pass has nothing left to do"
+            );
+        }
     }
 
     /// Guards against an accidental SCHEMA_VERSION bump and confirms a fresh
