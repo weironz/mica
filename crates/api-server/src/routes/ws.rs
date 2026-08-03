@@ -1,9 +1,10 @@
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
   extract::{
     Path, Query, State,
-    ws::{Message, WebSocket, WebSocketUpgrade},
+    ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
   },
   http::HeaderMap,
   http::header::AUTHORIZATION,
@@ -22,7 +23,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
-use crate::routes::auth::user_id_from_token;
+use crate::routes::auth::session_from_token;
 use crate::routes::documents::{
   DocumentPermissions, ensure_workspace_member, permissions_for_role, workspace_role,
 };
@@ -86,7 +87,7 @@ pub async fn document_socket(
   let client_protocol = check_protocol(query.v, state.config.ws_min_protocol)?;
 
   let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
-  let user_id = user_id_from_token(&state, &token)?;
+  let (user_id, token_exp) = session_from_token(&state, &token)?;
   if client_protocol < WS_PROTOCOL_VERSION {
     // The signal that decides when the floor can be raised. Logged only for
     // below-current clients, so ordinary traffic stays quiet and this line
@@ -118,8 +119,32 @@ pub async fn document_socket(
       document_id,
       user_id,
       permissions,
+      token_exp,
     )
   }))
+}
+
+/// Close code for "the token this socket was opened with has expired".
+///
+/// 4401 rather than 1008 (policy violation): 4000–4999 is the application's own
+/// range, and the client has to tell this apart from every other close to know
+/// that reconnecting with a FRESH token is the fix. A generic code would send it
+/// into the same backoff as an unreachable server, where waiting longer is
+/// exactly the wrong move — the token does not come back on its own.
+pub(crate) const WS_CLOSE_TOKEN_EXPIRED: u16 = 4401;
+
+/// How long this socket may live, from `exp`.
+///
+/// Returns `None` when the deadline has already passed — the caller closes at
+/// once rather than arming a timer for the past. Clock skew is not corrected
+/// for: `exp` was already validated at the upgrade by the same clock, so a
+/// socket can only be here if this machine thought the token was live.
+fn time_left(exp_unix: u64, now: SystemTime) -> Option<Duration> {
+  let now_unix = now.duration_since(UNIX_EPOCH).ok()?.as_secs();
+  exp_unix
+    .checked_sub(now_unix)
+    .filter(|secs| *secs > 0)
+    .map(Duration::from_secs)
 }
 
 /// Resolve the client's announced protocol version against the server's floor.
@@ -161,6 +186,7 @@ async fn run_connection(
   document_id: Uuid,
   user_id: Uuid,
   permissions: DocumentPermissions,
+  token_exp: u64,
 ) {
   let connection_id = Uuid::new_v4();
   let room = state.hub.join(document_id);
@@ -181,8 +207,27 @@ async fn run_connection(
     return;
   }
 
+  // The socket outlives the token check that let it in, so it carries its own
+  // deadline. Armed once: `sleep` is not reset by traffic, which is the point —
+  // a busy socket must not be able to hold an expired session open forever.
+  let expiry = tokio::time::sleep(
+    time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO),
+  );
+  tokio::pin!(expiry);
+
   loop {
     tokio::select! {
+      () = &mut expiry => {
+        // Best-effort: the client may already be gone, and there is nothing to
+        // do about it if the frame does not land.
+        let _ = socket
+          .send(Message::Close(Some(CloseFrame {
+            code: WS_CLOSE_TOKEN_EXPIRED,
+            reason: "token expired".into(),
+          })))
+          .await;
+        break;
+      }
       incoming = socket.recv() => {
         match incoming {
           Some(Ok(Message::Text(text))) => {
@@ -650,6 +695,51 @@ mod tests {
       other => panic!("expected a machine code the client can branch on, got {other:?}"),
     }
     assert!(check_protocol(Some(1), 1).is_ok(), "exactly at the floor is fine");
+  }
+
+  /// A socket authenticates ONCE, at the upgrade, and then lives as long as it
+  /// stays connected — so without this it outlives the token that opened it. The
+  /// interesting values are all at the edges: a token that expires in the next
+  /// second, and one that expired while the request was in flight.
+  #[test]
+  fn a_socket_lives_exactly_as_long_as_its_token() {
+    let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+
+    assert_eq!(
+      time_left(1_000_060, now),
+      Some(Duration::from_secs(60)),
+      "a minute of token left is a minute of socket"
+    );
+    assert_eq!(
+      time_left(1_000_001, now),
+      Some(Duration::from_secs(1)),
+      "one second still counts — rounding it away would let a socket in for free"
+    );
+  }
+
+  /// Already expired must be `None`, not a huge duration. `u64` subtraction the
+  /// other way wraps, and a wrapped deadline is a socket that never closes —
+  /// precisely the bug this exists to fix, reintroduced by an arithmetic slip.
+  #[test]
+  fn an_already_expired_token_gets_no_time_at_all() {
+    let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+
+    assert_eq!(time_left(1_000_000, now), None, "expiring exactly now");
+    assert_eq!(time_left(999_999, now), None, "expired a second ago");
+    assert_eq!(time_left(0, now), None, "an absent/zero exp is not forever");
+  }
+
+  /// The client branches on this number to tell "get a fresh token" apart from
+  /// "the server is unreachable" — the two call for opposite reactions, and
+  /// backing off harder does not bring an expired token back.
+  #[test]
+  fn the_expiry_close_code_is_in_the_application_range() {
+    assert_eq!(WS_CLOSE_TOKEN_EXPIRED, 4401);
+    assert!(
+      (4000..5000).contains(&WS_CLOSE_TOKEN_EXPIRED),
+      "4000-4999 is the application's own range; below it is reserved and \
+       clients may not see the code at all"
+    );
   }
 
   /// The client announces the same number the server calls current. They live in

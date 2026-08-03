@@ -749,6 +749,17 @@ pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) 
 /// Decode a bare JWT access token into a user id. Used by the WebSocket handler,
 /// which receives the token via query string rather than an Authorization header.
 pub(crate) fn user_id_from_token(state: &AppState, token: &str) -> ApiResult<Uuid> {
+  session_from_token(state, token).map(|(user_id, _)| user_id)
+}
+
+/// The user AND the moment this token stops being valid (`exp`, unix seconds).
+///
+/// Every HTTP request re-checks `exp` because every request re-reads the token.
+/// A WebSocket does not: it authenticates once at the upgrade and then lives for
+/// as long as it stays connected, so a socket opened one second before expiry
+/// stayed authorised for hours. Handing the deadline out here lets the socket
+/// enforce it — see `ws.rs`, which closes with 4401 when it passes.
+pub(crate) fn session_from_token(state: &AppState, token: &str) -> ApiResult<(Uuid, u64)> {
   let token = decode::<Claims>(
     token,
     &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
@@ -756,7 +767,8 @@ pub(crate) fn user_id_from_token(state: &AppState, token: &str) -> ApiResult<Uui
   )
   .map_err(|_| ApiError::Unauthorized)?;
 
-  Uuid::parse_str(&token.claims.sub).map_err(|_| ApiError::Unauthorized)
+  let user_id = Uuid::parse_str(&token.claims.sub).map_err(|_| ApiError::Unauthorized)?;
+  Ok((user_id, token.claims.exp as u64))
 }
 
 /// Axum middleware: authenticate every non-public `/api` request and enforce the

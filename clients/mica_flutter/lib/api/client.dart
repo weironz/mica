@@ -4,11 +4,11 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../swallowed.dart';
 import '../upload/sha256.dart';
 import 'models.dart';
+import 'ws_connect.dart';
 
 /// `scheme://host[:port]` for [base], omitting the port when it IS the
 /// scheme's default. `Uri.port` always answers with a number (443 for https),
@@ -560,7 +560,7 @@ class ApiClient {
       path: '/ws/ai',
       queryParameters: {'token': token},
     );
-    final channel = WebSocketChannel.connect(uri);
+    final channel = connectAuthedSocket(uri);
     // The caller sees the failure through the stream below; `ready` carries the
     // same error and would otherwise go unobserved (uncaught zone error).
     unawaited(channel.ready.catchError((_) => swallowed('ai_ws_ready')));

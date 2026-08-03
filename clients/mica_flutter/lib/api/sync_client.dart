@@ -6,6 +6,8 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'ws_connect.dart';
+
 import '../swallowed.dart';
 import 'models.dart';
 
@@ -39,7 +41,7 @@ class DocumentSyncClient {
   bool _disposed = false;
 
   void connect() {
-    final channel = WebSocketChannel.connect(uri);
+    final channel = connectAuthedSocket(uri);
     _channel = channel;
     // See cloud_sync_session.connect: the connect failure lands on `ready` too,
     // and an unobserved future error becomes an uncaught zone error. Dropped, but
