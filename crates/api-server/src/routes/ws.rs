@@ -7,7 +7,6 @@ use axum::{
     ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
   },
   http::HeaderMap,
-  http::header::AUTHORIZATION,
   response::Response,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -23,7 +22,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
-use crate::routes::auth::session_from_token;
+use crate::routes::auth::{SESSION_COOKIE, bearer_token, cookie_value, session_from_token};
 use crate::routes::documents::{
   DocumentPermissions, ensure_workspace_member, permissions_for_role, workspace_role,
 };
@@ -65,9 +64,9 @@ struct UpdatePayload {
 
 /// `GET /ws/workspaces/{workspace_id}/documents/{document_id}`
 ///
-/// Authenticates the upgrade request (token via `Authorization` header or
-/// `?token=` query), verifies workspace membership, then hands the socket to the
-/// per-connection loop.
+/// Authenticates the upgrade request (see [`token_from_request`] for the three
+/// places the token may come from), verifies workspace membership, then hands
+/// the socket to the per-connection loop.
 pub async fn document_socket(
   State(state): State<AppState>,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
@@ -163,13 +162,23 @@ fn check_protocol(announced: Option<u32>, floor: u32) -> ApiResult<u32> {
   Ok(client_protocol)
 }
 
+/// Three sources, in descending order of how deliberate they are.
+///
+/// 1. `Authorization: Bearer` — desktop. An explicit header is an explicit act.
+/// 2. The session **cookie** — web. The WS handshake is an ordinary HTTP
+///    request, so the browser attaches it by itself. This is what lets the web
+///    client stop putting a JWT in the URL: "browsers cannot authenticate a
+///    WebSocket" is only true of custom headers, and taking it as true of
+///    cookies too is what kept the token in the query string for so long.
+/// 3. `?token=` — the compatibility tail. Still read so an older web build (and
+///    any non-browser client) keeps working; it is no longer written by ours.
 fn token_from_request(headers: &HeaderMap, query: &ConnectQuery) -> Option<String> {
-  if let Some(token) = headers
-    .get(AUTHORIZATION)
-    .and_then(|value| value.to_str().ok())
-    .and_then(|value| value.strip_prefix("Bearer "))
-  {
-    return Some(token.to_string());
+  if let Some(token) = bearer_token(headers) {
+    return Some(token);
+  }
+
+  if let Some(token) = cookie_value(headers, SESSION_COOKIE) {
+    return Some(token);
   }
 
   query
@@ -668,6 +677,7 @@ async fn send_all(socket: &mut WebSocket, messages: Vec<String>) -> Result<(), (
 #[cfg(test)]
 mod tests {
   use super::*;
+  use axum::http::header::{AUTHORIZATION, COOKIE};
   use chrono::Utc;
   use mica_app_core::store::{self, DocumentRecord};
   use serde_json::json;
@@ -861,6 +871,73 @@ mod tests {
       serde_json::from_str(&base_message(&base, Some(b"not a state vector"), None, doc_id))
         .unwrap();
     assert_eq!(bad["delta"], false);
+  }
+
+  /// What lets the web client stop putting a JWT in the URL: the browser
+  /// attaches the session cookie to the upgrade request by itself, because the
+  /// handshake is an ordinary HTTP request.
+  #[test]
+  fn token_comes_from_the_cookie_when_there_is_no_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      COOKIE,
+      format!("theme=dark; {SESSION_COOKIE}=cookie-token; other=1")
+        .parse()
+        .unwrap(),
+    );
+    let query = ConnectQuery { token: None, v: None };
+    assert_eq!(
+      token_from_request(&headers, &query),
+      Some("cookie-token".to_string())
+    );
+  }
+
+  /// A header is a deliberate act; a cookie is ambient. When both are present
+  /// the deliberate one wins — otherwise a stale cookie left in a browser could
+  /// silently outrank the credential a caller actually chose to send.
+  #[test]
+  fn an_explicit_header_outranks_the_cookie() {
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, "Bearer header-token".parse().unwrap());
+    headers.insert(
+      COOKIE,
+      format!("{SESSION_COOKIE}=cookie-token").parse().unwrap(),
+    );
+    let query = ConnectQuery { token: None, v: None };
+    assert_eq!(
+      token_from_request(&headers, &query),
+      Some("header-token".to_string())
+    );
+  }
+
+  /// ...and the cookie outranks the query tail, which only still exists so an
+  /// older web build keeps working. Ours no longer writes it.
+  #[test]
+  fn the_cookie_outranks_the_query_string() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      COOKIE,
+      format!("{SESSION_COOKIE}=cookie-token").parse().unwrap(),
+    );
+    let query = ConnectQuery {
+      token: Some("query-token".to_string()),
+      v: None,
+    };
+    assert_eq!(
+      token_from_request(&headers, &query),
+      Some("cookie-token".to_string())
+    );
+  }
+
+  /// A `Cookie` header without ours must not be read as "there is a token".
+  /// Returning `Some("")` here would turn a missing credential into a malformed
+  /// one, which fails later and further away.
+  #[test]
+  fn an_unrelated_cookie_jar_yields_nothing() {
+    let mut headers = HeaderMap::new();
+    headers.insert(COOKIE, "theme=dark; locale=zh".parse().unwrap());
+    let query = ConnectQuery { token: None, v: None };
+    assert_eq!(token_from_request(&headers, &query), None);
   }
 
   #[test]

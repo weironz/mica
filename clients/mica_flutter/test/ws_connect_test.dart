@@ -74,15 +74,48 @@ void main() {
     });
   });
 
-  // Not a limitation we forgot — one the platform imposes. Stated as a test so
-  // that "web still sends it in the URL" is a recorded decision, and so that
-  // making web behave like desktop has to come with deleting this.
-  test('web leaves the token in the URL, because it has nowhere else', () {
-    final uri = Uri.parse('wss://mica.example/ws?token=jwt.abc&v=1');
-    final split = web_variant.splitSocketAuth(uri);
+  // This test used to assert the opposite — that web HAD to leave the token in
+  // the URL, because the browser WebSocket API cannot set headers. That much is
+  // true and it is still true; what was wrong is the conclusion drawn from it.
+  // The handshake is an ordinary HTTP request, so the browser attaches the
+  // session cookie by itself, and the URL needs to carry nothing at all.
+  group('web sends no credential in the URL — the cookie rides the handshake',
+      () {
+    test('the token is stripped, not relocated', () {
+      final split = web_variant.splitSocketAuth(
+        Uri.parse('wss://mica.example/ws?token=jwt.abc&v=1'),
+      );
 
-    expect(split.token, isNull);
-    expect(split.uri, uri);
+      expect(split.uri.queryParameters.containsKey('token'), isFalse);
+      expect(split.uri.toString(), isNot(contains('jwt.abc')));
+      expect(
+        split.token,
+        isNull,
+        reason: 'nothing to hand anywhere — there is no header to put it in',
+      );
+    });
+
+    test('the protocol version survives', () {
+      final split = web_variant.splitSocketAuth(
+        Uri.parse('wss://mica.example/ws?token=jwt.abc&v=1'),
+      );
+
+      expect(split.uri.queryParameters['v'], '1');
+    });
+
+    test('a token-only query leaves no dangling question mark', () {
+      final split = web_variant.splitSocketAuth(
+        Uri.parse('wss://mica.example/ws/ai?token=jwt.abc'),
+      );
+
+      expect(split.uri.toString(), 'wss://mica.example/ws/ai');
+    });
+
+    test('a URL that never had a token is untouched', () {
+      final plain = Uri.parse('wss://mica.example/ws?v=1');
+
+      expect(web_variant.splitSocketAuth(plain).uri, plain);
+    });
   });
 
   // The URI builder still owns the token — the header move happens at the

@@ -5,14 +5,17 @@ use argon2::{
 use axum::{
   Json,
   extract::{Request, State},
-  http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+  http::{
+    HeaderMap, HeaderValue, StatusCode,
+    header::{AUTHORIZATION, SET_COOKIE},
+  },
   middleware::Next,
   response::Response,
 };
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use mica_app_core::AppState;
-use mica_infra::{ApiError, ApiResult};
+use mica_infra::{ApiError, ApiResult, Environment};
 
 use super::email_verify;
 use serde::{Deserialize, Serialize};
@@ -47,7 +50,11 @@ pub struct AuthResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct RefreshRequest {
-  refresh_token: String,
+  /// Optional because web no longer has it: the refresh token lives in an
+  /// `HttpOnly` cookie there, so the browser sends it and script never sees it.
+  /// Desktop still posts it in the body — it has no cookie jar we control.
+  #[serde(default)]
+  refresh_token: Option<String>,
 }
 
 /// No `used_at` here on purpose: whether the token is already spent is decided
@@ -180,7 +187,7 @@ pub async fn register(
 pub async fn login(
   State(state): State<AppState>,
   Json(payload): Json<LoginRequest>,
-) -> ApiResult<Json<AuthResponse>> {
+) -> ApiResult<(HeaderMap, Json<AuthResponse>)> {
   let email = normalize_email(&payload.email)?;
 
   let user = sqlx::query_as::<_, UserRow>(
@@ -201,7 +208,8 @@ pub async fn login(
   // line means the caller already knows the credentials.
   email_verify::ensure_verified(user.email_verified_at)?;
 
-  Ok(Json(auth_response(&state, user).await?))
+  let response = auth_response(&state, user).await?;
+  Ok((auth_cookie_headers(&state, &response), Json(response)))
 }
 
 pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<MeResponse>> {
@@ -552,9 +560,18 @@ pub async fn rotate_refresh_token(
 /// rotating the refresh token itself.
 pub async fn refresh(
   State(state): State<AppState>,
+  headers: HeaderMap,
   Json(payload): Json<RefreshRequest>,
-) -> ApiResult<Json<AuthResponse>> {
-  let (user_id, family_id) = rotate_refresh_token(&state.db, &payload.refresh_token).await?;
+) -> ApiResult<(HeaderMap, Json<AuthResponse>)> {
+  // Body first, then cookie. The body is the explicit ask; falling back the
+  // other way would let a stale cookie quietly outrank a token the caller
+  // deliberately handed us.
+  let presented = payload
+    .refresh_token
+    .filter(|token| !token.is_empty())
+    .or_else(|| cookie_value(&headers, REFRESH_COOKIE))
+    .ok_or(ApiError::Unauthorized)?;
+  let (user_id, family_id) = rotate_refresh_token(&state.db, &presented).await?;
 
   let user = sqlx::query_as::<_, UserRow>(
     r#"
@@ -568,9 +585,8 @@ pub async fn refresh(
   .await?
   .ok_or(ApiError::Unauthorized)?;
 
-  Ok(Json(
-    auth_response_in_family(&state, user, family_id).await?,
-  ))
+  let response = auth_response_in_family(&state, user, family_id).await?;
+  Ok((auth_cookie_headers(&state, &response), Json(response)))
 }
 
 /// `POST /api/auth/logout` — end this sign-in server-side.
@@ -586,11 +602,20 @@ pub async fn refresh(
 /// state it cannot leave.
 pub async fn logout(
   State(state): State<AppState>,
+  headers: HeaderMap,
   Json(payload): Json<RefreshRequest>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<(HeaderMap, StatusCode)> {
+  // Signing out has to clear the cookies even when the token is already gone or
+  // unknown — otherwise a stale `mica_session` keeps authenticating the next
+  // page load, and "sign out" would be a lie in exactly the case that matters.
+  let presented = payload
+    .refresh_token
+    .filter(|token| !token.is_empty())
+    .or_else(|| cookie_value(&headers, REFRESH_COOKIE))
+    .unwrap_or_default();
   let family: Option<Uuid> =
     sqlx::query_scalar("SELECT family_id FROM refresh_tokens WHERE token_hash = $1")
-      .bind(sha256_hex(&payload.refresh_token))
+      .bind(sha256_hex(&presented))
       .fetch_optional(&state.db)
       .await?;
 
@@ -600,7 +625,7 @@ pub async fn logout(
     revoke_family(&state.db, family).await?;
   }
 
-  Ok(StatusCode::NO_CONTENT)
+  Ok((cleared_cookie_headers(), StatusCode::NO_CONTENT))
 }
 
 /// Burn every sign-in a user has, everywhere. The access tokens already issued
@@ -748,6 +773,115 @@ pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) 
 
 /// Decode a bare JWT access token into a user id. Used by the WebSocket handler,
 /// which receives the token via query string rather than an Authorization header.
+/// The access token, as a cookie the browser keeps out of JavaScript's reach.
+///
+/// Web had nowhere safe to put a token: `localStorage` is readable by any
+/// same-origin script, so one stored XSS on a shared page was an account
+/// takeover, and the WebSocket had to carry the token in its URL because the
+/// browser `WebSocket` API cannot set headers.
+///
+/// A cookie answers both at once, which is why it beats the ticket-plus-memory
+/// design it replaced: `HttpOnly` puts it beyond script, and the browser attaches
+/// it to the WS handshake by itself — the handshake is an ordinary HTTP request,
+/// a fact easy to miss behind "browsers can't authenticate WebSockets". (Same
+/// shape AFFiNE uses, under the same constraint.)
+pub(crate) const SESSION_COOKIE: &str = "mica_session";
+
+/// The refresh token, so a page reload can recover a session without ever
+/// handing the durable credential to script.
+pub(crate) const REFRESH_COOKIE: &str = "mica_refresh";
+
+/// What the cookies buy, and what they cost.
+///
+/// **Cost:** cookies are attached by the browser, so cookie auth is CSRF-able
+/// where header auth is not. `SameSite=Strict` is the answer here — a cross-site
+/// request simply does not carry it — and it is enough on its own for this
+/// shape: the tokens are only ever *read* from the cookie, never combined with
+/// ambient state, and a double-submit token on top would mean touching every
+/// write endpoint for a second layer over a defence browsers already enforce.
+/// If mica ever serves its API from a different origin than its app, this
+/// reasoning has to be redone, not extended.
+///
+/// **Not `Secure` in development**, or the cookie never arrives over plain
+/// `http://127.0.0.1` and web dev silently cannot sign in.
+fn session_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
+  let secure = if secure { "; Secure" } else { "" };
+  format!("{name}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{secure}")
+}
+
+/// Expire a cookie now. `Max-Age=0` with an empty value is the only reliable
+/// delete — a browser matches on name+path, so the path must match the one it
+/// was set with or the old cookie simply survives the sign-out.
+fn cleared_cookie(name: &str) -> String {
+  format!("{name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict")
+}
+
+/// Read one cookie out of the `Cookie` header.
+///
+/// Hand-parsed rather than pulling a cookie crate: the header is
+/// `a=1; b=2`, values here are our own base64/JWT alphabets, and the parse is
+/// three lines. A crate would also tempt the rest of the codebase into cookie
+/// state we do not want.
+pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+  headers
+    .get(axum::http::header::COOKIE)?
+    .to_str()
+    .ok()?
+    .split(';')
+    .filter_map(|pair| pair.trim().split_once('='))
+    .find(|(key, _)| *key == name)
+    .map(|(_, value)| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+}
+
+/// `Authorization: Bearer …`, the credential desktop uses and the one that wins
+/// wherever both are present — an explicit header is a deliberate act, a cookie
+/// is ambient.
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<String> {
+  headers
+    .get(AUTHORIZATION)?
+    .to_str()
+    .ok()?
+    .strip_prefix("Bearer ")
+    .map(str::to_string)
+    .filter(|token| !token.is_empty())
+}
+
+/// The `Set-Cookie` pair for a freshly minted session.
+fn auth_cookie_headers(state: &AppState, response: &AuthResponse) -> HeaderMap {
+  let secure = state.config.environment == Environment::Production;
+  let mut headers = HeaderMap::new();
+  for raw in [
+    session_cookie(
+      SESSION_COOKIE,
+      &response.access_token,
+      state.config.access_token_ttl_seconds,
+      secure,
+    ),
+    session_cookie(
+      REFRESH_COOKIE,
+      &response.refresh_token,
+      state.config.refresh_token_ttl_seconds,
+      secure,
+    ),
+  ] {
+    if let Ok(value) = HeaderValue::from_str(&raw) {
+      headers.append(SET_COOKIE, value);
+    }
+  }
+  headers
+}
+
+fn cleared_cookie_headers() -> HeaderMap {
+  let mut headers = HeaderMap::new();
+  for name in [SESSION_COOKIE, REFRESH_COOKIE] {
+    if let Ok(value) = HeaderValue::from_str(&cleared_cookie(name)) {
+      headers.append(SET_COOKIE, value);
+    }
+  }
+  headers
+}
+
 pub(crate) fn user_id_from_token(state: &AppState, token: &str) -> ApiResult<Uuid> {
   session_from_token(state, token).map(|(user_id, _)| user_id)
 }
@@ -782,13 +916,10 @@ pub async fn scope_guard(
   if is_public(request.uri().path()) {
     return Ok(next.run(request).await);
   }
-  let token = request
-    .headers()
-    .get(AUTHORIZATION)
-    .and_then(|value| value.to_str().ok())
-    .and_then(|value| value.strip_prefix("Bearer "))
+  let token = bearer_token(request.headers())
+    .or_else(|| cookie_value(request.headers(), SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
-  let auth = resolve_token(&state, token).await?;
+  let auth = resolve_token(&state, &token).await?;
   let need = if request.method().is_safe() {
     Scope::Read
   } else {

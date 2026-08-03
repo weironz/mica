@@ -837,8 +837,38 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _restoreSession() async {
     if (_session != null) return;
-    final token = loadPref('authToken:$_cloudOrigin');
+    var token = loadPref('authToken:$_cloudOrigin');
     final userJson = loadPref('authUser:$_cloudOrigin');
+    // Web keeps the access token in MEMORY only, so a fresh page never has one —
+    // that is the point, not a fault: localStorage is readable by any same-origin
+    // script, and a stored XSS there was an account takeover. The durable
+    // credential is the HttpOnly refresh cookie, which script cannot read and the
+    // browser sends anyway. Trade it for a session here.
+    //
+    // Desktop never takes this branch: it has the token on disk, DPAPI-sealed.
+    if (kIsWeb &&
+        (token == null || token.isEmpty) &&
+        userJson != null &&
+        userJson.isNotEmpty) {
+      try {
+        // Empty string, not the missing token: the server reads an absent/blank
+        // body field as "use the cookie".
+        final recovered = await _api.refreshSession('');
+        if (!mounted) return;
+        _persistSession(recovered);
+        token = recovered.accessToken;
+      } on ApiException catch (error) {
+        // The cookie is gone or burnt (signed out elsewhere, 30 days idle,
+        // reuse detected). That is a real end of session, not a transient.
+        if (error.isUnauthorized) {
+          _clearPersistedSession();
+          _fallBackToLocalWorld();
+        }
+        return;
+      } catch (_) {
+        return; // offline / server down: keep whatever is left, try next load
+      }
+    }
     if (token == null ||
         token.isEmpty ||
         userJson == null ||
