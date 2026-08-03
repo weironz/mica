@@ -105,7 +105,16 @@
   空实现 → 每次本地搜索都答「没有找到与「x」匹配的内容」,把"页面不在这个工作区里"当
   事实说了出来。**已先止血**(改成 null-means-absent + 诚实文案 + 指向页内 Ctrl+F,
   6668976 一批),真做需要本地 store 侧同样维护一份正文投影并给 FFI 查询接口 ——
-  和云端那条是同一套设计,不是两套。(M)
+  和云端那条是同一套设计,不是两套。
+  **2026-08-03 勘定真实形状:原标 (M) 偏小,它是三层改动 + 一次本地库迁移**。逐层:
+  ① `crates/mica-core/src/store.rs` 给 `doc_snapshot` 加 `content_text` 派生列 + 三条写
+  快照的路径同语句 co-write(照云端红线#1)+ 存量回填 + 查询;② `clients/mica_flutter/rust/src/api/store.rs`
+  暴露查询,**并跑 flutter_rust_bridge 重新生成 Dart 绑定**(codegen 在
+  `~/.cargo/bin/flutter_rust_bridge_codegen`,可用);③ `main.dart` 把 `onSearch` 从
+  `local ? null` 接上。**真正的成本不在写代码,在第 ④ 步**:动 `SCHEMA_VERSION` 就触发
+  release.md 步骤 4 那条 —— 桌面自动更新后**首启就地迁移本地库**,迁移写坏 = 用户笔记打不开,
+  所以必须拿一份真 `store.db` 拷贝跑 `upgrade_real_store_smoke`。**这不是「多花点时间」,
+  是「需要一份真实用户数据来验」**,和前面几件纯逻辑改动不是一个量级。(M–L)
 - 🟡 **结构块 callout/toggle/embed/columns** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— **已拍板(2026-07-29):分两步,先做渲染层折叠 UI**。关键区分:`<details><summary>` 是**合法的 CommonMark/GFM raw-HTML block**(GitHub 官方推荐写法),属于"我们的解析器没接住",**不是**像合并单元格/多列那样"标准 md 表达不了"——所以**不适用**那两条的「红线不做」先例。现状比参照产品还弱一档:AppFlowy(原生 `toggle_list` block)和 AFFiNE(`collapsed` 做成 list/heading 通用属性)**编辑器里都有可点的折叠 UI**,只在导出 md 时降级;我们是连折叠 UI 都没有,`<details>` 源码当代码块摆着。**第一步(S,建议先做)**:纯渲染层——`code_block`+`raw:true` 的解析/序列化**一个字不改**,只在渲染层认出规范形态的 `<details>` 就换折叠外观,走 `AtomicBlockRenderer` 注册表(不堆 if,守渲染红线);折叠态复用现有 `data.collapsed` 那条路。round-trip 零改动。**第二步(M–L,另议)**:规范子集结构化成新 kind(summary 富文本 + body 复用 `data.li` 扁平容器),非规范形态退回现状直通;成本大头在教导入器反解析真实世界五花八门的 `<details>`。**顺带定论**:折叠状态**是文档数据不是视图状态**——AppFlowy(`updateNode` 事务)、AFFiNE(`store.updateBlock`)、以及本仓库自己的代码块折叠先例(`controller.dart` `toggleCollapsed` 走 `update_block`,但 `collapsed` **从不进 md 字节**)三方一致;`<details open>` 让我们有机会比前两家更彻底(折叠态也能 round-trip),但那意味着"点一下折叠"变成一次真实文本编辑,留到第二步再定;② **columns** —— **红线不做**(标准 md 无多列表示,同表格合并;要做只能显式有损方言);③ embed 未做。附:render 注册表 P3-1 对这三种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。
   **2026-08-03 核实:比原文写的更糟** —— 编辑器目录里 `Semantics` **0 处**(不是「少」,是没有),
