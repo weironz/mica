@@ -7176,16 +7176,26 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // App header — top-left, grouped with the sidebar (no global AppBar).
+              // Top row: HOME on the left, the collapse button on the right.
+              //
+              // No logo/wordmark — the window title bar already says "Mica" with
+              // the same icon directly above, and two of them read as two apps
+              // stacked. Removing it left the row holding nothing but a Spacer,
+              // i.e. a blank band across the most valuable strip in the sidebar;
+              // home moved up into it rather than sitting a row lower under
+              // whitespace.
               Row(
                 children: [
-                  const MicaLogo(size: 24),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Mica',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                  ),
-                  const Spacer(),
+                  if (widget.onOpenHome != null)
+                    Expanded(
+                      child: _HomeNavRow(
+                        label: context.l10n.navHome,
+                        selected: widget.selectedBootstrap == null,
+                        onTap: widget.onOpenHome!,
+                      ),
+                    )
+                  else
+                    const Spacer(),
                   if (widget.isBusy)
                     const Padding(
                       padding: EdgeInsets.only(right: 4),
@@ -7210,20 +7220,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              // Home + search sit ABOVE the workspace switcher (design 03), and
-              // that order is the meaning: both span every workspace, so putting
-              // them under a workspace picker would imply they are scoped to the
-              // one you happen to have selected. Home is highlighted while it IS
-              // the current view, i.e. no page is open.
-              if (widget.onOpenHome != null) ...[
-                _HomeNavRow(
-                  label: context.l10n.navHome,
-                  selected: widget.selectedBootstrap == null,
-                  onTap: widget.onOpenHome!,
-                ),
-                const SizedBox(height: 8),
-              ],
+              const SizedBox(height: 10),
+              // Search still sits ABOVE the workspace switcher (design 03), and
+              // that order is the meaning: it spans every workspace, so putting
+              // it under a workspace picker would imply it is scoped to the one
+              // you happen to have selected. Same reason home is on the row
+              // above rather than inside the workspace section.
               _searchBox(context),
               const SizedBox(height: 14),
               Divider(height: 1, color: MicaTheme.of(context).border.subtle),
@@ -7450,16 +7452,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// The sidebar collapsed to a slim rail: just the logo and an expand button.
+  /// The sidebar collapsed to a slim rail: just an expand button.
+  ///
+  /// No logo here either. It was the same duplicate as the expanded header's —
+  /// collapsing the sidebar brought back the second Mica mark that had just been
+  /// removed, which reads as the app re-introducing itself.
   Widget _collapsedNavRail(BuildContext context) {
     return ColoredBox(
       color: MicaTheme.of(context).surface.base,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         child: Column(
           children: [
-            const MicaLogo(size: 24),
-            const SizedBox(height: 12),
             IconButton(
               tooltip: context.l10n.sidebarExpand,
               visualDensity: VisualDensity.compact,
@@ -8303,119 +8307,227 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (widget.showFormatBar && canEdit)
-            ListenableBuilder(
-              listenable: _activeBlockHook,
-              builder: (context, _) => _formatBar(context),
-            ),
-          // The editor column is capped at widget.pageWidth (a fixed page-width
-          // step) inside _editorScroll, and the window caps it below that on a
-          // narrow pane — so no measured max is needed here.
-          // STICKY. It used to be the first child inside the scroll view, so
-          // scrolling a long page carried away the one line that says WHERE you
-          // are — exactly when a long page makes you want to know. AppFlowy
-          // keeps it pinned for the same reason.
-          //
-          // Same `Center` + `ConstrainedBox(pageWidth)` + gutter inset as the
-          // body below, so the pinned row stays on the page's text column
-          // instead of drifting to the window edge.
-          if (widget.selectedView != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 28, left: 28, right: 28),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: widget.pageWidth),
-                  child: Padding(
-                    padding: const EdgeInsets.only(
-                      left: EditorTheme.gutter,
-                      bottom: 2,
-                    ),
+          // ONE top row for the pane, so the page tools line up with the left
+          // sidebar's collapse button instead of sitting 37px below it in the
+          // document column. Notion puts the same cluster here; the row exists
+          // whether or not the format bar is on, because the tools do.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+            child: Row(
+              children: [
+                // The path shares the top row now. A FIXED budget, not a
+                // flexible one: the toolbar beside it is a strip of fixed-size
+                // click targets, so the width it gets must not depend on how
+                // deep the current page happens to be. Inside this budget the
+                // path collapses in the middle, and beyond that it scrolls
+                // horizontally (it always could) — it never pushes.
+                if (widget.selectedView != null)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 260),
                     child: PageBreadcrumb(
-                      views: widget.views,
-                      current: widget.selectedView!,
-                      onSelect: widget.onSelectView,
-                      // Renaming from the breadcrumb tail (AppFlowy does this).
-                      // Gated on the editor role: a viewer's rename would 403,
-                      // and an edit affordance that cannot succeed is worse than
-                      // none — same rule as everywhere else here.
-                      onRename: canEdit ? widget.onRenameView : null,
-                      onCopyPath: _copyPagePath,
-                      workspaceName: widget.selectedWorkspace?.name,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Quiet sync status (nothing when synced) sits just
-                          // left of the properties toggle, SiYuan-style top-right.
-                          if (widget.syncPhase != null)
-                            _SyncBadge(widget.syncPhase!),
-                          // Comments entry: only for cloud documents, and only
-                          // shows a count when something is actually open.
-                          if (widget.onAddComment != null)
-                            _CommentsButton(
-                              openCount: widget.commentThreads
-                                  .where((t) => !t.isResolved)
-                                  .length,
-                              active:
-                                  _toolsExpanded &&
-                                  _toolsTab == _ToolsTab.comments,
-                              onTap: () {
-                                final showing =
-                                    _toolsExpanded &&
-                                    _toolsTab == _ToolsTab.comments;
-                                setState(() {
-                                  // From anywhere else this means "show me the
-                                  // comments", not "toggle the sidebar" — so it
-                                  // opens the sidebar AND selects the tab. Only
-                                  // a second press on an already-showing comment
-                                  // tab closes it.
-                                  _toolsExpanded = !showing;
-                                  _toolsTab = _ToolsTab.comments;
-                                });
-                                // Closing drops the emphasis: it means "the
-                                // thread I am reading", and with the panel gone
-                                // there is no such thing — leaving it on would
-                                // strand a stronger wash with nothing to explain
-                                // it.
-                                if (showing) widget.onFocusCommentThread(null);
-                              },
-                            ),
-                          // The right-hand twin of the sidebar collapse button.
-                          // It used to live one row lower, on the title row, so
-                          // the "symmetric pair" the old comment claimed was
-                          // visibly off — different row, different size. Same
-                          // line, same density, same icon size as the left one.
-                          IconButton(
-                            tooltip: _toolsExpanded
-                                ? context.l10n.pageHideSidePanel
-                                : context.l10n.pageShowSidePanel,
-                            visualDensity: VisualDensity.compact,
-                            onPressed: () => setState(
-                              () => _toolsExpanded = !_toolsExpanded,
-                            ),
-                            icon: Transform.flip(
-                              flipX: true,
-                              child: const Icon(
-                                Icons.view_sidebar_outlined,
-                                size: 20,
-                              ),
-                            ),
-                          ),
-                          _PropertiesToggle(
-                            active: _showProperties,
-                            hasProperties: bootstrap.rootFrontMatter
-                                .trim()
-                                .isNotEmpty,
-                            onTap: () => setState(
-                              () => _showProperties = !_showProperties,
-                            ),
-                          ),
-                        ],
-                      ),
+              views: widget.views,
+              current: widget.selectedView!,
+              onSelect: widget.onSelectView,
+              // Renaming from the breadcrumb tail (AppFlowy does this).
+              // Gated on the editor role: a viewer's rename would 403,
+              // and an edit affordance that cannot succeed is worse than
+              // none — same rule as everywhere else here.
+              onRename: canEdit ? widget.onRenameView : null,
+              onCopyPath: _copyPagePath,
+              workspaceName: widget.selectedWorkspace?.name,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Quiet sync status (nothing when synced). It STAYS
+                  // on the breadcrumb while the tools moved to the pane
+                  // header: it reports on this document, not on the app
+                  // — same reason the breadcrumb itself lives here.
+                  if (widget.syncPhase != null)
+                    _SyncBadge(widget.syncPhase!),
+                ],
+              ),
+            ),
+                  ),
+                Expanded(
+                  child: (widget.showFormatBar && canEdit)
+                      ? ListenableBuilder(
+                          listenable: _activeBlockHook,
+                          builder: (context, _) => _formatBar(context),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                // The right-hand twin of the sidebar collapse button.
+                // It used to live one row lower, on the title row, so
+                // the "symmetric pair" the old comment claimed was
+                // visibly off — different row, different size. Same
+                // line, same density, same icon size as the left one.
+                IconButton(
+                  tooltip: _toolsExpanded
+                      ? context.l10n.pageHideSidePanel
+                      : context.l10n.pageShowSidePanel,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(
+                    () => _toolsExpanded = !_toolsExpanded,
+                  ),
+                  icon: Transform.flip(
+                    flipX: true,
+                    child: const Icon(
+                      Icons.view_sidebar_outlined,
+                      size: 20,
                     ),
                   ),
                 ),
-              ),
+                if (widget.onAddComment != null)
+                  _CommentsButton(
+                    openCount: widget.commentThreads
+                        .where((t) => !t.isResolved)
+                        .length,
+                    active:
+                        _toolsExpanded &&
+                        _toolsTab == _ToolsTab.comments,
+                    onTap: () {
+                      final showing =
+                          _toolsExpanded &&
+                          _toolsTab == _ToolsTab.comments;
+                      setState(() {
+                        // From anywhere else this means "show me the
+                        // comments", not "toggle the sidebar" — so it
+                        // opens the sidebar AND selects the tab. Only
+                        // a second press on an already-showing comment
+                        // tab closes it.
+                        _toolsExpanded = !showing;
+                        _toolsTab = _ToolsTab.comments;
+                      });
+                      // Closing drops the emphasis: it means "the
+                      // thread I am reading", and with the panel gone
+                      // there is no such thing — leaving it on would
+                      // strand a stronger wash with nothing to explain
+                      // it.
+                      if (showing) widget.onFocusCommentThread(null);
+                    },
+                  ),
+                _PropertiesToggle(
+                  active: _showProperties,
+                  hasProperties: bootstrap.rootFrontMatter
+                      .trim()
+                      .isNotEmpty,
+                  onTap: () => setState(
+                    () => _showProperties = !_showProperties,
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: context.l10n.pageMenu,
+                  // Same density as its neighbours — it used to sit alone
+                  // on the title row at the default size.
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.expand_more, size: 20),
+                  onSelected: _onPageMenu,
+                  itemBuilder: (context) => [
+                    // Copy sits above the exports and gets its own group:
+                    // it is the cheap, frequent one (grab the text, paste
+                    // it somewhere), while everything below produces a
+                    // file. Grouping it with the exports would bury it.
+                    PopupMenuItem(
+                      value: 'copy-md',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.copy_all_outlined),
+                        title: Text(context.l10n.pageCopyContent),
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    // One export, always a ZIP. The old "Export Markdown"
+                    // handed back a lone .md whose images pointed at
+                    // `![](photo.png)` — a file that was nowhere in the
+                    // download. A zip can carry them; a .md cannot.
+                    PopupMenuItem(
+                      value: 'export-zip',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.folder_zip_outlined),
+                        title: Text(context.l10n.rowExportZipImages),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'export-html',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.html_outlined),
+                        title: Text(context.l10n.rowExportHtml),
+                      ),
+                    ),
+                    // PDF export: desktop drives the OS WebView2 runtime's
+                    // headless print (native bytes → download); web hands
+                    // the same self-contained HTML to the browser's own
+                    // print dialog ("Save as PDF"). Available on both.
+                    PopupMenuItem(
+                      value: 'export-pdf',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.picture_as_pdf_outlined,
+                        ),
+                        title: Text(context.l10n.rowExportPdf),
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'import-md',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.upload_file_outlined),
+                        title: Text(context.l10n.pageImportMarkdown),
+                      ),
+                    ),
+                    if (widget.onShare != null) ...[
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: 'share',
+                        child: ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.public),
+                          title: Text(context.l10n.shareTitle),
+                        ),
+                      ),
+                    ],
+                    if (widget.onVersionHistory != null) ...[
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: 'version-history',
+                        child: ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.history),
+                          title: Text(context.l10n.versionHistoryTitle),
+                        ),
+                      ),
+                    ],
+                    if (widget.onRestoreCheckpoint != null) ...[
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: 'restore-checkpoint',
+                        child: ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.restore_outlined),
+                          title: Text(context.l10n.pageRestoreCheckpoint),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
             ),
+          ),
+          // The editor column is capped at widget.pageWidth (a fixed page-width
+          // step) inside _editorScroll, and the window caps it below that on a
+          // narrow pane — so no measured max is needed here.
           Expanded(
             child: Stack(
                     children: [
@@ -8717,110 +8829,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                             ),
                           ),
                         ),
-                      PopupMenuButton<String>(
-                        tooltip: context.l10n.pageMenu,
-                        icon: const Icon(Icons.expand_more),
-                        onSelected: _onPageMenu,
-                        itemBuilder: (context) => [
-                          // Copy sits above the exports and gets its own group:
-                          // it is the cheap, frequent one (grab the text, paste
-                          // it somewhere), while everything below produces a
-                          // file. Grouping it with the exports would bury it.
-                          PopupMenuItem(
-                            value: 'copy-md',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.copy_all_outlined),
-                              title: Text(context.l10n.pageCopyContent),
-                            ),
-                          ),
-                          const PopupMenuDivider(),
-                          // One export, always a ZIP. The old "Export Markdown"
-                          // handed back a lone .md whose images pointed at
-                          // `![](photo.png)` — a file that was nowhere in the
-                          // download. A zip can carry them; a .md cannot.
-                          PopupMenuItem(
-                            value: 'export-zip',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.folder_zip_outlined),
-                              title: Text(context.l10n.rowExportZipImages),
-                            ),
-                          ),
-                          PopupMenuItem(
-                            value: 'export-html',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.html_outlined),
-                              title: Text(context.l10n.rowExportHtml),
-                            ),
-                          ),
-                          // PDF export: desktop drives the OS WebView2 runtime's
-                          // headless print (native bytes → download); web hands
-                          // the same self-contained HTML to the browser's own
-                          // print dialog ("Save as PDF"). Available on both.
-                          PopupMenuItem(
-                            value: 'export-pdf',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(
-                                Icons.picture_as_pdf_outlined,
-                              ),
-                              title: Text(context.l10n.rowExportPdf),
-                            ),
-                          ),
-                          const PopupMenuDivider(),
-                          PopupMenuItem(
-                            value: 'import-md',
-                            child: ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.upload_file_outlined),
-                              title: Text(context.l10n.pageImportMarkdown),
-                            ),
-                          ),
-                          if (widget.onShare != null) ...[
-                            const PopupMenuDivider(),
-                            PopupMenuItem(
-                              value: 'share',
-                              child: ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.public),
-                                title: Text(context.l10n.shareTitle),
-                              ),
-                            ),
-                          ],
-                          if (widget.onVersionHistory != null) ...[
-                            const PopupMenuDivider(),
-                            PopupMenuItem(
-                              value: 'version-history',
-                              child: ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.history),
-                                title: Text(context.l10n.versionHistoryTitle),
-                              ),
-                            ),
-                          ],
-                          if (widget.onRestoreCheckpoint != null) ...[
-                            const PopupMenuDivider(),
-                            PopupMenuItem(
-                              value: 'restore-checkpoint',
-                              child: ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.restore_outlined),
-                                title: Text(context.l10n.pageRestoreCheckpoint),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
                     ],
                   ),
                 ),

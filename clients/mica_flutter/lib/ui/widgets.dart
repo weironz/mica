@@ -1900,7 +1900,16 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
       final pid = v.parentViewId;
       v = (pid == null) ? null : byId[pid];
     }
-    final path = chain.reversed.toList(); // root … current
+    final full = chain.reversed.toList(); // root … current
+    // Deep paths collapse in the MIDDLE. The breadcrumb now shares the top row
+    // with the format toolbar, and the toolbar is a strip of fixed-size click
+    // targets — shrink those and they stop being hittable, while a path is text
+    // that degrades readably. So the path yields, and it yields by dropping the
+    // segments you already guessed rather than the one you were looking for:
+    // workspace and immediate parent survive. Same rule as the search results
+    // list, and the full path is always one click away on "copy path".
+    final path = full.length > 3 ? [full.first, full.last] : full;
+    final collapsed = path.length != full.length;
 
     return Row(
       children: [
@@ -1934,6 +1943,23 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
                   ),
                 ],
                 for (var i = 0; i < path.length; i++) ...[
+                  if (i > 0 && collapsed) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                      child: Icon(
+                        Icons.chevron_right,
+                        size: 14,
+                        color: MicaTheme.of(context).text.faint,
+                      ),
+                    ),
+                    Text(
+                      '…',
+                      style: TextStyle(
+                        color: MicaTheme.of(context).text.faint,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                   if (i > 0)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 3),
