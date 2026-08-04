@@ -8,6 +8,7 @@ use tracing::info;
 
 mod blob_gc;
 mod mail;
+mod metrics;
 mod password_strength;
 mod rate_limit;
 mod routes;
@@ -105,6 +106,15 @@ fn app_router(state: AppState) -> Router {
     .merge(routes::ws_router())
     .merge(routes::share_router())
     .merge(routes::reset_router())
+    // NOT under `/api`, and that placement IS the access control: nginx only
+    // proxies /api, /ws, /s and the two mail links, so this is reachable from
+    // the compose network and not from the internet. See metrics.rs.
+    .route("/metrics", axum::routing::get(metrics::metrics_handler))
+    // Outermost of our own layers, so a request rejected by the rate limiter or
+    // by CORS is still counted — those are exactly the requests you want to see
+    // during an incident, and a middleware that only observes the happy path
+    // reports calm while the front door is on fire.
+    .layer(axum::middleware::from_fn(metrics::track))
     .layer(TraceLayer::new_for_http())
     // Throttle the auth endpoints per client IP + cap Argon2 concurrency. Inner
     // to CORS (so a preflight is answered before the limiter sees it); the

@@ -192,7 +192,26 @@
 - 🟡 **不可信输入解析面 fuzz**(2026-07-23:markdown + interchange 已上,yrs 待)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**已做**:proptest 属性 fuzz 覆盖前两个自家解析面——`markdown/tests/proptest_parse.rs`(`import_markdown` 灌任意字节 + markdown-ish 片段,never-panic)+ `interchange/tests/proptest_zip.rs`(`read_zip→normalize_entries→expand_nested_zips` 灌任意/PK-前缀字节)。本轮**未挖出 panic**(解析器稳),但落成**快回归门**(各 ~2–5s,随 `cargo test` 进 CI;`PROPTEST_CASES=100000` 可本机长跑)。**残留**:yrs 二进制更新那面——手写 xor 已实证挖出远程可达(需认证)UB,但 UB 要 **cargo-fuzz + sanitizer(ASan)** 才抓得住,proptest(只抓 panic)不够 → 留 Linux/CI 的 cargo-fuzz。(`store.rs:2202`)(M)
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
-- **仅结构化日志,无 /metrics/telemetry** —— 同步后端生产盲飞(`telemetry.rs`)。(M) `[需后端]`
+- 🟡 **可观测性:`/metrics` + 自建 Prometheus 已上,告警仍未做**(2026-08-04)——
+  ~~仅结构化日志,无 /metrics~~ ✅ 已做。**顺带修正原条目的两处错**:它写 `telemetry.rs`,
+  而那文件在 `crates/infra` 不在 api-server,且只有 **12 行**——只初始化 tracing 的输出格式,
+  没有任何计数器。所以起点不是「有 telemetry 但没暴露」,是**什么都没数**。
+  已落地:自研 exporter(`api-server/src/metrics.rs`,**不引第三方 metrics 库** —— 文本格式
+  + 计数器 map 约 150 行,CLAUDE.md「粘合层用成熟包」针对的是要背三套平台原生层的情形,
+  这里没有那个乘数)。指标选的是**能解释 08-03 那次故障**的:HTTP 请求数/延迟直方图(按
+  **路由模式**打标签,不是原始路径 —— 实测两个不同 UUID 合并成一条 `{workspace_id}`,
+  爬虫撑不爆基数)、**PG 连接池 idle/in_use**(那次的真实症状是 acquire 3.3s)、WS 连接数
+  (drop guard,提前返回或 panic 都不会漏计)、build_info。
+  **暴露方式是结构性的**:挂在顶层 `/metrics` 而非 `/api` 下,nginx 只转发 `/api|/ws|/s|`
+  两个邮件链接,所以公网够不到。**实测机制与直觉相反**:公网 `GET /metrics` **不是 404**,
+  是 SPA 兜底 `try_files` 返回 **200 + index.html**(text/html,不含任何 `mica_` 序列)。
+  安全结论不变,但「它会 404」是会被人当依据的半对说法。
+  采集:`prom/prometheus` 单容器(`deploy/prometheus.yml`,dev 与 prod 共用同一份配置),
+  **刻意不复用机器上已有的 neostor VictoriaMetrics** —— 共用会把 Mica「看见自己」的能力
+  耦合到一个它说不上话的系统上。生产不挂 traefik、端口只绑 127.0.0.1,看图走 SSH 隧道。
+  **残留**:① **告警规则与通知通道**(有了真实曲线再定阈值,而不是先设计告警再倒推指标);
+  ② **node 级指标**(CPU/磁盘/内存)要 node_exporter;③ **外部黑盒探测**(含 TLS 证书剩余
+  天数)必须跑在这台机器之外 —— 08-03 那次整机 IO 饥饿,同机采集器一样会被饿死。(残留 M)
 - **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
 - **自研 parser vs 采用 comrak(读侧)未决** —— Milestone 8 决策点(editor-engine)。(M)
 
@@ -220,12 +239,13 @@
 > 问题。写放大那条仍然成立,但它单独不构成「无界增长」。这正是维护规矩第 3 条要求把核实
 > 结论写进条目本身的原因:结论进了条目,却没同步到引用它的排序清单里。
 
-1. **可观测性:先有 `/metrics`,再谈告警**(M,`[需后端]`)—— 2026-08-04:那个假装每 15 分钟
-   拨测、实际 21 小时只跑 12 次、**整段故障一次没跑**的 `uptime.yml` 已删除,所以生产现在
-   **没有任何自动化告警**。方向已拍板走 **Prometheus**,与「仅结构化日志,无 /metrics」合并
-   推进。排第一不是因为它难,是因为**其余每一条都默认「出事你会知道」**,而这个前提现在明确
-   是假的 —— 而且删掉之后是**诚实地**假,不再是假装有。
-   **别漏掉证书过期**:它随 `uptime.yml` 一起没了,属于 blackbox 探测那一档,`/metrics` 不覆盖。
+1. **可观测性:~~先有 `/metrics`~~ ✅,现在缺告警**(残留 M,`[需后端]`)—— 2026-08-04:
+   `/metrics` + 自建 Prometheus 已上(见 §开发者体验 那条,含实测细节)。**但生产仍然没有任何
+   自动化告警** —— 有了曲线不等于有人会被叫醒。
+   下一步刻意**先看一周真实数据再定阈值**,而不是先设计告警体系再倒推指标。
+   **两个 `/metrics` 覆盖不到、别忘了的**:① **证书过期**(随 `uptime.yml` 一起没的);
+   ② **「机器整个不行了」** —— 08-03 那次是整机 IO 饥饿,同机采集器一样会被饿死,
+   所以这一档必须跑在这台机器**之外**。
 2. **发布可信度:Windows Authenticode 签名**(M,**卡在买证书**)—— 更新器已校验 size+sha256,
    但用户装的仍是一个 SmartScreen 会告警的包。这是新用户看到的**第一样**东西,而它现在说
    「不可信」。需要你买代码签名证书,我做不了。

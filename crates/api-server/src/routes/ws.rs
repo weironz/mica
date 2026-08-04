@@ -197,6 +197,10 @@ async fn run_connection(
   permissions: DocumentPermissions,
   token_exp: u64,
 ) {
+  // Held for the life of the connection; the gauge comes back down on drop, so
+  // it stays right whichever way this function leaves — normal close, error
+  // return, or panic.
+  let _ws_metric = crate::metrics::METRICS.ws_connected();
   let connection_id = Uuid::new_v4();
   let room = state.hub.join(document_id);
   let mut events = room.subscribe();

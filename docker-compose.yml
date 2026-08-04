@@ -111,8 +111,31 @@ services:
       - ./deploy/nginx.dev.conf:/etc/nginx/nginx.conf:ro
       - ./clients/mica_flutter/build/web:/usr/share/nginx/html:ro
 
+  # Mica's own scraper (config: deploy/prometheus.yml, shared with prod so the
+  # two cannot drift). Published on the host here — locally that is convenient
+  # and harmless; in production it is deliberately NOT published and you reach
+  # it over an SSH tunnel, because a metrics UI on the public internet is a free
+  # map of the system.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: mica-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 15 days: long enough to compare this week with last, short enough that
+      # the series never become a disk problem on a box whose /data already sits
+      # at 83%.
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - mica-prometheus-data:/prometheus
+
 volumes:
   mica-cargo-target:
   mica-cargo-registry:
   mica-postgres-data:
   mica-rustfs-data:
+  mica-prometheus-data:
