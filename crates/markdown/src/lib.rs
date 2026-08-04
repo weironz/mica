@@ -4647,7 +4647,18 @@ fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut LinkCache) -> 
   if let Some(&hit) = cache.get(label) {
     return hit;
   }
-  let answer = parse_inline_memo(label, defs, cache)
+  // `allow_autolink: false` is the whole point of this call.
+  //
+  // CommonMark forbids a link inside a link, and this guard enforces it — but
+  // it used to ask "does the label parse to anything with a link mark", and a
+  // GFM *extended autolink* produces exactly that mark. So a label that was
+  // itself a bare URL counted as a nested link, and `[https://x](https://x)`
+  // — precisely what you get when you copy a link out of Mica and paste it
+  // back — was refused and fell through to literal text. GitHub renders that
+  // as an ordinary link; the nesting rule is about explicit link CONSTRUCTS,
+  // not about text that would have autolinked had it been left alone. It never
+  // is: once the label becomes a link's text, nothing autolinks inside it.
+  let answer = parse_inline_memo(label, defs, cache, false)
     .marks
     .iter()
     .any(|m| m.kind == "link");
@@ -4655,12 +4666,34 @@ fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut LinkCache) -> 
   answer
 }
 
-fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
+/// Parse a link's (or image's) LABEL.
+///
+/// Autolinks off: the label is about to become the link's TEXT, and text inside
+/// a link never autolinks — that is the same rule `label_has_link_cached`
+/// enforces, applied to the other half of the job. With it on, a URL-shaped
+/// label got a second link mark of its own: `[https://a](https://b)` produced
+/// TWO overlapping marks over the same range, one pointing at `a` (the
+/// autolink) and one at `b` (the real destination). Which one wins is then a
+/// question about mark order, and there is no answer to it that is right.
+fn parse_inline_label(src: &str, defs: &RefDefs) -> ParsedInline {
   let mut cache = LinkCache::new();
-  parse_inline_memo(src, defs, &mut cache)
+  parse_inline_memo(src, defs, &mut cache, false)
 }
 
-fn parse_inline_memo(src: &str, defs: &RefDefs, cache: &mut LinkCache) -> ParsedInline {
+fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
+  let mut cache = LinkCache::new();
+  parse_inline_memo(src, defs, &mut cache, true)
+}
+
+fn parse_inline_memo(
+  src: &str,
+  defs: &RefDefs,
+  cache: &mut LinkCache,
+  // Whether GFM extended autolinks (bare `www.`/`http(s)://`/email) are
+  // recognized. Off ONLY while testing a link label for nested links — see
+  // `label_has_link_cached`.
+  allow_autolink: bool,
+) -> ParsedInline {
   // Line-ending canonicalization (§6.7/6.9/6.12) with span awareness: a run
   // of 2+ trailing spaces before '\n' OUTSIDE code spans / autolinks / raw
   // inline HTML is a hard break — canonicalized to the "\\\n" stored-text
@@ -4748,7 +4781,7 @@ fn parse_inline_memo(src: &str, defs: &RefDefs, cache: &mut LinkCache) -> Parsed
                    out_len: &mut usize,
                    marks: &mut Vec<InlineMark>| {
     let start = *out_len;
-    let parsed = parse_inline_with(label, defs);
+    let parsed = parse_inline_label(label, defs);
     out.push_str(&parsed.text);
     *out_len += parsed.text.encode_utf16().count();
     for m in parsed.marks {
@@ -5029,9 +5062,10 @@ fn parse_inline_memo(src: &str, defs: &RefDefs, cache: &mut LinkCache) -> Parsed
     }
     // GFM extended autolinks: bare www./http(s):// URLs and emails at a
     // word boundary (start, whitespace, or `*`/`_`/`~`/`(`).
-    if (i == 0
-      || chars[i - 1].is_whitespace()
-      || matches!(chars[i - 1], '*' | '_' | '~' | '('))
+    if allow_autolink
+      && (i == 0
+        || chars[i - 1].is_whitespace()
+        || matches!(chars[i - 1], '*' | '_' | '~' | '('))
       && let Some((len, href)) = extended_autolink(&chars, i)
     {
       let text: String = chars[i..i + len].iter().collect();

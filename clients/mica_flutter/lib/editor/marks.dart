@@ -1130,10 +1130,22 @@ bool _labelHasLinkCached(
 ) {
   final hit = cache[label];
   if (hit != null) return hit;
+  // `allowAutolink: false` is the whole point of this call.
+  //
+  // CommonMark forbids a link inside a link, and this guard enforces it — but
+  // it used to ask "does the label parse to anything with a link mark", and a
+  // GFM *extended autolink* produces exactly that mark. So a label that was
+  // itself a bare URL counted as a nested link, and `[https://x](https://x)`
+  // — precisely what the clipboard hands back when you copy a link out of Mica
+  // and paste it in again — was refused and fell through to literal text. The
+  // nesting rule is about explicit link CONSTRUCTS, not about text that would
+  // have autolinked had it been left alone. Mirrors `label_has_link_cached` in
+  // crates/markdown/src/lib.rs.
   final answer = _parseInlineMemo(
     label,
     defs,
     cache,
+    allowAutolink: false,
   ).marks.any((m) => m.type == 'link');
   cache[label] = answer;
   return answer;
@@ -1146,11 +1158,28 @@ bool _labelHasLinkCached(
   Map<String, ({String dest, String? title})> defs = const {},
 }) => _parseInlineMemo(src, defs, <String, bool>{});
 
+/// Parse a link's (or image's) LABEL.
+///
+/// Autolinks off: the label is about to become the link's TEXT, and text inside
+/// a link never autolinks. With it on, a URL-shaped label got a second link
+/// mark of its own — `[https://a](https://b)` produced TWO overlapping marks
+/// over the same range, one pointing at `a` and one at `b`, and which one wins
+/// becomes a question about mark order that has no right answer.
+/// Mirrors `parse_inline_label` in crates/markdown/src/lib.rs.
+({String text, List<Mark> marks}) _parseInlineLabel(
+  String src,
+  Map<String, ({String dest, String? title})> defs,
+) => _parseInlineMemo(src, defs, <String, bool>{}, allowAutolink: false);
+
 ({String text, List<Mark> marks}) _parseInlineMemo(
   String rawSrc,
   Map<String, ({String dest, String? title})> defs,
-  Map<String, bool> cache,
-) {
+  Map<String, bool> cache, {
+  // Whether GFM extended autolinks (bare `www.`/`http(s)://`/email) are
+  // recognized. Off ONLY while parsing a link LABEL — see
+  // [_labelHasLinkCached] and [_parseInlineLabel].
+  bool allowAutolink = true,
+}) {
   final src = _canonicalizeBreaks(rawSrc);
   final out = StringBuffer();
   final marks = <Mark>[];
@@ -1169,7 +1198,7 @@ bool _labelHasLinkCached(
 
   void addLink(String kind, String label, String href, String? title) {
     final start = out.length;
-    final parsed = parseInline(label, defs: defs);
+    final parsed = _parseInlineLabel(label, defs);
     out.write(parsed.text);
     for (final m in parsed.marks) {
       marks.add(m.shifted(start));
@@ -1388,7 +1417,7 @@ bool _labelHasLinkCached(
         src[i - 1] == '\t' ||
         src[i - 1] == '\n' ||
         '*_~('.contains(src[i - 1])) {
-      final auto = extendedAutolink(src, i);
+      final auto = allowAutolink ? extendedAutolink(src, i) : null;
       if (auto != null) {
         final text = src.substring(i, i + auto.$1);
         final start = out.length;
