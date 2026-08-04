@@ -323,6 +323,13 @@ deploy-prod version:
            && docker compose --profile backup up -d --no-deps backup \
            && echo 'backup refreshed'; \
          else echo 'backup profile not active on this node — skipped'; fi"
+    # Services this recipe does not NAME are never started, so a service ADDED
+    # to the compose silently never runs — prometheus shipped in 0.13.12 and
+    # prod came up without it. Best-effort: a monitoring container that fails to
+    # start is not a reason to fail an otherwise healthy deploy.
+    echo "==> starting prometheus (best-effort)"
+    ssh {{node}} "cd {{node_dir}} && docker compose up -d --no-deps prometheus" \
+      || echo "WARN: prometheus did not start"
     # Go-template braces vs just: four open-braces escape a literal two, but a
     # closing pair is ALREADY literal outside an interpolation — writing four
     # closers emitted two extra, so the format returned "healthy}}" and the
