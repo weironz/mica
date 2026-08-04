@@ -195,6 +195,20 @@
 
 ## 数据生命周期与增长 🆕
 
+- ~~🟡 **导出不含回收站,回收站页面独有的图片 blob 也不在任何备份里**~~ ✅ **整条为假(2026-08-04 实测)**
+  —— 条目写于 blob 备份腿存在之前,之后没人回来核;它自己还留着一句「等 DB 进异地备份再重估」,
+  而 DB 那条腿早已做完,重估也一直没做。**三层都核了**:
+  ① **生产上回收站的图片根本不会被 GC 掉** —— `blob_gc.rs` 的引用集是
+  `SELECT DISTINCT object_id FROM views WHERE workspace_id = $1`,**不过滤 `is_deleted`**,
+  注释写明「INCLUDING trashed ones,which is what makes the recycle bin a real grace period」;
+  ② **异地备份里有** —— 备份不是两条腿是**三条**:内容导出(确实过滤 `is_deleted`)、`pg_dump`、
+  以及一条 **blob 腿**`rclone copy rustfs:<桶> → ossblob:<桶>/<root>`,**整桶逐对象复制,
+  完全不看引用关系**,所以回收站的图片与活着的图片一视同仁;
+  ③ **实测跑过** —— 节点 `.env` 与 backup 容器里 `OSS_BLOB_BUCKET`/`OSS_BLOB_ROOT` 都在,
+  容器日志 2026-08-04T12:12:28 有 `rclone copy ... (objects, no rustic)` 与 `objects: ran`。
+  〔教训:这条被"部分完成"的外观保护了很久 —— 🟡 让人以为只是半条没做,而实际上它描述的
+  缺口从某一刻起就整个不存在了。否定式条目会静默变假,🟡 的否定式那半也一样。〕(S)
+
 > 2026-07-22 新增小节。多处「删除不真删」+「无界追加」,单节点小盘上会慢慢暴雷。
 
 - ~~**REST/MCP 写路径从不落自动版本快照**~~ ✅ `apply_derived_operations` 复用 push_update 的 auto 版本 INSERT(同事务、10min cadence、30 天;只写版本归档表、不碰双表示红线,6612330;连真 PG 测试)。
