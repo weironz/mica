@@ -67,8 +67,9 @@
   **GitHub Actions 的 schedule 是 best-effort**,短间隔被丢得最狠。它把一个可靠性承诺建在
   尽力而为的调度上,而**没有任何东西会在这个前提失效时报错** —— 维护规矩第 2 条的活标本。
   留着比没有更糟:它让人以为有人看着。
-  **方向已定:Prometheus**(用户 2026-08-04 拍板),和本文件「仅结构化日志,无 /metrics」那条
-  合并推进 —— 先有 `/metrics`,再谈抓取与告警。
+  **本条已收敛,但不是靠告警补上的**(2026-08-04):`/metrics` 已上;**采集刻意不在 Mica 的
+  部署里**(示例栈在 `deploy/monitoring/`,谁抓是运维的决定);**告警已拍板不做**。所以标题
+  这句"挂了只能靠人发现"到今天**仍然字面为真** —— 它现在是一个被接受的代价,不是待办。
   **删除同时丢掉的两样,别忘了**:① 应用层拨测;② **TLS 证书过期检查**(见下条)。
   ②和应用监控不是一回事,Prometheus 本体也不覆盖(要 blackbox_exporter),而 ACME 卡死是
   **静默的全站故障**。(M) `[需后端]`
@@ -192,7 +193,7 @@
 - 🟡 **不可信输入解析面 fuzz**(2026-07-23:markdown + interchange 已上,yrs 待)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**已做**:proptest 属性 fuzz 覆盖前两个自家解析面——`markdown/tests/proptest_parse.rs`(`import_markdown` 灌任意字节 + markdown-ish 片段,never-panic)+ `interchange/tests/proptest_zip.rs`(`read_zip→normalize_entries→expand_nested_zips` 灌任意/PK-前缀字节)。本轮**未挖出 panic**(解析器稳),但落成**快回归门**(各 ~2–5s,随 `cargo test` 进 CI;`PROPTEST_CASES=100000` 可本机长跑)。**残留**:yrs 二进制更新那面——手写 xor 已实证挖出远程可达(需认证)UB,但 UB 要 **cargo-fuzz + sanitizer(ASan)** 才抓得住,proptest(只抓 panic)不够 → 留 Linux/CI 的 cargo-fuzz。(`store.rs:2202`)(M)
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
-- 🟡 **可观测性:`/metrics` 已上,抓取器移出部署改为示例栈,告警仍未做**(2026-08-04)——
+- 🟡 **可观测性:`/metrics` + dashboard 已上,抓取器移出部署改为示例栈,告警⏸️不做,缺机外黑盒探测**(2026-08-04)——
   ~~仅结构化日志,无 /metrics~~ ✅ 已做。**顺带修正原条目的两处错**:它写 `telemetry.rs`,
   而那文件在 `crates/infra` 不在 api-server,且只有 **12 行**——只初始化 tracing 的输出格式,
   没有任何计数器。所以起点不是「有 telemetry 但没暴露」,是**什么都没数**。
@@ -237,7 +238,8 @@
   **上限不是过滤**,按用量降序,撞上了由 `mica_workspace_series_truncated` **明说**。
   容量 gauge 与配额执行是**同一张表上的两条 SQL**=典型双表示,`the_capacity_gauge_matches_
   what_the_quota_enforces` 把两者钉在一起。
-  **残留**:① **告警规则与通知通道**(有了真实曲线再定阈值,而不是先设计告警再倒推指标);
+  **残留**:① ⏸️ **告警规则与通知通道:已拍板不做**(2026-08-04 用户决定,理由与代价见排序
+  清单第 1 条 —— 单人自托管、没有值班轮转,一条没人 ack 的告警和没有告警区别有限);
   ② **node 级指标**(CPU/磁盘/内存)要 node_exporter;③ **外部黑盒探测**(含 TLS 证书剩余
   天数)必须跑在这台机器之外 —— 08-03 那次整机 IO 饥饿,同机采集器一样会被饿死。(残留 M)
 - **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
@@ -267,11 +269,13 @@
 > 问题。写放大那条仍然成立,但它单独不构成「无界增长」。这正是维护规矩第 3 条要求把核实
 > 结论写进条目本身的原因:结论进了条目,却没同步到引用它的排序清单里。
 
-1. **可观测性:~~指标~~ ✅,采集给示例栈(`deploy/monitoring/`),**缺的是告警**(残留 M,`[需后端]`)—— 2026-08-04
-   一天之内把这条从"什么都没数"推到"23 个指标族、80+ 序列、自建 Prometheus 在抓":
-   见 §开发者体验 那条(含 per-workspace 用量、CRDT 完整性、池 acquire 探针、进程 RSS)。
-   **但生产仍然没有任何自动化告警** —— 有了曲线不等于有人会被叫醒,而 08-03 那次正是
-   "没人被叫醒"。所以它还排第一。
+1. **可观测性:~~指标~~ ✅、~~采集~~ ✅(给示例栈),告警 ⏸️ 不做,**缺的是机外黑盒探测**(M,`[需后端]`)—— 2026-08-04
+   一天之内把这条从"什么都没数"推到"23 个指标族、80+ 序列 + 一份 provisioning 好的
+   dashboard":见 §开发者体验 那条(含 per-workspace 用量、CRDT 完整性、池 acquire 探针、
+   进程 RSS)。
+   **还排第一的理由变了**:不再是"没有告警",而是**这一档的盲区在机器之外**。08-03 那次
+   是整机 IO 饥饿,`/metrics`、同机采集器、存活探针会一起被饿死 —— 装在这台机器上的任何
+   东西都看不见那种故障。
    ⏸️ **告警:已拍板不做(2026-08-04,用户决定)** —— 不是遗留 TODO。指标和曲线已经在了,
    出事时能查、能回溯;缺的只是"自动把人叫醒"。这台机器是单人自托管,没有值班轮转,
    一条没人 ack 的告警和没有告警的区别有限。**代价要写明**:故障仍然只能靠人发现
