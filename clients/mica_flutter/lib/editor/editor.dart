@@ -356,6 +356,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       widget.focusNode ?? FocusNode(debugLabel: 'MicaEditor');
   final GlobalKey _surfaceKey = GlobalKey();
 
+  /// Anchors the table-cell editor overlay to the canvas.
+  ///
+  /// The overlay used to be placed at a `localToGlobal` position recomputed on
+  /// every build — which is fine while TYPING (the table relayouts and the
+  /// overlay rebuilds with it) and wrong the moment anyone SCROLLS: scrolling
+  /// changes where the canvas sits on screen without rebuilding the overlay, so
+  /// the cell's text stayed pinned to the old screen position while the table
+  /// slid away under it. On screen that reads as the content escaping its cell
+  /// (and the cell looks empty, because the renderer skips painting the cell
+  /// being edited). A LayerLink is the fix rather than a scroll listener
+  /// because the editor does not own the scrollable — the host does — so there
+  /// is no ScrollController here to listen to, and a follower layer tracks the
+  /// target through ANY transform without needing to know who moved it.
+  final LayerLink _cellLink = LayerLink();
+
   TextInputConnection? _conn;
   // True while an IME composition (e.g. pinyin) is in progress. Desktop
   // backspace/delete must defer to the IME then, or the composition desyncs and
@@ -2614,7 +2629,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final text = (row < table.rows.length && col < table.rows[row].length)
         ? table.rows[row][col]
         : '';
-    final topLeft = r.localToGlobal(localRect.topLeft);
     // WYSIWYG cell editor: renders inline marks (bold/italic/code) live instead
     // of the raw Markdown source, and serializes back to Markdown on commit.
     final controller = CellEditController(text);
@@ -2791,45 +2805,59 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       builder: (context) {
         // Anchor to the cell's CURRENT rect each build — the table relayouts
         // under the field while typing (live row growth + auto-fit column
-        // widths), and a stale position would visibly detach the editor.
+        // widths), and a stale SIZE would clip the editor.
         final rr = _render;
         final liveRect = rr?.tableCellRect(node, row, col) ?? localRect;
-        final liveTopLeft = rr != null
-            ? rr.localToGlobal(liveRect.topLeft)
-            : topLeft;
+        // The POSITION is not computed here on purpose. It used to be
+        // `localToGlobal(...)`, which is only correct until something moves the
+        // canvas without rebuilding this overlay — and scrolling does exactly
+        // that, leaving the cell's text pinned to the old screen position while
+        // the table slid away beneath it. Following the canvas' leader layer
+        // makes the compositor keep them together, whoever does the scrolling.
+        // `liveRect.topLeft` is canvas-LOCAL, which is the space the follower's
+        // offset is measured in.
         return Positioned(
-          left: liveTopLeft.dx,
-          top: liveTopLeft.dy,
-          width: liveRect.width,
-          child: Focus(
-            onKeyEvent: onKey,
-            // The overlay mounts above the app's Material, but TextField needs a
-            // Material ancestor (ink/selection) — a transparent one adds no chrome.
-            child: Material(
-              type: MaterialType.transparency,
-              child: Container(
-                constraints: BoxConstraints(minHeight: liveRect.height),
-                color: Colors.transparent,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 9,
-                ),
-                child: TextField(
-                  controller: controller,
-                  focusNode: focus,
-                  autofocus: true,
-                  maxLines: null,
-                  // Enter inserts a newline inside the cell (the cell grows); it
-                  // does NOT commit. Commit is click-away / Esc / Tab / arrows.
-                  keyboardType: TextInputType.multiline,
-                  textInputAction: TextInputAction.newline,
-                  cursorColor: MicaTheme.of(context).editor.caret,
-                  style: _cellStyle(node, row),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                    border: InputBorder.none,
-                    isCollapsed: true,
+          left: 0,
+          top: 0,
+          child: CompositedTransformFollower(
+            link: _cellLink,
+            showWhenUnlinked: false,
+            offset: liveRect.topLeft,
+            child: SizedBox(
+              width: liveRect.width,
+              child: Focus(
+                onKeyEvent: onKey,
+                // The overlay mounts above the app's Material, but TextField
+                // needs a Material ancestor (ink/selection) — a transparent one
+                // adds no chrome.
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Container(
+                    constraints: BoxConstraints(minHeight: liveRect.height),
+                    color: Colors.transparent,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 9,
+                    ),
+                    child: TextField(
+                      controller: controller,
+                      focusNode: focus,
+                      autofocus: true,
+                      maxLines: null,
+                      // Enter inserts a newline inside the cell (the cell
+                      // grows); it does NOT commit. Commit is click-away /
+                      // Esc / Tab / arrows.
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      cursorColor: MicaTheme.of(context).editor.caret,
+                      style: _cellStyle(node, row),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                        border: InputBorder.none,
+                        isCollapsed: true,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -5724,22 +5752,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             child: Stack(
               clipBehavior: Clip.hardEdge,
               children: [
-                DocumentSurface(
-                  key: _surfaceKey,
-                  nodes: _controller.nodes,
-                  selection: _controller.selection,
-                  showCaret: _focus.hasFocus && widget.canEdit,
-                  caretBlink: _caretBlink,
-                  appearance: widget.appearance,
-                  images: _imageCache,
-                  imageErrors: _imageErrors,
-                  previewImages: _previews.images,
-                  previewBaselines: _previews.baselines,
-                  onRequestPreview: _previews.request,
-                  onRequestImage: _requestImage,
-                  onImagePainted: _onImagePainted,
-                  remoteCursors: widget.remoteCursors,
-                  commentHighlights: widget.commentHighlights,
+                CompositedTransformTarget(
+                  link: _cellLink,
+                  child: DocumentSurface(
+                    key: _surfaceKey,
+                    nodes: _controller.nodes,
+                    selection: _controller.selection,
+                    showCaret: _focus.hasFocus && widget.canEdit,
+                    caretBlink: _caretBlink,
+                    appearance: widget.appearance,
+                    images: _imageCache,
+                    imageErrors: _imageErrors,
+                    previewImages: _previews.images,
+                    previewBaselines: _previews.baselines,
+                    onRequestPreview: _previews.request,
+                    onRequestImage: _requestImage,
+                    onImagePainted: _onImagePainted,
+                    remoteCursors: widget.remoteCursors,
+                    commentHighlights: widget.commentHighlights,
+                  ),
                 ),
                 // Far off-screen: painted (capturable) but never visible.
                 Positioned(
