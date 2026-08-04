@@ -31,6 +31,9 @@ uuid = { workspace = true, optional = true }
 mica-markdown = { path = "../markdown" }
 # Decode the base64 yjs state captured from the browser (web→yjs interop test).
 base64 = "0.22"
+# Property fuzz for the yrs binary-update surface (tests/proptest_yrs.rs) —
+# the third of the three untrusted-input faces, alongside markdown + interchange.
+proptest = "1"
 
 [features]
 # Local SQLite store + on-device identity (P2-M2). Enabled by the desktop FFI
