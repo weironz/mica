@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -356,7 +357,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       widget.focusNode ?? FocusNode(debugLabel: 'MicaEditor');
   final GlobalKey _surfaceKey = GlobalKey();
 
-  /// Anchors the table-cell editor overlay to the canvas.
+  /// Anchors canvas-owned overlays (cell editor, format bar, link bar).
   ///
   /// The overlay used to be placed at a `localToGlobal` position recomputed on
   /// every build — which is fine while TYPING (the table relayouts and the
@@ -369,7 +370,38 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// because the editor does not own the scrollable — the host does — so there
   /// is no ScrollController here to listen to, and a follower layer tracks the
   /// target through ANY transform without needing to know who moved it.
-  final LayerLink _cellLink = LayerLink();
+  final LayerLink _canvasLink = LayerLink();
+
+  /// Place an overlay that belongs to a spot INSIDE the canvas.
+  ///
+  /// [local] is in CANVAS coordinates (what `caretRectFor` / `tableCellRect`
+  /// return), and the follower keeps it there across scrolls without this
+  /// having to be rebuilt — the same reason the cell editor uses it.
+  ///
+  /// The clamp is against the CANVAS, not the screen. That is the box the
+  /// anchor actually lives in, and a screen clamp cannot survive scrolling
+  /// anyway: it would pin the overlay to a viewport position while its anchor
+  /// moved away. An overlay whose anchor scrolls out of view now scrolls out
+  /// with it, which is what it means for the two to belong together.
+  Widget _followCanvas({
+    required Offset local,
+    required double width,
+    required Widget child,
+  }) {
+    // `max` because a window narrower than the overlay makes the upper bound
+    // smaller than the lower one, and `clamp` throws on that.
+    final maxX = math.max(0.0, (_render?.size.width ?? width) - width);
+    return Positioned(
+      left: 0,
+      top: 0,
+      child: CompositedTransformFollower(
+        link: _canvasLink,
+        showWhenUnlinked: false,
+        offset: Offset(local.dx.clamp(0.0, maxX), math.max(0.0, local.dy)),
+        child: child,
+      ),
+    );
+  }
 
   TextInputConnection? _conn;
   // True while an IME composition (e.g. pinyin) is in progress. Desktop
@@ -2820,7 +2852,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           left: 0,
           top: 0,
           child: CompositedTransformFollower(
-            link: _cellLink,
+            link: _canvasLink,
             showWhenUnlinked: false,
             offset: liveRect.topLeft,
             child: SizedBox(
@@ -3255,21 +3287,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         cellSel != null &&
         cellSel.isValid &&
         !cellSel.isCollapsed;
-    final Offset origin;
+    // Canvas-LOCAL, not screen: the bar follows the canvas (see
+    // [_followCanvas]) instead of being pinned where the anchor happened to be
+    // on screen at the moment the selection was made.
+    final Offset local;
     if (inCell) {
       final cellRect = r.tableCellRect(ac.node, ac.row, ac.col);
       if (cellRect == null) return const SizedBox.shrink();
-      origin = r.localToGlobal(cellRect.topLeft);
+      local = cellRect.topLeft;
     } else {
       final sel = _controller.selection;
       if (sel == null) return const SizedBox.shrink();
       final rect = r.caretRectFor(sel.start);
       if (rect == null) return const SizedBox.shrink();
-      origin = r.localToGlobal(rect.topLeft);
+      local = rect.topLeft;
     }
-    final screen = MediaQuery.of(context).size;
-    final left = origin.dx.clamp(8.0, screen.width - 420);
-    final top = (origin.dy - 44).clamp(8.0, screen.height - 8);
 
     final docSel = _controller.selection;
     final singleText =
@@ -3398,9 +3430,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
-    return Positioned(
-      left: left,
-      top: top,
+    return _followCanvas(
+      local: local.translate(0, -44),
+      width: 420,
       // TextFieldTapRegion: clicking the bar must not count as a tap OUTSIDE
       // the cell editor's TextField — Flutter's onTapOutside would unfocus it
       // on pointer-DOWN, committing and closing the cell before the button's
@@ -3678,10 +3710,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (r == null || mark == null) return const SizedBox.shrink();
     final rect = r.caretRectFor(DocPosition(_linkBarNode, mark.start));
     if (rect == null) return const SizedBox.shrink();
-    final origin = r.localToGlobal(rect.bottomLeft);
-    final screen = MediaQuery.of(context).size;
-    final left = origin.dx.clamp(8.0, screen.width - 320);
-    final top = (origin.dy + 4).clamp(8.0, screen.height - 48);
+    // Canvas-LOCAL — the bar follows the canvas, see [_followCanvas].
+    final local = rect.bottomLeft;
 
     Widget action(
       IconData icon,
@@ -3718,9 +3748,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
-    return Positioned(
-      left: left,
-      top: top,
+    return _followCanvas(
+      local: local.translate(0, 4),
+      width: 320,
       child: MouseRegion(
         onEnter: (_) {
           _pointerOverLinkBar = true;
@@ -5753,7 +5783,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               clipBehavior: Clip.hardEdge,
               children: [
                 CompositedTransformTarget(
-                  link: _cellLink,
+                  link: _canvasLink,
                   child: DocumentSurface(
                     key: _surfaceKey,
                     nodes: _controller.nodes,

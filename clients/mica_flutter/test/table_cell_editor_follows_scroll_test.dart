@@ -107,4 +107,90 @@ void main() {
           '(before=$before after=$after)',
     );
   });
+
+  /// The format bar has the same shape as the cell editor: an overlay anchored
+  /// to a spot in the canvas. It persists across scrolls (nothing rebuilds it
+  /// but a selection change), so it detached exactly the same way.
+  testWidgets('the format bar stays with its selection across a scroll', (
+    tester,
+  ) async {
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            controller: scroll,
+            child: Column(
+              children: [
+                const SizedBox(height: 400),
+                MicaEditor(
+                  rootBlockId: 'root',
+                  nodes: [
+                    EditorNode(
+                      id: 'p',
+                      kind: 'paragraph',
+                      text: 'select some of this text please',
+                      data: const {},
+                    ),
+                  ],
+                  version: 0,
+                  canEdit: true,
+                  onApplyOperations: (_) async {},
+                ),
+                const SizedBox(height: 800),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Click into the text first (the bar only shows while the editor has
+    // focus), then drag across it the way a user selects.
+    final canvas = tester.getTopLeft(find.byType(DocumentSurface));
+    final from = canvas + const Offset(30, 14);
+    await tester.tapAt(from);
+    await tester.pump();
+    final g = await tester.startGesture(from);
+    for (var i = 1; i <= 6; i++) {
+      await g.moveTo(from + Offset(25.0 * i, 0));
+      await tester.pump();
+    }
+    await g.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Measure a DESCENDANT of the follower, never the follower itself:
+    // `RenderFollowerLayer.applyPaintTransform` applies the link transform to
+    // its CHILD, so the follower's own `getTopLeft` reports the plain layout
+    // position and would look pinned even when the child follows correctly.
+    final bar = find
+        .descendant(
+          of: find.byType(CompositedTransformFollower),
+          matching: find.byType(Material),
+        )
+        .first;
+    expect(bar, findsOneWidget, reason: 'the drag must have shown the bar');
+
+    Offset relativeToCanvas() =>
+        tester.getTopLeft(bar) - tester.getTopLeft(find.byType(DocumentSurface));
+
+    final before = relativeToCanvas();
+    scroll.jumpTo(scroll.offset + 180);
+    await tester.pump();
+    await tester.pump();
+
+    expect(scroll.offset, greaterThan(0));
+    expect(
+      (relativeToCanvas() - before).distance,
+      lessThan(1.0),
+      reason: 'the bar must move WITH the canvas, not stay pinned to the screen',
+    );
+  });
 }
