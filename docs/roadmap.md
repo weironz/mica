@@ -27,23 +27,6 @@
 
 - 🆕 **可上传携带脚本的 SVG,直开 blob 链接执行脚本**(**降级 low**,2026-07-22 复核)—— 允许 `image/svg+xml`,blob 端点(`blob_inner`)**302 跳存储的 `download_url`**(`public_base_url`/CDN 或 presigned GET,都是**存储源、非 app 源**)→ SVG 脚本跑在存储源、**碰不到 app 的 token,不是账号接管 XSS**。**仅当**运营者把 `public_base_url` 配成与 app 同源才成洞(部署误配)。且 302-跳存储架构下 app 不发字节,强制 attachment 别扭(要么上传即拒 SVG / 存成 text/plain,要么 presigned 加 `response-content-disposition`)。作为「防误配」的纵深项保留,非活跃洞。(`files.rs:350/364/537`)(S) `[需后端]`
 - 🟡 **自托管 TLS 全靠运维 + `HTTP_ADDR` 默认明文**(2026-07-30 核实:「无启动告警」已假)—— ~~无启动告警~~ ✅ 早在 `9289ecf` 就有:`main.rs` 绑定后判 `!addr.ip().is_loopback()`,非环回即 warn「本进程只说明文 HTTP,请在前面终止 TLS,否则连 WS URL 里那个 token 都在网上裸奔」。默认 `127.0.0.1` 安全且**静默** —— 只有真承担了风险的部署才看到告警。(2026-07-30 顺手修了那条字符串:它被压成一行、中间留了三段连续空格,打出来有大段空白。)**残留**:TLS 本体仍全靠运维,且告警只是告警 —— 没有「prod + 非环回 + 无 TLS 即拒启动」的硬闸门(要拒得先能看见前面有没有反代,单机上看不见)。(M) `[需后端]`
-- 🟠 原文:**compose 的注册默认已改对,但要下一版才到生产**(2026-07-30)—— 改动已在 main:compose 那行
-  改成 `${MICA_REGISTRATION_ENABLED:-}`(透传空 → 代码 fail-safe 默认 = 关;已核实
-  `registration_open` 对空串返回 false),`deploy/.env.prod.example` 里那段「Unset/true = open」
-  同批改掉(它自 0.13.5 翻转默认起就已经是假的)。**和配额那条同一个形状**:compose 变了 →
-  `deploy-prod` 的 sha256 指纹校验会拒 → **必须发一版才生效**(且 Deploy workflow 会先失败一次,
-  得走 `just deploy-prod`)。生产当前仍是「靠 `.env` 那一行关着」,发版后才变成「代码默认关着」。
-  原文如下 —— `config.rs` 自 0.13.5 起注册**默认关闭**,只认显式 `true/1/yes/on`
-  (拼错保持关闭)。但 `deploy/docker-compose.yml` 那行是
-  `MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-true}"`,`.env` 不设它就注入字面量 `true`。
-  **生产当前是安全的**:节点 `/data/mica/.env` 明确写了 `MICA_REGISTRATION_ENABLED=false`,
-  容器里实测 `MICA_REGISTRATION_ENABLED=false`(0.13.6 部署后查的),注册是关的。
-  **所以这条不是「注册开着」,而是「那道防线只剩 `.env` 一层」** —— 谁哪天清理 `.env`、或换台机器
-  重建节点忘了这一行,注册就会**静默打开**,而代码的 fail-safe 默认本该在那时接住它,却被 compose 覆盖掉。
-  修法:① 改成 `${MICA_REGISTRATION_ENABLED:-}`,让代码默认(关)生效,要开就在 `.env` 里显式写 `true`;
-  ② 或至少把旁边那句过期注释(「Defaults open (current behaviour)」——写在代码翻转默认**之前**)
-  改成如实的「这里刻意覆盖代码默认」。推荐 ①。**没有顺手改**:改完下次部署会让「注册开关」的实际来源
-  发生变化,属于对外行为的边界,留给用户拍板。(S)
 - 🆕 **安全清单卫生**(low) —— 上面两条已勾除即本轮校准;后续改动请同步勾选,避免半真半假的清单掩盖真未修项。
 
 ## 生产运维与备份 🆕
