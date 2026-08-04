@@ -17,13 +17,6 @@
 
 ## 可靠性与同步
 
-- ✅ **实时字符级并发协同:文本与 marks 两半都已落地并验证**(2026-08-04,发版时整条搬走)—— 传输/应用层一直是**真 yrs merge**,不是 last-write。~~两端并发编辑同块合并成重复/拼接~~ ✅ **已修**。
-  **实测出的缺陷形状**(修之前,`tests/sync.rs`):`"Hello"`,A 在头部打 `A`、B 在尾部打 `B`,收敛结果是 **`"AHelloHelloB"`** —— 不是丢字符,是**整段被复制**。因为 `set_text_and_marks` 做 `remove_range(0,len)` + `insert(0,全文)`,两个副本各自删掉自己看到的 `Hello` 再插入自己的新串,合并后两次插入都留下、两次删除只消掉了那一个原始 `Hello`。
-  **原条目把修法指错了方向**:它写「字符级 API 已在但编辑器热路径不用」,读起来像要改编辑器发什么(所以标 L)。真正的修法在**镜像怎么落**——编辑器照旧发整块文本,`set_text_and_marks` 改成写**最小拼接**(`text_diff::utf16_text_diff`),两个写者就落在互不相交的区间上。编辑器一行没动。
-  两处镜像都改了(**双表示**:yrs 在 `doc.rs`,yjs 在 `mica_ydoc.dart`),用**同一张用例表**在两端各测一遍。偏移是 UTF-16 单元且不切开代理对(emoji / CJK 扩展 B)。
-  **顺带暴露的耦合**:旧的全删重插**顺手把格式也清了**,而插入会**继承相邻字符的属性**——所以最小拼接后追加到粗体后面会变粗体。现用 `insert_with_attributes(clear_all_attrs)` 显式不继承(既有测试 `join_into_prev_merges_text_and_marks` 当场抓到了这个)。
-  ~~**残留(这才是 phase2 §12 说的最大风险区)**:marks 仍然粗粒度~~ ✅ **已做(2026-08-04)**:写 marks 改成只写**真正不同**的区间(`marks_diff_format_ops`,两端镜像)。切点取 run 边界 ∪ mark 边界,相邻同 delta 的段合并;删除变成对该区间的显式 `Null` —— 「这段不再加粗」第一次能在不顺带说「别处也都不加粗」的前提下表达。**实测影响面与原判断不同**:并发**新增**格式在旧代码下靠 yrs 属性合并侥幸已经是对的,真正坏掉的是**删除**那一类(stash 掉改动后 `an_unbold_does_not_erase_a_concurrent_italic` 与 `a_concurrent_format_elsewhere_does_not_resurrect_a_removed_bold` 变红)。更新体积顺带变小(2000 字已有格式时加一条 italic:80 → 43 字节)。**验证已补齐(2026-08-04)**:`flutter test` 1124 全过;`just web-e2e` 全部断言通过,含「两个 web 会话经真服务端收敛」与「A 的编辑到达 B」—— 这是 web 那半(`mica_ydoc.dart`,web-only,VM 测试碰不到)唯一的端到端验证。〔跑的时候先失败了一次:`no CDN fetch for engine resources`,是我用了裸的 `flutter build web`,少了 CI 用的 `--release --no-web-resources-cdn`,不是代码回归 —— justfile:173 早写着这个 flag 要跟着每一次 web 构建。〕**整条已完成,发版时搬去 roadmap-done.md。**
-  验证:mica-core 8 条并发用例 + 两端各 6 条差分用例;`cargo test --workspace`(带 DATABASE_URL,api-server 135 全过);`just web-e2e` 全过(浏览器 yjs 与服务端 yrs 经真 WS 收敛,用的是重建后的 bundle);桌面真机实测打字/CJK/emoji/加粗与取消加粗、重启后落盘一致。(残留 M–L) `[需后端]`
 - 🟡 **长离线重连 = 推送风暴**(2026-07-30 核实:原描述「无分批/背压/合并」已半假)—— **桌面已修**:`_flushUnacked` 在 append-log 路径上按 `_pushWindow = 64` 开窗,尾巴由 ack 回调驱动继续排空 —— 这既是分批也是背压(节奏由服务端定,不由 for 循环定)。~~① **web 仍然无界**~~ ✅ **已做(2026-08-03)**:内存 outbox 走同一个 `_pushWindow = 64`,尾巴由 ack 回调续排;`resendAll`(重连)先清 `sent`/`rejected` 再按窗口发。**顺带修掉一个只有开窗后才存在的死角**:被 `error` 拒绝的 push 永远等不到 ack,如果一直算「在飞」就会**永久占着窗口位**,攒够一批直接把排空焊死 —— 现在打 `rejected` 标记让位,但**不立刻重发**(这条路的重试本来就在重连)。节奏判定抽成纯函数 `pushSlice` 单测(`web_outbox_backpressure_test.dart`),因为真正的发送路径要先 bootstrap,而 bootstrap 要 CRDT 引擎 + 活服务端 —— 那是 `integration_test/cloud_sync_*` 的地盘,CI 里排除。**残留**:② **合并未做**(两条路径都没有):可先用 yrs merge 把尾巴合成一条再推。服务端那半仍然成立:每条 push 全档 decode+encode+upsert = O(条数×文档大小),见本文件「每次 push 重建+重编码+重写整档」。(`cloud_sync_session.dart` `_flushUnacked`, `sync.rs` `push_update`)(M) `[需后端]`
 
 ## 安全
