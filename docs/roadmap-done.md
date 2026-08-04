@@ -314,6 +314,21 @@
 
 ## 开发者体验 / CI / Markdown
 
+- ~~**自研 parser vs 采用 comrak(读侧)未决**~~ ✅ **已拍板:继续自研**(2026-08-04,用户决定)——
+  出处是 `editor-engine.md` Milestone 8 的决策点,判据写的是「等自研的曲线走平再决定」。
+  **判据不是勉强满足,是到顶了**:`BASELINE_PASS` 现为 641,记分牌 641/641(100%)、GFM 扩展
+  24/24。〔那段文字当时还写着「剩 54 条」、地板 598 —— 写下时为真,后来悄悄变假而没有任何
+  东西会响,维护规矩第 2 条的又一个标本,已一并改掉。〕
+  **决定性论据不是「自研考得好」,而是 comrak 只解决一半**:Mica 有**两个**解析器 ——
+  Rust `crates/markdown`(权威)与 Dart `editor/marks.dart`(编辑器热路径的镜像),CLAUDE.md
+  原则 2 要求两端语法逻辑同步。comrak 是 Rust crate,Dart 那边用不上。换过去会把「同一套
+  手写规则,对着同一张用例表改两处」变成「comrak vs 手写」—— 这是**静默分歧**的形状,而这里
+  分歧的后果是同一份文档在不同客户端里意思不同。
+  **0.13.13 是现成的实例**:`1~2` 不再被当作删除线是**刻意偏离 GitHub**(拿 GitHub 自己的
+  渲染 API 实测确认它确实那样渲染)。自研时是改几行 + 加一张两端共用的用例表;用 comrak 就得
+  fork 它或加后处理。
+  **写侧从来不在讨论范围** —— 那必须自研,round-trip 是不变量。(M)
+
 - ~~🆕 **api-server 全部测试不进 CI;DB 测试本地也静默跳过**~~ ✅ 已做(校准复核)—— `ci.yml` 已有 postgres service + `-p mica-api-server`(测在 CI 实跑);`auth.rs:895` `pool()` **已带 sync_pg.rs 同款 CI-assert**(`assert!(env CI is_err, "DATABASE_URL unset in CI...")`)→ 缺库在 CI 里 panic、本地才 return None 跳过,那些 `else{return}` 在 CI 不会假绿。(校准注:审计曾误判为残留,因只看了 `else{return}` 调用点、未读 `pool()` 定义——同其 #1 的错。)
 - ~~🆕 **页树不变量守卫 `ensure_parent_accepts_children` 零自动化测试**~~ ✅ 已做(校准复核)—— `documents.rs` `parent_guard_pg` 测 folder 接受/page 拒绝/缺失父 + 触发器 backstop(真 PG 门控)。
 - ~~**Release 出的 Windows 安装包从未被自动安装-启动验证**~~ ✅ release.yml 加「安装-启动冒烟」(/VERYSILENT 装 + 启动 + 存活 10s + finally 清理,发布前拦,0d9c404)。**2026-07-23 根治 flaky**:冒烟测撞单实例 mutex 竞态偶发假失败(安装器 `[Run]` 自启一个 + 测试又自启一个,谁后抢到 `Local\MicaSingleInstance` 谁 `exit 0`;`[Run]` 触发时机随机)。结构性解法(ShareX 同款):`mica.iss` 的 `[Run]` 加 `Check: not CmdLineParamExists('/SKIPRUN')`,CI 安装传 `/SKIPRUN` → 安装器不自启 → 测试是唯一启动方 → mutex 永不争用,竞态从结构上消失(9c006e6),0.12.16 真 CI 跑绿实证。〔sccache 曾加在 windows job(b5e7f04)后于 v0.12.18 撤除:tag 触发的 job 命中率恒 0%(GHA cache 按 ref 隔离、release 只在 tag 上跑),且长杆是 Flutter 构建非 Rust——详见 `docs/lessons.md`。〕

@@ -594,13 +594,27 @@ The recurring problem the engine must get right for every node type:
      click re-opens it; inline math renders as tinted mono source.
      Real typesetting (flutter_math_fork, the AppFlowy choice) is the
      planned follow-up — a recorded dependency exception. Fixture 23
-     pins both parsers. The remaining 54
-     are isolated precedence/exotic edges with no real-document impact
-     — Links precedence (20), Emphasis rule-of-3 exotics (6), List
-     items/Lists deep-container edges, code-span/entity/tab oddments —
-     each would be a one-off special case; fix on demand when a real
-     document hits one. The scoreboard stays a permanent regression
-     floor (BASELINE_PASS = 598) and the 21 conformance fixtures pin
-     both parsers; any future grammar change must keep or raise both. Decision point: keep extending
-     the in-house parser vs adopting `comrak` for the *read side only*
-     — decide when the in-house curve flattens.
+     pins both parsers. The scoreboard stays a permanent regression floor
+     and the conformance fixtures pin both parsers; any future grammar
+     change must keep or raise both.
+     **DECIDED 2026-08-04: keep the in-house parser.** The criterion this
+     decision point named — "decide when the in-house curve flattens" —
+     is not merely met: the curve topped out. `BASELINE_PASS` is now 641,
+     the scoreboard reads 641/641 (100%) and GFM extensions 24/24. (The
+     text here used to say "the remaining 54" against a floor of 598;
+     that was true when written and stopped being true without anything
+     announcing it.)
+     The decisive argument is not that the in-house parser scores well.
+     It is that comrak solves only HALF the problem: Mica runs TWO
+     parsers — Rust `crates/markdown` (authority) and Dart
+     `editor/marks.dart` (the editor hot path's mirror) — and CLAUDE.md
+     requires their grammar to stay in step. comrak is a Rust crate; the
+     Dart side cannot use it. Adopting it would turn "one hand-written
+     rule set, changed in two places against one table of cases" into
+     "comrak vs hand-written", which is the shape that diverges SILENTLY,
+     and a divergence here means one document means two things depending
+     on which client opened it.
+     0.13.13 is the worked example: `1~2` was made to stop being
+     strikethrough — a DELIBERATE divergence from GitHub, confirmed
+     against GitHub's own render API. In-house that is a few lines plus a
+     shared table of cases; on comrak it is a fork or a post-pass.
