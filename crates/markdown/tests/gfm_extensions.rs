@@ -112,3 +112,51 @@ fn a_url_shaped_label_is_still_a_link() {
   assert_eq!(bare, "see https://x.example here");
   assert!(bare_marks.contains("https://x.example"), "{bare_marks}");
 }
+
+/// A single `~` between word characters is a RANGE, not a strikethrough.
+///
+/// Reported 2026-08-04: "1个汉字 ≈ 1~2个 Token，英文…1个单词 ≈ 1~2个 Token"
+/// came back as "…≈ 1<del>2个 Token，…≈ 1</del>2个 Token" — the two tildes of
+/// two separate ranges paired up with each other.
+///
+/// GitHub does exactly the same (verified against its own renderer), so this is
+/// a DELIBERATE divergence, not a conformance fix. It is justified by the thing
+/// GitHub does not have: Mica is WYSIWYG, so the tildes are consumed into a
+/// mark and the writer cannot recover them by editing the text — while on
+/// GitHub the source stays visible and escapable. See the note at the `~`
+/// branch in `parse_inline_memo`.
+///
+/// **The same table exists in Dart** (`test/tilde_range_test.dart`). Rust is the
+/// authority and Dart is the mirror; a case added here belongs there too.
+#[test]
+fn a_single_tilde_between_word_characters_is_a_range() {
+  let one = |md: &str| {
+    let snap = import_markdown(md, "root");
+    let b = snap
+      .blocks
+      .into_iter()
+      .find(|b| b.id != "root")
+      .expect("one block");
+    let marks = b.data.get("marks").cloned().unwrap_or(Value::Null);
+    (b.text, marks.to_string())
+  };
+
+  // The report, verbatim.
+  let (text, marks) = one("中文 1个汉字 ≈ 1~2个 Token，英文 1个单词 ≈ 1~2个 Token");
+  assert!(text.contains("1~2个 Token，"), "tildes survive: {text:?}");
+  assert!(!marks.contains("strike"), "no strike mark: {marks}");
+
+  // Same shape with CJK numerals — `一~二` is the same range written the
+  // other way, and the CJK flanking amendment must not let it through.
+  let (text, marks) = one("大约 一~二 个，再来 一~二 个");
+  assert!(!marks.contains("strike"), "CJK range is not strike: {marks} {text:?}");
+
+  // What must KEEP working: a single tilde with word boundaries around it,
+  // which is the GFM spec's own single-tilde form.
+  let (_, marks) = one("Hello, ~there~ world!");
+  assert!(marks.contains("strike"), "spaced single tilde still strikes: {marks}");
+
+  // And the double tilde is untouched in every position, intraword included.
+  let (_, marks) = one("~~Hi~~ and a1~~b~~c2");
+  assert!(marks.contains("strike"), "double tilde still strikes: {marks}");
+}

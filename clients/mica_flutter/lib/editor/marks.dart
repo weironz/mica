@@ -1435,15 +1435,25 @@ bool _labelHasLinkCached(
         n++;
       }
       if (n <= 2) {
+        // A SINGLE tilde may not open or close INTRAWORD. Mirror of the Rust
+        // rule (crates/markdown, `is_word_char`) — see the long note there for
+        // why this deliberately diverges from GitHub: the tildes are consumed
+        // into a mark here, and a range like "1~2 个 Token" written twice in
+        // one paragraph would silently eat everything between.
+        bool intraword(int at, int run) =>
+            at > 0 &&
+            _isWordChar(src[at - 1]) &&
+            at + run < src.length &&
+            _isWordChar(src[at + run]);
         var j = i + n;
         var close = -1;
-        while (j < src.length) {
+        while (j < src.length && !(n == 1 && intraword(i, n))) {
           if (src[j] == '~' && (j == 0 || src[j - 1] != r'\')) {
             var m = 0;
             while (j + m < src.length && src[j + m] == '~') {
               m++;
             }
-            if (m == n && j > i + n) {
+            if (m == n && j > i + n && !(n == 1 && intraword(j, m))) {
               close = j;
               break;
             }
@@ -1534,6 +1544,15 @@ class _Delim {
   final bool canOpen;
   final bool canClose;
 }
+
+/// A "word" character for the single-tilde intraword rule: neither whitespace
+/// nor punctuation. Mirror of the Rust `is_word_char` (crates/markdown).
+///
+/// CJK counts as a WORD character here, unlike in [_flanking], where the CJK
+/// amendment treats it as a boundary — that amendment is about PUNCTUATION
+/// adjacency (`**加粗。**后文`) and has no analogue for `~`. Counting CJK as
+/// word is what makes `一~二` behave like `1~2`.
+bool _isWordChar(String c) => c.trim().isNotEmpty && !_isMdPunct(c);
 
 bool _isMdPunct(String? c) {
   if (c == null) return false;

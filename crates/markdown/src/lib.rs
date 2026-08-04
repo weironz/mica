@@ -5091,15 +5091,38 @@ fn parse_inline_memo(
         n += 1;
       }
       if n <= 2 {
+        // A SINGLE tilde may not open or close INTRAWORD — our one deliberate
+        // divergence from GitHub here.
+        //
+        // GitHub strikes `1~2 … 1~2` (verified 2026-08-04 against its own
+        // renderer: `1<del>2个 Token，… ≈ 1</del>2个 Token`), and so did we.
+        // On GitHub that is survivable because the SOURCE survives — you see
+        // the tildes and can escape them. Mica is WYSIWYG: the tildes are
+        // consumed into a mark and the writer cannot get them back by editing
+        // the text, so a range like "1~2 个 Token" written twice in one
+        // paragraph silently eats everything between. Range notation is far
+        // more common in prose than single-tilde strikethrough, which Mica
+        // never even emits (the exporter always writes `~~`), so the trade is
+        // one-sided.
+        //
+        // Exactly the shape of CommonMark's intraword `_` rule, and for the
+        // same reason: a delimiter with word characters on BOTH sides is
+        // almost always literal. `~struck~` (spaces around it) still works and
+        // `~~` is untouched. Mirrored in Dart `_parseInlineMemo`.
+        let intraword = |at: usize, run: usize| {
+          at > 0
+            && is_word_char(chars[at - 1])
+            && chars.get(at + run).copied().is_some_and(is_word_char)
+        };
         let mut j = i + n;
         let mut close = None;
-        while j < chars.len() {
+        while j < chars.len() && !(n == 1 && intraword(i, n)) {
           if chars[j] == '~' && (j == 0 || chars[j - 1] != '\\') {
             let mut m = 0;
             while j + m < chars.len() && chars[j + m] == '~' {
               m += 1;
             }
-            if m == n && j > i + n {
+            if m == n && j > i + n && !(n == 1 && intraword(j, m)) {
               close = Some(j);
               break;
             }
@@ -5234,6 +5257,18 @@ fn is_cjk(c: char) -> bool {
       | '\u{F900}'..='\u{FAFF}' // CJK Compatibility Ideographs
       | '\u{FE30}'..='\u{FE4F}' // CJK Compatibility Forms
       | '\u{FF00}'..='\u{FFEF}') // Halfwidth and Fullwidth Forms
+}
+
+/// A "word" character for the single-tilde intraword rule: neither whitespace
+/// nor punctuation.
+///
+/// CJK counts as a WORD character here, unlike in [`flanking`] below, where the
+/// CJK amendment treats it as a boundary. That amendment exists so
+/// `**加粗。**后文` can close — it is about PUNCTUATION adjacency and has no
+/// analogue for `~`. Counting CJK as word is what makes `一~二` behave like
+/// `1~2`: the same range notation written the other way.
+fn is_word_char(c: char) -> bool {
+  !c.is_whitespace() && !is_md_punct(c)
 }
 
 /// Left/right flanking → (can_open, can_close), with the CJK-friendly amendment
