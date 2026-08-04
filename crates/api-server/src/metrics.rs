@@ -154,21 +154,44 @@ struct BlobGcStats {
   failures: u64,
 }
 
+/// The most workspace series one scrape will emit.
+///
+/// A cap, not a filter. node_exporter does not decide which disks are
+/// interesting, and neither does this — every workspace gets a series so the
+/// alert rule owns the threshold and the history is there to compute a growth
+/// rate from. The cap only exists so a very large instance cannot turn a scrape
+/// into a cardinality event, and when it bites it says so
+/// (`mica_workspace_series_truncated`) rather than quietly showing fewer.
+/// Ordered by usage, so the rows that get dropped are the empty ones.
+const MAX_WORKSPACE_SERIES: i64 = 1000;
+
+/// One workspace's storage, for the per-workspace gauges.
+#[derive(Clone)]
+struct WorkspaceUsage {
+  id: String,
+  name: String,
+  bytes: i64,
+}
+
 /// Counts derived from the database. Kept behind [`DB_SNAPSHOT_TTL`].
 #[derive(Clone, Default)]
 struct DbSnapshot {
   users: i64,
   workspaces: i64,
   documents: i64,
-  /// Total bytes across every workspace, and the largest single workspace.
+  /// Total bytes across every workspace.
   ///
   /// Computed with the SAME expression the quota enforces
-  /// (`sum(byte_size) FROM files WHERE workspace_id = …`, `store::workspace_bytes_used`).
-  /// If the two ever disagree the gauge is lying about who is near the wall,
-  /// which is the whole reason it exists — `quota_gauge_matches_enforcement`
-  /// pins them together.
+  /// (`sum(byte_size) FROM files WHERE workspace_id = …`, i.e.
+  /// `store::workspace_bytes_used`). If the two ever disagree the gauge is
+  /// lying about who is near the wall, which is the whole reason it exists —
+  /// `the_capacity_gauge_matches_what_the_quota_enforces` pins them together.
   bytes_total: i64,
-  bytes_max_workspace: i64,
+  /// Per workspace, ordered by usage descending, capped at
+  /// [`MAX_WORKSPACE_SERIES`].
+  workspace_usage: Vec<WorkspaceUsage>,
+  /// How many workspaces the cap left out. Zero in every ordinary case.
+  workspaces_truncated: i64,
 }
 
 /// Everything this process counts.
@@ -319,29 +342,54 @@ fn process_open_fds() -> Option<u64> {
 // ── database-derived snapshot ───────────────────────────────────────────────
 
 async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
-  // One round trip. Every count is cheap enough at this scale, and the byte
-  // aggregate rides `idx_files_workspace_bytes` (an index-only scan).
-  let row: (i64, i64, i64, i64, i64) = sqlx::query_as(
+  // Counts first. Cheap at this scale, and the byte aggregate rides
+  // `idx_files_workspace_bytes` (an index-only scan).
+  let row: (i64, i64, i64, i64) = sqlx::query_as(
     r#"
     SELECT
       (SELECT count(*) FROM users)::bigint,
       (SELECT count(*) FROM workspaces)::bigint,
       (SELECT count(*) FROM documents)::bigint,
       coalesce((SELECT sum(total) FROM
-        (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint,
-      coalesce((SELECT max(total) FROM
         (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint
     "#,
   )
   .fetch_one(db)
   .await
   .ok()?;
+
+  // LEFT JOIN, so a workspace with no blobs still reports 0 rather than
+  // vanishing: "this one is empty" and "this one is not being measured" have to
+  // look different, and a missing series reads as the latter.
+  let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(
+    r#"
+    SELECT w.id, w.name, coalesce(sum(f.byte_size), 0)::bigint AS used
+    FROM workspaces w
+    LEFT JOIN files f ON f.workspace_id = w.id
+    GROUP BY w.id, w.name
+    ORDER BY used DESC, w.id
+    LIMIT $1
+    "#,
+  )
+  .bind(MAX_WORKSPACE_SERIES)
+  .fetch_all(db)
+  .await
+  .ok()?;
+
   Some(DbSnapshot {
     users: row.0,
     workspaces: row.1,
     documents: row.2,
     bytes_total: row.3,
-    bytes_max_workspace: row.4,
+    workspaces_truncated: (row.1 - rows.len() as i64).max(0),
+    workspace_usage: rows
+      .into_iter()
+      .map(|(id, name, bytes)| WorkspaceUsage {
+        id: id.to_string(),
+        name,
+        bytes,
+      })
+      .collect(),
   })
 }
 
@@ -566,16 +614,58 @@ fn render(state: &AppState, snapshot: Option<&DbSnapshot>) -> String {
     out.push_str("# HELP mica_documents_total Documents (including trashed).\n");
     out.push_str("# TYPE mica_documents_total gauge\n");
     let _ = writeln!(out, "mica_documents_total {}", s.documents);
-    out.push_str("# HELP mica_storage_bytes Stored bytes, by scope.\n");
+    out.push_str("# HELP mica_storage_bytes Stored bytes across the instance.\n");
     out.push_str("# TYPE mica_storage_bytes gauge\n");
     let _ = writeln!(out, "mica_storage_bytes{{scope=\"total\"}} {}", s.bytes_total);
-    // No per-workspace label: workspace count is unbounded, and the question
-    // ("is anyone near the 1 GiB wall") is answered by the largest one.
+
+    // Per workspace, shaped like node_exporter's per-filesystem series: expose
+    // the fact for EVERY workspace and let the alert rule own the threshold.
+    //
+    //   mica_workspace_bytes_used / on() group_left() mica_workspace_quota_bytes > 0.8
+    //
+    // An earlier draft emitted only workspaces already past a hard-coded 50%.
+    // That bakes policy into the binary (redeploy to retune), and worse, it
+    // destroys the history: a workspace appears only once it is already in
+    // trouble, so there is no earlier data to compute a growth rate from — and
+    // the growth rate is the only thing that warns you EARLY.
+    //
+    // `largest_workspace` used to be a separate series; it is `max()` of this
+    // one now, and two ways to say the same number is how they drift.
+    out.push_str("# HELP mica_workspace_bytes_used Stored bytes, per workspace.\n");
+    out.push_str("# TYPE mica_workspace_bytes_used gauge\n");
+    for w in &s.workspace_usage {
+      let _ = writeln!(
+        out,
+        "mica_workspace_bytes_used{{workspace_id=\"{}\"}} {}",
+        esc(&w.id),
+        w.bytes
+      );
+    }
+    // The name rides an info metric rather than every sample: a rename would
+    // otherwise fork the whole series and break its history, and the standard
+    // join (`* on(workspace_id) group_left(name)`) puts it back on the graph.
+    out.push_str("# HELP mica_workspace_info Workspace id → name, for joins.\n");
+    out.push_str("# TYPE mica_workspace_info gauge\n");
+    for w in &s.workspace_usage {
+      let _ = writeln!(
+        out,
+        "mica_workspace_info{{workspace_id=\"{}\",name=\"{}\"}} 1",
+        esc(&w.id),
+        esc(&w.name)
+      );
+    }
+    out.push_str("# HELP mica_workspace_series_truncated Workspaces left out of the scrape.\n");
+    out.push_str("# TYPE mica_workspace_series_truncated gauge\n");
     let _ = writeln!(
       out,
-      "mica_storage_bytes{{scope=\"largest_workspace\"}} {}",
-      s.bytes_max_workspace
+      "mica_workspace_series_truncated {}",
+      s.workspaces_truncated
     );
+
+    // Unlabelled on purpose: the quota is ONE config value today, so copying it
+    // onto every workspace series would be N copies of a constant pretending to
+    // be per-workspace data. If per-workspace overrides ever land, this gains
+    // the label then — and the rule above already reads that way.
     out.push_str("# HELP mica_workspace_quota_bytes The per-workspace limit in force.\n");
     out.push_str("# TYPE mica_workspace_quota_bytes gauge\n");
     let _ = writeln!(

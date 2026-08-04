@@ -222,8 +222,16 @@
   ⑤ **进程 RSS / FD**(读 `/proc`,Linux only —— Windows 开发机**省略该序列而不是报 0**,
   报 0 会被读成「没用内存」);⑥ **in-flight 请求数**;⑦ **blob GC** sweeps/scanned/deleted/
   bytes_freed/failures(日志里本来就有这些数字);⑧ **容量**:users/workspaces/documents 计数 +
-  `mica_storage_bytes{scope}` + 生效中的配额值,DB 快照缓存 60s(抓取每 15s,不能让「看系统」
-  变成系统的负载),查询失败**返回陈旧值而非丢序列**(丢序列看起来和「归零了」一模一样)。
+  `mica_storage_bytes{scope="total"}` + **每工作区** `mica_workspace_bytes_used{workspace_id}`
+  + `mica_workspace_info{workspace_id,name}` + 生效中的配额值,DB 快照缓存 60s(抓取每 15s,
+  不能让「看系统」变成系统的负载),查询失败**返回陈旧值而非丢序列**(丢序列看起来和「归零了」
+  一模一样)。
+  **per-workspace 这一版是纠错**:第一版只发聚合(总量 + 最大的那个),理由是「工作区数量无界」。
+  错在原则上 —— **exporter 只暴露事实,策略归告警规则**,node_exporter 从不预先滤掉「还没满的
+  盘」。预筛的代价具体有三:阈值被烤进二进制(改一次要重新部署)、**丢历史**(工作区跨过阈值才
+  突然出现,于是算不出增长速率,而增长速率是唯一能提前预警的东西)、画不出「用量前 N」。名字走
+  **info metric** 而不是打在每个样本上,否则一次改名就会把序列历史劈成两半。基数上限 1000 是
+  **上限不是过滤**,按用量降序,撞上了由 `mica_workspace_series_truncated` **明说**。
   容量 gauge 与配额执行是**同一张表上的两条 SQL**=典型双表示,`the_capacity_gauge_matches_
   what_the_quota_enforces` 把两者钉在一起。
   **残留**:① **告警规则与通知通道**(有了真实曲线再定阈值,而不是先设计告警再倒推指标);
