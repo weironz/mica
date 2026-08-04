@@ -276,6 +276,15 @@ deploy-prod version:
     echo "==> syncing compose (from $tag) + pinning MICA_VERSION=$tag"
     git show "$tag:deploy/docker-compose.yml" \
       | ssh {{node}} "cat > {{node_dir}}/docker-compose.yaml.new"
+    # Every file the compose BIND-MOUNTS has to travel with it. prometheus.yml
+    # arrived in 0.13.12 and this recipe knew nothing about it: a missing bind
+    # source is not an error docker reports — it silently creates a DIRECTORY at
+    # that path, and the container then fails with "is a directory", which reads
+    # like a container bug rather than a missing file. Shipped from the tag for
+    # the same reason the compose is: the pair has to match the release.
+    git show "$tag:deploy/prometheus.yml" \
+      | ssh {{node}} "cat > {{node_dir}}/prometheus.yml.new"
+    ssh {{node}} "mv {{node_dir}}/prometheus.yml.new {{node_dir}}/prometheus.yml"
     ssh {{node}} "cd {{node_dir}} \
       && cp docker-compose.yaml docker-compose.yaml.bak-\$(date +%Y%m%d-%H%M%S) \
       && mv docker-compose.yaml.new docker-compose.yaml \
