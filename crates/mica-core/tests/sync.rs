@@ -239,3 +239,177 @@ fn merge_is_order_independent() {
     }
     assert_eq!(p.to_blocks(), q.to_blocks(), "merge order doesn't matter");
 }
+
+/// Marks of a block, as `{start,end,type}` triples, for readable assertions.
+fn marks_of(d: &MicaDoc, id: &str) -> Vec<(u32, u32, String)> {
+    let b = d.to_blocks().into_iter().find(|x| x.id == id).unwrap();
+    mica_core::marks_from_data(&b.data)
+        .into_iter()
+        .map(|m| (m.start, m.end, m.ty))
+        .collect()
+}
+
+fn marks(v: serde_json::Value) -> Vec<mica_core::Mark> {
+    mica_core::marks_from_data(&json!({ "marks": v }))
+}
+
+/// Two people formatting DIFFERENT words at the same time must both win.
+///
+/// The coarse writer could not do this: it said "clear the formatting of the
+/// whole block, then replay my marks", an operation over the entire text, so
+/// whichever update merged second erased the other's bold outright. Nothing
+/// about the text changed in either edit — this is purely the formatting half.
+#[test]
+fn concurrent_formatting_of_different_words_both_survive() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+    a.set_block_text("a", "Hello world", &[]);
+    sync(&mut a, &mut b);
+
+    a.set_block_text(
+        "a",
+        "Hello world",
+        &marks(json!([{"start": 0, "end": 5, "type": "bold"}])),
+    );
+    b.set_block_text(
+        "a",
+        "Hello world",
+        &marks(json!([{"start": 6, "end": 11, "type": "italic"}])),
+    );
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+    let mut got = marks_of(&a, "a");
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (0, 5, "bold".to_string()),
+            (6, 11, "italic".to_string()),
+        ],
+        "both formats survive"
+    );
+}
+
+/// Removing a mark is now expressible over just its own range, so an un-bold
+/// no longer takes an unrelated concurrent format with it.
+///
+/// A un-bolds everything; B, who still sees it all bold, italicises the second
+/// word. The un-bold must land AND the italic must survive it.
+#[test]
+fn an_unbold_does_not_erase_a_concurrent_italic() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+    let bold_all = marks(json!([{"start": 0, "end": 11, "type": "bold"}]));
+    a.set_block_text("a", "Hello world", &bold_all);
+    sync(&mut a, &mut b);
+
+    a.set_block_text("a", "Hello world", &[]);
+    b.set_block_text(
+        "a",
+        "Hello world",
+        &marks(json!([
+            {"start": 0, "end": 11, "type": "bold"},
+            {"start": 6, "end": 11, "type": "italic"},
+        ])),
+    );
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+    let got = marks_of(&a, "a");
+    assert!(
+        !got.iter().any(|(_, _, t)| t == "bold"),
+        "the un-bold lands: {got:?}"
+    );
+    assert!(
+        got.contains(&(6, 11, "italic".to_string())),
+        "the concurrent italic survives it: {got:?}"
+    );
+}
+
+/// Un-bolding ONE word leaves the other bold — the removal is scoped to the
+/// range it was asked for, not to the block.
+#[test]
+fn unbolding_one_word_leaves_the_other_bold() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    a.set_block_text(
+        "a",
+        "Hello world",
+        &marks(json!([{"start": 0, "end": 11, "type": "bold"}])),
+    );
+    a.set_block_text(
+        "a",
+        "Hello world",
+        &marks(json!([{"start": 6, "end": 11, "type": "bold"}])),
+    );
+    assert_eq!(marks_of(&a, "a"), vec![(6, 11, "bold".to_string())]);
+}
+
+/// Formatting and typing at the same time, in the same block: neither is lost.
+/// The text splice and the format delta touch disjoint ranges by construction.
+#[test]
+fn a_concurrent_format_and_keystroke_both_land() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+    a.set_block_text("a", "Hello world", &[]);
+    sync(&mut a, &mut b);
+
+    a.set_block_text(
+        "a",
+        "Hello world",
+        &marks(json!([{"start": 0, "end": 5, "type": "bold"}])),
+    );
+    b.set_block_text("a", "Hello world!", &[]);
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+    let out = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap();
+    assert_eq!(out.text, "Hello world!", "the keystroke survives");
+    assert_eq!(
+        marks_of(&a, "a"),
+        vec![(0, 5, "bold".to_string())],
+        "and so does the bold"
+    );
+}
+
+/// A removal must not be undone by someone else's unrelated formatting.
+///
+/// The coarse writer re-stated the block's ENTIRE formatting on every change,
+/// so B — who was only bolding the third word — also re-asserted the bold on
+/// the first word that A had just removed, resurrecting it.
+#[test]
+fn a_concurrent_format_elsewhere_does_not_resurrect_a_removed_bold() {
+    let state = base();
+    let mut a = replica(&state, 10);
+    let mut b = replica(&state, 20);
+    a.set_block_text(
+        "a",
+        "one two three",
+        &marks(json!([{"start": 0, "end": 3, "type": "bold"}])),
+    );
+    sync(&mut a, &mut b);
+
+    // A un-bolds "one"; B, still seeing it bold, bolds "three" as well.
+    a.set_block_text("a", "one two three", &[]);
+    b.set_block_text(
+        "a",
+        "one two three",
+        &marks(json!([
+            {"start": 0, "end": 3, "type": "bold"},
+            {"start": 8, "end": 13, "type": "bold"},
+        ])),
+    );
+    sync(&mut a, &mut b);
+
+    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+    let got = marks_of(&a, "a");
+    assert_eq!(
+        got,
+        vec![(8, 13, "bold".to_string())],
+        "the removal holds and only the new bold is there: {got:?}"
+    );
+}

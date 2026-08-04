@@ -17,6 +17,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import '../editor/marks.dart' show Mark;
+import 'marks_diff.dart';
 import 'text_diff.dart';
 import 'yjs_interop.dart';
 
@@ -371,37 +372,45 @@ class MicaYDoc {
         micaYjs.textFormatJson(text0, d.at, d.ins.length, _clearAllAttrsJson);
       }
     }
-    // Marks are still written coarsely (clear-all + re-apply): `_applyMarks`
-    // only ever adds, so nothing else can express "this got un-bolded". Same
-    // remaining half as the Rust side. Guarded by a comparison so ordinary
-    // typing emits only the splice, not a whole-block format op per keystroke.
-    final len = micaYjs.textLength(text0);
-    if (len > 0 && !_sameMarks(_marksFromText(text0), marks)) {
-      micaYjs.textFormatJson(text0, 0, len, _clearAllAttrsJson);
-      _applyMarks(text0, marks);
+    // Marks get the same treatment as the text: write only the ranges that
+    // actually differ. This used to be "clear the whole block, then re-apply
+    // every mark", which clobbered concurrent formatting for exactly the reason
+    // the whole-range text replace clobbered concurrent typing — a format over
+    // `[0, len)` is an operation on the ENTIRE block. Mirrors the Rust
+    // `marks_diff_format_ops`; no separate "did anything change?" guard is
+    // needed because an unchanged block yields an empty diff.
+    if (micaYjs.textLength(text0) > 0) {
+      for (final op in marksDiffFormatOps(_runsOf(text0), marks)) {
+        micaYjs.textFormatJson(text0, op.start, op.len, jsonEncode(op.attrs));
+      }
     }
+  }
+
+  /// The text's current formatting as runs, for [marksDiffFormatOps]. Reading
+  /// the delta is the only JS-touching part of the diff; the decision itself is
+  /// pure Dart in `marks_diff.dart`, which is what makes it unit-testable.
+  List<MarkRun> _runsOf(JSObject text) {
+    final delta = jsonDecode(micaYjs.textDeltaJson(text));
+    if (delta is! List) return const [];
+    final runs = <MarkRun>[];
+    for (final op in delta) {
+      if (op is! Map) continue;
+      final insert = op['insert'];
+      if (insert is! String || insert.isEmpty) continue;
+      final attrs = <String, Object?>{};
+      final a = op['attributes'];
+      if (a is Map) {
+        a.forEach((k, v) => attrs['$k'] = v);
+      }
+      runs.add((len: insert.length, attrs: attrs));
+    }
+    return runs;
   }
 
   static final String _clearAllAttrsJson = jsonEncode({
     for (final t in Mark.types) t: null,
   });
 
-  static bool _sameMarks(
-    List<Map<String, dynamic>> a,
-    List<Map<String, dynamic>> b,
-  ) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i]['start'] != b[i]['start'] ||
-          a[i]['end'] != b[i]['end'] ||
-          a[i]['type'] != b[i]['type'] ||
-          a[i]['href'] != b[i]['href'] ||
-          a[i]['title'] != b[i]['title']) {
-        return false;
-      }
-    }
-    return true;
-  }
 
   void _insertBlock(String parentId, int index, Map<String, dynamic> block) {
     final blocks = _blocksMap();

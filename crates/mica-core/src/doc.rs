@@ -613,21 +613,19 @@ fn set_text_and_marks(txn: &mut TransactionMut, bm: &MapRef, text: &str, block_m
                 t.insert_with_attributes(txn, d.at, &d.ins, marks::clear_all_attrs());
             }
         }
-        // Marks are still written COARSELY — clear the whole text, re-apply —
-        // because `marks_to_format_ops` only ever adds, so nothing else can
-        // express "this got un-bolded". That is the half of this problem that
-        // is still open (the delta↔marks mapping phase2 §12 calls the risk
-        // area); it is not a regression, since the code this replaced deleted
-        // the entire text on every keystroke, which is strictly more
-        // destructive.
+        // Marks get the same treatment as the text: write only the ranges that
+        // actually differ. This used to be "clear the whole text, then replay
+        // every mark", which clobbered concurrent formatting for exactly the
+        // reason the whole-range text replace clobbered concurrent typing —
+        // `format(0, len, …)` is an operation over the ENTIRE block, so B's
+        // bold on words 6-10 died to A's re-format of word 1.
         //
-        // Guarded by a comparison so the common case — typing, no formatting
-        // change — emits ONLY the text splice, instead of a whole-block format
-        // op per keystroke.
-        let len = t.len(txn);
-        if len > 0 && marks::marks_from_runs(&text_runs(txn, &t)) != block_marks {
-            t.format(txn, 0, len, marks::clear_all_attrs());
-            for (start, l, attrs) in marks::marks_to_format_ops(block_marks) {
+        // No separate "did anything change?" guard is needed any more: an
+        // unchanged block yields an empty diff, so ordinary typing still emits
+        // only the text splice.
+        if t.len(txn) > 0 {
+            for (start, l, attrs) in marks::marks_diff_format_ops(&text_runs(txn, &t), block_marks)
+            {
                 t.format(txn, start, l, attrs);
             }
         }
