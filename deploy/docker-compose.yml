@@ -232,38 +232,12 @@ services:
     volumes:
       - mica-prod-backup:/var/lib/mica/export
 
-  # Mica's own scraper. Config shared with the dev stack (deploy/prometheus.yml)
-  # so the two cannot drift.
-  #
-  # NOT on the traefik network, and the port binds to LOOPBACK only: a metrics
-  # UI on the public internet is a free map of the system, and the endpoint it
-  # scrapes is private for the same reason (crates/api-server/src/metrics.rs).
-  # To look at it, tunnel:
-  #   ssh -N -L 9090:127.0.0.1:9090 root@mica.cloudcele.com
-  #
-  # Why its own scraper rather than the VictoriaMetrics already running on this
-  # box: that one belongs to the neostor stack. Sharing it would couple Mica's
-  # ability to see itself to a system Mica has no say over — its retention, its
-  # upgrades, its outages.
-  prometheus:
-    image: prom/prometheus:v3.1.0
-    restart: unless-stopped
-    logging: *default-logging
-    depends_on:
-      - api
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      # /data on this box was at 83% on 2026-08-04, so retention is the knob
-      # that decides whether this helps or becomes the next incident. Both
-      # limits apply — whichever is hit first wins.
-      - --storage.tsdb.retention.time=15d
-      - --storage.tsdb.retention.size=2GB
-    ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - mica-prod-prometheus:/prometheus
+# No scraper here on purpose. The api exposes `/metrics` (Prometheus text
+# format, on the compose network only — see crates/api-server/src/metrics.rs);
+# WHO scrapes it is a separate, optional decision that belongs to whoever runs
+# the box, not to Mica's deployment. A ready-made prometheus + grafana stack
+# lives in `deploy/monitoring/` — point it at this stack's network and it works,
+# skip it and Mica is unaffected.
 
 networks:
   traefik:
@@ -274,4 +248,3 @@ volumes:
   mica-prod-postgres:
   mica-prod-rustfs:
   mica-prod-backup:
-  mica-prod-prometheus:

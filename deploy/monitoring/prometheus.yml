@@ -1,0 +1,42 @@
+# Example scraper config for Mica. Deliberately small.
+#
+# One target on purpose. Node-level metrics (CPU, disk, memory) would need
+# node_exporter, and blackbox probing ("is it up from outside") has to run
+# somewhere that is NOT the box being probed — both are separate decisions, not
+# things to smuggle in under "add monitoring". What this file covers is the
+# application's own latency and DB-pool pressure, which no liveness check can
+# express.
+#
+# If you already run a monitoring stack you need neither this file nor the
+# compose beside it: point your existing Prometheus at the api's `/metrics` and
+# delete the rest.
+global:
+  # 15s is Prometheus's default and it is the right default here: the incident
+  # this exists for developed over minutes, so a shorter interval would buy
+  # noise plus disk and nothing else.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    stack: mica
+
+scrape_configs:
+  - job_name: mica-api
+    # The SERVICE name on Mica's compose network — not a public hostname.
+    # `/metrics` is not routed through nginx, so joining that network is the only
+    # way in, which is also what keeps it private (see
+    # crates/api-server/src/metrics.rs). `api` is the service name in both
+    # `docker-compose.yml` (dev) and `deploy/docker-compose.yml` (prod), so the
+    # only thing that changes between them is which network to attach to —
+    # `MICA_NETWORK` in the compose beside this file.
+    static_configs:
+      - targets: ["api:8080"]
+        labels:
+          service: api
+
+  # Prometheus scraping itself. Two lines, and it is how you tell "the app is
+  # quiet" apart from "the scraper died" — the failure mode that made the old
+  # GitHub-Actions probe worthless was precisely that nothing watched the
+  # watcher.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

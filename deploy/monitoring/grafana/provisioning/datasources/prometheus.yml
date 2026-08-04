@@ -1,0 +1,17 @@
+# The datasource as a FILE, so a rebuilt Grafana comes back already pointing at
+# Prometheus instead of waiting for someone to remember the click-through.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Service name on this stack's own network, not the host port: Grafana talks
+    # to Prometheus container-to-container, so the loopback bind on 9090 is only
+    # ever for a human with an SSH tunnel.
+    url: http://prometheus:9090
+    isDefault: true
+    # Match the scrape_interval in ../../prometheus.yml. Grafana uses it to pick
+    # sane step sizes; a mismatch shows up as gappy or over-smoothed graphs.
+    jsonData:
+      timeInterval: 15s

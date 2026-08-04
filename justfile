@@ -276,15 +276,13 @@ deploy-prod version:
     echo "==> syncing compose (from $tag) + pinning MICA_VERSION=$tag"
     git show "$tag:deploy/docker-compose.yml" \
       | ssh {{node}} "cat > {{node_dir}}/docker-compose.yaml.new"
-    # Every file the compose BIND-MOUNTS has to travel with it. prometheus.yml
-    # arrived in 0.13.12 and this recipe knew nothing about it: a missing bind
-    # source is not an error docker reports — it silently creates a DIRECTORY at
-    # that path, and the container then fails with "is a directory", which reads
-    # like a container bug rather than a missing file. Shipped from the tag for
-    # the same reason the compose is: the pair has to match the release.
-    git show "$tag:deploy/prometheus.yml" \
-      | ssh {{node}} "cat > {{node_dir}}/prometheus.yml.new"
-    ssh {{node}} "mv {{node_dir}}/prometheus.yml.new {{node_dir}}/prometheus.yml"
+    # NOTE if you ever add a service to the compose: this recipe ships ONLY
+    # docker-compose.yml, and brings up ONLY the services it names below. A file
+    # the compose bind-mounts but this does not send is not an error docker
+    # reports — it silently creates a DIRECTORY at the mount point and the
+    # container dies on "is a directory". Both bit the 0.13.12 prometheus
+    # service, which is why monitoring now lives in its own stack
+    # (deploy/monitoring/) instead of in Mica's deployment.
     ssh {{node}} "cd {{node_dir}} \
       && cp docker-compose.yaml docker-compose.yaml.bak-\$(date +%Y%m%d-%H%M%S) \
       && mv docker-compose.yaml.new docker-compose.yaml \
@@ -323,13 +321,6 @@ deploy-prod version:
            && docker compose --profile backup up -d --no-deps backup \
            && echo 'backup refreshed'; \
          else echo 'backup profile not active on this node — skipped'; fi"
-    # Services this recipe does not NAME are never started, so a service ADDED
-    # to the compose silently never runs — prometheus shipped in 0.13.12 and
-    # prod came up without it. Best-effort: a monitoring container that fails to
-    # start is not a reason to fail an otherwise healthy deploy.
-    echo "==> starting prometheus (best-effort)"
-    ssh {{node}} "cd {{node_dir}} && docker compose up -d --no-deps prometheus" \
-      || echo "WARN: prometheus did not start"
     # Go-template braces vs just: four open-braces escape a literal two, but a
     # closing pair is ALREADY literal outside an interpolation — writing four
     # closers emitted two extra, so the format returned "healthy}}" and the

@@ -130,17 +130,12 @@ if [ -n "$(docker compose --profile backup ps -aq backup 2>/dev/null)" ]; then
   echo 'backup sidecar refreshed'
 fi
 
-# Services this script does not NAME are never started. Naming `api web` keeps a
-# deploy from touching postgres/rustfs, which is the point — but it also means a
-# service ADDED to the compose silently never runs: prometheus shipped in
-# 0.13.12 and prod came up without it, with nothing in the output saying so.
-#
-# Best-effort, and deliberately AFTER the trapped section. prometheus is a
-# pinned third-party image with no MICA_VERSION in it, so the rollback has
-# nothing to say about it — and a monitoring container failing to start must not
-# roll the APPLICATION back. `|| echo WARN` is the whole difference between
-# "metrics are down" and "the deploy failed".
-docker compose up -d --no-deps prometheus || echo 'WARN: prometheus did not start' >&2
+# NOTE if you ever add a service to the compose: `up -d --no-deps api web` above
+# names its services so a deploy cannot touch postgres/rustfs — which also means
+# a service ADDED to the compose is silently never started, with nothing in the
+# output saying so. That bit the 0.13.12 prometheus service, and is part of why
+# monitoring now lives in its own stack (deploy/monitoring/) rather than in
+# Mica's deployment.
 
 # Reclaim disk: every deploy pulls a new image and orphans the one it replaced,
 # so the node's disk only ever grows (the reason for the once-a-release manual

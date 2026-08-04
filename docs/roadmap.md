@@ -192,7 +192,7 @@
 - 🟡 **不可信输入解析面 fuzz**(2026-07-23:markdown + interchange 已上,yrs 待)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**已做**:proptest 属性 fuzz 覆盖前两个自家解析面——`markdown/tests/proptest_parse.rs`(`import_markdown` 灌任意字节 + markdown-ish 片段,never-panic)+ `interchange/tests/proptest_zip.rs`(`read_zip→normalize_entries→expand_nested_zips` 灌任意/PK-前缀字节)。本轮**未挖出 panic**(解析器稳),但落成**快回归门**(各 ~2–5s,随 `cargo test` 进 CI;`PROPTEST_CASES=100000` 可本机长跑)。**残留**:yrs 二进制更新那面——手写 xor 已实证挖出远程可达(需认证)UB,但 UB 要 **cargo-fuzz + sanitizer(ASan)** 才抓得住,proptest(只抓 panic)不够 → 留 Linux/CI 的 cargo-fuzz。(`store.rs:2202`)(M)
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
-- 🟡 **可观测性:`/metrics` + 自建 Prometheus 已上,告警仍未做**(2026-08-04)——
+- 🟡 **可观测性:`/metrics` 已上,抓取器移出部署改为示例栈,告警仍未做**(2026-08-04)——
   ~~仅结构化日志,无 /metrics~~ ✅ 已做。**顺带修正原条目的两处错**:它写 `telemetry.rs`,
   而那文件在 `crates/infra` 不在 api-server,且只有 **12 行**——只初始化 tracing 的输出格式,
   没有任何计数器。所以起点不是「有 telemetry 但没暴露」,是**什么都没数**。
@@ -206,9 +206,12 @@
   两个邮件链接,所以公网够不到。**实测机制与直觉相反**:公网 `GET /metrics` **不是 404**,
   是 SPA 兜底 `try_files` 返回 **200 + index.html**(text/html,不含任何 `mica_` 序列)。
   安全结论不变,但「它会 404」是会被人当依据的半对说法。
-  采集:`prom/prometheus` 单容器(`deploy/prometheus.yml`,dev 与 prod 共用同一份配置),
-  **刻意不复用机器上已有的 neostor VictoriaMetrics** —— 共用会把 Mica「看见自己」的能力
-  耦合到一个它说不上话的系统上。生产不挂 traefik、端口只绑 127.0.0.1,看图走 SSH 隧道。
+  采集:**不在 Mica 的部署里**(2026-08-04 用户拍板:「prometheus 不是必须的,属于可选项」)。
+  它先是作为一个 service 进了 prod compose,当天就被摘出来 —— `/metrics` 是应用的一部分,
+  谁抓、留多久、谁能看是运维的决定;分开之后监控栈升级/挂掉/写满磁盘都带不走应用,而已经有
+  Prometheus 的人可以直接指过来。示例栈(prometheus + grafana,含 provisioning 好的数据源)
+  在 `deploy/monitoring/`,以**外部网络**接进 Mica 的 compose 网络 —— 那是通往 `/metrics`
+  的唯一路径。两个 UI 都只绑 127.0.0.1,看图走 SSH 隧道。
   **2026-08-04 二轮补齐(5 族 → 23 族,80 条序列)**,按「这个产品会怎么坏」而不是「监控
   系统通常有什么」选:
   ① **CRDT 完整性**`mica_crdt_integrity_failures_total{kind}` —— 红线 #1 是「绝不静默分歧」,
@@ -264,7 +267,7 @@
 > 问题。写放大那条仍然成立,但它单独不构成「无界增长」。这正是维护规矩第 3 条要求把核实
 > 结论写进条目本身的原因:结论进了条目,却没同步到引用它的排序清单里。
 
-1. **可观测性:~~指标~~ ✅ ~~采集~~ ✅,**缺的是告警**(残留 M,`[需后端]`)—— 2026-08-04
+1. **可观测性:~~指标~~ ✅,采集给示例栈(`deploy/monitoring/`),**缺的是告警**(残留 M,`[需后端]`)—— 2026-08-04
    一天之内把这条从"什么都没数"推到"23 个指标族、80+ 序列、自建 Prometheus 在抓":
    见 §开发者体验 那条(含 per-workspace 用量、CRDT 完整性、池 acquire 探针、进程 RSS)。
    **但生产仍然没有任何自动化告警** —— 有了曲线不等于有人会被叫醒,而 08-03 那次正是

@@ -1,0 +1,76 @@
+# EXAMPLE monitoring stack for Mica — prometheus + grafana. Optional.
+#
+# Mica's own deployment deliberately does not include a scraper. `/metrics` is
+# part of the application; deciding who scrapes it, how long series are kept and
+# who can look at them belongs to whoever runs the box. Keeping the two apart
+# means an upgrade, an outage or a disk-full in the monitoring stack cannot take
+# the app with it — and that anyone who already runs Prometheus can point it at
+# `/metrics` and ignore this directory entirely.
+#
+#   docker compose -f deploy/monitoring/docker-compose.yml up -d
+#
+# It attaches to Mica's compose network as an EXTERNAL network, because that is
+# the only route to `/metrics` (nginx does not proxy it). Set MICA_NETWORK to
+# match the stack you are watching — `docker network ls` will show it:
+#
+#   prod (deploy/docker-compose.yml)   mica_default          <- the default here
+#   dev  (docker-compose.yml)          <repo-dir>_default    e.g. mica-will-laptop_default
+#
+# Both UIs bind to LOOPBACK. A metrics UI on the public internet is a free map
+# of the system, and Grafana's default credentials are public knowledge. Reach
+# them over SSH:
+#
+#   ssh -N -L 9090:127.0.0.1:9090 -L 3000:127.0.0.1:3000 root@<host>
+
+name: mica-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Both limits apply, whichever is hit first. Retention is the knob that
+      # decides whether monitoring helps or becomes the next incident — on a box
+      # whose disk is already tight, set it before you need to.
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks: [default, mica]
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    environment:
+      # An example stack, so it ships usable rather than locked: change this (or
+      # the whole auth setup) before putting it anywhere that matters.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Sign-up off, anonymous access off: the loopback bind is the only thing
+      # standing between this UI and whoever can reach the host.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Provisioned, not clicked: the datasource is a file so a rebuilt stack
+      # comes back configured instead of needing someone to remember the steps.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks: [default]
+
+networks:
+  # Mica's stack, created by ITS compose — external here, so this file never
+  # tries to own it and `docker compose down` cannot take Mica's network with it.
+  mica:
+    external: true
+    name: ${MICA_NETWORK:-mica_default}
+
+volumes:
+  prometheus-data:
+  grafana-data:
