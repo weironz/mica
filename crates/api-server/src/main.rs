@@ -56,6 +56,11 @@ async fn main() -> anyhow::Result<()> {
   if let Some(storage) = state.storage.clone() {
     blob_gc::spawn(state.db.clone(), storage);
   }
+  // Samples how long it takes to get a pooled connection. The idle/in_use
+  // gauges show saturation; this shows the WAIT, which is what 2026-08-03
+  // actually looked like (acquire 3.3s) and what a 15s-sampled gauge can miss
+  // entirely between two scrapes.
+  metrics::spawn_pool_probe(state.db.clone());
   // The yrs-base backfill that used to run here is gone with S5: it built bases
   // out of `document_snapshots`, and migration 0016 dropped that table. It had
   // already finished its job — 1428 bases built on 0.13.3, leaving 3735 bases for

@@ -142,6 +142,7 @@ async fn referenced_file_ids(db: &PgPool, workspace_id: Uuid) -> Option<HashSet<
             Ok(None) => continue,
             Err(error) => {
                 tracing::warn!(%workspace_id, %document_id, %error, "blob gc: unreadable document, skipping workspace");
+                crate::metrics::METRICS.blob_gc_failed();
                 return None;
             }
         };
@@ -181,6 +182,7 @@ pub async fn sweep_workspace(
         Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(%workspace_id, %error, "blob gc: cannot list files");
+            crate::metrics::METRICS.blob_gc_failed();
             report.workspaces_skipped += 1;
             report.workspaces_scanned -= 1;
             return;
@@ -241,6 +243,7 @@ pub async fn sweep_workspace(
             }
             Err(error) => {
                 tracing::warn!(%workspace_id, %object_key, %error, "blob gc: delete failed, keeping row");
+                crate::metrics::METRICS.blob_gc_failed();
                 continue;
             }
         }
@@ -330,6 +333,14 @@ pub fn spawn(db: PgPool, storage: std::sync::Arc<S3Config>) {
                 deleted = report.deleted,
                 bytes_freed = report.bytes_freed,
                 "blob gc: sweep complete"
+            );
+            // Same numbers the log line carries. A sweep that quietly stops
+            // reclaiming is a disk problem that only shows up as a disk problem
+            // — weeks later, as the incident.
+            crate::metrics::METRICS.record_blob_gc(
+                report.workspaces_scanned as u64,
+                report.deleted as u64,
+                report.bytes_freed.max(0) as u64,
             );
             cleanup_lifecycle_rows(&db).await;
             tokio::time::sleep(SWEEP_INTERVAL).await;

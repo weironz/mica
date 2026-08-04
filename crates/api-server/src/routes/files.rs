@@ -922,6 +922,54 @@ mod quota_pg {
     }
   }
 
+  /// The `mica_storage_bytes` gauges must agree with the expression the quota
+  /// actually enforces.
+  ///
+  /// They are two SQL statements over the same table — a textbook second
+  /// representation. If they drift, the gauge answers "who is near the 1 GiB
+  /// wall" with a number that is not the one doing the refusing, which is the
+  /// only question it exists to answer. So they are pinned to each other here
+  /// rather than trusted to stay in step.
+  #[tokio::test]
+  async fn the_capacity_gauge_matches_what_the_quota_enforces() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let (small, small_user) = seed_workspace(&db).await;
+    put(&db, ws, user, "gauge-big-a", 700).await;
+    put(&db, ws, user, "gauge-big-b", 300).await;
+    put(&db, small, small_user, "gauge-small-a", 40).await;
+
+    let enforced = store::workspace_bytes_used(&db, ws).await.unwrap();
+    assert_eq!(enforced, 1000);
+
+    // The aggregate the exposition renders (metrics.rs `load_db_snapshot`).
+    let (total, max): (i64, i64) = sqlx::query_as(
+      r#"SELECT
+           coalesce((SELECT sum(total) FROM
+             (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint,
+           coalesce((SELECT max(total) FROM
+             (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint"#,
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    // Written as inequalities on purpose: the test database is shared, so other
+    // workspaces may exist. What must hold regardless is that the aggregate
+    // COUNTS this workspace the same way the quota does — a `WHERE` clause
+    // drifting apart from the quota's would break both of these.
+    assert!(
+      max >= enforced,
+      "the largest workspace cannot be smaller than one we just measured ({max} < {enforced})"
+    );
+    assert!(
+      total >= enforced + 40,
+      "the total must include every workspace, including the small one ({total})"
+    );
+
+    cleanup(&db, &[ws, small], &[user, small_user]).await;
+  }
+
   #[tokio::test]
   async fn usage_sums_this_workspace_only_and_dedups() {
     let Some(db) = pool().await else { return };

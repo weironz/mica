@@ -209,6 +209,23 @@
   采集:`prom/prometheus` 单容器(`deploy/prometheus.yml`,dev 与 prod 共用同一份配置),
   **刻意不复用机器上已有的 neostor VictoriaMetrics** —— 共用会把 Mica「看见自己」的能力
   耦合到一个它说不上话的系统上。生产不挂 traefik、端口只绑 127.0.0.1,看图走 SSH 隧道。
+  **2026-08-04 二轮补齐(5 族 → 23 族,80 条序列)**,按「这个产品会怎么坏」而不是「监控
+  系统通常有什么」选:
+  ① **CRDT 完整性**`mica_crdt_integrity_failures_total{kind}` —— 红线 #1 是「绝不静默分歧」,
+  而被拒绝的更新此前只是一行日志。**刻意以 0 值序列出现**:只在触发后才存在的计数器无法在
+  触发前配告警,而那正是唯一重要的时刻(`absent()` 规则是不这么做的补丁);
+  ② **push 成本**`mica_crdt_push_{duration_seconds,bytes_total,rejected_total}` —— 写放大
+  那条从此有数,不再是争论;③ **客户端落后**`mica_crdt_lag_notices_total`;
+  ④ **池 acquire 探针**`mica_db_acquire_probe_seconds` —— idle/in_use 是 15s 采样的瞬时
+  gauge,会在两次采样间漏掉尖峰,而 08-03 的真实症状正是「acquire 3.3s」。**是探针不是全量
+  埋点**(sqlx 在每个 `fetch_*` 内部隐式 acquire,全量要动所有调用点),名字里写明了;
+  ⑤ **进程 RSS / FD**(读 `/proc`,Linux only —— Windows 开发机**省略该序列而不是报 0**,
+  报 0 会被读成「没用内存」);⑥ **in-flight 请求数**;⑦ **blob GC** sweeps/scanned/deleted/
+  bytes_freed/failures(日志里本来就有这些数字);⑧ **容量**:users/workspaces/documents 计数 +
+  `mica_storage_bytes{scope}` + 生效中的配额值,DB 快照缓存 60s(抓取每 15s,不能让「看系统」
+  变成系统的负载),查询失败**返回陈旧值而非丢序列**(丢序列看起来和「归零了」一模一样)。
+  容量 gauge 与配额执行是**同一张表上的两条 SQL**=典型双表示,`the_capacity_gauge_matches_
+  what_the_quota_enforces` 把两者钉在一起。
   **残留**:① **告警规则与通知通道**(有了真实曲线再定阈值,而不是先设计告警再倒推指标);
   ② **node 级指标**(CPU/磁盘/内存)要 node_exporter;③ **外部黑盒探测**(含 TLS 证书剩余
   天数)必须跑在这台机器之外 —— 08-03 那次整机 IO 饥饿,同机采集器一样会被饿死。(残留 M)

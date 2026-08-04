@@ -278,6 +278,7 @@ async fn run_connection(
             }
           }
           Err(RecvError::Lagged(_)) => {
+            crate::metrics::METRICS.lag_notice();
             let notice = json!({
               "type": "error",
               "code": "client_out_of_date",
@@ -526,7 +527,11 @@ async fn handle_client_message(
           return vec![error_message(ack_id, "invalid_payload", "update is not valid base64")];
         }
       };
-      match sync::push_update(
+      // Timed as a whole: the round trip decodes and re-encodes the entire
+      // document (the write-amplification entry in docs/roadmap.md), so this
+      // histogram is the number that argument has been missing.
+      let push_started = std::time::Instant::now();
+      let push_result = sync::push_update(
         &state.db,
         workspace_id,
         document_id,
@@ -534,7 +539,19 @@ async fn handle_client_message(
         &update,
         &state.config.sync_tuning,
       )
-      .await
+      .await;
+      crate::metrics::METRICS.record_push(
+        push_started.elapsed().as_secs_f64(),
+        update.len(),
+        push_result.is_ok(),
+      );
+      if push_result.is_err() {
+        // Red line #1 is "never diverge silently". A refused update used to be
+        // a log line only, so there was no curve to alert on before a user
+        // noticed their document was wrong.
+        crate::metrics::METRICS.integrity_failure("push");
+      }
+      match push_result
       {
         Ok(rid) => {
           // Fan the update out to the rest of the room (already-have-it sender
