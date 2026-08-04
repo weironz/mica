@@ -145,6 +145,40 @@ fi
 # newer than a week as a second guard. Best-effort: never fail a deploy over it.
 docker image prune -f --filter "until=168h" || true
 
+# ...but dangling-only is not enough on its own: every release leaves THREE new
+# TAGGED images (api/web/cli), and `prune` without `-a` never touches a tagged
+# one. Measured 2026-08-04: 125 mica images on the node, 3 of them in use —
+# v0.1 through v0.13.13, ~360 MB per release, the bulk of docker's 7.14 GB of
+# reclaimable space on a disk sitting at 83%.
+#
+# So keep the newest N VERSIONS and drop the rest. Not `prune -a`: that would
+# take the previous version with it and break the EXIT-trap rollback above,
+# which is the whole reason `-a` was left off in the first place.
+KEEP_VERSIONS=3
+# Sorted by VERSION, not by creation time — images arrive in whatever order they
+# were pulled, so a re-pulled old one would otherwise look newest. `head -n -N`
+# drops the newest N off the ascending list, leaving exactly what to remove.
+stale=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+  | grep -E '/mica-(api|web|cli):v[0-9]+(\.[0-9]+)+$' \
+  | sed -E 's/.*:(v[0-9.]+)$/\1/' \
+  | sort -uV \
+  | head -n "-$KEEP_VERSIONS" || true)
+for v in $stale; do
+  # Never the version this deploy just rolled to, whatever the sort says.
+  [ "$v" = "$tag" ] && continue
+  # `docker rmi` refuses an image a container is using, which is the backstop
+  # that makes this safe to run unattended: worst case it prints and moves on.
+  docker images --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E "/mica-(api|web|cli):${v}\$" \
+    | xargs -r docker rmi >/dev/null 2>&1 || true
+done
+# `if`, not `[ … ] && echo` — under `set -e` that one-liner returns 1 when there
+# is nothing stale, which would trip the EXIT trap and ROLL BACK a perfectly
+# healthy deploy. A disk-cleanup step must never be able to do that.
+if [ -n "$stale" ]; then
+  echo "pruned mica images older than the newest $KEEP_VERSIONS versions"
+fi
+
 for _ in $(seq 1 60); do
   state=$(docker inspect --format '{{.State.Health.Status}}' mica-api-1 2>/dev/null || true)
   if [ "$state" = healthy ]; then
