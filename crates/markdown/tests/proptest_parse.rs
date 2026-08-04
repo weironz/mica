@@ -7,8 +7,10 @@
 //! any panic, SHRINKS to a minimal reproducer — copy that into a fixed
 //! regression test and fix the parser. The property is simply: **never panic.**
 //!
-//! (yrs binary-update fuzzing — where a real UB was found by hand — needs
-//! cargo-fuzz + a sanitizer, so it lives in CI/Linux, not here.)
+//! (The yrs binary-update surface has its own file now —
+//! `mica-core/tests/proptest_yrs.rs`. It was parked on the belief that its UB
+//! needed cargo-fuzz + a sanitizer; plain proptest found three failure classes
+//! in seconds. See that file.)
 
 use mica_markdown::import_markdown;
 use proptest::prelude::*;

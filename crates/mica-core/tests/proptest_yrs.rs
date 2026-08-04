@@ -26,7 +26,12 @@
 //! (2) and (3) are reachable from `push_update`, i.e. by any AUTHENTICATED
 //! client, and neither is containable from this side: bounding the input does
 //! not help (21 bytes), and pre-validating would mean re-implementing the
-//! decoder. It needs an upstream fix or process isolation.
+//! decoder. It needs an upstream fix.
+//!
+//! **Reported and fixed upstream (2026-08-05):** reproducer for (3) in
+//! y-crdt/y-crdt#415, fixes for (2) and (3) in y-crdt/y-crdt#644 — `try_reserve`
+//! for the length prefix (the pattern that crate already uses elsewhere) and
+//! checked `from_utf8` for the string content. Pending review.
 //!
 //! **Everything here is `#[ignore]`d on purpose**, not because it is flaky but
 //! because two of the three failures ABORT the test process — an un-ignored
