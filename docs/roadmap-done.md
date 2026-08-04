@@ -165,6 +165,11 @@
 - ~~🆕 **备份 sidecar 静默失败无任何告警**~~ ✅ 已做(校准复核)—— `mica-backup-loop.sh:16` 死人开关:成功/失败分别 ping `${HEALTHCHECK_URL}`(healthchecks.io 式),compose 已布线。
 - ~~🆕 **Postgres 全库无自动异地备份**~~ ✅ 已做(校准复核)—— `mica-backup.sh:70` `pg_dump|gzip` 进 PGDUMP_DIR、rustic 顺带异地;`Dockerfile.cli` 装 postgresql-client-16。
 - ~~🆕 **生产无任何外部探活**~~ ✅ 已做(校准复核)—— `.github/workflows/uptime.yml` cron `*/15` 打 `/api/ready`。
+  **⚠️ 2026-08-04 追记:该 workflow 已删除,这条「已做」不再成立。** 实测它 21 小时只跑 12 次
+  (应有 84 次),08-03 那次真实故障的整个窗口一次都没跑 —— GitHub Actions 的 schedule 是
+  best-effort,把可靠性承诺建在它上面就是这个下场。方向改为 Prometheus,已回到 `roadmap.md`
+  作为未做项。**归档只进不出,所以这条留着** —— 它记录的是「当初以为解决了」,而那正是下次
+  遇到同类判断时最该读到的东西。
 - ~~🆕 **容器 HEALTHCHECK 用不摸库的静态 `/api/health`**~~ ✅ 已做(校准复核)—— `Dockerfile.api:22` HEALTHCHECK + 部署验证均改打摸库的 `/api/ready`。
 - ~~**坏迁移的「恢复」流程无文档**~~ ✅ backup.md 加「从 pg_dump 恢复/回滚坏迁移」runbook(停 api→drop/create→zcat|psql→钉旧 tag→health/ready 验证,0d9c404)。
 - ~~🆕 **单机兜底部署脚本 `deploy/deploy-from-source.sh` 已漂移**~~ ✅ 已做(2026-07-23)—— 对齐 justfile 权威版:`flutter build web` 补 `--no-web-resources-cdn`(修 CN 运行时拉 gstatic CanvasKit 不可用)、删 stale `--no-tree-shake-icons`、rsync→`rm -rf + cp -r`(Windows 无 rsync);`bash -n` 过。
