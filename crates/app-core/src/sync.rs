@@ -108,7 +108,11 @@ pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
 /// projection. Newlines between blocks keep a needle from spuriously matching
 /// across a block boundary. Marks/attributes live in `data`, never in `text`, so
 /// the body part carries no formatting — exactly what a substring search wants.
-pub(crate) fn content_text_from_doc(doc: &MicaDoc) -> String {
+/// `pub` rather than `pub(crate)` so out-of-band repairs (the `repair_url_labels`
+/// example) derive `content_text` through the SAME function the write paths use.
+/// A second implementation there would be a second source of truth for a column
+/// whose whole contract is "pure derivation of `state`".
+pub fn content_text_from_doc(doc: &MicaDoc) -> String {
     let blocks = doc.to_blocks();
     let mut text = blocks
         .iter()
