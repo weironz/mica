@@ -1,0 +1,569 @@
+{
+  "uid": "mica-overview",
+  "title": "Mica",
+  "description": "Mica 应用指标总览。面板按「这个产品会怎么坏」排,不是按「监控系统通常有什么」排 —— 先是它挂没挂,再是它为什么慢,最后是数据面有没有在静默出错。",
+  "tags": ["mica"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "版本",
+      "description": "build_info 的 version 标签。曲线断层对不上代码时,先看这里是不是刚换过版本。",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name",
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mica_build_info",
+          "legendFormat": "{{version}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "用户",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "none",
+        "graphMode": "area"
+      },
+      "targets": [{ "refId": "A", "expr": "mica_users_total", "instant": true }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "工作区",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "none",
+        "graphMode": "area"
+      },
+      "targets": [{ "refId": "A", "expr": "mica_workspaces_total", "instant": true }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "文档",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "none",
+        "graphMode": "area"
+      },
+      "targets": [{ "refId": "A", "expr": "mica_documents_total", "instant": true }]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "WS 连接",
+      "description": "当前活跃的协同连接数。掉到 0 而 HTTP 仍有流量 = 同步面单独坏了,这是存活探针看不见的一类故障。",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "none",
+        "graphMode": "area"
+      },
+      "targets": [{ "refId": "A", "expr": "mica_ws_connections", "instant": true }]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "存储总量",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "none",
+        "graphMode": "area"
+      },
+      "targets": [
+        { "refId": "A", "expr": "mica_storage_bytes{scope=\"total\"}", "instant": true }
+      ]
+    },
+
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "HTTP 请求速率(按路由)",
+      "description": "标签是路由 MODE 不是原始路径 —— 两个不同 UUID 会合并成同一条 {workspace_id},所以爬虫撑不爆基数。",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(mica_http_requests_total[5m]))",
+          "legendFormat": "{{route}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "HTTP 延迟分位",
+      "description": "从直方图桶算出来的 p50/p95/p99。平均值会把「大多数很快、少数极慢」抹平成「还行」,而用户体感的是 p99。",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mica_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mica_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mica_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ]
+    },
+
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "4xx / 5xx 速率",
+      "description": "分开画而不是只画一条错误率:一条稳定的 4xx 基线是正常的(未登录、404),5xx 抬头才是事故。",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 20, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(mica_http_requests_total{status=~\"4..\"}[5m]))",
+          "legendFormat": "{{status}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (status) (rate(mica_http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "{{status}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "在飞请求数",
+      "description": "堆积说明下游(DB、存储)在拖后腿,而请求速率本身可能一点没变。",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 20, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        { "refId": "A", "expr": "mica_http_requests_in_flight", "legendFormat": "in-flight", "range": true }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "PG 连接池",
+      "description": "2026-08-03 那次故障里存活探针一切正常,先动的是这里(acquire 3.3s)。idle 归零 + in_use 顶格 = 池被打满。",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 20, "showPoints": "never", "stacking": { "mode": "normal" } }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mica_db_pool_connections",
+          "legendFormat": "{{state}}",
+          "range": true
+        }
+      ]
+    },
+
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "CRDT push 速率与 p95 耗时",
+      "description": "写放大那条争论的实测面:每条 push 服务端要全档 decode + encode + upsert,所以耗时跟着文档大小走,而不是跟着改动大小走。",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p95 耗时" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(mica_crdt_push_duration_seconds_count[5m]))",
+          "legendFormat": "push/s",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mica_crdt_push_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 耗时",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "CRDT push 字节 / 被拒 / 客户端滞后",
+      "description": "被拒和滞后是同步面「在坏但没挂」的两个早期信号 —— 请求还在成功,数据已经开始对不上。",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "custom": { "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*(被拒|滞后).*" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(mica_crdt_push_bytes_total[5m]))",
+          "legendFormat": "字节/s",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mica_crdt_push_rejected_total[5m]))",
+          "legendFormat": "被拒/s",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(mica_crdt_lag_notices_total[5m]))",
+          "legendFormat": "滞后通知/s",
+          "range": true
+        }
+      ]
+    },
+
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "CRDT 完整性失败(1h 增量)",
+      "description": "红线 #1 是「绝不静默分歧」。这条指标刻意以 0 值序列存在 —— 只在触发后才出现的计数器没法在触发前配告警,而那正是唯一重要的时刻。这条线离开 0 就是数据面在丢东西。",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 30, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(mica_crdt_integrity_failures_total[1h]))",
+          "legendFormat": "{{kind}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "DB acquire 探针 p95",
+      "description": "池的 idle/in_use 是 15s 采样的瞬时 gauge,会在两次采样之间漏掉尖峰 —— 而 08-03 的真实症状正是「acquire 3.3s」。这是探针不是全量埋点(sqlx 在每个 fetch 内部隐式 acquire)。",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mica_db_acquire_probe_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "进程 RSS / 打开的 FD",
+      "description": "读 /proc,只有 Linux 有 —— Windows 上这两条序列整条缺失而不是报 0(报 0 会被读成「没用内存」)。",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "打开的 FD" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        { "refId": "A", "expr": "mica_process_resident_bytes", "legendFormat": "RSS", "range": true },
+        { "refId": "B", "expr": "mica_process_open_fds", "legendFormat": "打开的 FD", "range": true }
+      ]
+    },
+
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Blob GC",
+      "description": "扫过多少、删掉多少、回收多少字节。失败持续不为 0 = 空间只进不出。",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "回收字节/h" },
+            "properties": [
+              { "id": "unit", "value": "bytes" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (op) (increase(mica_blob_gc_objects_total[1h]))",
+          "legendFormat": "{{op}}/h",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "increase(mica_blob_gc_failures_total[1h])",
+          "legendFormat": "失败/h",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "increase(mica_blob_gc_bytes_freed_total[1h])",
+          "legendFormat": "回收字节/h",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "工作区序列是否被截断",
+      "description": "每工作区序列有 1000 条上限 —— 那是上限不是过滤。撞上了这条线会离开 0,提醒你下面那张「用量 Top」可能不完整。",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 30, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        { "refId": "A", "expr": "mica_workspace_series_truncated", "legendFormat": "被截断的序列数", "range": true }
+      ]
+    },
+
+    {
+      "id": 60,
+      "type": "table",
+      "title": "工作区用量 Top 20",
+      "description": "名字是 info metric join 出来的,不是打在每个样本上 —— 否则一次改名就会把序列历史劈成两半。配额是全局单值(MICA_WORKSPACE_QUOTA_BYTES),所以用 scalar()。",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 44 },
+      "datasource": { "type": "prometheus", "uid": "mica-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "占配额" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "max", "value": 1 },
+              { "id": "min", "value": 0 },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "gauge", "mode": "gradient" }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "用量", "desc": true }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20, mica_workspace_bytes_used * on(workspace_id) group_left(name) mica_workspace_info)",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "topk(20, mica_workspace_bytes_used * on(workspace_id) group_left(name) mica_workspace_info) / scalar(mica_workspace_quota_bytes)",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": { "byField": "workspace_id", "mode": "outer" }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "__name__": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "service": true,
+              "service 1": true,
+              "service 2": true,
+              "name 2": true
+            },
+            "renameByName": {
+              "name": "工作区",
+              "name 1": "工作区",
+              "workspace_id": "ID",
+              "Value #A": "用量",
+              "Value #B": "占配额"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

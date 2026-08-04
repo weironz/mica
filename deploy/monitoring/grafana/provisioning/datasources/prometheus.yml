@@ -4,6 +4,10 @@ apiVersion: 1
 
 datasources:
   - name: Prometheus
+    # Pinned, because the dashboards reference it BY uid. Left unset, Grafana
+    # generates one, and a dashboard JSON carrying whatever it generated on some
+    # other machine loads with every panel saying "datasource not found".
+    uid: mica-prometheus
     type: prometheus
     access: proxy
     # Service name on this stack's own network, not the host port: Grafana talks

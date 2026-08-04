@@ -1,0 +1,22 @@
+# Dashboards from FILES, same reasoning as the datasource: a stack that is
+# rebuilt (or a second one stood up next to it) comes back with the graphs
+# already there, and changes to them are reviewable diffs rather than clicks
+# nobody can reconstruct.
+apiVersion: 1
+
+providers:
+  - name: mica
+    type: file
+    # `false` would let the UI silently diverge from the file — edits would be
+    # saved into Grafana's DB and the next `docker compose down -v` would take
+    # them with it. Edit in the UI to explore, then copy the JSON back here.
+    allowUiUpdates: false
+    # Deleting the JSON removes the dashboard instead of leaving an orphan whose
+    # source no longer exists anywhere.
+    disableDeletion: false
+    options:
+      # NOT under /var/lib/grafana: that path is a named volume, and nesting a
+      # read-only bind inside it is the kind of mount ordering that works until
+      # it doesn't.
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

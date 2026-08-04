@@ -31,8 +31,29 @@ ssh -N -L 9090:127.0.0.1:9090 -L 3000:127.0.0.1:3000 root@<host>
 ```
 
 - Prometheus <http://127.0.0.1:9090> —— `Status -> Targets` 应看到 `mica-api` 是 `UP`
-- Grafana <http://127.0.0.1:3000> —— 默认 `admin` / `admin`(`GRAFANA_ADMIN_PASSWORD` 可改),
-  数据源已通过 provisioning 配好,直接进 Explore
+- Grafana <http://127.0.0.1:3000> —— 默认 `admin` / `admin`(`GRAFANA_ADMIN_PASSWORD` 可改)。
+  用默认口令登录后 Grafana 会**强制要求改密**,可以 Skip,但既然要长期用就改掉。
+  数据源和 dashboard 都已 provisioning 好,登录即见。
+
+## Dashboard
+
+`grafana/dashboards/mica.json`,15 个面板,按「这个产品会怎么坏」排而不是按「监控系统通常
+有什么」排:
+
+1. **一屏看它挂没挂** —— 版本、用户/工作区/文档数、WS 连接数、存储总量。
+   WS 连接掉到 0 而 HTTP 仍有流量 = 同步面单独坏了,这是存活探针看不见的一类故障。
+2. **它为什么慢** —— 按路由的请求速率、p50/p95/p99 延迟、4xx/5xx、在飞请求数、PG 连接池、
+   DB acquire 探针 p95。08-03 那次故障里存活探针一切正常,先动的是最后两个。
+3. **数据面有没有在静默出错** —— CRDT push 速率/耗时/字节/被拒/客户端滞后,以及
+   **完整性失败**(刻意以 0 值序列存在,所以它离开 0 的那一刻你看得见)。
+4. **容量** —— blob GC、工作区序列是否被截断、工作区用量 Top 20(名字由 info metric
+   join 出来,配额比走 `scalar()`,因为配额是全局单值)。
+
+dashboard 引用数据源用的是**固定 uid** `mica-prometheus`(见 provisioning)。不钉住的话
+Grafana 会自己生成一个,而带着别处生成的 uid 的 JSON 加载后每个面板都会说「找不到数据源」。
+
+要改就在 UI 里试,满意后把 JSON 拷回这个文件 —— provider 设了 `allowUiUpdates: false`,
+UI 里的改动只存在 Grafana 自己的库里,`docker compose down -v` 会一起带走。
 
 ## 几条起手的查询
 

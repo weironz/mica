@@ -56,9 +56,14 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      # Provisioned, not clicked: the datasource is a file so a rebuilt stack
-      # comes back configured instead of needing someone to remember the steps.
+      # Provisioned, not clicked: datasource AND dashboards are files, so a
+      # rebuilt stack comes back configured instead of needing someone to
+      # remember the steps.
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Deliberately NOT under /var/lib/grafana — that path is the named volume
+      # below, and nesting a read-only bind inside a volume is the kind of mount
+      # ordering that works until it doesn't.
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
