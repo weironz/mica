@@ -29,3 +29,29 @@ String formatBytes(int bytes) {
       : (value < 10 ? value.toStringAsFixed(1) : value.toStringAsFixed(0));
   return '$text ${units[unit]}';
 }
+
+/// A byte count in BINARY units: `948 KiB`, `1.0 GiB`.
+///
+/// A second formatter rather than a flag on the first, because the choice is
+/// not cosmetic — it follows from what the number gets compared against.
+/// [formatBytes] sits next to "export", where the user checks it against what
+/// their browser reported, and browsers are decimal. THIS one sits next to a
+/// quota that is configured, documented and enforced in GiB
+/// (`MICA_WORKSPACE_QUOTA_BYTES`, 1 GiB by default). Rendering that with
+/// decimal units printed **1.1 GB** for a limit everything else calls 1 GiB —
+/// a number the user cannot reconcile with the docs, and the kind of small
+/// mismatch that reads as a bug in the quota rather than in the label.
+String formatBytesBinary(int bytes) {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  var value = bytes.toDouble();
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  final text = unit == 0
+      ? value.toStringAsFixed(0)
+      : (value < 10 ? value.toStringAsFixed(1) : value.toStringAsFixed(0));
+  return '$text ${units[unit]}';
+}

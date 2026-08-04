@@ -40,4 +40,30 @@ void main() {
     expect(formatBytes(999999), '1000 KB');
     expect(formatBytes(1000000), '1.0 MB');
   });
+
+  group('formatBytesBinary is the quota-side formatter', () {
+    /// The case that made it exist: the default quota is 1 GiB, and the
+    /// decimal formatter rendered it "1.1 GB" — a number the user cannot
+    /// reconcile with a doc that says 1 GiB.
+    test('the default quota reads back as the number it was configured as', () {
+      expect(formatBytesBinary(1073741824), '1.0 GiB');
+      expect(formatBytes(1073741824), '1.1 GB', reason: 'why the second one exists');
+    });
+
+    test('the two bases really do disagree, which is the point', () {
+      expect(formatBytesBinary(1024), '1.0 KiB');
+      expect(formatBytes(1024), '1.0 KB');
+      expect(formatBytesBinary(1000), '1000 B');
+    });
+
+    test('zero and negative read as empty here too', () {
+      expect(formatBytesBinary(0), '0 B');
+      expect(formatBytesBinary(-5), '0 B');
+    });
+
+    test('the boundary carries up', () {
+      expect(formatBytesBinary(1024 * 1024 - 1), '1024 KiB');
+      expect(formatBytesBinary(1024 * 1024), '1.0 MiB');
+    });
+  });
 }

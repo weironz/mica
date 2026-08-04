@@ -9221,16 +9221,28 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         // A quota of 0 means the server disabled quotas. Showing
                         // "8.6 MB / 0 B" there would read as "you are over the
                         // limit", so that case says only what is true.
+                        // BINARY units on this row: the quota is configured,
+                        // documented and enforced in GiB, and decimal units
+                        // printed "1.1 GB" for a limit everything else calls
+                        // 1 GiB. Both sides use the same base — mixing them in
+                        // one "used / limit" string is worse than either.
                         value: usage.quota > 0
-                            ? '${formatBytes(usage.used)} / ${formatBytes(usage.quota)}'
-                            : formatBytes(usage.used),
+                            ? '${formatBytesBinary(usage.used)} / ${formatBytesBinary(usage.quota)}'
+                            : formatBytesBinary(usage.used),
                       ),
-                      if (usage.quota > 0)
+                      // Nothing stored → no bar. An empty track is a 1px line
+                      // directly under a row of text, and it reads as a divider
+                      // someone added by mistake; a brand-new workspace would
+                      // wear it forever.
+                      if (usage.quota > 0 && usage.used > 0)
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
-                          child: LinearProgressIndicator(
-                            value: (usage.used / usage.quota).clamp(0.0, 1.0),
-                            minHeight: 4,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: LinearProgressIndicator(
+                              value: (usage.used / usage.quota).clamp(0.0, 1.0),
+                              minHeight: 6,
+                            ),
                           ),
                         ),
                     ],

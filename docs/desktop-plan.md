@@ -131,6 +131,13 @@ math 公式(flutter_math_fork)纯 Flutter,桌面直接可用,无需处理。
 - **本地 web 测试环路**(我自己的浏览器就能跑,不碰 prod、不碰你的桌面客户端数据):
   `just dev-web`(构建 bundle 到 `clients/mica_flutter/build/web`)→ `docker compose up -d --force-recreate web` → http://localhost:8090,nginx 把 `/api` 代理到本地 api。配 `demo@mica.dev` / `password123` 就是一套完整的可写环境。
   **`--force-recreate` 不是可选的**:`up -d` 见配置哈希没变就只重启老容器 —— 2026-07-15 撞到过一个 7/11 建的 web 容器,重启后 `HostConfig.PortBindings` 里明明写着 8090,`docker port` 却是空的、host 上没人在听(HTTP 000)。重建才真正发布端口。
+  **2026-08-04 补两个坑**:① **headless 拍不到** —— Flutter web 是 CanvasKit 画布,
+  playwright 的 headless chromium 只出白屏(而且 `npx playwright install chromium` 装的常常
+  只有 headless-shell,有头模式 spawn 直接失败)。用系统 Chrome:`chromium.launch({ channel:
+  'chrome', headless: false })`,并且要等 **25–30 秒**(bundle 加载 + dev autologin)。
+  ② **脚本必须放在 `e2e/` 下**,放 scratchpad 里解析不到它的 `node_modules`。
+  ③ 顺带提醒自己:这套环路本文件早就写了 —— 2026-08-04 我没读就去点用户的**生产桌面端**,
+  差点把测试字符串打进他的文档。要在真机看 UI,先翻这一节。
   **web 验不了的**(别在这儿浪费时间):账号栏的世界切换器整块是 `if (!kIsWeb)`;本地模式在 web 上不存在(`_local.available == false`);窗口几何/最大化;FFI 本地库。这些只能桌面端实测。
 - **本地 Docker 栈不跟着代码走**:`docker compose up -d` 只保证容器在跑,不重建镜像 —— 改了 `crates/` 必须 `docker compose build api && docker compose up -d api`。
   **怎么发现自己中招**:`curl -s localhost:8080/api/health` 报的 version 是 `env!("CARGO_PKG_VERSION")`,编译期烤进去的,和 `crates/api-server/Cargo.toml` 比一下就知道镜像多老(2026-07-15 撞过:镜像停在 7/11 的 0.1.5,落后 4 个发版,登录压根不返回 refresh_token,差点把"功能没做"当成"功能坏了"查)。
