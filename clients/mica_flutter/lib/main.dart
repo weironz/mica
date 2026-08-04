@@ -4572,6 +4572,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
+  /// Storage for the settings dialog. Deliberately NOT wrapped in `_run`:
+  /// that reports failures as a banner, and a storage row that cannot load is
+  /// not worth interrupting someone who opened the dialog to rename their
+  /// workspace. Null simply omits the row.
+  Future<({int used, int quota})?> _loadWorkspaceUsage(Workspace workspace) async {
+    final session = _session;
+    if (session == null) return null;
+    try {
+      return await _api.workspaceUsage(session.accessToken, workspace.id);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _addWorkspaceMember(String email, WorkspaceRole role) {
     return _run(() async {
       final session = _requireSession();
@@ -5642,6 +5656,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // carry role 'owner' so canManage was true — you could invite someone and
       // nothing whatsoever happened.
       onAddMember: local ? null : _addWorkspaceMember,
+      onLoadWorkspaceUsage: local ? null : _loadWorkspaceUsage,
       onUpdateMember: local ? null : _updateWorkspaceMember,
       onRemoveMember: local ? null : _removeWorkspaceMember,
       onRestoreCheckpoint: local ? _localRollbackDoc : null,
@@ -6316,6 +6331,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onImportWorkspaceTreeInto,
     required this.onExportMarkdown,
     this.onAddMember,
+    this.onLoadWorkspaceUsage,
     this.onUpdateMember,
     this.onRemoveMember,
     this.onRestoreCheckpoint,
@@ -6621,6 +6637,11 @@ class WorkspaceView extends StatefulWidget {
   /// rather than inert: see the member section in
   /// [_WorkspaceViewState._openWorkspaceSettingsDialog].
   final Future<void> Function(String email, WorkspaceRole role)? onAddMember;
+
+  /// Storage this workspace occupies + the limit in force. Null in 本地模式:
+  /// there is no server to ask and no quota to be near.
+  final Future<({int used, int quota})?> Function(Workspace workspace)?
+  onLoadWorkspaceUsage;
   final Future<void> Function(WorkspaceMember member, WorkspaceRole role)?
   onUpdateMember;
   final Future<void> Function(WorkspaceMember member)? onRemoveMember;
@@ -9168,6 +9189,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (workspace == null) return;
     _rename.text = workspace.name;
     final l10n = context.l10n;
+    // Fetched BEFORE the dialog opens: one call, no spinner inside a
+    // StatefulBuilder, and a failure just omits the row instead of putting
+    // rename + members behind an unrelated error.
+    final usage = await widget.onLoadWorkspaceUsage?.call(workspace);
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -9189,6 +9215,25 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   children: [
                     DetailRow(label: l10n.widgetRoleLabel, value: ws.role),
                     DetailRow(label: 'ID', value: ws.id),
+                    if (usage != null) ...[
+                      DetailRow(
+                        label: l10n.workspaceStorage,
+                        // A quota of 0 means the server disabled quotas. Showing
+                        // "8.6 MB / 0 B" there would read as "you are over the
+                        // limit", so that case says only what is true.
+                        value: usage.quota > 0
+                            ? '${formatBytes(usage.used)} / ${formatBytes(usage.quota)}'
+                            : formatBytes(usage.used),
+                      ),
+                      if (usage.quota > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: LinearProgressIndicator(
+                            value: (usage.used / usage.quota).clamp(0.0, 1.0),
+                            minHeight: 4,
+                          ),
+                        ),
+                    ],
                     const SizedBox(height: 16),
                     TextField(
                       controller: _rename,

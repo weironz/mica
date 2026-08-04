@@ -352,6 +352,39 @@ pub async fn delete(
   Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Serialize)]
+pub struct WorkspaceUsageResponse {
+  /// Bytes this workspace occupies.
+  pub bytes_used: i64,
+  /// The limit in force, or `0` when quotas are disabled.
+  pub quota_bytes: i64,
+}
+
+/// `GET /workspaces/{workspace_id}/usage`
+///
+/// What a member is allowed to know about their own storage. A separate call
+/// rather than a field on the workspace LIST, because the list is fetched on
+/// every start and every switch, and a `sum(byte_size)` per workspace does not
+/// belong on that path for a number nobody is looking at yet.
+///
+/// `bytes_used` goes through the SAME function the upload path checks against
+/// (`store::workspace_bytes_used`) rather than a second query saying the same
+/// thing — a "you have room" screen that disagrees with the refusal you get on
+/// upload would be worse than no screen at all.
+pub async fn workspace_usage(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Json<WorkspaceUsageResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+
+  Ok(Json(WorkspaceUsageResponse {
+    bytes_used: mica_app_core::store::workspace_bytes_used(&state.db, workspace_id).await?,
+    quota_bytes: state.config.workspace_quota_bytes,
+  }))
+}
+
 pub async fn list_members(
   State(state): State<AppState>,
   headers: HeaderMap,

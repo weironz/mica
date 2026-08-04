@@ -158,6 +158,23 @@ class ApiClient {
     }, token: token);
   }
 
+  /// Storage this workspace occupies, and the limit in force (a `quota` of 0
+  /// means quotas are disabled on this server).
+  ///
+  /// Its own call rather than a field on the workspace list: the list is
+  /// fetched on every start and every switch, and this number is only looked at
+  /// when someone opens the settings dialog.
+  Future<({int used, int quota})> workspaceUsage(
+    String token,
+    String workspaceId,
+  ) async {
+    final response = await _get('/api/workspaces/$workspaceId/usage', token);
+    return (
+      used: (response['bytes_used'] as num).toInt(),
+      quota: (response['quota_bytes'] as num).toInt(),
+    );
+  }
+
   Future<List<WorkspaceMember>> listWorkspaceMembers(
     String token,
     String workspaceId,

@@ -123,6 +123,10 @@ pub fn api_router() -> Router<AppState> {
         .delete(workspaces::delete),
     )
     .route(
+      "/workspaces/{workspace_id}/usage",
+      get(workspaces::workspace_usage),
+    )
+    .route(
       "/workspaces/{workspace_id}/members",
       get(workspaces::list_members).post(workspaces::add_member),
     )

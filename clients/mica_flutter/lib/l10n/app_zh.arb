@@ -342,6 +342,7 @@
   "workspaceTitle": "工作区",
   "workspaceNameLabel": "工作区名称",
   "workspaceCreate": "创建",
+  "workspaceStorage": "存储",
   "workspaceRename": "重命名工作区",
   "workspaceDeleteTitle": "删除工作区",
   "workspaceDeleteConfirm": "删除“{name}”及其所有页面吗？此操作不可撤销。",

@@ -587,6 +587,7 @@
   "workspaceTitle": "Workspace",
   "workspaceNameLabel": "Workspace name",
   "workspaceCreate": "Create",
+  "workspaceStorage": "Storage",
   "workspaceRename": "Rename workspace",
   "workspaceDeleteTitle": "Delete workspace",
   "workspaceDeleteConfirm": "Delete \"{name}\" and all of its pages? This cannot be undone.",
