@@ -27,11 +27,26 @@ reachable only inside the compose network.
 ## First deployment
 
 ```bash
-cp deploy/.env.prod.example .env.prod
-vi .env.prod          # SERVER_IP + MICA_VERSION + strong JWT_SECRET / passwords
-                      # (openssl rand -hex 32)
-docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
+mkdir -p /data/mica && cd /data/mica
+
+# The two files the server needs. Pinned to a RELEASE TAG, not `main`: the
+# compose file and the images it pulls (MICA_VERSION) have to be the same
+# generation, and `main` can be ahead of the newest release.
+curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/docker-compose.single.yml
+curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/.env.prod.example -o .env.prod
+
+vi .env.prod          # UNCOMMENT SERVER_IP (it ships commented out) and fill
+                      # JWT_SECRET (ships empty). `compose config` refuses to
+                      # resolve until both are set. MICA_VERSION is already
+                      # pinned to a release; bump it when you want a newer one.
+                      # Secrets: openssl rand -hex 32
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
+
+Already have the repo checked out on the server? Then it is just
+`cp deploy/.env.prod.example .env.prod` and point `-f` at
+`deploy/docker-compose.single.yml` — but a checkout is not required, and that is
+the point: the server needs Docker and nothing else.
 
 Nothing is built: `mica-api` and `mica-web` are pulled, and the web image
 already carries nginx, its config and the Flutter bundle. The server needs
@@ -47,8 +62,9 @@ binary and run automatically at startup.
 ## Upgrades
 
 ```bash
+cd /data/mica
 vi .env.prod          # bump MICA_VERSION to the release you want
-docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d --pull always
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d --pull always
 ```
 
 No `git pull` — the compose file is the only repo file this stack needs, and
@@ -80,7 +96,7 @@ reload picks up new releases (asset files are content-hashed).
 
 | Data | Where | Backup |
 |---|---|---|
-| Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f deploy/docker-compose.single.yml exec postgres pg_dump -U mica mica > backup.sql` |
+| Documents, users, files index | volume `mica-prod-postgres` | `docker compose -f docker-compose.single.yml exec postgres pg_dump -U mica mica > backup.sql` |
 | Image bytes | volume `mica-prod-rustfs` | snapshot the volume directory |
 
 The canonical stack also ships an off-site, encrypted, deduplicated backup of

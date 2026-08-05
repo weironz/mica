@@ -195,6 +195,12 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 - **`.env` 两个关键变量**:
   - `MICA_REGISTRY=registry.cn-shenzhen.aliyuncs.com/willspace`(compose 默认值也是它)
   - `MICA_VERSION=vX.Y.Z`(由 `just deploy-prod` 改写)
+
+**别忘了 `deploy/.env.prod.example` 里的 `MICA_VERSION`**:那是自托管用户照抄的起点,
+`just deploy-prod` 改的是**节点上的** `.env`,碰不到仓库里的示例。2026-08-05 发现它还钉着
+`v0.13.6`(落后 9 个版本)—— 照文档走一遍的人装到的就是那一版。发版时一并 bump。
+也别改成 `:latest`:发版流水线只推 `:v<版本>`,registry 上那个 `latest` 是早期手工推的残留
+(2026-06-29),比任何一个在用的版本都旧。
 - **节点必须能 pull ACR**:仓库设为公开,或在节点上 `docker login registry.cn-shenzhen.aliyuncs.com`
   一次(凭据只存在节点本地)。
 - **`--no-deps`**:只重建 api + web + backup,postgres / rustfs 不动。

@@ -115,10 +115,18 @@ need to bring your own.
 <summary><b>Single server — nginx on port 80, no Traefik</b></summary>
 
 ```sh
-cp deploy/.env.prod.example .env.prod
-vi .env.prod          # SERVER_IP and MICA_VERSION, plus a strong JWT_SECRET
-                      # and passwords:  openssl rand -hex 32
-docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
+mkdir -p /data/mica && cd /data/mica
+
+# The two files the server needs. Pinned to a RELEASE TAG, not `main`: the
+# compose file and the images it pulls (MICA_VERSION) must be the same
+# generation, and `main` can be ahead of the newest release.
+curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/docker-compose.single.yml
+curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/.env.prod.example -o .env.prod
+
+vi .env.prod          # UNCOMMENT SERVER_IP (ships commented out) and fill
+                      # JWT_SECRET (ships empty) — compose refuses to resolve
+                      # until both are set.  openssl rand -hex 32
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
 
 Nothing is built — every image is pulled, so the server needs Docker and

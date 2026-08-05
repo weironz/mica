@@ -104,11 +104,22 @@ Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏�
 <summary><b>单机部署 —— nginx 占 80 端口,不需要 Traefik</b></summary>
 
 ```sh
-cp deploy/.env.prod.example .env.prod
-vi .env.prod          # 填 SERVER_IP 和 MICA_VERSION,以及足够强的
-                      # JWT_SECRET 和各种口令:  openssl rand -hex 32
-docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
+mkdir -p /data/mica && cd /data/mica
+
+# 服务器只需要这两个文件。用 **release tag** 而不是 `main`:compose 文件和它
+# 拉的镜像(MICA_VERSION)必须是同一代,而 `main` 可能比最新发布还新。
+curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/docker-compose.single.yml
+curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/.env.prod.example -o .env.prod
+
+vi .env.prod          # 把 SERVER_IP **取消注释**并填上(默认是注释掉的),
+                      # JWT_SECRET 默认为空也要填 —— 这两项没填,
+                      # compose 直接拒绝解析。 openssl rand -hex 32
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
+
+服务器上已经 clone 了仓库?那就 `cp deploy/.env.prod.example .env.prod`、
+`-f` 指向 `deploy/docker-compose.single.yml` 即可 —— 但**并不需要** clone,
+这正是重点:服务器上只要有 Docker。
 
 **什么都不用构建** —— 镜像全部是拉的,服务器上只需要 Docker。然后打开
 `http://<SERVER_IP>/`;数据库迁移在 API 启动时自动跑。
