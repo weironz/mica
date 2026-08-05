@@ -1703,6 +1703,58 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final sel = _controller.selection;
     final rect = sel == null ? null : _render?.caretRectFor(sel.focus);
     if (rect != null) conn.setCaretRect(rect);
+    _ensureCaretVisible();
+  }
+
+  /// True while a caret reveal is already booked for the next frame, so a burst
+  /// of keystrokes schedules ONE scroll instead of one per character.
+  bool _caretRevealScheduled = false;
+
+  /// Breathing room around the caret when scrolling it into view: without it the
+  /// caret lands flush against the viewport edge and the very next line typed is
+  /// off screen again.
+  static const double _caretRevealMargin = 28;
+
+  /// Scroll whatever is holding this canvas until the caret is on screen.
+  ///
+  /// Measured broken 2026-08-05 (`e2e/web_ime_probe.mjs`): typing past the
+  /// bottom of the viewport left the view pinned at the top of the document, so
+  /// you were typing into a place you could not see.
+  ///
+  /// `showOnScreen` rather than a ScrollController, for the same reason
+  /// [_canvasLink] is a LayerLink: **the editor does not own the scrollable —
+  /// the host does.** `showOnScreen` walks up to whichever viewport actually
+  /// contains the canvas and asks IT to reveal the rect, so this works without
+  /// the editor knowing who owns the controller, how deep it sits, or whether
+  /// there is one at all (the sharing page has its own host).
+  ///
+  /// **Deferred to the next frame on purpose.** `setFocusedText` notifies, which
+  /// schedules a rebuild — the new glyphs are not laid out yet, so a synchronous
+  /// `caretRectFor` returns the caret's position BEFORE this keystroke. That is
+  /// invisible mid-line and exactly wrong at a line wrap, which is the one
+  /// moment the scroll matters.
+  ///
+  /// Called only from the input paths (typing, IME composition, arrows, click,
+  /// structural edits), never from [_onControllerChanged]: that also fires for
+  /// REMOTE edits, and yanking the view to follow someone else's typing is worse
+  /// than not scrolling at all.
+  void _ensureCaretVisible() {
+    if (_caretRevealScheduled) return;
+    _caretRevealScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _caretRevealScheduled = false;
+      if (!mounted) return;
+      final render = _render;
+      final focus = _controller.selection?.focus;
+      if (render == null || !render.attached || focus == null) return;
+      final rect = render.caretRectFor(focus);
+      if (rect == null) return;
+      render.showOnScreen(
+        rect: rect.inflate(_caretRevealMargin),
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   // TextInputClient ----------------------------------------------------------
@@ -1740,6 +1792,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final f = _controller.selection?.focus;
       final rect = f == null ? null : _render?.caretRectFor(f);
       if (rect != null) _conn?.setCaretRect(rect);
+      // A long preedit can wrap a line too — the caret must stay visible while
+      // the candidate is still being composed, not only once it commits.
+      _ensureCaretVisible();
       return;
     }
 
@@ -1818,6 +1873,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     _refreshSlash();
     _refreshPageLink();
+    // The ordinary typing path: it returns without touching
+    // `_syncImeFromSelection` (the OS is the source of truth while typing), so
+    // the reveal has to be asked for here or plain typing never scrolls.
+    _ensureCaretVisible();
   }
 
   @override

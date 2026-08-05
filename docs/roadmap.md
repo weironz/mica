@@ -135,19 +135,23 @@
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。
   **2026-08-03 核实:比原文写的更糟** —— 编辑器目录里 `Semantics` **0 处**(不是「少」,是没有),
   `TextDirection.ltr` **31 处**(2026-08-05 复数;原文写「10+」,08-03 写 32)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
-- 🟡 **Web:caret 不跟随光标滚动**(2026-08-05 实测,`e2e/web_ime_probe.mjs` 是复现器)——
+- ✅ ~~**Web:caret 不跟随光标滚动**~~(2026-08-05 实测发现并当天修掉)——
   原条目笼统写「Web IME/光标滚动实况调优:合成态/游离换行、caret scroll-into-view」,
-  从 Milestone 1 挂到现在**没有任何实测**。拿真 Chrome + CDP `Input.imeSetComposition`
+  从 Milestone 1 挂到现在**零实测**。拿真 Chrome + CDP `Input.imeSetComposition` 逐项打
   (不是手工 dispatch CompositionEvent —— 那会绕开浏览器自己的合成状态机,而「合成态」
-  的 bug 恰恰活在那一层)在本地 web 构建上逐项打:
-  **① 合成态输入:好的。**「中文输入」逐字 preedit 后提交,正确落进文档,字数角标同步。
-  **② 游离换行:复现不了。** 合成中按 Enter 只提交候选,没有多出换行,文字留在同一行。
-  **③ caret scroll-into-view:确认坏的。** 连打 28 行(人类速度 80ms/键)直到光标远在
-  屏幕外,**视口自始至终停在文档顶部**,末尾的 `<<<CARET-IS-HERE>>>` 标记完全不可见 ——
-  也就是「打字打进一个自己看不见的地方」。
-  **一个差点报错的观察**:第一版探针以 CDP 的最快速度发键,结果行序错乱(line 4/7/14/23…)。
-  降到人类速度后顺序完全正确 —— 那是**探针跑过了编辑器**,不是编辑器的 bug。
-  滚动这条在两种速度下都成立,这才是它算数的原因。(S–M)
+  的 bug 恰恰活在那一层),复现器留在 `e2e/web_ime_probe.mjs`:
+  **① 合成态输入:好的**(逐字 preedit 后提交正确落盘);**② 游离换行:复现不了**
+  (合成中按 Enter 只提交候选);**③ caret scroll-into-view:确认坏的** —— 连打 28 行到
+  光标远在屏幕外,视口自始至终停在文档顶部,即「打字打进一个自己看不见的地方」。
+  **根因是结构性的**:编辑器**不拥有滚动容器,宿主才拥有**,所以编辑器里根本没有
+  ScrollController 可供人察觉「它从没被驱动过」—— 这也是它能整整一个里程碑没人发现的原因。
+  **修法**:`showOnScreen(rect:)` 向上找到真正装着画布的 viewport 去揭示,不需要知道谁持有
+  controller、嵌多深(与 `_canvasLink` 用 LayerLink 是同一个理由)。**延后一帧**是必须的:
+  `setFocusedText` 只是排了一次重建,新字形还没布局,同步取 caret 矩形拿到的是**上一键之前**
+  的位置 —— 行内看不出来,恰好在换行处最错,而那正是滚动唯一要紧的时刻。只挂在输入路径上,
+  **不挂 `_onControllerChanged`**:后者远端编辑也会触发,跟着别人打字甩视口比不滚更糟。
+  回归测试 `caret_scroll_into_view_test.dart`(两条:该滚时滚、已在屏内不滚),**做过变异验证**
+  —— 摘掉修复第一条立刻变红。
 - **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
 - 🆕 **集成 AI 升级为「能操作文档的 agent」(候选,已调研背书,2026-07-23)** —— 现
   `/ai/complete`(`ai.rs`)只是**单次 prompt→Markdown 补全**,无 tools/agent 循环;而
