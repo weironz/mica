@@ -173,17 +173,31 @@ List<String> setupArgs({required String logPath, required int waitPid}) => [
 ];
 
 /// Whether the downloaded installer [bytes] match the release's expected [size]
-/// and [sha256] (lowercase hex). A null field is not checked — an older release
-/// has no `digest`, so only its `size` gates. Pure (no I/O), so the integrity
-/// gate that stands between a network download and running an .exe is unit-tested
+/// and [sha256] (lowercase hex). Pure (no I/O), so the integrity gate that
+/// stands between a network download and running an .exe is unit-tested
 /// directly. `size` rejects a truncated download; `sha256` rejects a corrupted
 /// or swapped one.
+///
+/// **A missing [sha256] is a REFUSAL, not a downgrade.** It used to mean "skip
+/// that check", which quietly reduced the gate to `size` alone — and size only
+/// catches truncation: a file of identical length with different contents walks
+/// straight through, which is the exact thing this gate exists to stop.
+///
+/// The digest comes from GitHub's `assets[].digest`, and today it is always
+/// populated (verified 2026-08-05: all four assets of v0.13.13 carry one). That
+/// is the point — the double check currently works BY ACCIDENT, and if GitHub
+/// ever stopped filling the field nothing would announce the downgrade.
+/// Refusing makes the dependency explicit: the updater either verifies the
+/// installer or declines to run it, and the user updates by hand.
+///
+/// Publishing our own `SHA256SUMS` from CI was considered and rejected: it would
+/// share a trust root with the asset it vouches for (both come from the same
+/// release), so it adds no security. What would is signing the installer — a
+/// separate item, deliberately not done (it needs a code-signing certificate).
 bool installerMatches(List<int> bytes, {int? size, String? sha256}) {
   if (size != null && bytes.length != size) return false;
-  if (sha256 != null && crypto.sha256.convert(bytes).toString() != sha256) {
-    return false;
-  }
-  return true;
+  if (sha256 == null) return false;
+  return crypto.sha256.convert(bytes).toString() == sha256;
 }
 
 /// Best-effort delete of a rejected/failed installer download, so a corrupt file

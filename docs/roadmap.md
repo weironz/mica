@@ -137,7 +137,7 @@
 
 - **无触屏选择手势** —— 无长按选词/选择手柄/放大镜,手机端文本选择基本不可用。(L)
 - ⏸️ **Windows 未签名(SmartScreen 告警)—— 已拍板不做(2026-08-04)**,不是遗留 TODO。路径本身清楚(SignPath CA 证书接入 Inno SignTool,desktop-plan),**卡的是买证书**。代价:每个新用户看到的第一样东西就是「不可信」。(M)
-- 🟡 **自动更新器不校验下载完整性/哈希/签名**(medium) —— **完整性校验已做**(508808e):下载后经纯函数 `installerMatches` 验 `size`(GitHub `assets[].size`,恒有→拒截断)+ `sha256`(`assets[].digest`,GitHub 服务端算→拒换包/损坏),不符即删+`updaterIntegrityFailed`,绝不运行;无 digest 老 release 退化仅 size。**残留**:① **Authenticode 签名**——安装包本身仍未签名(需代码签名证书,独立项);② digest 依赖 GitHub 是否为我方资产填充(未填时仅 size 兜底),要更强可让 release CI 自发 `SHA256SUMS`。(`updater_desktop.dart` `installerMatches`)(证书项 M / 其余已做)
+
 - **window_manager→nativeapi / Turso 观望**(各 S,已隔离在 trait 后)。
 
 ## 客户端质量与兜底 🆕

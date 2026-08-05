@@ -59,9 +59,18 @@ void main() {
     test('rejects a swapped download (sha256 mismatch)', () {
       expect(installerMatches(bytes, size: 3, sha256: 'deadbeef'), isFalse);
     });
-    test('falls back to size-only when the release has no digest', () {
-      expect(installerMatches(bytes, size: 3), isTrue);
-      expect(installerMatches(bytes, size: 4), isFalse);
+    /// This used to assert the opposite — that a missing digest falls back to
+    /// size-only. That IS what the code did, and it is the wrong policy for a
+    /// gate whose job is "never run what you could not verify": size alone only
+    /// catches truncation, so a same-length replacement passed.
+    ///
+    /// GitHub populates `assets[].digest` for every asset today (checked
+    /// 2026-08-05 against v0.13.13), so this path should never fire in
+    /// practice. That is precisely why it has to refuse rather than degrade —
+    /// otherwise the day it stops being populated, nothing announces it.
+    test('refuses when the release carries no digest — never size-only', () {
+      expect(installerMatches(bytes, size: 3), isFalse);
+      expect(installerMatches(bytes), isFalse);
     });
   });
 }
