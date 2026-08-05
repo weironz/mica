@@ -52,12 +52,19 @@ void main() {
       body: jsonEncode({
         'email': 'sync$stamp@test.dev',
         'display_name': 'Sync',
-      // NOT `password123`: that string is literally in the server's common-password list
-      // (`password_strength.rs`), so registration answered 400 and this test had
-      // been broken since that guard landed — unnoticed, because the file was
-      // excluded from CI. Bringing it into CI (2026-08-05) surfaced it on the
-      // first real run.
-      'password': 'mica-sync-e2e-2026',
+      // This password has to clear BOTH of `password_strength.rs`'s rules, and
+      // getting it wrong costs a full CI round trip — so it was checked against
+      // the real endpoint before landing (2026-08-05: 204).
+      //
+      //   1. not in the common list — `password123` is literally in it
+      //   2. no >=4-char run shared with the email's LOCAL PART or the display
+      //      name — which rules out anything containing `sync`, including the
+      //      first replacement tried here
+      //
+      // The test had been broken since that guard landed and nobody knew,
+      // because this file was excluded from CI. Bringing it in surfaced it on
+      // the first real run.
+      'password': 'orbital-kettle-2026',
       }),
     );
     expect(reg.statusCode, inInclusiveRange(200, 299), reason: reg.body);
