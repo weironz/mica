@@ -125,3 +125,98 @@ jobs:
             exit 1
           }
           Write-Host "All offline integration tests passed"
+
+  # The DESKTOP client against a REAL server. The offline set above proves the
+  # FFI and the client's own logic; this proves the thing neither it nor the
+  # Linux jobs in ci.yml can: a real Windows app talking WS + CRDT to a real
+  # api-server over a real Postgres.
+  #
+  # Only `cloud_sync_test` of the four excluded files runs here — it is the one
+  # that needs no OBJECT STORAGE. The other three (migration_sync,
+  # offline_image_reconcile, page_switch_fidelity) upload real image bytes
+  # through presign → PUT → complete, and a Windows runner cannot start the
+  # rustfs Linux container (GitHub's Windows runners have no Linux service
+  # containers). Standing up a Windows S3 binary for them is the path if it ever
+  # matters; it is not worth it for three tests today.
+  cloud:
+    name: Flutter integration_test (Windows, live server)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mica-api-server-itest
+
+      # windows-latest ships PostgreSQL but leaves it stopped, and there is no
+      # `services:` block on Windows runners — that is the whole reason these
+      # tests were excluded. Starting the preinstalled service is enough: the
+      # api runs migrations itself at boot.
+      - name: Start PostgreSQL
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name postgresql* | Select-Object -First 1
+          Set-Service -Name $svc.Name -StartupType Manual
+          Start-Service -Name $svc.Name
+          $env:PGPASSWORD = 'root'
+          $psql = (Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\psql.exe' | Select-Object -First 1).FullName
+          & $psql -U postgres -c "CREATE USER mica WITH PASSWORD 'mica' SUPERUSER;"
+          & $psql -U postgres -c "CREATE DATABASE mica OWNER mica;"
+          Write-Host "postgres up: $($svc.Name)"
+
+      - name: Build + start the api
+        shell: pwsh
+        env:
+          DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
+        run: |
+          cargo build -p mica-api-server
+          $env:APP_ENV = 'development'
+          $env:HTTP_ADDR = '127.0.0.1:8090'
+          $env:DATABASE_URL = 'postgres://mica:mica@127.0.0.1:5432/mica'
+          $env:JWT_SECRET = 'ci-integration-secret'
+          $env:ACCESS_TOKEN_TTL_SECONDS = '86400'
+          # cloud_sync_test registers its own throwaway account, and
+          # registration is CLOSED by default (MICA_REGISTRATION_ENABLED).
+          $env:MICA_REGISTRATION_ENABLED = 'true'
+          Start-Process -FilePath 'target\debug\mica-api-server.exe' `
+            -RedirectStandardOutput api.log -RedirectStandardError api.err -NoNewWindow
+          # Health-gate rather than sleep: the first boot also runs migrations
+          # and the derived-column backfill.
+          $ok = $false
+          foreach ($i in 1..60) {
+            try {
+              Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8090/api/health -TimeoutSec 2 | Out-Null
+              $ok = $true; break
+            } catch { Start-Sleep -Seconds 2 }
+          }
+          if (-not $ok) {
+            Write-Host "::error::api never became healthy"
+            Get-Content api.log, api.err -ErrorAction SilentlyContinue | Select-Object -Last 60
+            exit 1
+          }
+          Write-Host "api healthy on :8090"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/mica_flutter/rust
+          key: mica-flutter-ffi-itest-cloud
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+        working-directory: clients/mica_flutter
+
+      - name: cloud_sync_test against the live server
+        shell: pwsh
+        working-directory: clients/mica_flutter
+        run: |
+          flutter test integration_test/cloud_sync_test.dart -d windows `
+            --dart-define=MICA_TEST_API=http://127.0.0.1:8090
+
+      - name: api log (on failure)
+        if: failure()
+        shell: pwsh
+        run: Get-Content api.log, api.err -ErrorAction SilentlyContinue | Select-Object -Last 120

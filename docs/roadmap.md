@@ -173,7 +173,19 @@
 
 ## 开发者体验 / CI / Markdown
 
-- 🟡 **CI 补 Windows 集成测试**(2026-07-23:离线子集已进)—— 新 `.github/workflows/flutter-integration.yml`:windows-latest **串行**跑 **14 个离线/客户端**集成测试(文件间杀 `mica_flutter.exe`,化解单实例守卫导致的 debug-connection race——已复现:残留进程锁住下次启动)。**残留**:4 个需活的 dev 栈(postgres+rustfs+api)的测试仍排除(`cloud_sync_test`/`migration_sync_test`/`offline_image_reconcile_test`/`page_switch_fidelity_test`,含那对 race 文件)——CI 里起全栈超范围。且 12/14 是读文件头判定离线(实跑了 2)、首次 CI 真跑确认。(M) `[需后端]`(残留部分)
+- 🟡 **CI 的 Windows 集成测试:4 个排除项已收 1,剩 3 个卡对象存储**(2026-08-05 复核+补)——
+  `flutter-integration.yml` 在 windows-latest **串行**跑离线集成测试(文件间杀
+  `mica_flutter.exe`,化解单实例守卫的 debug-connection race)。
+  **本轮补上 `cloud_sync_test`**:新 `cloud` job 起 windows-latest 预装的 PostgreSQL
+  (Windows runner 没有 `services:` 块 —— 这正是当初排除它们的原因)+ 本机 cargo 起 api,
+  跑真 Windows 客户端 ↔ 真服务端的 WS/CRDT 收敛。**剩 3 个**(migration_sync /
+  offline_image_reconcile / page_switch_fidelity)要走 presign→PUT→complete 传真图片字节,
+  而 Windows runner 起不了 rustfs 的 Linux 容器;要做只能上 Windows 版 S3 二进制,
+  为三个测试不值。
+  **顺带修了真正的缺口**(这一轮事故的根因不是缺测试):`cloud_sync_integrity_test`
+  **本来就在 CI 里**、并且红了六次提交,失效的是本地闸门 —— `just test` 报「All tests
+  passed」被读成了「都过了」。现在它跑完会明说自己没覆盖 integration_test,并给出
+  `gh run list` 的查法;另加 `just test-integration` 让离线那批能在本机跑。(S 剩余)
 - 🟡 **不可信输入解析面 fuzz:三个面都已覆盖,yrs 那面挖出三类问题、已报上游并提 PR**(2026-08-05)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**前两个**(`markdown/tests/proptest_parse.rs`、`interchange/tests/proptest_zip.rs`,2026-07-23)未挖出 panic,落成快回归门。
   **第三个 2026-08-05 补上**(`mica-core/tests/proptest_yrs.rs`),而**搁置它的理由本身是错的**:原条目写「UB 要 cargo-fuzz + sanitizer 才抓得住,proptest 只抓 panic 不够」—— 实际普通 proptest **几秒就撞上了**,根本没用上 ASan。搁置的代价是这个面白空了两周。
   **挖出三类**(yrs 0.27.3,最新版):① `assert!` panic(`block.rs:92`)—— unwinding,服务端 `catch_unwind` 兜得住;② **UB** `invalid value for char` —— 非 unwinding,兜不住,release 下是静默 UB;③ **无界分配** —— **21 字节让 yrs 要 215 TB**,分配失败直接 abort,debug/release 都复现。②③ 从 `push_update` 可达 = **任何已认证客户端都能打挂 api 进程**。

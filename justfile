@@ -111,6 +111,14 @@ app target="windows":
 # here by `just parity-check`. They are now caught by the `container` job in
 # ci.yml, on every push — that check was manual and optional, so it was rarely
 # run, and a check nobody runs catches nothing.
+# The tail of this recipe prints what it does NOT run.
+#
+# 2026-08-05: a sync regression turned `integration_test/` red and STAYED red for
+# six commits, because every local check was green and nobody looked at CI.
+# `just test` reporting "All tests passed" is what made that comfortable. The
+# integration suite needs a Windows desktop device (and one file a live server),
+# so it cannot run here — but a gate that is silent about its own edges reads as
+# a gate over everything.
 [doc("Run all tests (Rust workspace + Flutter)")]
 test:
     # The Postgres-backed tests (`pool()` in documents.rs / password_reset.rs)
@@ -133,6 +141,32 @@ test:
     # local store tests only run under this invocation).
     cargo test -p mica-core --features store
     cd clients/mica_flutter && {{flutter}} test
+    @echo ""
+    @echo "==> NOT covered by this recipe: clients/mica_flutter/integration_test/"
+    @echo "    (real Windows app + FFI, and one file needs a live server)."
+    @echo "    Those run ONLY in the 'Flutter Integration Tests' workflow."
+    @echo "    Before merging anything under lib/cloud, lib/editor or crates/mica-core:"
+    @echo "      gh run list --workflow='Flutter Integration Tests' --limit 3"
+
+[doc("The integration suite `just test` cannot reach: real Windows app + FFI. Needs a Windows desktop.")]
+test-integration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd clients/mica_flutter
+    # Serial with a kill between files, exactly as CI does: the app is
+    # single-instance, and a lingering process makes the next launch fail with
+    # "Error waiting for a debug connection".
+    for f in integration_test/*.dart; do
+      case "$(basename "$f")" in
+        # Need the whole dev stack (`just dev`) — run those by hand.
+        cloud_sync_test.dart|migration_sync_test.dart|offline_image_reconcile_test.dart|page_switch_fidelity_test.dart)
+          echo "== skip $f (needs the dev stack; see the workflow header)"; continue;;
+      esac
+      echo "== $f"
+      {{flutter}} test "$f" -d windows
+      powershell -NoProfile -Command "Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force" || true
+      sleep 3
+    done
 
 [doc("Static analysis on both sides")]
 check:
