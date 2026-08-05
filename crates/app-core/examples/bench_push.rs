@@ -48,7 +48,7 @@ fn main() {
             .with_children((0..blocks).map(|i| format!("b{i}")).collect())];
         for i in 0..blocks {
             bs.push(
-                mica_core::Block::new(format!("b{i}"), "paragraph").with_text(&"字".repeat(120)),
+                mica_core::Block::new(format!("b{i}"), "paragraph").with_text("字".repeat(120)),
             );
         }
         let state = mica_core::MicaDoc::from_blocks("r", &bs).encode_state();

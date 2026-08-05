@@ -301,8 +301,13 @@ mod diff_tests {
         crate::marks_from_data(&serde_json::json!({ "marks": v }))
     }
 
+    /// One format op with its attributes flattened to sorted (key, value)
+    /// strings — readable in a failure message and order-independent, which the
+    /// raw `Attrs` HashMap is not.
+    type FlatOp = (u32, u32, Vec<(String, String)>);
+
     /// Flatten ops to something readable and order-independent per op.
-    fn flat(ops: Vec<(u32, u32, Attrs)>) -> Vec<(u32, u32, Vec<(String, String)>)> {
+    fn flat(ops: Vec<(u32, u32, Attrs)>) -> Vec<FlatOp> {
         ops.into_iter()
             .map(|(s, l, a)| {
                 let mut kv: Vec<(String, String)> = a
