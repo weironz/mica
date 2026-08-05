@@ -125,22 +125,6 @@
   **② 排序/高亮/分词**照旧:各自独立 UX 特性,另立项,不是 M1 的尾巴。(各 S–L) `[需后端]`
 
 - 🟡 **表格**(2026-07-22 复核:原描述大幅失实)—— 实测:**富行内单元格**(粗体/斜体/行内代码/链接,cell 存可重解析 md 源码、两端渲染+编辑,`cellDisplaySpan`/`CellEditController`)与**矩形/行列选区**(跨格拖选、点行/列把手选整行列、Ctrl+C/X 复制为 TSV+HTML、Delete 清空、Esc 清除)**本来就能用**;本轮仅补 **Shift+点击扩展选区**。**合并单元格有意不做**——8 家同类(Notion/AFFiNE/AppFlowy/Outline/siyuan/Joplin/logseq/anytype)调研定论:合并与「Markdown 权威 + round-trip 不变量」在 GFM 下**架构级互斥**(siyuan 能合并因它放弃了 md 权威;Joplin 同约束只能冻单向 HTML;Logseq/Notion 干脆不做)。要做只能另开 HTML 逃生舱块退出 round-trip,是独立决策。块级单元格/列宽 GFM 表达不了,同样不做。
-- ✅ **反向链接/引用面板/关系图**(2026-08-05 全部做完)—— 正向 `[[` 已建;**引用面板**(7de2c2a);~~①并发扫描~~ ✅(6612330);~~②反向索引表~~ ✅(1775b31);~~③本地(offline)反链~~ ✅(44c4f5e);~~④关系图~~ ✅。
-  **②的经过**留作方法记录:条目原写「规模成瓶颈再上,现在故意不建」——**没有数字支撑**。
-  拿生产快照实测 **release 690 ms**(798 篇),而同库全文搜索 53 ms;贵 13× 且**跟着每次翻页触发**,
-  于是翻案:`link_targets uuid[]` + GIN(migration 0019),三条写路径同语句 co-write,**690 ms → 2–10 ms**。
-  顺手量出两件不在计划里的:回填一行一 UPDATE 要 **43.8 s**(跑在接受流量之前 = 部署首启不可用),
-  改成每批一事务后 **6.7 s**;正确性拿真实工作区**736 个目标逐一比对**索引与全量解码(384 个有反链)全部一致。
-  **③**:本地 `doc_snapshot.link_targets`(JSON)与 state **同一条 upsert** co-write —— 本地比云端更强,
-  只有一条写路径,结构上不可能漂移;查询走 `json_each`。`page_link_targets` 因此**再下沉到 mica-core**,
-  两个世界共用一个「什么算页面链接」的定义。原来 `onLoadBacklinks: local ? null` 让面板在本地模式**整个隐藏**,
-  被三篇文档链接的页面和没人链接的页面长得一模一样。
-  **④关系图**:自绘画布(`ui/page_graph_view.dart`),Fruchterman–Reingold **一次性跑到固定轮数**而非持续动画 ——
-  确定性布局,同一工作区每次画出同一张图,找到过的页面还在原地。数据两世界同形(云 `GET .../graph` /
-  本地 `graph_local`),都从 `link_targets` 出,**不解码任何文档**。
-  **一个刻意的取舍**:没有任何链接的页面**不画,只报数**。生产快照 798 篇里只有 136 篇有链接 ——
-  画出 662 个孤立点会把这个视图存在的意义(结构)埋掉;但静默省略等于谎报工作区,所以数字上屏。
-  **剩下的**:边只有直线、没有方向箭头,节点不可拖拽 —— 都是「够用」的下限,真有需求再说。`[需后端]`
 - 🟡 **页面属性/标签**(**M1 已完成**,2026-07-22)—— 走 front matter 权威路(调研定论:同类 md 权威系均如此,见 `docs/page-properties.md`)。**M1 全部落地**:① 数据/权威层——Rust `crates/markdown/src/properties.rs`(解析扁平子集 + 类型推断 + 外科式写回,round-trip 不变量经用户批准从字节保真降为规范化子集稳定)+ Dart 镜像 `properties.dart`,两端逐条测试一致(Rust 9 / Dart 10 全绿);② 页头属性面板 `property_panel.dart`(读 root 块 `data['front_matter']` → 类型化编辑:文本/数字/日期文本框、勾选、tags chips 增删 + 增/删属性 → 编辑经 `onApplyOperations` 单入口自分派写回 root 块,local/cloud-CRDT/cloud-REST 三模式通用,无需穿层新回调);flutter build windows 通过。tags = `tags:` list 属性。**Obsidian-lite 闭环已完成**:增删改属性(类型 text/number/checkbox/date/list)、tags chips、**可搜**(属性值折进 content_text,list 值以 `#值` 存)、**tag 点击精确跳页**(搜 `#值` 只命中真正带该标签的页,ce13cef)、**默认隐藏在页头 ⓘ 图标后**(不占版)+ **AppFlowy 式面包屑路径**(579272f)、AFFiNE 式紧凑面板(7379444)。**故意不做/另立项**:① 数据库视图级「按属性筛选/排序/看板」——是 Notion 数据库那套,与 markdown 权威+round-trip 架构互斥(要豁免 md 权威,AFFiNE/siyuan 路),独立大决策;~~② 存量页要下次编辑才索引属性~~ ✅ **v0.13.14 顺带关掉,不是单独做的**:migration 0019 把每行 `link_targets` 置 NULL,而回填条件是 `content_text = '' OR link_targets IS NULL` —— 于是**每一行的 content_text 都被重新推导**,其中就含 front matter 的属性值。生产快照上做过哨兵验证(把某行 content_text 改成哨兵、link_targets 置 NULL,跑真回填后哨兵被覆盖)。存量页无需逐页编辑即可搜属性;③ 日期选择器 UI(现文本输入)。**数据库视图(带类型列/筛选/relation)另立项**——与 markdown 权威+round-trip 架构互斥,要么破双表示红线要么豁免 md 权威(AFFiNE/siyuan 路),是独立大决策。(L) `[需后端]`
 - 🆕 **评论 Phase 2 + 建议(suggest mode)**(2026-08-03 立,Phase 1 整条已归档)—— Phase 1 已闭环并
   经真机验收(评论栏、跨块高亮、锚点随文字位移),整条见 `roadmap-done.md`。**没做的三件**:
@@ -153,23 +137,6 @@
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。
   **2026-08-03 核实:比原文写的更糟** —— 编辑器目录里 `Semantics` **0 处**(不是「少」,是没有),
   `TextDirection.ltr` **31 处**(2026-08-05 复数;原文写「10+」,08-03 写 32)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
-- ✅ ~~**Web:caret 不跟随光标滚动**~~(2026-08-05 实测发现并当天修掉)——
-  原条目笼统写「Web IME/光标滚动实况调优:合成态/游离换行、caret scroll-into-view」,
-  从 Milestone 1 挂到现在**零实测**。拿真 Chrome + CDP `Input.imeSetComposition` 逐项打
-  (不是手工 dispatch CompositionEvent —— 那会绕开浏览器自己的合成状态机,而「合成态」
-  的 bug 恰恰活在那一层),复现器留在 `e2e/web_ime_probe.mjs`:
-  **① 合成态输入:好的**(逐字 preedit 后提交正确落盘);**② 游离换行:复现不了**
-  (合成中按 Enter 只提交候选);**③ caret scroll-into-view:确认坏的** —— 连打 28 行到
-  光标远在屏幕外,视口自始至终停在文档顶部,即「打字打进一个自己看不见的地方」。
-  **根因是结构性的**:编辑器**不拥有滚动容器,宿主才拥有**,所以编辑器里根本没有
-  ScrollController 可供人察觉「它从没被驱动过」—— 这也是它能整整一个里程碑没人发现的原因。
-  **修法**:`showOnScreen(rect:)` 向上找到真正装着画布的 viewport 去揭示,不需要知道谁持有
-  controller、嵌多深(与 `_canvasLink` 用 LayerLink 是同一个理由)。**延后一帧**是必须的:
-  `setFocusedText` 只是排了一次重建,新字形还没布局,同步取 caret 矩形拿到的是**上一键之前**
-  的位置 —— 行内看不出来,恰好在换行处最错,而那正是滚动唯一要紧的时刻。只挂在输入路径上,
-  **不挂 `_onControllerChanged`**:后者远端编辑也会触发,跟着别人打字甩视口比不滚更糟。
-  回归测试 `caret_scroll_into_view_test.dart`(两条:该滚时滚、已在屏内不滚),**做过变异验证**
-  —— 摘掉修复第一条立刻变红。
 - **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
 - 🆕 **集成 AI 升级为「能操作文档的 agent」(候选,已调研背书,2026-07-23)** —— 现
   `/ai/complete`(`ai.rs`)只是**单次 prompt→Markdown 补全**,无 tools/agent 循环;而
