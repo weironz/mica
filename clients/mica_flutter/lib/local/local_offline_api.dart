@@ -98,6 +98,10 @@ abstract interface class LocalOfflineApi {
   /// backlinks renders nothing either way, so the panel simply stays hidden.
   Future<List<Backlink>> backlinksLocal(String viewId);
 
+  /// The page-link graph of this device's workspace, for the graph view.
+  /// Empty on web — no on-device store.
+  Future<PageGraph> graphLocal();
+
   /// Index up to [limit] documents saved before the search projection existed.
   /// Returns how many it did; fewer than [limit] means the backlog is done.
   Future<int> backfillSearchIndex(int limit);

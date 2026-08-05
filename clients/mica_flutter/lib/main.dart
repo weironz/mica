@@ -39,6 +39,7 @@ import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/format_bytes.dart';
 import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
+import 'ui/page_graph_view.dart';
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/panel_kit.dart';
@@ -2088,6 +2089,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// linked to. On web `backlinksLocal` returns empty (no on-device store), but
   /// unlike search that needs no special case: a page with no backlinks renders
   /// nothing either way, so the panel just stays hidden.
+  /// The page-link graph of the open workspace, from whichever world it is.
+  Future<PageGraph> _loadGraph() async {
+    if (_activeIsLocal) return _local.graphLocal();
+    final session = _session;
+    final workspace = _selectedWorkspace;
+    if (session == null || workspace == null) return PageGraph.empty;
+    return _api.workspaceGraph(session.accessToken, workspace.id);
+  }
+
   Future<List<Backlink>> _loadBacklinks(String viewId) async {
     if (_activeIsLocal) return _local.backlinksLocal(viewId);
     final session = _session;
@@ -5622,6 +5632,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // in 本地模式 and the endpoint in the cloud. It used to be `local ? null`,
       // which hid the panel outright: a locally-linked page looked unlinked.
       onLoadBacklinks: _loadBacklinks,
+      onLoadGraph: _loadGraph,
       // Local workspaces have no server to bundle the zip; SAY so rather than
       // handing back Uint8List(0), which the caller happily saved as a 0-byte
       // page.zip and called it a successful export.
@@ -6326,6 +6337,7 @@ class WorkspaceView extends StatefulWidget {
     this.onSearch,
     required this.onOpenSearchResult,
     this.onLoadBacklinks,
+    this.onLoadGraph,
     required this.onExportPageZip,
     required this.onExportPage,
     required this.onCopyPageMarkdown,
@@ -6608,6 +6620,10 @@ class WorkspaceView extends StatefulWidget {
   /// backlinks panel under the editor. Null in 本地模式 — the local world has no
   /// backlinks endpoint, so the panel is hidden there entirely.
   final Future<List<Backlink>> Function(String viewId)? onLoadBacklinks;
+
+  /// The workspace's page-link graph, for the graph view. Null only while there
+  /// is no workspace to ask about.
+  final Future<PageGraph> Function()? onLoadGraph;
   final Future<Uint8List> Function() onExportPageZip;
   final Future<({Uint8List bytes, String name, String mime})> Function(
     String title,
@@ -7301,6 +7317,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ),
                   ),
                   const SizedBox(width: 4),
+                  // The graph is WORKSPACE-scoped, so it belongs here rather
+                  // than next to search: search sits above the switcher because
+                  // it spans every workspace, and this one shows the links
+                  // inside the workspace you have selected.
+                  IconButton(
+                    tooltip: context.l10n.graphTitle,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onLoadGraph == null ||
+                            widget.selectedWorkspace == null
+                        ? null
+                        : _openGraph,
+                    icon: const Icon(Icons.hub_outlined, size: 20),
+                  ),
                   IconButton(
                     tooltip: context.l10n.workspaceSettings,
                     visualDensity: VisualDensity.compact,
@@ -9823,6 +9852,24 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
       }
     }
+  }
+
+  /// The graph opens as a large dialog rather than a route: it is something you
+  /// glance at and dismiss, and a route would lose the page you were reading.
+  void _openGraph() {
+    final load = widget.onLoadGraph;
+    if (load == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (context) => _GraphDialog(
+        load: load,
+        currentViewId: widget.selectedView?.id,
+        onOpen: (viewId) {
+          Navigator.of(context).pop();
+          widget.onOpenSearchResult(viewId);
+        },
+      ),
+    );
   }
 
   void _openSearch([String? initialQuery]) {

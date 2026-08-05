@@ -134,6 +134,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LocalBacklink> dco_decode_list_local_backlink(dynamic raw);
 
   @protected
+  List<LocalGraphEdge> dco_decode_list_local_graph_edge(dynamic raw);
+
+  @protected
+  List<LocalGraphNode> dco_decode_list_local_graph_node(dynamic raw);
+
+  @protected
   List<LocalSearchHit> dco_decode_list_local_search_hit(dynamic raw);
 
   @protected
@@ -165,6 +171,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalBacklink dco_decode_local_backlink(dynamic raw);
+
+  @protected
+  LocalGraph dco_decode_local_graph(dynamic raw);
+
+  @protected
+  LocalGraphEdge dco_decode_local_graph_edge(dynamic raw);
+
+  @protected
+  LocalGraphNode dco_decode_local_graph_node(dynamic raw);
 
   @protected
   LocalSearchHit dco_decode_local_search_hit(dynamic raw);
@@ -359,6 +374,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<LocalGraphEdge> sse_decode_list_local_graph_edge(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<LocalGraphNode> sse_decode_list_local_graph_node(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<LocalSearchHit> sse_decode_list_local_search_hit(
     SseDeserializer deserializer,
   );
@@ -400,6 +425,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalBacklink sse_decode_local_backlink(SseDeserializer deserializer);
+
+  @protected
+  LocalGraph sse_decode_local_graph(SseDeserializer deserializer);
+
+  @protected
+  LocalGraphEdge sse_decode_local_graph_edge(SseDeserializer deserializer);
+
+  @protected
+  LocalGraphNode sse_decode_local_graph_node(SseDeserializer deserializer);
 
   @protected
   LocalSearchHit sse_decode_local_search_hit(SseDeserializer deserializer);
@@ -636,6 +670,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_local_graph_edge(
+    List<LocalGraphEdge> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_local_graph_node(
+    List<LocalGraphNode> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_local_search_hit(
     List<LocalSearchHit> self,
     SseSerializer serializer,
@@ -691,6 +737,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_local_backlink(LocalBacklink self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_local_graph(LocalGraph self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_local_graph_edge(
+    LocalGraphEdge self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_local_graph_node(
+    LocalGraphNode self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_local_search_hit(

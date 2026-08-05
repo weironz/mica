@@ -410,6 +410,79 @@ class Backlink {
   final String title;
 }
 
+/// The page-link graph of a workspace, for the graph view.
+///
+/// [unlinked] is a COUNT, not nodes. Most pages in a real library link to
+/// nothing (a production snapshot: 798 documents, 136 with any link), so drawing
+/// them would bury the structure the view exists to show — but omitting them
+/// silently would misrepresent the workspace, hence the number.
+class PageGraph {
+  const PageGraph({
+    required this.nodes,
+    required this.edges,
+    required this.unlinked,
+  });
+
+  factory PageGraph.fromJson(Map<String, dynamic> json) {
+    return PageGraph(
+      nodes: [
+        for (final n in json['nodes'] as List<dynamic>)
+          GraphNode.fromJson(n as Map<String, dynamic>),
+      ],
+      edges: [
+        for (final e in json['edges'] as List<dynamic>)
+          GraphEdge.fromJson(e as Map<String, dynamic>),
+      ],
+      unlinked: json['unlinked'] as int? ?? 0,
+    );
+  }
+
+  static const empty = PageGraph(nodes: [], edges: [], unlinked: 0);
+
+  final List<GraphNode> nodes;
+  final List<GraphEdge> edges;
+  final int unlinked;
+
+  bool get isEmpty => nodes.isEmpty;
+}
+
+/// One page in the graph. [degree] is how many edges touch it (in + out) — the
+/// view sizes hubs by it rather than counting edges itself.
+class GraphNode {
+  const GraphNode({
+    required this.viewId,
+    required this.name,
+    required this.degree,
+  });
+
+  factory GraphNode.fromJson(Map<String, dynamic> json) {
+    return GraphNode(
+      viewId: json['view_id'] as String,
+      name: json['name'] as String? ?? '',
+      degree: json['degree'] as int? ?? 0,
+    );
+  }
+
+  final String viewId;
+  final String name;
+  final int degree;
+}
+
+/// A link, in the direction it was written: [source] links to [target].
+class GraphEdge {
+  const GraphEdge({required this.source, required this.target});
+
+  factory GraphEdge.fromJson(Map<String, dynamic> json) {
+    return GraphEdge(
+      source: json['source'] as String,
+      target: json['target'] as String,
+    );
+  }
+
+  final String source;
+  final String target;
+}
+
 /// Where a comment sits in the document RIGHT NOW, resolved by the server from a
 /// yrs sticky index. UTF-16 offsets, so they index Dart strings directly.
 ///

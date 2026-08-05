@@ -160,6 +160,10 @@ pub fn api_router() -> Router<AppState> {
       get(documents::backlinks),
     )
     .route(
+      "/workspaces/{workspace_id}/graph",
+      get(documents::graph),
+    )
+    .route(
       "/workspaces/{workspace_id}/views/{view_id}/move",
       post(documents::move_view),
     )

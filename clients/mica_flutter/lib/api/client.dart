@@ -637,6 +637,14 @@ class ApiClient {
         .toList();
   }
 
+  /// The page-link graph of [workspaceId] — nodes, edges, and a count of the
+  /// pages no link touches. One call: the server answers it from the maintained
+  /// `link_targets` index, so it does not decode documents.
+  Future<PageGraph> workspaceGraph(String token, String workspaceId) async {
+    final response = await _get('/api/workspaces/$workspaceId/graph', token);
+    return PageGraph.fromJson(response);
+  }
+
   // ── Comments (docs/comments-plan.md) ───────────────────────────────────────
   // Anchors are yrs sticky indexes the SERVER owns: the client sends the range it
   // selected and gets back offsets resolved against the live document. It never

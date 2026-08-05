@@ -9,7 +9,8 @@ use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
 use mica_core::{
-    LocalBacklink as CoreBacklink, LocalSearchHit as CoreSearchHit, LocalStore,
+    LocalBacklink as CoreBacklink, LocalGraph as CoreGraph, LocalSearchHit as CoreSearchHit,
+    LocalStore,
     LocalVersion as CoreVersion,
     LocalView as CoreView, LocalWorkspace as CoreWorkspace, SyncCursor as CoreSyncCursor,
 };
@@ -169,6 +170,52 @@ impl From<LocalView> for CoreView {
 }
 
 /// A local workspace mirrored to Dart (P2-M3).
+/// The page-link graph of this device's workspace. Same shape the cloud's
+/// `GET /workspaces/{id}/graph` returns, so the view has one model.
+pub struct LocalGraph {
+    pub nodes: Vec<LocalGraphNode>,
+    pub edges: Vec<LocalGraphEdge>,
+    /// Live documents no link touches — a count, not nodes. See the store-side
+    /// note: most pages in a real library link to nothing.
+    pub unlinked: i64,
+}
+
+pub struct LocalGraphNode {
+    pub view_id: String,
+    pub name: String,
+    pub degree: i64,
+}
+
+pub struct LocalGraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+impl From<CoreGraph> for LocalGraph {
+    fn from(g: CoreGraph) -> Self {
+        LocalGraph {
+            nodes: g
+                .nodes
+                .into_iter()
+                .map(|n| LocalGraphNode {
+                    view_id: n.view_id,
+                    name: n.name,
+                    degree: n.degree,
+                })
+                .collect(),
+            edges: g
+                .edges
+                .into_iter()
+                .map(|e| LocalGraphEdge {
+                    source: e.source,
+                    target: e.target,
+                })
+                .collect(),
+            unlinked: g.unlinked,
+        }
+    }
+}
+
 /// One page that links TO the page being viewed. Same three fields the cloud's
 /// `Backlink` carries, so the panel has one model for both worlds.
 pub struct LocalBacklink {
@@ -410,6 +457,21 @@ impl MicaStore {
             .into_iter()
             .map(Into::into)
             .collect()
+    }
+
+    /// The page-link graph for the graph view.
+    ///
+    /// NOT `#[frb(sync)]`: it reads every view and every link row. The view has
+    /// its own loading state; the frame does not.
+    pub fn graph_local(&self) -> LocalGraph {
+        self.store()
+            .graph_local()
+            .map(Into::into)
+            .unwrap_or(LocalGraph {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                unlinked: 0,
+            })
     }
 
     /// Index documents stored before the text projection existed. Returns how

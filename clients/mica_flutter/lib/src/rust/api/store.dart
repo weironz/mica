@@ -8,7 +8,7 @@ import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `set_trashed`, `store`, `subtree_ids`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
@@ -139,6 +139,12 @@ abstract class MicaStore implements RustOpaqueInterface {
     String? folderId,
     required List<FolderExportImage> images,
   });
+
+  /// The page-link graph for the graph view.
+  ///
+  /// NOT `#[frb(sync)]`: it reads every view and every link row. The view has
+  /// its own loading state; the frame does not.
+  Future<LocalGraph> graphLocal();
 
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
@@ -356,7 +362,6 @@ class FolderExportImage {
           bytes == other.bytes;
 }
 
-/// A local workspace mirrored to Dart (P2-M3).
 /// One page that links TO the page being viewed. Same three fields the cloud's
 /// `Backlink` carries, so the panel has one model for both worlds.
 class LocalBacklink {
@@ -381,6 +386,78 @@ class LocalBacklink {
           viewId == other.viewId &&
           objectId == other.objectId &&
           name == other.name;
+}
+
+/// A local workspace mirrored to Dart (P2-M3).
+/// The page-link graph of this device's workspace. Same shape the cloud's
+/// `GET /workspaces/{id}/graph` returns, so the view has one model.
+class LocalGraph {
+  final List<LocalGraphNode> nodes;
+  final List<LocalGraphEdge> edges;
+
+  /// Live documents no link touches — a count, not nodes. See the store-side
+  /// note: most pages in a real library link to nothing.
+  final PlatformInt64 unlinked;
+
+  const LocalGraph({
+    required this.nodes,
+    required this.edges,
+    required this.unlinked,
+  });
+
+  @override
+  int get hashCode => nodes.hashCode ^ edges.hashCode ^ unlinked.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalGraph &&
+          runtimeType == other.runtimeType &&
+          nodes == other.nodes &&
+          edges == other.edges &&
+          unlinked == other.unlinked;
+}
+
+class LocalGraphEdge {
+  final String source;
+  final String target;
+
+  const LocalGraphEdge({required this.source, required this.target});
+
+  @override
+  int get hashCode => source.hashCode ^ target.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalGraphEdge &&
+          runtimeType == other.runtimeType &&
+          source == other.source &&
+          target == other.target;
+}
+
+class LocalGraphNode {
+  final String viewId;
+  final String name;
+  final PlatformInt64 degree;
+
+  const LocalGraphNode({
+    required this.viewId,
+    required this.name,
+    required this.degree,
+  });
+
+  @override
+  int get hashCode => viewId.hashCode ^ name.hashCode ^ degree.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalGraphNode &&
+          runtimeType == other.runtimeType &&
+          viewId == other.viewId &&
+          name == other.name &&
+          degree == other.degree;
 }
 
 /// One local search hit. Same fields the cloud's `SearchResult` carries, so the

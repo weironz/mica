@@ -49,6 +49,32 @@ pub enum StoreError {
 /// `load_doc` at startup. A corrupt local blob is recoverable — this store is a
 /// cache and the cloud holds the document — so it must degrade to an error the
 /// caller can re-seed from, not take the process down.
+/// The page-link graph of the local workspace: nodes that participate in at
+/// least one link, the edges between them, and a COUNT of everything else.
+#[derive(Debug, Clone)]
+pub struct LocalGraph {
+    pub nodes: Vec<LocalGraphNode>,
+    pub edges: Vec<LocalGraphEdge>,
+    /// Live documents that no link touches. A count, not nodes — see
+    /// [`LocalStore::graph_local`].
+    pub unlinked: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalGraphNode {
+    pub view_id: String,
+    pub name: String,
+    /// Edges touching this node (in + out), so the client can size hubs without
+    /// counting edges itself.
+    pub degree: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalGraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
 /// One page that links TO the page being viewed. Mirrors the cloud `Backlink`
 /// so the panel renders both worlds from the same shape.
 #[derive(Debug, Clone)]
@@ -828,6 +854,65 @@ impl LocalStore {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
+
+    /// The page-link graph for the graph view — the local mirror of the cloud's
+    /// `GET /workspaces/{id}/graph`, off the same maintained `link_targets`.
+    ///
+    /// Only pages that participate in a link become nodes; the rest are returned
+    /// as `unlinked`. On a real library most pages link to nothing (a production
+    /// snapshot: 798 documents, 136 with any link at all), and a canvas of
+    /// hundreds of disconnected dots hides the structure the view exists to show.
+    /// The count keeps that omission visible rather than silent.
+    ///
+    /// An edge survives only if BOTH ends are live documents here: a link to a
+    /// trashed or foreign page is a dangling reference, and drawing it would
+    /// invent a node that is not in the workspace.
+    pub fn graph_local(&self) -> Result<LocalGraph, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT src.id, tgt.id
+             FROM local_view src
+             JOIN doc_snapshot s ON s.doc_id = src.object_id
+             JOIN json_each(s.link_targets) j
+             JOIN local_view tgt ON tgt.id = j.value AND tgt.trashed = 0
+             WHERE src.trashed = 0
+               AND src.object_type = 'document'
+               AND s.link_targets IS NOT NULL
+               AND src.id <> j.value",
+        )?;
+        let edges: Vec<LocalGraphEdge> = stmt
+            .query_map([], |r| {
+                Ok(LocalGraphEdge {
+                    source: r.get(0)?,
+                    target: r.get(1)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+
+        let mut degree: std::collections::HashMap<String, i64> = Default::default();
+        for e in &edges {
+            *degree.entry(e.source.clone()).or_default() += 1;
+            *degree.entry(e.target.clone()).or_default() += 1;
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name FROM local_view
+             WHERE trashed = 0 AND object_type = 'document'",
+        )?;
+        let named: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+
+        let mut nodes = Vec::new();
+        let mut unlinked = 0i64;
+        for (view_id, name) in named {
+            match degree.get(&view_id) {
+                Some(&d) => nodes.push(LocalGraphNode { view_id, name, degree: d }),
+                None => unlinked += 1,
+            }
+        }
+        nodes.sort_by(|a, b| b.degree.cmp(&a.degree).then(a.view_id.cmp(&b.view_id)));
+        Ok(LocalGraph { nodes, edges, unlinked })
     }
 
     /// Fill in `content_text` for documents stored before the column existed.
@@ -3046,6 +3131,44 @@ mod tests {
                 .map(|b| b.name)
                 .collect();
             assert_eq!(names, vec!["乙".to_string()], "甲 must leave the index");
+        }
+
+        /// The graph view's data. `丁` links nowhere and nothing links to it, so
+        /// it must be COUNTED, not drawn — a canvas of disconnected dots hides
+        /// the structure the view exists to show, and every "the edge is there"
+        /// assertion would still pass while it happened.
+        #[test]
+        fn the_graph_carries_edges_and_counts_the_rest() {
+            let store = seeded();
+            let g = store.graph_local().unwrap();
+
+            assert_eq!(g.edges.len(), 2, "{:?}", g.edges);
+            assert!(g.edges.iter().all(|e| e.target == "v3"));
+            let sources: std::collections::HashSet<&str> =
+                g.edges.iter().map(|e| e.source.as_str()).collect();
+            assert_eq!(sources, ["v1", "v2"].into_iter().collect());
+
+            let ids: Vec<&str> = g.nodes.iter().map(|n| n.view_id.as_str()).collect();
+            assert_eq!(ids.len(), 3, "v1 v2 v3 participate: {ids:?}");
+            assert!(!ids.contains(&"v4"), "丁 must not be a node: {ids:?}");
+            assert_eq!(g.unlinked, 1, "丁 is counted");
+            // v3 is the hub: two edges in.
+            assert_eq!(g.nodes[0].view_id, "v3");
+            assert_eq!(g.nodes[0].degree, 2);
+        }
+
+        /// A link whose target is in the trash is a DANGLING reference, not an
+        /// edge — drawing it would invent a node that is not in the workspace.
+        #[test]
+        fn a_link_to_a_trashed_page_is_not_an_edge() {
+            let store = seeded();
+            let mut v3 = view("v3", "d3", "丙");
+            v3.trashed = true;
+            store.save_view(&v3).unwrap();
+
+            let g = store.graph_local().unwrap();
+            assert!(g.edges.is_empty(), "dangling edges survived: {:?}", g.edges);
+            assert!(g.nodes.is_empty(), "{:?}", g.nodes);
         }
 
         #[test]

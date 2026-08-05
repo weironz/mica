@@ -23,7 +23,8 @@ pub use marks::{marks_from_data, Mark};
 pub use text_diff::{utf16_text_diff, TextDiff};
 #[cfg(feature = "store")]
 pub use store::{
-  Identity, LocalBacklink, LocalSearchHit, LocalStore, LocalVersion, LocalView, LocalWorkspace,
+  Identity, LocalBacklink, LocalGraph, LocalGraphEdge, LocalGraphNode, LocalSearchHit,
+  LocalStore, LocalVersion, LocalView, LocalWorkspace,
   StoreError,
   SyncCursor,
 };

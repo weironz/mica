@@ -225,6 +225,22 @@ class LocalOffline implements LocalOfflineApi {
     ];
   }
 
+  Future<PageGraph> graphLocal() async {
+    final store = _store;
+    if (store == null) return PageGraph.empty;
+    final g = await store.graphLocal();
+    return PageGraph(
+      nodes: [
+        for (final n in g.nodes)
+          GraphNode(viewId: n.viewId, name: n.name, degree: n.degree),
+      ],
+      edges: [
+        for (final e in g.edges) GraphEdge(source: e.source, target: e.target),
+      ],
+      unlinked: g.unlinked,
+    );
+  }
+
   Future<int> backfillSearchIndex(int limit) async {
     final store = _store;
     if (store == null) return 0;

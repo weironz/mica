@@ -44,16 +44,46 @@
   "homeDirectoriesEmptyBody": "用侧栏「更多操作 → 新建文件夹」把页面归类。",
   "homeJustNow": "刚刚",
   "homeMinutesAgo": "{count} 分钟前",
-  "@homeMinutesAgo": { "placeholders": { "count": { "type": "int" } } },
+  "@homeMinutesAgo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "homeHoursAgo": "{count} 小时前",
-  "@homeHoursAgo": { "placeholders": { "count": { "type": "int" } } },
+  "@homeHoursAgo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "homeYesterday": "昨天",
   "homeDaysAgo": "{count} 天前",
-  "@homeDaysAgo": { "placeholders": { "count": { "type": "int" } } },
+  "@homeDaysAgo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "pageCount": "{count} 个页面",
-  "@pageCount": { "placeholders": { "count": { "type": "int" } } },
+  "@pageCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "itemCount": "{count} 项",
-  "@itemCount": { "placeholders": { "count": { "type": "int" } } },
+  "@itemCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "iconPickerTitle": "选择图标",
   "iconPickerSearch": "搜索表情…",
   "iconPickerRemove": "移除图标",
@@ -630,5 +660,24 @@
   "propertyAdd": "添加属性",
   "propertyKeyHint": "属性名",
   "propertyTagAdd": "添加标签",
-  "properties": "属性"
+  "properties": "属性",
+  "graphTitle": "关系图",
+  "graphEmptyNoLinks": "{count, plural, other{还没有页面互相链接({count} 个页面)}}",
+  "@graphEmptyNoLinks": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "graphEmptyNoPages": "这个工作区还没有页面",
+  "graphEmptyHint": "在页面里输入 [[ 链接到另一个页面，连线就会出现在这里。",
+  "graphUnlinked": "{count, plural, other{另有 {count} 个页面没有任何链接，未画出}}",
+  "@graphUnlinked": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  }
 }
