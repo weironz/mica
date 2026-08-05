@@ -76,7 +76,9 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 - 登录页与首页按设计稿重做,桌面与 web 同一屏。
 - **平台现状**:Windows 出安装包并支持自动更新;`linux/` 有目录但 CI 不出桌面包;无 macOS / 移动端。
   本地(离线)模式是桌面独有,web 没有。
-- **待办总账在 `docs/roadmap.md`**(权威,**只放没做完的**,含"有意不做 + 理由");
+- **待办总账在 `docs/roadmap.md`**(权威,**只放还要做的** —— 拍板不做的**整条删掉,不留**
+  〔用户 2026-08-05 定〕,理由进那次提交的信息,`git log` 查得到;代价是同一个决定可能被
+  重新翻出来做一遍,拿不准就先 `git log --grep` 搜一下);
   已完成的整条存档在 `docs/roadmap-done.md`(只进不出,发版时搬,见 release.md 步骤 5);桌面计划与开发环境备忘
   (stale bundle、幽灵会话、DB 取证)在 `docs/desktop-plan.md`。
 
