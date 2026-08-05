@@ -176,12 +176,17 @@
 - 🟡 **CI 的 Windows 集成测试:4 个排除项已收 1,剩 3 个卡对象存储**(2026-08-05 复核+补)——
   `flutter-integration.yml` 在 windows-latest **串行**跑离线集成测试(文件间杀
   `mica_flutter.exe`,化解单实例守卫的 debug-connection race)。
-  **本轮补上 `cloud_sync_test`**:新 `cloud` job 起 windows-latest 预装的 PostgreSQL
+  **本轮补上 `cloud_sync_test`**(第一版是假绿,见下):新 `cloud` job 起 windows-latest 预装的 PostgreSQL
   (Windows runner 没有 `services:` 块 —— 这正是当初排除它们的原因)+ 本机 cargo 起 api,
   跑真 Windows 客户端 ↔ 真服务端的 WS/CRDT 收敛。**剩 3 个**(migration_sync /
   offline_image_reconcile / page_switch_fidelity)要走 presign→PUT→complete 传真图片字节,
   而 Windows runner 起不了 rustfs 的 Linux 容器;要做只能上 Windows 版 S3 二进制,
   为三个测试不值。
+  **第一版假绿,值得记**:api 起在自己的 step 里,日志写着「api healthy on :8090」,
+  而下一步的测试同时打印了「✅ 收敛」和「skipping cloud_sync_test: no server」——
+  runner 不保证上一步的子进程活到下一步。且这个测试**没服务端就降级为跳过且仍退出 0**。
+  两处都修:服务端与测试放进**同一个 step**,并加一条守卫 —— 输出里出现 `skipping`
+  就判失败,否则绿色证明不了服务端可达。
   **顺带修了真正的缺口**(这一轮事故的根因不是缺测试):`cloud_sync_integrity_test`
   **本来就在 CI 里**、并且红了六次提交,失效的是本地闸门 —— `just test` 报「All tests
   passed」被读成了「都过了」。现在它跑完会明说自己没覆盖 integration_test,并给出

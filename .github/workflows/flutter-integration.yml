@@ -165,37 +165,11 @@ jobs:
           & $psql -U postgres -c "CREATE DATABASE mica OWNER mica;"
           Write-Host "postgres up: $($svc.Name)"
 
-      - name: Build + start the api
+      - name: Build the api
         shell: pwsh
         env:
           DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
-        run: |
-          cargo build -p mica-api-server
-          $env:APP_ENV = 'development'
-          $env:HTTP_ADDR = '127.0.0.1:8090'
-          $env:DATABASE_URL = 'postgres://mica:mica@127.0.0.1:5432/mica'
-          $env:JWT_SECRET = 'ci-integration-secret'
-          $env:ACCESS_TOKEN_TTL_SECONDS = '86400'
-          # cloud_sync_test registers its own throwaway account, and
-          # registration is CLOSED by default (MICA_REGISTRATION_ENABLED).
-          $env:MICA_REGISTRATION_ENABLED = 'true'
-          Start-Process -FilePath 'target\debug\mica-api-server.exe' `
-            -RedirectStandardOutput api.log -RedirectStandardError api.err -NoNewWindow
-          # Health-gate rather than sleep: the first boot also runs migrations
-          # and the derived-column backfill.
-          $ok = $false
-          foreach ($i in 1..60) {
-            try {
-              Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8090/api/health -TimeoutSec 2 | Out-Null
-              $ok = $true; break
-            } catch { Start-Sleep -Seconds 2 }
-          }
-          if (-not $ok) {
-            Write-Host "::error::api never became healthy"
-            Get-Content api.log, api.err -ErrorAction SilentlyContinue | Select-Object -Last 60
-            exit 1
-          }
-          Write-Host "api healthy on :8090"
+        run: cargo build -p mica-api-server
 
       - uses: subosito/flutter-action@v2
         with:
@@ -209,12 +183,64 @@ jobs:
       - run: flutter pub get
         working-directory: clients/mica_flutter
 
+      # Server and test in ONE step, deliberately.
+      #
+      # The first version started the api in its own step. The step reported
+      # "api healthy on :8090" and the next step's test printed BOTH
+      # "✅ two cloud sessions converge through the real server" AND
+      # "skipping cloud_sync_test: no server at http://127.0.0.1:8090" — a green
+      # job that had exercised nothing. The runner does not keep a step's child
+      # process alive for the next step.
+      #
+      # The `skipping` guard below is the other half: this test degrades to a
+      # skip when the server is absent and still exits 0, so a green here would
+      # otherwise never prove the server was reachable.
       - name: cloud_sync_test against the live server
         shell: pwsh
-        working-directory: clients/mica_flutter
         run: |
-          flutter test integration_test/cloud_sync_test.dart -d windows `
-            --dart-define=MICA_TEST_API=http://127.0.0.1:8090
+          $env:APP_ENV = 'development'
+          $env:HTTP_ADDR = '127.0.0.1:8090'
+          $env:DATABASE_URL = 'postgres://mica:mica@127.0.0.1:5432/mica'
+          $env:JWT_SECRET = 'ci-integration-secret'
+          $env:ACCESS_TOKEN_TTL_SECONDS = '86400'
+          # cloud_sync_test registers its own throwaway account, and
+          # registration is CLOSED by default (MICA_REGISTRATION_ENABLED).
+          $env:MICA_REGISTRATION_ENABLED = 'true'
+          $api = Start-Process -FilePath 'target\debug\mica-api-server.exe' `
+            -RedirectStandardOutput api.log -RedirectStandardError api.err `
+            -NoNewWindow -PassThru
+          try {
+            # Health-gate rather than sleep: the first boot also runs migrations
+            # and the derived-column backfill.
+            $ok = $false
+            foreach ($i in 1..60) {
+              try {
+                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8090/api/health -TimeoutSec 2 | Out-Null
+                $ok = $true; break
+              } catch { Start-Sleep -Seconds 2 }
+            }
+            if (-not $ok) {
+              Write-Host "::error::api never became healthy"
+              Get-Content api.log, api.err -ErrorAction SilentlyContinue | Select-Object -Last 60
+              exit 1
+            }
+            Write-Host "api healthy on :8090"
+
+            Push-Location clients/mica_flutter
+            $out = flutter test integration_test/cloud_sync_test.dart -d windows `
+              --dart-define=MICA_TEST_API=http://127.0.0.1:8090 2>&1 | Tee-Object -Variable lines
+            $code = $LASTEXITCODE
+            Pop-Location
+            $out | ForEach-Object { Write-Host $_ }
+            if ($code -ne 0) { exit $code }
+            if ($lines -match 'skipping cloud_sync_test') {
+              Write-Host "::error::the test SKIPPED (no server) and still exited 0 — the job proved nothing"
+              exit 1
+            }
+            Write-Host "cloud_sync_test really ran against the live server"
+          } finally {
+            if ($api -and -not $api.HasExited) { Stop-Process -Id $api.Id -Force }
+          }
 
       - name: api log (on failure)
         if: failure()
