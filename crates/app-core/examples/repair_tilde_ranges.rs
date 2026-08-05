@@ -21,7 +21,7 @@
 //!
 //! Deliberately an example, not a bin: it runs once, against one database.
 
-use mica_app_core::sync::content_text_from_doc;
+use mica_app_core::sync::{content_text_from_doc, link_targets_from_doc};
 use mica_core::{marks_from_data, Mark, MicaDoc};
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -149,13 +149,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         sqlx::query(
             "UPDATE document_yrs_base
-             SET state = $2, state_vector = $3, content_text = $4, updated_at = now()
+             SET state = $2, state_vector = $3, content_text = $4, link_targets = $5,
+                 updated_at = now()
              WHERE document_id = $1",
         )
         .bind(doc_id)
         .bind(doc.encode_state())
         .bind(doc.state_vector())
         .bind(content_text_from_doc(&doc))
+        // Rewriting `state` without re-deriving link_targets would leave the
+        // backlink index describing the PREVIOUS state — exactly the drift
+        // migration 0019's co-write contract exists to prevent.
+        .bind(link_targets_from_doc(&doc))
         .execute(&pool)
         .await?;
     }

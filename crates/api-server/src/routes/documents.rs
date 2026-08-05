@@ -321,10 +321,9 @@ fn like_pattern(needle: &str) -> String {
   out
 }
 
-/// How many document reconstructions run at once during a backlink scan. Bounded
-/// so a large workspace cannot drain the connection pool; small enough to leave
-/// room for everything else the server is doing.
-const SEARCH_CONCURRENCY: usize = 8;
+// SEARCH_CONCURRENCY is gone: nothing in this file decodes documents per query
+// any more. Search reads `content_text` (0012) and backlinks read `link_targets`
+// (0019), both maintained columns — there is no fan-out left to bound.
 
 /// A ~160-char snippet of `text` centered on the first case-insensitive match of
 /// `needle_lower`, with an ellipsis on each clipped edge. `None` if the needle is
@@ -355,7 +354,7 @@ fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {
   Some(out)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 struct Backlink {
   view_id: Uuid,
   document_id: Uuid,
@@ -371,11 +370,8 @@ pub struct BacklinksResponse {
 /// this workspace that link TO `view_id`, i.e. any live document whose blocks
 /// carry a `mica://page/<view_id>` link mark.
 ///
-/// This is the inverse of the forward page-link scan the transfer flow runs
-/// ([`page_link_targets`] over each document's [`store::current_payload`]).
-/// Computed on demand with NO maintained index — the same on-the-fly O(document)
-/// walk as full-text search (see `search_workspace`); a real reverse-index table
-/// only earns its keep once the scan itself is the bottleneck. Cloud-only: the
+/// Answered from the maintained `document_yrs_base.link_targets` index
+/// (migration 0019), the same way search reads `content_text`. Cloud-only: the
 /// local (offline) world has its own store and never hits this endpoint.
 pub async fn backlinks(
   State(state): State<AppState>,
@@ -392,78 +388,50 @@ pub async fn backlinks(
   Ok(Json(BacklinksResponse { backlinks }))
 }
 
-/// The backlink walk behind [`backlinks`], extracted so tests exercise the real
-/// scan rather than a re-implementation of it.
+/// The backlink lookup behind [`backlinks`], extracted so tests exercise the real
+/// query rather than a re-implementation of it.
 ///
-/// Unlike full-text search there is NO early stop — a backlink panel must be
-/// complete, so every document is reconstructed regardless of how many hits are
-/// already in hand. That makes a sequential await loop O(N) latency on a large
-/// workspace, so the per-document reconstructions run concurrently, `buffered`
-/// and bounded exactly like `search_workspace` to keep the scan off the
-/// connection pool. Order is irrelevant here (the results are sorted at the end),
-/// but `buffered` preserves it anyway.
+/// One indexed query. This used to be an on-demand scan: a DB round-trip plus a
+/// full CRDT decode PER DOCUMENT, with no early stop (a panel must be complete),
+/// bounded only by `buffered(8)`. Measured 2026-08-05 against a restored
+/// production snapshot — 798 documents, ~690 ms in release, versus 53 ms for
+/// full-text search on the same database — and the panel loads on every page
+/// open, so that was paid passively on every navigation. `link_targets`
+/// (migration 0019) is the same fix `content_text` was for search: a co-written
+/// pure projection of `state`, so the decode happens once at write time instead
+/// of N times per read.
+///
+/// Documents still awaiting the startup backfill have `link_targets` NULL and do
+/// not match — the same "not yet indexed" window search has, and the backfill
+/// runs before the server accepts traffic.
 async fn scan_backlinks(
   db: &PgPool,
   workspace_id: Uuid,
   view_id: Uuid,
 ) -> ApiResult<Vec<Backlink>> {
-  let target = view_id.to_string();
-  // Live views only (fetch_workspace_views filters is_deleted); folders carry no
-  // blocks so they can never be a source.
-  let views = fetch_workspace_views(db, workspace_id).await?;
-
-  let target = target.as_str();
-  use futures_util::StreamExt as _;
-  // A page linking to itself is not a backlink, and only documents carry blocks,
-  // so both are filtered out before the (costly) reconstruction rather than
-  // inside it. Each async block OWNS its `View` (via `into_iter`), mirroring
-  // `search_workspace` — borrowing `&View` into the futures trips a higher-ranked
-  // lifetime bound in `stream::iter`.
-  let mut stream = futures_util::stream::iter(
-    views
-      .into_iter()
-      .filter(|view| view.object_type == "document" && view.id != view_id)
-      .map(|view| async move {
-        // Each document's payload is a DB round-trip + CRDT decode (body text is
-        // not a queryable column). A single unreadable document drops out rather
-        // than 500-ing the whole panel — but it must not vanish SILENTLY (same
-        // corruption signal search_workspace logs).
-        let payload = match store::current_payload(db, view.object_id).await {
-          Ok(Some(payload)) => payload,
-          Ok(None) => return None,
-          Err(error) => {
-            tracing::warn!(
-              view_id = %view.id,
-              object_id = %view.object_id,
-              %error,
-              "backlinks: skipping unreadable document"
-            );
-            return None;
-          }
-        };
-        payload
-          .blocks
-          .iter()
-          .any(|block| page_link_targets(&block.data).iter().any(|t| *t == target))
-          .then(|| Backlink {
-            view_id: view.id,
-            document_id: view.object_id,
-            title: view.name.clone(),
-          })
-      }),
+  // A page linking to itself is not a backlink; folders carry no blocks so they
+  // can never be a source. Stable order: title first (what the panel shows),
+  // view_id to break ties — the same order the old in-memory sort produced.
+  // `@>` (not `= ANY`) is what the GIN index on link_targets answers.
+  Ok(
+    sqlx::query_as::<_, Backlink>(
+      r#"
+        SELECT v.id AS view_id, v.object_id AS document_id, v.name AS title
+        FROM views v
+        JOIN document_yrs_base yb ON yb.document_id = v.object_id
+        WHERE v.workspace_id = $1
+          AND v.is_deleted = false
+          AND v.object_type::text = 'document'
+          AND v.id <> $2
+          AND yb.link_targets @> ARRAY[$2]::uuid[]
+        ORDER BY v.name, v.id
+      "#,
+    )
+    .bind(workspace_id)
+    .bind(view_id)
+    .fetch_all(db)
+    .await?,
   )
-  .buffered(SEARCH_CONCURRENCY);
-
-  let mut backlinks = Vec::new();
-  while let Some(hit) = stream.next().await {
-    if let Some(backlink) = hit {
-      backlinks.push(backlink);
-    }
-  }
-
-  // Stable order: title first (what the panel shows), view_id to break ties.
-  backlinks.sort_by(|a, b| a.title.cmp(&b.title).then(a.view_id.cmp(&b.view_id)));
-  Ok(backlinks)
 }
 
 pub async fn create_document(
@@ -3493,22 +3461,11 @@ fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
 }
 
 /// The `mica://page/<viewId>` targets referenced by a block's link marks.
-fn page_link_targets(data: &serde_json::Value) -> Vec<String> {
-  const SCHEME: &str = "mica://page/";
-  let Some(marks) = data.get("marks").and_then(|m| m.as_array()) else {
-    return Vec::new();
-  };
-  marks
-    .iter()
-    .filter_map(|mark| {
-      mark
-        .get("href")
-        .and_then(|h| h.as_str())
-        .and_then(|href| href.strip_prefix(SCHEME))
-        .map(str::to_string)
-    })
-    .collect()
-}
+///
+/// Re-exported from app-core, which owns it because the write paths there derive
+/// `document_yrs_base.link_targets` with it. A copy here would be a second source
+/// of truth for what counts as a page link.
+use mica_app_core::sync::page_link_targets;
 
 /// Rewrite a transferred document's blocks for their new home: remap uploaded-
 /// image `file_id`s to the destination copies, and remap in-subtree page links to
@@ -5044,10 +5001,16 @@ mod tests {
     let docs: Vec<_> = views.iter().filter(|v| v.object_type == "document").collect();
     println!("workspace has {} live documents", docs.len());
 
-    // Three targets, because the panel's cost must not depend on the answer:
-    // every document is reconstructed either way. A target with MANY backlinks
-    // and one with NONE should time the same — if they do, the scan is the
-    // cost, not the result set.
+    // The index is only as good as the backfill that fills it, and the backfill
+    // is the one O(all documents) decode left — pay it once here so the number
+    // below is the steady state a running server actually serves from.
+    let started = std::time::Instant::now();
+    let filled = mica_app_core::sync::backfill_derived_columns(&db).await.unwrap();
+    println!("backfill: {filled} row(s) in {:?}", started.elapsed());
+
+    // Three targets, because the panel's cost must not depend on the answer.
+    // Before the index every one of these took the same ~690 ms regardless of
+    // hits, since every document was decoded either way.
     for view in docs.iter().take(3) {
       let started = std::time::Instant::now();
       let hits = scan_backlinks(&db, ws, view.id).await.unwrap();
@@ -5058,5 +5021,56 @@ mod tests {
         started.elapsed()
       );
     }
+
+    // The panel must still be CORRECT, not just fast. Rebuild the whole answer
+    // the slow way — the O(N) decode this change deleted — and demand the index
+    // agrees for EVERY target in the workspace, not just one. Checking only a
+    // target that happens to have hits would miss the opposite failure: a target
+    // the index reports backlinks for when it has none.
+    let mut expected: std::collections::HashMap<Uuid, Vec<Uuid>> = Default::default();
+    for view in &docs {
+      let Ok(Some(payload)) = store::current_payload(&db, view.object_id).await else {
+        continue;
+      };
+      let mut linked: Vec<String> = payload
+        .blocks
+        .iter()
+        .flat_map(|b| page_link_targets(&b.data))
+        .collect();
+      linked.sort_unstable();
+      linked.dedup();
+      for target in linked.iter().filter_map(|t| t.parse::<Uuid>().ok()) {
+        // A page linking to itself is not a backlink — the query excludes it, so
+        // the expectation must too.
+        if target != view.id {
+          expected.entry(target).or_default().push(view.id);
+        }
+      }
+    }
+    for sources in expected.values_mut() {
+      sources.sort_unstable();
+    }
+
+    let mut checked = 0usize;
+    let mut with_hits = 0usize;
+    for view in &docs {
+      let mut got: Vec<Uuid> = scan_backlinks(&db, ws, view.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|b| b.view_id)
+        .collect();
+      got.sort_unstable();
+      // `expected` is built from every document in the workspace; the query also
+      // requires the SOURCE to be a live document in this workspace, which is
+      // exactly the set `docs` was filtered to. So the two must match exactly.
+      let want = expected.get(&view.id).cloned().unwrap_or_default();
+      assert_eq!(got, want, "index disagrees with a full decode for {}", view.id);
+      checked += 1;
+      if !got.is_empty() {
+        with_hits += 1;
+      }
+    }
+    println!("correctness: {checked} target(s) checked, {with_hits} with backlinks — all match");
   }
 }

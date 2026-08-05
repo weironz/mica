@@ -172,34 +172,90 @@ fn searchable_metadata(front_matter: &str) -> String {
     parts.join(" ")
 }
 
+/// The `mica://page/<viewId>` targets referenced by a block's link marks.
+///
+/// Lives here rather than in api-server because the WRITE paths (which are in
+/// this crate) must derive `link_targets` from the very same extractor the
+/// readers use — a second implementation would be a second source of truth for
+/// a column whose whole contract is "pure derivation of `state`". api-server
+/// still calls it for the link-remap on document transfer.
+pub fn page_link_targets(data: &serde_json::Value) -> Vec<String> {
+    const SCHEME: &str = "mica://page/";
+    let Some(marks) = data.get("marks").and_then(|m| m.as_array()) else {
+        return Vec::new();
+    };
+    marks
+        .iter()
+        .filter_map(|mark| {
+            mark.get("href")
+                .and_then(|h| h.as_str())
+                .and_then(|href| href.strip_prefix(SCHEME))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Every page this document links TO — the producer of
+/// `document_yrs_base.link_targets`, and the mirror of [`content_text_from_doc`]:
+/// a pure projection of the SAME folded `doc` whose `encode_state()` is written
+/// as `state` in the same statement, so the backlink index can never diverge
+/// from the base it indexes (red line #1).
+///
+/// Sorted and deduplicated: a page linked from five blocks is one edge, and a
+/// stable order keeps the stored array comparable across rewrites. Targets that
+/// do not parse as a uuid are dropped rather than stored — the column is
+/// `uuid[]`, and a link to a non-view is not a backlink to anything.
+pub fn link_targets_from_doc(doc: &MicaDoc) -> Vec<Uuid> {
+    let mut targets: Vec<Uuid> = doc
+        .to_blocks()
+        .iter()
+        .flat_map(|b| page_link_targets(&b.data))
+        .filter_map(|t| t.parse().ok())
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
 /// How many base rows the startup backfill decodes per DB round trip.
 const BACKFILL_BATCH: i64 = 256;
 
-/// One-time startup backfill of `document_yrs_base.content_text` for rows migration
-/// 0012 created with the empty default (the yrs decode is Rust, not SQL, so the
-/// migration could only add an empty column). Run once after `run_migrations`,
-/// before the server accepts traffic.
+/// One-time startup backfill of the two DERIVED columns on `document_yrs_base` —
+/// `content_text` (migration 0012) and `link_targets` (0019) — for rows the
+/// migrations could only create empty, because deriving either needs the yrs
+/// decode, which is Rust, not SQL. Run once after `run_migrations`, before the
+/// server accepts traffic.
 ///
-/// Idempotent and safe to run every boot: it walks only rows whose `content_text`
-/// is still `''`, keyset-paginated by `document_id` so each row is visited at most
-/// once per pass regardless of the value it derives (a genuinely-empty document
-/// stays `''` and is simply re-derived on the next boot — cheap and rare). A base
-/// that fails to decode is warn-logged and skipped, never blocking startup — this
-/// is where the "unreadable document" corruption signal that `search_workspace`
-/// used to emit at query time now surfaces (search no longer decodes anything).
+/// ONE pass for both: they are projections of the same folded doc, so a row that
+/// needs either is decoded once and both are written together. Splitting this in
+/// two would decode most documents twice for nothing.
 ///
-/// Returns how many rows were given non-empty text (for the startup log line).
-pub async fn backfill_content_text(db: &PgPool) -> ApiResult<usize> {
+/// Idempotent and safe to run every boot, keyset-paginated by `document_id` so
+/// each row is visited at most once per pass regardless of what it derives. The
+/// two "not yet derived" sentinels differ on purpose:
+///   - `content_text = ''` — an empty BODY is rare, so a genuinely-empty document
+///     being re-derived (to the same `''`) on a later boot is cheap and rare.
+///   - `link_targets IS NULL` — an empty LINK LIST is the common case, so `'{}'`
+///     as the sentinel would re-decode nearly every document on every boot.
+///     NULL converges permanently: once written, `'{}'` is never revisited.
+///
+/// A base that fails to decode is warn-logged and skipped, never blocking
+/// startup — this is where the "unreadable document" corruption signal that
+/// `search_workspace` used to emit at query time now surfaces (neither search nor
+/// the backlinks panel decodes anything any more).
+///
+/// Returns how many rows were updated (for the startup log line).
+pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
     let mut filled = 0usize;
     // Byte-wise uuid cursor; `Uuid::nil()` is the minimum, so `> $cursor` starts
-    // from the first row. Advancing by document_id (not by re-querying `= ''`)
-    // guarantees the loop terminates within a pass even when every row in a batch
-    // derives empty text or fails to decode.
+    // from the first row. Advancing by document_id (not by re-querying the
+    // sentinels) guarantees the loop terminates within a pass even when every row
+    // in a batch derives nothing or fails to decode.
     let mut cursor = Uuid::nil();
     loop {
         let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
             "SELECT document_id, state FROM document_yrs_base
-             WHERE content_text = '' AND document_id > $1
+             WHERE (content_text = '' OR link_targets IS NULL) AND document_id > $1
              ORDER BY document_id
              LIMIT $2",
         )
@@ -210,31 +266,46 @@ pub async fn backfill_content_text(db: &PgPool) -> ApiResult<usize> {
         if rows.is_empty() {
             break;
         }
+        // One transaction per batch, not per row. Measured 2026-08-05 on a
+        // restored production snapshot (3784 rows): 43.8 s as autocommit
+        // singletons — the decodes are only ~3 s of that, the rest was 3784
+        // separate round-trips each paying a commit. This runs before the server
+        // accepts traffic, so those seconds were startup downtime on the first
+        // boot after a deploy.
+        let mut tx = db.begin().await?;
         for (document_id, state) in &rows {
             cursor = *document_id;
-            let text = match guarded_from_update(state) {
-                Ok(doc) => content_text_from_doc(&doc),
+            let doc = match guarded_from_update(state) {
+                Ok(doc) => doc,
                 Err(error) => {
                     tracing::warn!(
                         document_id = %document_id,
                         %error,
-                        "content_text backfill: skipping undecodable yrs base"
+                        "derived-column backfill: skipping undecodable yrs base"
                     );
                     continue;
                 }
             };
-            // Nothing to index for a genuinely-empty doc; leave it '' (it will be
-            // re-derived — to the same '' — on a later boot, which is harmless).
-            if text.is_empty() {
-                continue;
-            }
-            sqlx::query("UPDATE document_yrs_base SET content_text = $2 WHERE document_id = $1")
-                .bind(document_id)
-                .bind(&text)
-                .execute(db)
-                .await?;
+            let text = content_text_from_doc(&doc);
+            let targets = link_targets_from_doc(&doc);
+            // `link_targets` is written unconditionally — writing `'{}'` is the
+            // whole point of the NULL sentinel, and skipping it here would leave
+            // the row NULL and re-decoded forever. `content_text` keeps its own
+            // rule: leave a genuinely-empty body as ''.
+            sqlx::query(
+                "UPDATE document_yrs_base
+                 SET content_text = CASE WHEN $2 = '' THEN content_text ELSE $2 END,
+                     link_targets = $3
+                 WHERE document_id = $1",
+            )
+            .bind(document_id)
+            .bind(&text)
+            .bind(&targets)
+            .execute(&mut *tx)
+            .await?;
             filled += 1;
         }
+        tx.commit().await?;
     }
     Ok(filled)
 }
@@ -319,15 +390,17 @@ pub async fn seed_base_tx(
     // base it indexes, so this first-touch base is searchable immediately, not
     // only after the startup backfill.
     let content_text = content_text_from_doc(&doc);
+    let link_targets = link_targets_from_doc(&doc);
     let inserted = sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
-         VALUES ($1, $2, $3, 0, $4, now())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
+         VALUES ($1, $2, $3, 0, $4, $5, now())
          ON CONFLICT (document_id) DO NOTHING",
     )
     .bind(document_id)
     .bind(&state)
     .bind(&state_vector)
     .bind(&content_text)
+    .bind(&link_targets)
     .execute(&mut **tx)
     .await?;
     if inserted.rows_affected() == 0 {
@@ -436,12 +509,14 @@ pub async fn push_update(
     // SAME statement as `state`, so the search index moves atomically with the
     // base on every push (never a stale window between the two).
     let content_text = content_text_from_doc(&doc);
+    let link_targets = link_targets_from_doc(&doc);
     sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
-         VALUES ($1, $2, $3, $4, $5, now())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now())
          ON CONFLICT (document_id) DO UPDATE SET
              state = excluded.state, state_vector = excluded.state_vector,
              base_rid = excluded.base_rid, content_text = excluded.content_text,
+             link_targets = excluded.link_targets,
              updated_at = now()",
     )
     .bind(document_id)
@@ -449,6 +524,7 @@ pub async fn push_update(
     .bind(&state_vector)
     .bind(rid)
     .bind(&content_text)
+    .bind(&link_targets)
     .execute(&mut *tx)
     .await?;
 

@@ -240,12 +240,14 @@ where
   // lockstep with the base exactly as the collaborative push path does (red
   // line #1: content_text is a co-written pure projection of the base).
   let yrs_content_text = crate::sync::content_text_from_doc(&doc);
+  let yrs_link_targets = crate::sync::link_targets_from_doc(&doc);
   sqlx::query(
-    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
+    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, now())
      ON CONFLICT (document_id) DO UPDATE SET
          state = excluded.state, state_vector = excluded.state_vector,
          base_rid = excluded.base_rid, content_text = excluded.content_text,
+         link_targets = excluded.link_targets,
          updated_at = now()",
   )
   .bind(document_id)
@@ -253,6 +255,7 @@ where
   .bind(&yrs_state_vector)
   .bind(yrs_rid)
   .bind(&yrs_content_text)
+  .bind(&yrs_link_targets)
   .execute(&mut *tx)
   .await?;
 

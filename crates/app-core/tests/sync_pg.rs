@@ -677,6 +677,17 @@ async fn concurrent_first_bootstrap_returns_one_universe() {
 // ── FTS M1: document_yrs_base.content_text (the search index) ────────────────
 
 /// The document's stored search text.
+/// `link_targets` as stored. `None` is the "never derived" sentinel migration
+/// 0019 leaves behind; `Some(vec![])` means derived-and-empty, which is what the
+/// backfill must converge to so it stops revisiting the row every boot.
+async fn stored_link_targets(db: &PgPool, doc: Uuid) -> Option<Vec<Uuid>> {
+    sqlx::query_scalar("SELECT link_targets FROM document_yrs_base WHERE document_id = $1")
+        .bind(doc)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
 async fn stored_content_text(db: &PgPool, doc: Uuid) -> String {
     sqlx::query_scalar("SELECT content_text FROM document_yrs_base WHERE document_id = $1")
         .bind(doc)
@@ -699,6 +710,63 @@ fn derive_text(state: &[u8]) -> String {
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `link_targets` is the backlink index, and it is co-written with the base by
+/// the same contract `content_text` has (red line #1). The half that actually
+/// breaks in practice is REMOVAL: an index that only ever gains entries still
+/// passes every "the backlink shows up" test, while the panel keeps listing a
+/// page whose link was deleted. So this asserts both directions.
+#[tokio::test]
+async fn writes_maintain_link_targets_in_both_directions() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping writes_maintain_link_targets_in_both_directions: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let target = Uuid::new_v4();
+
+    use mica_app_core::documents::DocumentOperation;
+    let link_op = |data: serde_json::Value| {
+        vec![DocumentOperation::UpdateBlock {
+            block_id: "a".to_string(),
+            kind: None,
+            text: Some("see other page".to_string()),
+            data: Some(data),
+        }]
+    };
+
+    // Adding a page link puts the target in the index.
+    store::apply_document_operations(
+        &db,
+        ws,
+        doc,
+        user,
+        &link_op(serde_json::json!({
+            "marks": [{"type": "link", "href": format!("mica://page/{target}"), "start": 0, "end": 3}]
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stored_link_targets(&db, doc).await,
+        Some(vec![target]),
+        "the co-write derived the link target from the same doc it stored"
+    );
+
+    // Removing it takes the target back OUT. Before the index this was free —
+    // the scan re-read the blocks every time — so nothing in the old code could
+    // go stale here, and nothing tested it.
+    store::apply_document_operations(&db, ws, doc, user, &link_op(serde_json::json!({"marks": []})))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_link_targets(&db, doc).await,
+        Some(Vec::new()),
+        "a deleted link must leave the index, not linger in it"
+    );
+
+    cleanup(&db, ws, user).await;
 }
 
 /// The collaborative push path keeps content_text in lockstep with the base, and
@@ -827,7 +895,12 @@ async fn backfill_fills_valid_and_skips_corrupt() {
     .unwrap();
 
     assert_eq!(stored_content_text(&db, doc).await, "", "starts empty");
-    let filled = sync::backfill_content_text(&db).await.unwrap();
+    assert_eq!(
+        stored_link_targets(&db, doc).await,
+        None,
+        "link_targets starts at the NULL sentinel"
+    );
+    let filled = sync::backfill_derived_columns(&db).await.unwrap();
     assert!(filled >= 1, "at least the valid row was indexed");
 
     assert_eq!(
@@ -841,10 +914,20 @@ async fn backfill_fills_valid_and_skips_corrupt() {
         "undecodable base skipped, left empty, no error"
     );
 
-    // Idempotent: a second pass changes nothing (the filled row is skipped by the
-    // content_text='' filter; the corrupt row is re-skipped) and terminates.
-    sync::backfill_content_text(&db).await.unwrap();
+    // A link-free document must land on `Some([])`, NOT stay NULL — that is the
+    // whole point of the NULL sentinel. If this regressed to NULL the backfill
+    // would re-decode this row on every single boot and never converge.
+    assert_eq!(
+        stored_link_targets(&db, doc).await,
+        Some(Vec::new()),
+        "derived-and-empty, so the next pass skips it"
+    );
+
+    // Idempotent: a second pass changes nothing (the filled row now matches
+    // neither sentinel; the corrupt row is re-skipped) and terminates.
+    sync::backfill_derived_columns(&db).await.unwrap();
     assert_eq!(stored_content_text(&db, doc).await, "回填后的可搜索文本");
+    assert_eq!(stored_link_targets(&db, doc).await, Some(Vec::new()));
 
     cleanup(&db, ws, user).await;
 }
