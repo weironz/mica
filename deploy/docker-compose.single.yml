@@ -75,7 +75,7 @@ services:
   # the world. The maintainer's own stack defaults to Aliyun ACR instead, because
   # it runs in CN where Docker Hub is not dependable.
   api:
-    image: ${MICA_REGISTRY:-willdockerhub}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env.prod, e.g. v0.13.6}
+    image: ${MICA_REGISTRY:-willdockerhub}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env.prod — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -106,7 +106,7 @@ services:
   # mounted config. Nothing here reads the repo, so the compose file is the only
   # file you need on the server.
   web:
-    image: ${MICA_REGISTRY:-willdockerhub}/mica-web:${MICA_VERSION:?set MICA_VERSION in .env.prod, e.g. v0.13.6}
+    image: ${MICA_REGISTRY:-willdockerhub}/mica-web:${MICA_VERSION:?set MICA_VERSION in .env.prod — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
     ports:
