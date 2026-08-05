@@ -68,6 +68,34 @@ class _Pending {
 /// [occupiesSlot] is deliberately narrower than [alreadySent]: a REJECTED push
 /// has been sent (so don't send it again on a live flush) but will never be
 /// acked (so it must not hold a slot).
+/// How many of the leading queued updates to fold into ONE push.
+///
+/// Merging is what turns a reconnect from "one round trip per queued edit" into
+/// one round trip, but a merged update is a single WebSocket message, so it
+/// cannot grow without bound (the server's frame limit is 64 MiB). [maxBytes]
+/// caps a segment; whatever is left rides the next flush, which the ack handler
+/// triggers.
+///
+/// **Always at least one**, even when that one entry is already over the cap:
+/// refusing to send it would stall the outbox forever, and a single oversized
+/// entry is exactly as sendable as it was before merging existed.
+/// Cap on one merged push. Well under the server's 64 MiB frame limit — the
+/// point is not to sail close to it but to keep a pathological outbox (a very
+/// long offline stretch on a large document) from building one enormous message
+/// whose failure would retry the whole thing.
+const int _mergeMaxBytes = 4 * 1024 * 1024;
+
+@visibleForTesting
+int mergeRunLength(List<int> sizes, {required int maxBytes}) {
+  if (sizes.isEmpty) return 0;
+  var total = 0;
+  for (var i = 0; i < sizes.length; i++) {
+    total += sizes[i];
+    if (total > maxBytes) return i == 0 ? 1 : i;
+  }
+  return sizes.length;
+}
+
 @visibleForTesting
 List<T> pushSlice<T>(
   List<T> queue, {
@@ -824,13 +852,24 @@ class CloudSyncSession {
       // answers by decoding+re-encoding the whole document per entry. The ack
       // handler calls back here as `pushed_clock` advances, so the tail still
       // drains, just paced by the server instead of by our for-loop.
-      var inFlight = 0;
-      for (final e in persistence!.outboxAfter(floor)) {
-        if (inFlight >= _pushWindow) break;
-        _sendPushRaw(e.clock.toString(), e.bytes);
-        if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;
-        inFlight++;
-      }
+      final pending = persistence!.outboxAfter(floor).toList();
+      if (pending.isEmpty) return;
+      // Fold the run into ONE push instead of one push per entry. The id is the
+      // HIGHEST clock in the run, which is what makes this need no protocol
+      // change: the server treats `id` as an opaque correlation token and echoes
+      // it, and the ack advances `pushed_clock` to it — trimming the whole run
+      // as a prefix, exactly as if each entry had been acked in turn.
+      final run = mergeRunLength(
+        [for (final e in pending) e.bytes.length],
+        maxBytes: _mergeMaxBytes,
+      );
+      final head = pending.take(run).toList();
+      final bytes = head.length == 1
+          ? head.first.bytes
+          : _doc!.mergeUpdates([for (final e in head) e.bytes]);
+      final last = head.last.clock;
+      _sendPushRaw(last.toString(), bytes);
+      if (last > _sentThroughClock) _sentThroughClock = last;
       return;
     }
     // In-memory outbox (no local store — this is the WEB path). Same bounded
@@ -846,14 +885,36 @@ class CloudSyncSession {
         p.rejected = false;
       }
     }
-    for (final p in pushSlice(
+    final slice = pushSlice(
       _unacked,
       alreadySent: (p) => p.sent,
       occupiesSlot: (p) => p.sent && !p.rejected,
       window: _pushWindow,
-    )) {
-      _sendPush(p);
+    );
+    if (slice.isEmpty) return;
+    // Fold the slice into one push, same as the append-log branch. Here the
+    // queue IS the bookkeeping, so the merged entries are REPLACED by a single
+    // `_Pending` carrying the last id — otherwise the four entries folded into
+    // the fifth would sit unacked forever, since only the id we sent comes back.
+    // Collapsing them is also the honest model: after the merge they are one
+    // update, and one rejection now rejects all of it, which is what it is.
+    final run = mergeRunLength(
+      [for (final p in slice) p.bytes.length],
+      maxBytes: _mergeMaxBytes,
+    );
+    final head = slice.take(run).toList();
+    if (head.length == 1) {
+      _sendPush(head.first);
+      return;
     }
+    final merged = _Pending(
+      head.last.id,
+      _doc!.mergeUpdates([for (final p in head) p.bytes]),
+    );
+    final at = _unacked.indexOf(head.first);
+    _unacked.removeRange(at, at + head.length);
+    _unacked.insert(at, merged);
+    _sendPush(merged);
   }
 
   void _sendPush(_Pending p) {

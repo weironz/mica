@@ -413,3 +413,60 @@ fn a_concurrent_format_elsewhere_does_not_resurrect_a_removed_bold() {
         "the removal holds and only the new bold is there: {got:?}"
     );
 }
+
+/// Merging queued updates must not change what they MEAN.
+///
+/// This is the property the reconnect path now leans on: instead of pushing a
+/// long offline queue one update per round trip, the client folds the run into
+/// one update and pushes that. If the fold were not exactly equivalent, a
+/// reconnect would silently rewrite history — red line #1, and the kind of
+/// divergence that surfaces days later as "my edits came back wrong".
+///
+/// The clients build the merged update by applying the run to a scratch replica
+/// that starts EMPTY and encoding its state, which is what this mirrors.
+#[test]
+fn merging_queued_updates_is_equivalent_to_applying_them_in_order() {
+    let state = base();
+    let mut client = replica(&state, 77);
+
+    // A long offline stretch: many small edits to the same block, which is the
+    // shape that folds best (every intermediate text state is superseded).
+    let mut queued = Vec::new();
+    let mut text = String::from("Hello");
+    for i in 0..40 {
+        let before = client.state_vector();
+        text.push_str(&format!(" w{i}"));
+        client.set_block_text("a", &text, &[]);
+        queued.push(client.encode_diff(&before).unwrap());
+    }
+
+    // `[0, 0]` is an empty update: zero clients, empty delete set. A scratch
+    // seeded from anything with content would fold that content in as a
+    // concurrent write — `from_blocks("r", &[])` writes `meta.root`, which is
+    // exactly the trap.
+    let mut scratch = MicaDoc::from_update(&[0, 0]).expect("empty update decodes");
+    assert!(scratch.to_blocks().is_empty(), "the scratch must start empty");
+    for u in &queued {
+        scratch.apply_update(u).unwrap();
+    }
+    let merged = scratch.encode_state();
+
+    let mut one_by_one = replica(&state, 1);
+    for u in &queued {
+        one_by_one.apply_update(u).unwrap();
+    }
+    let mut folded = replica(&state, 2);
+    folded.apply_update(&merged).unwrap();
+
+    assert_eq!(
+        one_by_one.to_blocks(),
+        folded.to_blocks(),
+        "the folded update must land the same document"
+    );
+    assert!(
+        merged.len() < queued.iter().map(|u| u.len()).sum::<usize>(),
+        "folding should also shrink the bytes ({} vs {})",
+        merged.len(),
+        queued.iter().map(|u| u.len()).sum::<usize>()
+    );
+}

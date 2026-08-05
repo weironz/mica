@@ -951,3 +951,71 @@ async fn a_document_with_no_base_opens_as_an_empty_page() {
 
     cleanup(&db, ws, user).await;
 }
+
+/// 量「长离线重连」的两条路径:攒了 N 条更新后,逐条推 vs 合并成一条再推。
+///
+/// 不是回归门,是一次测量 —— 所以 `#[ignore]`,要跑就显式跑:
+/// `DATABASE_URL=… cargo test -p mica-app-core --test sync_pg -- --ignored offline_reconnect --nocapture`
+///
+/// 合并的做法就是条目里写的那句「先用 yrs merge 把尾巴合成一条」:把 N 条应用到一个
+/// 临时 doc,再对**离线前**的 state vector 出一次 diff。等价于 N 条的净效果。
+#[tokio::test]
+#[ignore = "measurement, not a gate — needs a live DB and prints numbers"]
+async fn offline_reconnect_merge_measurement() {
+    let Some(db) = pool().await else { return };
+    for n in [10usize, 50, 200] {
+        // ── 造 N 条更新:模拟离线期间逐次编辑同一个块 ──
+        let (ws, doc, user) = seed_doc(&db).await;
+        let base: Vec<u8> =
+            sqlx::query_scalar("SELECT state FROM document_yrs_base WHERE document_id = $1")
+                .bind(doc)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        // The client is a DIFFERENT actor from the server that seeded the base —
+        // otherwise the updates merge trivially and the measurement flatters itself.
+        let sv0 = MicaDoc::from_update(&base).unwrap().state_vector();
+        let mut d = MicaDoc::from_update_with_client_id(&base, Some(4242)).unwrap();
+        let mut updates = Vec::new();
+        let mut text = String::from("Hello");
+        for i in 0..n {
+            let before = d.state_vector();
+            text.push_str(&format!(" w{i}"));
+            d.set_block_text("a", &text, &[]);
+            updates.push(d.encode_diff(&before).unwrap());
+        }
+        let bytes: usize = updates.iter().map(|u| u.len()).sum();
+
+        // ── 路径 A:逐条推(今天的行为) ──
+        let t = std::time::Instant::now();
+        for u in &updates {
+            sync::push_update(&db, ws, doc, user, u, &tuning()).await.unwrap();
+        }
+        let one_by_one = t.elapsed();
+        cleanup(&db, ws, user).await;
+
+        // ── 路径 B:先合并再推一次 ──
+        let (ws2, doc2, user2) = seed_doc(&db).await;
+        let t = std::time::Instant::now();
+        let mut scratch = MicaDoc::from_update(&base).unwrap();
+        for u in &updates {
+            scratch.apply_update(u).unwrap();
+        }
+        let merged = scratch.encode_diff(&sv0).unwrap();
+        let merge_cost = t.elapsed();
+        sync::push_update(&db, ws2, doc2, user2, &merged, &tuning()).await.unwrap();
+        let merged_total = t.elapsed();
+        cleanup(&db, ws2, user2).await;
+
+        println!(
+            "n={n:>3}  逐条 {:>7.1} ms ({} 次往返, {} B)  |  合并后 {:>6.1} ms              (其中合并本身 {:.1} ms, 1 次往返, {} B)  |  省 {:.1}x",
+            one_by_one.as_secs_f64() * 1000.0,
+            n,
+            bytes,
+            merged_total.as_secs_f64() * 1000.0,
+            merge_cost.as_secs_f64() * 1000.0,
+            merged.len(),
+            one_by_one.as_secs_f64() / merged_total.as_secs_f64(),
+        );
+    }
+}
