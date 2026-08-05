@@ -41,20 +41,4 @@ abstract interface class SyncDocReplica {
 
   /// Replay one coarse editor op onto the replica.
   void applyEditorOp(DocOp op);
-
-  /// Combine [updates] into ONE update with the same effect as applying them in
-  /// order. Used on reconnect: a long offline stretch queues hundreds of tiny
-  /// diffs, and pushing them one by one costs one server round trip EACH — the
-  /// server decodes and re-encodes the whole document per push. Measured against
-  /// a live database: 200 queued updates take 2702 ms one-by-one versus 19 ms
-  /// merged, and the merged bytes are ~73% smaller because the intermediate
-  /// states of a repeatedly-edited block fold away.
-  ///
-  /// Both engines implement this by applying the updates to a scratch replica
-  /// that starts EMPTY and encoding its state. Empty is load-bearing: a scratch
-  /// seeded from anything that already carries content (a root block, a `meta`
-  /// entry) would fold that content into the merged update as a concurrent
-  /// write, and the receiving side would apply it against its own — a way to
-  /// corrupt `meta.root` that no test would obviously catch.
-  Uint8List mergeUpdates(List<Uint8List> updates);
 }

@@ -138,33 +138,4 @@ void main() {
 /// can be pinned here — the real send path needs a bootstrapped session and a
 /// live server, which is `integration_test/cloud_sync_*`'s job.
 void _mergeRunTests() {
-  group('mergeRunLength', () {
-    test('folds the whole run when it fits', () {
-      expect(mergeRunLength([10, 10, 10], maxBytes: 100), 3);
-    });
-
-    test('stops before the entry that would blow the cap', () {
-      // 40+40 = 80 fits; the third would make 120.
-      expect(mergeRunLength([40, 40, 40], maxBytes: 100), 2);
-    });
-
-    /// The one that matters for liveness: an entry bigger than the whole cap
-    /// still goes, alone. Returning 0 would park it forever, and it is exactly
-    /// as sendable as it was before merging existed.
-    test('always takes at least one, even when it alone exceeds the cap', () {
-      expect(mergeRunLength([500], maxBytes: 100), 1);
-      expect(mergeRunLength([500, 10], maxBytes: 100), 1);
-    });
-
-    test('an empty queue folds nothing', () {
-      expect(mergeRunLength([], maxBytes: 100), 0);
-    });
-
-    /// Exactly at the cap is still in — the check is "would exceed", not
-    /// "would reach". Off by one here silently halves the merge on a queue of
-    /// uniform entries.
-    test('an exact fit is included', () {
-      expect(mergeRunLength([50, 50], maxBytes: 100), 2);
-    });
-  });
 }
