@@ -203,9 +203,12 @@ jobs:
           $env:DATABASE_URL = 'postgres://mica:mica@127.0.0.1:5432/mica'
           $env:JWT_SECRET = 'ci-integration-secret'
           $env:ACCESS_TOKEN_TTL_SECONDS = '86400'
-          # cloud_sync_test registers its own throwaway account, and
-          # registration is CLOSED by default (MICA_REGISTRATION_ENABLED).
-          $env:MICA_REGISTRATION_ENABLED = 'true'
+          # Registration stays CLOSED (the default) ON PURPOSE. The test
+          # registers one throwaway account, and on an EMPTY instance the first
+          # account is always allowed AND verified on the spot — the bootstrap
+          # exception in auth.rs. Setting MICA_REGISTRATION_ENABLED=true was
+          # tried and is WRONG: with registration open the account is created
+          # unverified, so `login` refuses it and the test cannot get a session.
           $api = Start-Process -FilePath 'target\debug\mica-api-server.exe' `
             -RedirectStandardOutput api.log -RedirectStandardError api.err `
             -NoNewWindow -PassThru

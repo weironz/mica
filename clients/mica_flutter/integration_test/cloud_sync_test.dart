@@ -54,7 +54,7 @@ void main() {
         'display_name': 'Sync',
       // This password has to clear BOTH of `password_strength.rs`'s rules, and
       // getting it wrong costs a full CI round trip — so it was checked against
-      // the real endpoint before landing (2026-08-05: 204).
+      // the real endpoint before landing (2026-08-05: register 204, login 200).
       //
       //   1. not in the common list — `password123` is literally in it
       //   2. no >=4-char run shared with the email's LOCAL PART or the display
@@ -68,7 +68,28 @@ void main() {
       }),
     );
     expect(reg.statusCode, inInclusiveRange(200, 299), reason: reg.body);
-    final token = (jsonDecode(reg.body) as Map)['access_token'] as String;
+
+    // `register` answers **204 with no body** — it stopped handing back a
+    // session when email verification landed, and this test still parsed the
+    // body as JSON (`FormatException: Unexpected end of input`). The session
+    // comes from `login`.
+    //
+    // Which only works because this runs against an EMPTY instance with
+    // registration CLOSED: that is the bootstrap exception — the first account
+    // is always allowed AND verified on the spot (auth.rs), so it can sign in
+    // immediately. With registration OPEN the account would be created but
+    // unverified, and login would refuse it. Hence: a fresh database, and do
+    // NOT set MICA_REGISTRATION_ENABLED.
+    final login = await http.post(
+      base.replace(path: '/api/auth/login'),
+      headers: json(),
+      body: jsonEncode({
+        'email': 'sync$stamp@test.dev',
+        'password': 'orbital-kettle-2026',
+      }),
+    );
+    expect(login.statusCode, inInclusiveRange(200, 299), reason: login.body);
+    final token = (jsonDecode(login.body) as Map)['access_token'] as String;
 
     // Workspace + document.
     final ws = await http.post(
