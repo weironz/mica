@@ -11,6 +11,8 @@ async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
+# OS CSPRNG for the self-minted JWT signing key (db.rs::ensure_jwt_secret).
+rand_core.workspace = true
 hmac.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,3 +21,9 @@ sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# `tests/jwt_secret_pg.rs` is async against a real Postgres. infra itself needs
+# no runtime — it hands futures to whoever drives them — so tokio is a test-only
+# dependency here.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

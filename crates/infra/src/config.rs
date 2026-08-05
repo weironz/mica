@@ -177,10 +177,23 @@ impl AppConfig {
       .and_then(|value| value.parse::<u32>().ok())
       .unwrap_or(10);
 
-    let jwt_secret = env::var("JWT_SECRET").map_err(|_| ConfigError::MissingJwtSecret)?;
-    // Refuse to start rather than serve forgeable tokens. See
-    // [`validate_jwt_secret`] for why this is strict only in production.
-    validate_jwt_secret(&jwt_secret, environment)?;
+    // EMPTY means "not configured" — the server mints its own on first boot and
+    // keeps it in the database (see `ensure_jwt_secret`). It is NOT a usable
+    // secret at this point, and `AppState::new` refuses to be built with one.
+    //
+    // Missing used to be a hard error, which closed the `change-me` hole but
+    // charged every self-hoster a chore with no decision in it. Self-minting
+    // closes the hole differently and better: there is no default to leak,
+    // because every instance's value is its own.
+    let jwt_secret = match env::var("JWT_SECRET") {
+      Ok(raw) => {
+        // Explicitly set: hold it to the same bar as before. An operator who
+        // says what the key is has to say something defensible.
+        validate_jwt_secret(&raw, environment)?;
+        raw
+      }
+      Err(_) => String::new(),
+    };
 
     // 1h default (was 24h). Because the client refreshes transparently, a
     // shorter access token shrinks the window in which a token that SHOULD be
@@ -319,14 +332,11 @@ pub enum ConfigError {
   #[error("DATABASE_URL is required")]
   MissingDatabaseUrl,
 
-  #[error("JWT_SECRET is required")]
-  MissingJwtSecret,
-
   /// Set, but to something that must never sign a token in production.
   ///
-  /// A separate variant from [`ConfigError::MissingJwtSecret`] on purpose: the
-  /// operator's next move differs. Missing means "add the line"; weak means
-  /// "the line you copied from the template is still there".
+  /// There is no `MissingJwtSecret` any more: an ABSENT `JWT_SECRET` is now
+  /// normal — the server mints one on first boot and stores it. Only a value the
+  /// operator explicitly supplied can be weak, and that is still fatal.
   #[error("JWT_SECRET {reason}")]
   WeakJwtSecret { reason: &'static str },
 

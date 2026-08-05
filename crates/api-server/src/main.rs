@@ -25,6 +25,14 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("failed to run database migrations")?;
 
+  // The signing key, resolved AFTER migrations because an unconfigured instance
+  // mints its own into a table they create. `JWT_SECRET` still wins when set —
+  // and is still held to the strict bar in `AppConfig::from_env`.
+  let mut config = config;
+  config.jwt_secret = mica_infra::ensure_jwt_secret(&db, &config.jwt_secret)
+    .await
+    .context("failed to resolve the JWT signing key")?;
+
   // One-time backfill of the derived columns on `document_yrs_base` —
   // `content_text` (search, migration 0012) and `link_targets` (backlinks, 0019)
   // — for rows that predate them, since deriving either needs the yrs decode,

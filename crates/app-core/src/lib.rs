@@ -92,7 +92,18 @@ pub enum ImportJobStatus {
 }
 
 impl AppState {
+  /// Panics on an EMPTY `jwt_secret`.
+  ///
+  /// Empty is the "not configured yet" marker `AppConfig::from_env` leaves when
+  /// `JWT_SECRET` is absent; `mica_infra::ensure_jwt_secret` is what turns it
+  /// into a real key, and it runs in `main` after migrations. Getting here with
+  /// an empty one means that step was skipped — and an empty signing key signs
+  /// anything, so failing loudly at construction beats serving forgeable tokens.
   pub fn new(config: AppConfig, db: PgPool, mailer: Arc<dyn Mailer>) -> Self {
+    assert!(
+      !config.jwt_secret.trim().is_empty(),
+      "AppState built with an empty jwt_secret — ensure_jwt_secret() was not called"
+    );
     Self {
       config: Arc::new(config),
       db,
