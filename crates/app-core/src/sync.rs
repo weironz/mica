@@ -172,28 +172,10 @@ fn searchable_metadata(front_matter: &str) -> String {
     parts.join(" ")
 }
 
-/// The `mica://page/<viewId>` targets referenced by a block's link marks.
-///
-/// Lives here rather than in api-server because the WRITE paths (which are in
-/// this crate) must derive `link_targets` from the very same extractor the
-/// readers use — a second implementation would be a second source of truth for
-/// a column whose whole contract is "pure derivation of `state`". api-server
-/// still calls it for the link-remap on document transfer.
-pub fn page_link_targets(data: &serde_json::Value) -> Vec<String> {
-    const SCHEME: &str = "mica://page/";
-    let Some(marks) = data.get("marks").and_then(|m| m.as_array()) else {
-        return Vec::new();
-    };
-    marks
-        .iter()
-        .filter_map(|mark| {
-            mark.get("href")
-                .and_then(|h| h.as_str())
-                .and_then(|href| href.strip_prefix(SCHEME))
-                .map(str::to_string)
-        })
-        .collect()
-}
+/// Re-exported so api-server keeps one import path. The definition lives in
+/// mica-core because the LOCAL store derives its backlink index from the same
+/// function — see [`mica_core::page_link_targets`].
+pub use mica_core::page_link_targets;
 
 /// Every page this document links TO — the producer of
 /// `document_yrs_base.link_targets`, and the mirror of [`content_text_from_doc`]:

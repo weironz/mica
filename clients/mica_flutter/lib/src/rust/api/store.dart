@@ -8,7 +8,7 @@ import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `set_trashed`, `store`, `subtree_ids`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
 abstract class MicaStore implements RustOpaqueInterface {
@@ -46,6 +46,13 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Batched and caller-driven on purpose — see the store-side note: a big
   /// library must not turn the first launch after an update into a stall.
   Future<int> backfillSearchIndex({required int limit});
+
+  /// The pages that link TO `view_id` — the local backlinks panel.
+  ///
+  /// NOT `#[frb(sync)]`, same reason as `search_local`: this runs on every page
+  /// open, and the panel is explicitly allowed to land a frame or two late
+  /// rather than hold up the document that the user actually asked for.
+  Future<List<LocalBacklink>> backlinksLocal({required String viewId});
 
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
@@ -350,6 +357,32 @@ class FolderExportImage {
 }
 
 /// A local workspace mirrored to Dart (P2-M3).
+/// One page that links TO the page being viewed. Same three fields the cloud's
+/// `Backlink` carries, so the panel has one model for both worlds.
+class LocalBacklink {
+  final String viewId;
+  final String objectId;
+  final String name;
+
+  const LocalBacklink({
+    required this.viewId,
+    required this.objectId,
+    required this.name,
+  });
+
+  @override
+  int get hashCode => viewId.hashCode ^ objectId.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalBacklink &&
+          runtimeType == other.runtimeType &&
+          viewId == other.viewId &&
+          objectId == other.objectId &&
+          name == other.name;
+}
+
 /// One local search hit. Same fields the cloud's `SearchResult` carries, so the
 /// Dart side keeps one model for both worlds instead of branching on which world
 /// it is in.

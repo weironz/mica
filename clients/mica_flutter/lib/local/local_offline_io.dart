@@ -216,6 +216,15 @@ class LocalOffline implements LocalOfflineApi {
     ];
   }
 
+  Future<List<Backlink>> backlinksLocal(String viewId) async {
+    final store = _store;
+    if (store == null) return const [];
+    return [
+      for (final b in await store.backlinksLocal(viewId: viewId))
+        Backlink(viewId: b.viewId, documentId: b.objectId, title: b.name),
+    ];
+  }
+
   Future<int> backfillSearchIndex(int limit) async {
     final store = _store;
     if (store == null) return 0;

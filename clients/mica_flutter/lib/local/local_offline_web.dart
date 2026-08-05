@@ -115,6 +115,9 @@ class LocalOffline implements LocalOfflineApi {
       const [];
 
   @override
+  Future<List<Backlink>> backlinksLocal(String viewId) async => const [];
+
+  @override
   Future<int> backfillSearchIndex(int limit) async => 0;
 
   /// Web has no on-device store at all, so there is nothing cached and nothing

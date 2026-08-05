@@ -2078,10 +2078,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// The cloud pages that link TO [viewId] (reverse references). Cloud only —
-  /// the local world has no backlinks endpoint, so [_unifiedWorkspaceView]
-  /// passes null in 本地模式 and the panel stays hidden.
+  /// The pages that link TO [viewId] (reverse references), in whichever world is
+  /// open: 本地模式 answers from the on-device store's own backlink index, the
+  /// cloud from `GET .../backlinks`. Both produce the same [Backlink] shape, so
+  /// the panel never branches on which world it is in.
+  ///
+  /// The local world had no answer here at all and the panel was hidden there —
+  /// which made a page WITH inbound links look exactly like a page nobody had
+  /// linked to. On web `backlinksLocal` returns empty (no on-device store), but
+  /// unlike search that needs no special case: a page with no backlinks renders
+  /// nothing either way, so the panel just stays hidden.
   Future<List<Backlink>> _loadBacklinks(String viewId) async {
+    if (_activeIsLocal) return _local.backlinksLocal(viewId);
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return const [];
@@ -5610,8 +5618,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // collapse the two, telling every local user their page was not there.
       onSearch: local ? (kIsWeb ? null : _searchLocalWorkspace) : _searchWorkspace,
       onOpenSearchResult: local ? _openLocalViewById : _openViewById,
-      // Cloud only: null in 本地模式 hides the backlinks panel entirely.
-      onLoadBacklinks: local ? null : _loadBacklinks,
+      // Both worlds now answer this — `_loadBacklinks` picks the on-device index
+      // in 本地模式 and the endpoint in the cloud. It used to be `local ? null`,
+      // which hid the panel outright: a locally-linked page looked unlinked.
+      onLoadBacklinks: _loadBacklinks,
       // Local workspaces have no server to bundle the zip; SAY so rather than
       // handing back Uint8List(0), which the caller happily saved as a 0-byte
       // page.zip and called it a successful export.

@@ -9,7 +9,8 @@ use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
 use mica_core::{
-    LocalSearchHit as CoreSearchHit, LocalStore, LocalVersion as CoreVersion,
+    LocalBacklink as CoreBacklink, LocalSearchHit as CoreSearchHit, LocalStore,
+    LocalVersion as CoreVersion,
     LocalView as CoreView, LocalWorkspace as CoreWorkspace, SyncCursor as CoreSyncCursor,
 };
 
@@ -168,6 +169,24 @@ impl From<LocalView> for CoreView {
 }
 
 /// A local workspace mirrored to Dart (P2-M3).
+/// One page that links TO the page being viewed. Same three fields the cloud's
+/// `Backlink` carries, so the panel has one model for both worlds.
+pub struct LocalBacklink {
+    pub view_id: String,
+    pub object_id: String,
+    pub name: String,
+}
+
+impl From<CoreBacklink> for LocalBacklink {
+    fn from(b: CoreBacklink) -> Self {
+        LocalBacklink {
+            view_id: b.view_id,
+            object_id: b.object_id,
+            name: b.name,
+        }
+    }
+}
+
 /// One local search hit. Same fields the cloud's `SearchResult` carries, so the
 /// Dart side keeps one model for both worlds instead of branching on which world
 /// it is in.
@@ -373,6 +392,20 @@ impl MicaStore {
     pub fn search_local(&self, query: String, limit: u32) -> Vec<LocalSearchHit> {
         self.store()
             .search_local(&query, limit as usize)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// The pages that link TO `view_id` — the local backlinks panel.
+    ///
+    /// NOT `#[frb(sync)]`, same reason as `search_local`: this runs on every page
+    /// open, and the panel is explicitly allowed to land a frame or two late
+    /// rather than hold up the document that the user actually asked for.
+    pub fn backlinks_local(&self, view_id: String) -> Vec<LocalBacklink> {
+        self.store()
+            .backlinks_local(&view_id)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)

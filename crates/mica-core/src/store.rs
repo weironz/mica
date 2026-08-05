@@ -49,12 +49,15 @@ pub enum StoreError {
 /// `load_doc` at startup. A corrupt local blob is recoverable — this store is a
 /// cache and the cloud holds the document — so it must degrade to an error the
 /// caller can re-seed from, not take the process down.
-/// Plain text of a stored state, for search. Same projection the cloud keeps in
-/// `document_yrs_base.content_text`, so a page reads the same either side.
-///
-/// Returns `None` — never an error — when the state cannot be decoded. See
-/// [`LocalStore::upsert_snapshot`]: the index is allowed to miss a document, the
-/// save is not allowed to fail because of it.
+/// One page that links TO the page being viewed. Mirrors the cloud `Backlink`
+/// so the panel renders both worlds from the same shape.
+#[derive(Debug, Clone)]
+pub struct LocalBacklink {
+    pub view_id: String,
+    pub object_id: String,
+    pub name: String,
+}
+
 /// One local search result. Mirrors the cloud's hit shape so the Dart side has
 /// one model, not two.
 #[derive(Debug, Clone)]
@@ -98,6 +101,12 @@ fn snippet_around(body: &str, needle_lower: &str) -> String {
     out
 }
 
+/// Plain text of a stored state, for search. Same projection the cloud keeps in
+/// `document_yrs_base.content_text`, so a page reads the same either side.
+///
+/// Returns `None` — never an error — when the state cannot be decoded. See
+/// [`LocalStore::upsert_snapshot`]: the index is allowed to miss a document, the
+/// save is not allowed to fail because of it.
 fn derive_content_text(doc_id: &str, state: &[u8]) -> Option<String> {
     let doc = contain_yrs_panic(doc_id, || Ok(MicaDoc::from_update(state)?)).ok()?;
     let text = doc
@@ -109,6 +118,28 @@ fn derive_content_text(doc_id: &str, state: &[u8]) -> Option<String> {
         .join("
 ");
     Some(text)
+}
+
+/// The pages this document links TO, as a JSON array — the local mirror of the
+/// cloud's `document_yrs_base.link_targets`, derived by the SAME
+/// [`crate::page_link_targets`] so the two worlds agree on what a backlink is.
+///
+/// JSON rather than a child table because `upsert_snapshot` is ONE statement: a
+/// second table would need a transaction around it and could then drift from
+/// `state`, which is exactly the property this store gets for free. SQLite reads
+/// it back with `json_each`, so it is still queryable, not an opaque blob.
+///
+/// Sorted + deduplicated: a page linked from five blocks is one edge.
+fn derive_link_targets(doc_id: &str, state: &[u8]) -> Option<String> {
+    let doc = contain_yrs_panic(doc_id, || Ok(MicaDoc::from_update(state)?)).ok()?;
+    let mut targets: Vec<String> = doc
+        .to_blocks()
+        .iter()
+        .flat_map(|b| crate::page_link_targets(&b.data))
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    serde_json::to_string(&targets).ok()
 }
 
 fn contain_yrs_panic<T>(
@@ -416,6 +447,21 @@ impl LocalStore {
         if !has_content_text {
             conn.execute("ALTER TABLE doc_snapshot ADD COLUMN content_text TEXT", [])?;
         }
+        // Same additive shape for `link_targets` (the backlink index). Two
+        // separate PRAGMA checks rather than one version bump: a store may have
+        // been opened by a build that had content_text but not this, so the two
+        // columns genuinely arrive independently.
+        let has_link_targets = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('doc_snapshot') WHERE name='link_targets'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_link_targets {
+            conn.execute("ALTER TABLE doc_snapshot ADD COLUMN link_targets TEXT", [])?;
+        }
         // Always have a default workspace so migrated views resolve and a fresh
         // store starts usable.
         conn.execute(
@@ -671,12 +717,15 @@ impl LocalStore {
     /// propagated.
     fn upsert_snapshot(&self, doc_id: &str, state: &[u8], crc: Option<i64>) -> Result<(), StoreError> {
         let content_text = derive_content_text(doc_id, state);
+        let link_targets = derive_link_targets(doc_id, state);
         self.conn.execute(
-            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc,content_text) VALUES(?1,?2,?3,?4,?5)
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc,content_text,link_targets)
+             VALUES(?1,?2,?3,?4,?5,?6)
              ON CONFLICT(doc_id) DO UPDATE SET
                  state=excluded.state, updated_at=excluded.updated_at,
-                 state_crc=excluded.state_crc, content_text=excluded.content_text",
-            params![doc_id, state, now_millis(), crc, content_text],
+                 state_crc=excluded.state_crc, content_text=excluded.content_text,
+                 link_targets=excluded.link_targets",
+            params![doc_id, state, now_millis(), crc, content_text, link_targets],
         )?;
         Ok(())
     }
@@ -746,6 +795,41 @@ impl LocalStore {
         Ok(hits)
     }
 
+    /// The pages that link TO `view_id` — the local backlinks panel.
+    ///
+    /// One statement over the maintained `link_targets`, the same way
+    /// `search_local` reads `content_text`. The cloud learned this the expensive
+    /// way: its panel used to decode every document per open (measured 690 ms on
+    /// a real 798-document workspace) before migration 0019 gave it the same
+    /// index. Doing it here from the start means the local world does not repeat
+    /// that, and — more to the point — that both worlds answer the same question
+    /// the same way instead of growing two different backlink features.
+    ///
+    /// `json_each` over the stored array, so a row that predates the column
+    /// (NULL) simply contributes nothing rather than erroring. A page linking to
+    /// itself is not a backlink. Trashed sources are excluded, matching search.
+    pub fn backlinks_local(&self, view_id: &str) -> Result<Vec<LocalBacklink>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT v.id, v.object_id, v.name
+             FROM local_view v
+             JOIN doc_snapshot s ON s.doc_id = v.object_id
+             WHERE v.trashed = 0
+               AND v.object_type = 'document'
+               AND v.id <> ?1
+               AND s.link_targets IS NOT NULL
+               AND EXISTS (SELECT 1 FROM json_each(s.link_targets) WHERE value = ?1)
+             ORDER BY v.name, v.id",
+        )?;
+        let rows = stmt.query_map(params![view_id], |r| {
+            Ok(LocalBacklink {
+                view_id: r.get(0)?,
+                object_id: r.get(1)?,
+                name: r.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
+
     /// Fill in `content_text` for documents stored before the column existed.
     ///
     /// Returns how many rows it filled. Bounded per call and driven by the
@@ -754,7 +838,8 @@ impl LocalStore {
     /// far smaller problem than an app that appears hung.
     pub fn backfill_content_text(&self, limit: usize) -> Result<usize, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT doc_id, state FROM doc_snapshot WHERE content_text IS NULL LIMIT ?1",
+            "SELECT doc_id, state FROM doc_snapshot
+             WHERE content_text IS NULL OR link_targets IS NULL LIMIT ?1",
         )?;
         let pending: Vec<(String, Vec<u8>)> = stmt
             .query_map(params![limit as i64], |r| {
@@ -768,9 +853,12 @@ impl LocalStore {
             // NULL means "not tried yet", and leaving it would make every backfill
             // pass pick the same broken row forever.
             let text = derive_content_text(&doc_id, &state).unwrap_or_default();
+            // Same reason as the text: an undecodable row stores `[]` rather than
+            // staying NULL, or every pass picks it again forever.
+            let links = derive_link_targets(&doc_id, &state).unwrap_or_else(|| "[]".to_string());
             self.conn.execute(
-                "UPDATE doc_snapshot SET content_text=?2 WHERE doc_id=?1",
-                params![doc_id, text],
+                "UPDATE doc_snapshot SET content_text=?2, link_targets=?3 WHERE doc_id=?1",
+                params![doc_id, text, links],
             )?;
             filled += 1;
         }
@@ -2851,6 +2939,160 @@ mod tests {
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION.to_string(), "no version bump");
         let _ = std::fs::remove_file(p);
+    }
+
+    /// Local backlinks exist at all. The local (offline) world used to hide the
+    /// panel entirely — `onLoadBacklinks` was null there — so a page that WAS
+    /// linked from three others showed nothing, indistinguishable from a page
+    /// nobody links to.
+    ///
+    /// These pin BEHAVIOUR: what the panel would list. Asserting that a
+    /// `link_targets` column exists would pass with a query that never matches.
+    mod local_backlinks {
+        use super::super::*;
+        use crate::block::Block;
+        use crate::marks::Mark;
+
+        /// A document whose single block links to `targets`.
+        ///
+        /// Marks go on through [`MicaDoc::set_block_text`], NOT by handing
+        /// `from_blocks` a `data.marks` — inline marks live in the CRDT as yrs
+        /// text formatting, and `to_blocks()` is what rebuilds `data.marks` from
+        /// it. A fixture that set `data` directly stored a block with `data:
+        /// Null`, so every backlink assertion here came back empty and would have
+        /// read as "the query is broken".
+        fn linking_doc(targets: &[&str]) -> MicaDoc {
+            let text = "see";
+            let marks: Vec<Mark> = targets
+                .iter()
+                .map(|t| Mark {
+                    start: 0,
+                    end: text.chars().count() as u32,
+                    ty: "link".to_string(),
+                    href: Some(format!("mica://page/{t}")),
+                    title: None,
+                })
+                .collect();
+            let mut doc = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
+            doc.set_block_text("root", text, &marks);
+            doc
+        }
+
+        fn view(id: &str, doc: &str, name: &str) -> LocalView {
+            LocalView {
+                id: id.into(),
+                workspace_id: "local".into(),
+                parent_id: None,
+                object_id: doc.into(),
+                name: name.into(),
+                position: "0000000010".into(),
+                trashed: false,
+                origin: "local".into(),
+                object_type: "document".into(),
+            }
+        }
+
+        /// v1 and v2 both link to v3; v4 links nowhere.
+        fn seeded() -> LocalStore {
+            let store = LocalStore::open_in_memory().unwrap();
+            for (v, d, name, targets) in [
+                ("v1", "d1", "甲", vec!["v3"]),
+                ("v2", "d2", "乙", vec!["v3"]),
+                ("v3", "d3", "丙", vec![]),
+                ("v4", "d4", "丁", vec![]),
+            ] {
+                store.save_doc(d, &linking_doc(&targets)).unwrap();
+                store.save_view(&view(v, d, name)).unwrap();
+            }
+            store
+        }
+
+        /// Order is the store's own collation, not a locale one: SQLite compares
+        /// TEXT by code point, so 乙 (U+4E59) precedes 甲 (U+7532). Pinned as-is
+        /// rather than "fixed" — the panel needs a STABLE order, and giving the
+        /// local world an ICU collation to match whatever Postgres happens to use
+        /// would be a dependency bought for the sort order of a sidebar list.
+        #[test]
+        fn lists_every_page_that_links_here() {
+            let store = seeded();
+            let names: Vec<String> = store
+                .backlinks_local("v3")
+                .unwrap()
+                .into_iter()
+                .map(|b| b.name)
+                .collect();
+            assert_eq!(names, vec!["乙".to_string(), "甲".to_string()]);
+        }
+
+        #[test]
+        fn a_page_nobody_links_to_has_none() {
+            assert!(seeded().backlinks_local("v4").unwrap().is_empty());
+        }
+
+        /// The half that rots silently. An index that only ever GAINS entries
+        /// passes every "the backlink shows up" test while the panel keeps
+        /// listing a page whose link was deleted — and on the local side the old
+        /// code could not regress this way at all, because there was no index.
+        #[test]
+        fn deleting_the_link_removes_the_backlink() {
+            let store = seeded();
+            assert_eq!(store.backlinks_local("v3").unwrap().len(), 2);
+
+            store.save_doc("d1", &linking_doc(&[])).unwrap();
+            let names: Vec<String> = store
+                .backlinks_local("v3")
+                .unwrap()
+                .into_iter()
+                .map(|b| b.name)
+                .collect();
+            assert_eq!(names, vec!["乙".to_string()], "甲 must leave the index");
+        }
+
+        #[test]
+        fn a_self_link_is_not_a_backlink() {
+            let store = LocalStore::open_in_memory().unwrap();
+            store.save_doc("d1", &linking_doc(&["v1"])).unwrap();
+            store.save_view(&view("v1", "d1", "自引")).unwrap();
+            assert!(store.backlinks_local("v1").unwrap().is_empty());
+        }
+
+        #[test]
+        fn a_trashed_source_stops_counting() {
+            let store = seeded();
+            let mut v = view("v1", "d1", "甲");
+            v.trashed = true;
+            store.save_view(&v).unwrap();
+            let names: Vec<String> = store
+                .backlinks_local("v3")
+                .unwrap()
+                .into_iter()
+                .map(|b| b.name)
+                .collect();
+            assert_eq!(names, vec!["乙".to_string()]);
+        }
+
+        /// A row written before the column existed contributes nothing rather
+        /// than erroring — `json_each` over NULL would otherwise blow up the
+        /// whole panel for one legacy row.
+        #[test]
+        fn a_row_predating_the_column_is_skipped_not_fatal() {
+            let store = seeded();
+            store
+                .conn
+                .execute("UPDATE doc_snapshot SET link_targets=NULL WHERE doc_id='d1'", [])
+                .unwrap();
+            let names: Vec<String> = store
+                .backlinks_local("v3")
+                .unwrap()
+                .into_iter()
+                .map(|b| b.name)
+                .collect();
+            assert_eq!(names, vec!["乙".to_string()]);
+
+            // …and the backfill picks it up.
+            assert!(store.backfill_content_text(100).unwrap() >= 1);
+            assert_eq!(store.backlinks_local("v3").unwrap().len(), 2);
+        }
     }
 
     /// Local search exists at all — a local workspace used to answer every query

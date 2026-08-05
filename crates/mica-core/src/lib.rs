@@ -17,12 +17,14 @@ pub mod store;
 pub mod text_diff;
 
 pub use block::Block;
+pub use block::page_link_targets;
 pub use doc::{DocError, MicaDoc};
 pub use marks::{marks_from_data, Mark};
 pub use text_diff::{utf16_text_diff, TextDiff};
 #[cfg(feature = "store")]
 pub use store::{
-  Identity, LocalSearchHit, LocalStore, LocalVersion, LocalView, LocalWorkspace, StoreError,
+  Identity, LocalBacklink, LocalSearchHit, LocalStore, LocalVersion, LocalView, LocalWorkspace,
+  StoreError,
   SyncCursor,
 };
 

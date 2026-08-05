@@ -131,6 +131,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<LocalBacklink> dco_decode_list_local_backlink(dynamic raw);
+
+  @protected
   List<LocalSearchHit> dco_decode_list_local_search_hit(dynamic raw);
 
   @protected
@@ -159,6 +162,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ZipAsset> dco_decode_list_zip_asset(dynamic raw);
+
+  @protected
+  LocalBacklink dco_decode_local_backlink(dynamic raw);
 
   @protected
   LocalSearchHit dco_decode_local_search_hit(dynamic raw);
@@ -348,6 +354,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<LocalBacklink> sse_decode_list_local_backlink(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<LocalSearchHit> sse_decode_list_local_search_hit(
     SseDeserializer deserializer,
   );
@@ -386,6 +397,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ZipAsset> sse_decode_list_zip_asset(SseDeserializer deserializer);
+
+  @protected
+  LocalBacklink sse_decode_local_backlink(SseDeserializer deserializer);
 
   @protected
   LocalSearchHit sse_decode_local_search_hit(SseDeserializer deserializer);
@@ -616,6 +630,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_local_backlink(
+    List<LocalBacklink> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_local_search_hit(
     List<LocalSearchHit> self,
     SseSerializer serializer,
@@ -668,6 +688,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_zip_asset(List<ZipAsset> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_local_backlink(LocalBacklink self, SseSerializer serializer);
 
   @protected
   void sse_encode_local_search_hit(

@@ -90,6 +90,14 @@ abstract interface class LocalOfflineApi {
   /// them apart (see `onSearch: null` in main.dart).
   Future<List<SearchResult>> searchLocal(String query, {int limit});
 
+  /// The pages on this device that link TO [viewId] — the backlinks panel.
+  ///
+  /// Async for the same reason as [searchLocal], and empty on web for the same
+  /// reason too: there is no on-device store there. Unlike search, the caller
+  /// does NOT have to tell "no store" from "no backlinks" apart — a page with no
+  /// backlinks renders nothing either way, so the panel simply stays hidden.
+  Future<List<Backlink>> backlinksLocal(String viewId);
+
   /// Index up to [limit] documents saved before the search projection existed.
   /// Returns how many it did; fewer than [limit] means the backlog is done.
   Future<int> backfillSearchIndex(int limit);
