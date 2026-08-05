@@ -52,7 +52,12 @@ void main() {
       body: jsonEncode({
         'email': 'sync$stamp@test.dev',
         'display_name': 'Sync',
-        'password': 'password123',
+      // NOT `password123`: that string is literally in the server's common-password list
+      // (`password_strength.rs`), so registration answered 400 and this test had
+      // been broken since that guard landed — unnoticed, because the file was
+      // excluded from CI. Bringing it into CI (2026-08-05) surfaced it on the
+      // first real run.
+      'password': 'mica-sync-e2e-2026',
       }),
     );
     expect(reg.statusCode, inInclusiveRange(200, 299), reason: reg.body);
