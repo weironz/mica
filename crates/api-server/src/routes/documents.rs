@@ -5013,4 +5013,50 @@ mod tests {
       );
     }
   }
+
+  /// What the backlinks panel actually costs at real scale.
+  ///
+  /// The roadmap deferred a maintained reverse-index table on the grounds that
+  /// the on-demand scan is fine "until scale bites" — a claim nobody had ever
+  /// put a number on. This puts one on it, against the REAL [`scan_backlinks`]
+  /// rather than a re-implementation, because the cost is not in the SQL: the
+  /// scan is one round-trip plus one full CRDT decode PER DOCUMENT, with no
+  /// early stop (a panel must be complete), bounded only by `buffered(8)`.
+  ///
+  /// Deliberately NOT wired to `DATABASE_URL`: it wants a restored production
+  /// snapshot, not the dev database, and pointing it at dev would measure an
+  /// empty workspace and read as "fast".
+  ///
+  ///   $env:MICA_BENCH_DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica_bench"
+  ///   $env:MICA_BENCH_WORKSPACE="<uuid>"
+  ///   cargo test -p mica-api-server backlink_scan_cost -- --ignored --nocapture
+  #[tokio::test]
+  #[ignore = "needs a restored production snapshot; see the doc comment"]
+  async fn backlink_scan_cost() {
+    let url = std::env::var("MICA_BENCH_DATABASE_URL").expect("MICA_BENCH_DATABASE_URL");
+    let ws: Uuid = std::env::var("MICA_BENCH_WORKSPACE")
+      .expect("MICA_BENCH_WORKSPACE")
+      .parse()
+      .unwrap();
+    let db = PgPool::connect(&url).await.unwrap();
+
+    let views = fetch_workspace_views(&db, ws).await.unwrap();
+    let docs: Vec<_> = views.iter().filter(|v| v.object_type == "document").collect();
+    println!("workspace has {} live documents", docs.len());
+
+    // Three targets, because the panel's cost must not depend on the answer:
+    // every document is reconstructed either way. A target with MANY backlinks
+    // and one with NONE should time the same — if they do, the scan is the
+    // cost, not the result set.
+    for view in docs.iter().take(3) {
+      let started = std::time::Instant::now();
+      let hits = scan_backlinks(&db, ws, view.id).await.unwrap();
+      println!(
+        "scan_backlinks({}) -> {} hits in {:?}",
+        view.name,
+        hits.len(),
+        started.elapsed()
+      );
+    }
+  }
 }
