@@ -54,6 +54,26 @@ async fn main() -> anyhow::Result<()> {
   // GC that stops is a disk-space problem, never a reason to fail a request.
   // No-op when object storage is not configured — nothing to reclaim.
   if let Some(storage) = state.storage.clone() {
+    // A blob is served by a 302 to the STORAGE origin, which is what keeps an
+    // uploaded SVG's scripts away from the app's tokens: they run wherever the
+    // bytes live, and that is a different origin. Configuring
+    // `S3_PUBLIC_BASE_URL` to the app's own origin quietly removes that
+    // boundary and turns "we allow SVG uploads" into stored XSS against the
+    // session. Nothing else would notice — the upload succeeds, the image
+    // renders, and only the origin changed.
+    //
+    // A warning rather than a refusal: the app cannot know that a shared origin
+    // is wrong (a reverse proxy could be routing /blobs elsewhere entirely),
+    // and refusing to start over a config the operator may have meant is worse
+    // than saying so. Same shape as the plaintext-HTTP warning below.
+    if let Some(public) = storage.public_base_url.as_deref() {
+      let app = state.config.app_base_url.trim_end_matches('/');
+      if !app.is_empty() && public.trim_end_matches('/').starts_with(app) {
+        tracing::warn!(
+          "S3_PUBLIC_BASE_URL ({public}) shares an origin with MICA_APP_BASE_URL            ({app}). Blob reads redirect there, so an uploaded SVG would execute            SAME-ORIGIN with the app and could read its session. Serve blobs from            a separate host (or leave S3_PUBLIC_BASE_URL unset to use presigned            GETs, which already are)."
+        );
+      }
+    }
     blob_gc::spawn(state.db.clone(), storage);
   }
   // Samples how long it takes to get a pooled connection. The idle/in_use
