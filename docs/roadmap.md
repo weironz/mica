@@ -131,11 +131,23 @@
   ③ **建议(suggest mode)** —— **刻意另立项**:建议是正文内 insert/delete overlay,与评论
   (side-store、正文一字不动)是两个问题,`comments-plan.md` 明写「别共用存储设计」。
   (①S / ②M `[需后端]` / ③L)
-- 🟡 **结构块 callout/toggle/embed/columns** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— **已拍板(2026-07-29):分两步,先做渲染层折叠 UI**。关键区分:`<details><summary>` 是**合法的 CommonMark/GFM raw-HTML block**(GitHub 官方推荐写法),属于"我们的解析器没接住",**不是**像合并单元格/多列那样"标准 md 表达不了"——所以**不适用**那两条的「红线不做」先例。现状比参照产品还弱一档:AppFlowy(原生 `toggle_list` block)和 AFFiNE(`collapsed` 做成 list/heading 通用属性)**编辑器里都有可点的折叠 UI**,只在导出 md 时降级;我们是连折叠 UI 都没有,`<details>` 源码当代码块摆着。~~**第一步(S)**~~ ✅ **已做(2026-08-03)**:纯渲染层折叠上线,`code_block`+`raw:true` 的解析/序列化一字未动,折叠态复用 `data.collapsed`(**实测 round-trip 字节不变**:点开折叠只写 `data.collapsed`,服务端读回的 `<details>` 仍无 `open`)。走 `AtomicBlockRenderer` 注册表 —— **顺带关掉了 P3-1**:注册表原本是 kind→renderer 的 Map,而 `code_block` 已被 Mermaid 占住,第二个 renderer 会**静默替换**它、无编译错误;现在是 kind→List,按注册顺序第一个不返回 null 的胜出(`render-architecture.md` 已改)。**但覆盖面比原计划小,原因是解析形态**:`<details>` 两种形态解析结果完全不同 —— **紧凑形态**(不留空行)是**一个** raw 块,已折叠;**GitHub 文档推荐的空行形态**(留空行让正文按 Markdown 解析)因为空行终止 type-6 HTML 块,解析成**三个块**(`<details>+<summary>` / 真正的 Markdown 正文 / `</details>`)。折叠后者要隐藏的是**一段范围**,而 `_layouts[i]` 在渲染器里全按节点下标索引,跳过节点会整体错位 → 得改成「零高度隐藏布局」,牵动选区/光标/命中测试/拖拽把手多条路径 —— **那是第二步的量级,不是第一步的尾巴**。空行形态今天仍是「两段源码夹着正文」,与改动前一致、不更差。**第二步(M–L,另议)**:规范子集结构化成新 kind(summary 富文本 + body 复用 `data.li` 扁平容器),非规范形态退回现状直通;成本大头在教导入器反解析真实世界五花八门的 `<details>`。**顺带定论**:折叠状态**是文档数据不是视图状态**——AppFlowy(`updateNode` 事务)、AFFiNE(`store.updateBlock`)、以及本仓库自己的代码块折叠先例(`controller.dart` `toggleCollapsed` 走 `update_block`,但 `collapsed` **从不进 md 字节**)三方一致;`<details open>` 让我们有机会比前两家更彻底(折叠态也能 round-trip),但那意味着"点一下折叠"变成一次真实文本编辑,留到第二步再定;② **columns** —— **红线不做**(标准 md 无多列表示,同表格合并;要做只能显式有损方言);③ embed 未做。附:render 注册表 P3-1 对这三种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
+- 🟡 **结构块 callout/toggle/embed** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— **已拍板(2026-07-29):分两步,先做渲染层折叠 UI**。关键区分:`<details><summary>` 是**合法的 CommonMark/GFM raw-HTML block**(GitHub 官方推荐写法),属于"我们的解析器没接住",**不是**像合并单元格那样"标准 md 表达不了"——所以**不适用**那条的「红线不做」先例。现状比参照产品还弱一档:AppFlowy(原生 `toggle_list` block)和 AFFiNE(`collapsed` 做成 list/heading 通用属性)**编辑器里都有可点的折叠 UI**,只在导出 md 时降级;我们是连折叠 UI 都没有,`<details>` 源码当代码块摆着。~~**第一步(S)**~~ ✅ **已做(2026-08-03)**:纯渲染层折叠上线,`code_block`+`raw:true` 的解析/序列化一字未动,折叠态复用 `data.collapsed`(**实测 round-trip 字节不变**:点开折叠只写 `data.collapsed`,服务端读回的 `<details>` 仍无 `open`)。走 `AtomicBlockRenderer` 注册表 —— **顺带关掉了 P3-1**:注册表原本是 kind→renderer 的 Map,而 `code_block` 已被 Mermaid 占住,第二个 renderer 会**静默替换**它、无编译错误;现在是 kind→List,按注册顺序第一个不返回 null 的胜出(`render-architecture.md` 已改)。**但覆盖面比原计划小,原因是解析形态**:`<details>` 两种形态解析结果完全不同 —— **紧凑形态**(不留空行)是**一个** raw 块,已折叠;**GitHub 文档推荐的空行形态**(留空行让正文按 Markdown 解析)因为空行终止 type-6 HTML 块,解析成**三个块**(`<details>+<summary>` / 真正的 Markdown 正文 / `</details>`)。折叠后者要隐藏的是**一段范围**,而 `_layouts[i]` 在渲染器里全按节点下标索引,跳过节点会整体错位 → 得改成「零高度隐藏布局」,牵动选区/光标/命中测试/拖拽把手多条路径 —— **那是第二步的量级,不是第一步的尾巴**。空行形态今天仍是「两段源码夹着正文」,与改动前一致、不更差。**第二步(M–L,另议)**:规范子集结构化成新 kind(summary 富文本 + body 复用 `data.li` 扁平容器),非规范形态退回现状直通;成本大头在教导入器反解析真实世界五花八门的 `<details>`。**顺带定论**:折叠状态**是文档数据不是视图状态**——AppFlowy(`updateNode` 事务)、AFFiNE(`store.updateBlock`)、以及本仓库自己的代码块折叠先例(`controller.dart` `toggleCollapsed` 走 `update_block`,但 `collapsed` **从不进 md 字节**)三方一致;`<details open>` 让我们有机会比前两家更彻底(折叠态也能 round-trip),但那意味着"点一下折叠"变成一次真实文本编辑,留到第二步再定;② embed 未做。附:render 注册表 P3-1 对这两种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
 - **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。
   **2026-08-03 核实:比原文写的更糟** —— 编辑器目录里 `Semantics` **0 处**(不是「少」,是没有),
-  `TextDirection.ltr` **32 处**(原文写「10+」)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
-- **Web IME/光标滚动实况调优** —— Milestone 1 遗留(合成态/游离换行、caret scroll-into-view)。(M)
+  `TextDirection.ltr` **31 处**(2026-08-05 复数;原文写「10+」,08-03 写 32)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
+- 🟡 **Web:caret 不跟随光标滚动**(2026-08-05 实测,`e2e/web_ime_probe.mjs` 是复现器)——
+  原条目笼统写「Web IME/光标滚动实况调优:合成态/游离换行、caret scroll-into-view」,
+  从 Milestone 1 挂到现在**没有任何实测**。拿真 Chrome + CDP `Input.imeSetComposition`
+  (不是手工 dispatch CompositionEvent —— 那会绕开浏览器自己的合成状态机,而「合成态」
+  的 bug 恰恰活在那一层)在本地 web 构建上逐项打:
+  **① 合成态输入:好的。**「中文输入」逐字 preedit 后提交,正确落进文档,字数角标同步。
+  **② 游离换行:复现不了。** 合成中按 Enter 只提交候选,没有多出换行,文字留在同一行。
+  **③ caret scroll-into-view:确认坏的。** 连打 28 行(人类速度 80ms/键)直到光标远在
+  屏幕外,**视口自始至终停在文档顶部**,末尾的 `<<<CARET-IS-HERE>>>` 标记完全不可见 ——
+  也就是「打字打进一个自己看不见的地方」。
+  **一个差点报错的观察**:第一版探针以 CDP 的最快速度发键,结果行序错乱(line 4/7/14/23…)。
+  降到人类速度后顺序完全正确 —— 那是**探针跑过了编辑器**,不是编辑器的 bug。
+  滚动这条在两种速度下都成立,这才是它算数的原因。(S–M)
 - **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
 - 🆕 **集成 AI 升级为「能操作文档的 agent」(候选,已调研背书,2026-07-23)** —— 现
   `/ai/complete`(`ai.rs`)只是**单次 prompt→Markdown 补全**,无 tools/agent 循环;而

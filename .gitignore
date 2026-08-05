@@ -91,3 +91,5 @@ password.txt
 # e2e/package.json and the browser download is machine-specific.
 e2e/node_modules/
 e2e/package-lock.json
+# Probe screenshots are evidence for one investigation, not artefacts to keep.
+e2e/*.png
