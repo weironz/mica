@@ -383,10 +383,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// anyway: it would pin the overlay to a viewport position while its anchor
   /// moved away. An overlay whose anchor scrolls out of view now scrolls out
   /// with it, which is what it means for the two to belong together.
+  /// [clampTop] keeps the overlay from riding above the canvas. True for
+  /// anchored editors (a cell editor above its own canvas would be nonsense);
+  /// FALSE for the floating format bar, which is allowed to sit in the app
+  /// chrome above the document — see [_buildMarkBar].
   Widget _followCanvas({
     required Offset local,
     required double width,
     required Widget child,
+    bool clampTop = true,
   }) {
     // `max` because a window narrower than the overlay makes the upper bound
     // smaller than the lower one, and `clamp` throws on that.
@@ -397,7 +402,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       child: CompositedTransformFollower(
         link: _canvasLink,
         showWhenUnlinked: false,
-        offset: Offset(local.dx.clamp(0.0, maxX), math.max(0.0, local.dy)),
+        offset: Offset(
+          local.dx.clamp(0.0, maxX),
+          clampTop ? math.max(0.0, local.dy) : local.dy,
+        ),
         child: child,
       ),
     );
@@ -467,6 +475,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // _activeCell / _areaDrag, which clear), so Shift+click can grow the
   // rectangle from where the selection started.
   ({int node, int row, int col})? _cellSelectAnchor;
+  /// The floating format bar's own height. A literal because the bar is placed
+  /// BEFORE it is laid out, so nothing can ask it how tall it is.
+  static const double _markBarHeight = 44;
+
   OverlayEntry? _markBar; // floating inline-format toolbar over a selection
   MouseCursor _cursor = SystemMouseCursors.text;
 
@@ -3349,17 +3361,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Canvas-LOCAL, not screen: the bar follows the canvas (see
     // [_followCanvas]) instead of being pinned where the anchor happened to be
     // on screen at the moment the selection was made.
-    final Offset local;
+    //
+    final Offset above;
     if (inCell) {
       final cellRect = r.tableCellRect(ac.node, ac.row, ac.col);
       if (cellRect == null) return const SizedBox.shrink();
-      local = cellRect.topLeft;
+      above = cellRect.topLeft;
     } else {
       final sel = _controller.selection;
       if (sel == null) return const SizedBox.shrink();
       final rect = r.caretRectFor(sel.start);
       if (rect == null) return const SizedBox.shrink();
-      local = rect.topLeft;
+      above = rect.topLeft;
     }
 
     final docSel = _controller.selection;
@@ -3489,8 +3502,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
     }
 
+    // Always ABOVE the selection, and allowed to ride above the canvas.
+    //
+    // The bug (2026-08-05, reported with a screenshot): selecting the FIRST line
+    // put the bar ON that line. The placement was already `-_markBarHeight`, but
+    // `_followCanvas` clamped a negative `dy` to 0 — turning "above the canvas"
+    // into "on top of the selection", the worse of the two.
+    //
+    // Flipping BELOW when there is no room above was tried first and is what
+    // every comparable editor does — but here it just moves the damage: the bar
+    // then covers the line UNDER the selection and, being an overlay, swallows
+    // clicks meant for it. Measured with an instrumented sweep: after selecting
+    // the first line, every click for the next ~50px hit the bar instead of the
+    // document.
+    //
+    // Above the canvas there is app chrome (the breadcrumb row), not content, so
+    // letting the bar sit there covers nothing the user is editing.
     return _followCanvas(
-      local: local.translate(0, -44),
+      local: above.translate(0, -_markBarHeight),
+      clampTop: false,
       width: 420,
       // TextFieldTapRegion: clicking the bar must not count as a tap OUTSIDE
       // the cell editor's TextField — Flutter's onTapOutside would unfocus it
