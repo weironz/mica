@@ -17,7 +17,9 @@
 
 ## 可靠性与同步
 
-- 🟡 **长离线重连 = 推送风暴**(2026-07-30 核实:原描述「无分批/背压/合并」已半假)—— **桌面已修**:`_flushUnacked` 在 append-log 路径上按 `_pushWindow = 64` 开窗,尾巴由 ack 回调驱动继续排空 —— 这既是分批也是背压(节奏由服务端定,不由 for 循环定)。~~① **web 仍然无界**~~ ✅ **已做(2026-08-03)**:内存 outbox 走同一个 `_pushWindow = 64`,尾巴由 ack 回调续排;`resendAll`(重连)先清 `sent`/`rejected` 再按窗口发。**顺带修掉一个只有开窗后才存在的死角**:被 `error` 拒绝的 push 永远等不到 ack,如果一直算「在飞」就会**永久占着窗口位**,攒够一批直接把排空焊死 —— 现在打 `rejected` 标记让位,但**不立刻重发**(这条路的重试本来就在重连)。节奏判定抽成纯函数 `pushSlice` 单测(`web_outbox_backpressure_test.dart`),因为真正的发送路径要先 bootstrap,而 bootstrap 要 CRDT 引擎 + 活服务端 —— 那是 `integration_test/cloud_sync_*` 的地盘,CI 里排除。**残留**:② **合并未做**(两条路径都没有):可先用 yrs merge 把尾巴合成一条再推。服务端那半仍然成立:每条 push 全档 decode+encode+upsert = O(条数×文档大小),见本文件「每次 push 重建+重编码+重写整档」。(`cloud_sync_session.dart` `_flushUnacked`, `sync.rs` `push_update`)(M) `[需后端]`
+> **这一节空了(2026-08-05)。** 不是漏删:同块字符级协同(文本 + marks)与长离线重连
+> (背压 + 合并)两条都整条搬进了存档。留着标题是因为这是最该有人盯的一档 —— 空着本身
+> 是个状态,而不是这一档不存在。
 
 ## 安全
 
