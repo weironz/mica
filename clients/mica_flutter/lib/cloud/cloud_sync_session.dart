@@ -68,6 +68,12 @@ class _Pending {
 /// [occupiesSlot] is deliberately narrower than [alreadySent]: a REJECTED push
 /// has been sent (so don't send it again on a live flush) but will never be
 /// acked (so it must not hold a slot).
+/// Cap on one merged push. Well under the server's 64 MiB frame limit — the
+/// point is not to sail close to it but to keep a pathological outbox (a very
+/// long offline stretch on a large document) from building one enormous message
+/// whose failure would retry the whole thing.
+const int _mergeMaxBytes = 4 * 1024 * 1024;
+
 /// How many of the leading queued updates to fold into ONE push.
 ///
 /// Merging is what turns a reconnect from "one round trip per queued edit" into
@@ -79,12 +85,6 @@ class _Pending {
 /// **Always at least one**, even when that one entry is already over the cap:
 /// refusing to send it would stall the outbox forever, and a single oversized
 /// entry is exactly as sendable as it was before merging existed.
-/// Cap on one merged push. Well under the server's 64 MiB frame limit — the
-/// point is not to sail close to it but to keep a pathological outbox (a very
-/// long offline stretch on a large document) from building one enormous message
-/// whose failure would retry the whole thing.
-const int _mergeMaxBytes = 4 * 1024 * 1024;
-
 @visibleForTesting
 int mergeRunLength(List<int> sizes, {required int maxBytes}) {
   if (sizes.isEmpty) return 0;
@@ -258,6 +258,15 @@ class CloudSyncSession {
   /// (the append-log has no per-entry `sent` flag). Reset on each (re)connect.
   int _sentThroughClock = 0;
 
+  /// The FIRST clock of the run most recently put on the wire.
+  ///
+  /// A rejection names the run's LAST clock (that is the correlation id), so
+  /// rolling `_sentThroughClock` back to `id - 1` is only correct when the run
+  /// was one entry. For a merged run it would leave the run's earlier entries
+  /// marked as sent while nothing ever acked them, and `pushed_clock` — which
+  /// may only advance through a contiguous acked prefix — would stall forever.
+  int _sentRunStartClock = 0;
+
   /// Append-log path: outbox clocks acked out of contiguous order (a lower clock
   /// errored / isn't acked yet). `pushed_clock` advances only through the
   /// contiguous acked prefix, so an un-acked lower clock is never skipped
@@ -346,6 +355,7 @@ class CloudSyncSession {
     // pushes the whole un-acked outbox afresh. Out-of-order ack bookkeeping and
     // the rejection budget are per-connection.
     _sentThroughClock = 0;
+    _sentRunStartClock = 0;
     _ackedAhead.clear();
     _pushRejects = 0;
     _pushStalled = false;
@@ -674,7 +684,11 @@ class CloudSyncSession {
         if (_useAppendLog && errId is String) {
           final clock = int.tryParse(errId);
           if (clock != null) {
-            if (clock - 1 < _sentThroughClock) _sentThroughClock = clock - 1;
+            // Back to just BEFORE the run this id belongs to, not `clock - 1`:
+            // see [_sentRunStartClock]. They are the same thing for a one-entry
+            // run, which is every ordinary edit.
+            final rollback = (_sentRunStartClock > 0 ? _sentRunStartClock : clock) - 1;
+            if (rollback < _sentThroughClock) _sentThroughClock = rollback;
             if (_pushRejects < _maxPushRejects) {
               _pushRejects++;
               _flushUnacked();
@@ -854,22 +868,53 @@ class CloudSyncSession {
       // drains, just paced by the server instead of by our for-loop.
       final pending = persistence!.outboxAfter(floor).toList();
       if (pending.isEmpty) return;
-      // Fold the run into ONE push instead of one push per entry. The id is the
-      // HIGHEST clock in the run, which is what makes this need no protocol
-      // change: the server treats `id` as an opaque correlation token and echoes
-      // it, and the ack advances `pushed_clock` to it — trimming the whole run
-      // as a prefix, exactly as if each entry had been acked in turn.
-      final run = mergeRunLength(
-        [for (final e in pending) e.bytes.length],
-        maxBytes: _mergeMaxBytes,
-      );
-      final head = pending.take(run).toList();
-      final bytes = head.length == 1
-          ? head.first.bytes
-          : _doc!.mergeUpdates([for (final e in head) e.bytes]);
-      final last = head.last.clock;
-      _sendPushRaw(last.toString(), bytes);
-      if (last > _sentThroughClock) _sentThroughClock = last;
+      // Merge only a genuine BACKLOG. Ordinary editing keeps one push per entry,
+      // which is what makes a rejected clock retryable on its own: the id the
+      // server echoes is that entry's clock, so an error names exactly one edit.
+      //
+      // The first version merged unconditionally and broke that — two sequential
+      // edits went out as one push carrying only the higher clock, so a
+      // rejection of the lower one could not be expressed at all, and the
+      // integration tests pinning "a rejected push is retried, never dropped"
+      // went red (2026-08-05; caught by CI, not by `just test` — integration
+      // tests need a Windows device and only run there).
+      //
+      // `_pushWindow` is the threshold rather than a new number: it already
+      // means "how many pushes may be in flight", so a queue longer than it is
+      // by definition more than the un-merged path could carry at once — the
+      // reconnect case merging exists for.
+      if (pending.length > _pushWindow) {
+        // Fold the run into ONE push. The id is the HIGHEST clock in the run,
+        // which is what makes this need no protocol change: the server treats
+        // `id` as an opaque correlation token and echoes it, and the ack
+        // advances `pushed_clock` to it — trimming the whole run as a prefix,
+        // exactly as if each entry had been acked in turn.
+        final run = mergeRunLength(
+          [for (final e in pending) e.bytes.length],
+          maxBytes: _mergeMaxBytes,
+        );
+        final head = pending.take(run).toList();
+        final bytes = head.length == 1
+            ? head.first.bytes
+            : _doc!.mergeUpdates([for (final e in head) e.bytes]);
+        final last = head.last.clock;
+        // Remember where the run STARTED. A rejection names the run's LAST
+        // clock, and rolling back to `clock - 1` would re-send only that entry
+        // while the rest of the run stayed marked as sent — `pushed_clock` could
+        // then never advance contiguously and the outbox would hang forever.
+        _sentRunStartClock = head.first.clock;
+        _sendPushRaw(last.toString(), bytes);
+        if (last > _sentThroughClock) _sentThroughClock = last;
+        return;
+      }
+      var inFlight = 0;
+      for (final e in pending) {
+        if (inFlight >= _pushWindow) break;
+        _sentRunStartClock = e.clock;
+        _sendPushRaw(e.clock.toString(), e.bytes);
+        if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;
+        inFlight++;
+      }
       return;
     }
     // In-memory outbox (no local store — this is the WEB path). Same bounded
