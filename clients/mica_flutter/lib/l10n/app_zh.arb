@@ -1,5 +1,10 @@
 {
   "@@locale": "zh",
+  "aiCodeExplain": "简要解释这段代码的功能:\n\n```\n{code}\n```",
+  "aiCodeImprove": "优化改进这段代码,只返回改进后的代码(放在代码块里):\n\n```\n{code}\n```",
+  "aiCodeFix": "找出这段代码里的 bug 或问题并简要说明:\n\n```\n{code}\n```",
+  "aiCodeContext": "\n\n参考代码:\n```\n{code}\n```",
+  "untitledPage": "未命名页面",
   "themeLabel": "主题",
   "themeSystem": "跟随系统",
   "themeLight": "浅色",

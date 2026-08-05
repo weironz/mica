@@ -1936,7 +1936,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
-    final name = title.trim().isEmpty ? kUntitledPage : title.trim();
+    final name = title.trim().isEmpty ? context.l10n.untitledPage : title.trim();
     final html = _local.exportDocHtml(
       bootstrap.document.id,
       name,
@@ -1959,7 +1959,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
-    final base = title.trim().isEmpty ? kUntitledPage : title.trim();
+    final base = title.trim().isEmpty ? context.l10n.untitledPage : title.trim();
     final result = _local.exportDocMarkdown(bootstrap.document.id, base);
     if (result == null) {
       throw ApiException(context.l10n.exportEmptyContent);
@@ -3378,7 +3378,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String name, {
     String? parentViewId,
   }) async {
-    final title = name.trim().isEmpty ? kUntitledPage : name.trim();
+    final title = name.trim().isEmpty ? context.l10n.untitledPage : name.trim();
     final created = _local.newDoc();
     // Rust assigns the id and the position (after the last live sibling) —
     // the same rule clone and reorder use.
@@ -7817,7 +7817,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 () => _expandForChildOf(item.view.id),
               ); // reveal the new child
               _createThenRename(
-                () => widget.onCreateChildDocument(item.view, kUntitledPage),
+                () => widget.onCreateChildDocument(item.view, context.l10n.untitledPage),
               );
             },
             onCreateChildFolder: () {
@@ -8853,8 +8853,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                               // TextInputAction.next finalize, which would
                               // otherwise nextFocus() away from the editor.
                               onEditingComplete: _titleEnter,
-                              decoration: const InputDecoration(
-                                hintText: kUntitledPage,
+                              decoration: InputDecoration(
+                                hintText: context.l10n.untitledPage,
                                 border: InputBorder.none,
                               ),
                             ),
@@ -9562,11 +9562,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       if (parent == null) {
         return folder
             ? widget.onCreateFolder(folderName)
-            : widget.onCreateDocument(kUntitledPage);
+            : widget.onCreateDocument(context.l10n.untitledPage);
       }
       return folder
           ? widget.onCreateChildFolder(parent, folderName)
-          : widget.onCreateChildDocument(parent, kUntitledPage);
+          : widget.onCreateChildDocument(parent, context.l10n.untitledPage);
     });
   }
 

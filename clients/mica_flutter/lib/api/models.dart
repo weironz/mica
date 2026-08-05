@@ -913,17 +913,23 @@ bool mayReplaceBootstrap({
 DocumentView? firstOpenableView(Iterable<DocumentView> views) =>
     views.where((v) => v.objectType == 'document').firstOrNull;
 
-/// The default name a freshly-created page carries (the server rejects empty
-/// view names, so a new page must be named). The title field renders this — and
-/// the legacy English 'Untitled' — as an empty placeholder so a new page shows a
-/// grey hint + caret rather than solid, pre-selected text.
-const String kUntitledPage = '未命名页面';
-
-/// True when [name] is an untouched default page name (new page never renamed),
-/// so the title field should show its placeholder instead of the literal text.
+/// True when [name] is an untouched default page name (a new page nobody
+/// renamed), so the title field shows its placeholder instead of the literal
+/// text — a grey hint + caret rather than solid, pre-selected words.
+///
+/// Both spellings are matched on purpose. The default is written by whichever
+/// client created the page (`l10n.untitledPage`), because the server rejects
+/// empty view names — so this string is persisted DATA, and a Chinese client
+/// saves one spelling while an English client saves the other. A page created in
+/// either language, by any version, has to keep rendering as untouched.
+///
+/// Literals rather than a shared constant: there is no longer a single "the
+/// default name" to point at, and a constant would invite someone to reuse it as
+/// one — which is precisely the bug this replaced, where every client persisted
+/// the Chinese string no matter what language it was running in.
 bool isUntitledPageName(String name) {
   final t = name.trim();
-  return t == kUntitledPage || t == 'Untitled';
+  return t == '未命名页面' || t == 'Untitled';
 }
 
 /// Whether a view may be nested under [parentId] (null = workspace root). A page

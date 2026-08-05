@@ -345,6 +345,26 @@
 - ~~🆕 **编辑器 op 管道 `catchError((_){})` 吞掉本应浮出的 outbox 写失败**~~ ✅ 已做(校准复核)—— `controller.dart` 现 `opFaultCount++` + `onOpFault?.call` 上浮,不再吞(红线 #1)。
 - ~~🆕 **云文档离线/未同步状态零指示**~~ ✅ 2026-07-26 完成(69ff98f 地基+信号 / 8e1318d 徽标 / 6832dea 心跳)—— 扒了 8 家(AFFiNE/SiYuan/Logseq/Anytype/Google Docs/Notion/Obsidian/AppFlowy)后定**最小形态**:三态克制徽标(已同步→**什么都不画**、同步中→faint 慢转圈、离线→cloud-off + tooltip),摆文档面包屑右上、**仅云工作区**显示。**不做数字计数**(同类无一家做)、**不可点击/不做手动同步**(AFFiNE/AppFlowy/Anytype 同样没有;mica 本就自动重连 + 自动 flush)。信号从 `CloudSyncSession` 四个真实转移点 emit,推导是纯函数 `deriveSyncPhase`(`sync_status.dart`,4 单测)。**关键补丁**:加了**心跳**(8s ping + 20s 帧静默看门狗)——否则拔网线是 TCP 半开、不发 WS close 帧,`_onDone` 永不触发 → 一直误判在线(用户实测拔线发现徽标不动才暴露);服务端 `ws.rs:267` 本就 `ping→pong`,零改动。〔"别人都没做"的印象来自 AppFlowy:它的 `sync_indicator.dart` 当前是**死代码**(重构后未挂载),且有未关闭的需求 #5729 求做回。〕
 
+## 客户端质量与兜底 🆕
+
+- ~~🆕 **i18n 漏网**~~ ✅ **已做(2026-08-05)** —— 两处都改了,而且形状和条目描述不同。
+  ① **默认页名**:`kUntitledPage='未命名页面'` 是**持久化数据**不是界面文案 —— 服务端拒绝空
+  view 名,所以新建页必须带名字,那串中文会进标题、进导出、进搜索。英文用户建页得到中文标题。
+  **本来想「存空串、渲染时本地化」,但服务端拒空这条路走不通**,所以改成创建时取
+  `l10n.untitledPage`(zh 存「未命名页面」,en 存「Untitled」)。`isUntitledPageName` 本来就同时
+  认这两种,无需改动;**常量整个删掉** —— 它的角色已从「那个默认名」变成「一个旧值」,留着只会
+  诱人再当默认名用,而那正是这次修的 bug。7 处调用点(其中一处在 `const InputDecoration` 里,
+  解掉 const)。
+  ② **代码块 AI prompt 全中文**:4 条 prompt 是**发给模型的**,模型用什么语言问就用什么语言答 ——
+  英文用户点「解释代码」会拿到中文解释。改成 4 个带 `{code}` 占位符的 l10n 键。
+  〔踩了两层转义坑,写下来:先是 arb 里写进**真实换行**导致 JSON 非法;修完又反过来,值里塞了
+  `
+` 两字符,生成的 Dart 变成字面反斜杠 n —— **而这两次 `flutter test` 都是全绿的**,因为没有
+  测试覆盖 prompt 字面量。正确做法是让 JSON 的**值**含真实换行、交给 `json.dumps` 转义,并**去看
+  生成产物**而不是只看测试。〕
+  **未做且不算漏网**:语言仍只有 en+zh —— 那是支持范围,不是缺陷。
+  验证:`flutter analyze` 0 error;`flutter test` 1126 全过;生成的 zh prompt 与原硬编码串语义逐字一致。(S)
+
 ## 性能
 
 - ~~**本地持久化:云文档已增量,纯本地文档仍全量**~~ ✅ **已做(2026-08-03)** —— 纯本地(离线)文档从「400ms debounce 全量 `saveDoc`」改成 append + 定期折叠,与云端同一套机制(`append_update` / `load_doc` 重放 base+log)。**「接线即可」是错的**:`squash` 刻意保留 `clock > pushed_clock`(那些还欠服务端),`trim_updates_through` 也钳在同一个标记上,而**纯本地文档永远没有服务端、`pushed_clock` 恒为 0** → 两条裁剪路径对它都是空操作,照原计划直接改追加会把「有界的全量写」换成**无界日志 + 每次开文档全量重放**,正是本文件 yrs base 那条踩过的形状。所以补了 Rust 原语 `compact_local`(折叠 + 清空全部日志),**守卫写在 store 里而非调用方**:任何有云同步痕迹的文档(sync cursor 非零、或有 remote log 行)一律拒绝——删掉未推送的 outbox 就是静默的服务端数据丢失(红线#1)。顺带两个非性能收益:① **400ms 窗口消失**,编辑在 `applyOps` 返回时就已落盘(此前崩在窗口内静默丢失);② **`loadDoc` 不再会陈旧**,读之前不必记得先 `flush()`(`local_offline_io.dart` 里有 4 处正是为此而 flush,忘一处就导出比屏幕上更旧的文档)。另注意 `compact_local` 必须走 `capture_auto_version`——本地版本历史原本挂在那个全量 `saveDoc` 上,不接就会静默停摆。(`store.rs` `compact_local`, `local_doc.dart`;Rust 3 测 + 集成测试 3 条)

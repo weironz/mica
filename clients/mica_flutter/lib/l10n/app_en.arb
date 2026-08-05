@@ -1,5 +1,17 @@
 {
   "@@locale": "en",
+  "aiCodeExplain": "Briefly explain what this code does:\n\n```\n{code}\n```",
+  "@aiCodeExplain": {"description": "Prompt sent to the model for a code block's Explain action. Localised because it is what the MODEL reads: a model answers in the language it was asked in, so an English user asking in Chinese gets a Chinese explanation of their own code.", "placeholders": {"code": {"type": "String"}}},
+  "aiCodeImprove": "Improve this code. Return only the improved code, in a code block:\n\n```\n{code}\n```",
+  "@aiCodeImprove": {"placeholders": {"code": {"type": "String"}}},
+  "aiCodeFix": "Find bugs or problems in this code and explain them briefly:\n\n```\n{code}\n```",
+  "@aiCodeFix": {"placeholders": {"code": {"type": "String"}}},
+  "aiCodeContext": "\n\nCode for reference:\n```\n{code}\n```",
+  "@aiCodeContext": {"description": "Appended below whatever the user types in the custom-question flow, so their question comes first and the code follows as context.", "placeholders": {"code": {"type": "String"}}},
+  "untitledPage": "Untitled",
+  "@untitledPage": {
+    "description": "Default title a freshly-created page is SAVED with. The server rejects empty view names, so a new page must carry one — which means this string is persisted DATA, not just chrome: it lands in the title, in export, and in search. Chinese clients therefore save a Chinese default and English ones an English default; isUntitledPageName() recognises both so either renders as a placeholder."
+  },
   "themeLabel": "Theme",
   "themeSystem": "System",
   "themeLight": "Light",

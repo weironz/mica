@@ -5636,19 +5636,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!mounted || selected == null) return;
     switch (selected) {
       case 'explain':
-        _runCodeAi(nodeIndex, (c) => '简要解释这段代码的功能:\n\n```\n$c\n```');
+        _runCodeAi(nodeIndex, (c) => context.l10n.aiCodeExplain(c));
       case 'improve':
         _runCodeAi(
           nodeIndex,
-          (c) => '优化改进这段代码,只返回改进后的代码(放在代码块里):\n\n```\n$c\n```',
+          (c) => context.l10n.aiCodeImprove(c),
         );
       case 'fix':
-        _runCodeAi(nodeIndex, (c) => '找出这段代码里的 bug 或问题并简要说明:\n\n```\n$c\n```');
+        _runCodeAi(nodeIndex, (c) => context.l10n.aiCodeFix(c));
       case 'custom':
         // Prefill the code as context; the user types their question above it.
         _runCodeAi(
           nodeIndex,
-          (c) => '\n\n参考代码:\n```\n$c\n```',
+          (c) => context.l10n.aiCodeContext(c),
           autoStart: false,
         );
     }
