@@ -130,6 +130,7 @@ fn app_router(state: AppState) -> Router {
     .nest("/api", api)
     .merge(routes::ws_router())
     .merge(routes::share_router())
+    .merge(routes::legal_router())
     .merge(routes::reset_router())
     // NOT under `/api`, and that placement IS the access control: nginx only
     // proxies /api, /ws, /s and the two mail links, so this is reachable from

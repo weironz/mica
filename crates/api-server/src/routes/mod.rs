@@ -12,6 +12,7 @@ mod comments;
 mod documents;
 mod files;
 mod health;
+mod legal;
 mod history;
 mod import;
 mod email_verify;
@@ -33,6 +34,14 @@ pub fn ws_router() -> Router<AppState> {
 /// The public share page, mounted OUTSIDE `/api` so it never sees the auth
 /// scope-guard — the token in the path is the only credential. Clean URL
 /// `/s/{token}`; nginx proxies `/s/` to the backend.
+/// The privacy statement and terms of service. Outside `/api` and unauthenticated
+/// — a user has to be able to read what an instance does with their data BEFORE
+/// they have an account, and to open the link someone sent them. Needs an nginx
+/// rule like the pages below (see `legal.rs`).
+pub fn legal_router() -> Router<AppState> {
+  legal::router()
+}
+
 pub fn share_router() -> Router<AppState> {
   Router::new().route("/s/{token}", get(documents::public_share_page))
 }
