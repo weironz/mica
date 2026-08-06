@@ -89,8 +89,9 @@
   服务端首启自铸存库;`POSTGRES_PASSWORD` 默认(两份 compose 都不发布 postgres 端口,安全);
   **S3 那对也默认了 —— 这一个不安全,是用户当天明确拍板的取舍**:rustfs `:9000` 有意对外,
   默认值又在公开仓库里,装机不改就是可写的桶,因此生产用着默认值会 `warn!`。
-  同批还补了 `rustfs-init` 建桶(以前是埋在 Traefik 章节的手工 `mkdir`,快速上手看不到 →
-  全栈 healthy 但上传全 404)。主干没动(Traefik / 受限部署账号仍无可重放路径),
+  同批还补了自动建桶(以前是埋在 Traefik 章节的手工 `mkdir`,快速上手看不到 → 全栈 healthy
+  但上传全 404);实现走 S3 接口(`bucket::ensure_bucket`),不绑 RustFS,换 MinIO/OSS/S3 都成立 ——
+  方案与调研见 `docs/bucket-provisioning-plan.md`。主干没动(Traefik / 受限部署账号仍无可重放路径),
   但「新机器起栈」现在只要填 `SERVER_IP` + `MICA_VERSION`。
   **剩下的真问题不是"要填几个变量",是那个不安全的默认** —— 要彻底解掉,得让 `:9000` 不再
   对外(nginx 同源反代 S3),那样这对凭据就能像 PG 口令一样安全地默认。当时评估为工作量与风险

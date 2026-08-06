@@ -73,8 +73,9 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   `mica`/`mica-default-not-a-secret` —— ⚠️ **这一个不安全,是用户 2026-08-06 明确拍板的取舍**:
   rustfs `:9000` 有意对外(浏览器直接 presign),默认值又写在公开仓库里,等于装机不改就是
   可写的桶。所以生产环境用着默认值时 `AppState::new` 会 `warn!`(`default_s3_secret_in_use`)——
-  只写在文档里的风险等于没写。另:`rustfs-init` 负责建桶(RustFS 是文件系统后端、自己不建;
-  以前是埋在 Traefik 章节里的一句手工 `mkdir`,快速上手的人看不到,后果是全栈 healthy 但上传全 404)。
+  只写在文档里的风险等于没写。另:**建桶由服务端走 S3 接口做**(`bucket::ensure_bucket`,
+  启动时 HeadBucket→缺失才 CreateBucket,**任何非 404 都当"存在"、且永不阻断启动**)——
+  不绑 RustFS,换 MinIO/OSS/S3 都成立;方案见 `docs/bucket-provisioning-plan.md`。
   ⚠️ **"没设"在容器里有两种形态,别只测其中一种**:compose 的 `${VAR:-}` 把未设变量解析成
   **空字符串**,`env::var` 因此返回 `Ok("")` 而不是 `Err` —— 自铸功能第一版就栽在这:手跑二进制
   (变量真的不存在)能自铸,一进 compose 全部 crash-loop。**空白必须等同于未提供**

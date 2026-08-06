@@ -94,21 +94,32 @@ reload picks up new releases (asset files are content-hashed).
   presigned URLs embed that host; an internal hostname would break every
   image. `S3_PUBLIC_BASE_URL` stays unset — the bucket is private and GETs
   are signed (see docs/export-import.md).
+- **`S3_INTERNAL_ENDPOINT` is the same store as the API sees it**
+  (`http://rustfs:9000`). Both compose files set it. It exists because the two
+  questions have different answers: the browser needs a public address, while
+  reaching that same public address from inside the api container may mean
+  hairpin NAT, or DNS plus TLS plus a round trip back through Traefik — for a
+  service one hop away on the compose network. The server-side callers (bucket
+  provisioning, blob GC) use it; browsers never see it. Unset falls back to
+  `S3_ENDPOINT`, so an existing deployment behaves as before.
 - **`client_max_body_size 1g`** on nginx matches the server-side import's
   body limit (whole-workspace ZIP uploads in one request).
 - **WebSocket upgrade headers** on `/ws/` are required for realtime
   collaboration; without them rooms silently fall back to errors.
 - RustFS CORS is pinned to the app origin (`http://SERVER_IP`), no longer
   `*` as in dev.
-- **`rustfs-init` creates the bucket.** RustFS is filesystem-backed — a bucket
-  is a directory under `/data` — and it creates none on its own. Without that
-  one-shot service the stack comes up entirely healthy and then 404s every
-  upload, which is the worst shape a missing step can have: nothing looks
-  wrong until a user tries to paste an image. It used to be a manual
-  `docker exec … mkdir` documented only in the Traefik section, so a
-  quickstart reader never saw it. It runs as root to `chown` the directory to
-  the `rustfs` user, and `rustfs` waits on
-  `service_completed_successfully`.
+- **The API creates the bucket, over the S3 API.** Nothing else does: RustFS is
+  filesystem-backed and creates no bucket on its own, and without one the stack
+  comes up entirely healthy and then 404s every upload — the worst shape a
+  missing step can have, since nothing looks wrong until someone pastes an
+  image. It used to be a manual `docker exec … mkdir` documented only in the
+  Traefik section, so a quickstart reader never saw it; then briefly a
+  `rustfs-init` compose service, which worked only because RustFS happens to
+  store buckets as directories. Both were replaced by `bucket::ensure_bucket`,
+  which speaks only S3 and therefore also works against MinIO, Alibaba OSS or
+  AWS. It **never fails startup** — see
+  [Bucket provisioning](bucket-provisioning-plan.md) for the branch-by-branch
+  reasoning and the survey it came from.
 
 ## Secrets: what you generate, and what generates itself
 
@@ -294,7 +305,7 @@ for both the app (`DOMAIN`) and RustFS (`S3_DOMAIN`, e.g.
 it and SigV4 survives the proxy because Traefik forwards Host unchanged).
 Ship images by `docker save | scp | docker load` when the server can't
 reach Docker Hub. (Creating the bucket is no longer a manual first-boot step —
-the `rustfs-init` service does it; see below.) If the ACME cert stays on
+the API creates it over the S3 API on startup; see below.) If the ACME cert stays on
 TRAEFIK DEFAULT CERT after a
 DNS change, restart Traefik to clear its issuance backoff. The API must
 bind `HTTP_ADDR=0.0.0.0:8080` in containers (compose files set it).

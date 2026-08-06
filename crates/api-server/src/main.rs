@@ -7,6 +7,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 mod blob_gc;
+mod bucket;
 mod mail;
 mod metrics;
 mod password_strength;
@@ -64,6 +65,13 @@ async fn main() -> anyhow::Result<()> {
   // GC that stops is a disk-space problem, never a reason to fail a request.
   // No-op when object storage is not configured — nothing to reclaim.
   if let Some(storage) = state.storage.clone() {
+    // Before anything can be uploaded there has to be a bucket, and nothing
+    // else creates one. Awaited rather than backgrounded: it is one HEAD on a
+    // store the api is about to depend on, and a bucket that appears after the
+    // first upload attempt is not much better than no bucket. It never fails
+    // startup — see `bucket::ensure_bucket`.
+    bucket::ensure_bucket(&storage).await;
+
     // A blob is served by a 302 to the STORAGE origin, which is what keeps an
     // uploaded SVG's scripts away from the app's tokens: they run wherever the
     // bytes live, and that is a different origin. Configuring

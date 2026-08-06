@@ -36,7 +36,21 @@ pub fn default_s3_secret_in_use() -> bool {
 /// endpoints rather than failing startup.
 #[derive(Debug, Clone)]
 pub struct S3Config {
+  /// The endpoint **browsers** use. Presigned URLs embed it, so it has to be
+  /// reachable from the client, and that is the only thing it has to be.
   pub endpoint: String,
+  /// The endpoint the **server** uses to reach the same store, when that is a
+  /// different address (`S3_INTERNAL_ENDPOINT`). `None` means "same as
+  /// `endpoint`".
+  ///
+  /// These are separate because [`endpoint`](Self::endpoint) is chosen for the
+  /// browser: it is a public IP or hostname. Whether the api container can
+  /// reach that address is a different question with a different answer —
+  /// inside compose the store is one hop away as `http://rustfs:9000`, while
+  /// the public address may route out through NAT and back, or not resolve at
+  /// all. The server-side callers (bucket provisioning, blob GC) would then
+  /// fail while every browser upload worked, which is a hard failure to see.
+  pub internal_endpoint: Option<String>,
   pub region: String,
   pub bucket: String,
   pub access_key: String,
@@ -69,6 +83,7 @@ impl S3Config {
     let non_blank = |name: &str| env::var(name).ok().filter(|v| !v.trim().is_empty());
 
     let endpoint = non_blank("S3_ENDPOINT")?;
+    let internal_endpoint = non_blank("S3_INTERNAL_ENDPOINT");
     let bucket = non_blank("S3_BUCKET")?;
     let access_key = non_blank("S3_ACCESS_KEY")?;
     let secret_key = non_blank("S3_SECRET_KEY")?;
@@ -91,6 +106,7 @@ impl S3Config {
 
     Some(Self {
       endpoint,
+      internal_endpoint,
       region,
       bucket,
       access_key,
@@ -114,8 +130,22 @@ impl S3Config {
   /// Presigned `DELETE` URL for an object. Server-side only — this is the blob
   /// GC's hand, and is never issued to a client. Not `public_base_url`: that is
   /// the read path and may be a CDN with no write access at all.
+  ///
+  /// Signed against [`server_endpoint`](Self::server_endpoint), because the
+  /// process that will send it is this one, not a browser.
   pub fn presign_delete(&self, key: &str) -> String {
-    self.presign("DELETE", key, Utc::now())
+    let (base_url, host, canonical_uri) =
+      self.location(self.server_endpoint(), &uri_encode(key, false));
+    self.sign_at("DELETE", &base_url, &host, &canonical_uri, Utc::now())
+  }
+
+  /// The address THIS PROCESS should use to reach the store.
+  ///
+  /// `S3_INTERNAL_ENDPOINT` when set, otherwise the browser-facing one — which
+  /// is the right fallback for a single-host deployment where both routes are
+  /// the same address, and the only sane guess when nobody said otherwise.
+  pub fn server_endpoint(&self) -> &str {
+    self.internal_endpoint.as_deref().unwrap_or(&self.endpoint)
   }
 
   /// URL a client uses to read an object: the public base URL when configured,
@@ -125,6 +155,112 @@ impl S3Config {
       Some(base) => format!("{}/{}", base.trim_end_matches('/'), uri_encode(key, false)),
       None => self.presign("GET", key, Utc::now()),
     }
+  }
+
+  /// Presigned `HEAD` on the bucket itself — "does this bucket exist, and may I
+  /// see it?". Server-side only.
+  pub fn presign_head_bucket(&self) -> String {
+    self.presign_bucket("HEAD", Utc::now())
+  }
+
+  /// Presigned `PUT` on the bucket itself — S3 `CreateBucket`. Server-side only.
+  ///
+  /// Pair it with [`create_bucket_body`](Self::create_bucket_body): the region
+  /// travels in the body, not the URL.
+  pub fn presign_create_bucket(&self) -> String {
+    self.presign_bucket("PUT", Utc::now())
+  }
+
+  /// The `CreateBucket` request body, or `None` when none is needed.
+  ///
+  /// `us-east-1` is the odd one out and must send NO `LocationConstraint` —
+  /// it is the implicit default, and sending it explicitly is rejected. Every
+  /// other region must state itself or the bucket lands in the wrong place (or
+  /// the request fails outright). Self-hosted stores ignore the whole thing.
+  ///
+  /// Signing is unaffected either way: [`sign_presigned`] signs
+  /// `UNSIGNED-PAYLOAD`, so a body may be attached to a presigned URL without
+  /// entering the signature.
+  pub fn create_bucket_body(&self) -> Option<String> {
+    if self.region.eq_ignore_ascii_case("us-east-1") {
+      return None;
+    }
+    Some(format!(
+      "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+       <LocationConstraint>{}</LocationConstraint>\
+       </CreateBucketConfiguration>",
+      self.region
+    ))
+  }
+
+  fn presign_bucket(&self, method: &str, now: DateTime<Utc>) -> String {
+    let (base_url, host, canonical_uri) = self.bucket_location();
+    self.sign_at(method, &base_url, &host, &canonical_uri, now)
+  }
+
+  /// Same split as [`object_location`](Self::object_location) but for the bucket
+  /// itself: path style addresses it as `/{bucket}`, virtual-hosted style as `/`
+  /// on the bucket's own host.
+  fn bucket_location(&self) -> (String, String, String) {
+    self.location(self.server_endpoint(), "")
+  }
+
+  /// Address one thing in the store, against a given endpoint.
+  ///
+  /// `path` is the ALREADY-ENCODED object key, or empty for the bucket itself.
+  /// The two addressing styles differ in where the bucket goes, which is why
+  /// this is one function rather than two: getting the canonical URI to match
+  /// the URL actually sent is what the signature depends on.
+  fn location(&self, endpoint: &str, path: &str) -> (String, String, String) {
+    let endpoint = endpoint.trim_end_matches('/');
+    let (scheme, host_port) = split_scheme(endpoint);
+
+    if self.force_path_style {
+      let bucket = &self.bucket;
+      if path.is_empty() {
+        (
+          format!("{endpoint}/{bucket}"),
+          host_port.to_string(),
+          format!("/{bucket}"),
+        )
+      } else {
+        (
+          format!("{endpoint}/{bucket}/{path}"),
+          host_port.to_string(),
+          format!("/{bucket}/{path}"),
+        )
+      }
+    } else {
+      let host = format!("{}.{host_port}", self.bucket);
+      (
+        format!("{scheme}://{host}/{path}"),
+        host,
+        format!("/{path}"),
+      )
+    }
+  }
+
+  fn sign_at(
+    &self,
+    method: &str,
+    base_url: &str,
+    host: &str,
+    canonical_uri: &str,
+    now: DateTime<Utc>,
+  ) -> String {
+    sign_presigned(
+      &PresignRequest {
+        method,
+        base_url,
+        host,
+        canonical_uri,
+        region: &self.region,
+        access_key: &self.access_key,
+        secret_key: &self.secret_key,
+        expires_in: self.presign_ttl_seconds,
+      },
+      now,
+    )
   }
 
   fn presign(&self, method: &str, key: &str, now: DateTime<Utc>) -> String {
@@ -142,21 +278,9 @@ impl S3Config {
     sign_presigned(&request, now)
   }
 
+  /// Where a BROWSER finds an object — always the public endpoint.
   fn object_location(&self, key: &str) -> (String, String, String) {
-    let endpoint = self.endpoint.trim_end_matches('/');
-    let (scheme, host_port) = split_scheme(endpoint);
-    let encoded_key = uri_encode(key, false);
-
-    if self.force_path_style {
-      let base_url = format!("{endpoint}/{}/{encoded_key}", self.bucket);
-      let canonical_uri = format!("/{}/{encoded_key}", self.bucket);
-      (base_url, host_port.to_string(), canonical_uri)
-    } else {
-      let host = format!("{}.{host_port}", self.bucket);
-      let base_url = format!("{scheme}://{host}/{encoded_key}");
-      let canonical_uri = format!("/{encoded_key}");
-      (base_url, host, canonical_uri)
-    }
+    self.location(&self.endpoint, &uri_encode(key, false))
   }
 }
 
@@ -257,6 +381,67 @@ fn uri_encode(input: &str, encode_slash: bool) -> String {
   out
 }
 
+/// What a `HEAD` on the bucket told us.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BucketProbe {
+  Exists,
+  Missing,
+  /// We could not tell, and that is a legitimate answer — not an error.
+  ///
+  /// The common cause is credentials scoped to objects within one bucket:
+  /// they can PUT and GET all day but may not introspect the bucket, so the
+  /// probe comes back 403 on a bucket that exists and works fine. Treating
+  /// that as "missing" would send us on to `CreateBucket`, which is exactly
+  /// how Nextcloud ends up logging "access denied while trying to create a
+  /// bucket" on installs whose bucket was there the whole time
+  /// (nextcloud/server#36427).
+  Unknown,
+}
+
+/// Classify a `HeadBucket` response. Pure so every branch is testable without
+/// an object store — see `docs/bucket-provisioning-plan.md`.
+pub fn classify_head(status: u16) -> BucketProbe {
+  match status {
+    200..=299 => BucketProbe::Exists,
+    404 => BucketProbe::Missing,
+    _ => BucketProbe::Unknown,
+  }
+}
+
+/// What a `CreateBucket` attempt did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateOutcome {
+  Created,
+  /// It already existed and we own it. Normal when two replicas boot together.
+  AlreadyOurs,
+  /// These credentials may not create buckets. Common on managed S3, where the
+  /// app is deliberately scoped to one bucket someone else provisioned.
+  Denied,
+  /// The name is taken by ANOTHER account. Only AWS can say this — its bucket
+  /// namespace is global across all accounts — and it means the configured
+  /// name is unusable, not that something went wrong.
+  NameTaken,
+  Failed {
+    status: u16,
+  },
+}
+
+/// Classify a `CreateBucket` response.
+///
+/// Both "already exists" answers are 409 and only the body tells them apart,
+/// and AWS returns 200 instead of 409 for `BucketAlreadyOwnedByYou` in
+/// us-east-1 alone (documented legacy behaviour) — which the 2xx arm already
+/// folds into success.
+pub fn classify_create(status: u16, body: &str) -> CreateOutcome {
+  match status {
+    200..=299 => CreateOutcome::Created,
+    403 => CreateOutcome::Denied,
+    409 if body.contains("BucketAlreadyOwnedByYou") => CreateOutcome::AlreadyOurs,
+    409 => CreateOutcome::NameTaken,
+    status => CreateOutcome::Failed { status },
+  }
+}
+
 fn split_scheme(endpoint: &str) -> (&str, &str) {
   match endpoint.split_once("://") {
     Some((scheme, rest)) => (scheme, rest),
@@ -295,6 +480,103 @@ mod tests {
   }
 
   #[test]
+  fn bucket_location_path_style_addresses_the_bucket_itself() {
+    let config = test_config(true, None);
+    let (base_url, host, canonical_uri) = config.bucket_location();
+    assert_eq!(base_url, "http://localhost:9000/mica");
+    assert_eq!(host, "localhost:9000");
+    assert_eq!(canonical_uri, "/mica");
+  }
+
+  /// The signature covers the canonical URI, so the bucket-level path has to be
+  /// the one actually requested — `/mica`, not the `/mica/<key>` of an object.
+  #[test]
+  fn bucket_presign_signs_the_bucket_path_not_an_object() {
+    let config = test_config(true, None);
+    let url = config.presign_head_bucket();
+    assert!(url.starts_with("http://localhost:9000/mica?"), "{url}");
+    assert!(url.contains("X-Amz-Signature="));
+  }
+
+  /// us-east-1 must send no LocationConstraint at all: it is the implicit
+  /// default and stating it explicitly is rejected.
+  #[test]
+  fn create_bucket_body_omits_the_default_region() {
+    let mut config = test_config(true, None);
+    config.region = "us-east-1".to_string();
+    assert_eq!(config.create_bucket_body(), None);
+
+    config.region = "eu-west-1".to_string();
+    let body = config.create_bucket_body().expect("non-default region states itself");
+    assert!(body.contains("<LocationConstraint>eu-west-1</LocationConstraint>"), "{body}");
+  }
+
+  /// The split that makes server-side S3 work at all: what the BROWSER is sent
+  /// keeps the public endpoint, what THIS PROCESS sends goes to the internal
+  /// one. Getting it backwards fails silently in the worst direction — uploads
+  /// keep working (browsers are fine), while bucket provisioning and blob GC
+  /// quietly cannot reach the store.
+  #[test]
+  fn server_side_urls_use_the_internal_endpoint_and_client_urls_do_not() {
+    let mut config = test_config(true, None);
+    config.internal_endpoint = Some("http://rustfs:9000".to_string());
+
+    let client_upload = config.presign_put("a/b.png").url;
+    assert!(
+      client_upload.starts_with("http://localhost:9000/"),
+      "browsers must keep the public endpoint: {client_upload}"
+    );
+
+    for server_url in [
+      config.presign_head_bucket(),
+      config.presign_create_bucket(),
+      config.presign_delete("a/b.png"),
+    ] {
+      assert!(
+        server_url.starts_with("http://rustfs:9000/"),
+        "server-side calls must use the internal endpoint: {server_url}"
+      );
+    }
+  }
+
+  /// Unset is the single-host case, where both routes are the same address.
+  #[test]
+  fn without_an_internal_endpoint_everything_uses_the_public_one() {
+    let config = test_config(true, None);
+    assert_eq!(config.server_endpoint(), "http://localhost:9000");
+    assert!(config
+      .presign_head_bucket()
+      .starts_with("http://localhost:9000/mica?"));
+  }
+
+  #[test]
+  fn head_classification_covers_every_branch() {
+    assert_eq!(classify_head(200), BucketProbe::Exists);
+    assert_eq!(classify_head(404), BucketProbe::Missing);
+    // The one that matters: scoped credentials on a bucket that DOES exist.
+    // Anything but a clean 404 has to stay Unknown, or we go on to create a
+    // bucket that is already there.
+    assert_eq!(classify_head(403), BucketProbe::Unknown);
+    assert_eq!(classify_head(500), BucketProbe::Unknown);
+    assert_eq!(classify_head(301), BucketProbe::Unknown);
+  }
+
+  #[test]
+  fn create_classification_separates_the_two_409s() {
+    assert_eq!(classify_create(200, ""), CreateOutcome::Created);
+    assert_eq!(
+      classify_create(409, "<Error><Code>BucketAlreadyOwnedByYou</Code></Error>"),
+      CreateOutcome::AlreadyOurs
+    );
+    assert_eq!(
+      classify_create(409, "<Error><Code>BucketAlreadyExists</Code></Error>"),
+      CreateOutcome::NameTaken
+    );
+    assert_eq!(classify_create(403, ""), CreateOutcome::Denied);
+    assert_eq!(classify_create(500, ""), CreateOutcome::Failed { status: 500 });
+  }
+
+  #[test]
   fn path_style_location_includes_bucket_in_path() {
     let config = test_config(true, None);
     let (base_url, host, canonical_uri) = config.object_location("workspaces/a/b.png");
@@ -325,6 +607,7 @@ mod tests {
   fn test_config(force_path_style: bool, public_base_url: Option<String>) -> S3Config {
     S3Config {
       endpoint: "http://localhost:9000".to_string(),
+      internal_endpoint: None,
       region: "us-east-1".to_string(),
       bucket: "mica".to_string(),
       access_key: "key".to_string(),
