@@ -926,7 +926,7 @@ mod quota_pg {
   /// actually enforces.
   ///
   /// They are two SQL statements over the same table — a textbook second
-  /// representation. If they drift, the gauge answers "who is near the 1 GiB
+  /// representation. If they drift, the gauge answers "who is near the quota
   /// wall" with a number that is not the one doing the refusing, which is the
   /// only question it exists to answer. So they are pinned to each other here
   /// rather than trusted to stay in step.

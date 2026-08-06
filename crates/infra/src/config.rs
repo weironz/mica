@@ -61,7 +61,7 @@ pub struct AppConfig {
   /// its very first account.
   pub registration_enabled: bool,
   /// Ceiling on the total bytes of stored files per WORKSPACE. `0` = unlimited.
-  /// Set `MICA_WORKSPACE_QUOTA_BYTES`; defaults to 1 GiB.
+  /// Set `MICA_WORKSPACE_QUOTA_BYTES`; defaults to 5 GiB.
   ///
   /// Per workspace rather than per instance because that is the unit a person
   /// owns and can clean up — an instance-wide cap gives whoever fills it first
@@ -69,9 +69,18 @@ pub struct AppConfig {
   /// bounding the NUMBER of workspaces is [`registration_enabled`]'s job, and
   /// neither limit means much without the other.
   ///
-  /// 1 GiB is chosen against measured reality, not taste: the largest workspace
-  /// on the production node holds 57 MB, so this is ~18× headroom for real use
-  /// while still capping a single workspace far below a disk.
+  /// 5 GiB is chosen against measured reality and against what comparable
+  /// products give away, not taste. The largest workspace on the production node
+  /// holds 57 MB, so this is ~94× headroom for real use while still capping a
+  /// single workspace well below a disk. It matches the free tier of AppFlowy
+  /// Cloud (5 GB) — the nearest analogue that publishes a number at all;
+  /// Notion caps per FILE and not per workspace, and AFFiNE's equivalent exists
+  /// to price tiers rather than to protect a disk.
+  ///
+  /// It was 1 GiB until 2026-08-06. Nothing was wrong with it — the ceiling
+  /// simply sat closer to a real workspace than it needed to, and the cost of
+  /// being wrong is asymmetric: too high wastes disk that is cheap, too low
+  /// refuses a paste from someone who is mid-sentence.
   pub workspace_quota_bytes: i64,
   /// Window + cadence knobs for the yrs update stream. See [`SyncTuning`].
   pub sync_tuning: SyncTuning,
@@ -300,7 +309,7 @@ pub fn registration_open(raw: Option<String>) -> bool {
 
 /// Per-workspace byte ceiling from the raw `MICA_WORKSPACE_QUOTA_BYTES`.
 ///
-/// Default 1 GiB. `0` means unlimited — spelled out so an operator who genuinely
+/// Default 5 GiB. `0` means unlimited — spelled out so an operator who genuinely
 /// wants no cap says so, instead of discovering that a typo removed it.
 ///
 /// **Garbage keeps the default rather than removing the limit.** That is the
@@ -309,7 +318,7 @@ pub fn registration_open(raw: Option<String>) -> bool {
 /// must never resolve to "unlimited", or a stray character in a deploy env is a
 /// silently disabled safety limit. Negative is treated the same way.
 pub fn workspace_quota(raw: Option<&str>) -> i64 {
-  const DEFAULT: i64 = 1024 * 1024 * 1024;
+  const DEFAULT: i64 = 5 * 1024 * 1024 * 1024;
   match raw.map(str::trim) {
     None | Some("") => DEFAULT,
     Some(v) => match v.parse::<i64>() {
@@ -588,10 +597,10 @@ mod quota_parse {
   const GIB: i64 = 1024 * 1024 * 1024;
 
   #[test]
-  fn unset_or_blank_is_one_gib() {
-    assert_eq!(workspace_quota(None), GIB);
-    assert_eq!(workspace_quota(Some("")), GIB);
-    assert_eq!(workspace_quota(Some("   ")), GIB);
+  fn unset_or_blank_is_five_gib() {
+    assert_eq!(workspace_quota(None), 5 * GIB);
+    assert_eq!(workspace_quota(Some("")), 5 * GIB);
+    assert_eq!(workspace_quota(Some("   ")), 5 * GIB);
   }
 
   #[test]
@@ -608,11 +617,15 @@ mod quota_parse {
   #[test]
   fn garbage_and_negatives_keep_the_default_rather_than_removing_the_limit() {
     for bad in ["abc", "1GiB", "1_000", "-1", "-99999", "1.5", "∞"] {
+      let parsed = workspace_quota(Some(bad));
       assert_eq!(
-        workspace_quota(Some(bad)),
-        GIB,
+        parsed,
+        workspace_quota(None),
         "{bad:?} must fall back to the default, never to unlimited"
       );
+      // Said separately, because the line above would also hold if the default
+      // itself became 0 — and 0 is exactly the value that means "no limit".
+      assert_ne!(parsed, 0, "{bad:?} must never resolve to unlimited");
     }
   }
 }

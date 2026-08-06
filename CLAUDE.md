@@ -64,7 +64,7 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 
 - **注册默认关闭**(`MICA_REGISTRATION_ENABLED`,只有显式 `true/1/yes/on` 才开;拼错保持关闭)。
   开启时注册返回 **204 而非 session** —— 需邮箱验证后才能登录。空实例的**第一个账号**永远放行
-  且直接标记为已验证(否则全新自托管装不起来)。每工作区字节配额默认 **1 GiB**
+  且直接标记为已验证(否则全新自托管装不起来)。每工作区字节配额默认 **5 GiB**
   (`MICA_WORKSPACE_QUOTA_BYTES`)。**注意**:节点 `.env` 里设了还不够 ——
   `deploy/docker-compose.yml` 的 `environment:` 是显式允许清单,没列进去的变量到不了进程。
 - **部署零凭据可起**(2026-08-06,v0.13.16):`JWT_SECRET` 不设时服务端首启自铸 32 字节存进

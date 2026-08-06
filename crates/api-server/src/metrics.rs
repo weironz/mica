@@ -37,7 +37,8 @@
 //! * **Process RSS / FDs** — that incident was a memory-and-IO event. A
 //!   hand-rolled exporter gets none of the `process_*` series a client library
 //!   would hand you for free, so they are read from `/proc` here.
-//! * **Capacity** — per-workspace quota is enforced at 1 GiB; "who is about to
+//! * **Capacity** — the per-workspace quota is enforced at whatever
+//!   `MICA_WORKSPACE_QUOTA_BYTES` says (5 GiB by default); "who is about to
 //!   hit the wall" was previously answerable only by hand.
 //!
 //! # Exposure
