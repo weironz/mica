@@ -240,6 +240,142 @@ void main() {
     _bestEffortDelete(dir);
   });
 
+  // ── Reconnect merge (v0.13.16) ────────────────────────────────────────────
+  //
+  // These two are the gate the first attempt at merging did not have. It went
+  // in at 593212e, wedged the outbox, and was reverted at 5aa9740 after six red
+  // commits nobody looked at — because the only tests that could see it live
+  // here, and this file was believed to be CI-only. It runs locally too; that
+  // is the whole reason the bug survived six commits.
+
+  test('merge: a reconnect backlog goes out as ONE push and drains the outbox',
+      () async {
+    final dir = Directory.systemTemp.createTempSync('mica_merge');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+
+    // Session 1 against a server that never acks: the edits pile up in the
+    // durable outbox exactly as a long offline stretch leaves them.
+    final server1 = await _FakeSyncServer.start(_buildBase(), ackPushes: false);
+    var ready1 = false;
+    final s1 = CloudSyncSession(
+      uri: () async => server1.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready1 = true,
+      onRemoteBlocks: (_) {},
+      persistence: StoreCloudDocStore(store, 'doc-m'),
+    );
+    s1.connect();
+    await _until(() => ready1, reason: 'bootstrap 1');
+    const queued = 12; // > _mergeMinRun, so the reconnect path merges
+    for (var i = 0; i < queued; i++) {
+      s1.applyLocalOps([
+        {'type': 'update_block', 'block_id': 'a', 'text': 'offline edit $i'},
+      ]);
+    }
+    await _until(
+        () => store.updatesAfter(docId: 'doc-m', after: 0).length == queued,
+        reason: 'all edits durable in the outbox');
+    s1.dispose();
+    await server1.stop();
+
+    // "Reconnect": a server that acks. The backlog must arrive as ONE push.
+    final server2 = await _FakeSyncServer.start(_buildBase());
+    var ready2 = false;
+    final s2 = CloudSyncSession(
+      uri: () async => server2.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready2 = true,
+      onRemoteBlocks: (_) {},
+      persistence: StoreCloudDocStore(store, 'doc-m'),
+    );
+    s2.connect();
+    await _until(() => ready2, reason: 'bootstrap 2');
+    await _until(() => server2.pushed.isNotEmpty, reason: 'backlog re-pushed');
+
+    final drained = await s2.drainOutbox(timeout: const Duration(seconds: 10));
+    expect(drained, isTrue,
+        reason: 'THE revert bug: a merged ack must advance pushed_clock past '
+            'the whole run, not stall at the first clock');
+    expect(server2.pushed.length, 1,
+        reason: '$queued queued edits went out as one push, not $queued');
+    expect(server2.pushed.first.id, '$queued',
+        reason: "the id is the run's highest clock");
+    expect(store.syncCursor(docId: 'doc-m').pushedClock, queued,
+        reason: 'pushed_clock jumped the whole run');
+    expect(store.updatesAfter(docId: 'doc-m', after: queued), isEmpty,
+        reason: 'outbox drained');
+
+    // The merged bytes must still carry every edit — a merge that loses the
+    // intermediate content would drain the outbox and silently lose writing.
+    s2.dispose();
+    final reloaded = store.loadDoc(docId: 'doc-m')!;
+    final blocks = (jsonDecode(reloaded.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
+    expect(blocks.firstWhere((b) => b['id'] == 'a')['text'],
+        'offline edit ${queued - 1}',
+        reason: 'the last offline edit survived the merge');
+    await server2.stop();
+    _bestEffortDelete(dir);
+  });
+
+  test('merge: a REJECTED merged push is retried one entry at a time', () async {
+    final dir = Directory.systemTemp.createTempSync('mica_demerge');
+    final store = MicaStore.open(path: '${dir.path}/s.db')!;
+
+    final server1 = await _FakeSyncServer.start(_buildBase(), ackPushes: false);
+    var ready1 = false;
+    final s1 = CloudSyncSession(
+      uri: () async => server1.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready1 = true,
+      onRemoteBlocks: (_) {},
+      persistence: StoreCloudDocStore(store, 'doc-d'),
+    );
+    s1.connect();
+    await _until(() => ready1, reason: 'bootstrap 1');
+    const queued = 12;
+    for (var i = 0; i < queued; i++) {
+      s1.applyLocalOps([
+        {'type': 'update_block', 'block_id': 'a', 'text': 'edit $i'},
+      ]);
+    }
+    await _until(
+        () => store.updatesAfter(docId: 'doc-d', after: 0).length == queued,
+        reason: 'backlog durable');
+    s1.dispose();
+    await server1.stop();
+
+    // Refuse the merged push once. Merging costs the ability to name the edit a
+    // server refused, so the retry has to take the run apart — otherwise one
+    // poison entry would block everything queued behind it, which is the
+    // guarantee the P2b pair above exists to hold.
+    final server2 = await _FakeSyncServer.start(_buildBase());
+    server2.rejectPushOnce('$queued');
+    var ready2 = false;
+    final s2 = CloudSyncSession(
+      uri: () async => server2.uri,
+      clientId: store.clientId(),
+      onReady: (_, _) => ready2 = true,
+      onRemoteBlocks: (_) {},
+      persistence: StoreCloudDocStore(store, 'doc-d'),
+    );
+    s2.connect();
+    await _until(() => ready2, reason: 'bootstrap 2');
+
+    final drained = await s2.drainOutbox(timeout: const Duration(seconds: 10));
+    expect(drained, isTrue, reason: 'a rejected run must still drain');
+    expect(server2.pushed.length, greaterThan(1),
+        reason: 'the rejected run was taken apart, not re-sent merged');
+    expect(server2.pushed.any((p) => p.id == '1'), isTrue,
+        reason: 'individual clocks are on the wire again, so a server can name '
+            'exactly which edit it refuses');
+    expect(store.syncCursor(docId: 'doc-d').pushedClock, queued);
+
+    s2.dispose();
+    await server2.stop();
+    _bestEffortDelete(dir);
+  });
+
   test('P2b: an unacked cloud edit survives a session restart and re-pushes',
       () async {
     final dir = Directory.systemTemp.createTempSync('mica_p2b2');

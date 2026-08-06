@@ -45,4 +45,16 @@ class _YjsReplica implements SyncDocReplica {
 
   @override
   void applyEditorOp(DocOp op) => _doc.applyOp(op);
+
+  @override
+  Uint8List mergeUpdates(List<Uint8List> updates) {
+    // A fresh Y.Doc is genuinely empty — nothing to strip, unlike a doc built
+    // from blocks, whose `meta.root` write would ride along in the merged bytes
+    // and land on the receiver as a concurrent write.
+    final scratch = MicaYDoc.empty();
+    for (final u in updates) {
+      scratch.applyUpdate(u);
+    }
+    return scratch.encodeState();
+  }
 }

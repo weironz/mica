@@ -86,6 +86,41 @@ List<T> pushSlice<T>(
   return out;
 }
 
+/// Cap on ONE merged push. Well under the server's 64 MiB frame limit — the
+/// point is not to sail close to it but to keep a pathological outbox (a very
+/// long offline stretch on a large document) from building one enormous message
+/// whose failure would retry the whole thing.
+const int _mergeMaxBytes = 4 * 1024 * 1024;
+
+/// Below this many queued entries, push one at a time.
+///
+/// Merging exists for a RECONNECT BACKLOG, and it is not free: it trades away
+/// per-edit rejection reporting until [_deMergeFrom] buys it back. At two or
+/// three queued entries there is nothing to win — the v0.13.14 attempt merged
+/// unconditionally and broke ordinary one-at-a-time retry, which is what
+/// 30c6da6 was patching when the deeper protocol bug surfaced.
+const int _mergeMinRun = 8;
+
+/// How many leading queued updates fold into ONE push, capped by [maxBytes].
+///
+/// Pure and top-level for the same reason as [pushSlice]: the pacing is the
+/// part that has to be right, and a unit test cannot reach the session's real
+/// send path.
+///
+/// **Always at least one**, even when that one entry is already over the cap:
+/// refusing to send it would stall the outbox forever, and a single oversized
+/// entry is exactly as sendable as it was before merging existed.
+@visibleForTesting
+int mergeRunLength(List<int> sizes, {required int maxBytes}) {
+  if (sizes.isEmpty) return 0;
+  var total = 0;
+  for (var i = 0; i < sizes.length; i++) {
+    total += sizes[i];
+    if (total > maxBytes) return i == 0 ? 1 : i;
+  }
+  return sizes.length;
+}
+
 class CloudSyncSession {
   CloudSyncSession({
     required this.uri,
@@ -230,11 +265,37 @@ class CloudSyncSession {
   /// (the append-log has no per-entry `sent` flag). Reset on each (re)connect.
   int _sentThroughClock = 0;
 
-  /// Append-log path: outbox clocks acked out of contiguous order (a lower clock
-  /// errored / isn't acked yet). `pushed_clock` advances only through the
-  /// contiguous acked prefix, so an un-acked lower clock is never skipped
-  /// (skipping it drops it from `outboxAfter` = silent server-side loss).
+  /// Append-log path: pushes acked out of contiguous order (a lower clock
+  /// errored / isn't acked yet), keyed by the push's id = the HIGHEST clock it
+  /// carries. `pushed_clock` advances only through the contiguous acked prefix,
+  /// so an un-acked lower clock is never skipped (skipping it drops it from
+  /// `outboxAfter` = silent server-side loss).
   final Set<int> _ackedAhead = {};
+
+  /// For a MERGED push, the lowest clock it carries; keyed by its id (the
+  /// highest). A push not in here carried exactly its own clock.
+  ///
+  /// This map is the whole reason merging works now and did not in v0.13.14.
+  /// That attempt asserted "the ack advances `pushed_clock` to the id, trimming
+  /// the run as a prefix" without reading the ack handler, which only ever
+  /// stepped `pushed + 1` one clock at a time: a push acked as id 50 left
+  /// clocks 1–49 never individually acked, the prefix stalled at 1, and the
+  /// outbox could never drain. Knowing each push's RANGE is what lets the
+  /// prefix jump a whole run at once — and it stays a client-side fact, because
+  /// the server treats `id` as an opaque token it echoes back (`ws.rs`).
+  final Map<int, int> _runFrom = {};
+
+  /// Runs whose merged push was REJECTED, so the retry must go one entry at a
+  /// time. Holds the run's lowest clock.
+  ///
+  /// Merging costs the ability to say WHICH edit a server refused — the whole
+  /// run comes back as one rejection. Rather than accept that (the v0.13.14
+  /// attempt did, and two "a rejected push is always retried, never dropped"
+  /// regressions went red), the run is taken apart on the way back: the retry
+  /// sends its entries individually, so a poison edit is isolated to itself and
+  /// everything around it still gets through. Granularity is spent only while
+  /// things are going well, and bought back the moment they are not.
+  final Set<int> _deMergeFrom = {};
 
   /// Consecutive push rejections without contiguous progress — bounds the
   /// re-push retry so a permanent rejection (e.g. permission) can't spin.
@@ -319,6 +380,10 @@ class CloudSyncSession {
     // the rejection budget are per-connection.
     _sentThroughClock = 0;
     _ackedAhead.clear();
+    // Run bookkeeping is per-connection too: nothing sent on the old socket is
+    // still in flight, and resendAll re-derives every run from the outbox.
+    _runFrom.clear();
+    _deMergeFrom.clear();
     _pushRejects = 0;
     _pushStalled = false;
     _restoreUnackedOnce();
@@ -576,12 +641,30 @@ class CloudSyncSession {
             final pushedBefore = persistence!.cursor().pushedClock;
             if (clock > pushedBefore) {
               _ackedAhead.add(clock);
+              // Walk the acked prefix by RUN, not by clock. `_runFrom[through]`
+              // is the run's first clock; a push that carried one entry has no
+              // entry and starts where it ends. A run is only consumed when it
+              // begins exactly where the prefix ended — an un-acked lower clock
+              // still blocks, which is the invariant that keeps a rejected edit
+              // from being skipped over and silently lost.
               var pushed = pushedBefore;
-              while (_ackedAhead.remove(pushed + 1)) {
-                pushed++;
+              var progressed = true;
+              while (progressed) {
+                progressed = false;
+                for (final through in _ackedAhead) {
+                  if ((_runFrom[through] ?? through) == pushed + 1) {
+                    _ackedAhead.remove(through);
+                    _runFrom.remove(through);
+                    pushed = through;
+                    progressed = true;
+                    break;
+                  }
+                }
               }
               if (pushed != pushedBefore) {
                 persistence!.advance(pushedClock: pushed);
+                // The run drained, so the reason to take it apart is gone.
+                _deMergeFrom.removeWhere((from) => from <= pushed);
                 // Reset the retry budget only on real contiguous PROGRESS — not on
                 // any ack — else a permanent rejection of a low clock would loop
                 // forever while higher clocks keep acking.
@@ -646,7 +729,17 @@ class CloudSyncSession {
         if (_useAppendLog && errId is String) {
           final clock = int.tryParse(errId);
           if (clock != null) {
-            if (clock - 1 < _sentThroughClock) _sentThroughClock = clock - 1;
+            // A MERGED push was refused, so all we know is "something in this
+            // run". Take the run apart: rewind to its FIRST clock and mark it
+            // so the retry sends entries individually. That turns one opaque
+            // rejection back into a per-edit one — the poison entry is isolated
+            // and everything around it still reaches the server, which is the
+            // guarantee the two P2b regressions check and the reason merging
+            // was reverted last time rather than shipped.
+            final from = _runFrom.remove(clock) ?? clock;
+            if (from != clock) _deMergeFrom.add(from);
+            _ackedAhead.remove(clock);
+            if (from - 1 < _sentThroughClock) _sentThroughClock = from - 1;
             if (_pushRejects < _maxPushRejects) {
               _pushRejects++;
               _flushUnacked();
@@ -824,8 +917,42 @@ class CloudSyncSession {
       // answers by decoding+re-encoding the whole document per entry. The ack
       // handler calls back here as `pushed_clock` advances, so the tail still
       // drains, just paced by the server instead of by our for-loop.
+      final pending = persistence!.outboxAfter(floor).toList();
+      if (pending.isEmpty) return;
+
+      // A real backlog folds into one message. `push_update` decodes and
+      // re-encodes the whole document per push, so a reconnect carrying a long
+      // offline stretch costs one of those per entry: measured at 200 entries,
+      // 2702ms one-by-one against 19ms merged (`offline_reconnect_merge_
+      // measurement`, #[ignore]). The multiplier is how many edits were queued
+      // and has no ceiling, which is what makes it worth the machinery.
+      //
+      // Not while de-merging this run: a rejection sent us back here to find
+      // which entry the server refuses, and re-merging would hide it again.
+      final deMerging = _deMergeFrom.contains(pending.first.clock);
+      if (!deMerging && pending.length >= _mergeMinRun) {
+        final run = mergeRunLength(
+          [for (final e in pending) e.bytes.length],
+          maxBytes: _mergeMaxBytes,
+        );
+        final head = pending.take(run).toList();
+        final merged = _doc?.mergeUpdates([for (final e in head) e.bytes]);
+        if (merged != null) {
+          final through = head.last.clock;
+          // The id is the run's HIGHEST clock, and `_runFrom` remembers where it
+          // started — without that pair the ack cannot advance past the first
+          // entry, which is exactly how v0.13.14 wedged the outbox.
+          _runFrom[through] = head.first.clock;
+          _sendPushRaw(through.toString(), merged);
+          if (through > _sentThroughClock) _sentThroughClock = through;
+          return;
+        }
+        // Merge failed (a corrupt entry): fall through and push one at a time,
+        // which both still works and isolates the bad one.
+      }
+
       var inFlight = 0;
-      for (final e in persistence!.outboxAfter(floor)) {
+      for (final e in pending) {
         if (inFlight >= _pushWindow) break;
         _sendPushRaw(e.clock.toString(), e.bytes);
         if (e.clock > _sentThroughClock) _sentThroughClock = e.clock;

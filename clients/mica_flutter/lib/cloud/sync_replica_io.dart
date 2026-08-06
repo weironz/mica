@@ -54,4 +54,20 @@ class _YrsReplica implements SyncDocReplica {
 
   @override
   void applyEditorOp(DocOp op) => _mirror.apply(_doc, op);
+
+  @override
+  Uint8List mergeUpdates(List<Uint8List> updates) {
+    // `[0, 0]` is the lib0 v1 encoding of an empty update — zero clients, empty
+    // delete set — and decoding it yields a doc with no blocks that re-encodes
+    // to exactly those two bytes. `MicaDocument.fromBlocksJson` would NOT do:
+    // it writes `meta.root`, which the merge would then carry into the receiving
+    // document as a concurrent write. (Verified against mica-core.)
+    final scratch = MicaDocument.fromState(bytes: _emptyUpdate)!;
+    for (final u in updates) {
+      scratch.applyUpdate(update: u);
+    }
+    return scratch.encodeState();
+  }
 }
+
+const List<int> _emptyUpdate = [0, 0];
