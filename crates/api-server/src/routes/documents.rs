@@ -256,25 +256,57 @@ async fn search_views(
   // `document_yrs_base` row, so the LEFT JOIN already leaves `content_text` NULL
   // and the body half of the predicate is simply never true for them. A folder
   // therefore matches by name only, which is the whole of what a folder is.
-  let rows = sqlx::query_as::<_, SearchRow>(
-    r#"
+  // The type predicate is a compile-time FRAGMENT, not a bound parameter, and
+  // the column is compared as its own enum type rather than cast to text. Both
+  // details exist so `idx_views_workspace_object (workspace_id, object_type,
+  // object_id)` can actually be used.
+  //
+  // It used to read `AND ($3 OR v.object_type::text = 'document')`, which
+  // defeated that index twice over: casting the indexed column hides it from the
+  // index, and a bound `$3` on the left of an `OR` leaves the planner unable to
+  // treat the conjunct as restrictive at all. Measured on production
+  // (2026-08-06), `object_type` was therefore applied as a heap filter that
+  // discarded 222 of 1020 rows AFTER the index scan had already fetched them.
+  //
+  // Worth being clear about the size of this: it is ~6 ms of row plumbing out of
+  // an 81 ms query. The other ~75 ms is the ILIKE reading 798 documents' bodies,
+  // and no amount of restructuring here touches that — see the search entry in
+  // docs/roadmap.md for why fixing THAT needs a CJK-capable text index.
+  //
+  // Built by `concat!` into TWO `&'static str` constants rather than formatted at
+  // runtime: sqlx 0.9 refuses a dynamic SQL string outright ("dynamic SQL strings
+  // should be audited for possible injections"), and that refusal is right — the
+  // way past it is to have no dynamic string, not to assert one is safe.
+  macro_rules! search_sql {
+    ($type_filter:literal) => {
+      concat!(
+        r#"
       SELECT v.id AS view_id, v.object_id, v.name, yb.content_text,
              v.parent_view_id, v.object_type::text AS object_type
       FROM views v
       LEFT JOIN document_yrs_base yb ON yb.document_id = v.object_id
       WHERE v.workspace_id = $1
         AND v.is_deleted = false
-        AND ($3 OR v.object_type::text = 'document')
+        "#,
+        $type_filter,
+        r#"
         AND (v.name ILIKE $2 ESCAPE '\' OR yb.content_text ILIKE $2 ESCAPE '\')
       ORDER BY v.updated_at DESC
       LIMIT 50
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(&pattern)
-  .bind(include_folders)
-  .fetch_all(db)
-  .await?;
+    "#
+      )
+    };
+  }
+  let sql = if include_folders {
+    search_sql!("")
+  } else {
+    search_sql!("AND v.object_type = 'document'")
+  };
+  let rows = sqlx::query_as::<_, SearchRow>(sql)
+    .bind(workspace_id)
+    .bind(&pattern)
+    .fetch_all(db)
+    .await?;
 
   let needle_lower = needle.to_lowercase();
   Ok(

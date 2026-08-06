@@ -91,18 +91,40 @@
 
 ## 编辑器与功能广度
 
-- 🟡 **全文搜索:M1 已做,索引仍缓做 —— 但缓做的理由 2026-08-05 实测已假**(原描述失实:不是「反序列化每篇快照」,是每查询把每篇 yrs base **全量 CRDT 解码**一遍,N 次 decode)—— **M1 已做**(aa4c5d8):加 `document_yrs_base.content_text` 派生列(migration 0012),搜索退化为**一条 LEFT JOIN + ILIKE SQL**,干掉 N 次 CRDT 解码。content_text 是 state 纯投影、三条写 base 路径同语句 co-write(红线#1 不漂移);启动一次性回填存量;LIKE 转义 + 命中处窗口 snippet;CJK 走子串(无扩展/无分词器)。~~②导入未打开的文档正文不可搜~~ ✅(2026-07-22)。
-  **⚠️ 2026-08-05 实测,原来那句「当前 22MB 库…已被索引收窄再 ILIKE,亚毫秒」两半都假了**:
-  库已 **53 MB**(2.4×),最大工作区 1003 个视图;拿真实 SQL 打 CJK 双字(`%模型%`,条目自己
-  承认 trigram 救不了的那种)——`EXPLAIN ANALYZE` 给出 **Execution Time: 53 ms**,不是亚毫秒。
-  **而且规划器根本没用那个索引**:计划里是**两个 Seq Scan** ——
-  `Seq Scan on document_yrs_base rows=3784` + `Seq Scan on views rows=1003, Rows Removed by Filter: 3618`。
-  所以「已被 (workspace_id,is_deleted,object_type) 索引收窄」这句从来没有被验证过,今天验了,是假的。
-  **仍然缓做,但理由换了**:53 ms 尚在「输入停顿后搜索」的无感区间(百毫秒内跟手),不值得现在
-  引入扩展 + 索引。**触发条件(任一)**:① 搜索 **p95 超过 200 ms**;② 单工作区超过 **5000 篇**;
-  ③ 出现真实的「搜索卡」反馈。
-  **动手前先查一件事**:`views` 上那个索引为什么没被选中(选择性不够?统计信息陈旧?)——
-  **不弄清就加 GIN,很可能加完还是扫表**,白付一个扩展依赖。
+- 🟡 **全文搜索:M1 已做;索引缓做,但候选方案换了** —— **M1 已做**(aa4c5d8):加
+  `document_yrs_base.content_text` 派生列(migration 0012),搜索退化为**一条 LEFT JOIN +
+  ILIKE SQL**,干掉 N 次 CRDT 解码。content_text 是 state 纯投影、三条写 base 路径同语句
+  co-write(红线#1 不漂移);启动一次性回填存量;LIKE 转义 + 命中处窗口 snippet;CJK 走子串
+  (无扩展/无分词器)。~~②导入未打开的文档正文不可搜~~ ✅(2026-07-22)。
+
+  **⚠️ 2026-08-06 实测,把 08-05 那版描述里的三处推翻了**(生产,库 58 MB,最大工作区 1020 视图,
+  真实 SQL 打 CJK 双字 `%模型%`):
+  - 「计划里是两个 Seq Scan」—— **一个都没有**。`views` 走 `Bitmap Index Scan on
+    idx_views_workspace_object`,`document_yrs_base` 走 pkey。
+  - 「`(workspace_id,is_deleted,object_type)` 索引没被选中」—— **这个索引从来就没建过**
+    (`migrations/0001` 里 views 上只有 `idx_views_workspace_parent_position` 与
+    `idx_views_workspace_object(workspace_id, object_type, object_id)`)。所以 08-05 定下的
+    「先查为什么规划器没选它」是**在追问一个不存在的东西**。
+  - 53 ms → **81 ms**(库 53→58 MB)。
+
+  **✅ 同日做掉了结构修正**(`documents.rs` `search_views`):原谓词
+  `AND ($3 OR v.object_type::text = 'document')` 把既有索引废了两次 —— **对索引列做 `::text`
+  转换**会让索引用不上,**参数化 `$3` 放在 `OR` 左边**让规划器无法把该合取项当作有选择性。
+  改成编译期两条静态 SQL(sqlx 0.9 直接拒绝动态 SQL 字符串,这个拒绝是对的:出路是没有动态
+  字符串,而不是断言它安全)。实测 **81 ms → 48.8 ms(-40%)**:`object_type` 进了 Index Cond
+  (索引扫 1307→877 行),且行数估准后规划器把 join 从 Nested Loop(798 次 pkey 查找)换成了
+  Hash Right Join。**这比动手前估的多得多** —— 当时只算了取行开销(~6 ms),没料到估准会改变
+  join 策略。
+
+  **仍然缓做,但候选方案变了**:剩下的 ~46 ms 全在 ILIKE 扫 798 篇正文上,**瓶颈是文本扫描量,
+  不是找行**,结构修正到此为止。而**原条目写的 `pg_trgm` 对实测场景无效** —— 测的针是两个 CJK
+  字符,trigram 需要 ≥3 字符才能用于 `LIKE '%…%'`,两字直接退化成全扫。真正对口的是
+  **pg_bigm**(二元组,CJK/短针可用)或 PGroonga,而**代价里要算上自托管镜像得换**
+  (`postgres:16-alpine` 不带这些),那对「一条命令起栈」是实打实的退步。
+  **触发条件(任一)**:① 搜索 **p95 超过 200 ms**;② 单工作区超过 **5000 篇**;③ 真实的
+  「搜索卡」反馈。今天 48.8 ms,离触发线还远。
+  〔顺带记一笔:`views` 的 `last_analyze` 为 NULL、`last_autoanalyze` 停在 2026-07-28。
+  不影响当前结论(索引在用),但下次量之前值得先 ANALYZE。〕
   **② 排序/高亮/分词**照旧:各自独立 UX 特性,另立项,不是 M1 的尾巴。(各 S–L) `[需后端]`
 
 - 🟡 **表格**(2026-07-22 复核:原描述大幅失实)—— 实测:**富行内单元格**(粗体/斜体/行内代码/链接,cell 存可重解析 md 源码、两端渲染+编辑,`cellDisplaySpan`/`CellEditController`)与**矩形/行列选区**(跨格拖选、点行/列把手选整行列、Ctrl+C/X 复制为 TSV+HTML、Delete 清空、Esc 清除)**本来就能用**;本轮仅补 **Shift+点击扩展选区**。**合并单元格有意不做**——8 家同类(Notion/AFFiNE/AppFlowy/Outline/siyuan/Joplin/logseq/anytype)调研定论:合并与「Markdown 权威 + round-trip 不变量」在 GFM 下**架构级互斥**(siyuan 能合并因它放弃了 md 权威;Joplin 同约束只能冻单向 HTML;Logseq/Notion 干脆不做)。要做只能另开 HTML 逃生舱块退出 round-trip,是独立决策。块级单元格/列宽 GFM 表达不了,同样不做。
