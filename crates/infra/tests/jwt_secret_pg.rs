@@ -7,7 +7,7 @@
 //!
 //!   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"
 //!   cargo test -p mica-infra
-use mica_infra::{ensure_jwt_secret, run_migrations};
+use mica_infra::ensure_jwt_secret;
 use sqlx::PgPool;
 
 async fn pool() -> Option<PgPool> {
@@ -22,9 +22,32 @@ async fn pool() -> Option<PgPool> {
     let db = PgPool::connect(&url)
         .await
         .expect("DATABASE_URL is set but the connection failed");
-    // `server_secrets` arrives with migration 0020; a database created by an
-    // older binary would otherwise fail on a missing table.
-    run_migrations(&db).await.expect("migrations");
+    // The schema is a PRECONDITION here, not this test's job.
+    //
+    // Calling `run_migrations` was the bug. Two mechanisms build this schema and
+    // only one of them writes sqlx's `_sqlx_migrations` bookkeeping: CI applies
+    // `migrations/*.sql` with a plain psql loop (see ci.yml — sqlx-cli would
+    // cost minutes to compile), which leaves that table EMPTY. sqlx then saw no
+    // record of anything, re-applied 0001 onto a live schema, and every CI run
+    // died on `relation "users" already exists`. Against a dev database that WAS
+    // sqlx-migrated it failed the other way — `VersionMismatch` the moment any
+    // already-applied migration file got rewritten. Either way a JWT test went
+    // red for reasons that have nothing to do with JWTs, and it was the ONLY
+    // test mixing the two mechanisms.
+    //
+    // `run_migrations` keeps its real coverage where it belongs: ci.yml's
+    // `container` job boots the actual api image against a fresh Postgres with
+    // no psql loop, so the api migrates itself end to end.
+    let migrated: bool =
+        sqlx::query_scalar("SELECT to_regclass('public.server_secrets') IS NOT NULL")
+            .fetch_one(&db)
+            .await
+            .expect("checking for the server_secrets table");
+    assert!(
+        migrated,
+        "`server_secrets` is missing — DATABASE_URL points at an unmigrated database. \
+         Apply them first: for f in migrations/*.sql; do psql \"$DATABASE_URL\" -f \"$f\"; done"
+    );
     Some(db)
 }
 
