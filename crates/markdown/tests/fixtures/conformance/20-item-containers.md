@@ -17,3 +17,10 @@
    ```
 
    paragraph after child
+
+- item owning a div
+
+  <div>
+  at the content column, so it stays INSIDE the item
+  </div>
+

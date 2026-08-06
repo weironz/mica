@@ -71,5 +71,13 @@
     },
     "kind": "quote",
     "text": "beta group after blank"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<section>\nhtml block after a quote group\n</section>"
   }
 ]

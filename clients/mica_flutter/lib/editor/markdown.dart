@@ -860,7 +860,15 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     // HTML block (CommonMark types 1–7) → a raw html code block: the
     // source is the content (AFFiNE-style degrade), `data.raw` makes the
     // exporters write it back verbatim. Type 7 can't interrupt a paragraph.
-    final htmlKind = col < 4 && listStack.isEmpty ? htmlBlockStart(line) : null;
+    // Outside any open item's content column an HTML block INTERRUPTS the list
+    // (spec ex. 308/309: `<!-- -->` splits two lists) — mirrors Rust. Demanding
+    // an EMPTY list stack was the bug: a list stays open until some other block
+    // resets it, so `</details>` after a list degraded to a paragraph here
+    // while Rust made the raw block, and `<details>` folding then worked on
+    // server-loaded documents but not on the same Markdown pasted in.
+    final htmlKind = col < 4 && (listStack.isEmpty || col < listStack.last)
+        ? htmlBlockStart(line)
+        : null;
     if (htmlKind != null && !(htmlKind == 7 && open != null)) {
       final htmlLines = <String>[lines[i]];
       final endsByMarker = htmlKind <= 5;
@@ -882,10 +890,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
         'language': 'html',
         'raw': true,
       }));
-      open = null;
-      lastList = null;
-      pendingLoose = false;
-      itemChildren = false;
+      // The interrupted list is over — Rust clears its stack here too, so a
+      // later indented line must not read as that list's child.
+      resetListState();
       continue;
     }
 

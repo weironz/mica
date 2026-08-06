@@ -22,3 +22,7 @@ continued lazy
 > alpha group
 
 > beta group after blank
+
+<section>
+html block after a quote group
+</section>

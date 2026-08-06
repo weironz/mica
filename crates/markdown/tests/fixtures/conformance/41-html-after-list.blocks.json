@@ -1,0 +1,100 @@
+[
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "one"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "two"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "</details>"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "alpha"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "beta"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<div align=\"center\">\nafter an ordered list\n</div>"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "foo"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "bar"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<!-- -->"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "baz"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "bim"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<details>\n<summary>toggle</summary>"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "inner"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "</details>"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "tight item"
+  },
+  {
+    "data": {
+      "language": "html",
+      "raw": true
+    },
+    "kind": "code_block",
+    "text": "<div>no blank line between</div>"
+  }
+]

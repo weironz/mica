@@ -75,5 +75,24 @@
     },
     "kind": "paragraph",
     "text": "paragraph after child"
+  },
+  {
+    "data": {
+      "loose": true,
+      "marks": [
+        {
+          "end": 24,
+          "start": 19,
+          "type": "html"
+        },
+        {
+          "end": 82,
+          "start": 76,
+          "type": "html"
+        }
+      ]
+    },
+    "kind": "bulleted_list",
+    "text": "item owning a div\n\n<div>\nat the content column, so it stays INSIDE the item\n</div>"
   }
 ]
