@@ -1019,17 +1019,27 @@ class MermaidRenderer extends AtomicBlockRenderer {
 // <details> fold (a raw-HTML code_block wearing a disclosure triangle)
 // -----------------------------------------------------------------------------
 
-/// Renders a self-contained `<details>` element as a fold instead of four
-/// lines of HTML source.
+/// Renders a `<details>` element as a fold instead of lines of HTML source.
 ///
 /// The node stays a `code_block` with `data.raw == true` and its tags intact —
 /// parsing and serialization are untouched, so Markdown round-trip is
-/// byte-identical. Only the drawing changes, and only when [parseDetailsBlock]
-/// recognizes the whole element (see that file for what it deliberately
-/// refuses, and why the blank-line form GitHub recommends is out of scope).
+/// byte-identical. Only the drawing changes.
 ///
-/// Declines while the caret is in the block, so the raw source stays editable —
-/// that is the escape hatch for anything the fold cannot express.
+/// Two source forms, both recognized in `details_html.dart`:
+///
+/// - **Tight** (no blank lines) is ONE block: [parseDetailsBlock] splits the
+///   summary from the body, and the body is shown verbatim because the parser
+///   never looked inside it.
+/// - **Blank-line** (what GitHub's docs recommend) is N+2 blocks: this renderer
+///   claims the opening tags, and ABSORBS the body blocks and the closing
+///   `</details>` block via [_NodeLayout.absorbs] — collapsed hides all of
+///   them, expanded hides only the closer (the body is ordinary Markdown, laid
+///   out and edited by the normal pipeline).
+///
+/// Declines when the selection touches the opening tags or anything the fold
+/// would hide, so the raw source stays reachable and editable — that is the
+/// escape hatch for anything the fold cannot express. It deliberately does NOT
+/// decline for a caret in an expanded body: that is the normal place to type.
 class DetailsRenderer extends AtomicBlockRenderer {
   const DetailsRenderer();
 
@@ -1040,11 +1050,20 @@ class DetailsRenderer extends AtomicBlockRenderer {
   static const _padV = 9.0;
   static const _triangle = 20.0;
 
-  /// The fold state actually in effect: `data.collapsed` is the user's choice
-  /// (tri-state, same convention as a long code block), and `<details open>`
-  /// only supplies the default for a block they have never touched.
-  static bool collapsedFor(EditorNode node, DetailsShape shape) =>
-      (node.data['collapsed'] as bool?) ?? !shape.openByDefault;
+  /// Index of the `</details>` block that closes the blank-line-form element
+  /// opening at [index], or null when there isn't one this renderer will
+  /// commit to (unterminated, or another `<details>` intervenes so the pairing
+  /// would be a guess). Null means "show the source", which is never wrong.
+  static int? _closerFor(RenderDocument host, int index) {
+    final nodes = host._nodes;
+    for (var i = index + 1; i < nodes.length; i++) {
+      final n = nodes[i];
+      if (n.kind != 'code_block' || n.data['raw'] != true) continue;
+      if (isDetailsCloseTag(n.text)) return i;
+      if (n.text.toLowerCase().contains('<details')) return null;
+    }
+    return null;
+  }
 
   @override
   _NodeLayout? layout(
@@ -1056,9 +1075,35 @@ class DetailsRenderer extends AtomicBlockRenderer {
   ) {
     if (node.data['raw'] != true) return null;
     final shape = parseDetailsBlock(node.text);
-    if (shape == null) return null;
-    // Caret in the block → show the source. Checked across the whole selection
-    // so a range that merely passes through still opens the source it covers.
+    final openTag = shape == null ? parseDetailsOpenTag(node.text) : null;
+    if (shape == null && openTag == null) return null;
+
+    // Blank-line form: the element ends in a later block. Without a closer this
+    // is just an opening tag floating in the document — fold nothing.
+    final closer = openTag == null ? null : _closerFor(host, index);
+    if (openTag != null && closer == null) return null;
+
+    // `data.collapsed` is the user's choice (tri-state, same convention as a
+    // long code block); `<details open>` only supplies the default for a block
+    // they have never touched.
+    final collapsed =
+        (node.data['collapsed'] as bool?) ??
+        !(shape?.openByDefault ?? openTag!.openByDefault);
+
+    // What this fold takes off the page. Collapsed swallows the body too;
+    // expanded hides only the closing tag, which the header already stands for.
+    final absorbs = <int>{};
+    if (closer != null) {
+      for (var i = collapsed ? index + 1 : closer; i <= closer; i++) {
+        absorbs.add(i);
+      }
+    }
+
+    // Escape hatch: a selection on the tags, or on anything this fold would
+    // hide, shows the whole element as source. Checked across the whole
+    // selection so a range that merely passes through still opens what it
+    // covers. A caret in an EXPANDED body is not in `absorbs`, so typing there
+    // does not make the tags reappear.
     final sel = host._selection;
     if (sel != null) {
       final lo = sel.anchor.node < sel.focus.node
@@ -1068,9 +1113,9 @@ class DetailsRenderer extends AtomicBlockRenderer {
           ? sel.anchor.node
           : sel.focus.node;
       if (index >= lo && index <= hi) return null;
+      if (absorbs.any((i) => i >= lo && i <= hi)) return null;
     }
 
-    final collapsed = collapsedFor(node, shape);
     final tokens = host._appearance.tokens;
     const left = EditorTheme.gutter;
     const textLeft = left + _padH + _triangle;
@@ -1082,9 +1127,10 @@ class DetailsRenderer extends AtomicBlockRenderer {
       TextStyle(color: tokens.text.primary, fontSize: 16, height: 1.65),
       isCode: false,
     );
-    final summary = shape.summary.isEmpty
+    final rawSummary = shape?.summary ?? openTag!.summary;
+    final summary = rawSummary.isEmpty
         ? l10nNoContext.detailsDefaultSummary
-        : shape.summary;
+        : rawSummary;
     final painter = TextPainter(
       text: TextSpan(
         children: [
@@ -1092,11 +1138,12 @@ class DetailsRenderer extends AtomicBlockRenderer {
             text: summary,
             style: base.copyWith(fontWeight: FontWeight.w600),
           ),
-          // The body is raw HTML, not Markdown (the tight form has no blank
-          // line, so the parser never looked inside). Showing it verbatim is
-          // the honest option — pretending to have rendered it would be a lie
-          // the moment someone writes a tag.
-          if (!collapsed && shape.body.isNotEmpty)
+          // TIGHT form only. That body is raw HTML, not Markdown (no blank
+          // line, so the parser never looked inside), and showing it verbatim
+          // is the honest option — pretending to have rendered it would be a
+          // lie the moment someone writes a tag. The blank-line form has no
+          // body here at all: its body is real blocks below the header.
+          if (shape != null && !collapsed && shape.body.isNotEmpty)
             TextSpan(
               text: '\n${shape.body}',
               style: base.copyWith(color: tokens.text.muted),
@@ -1121,6 +1168,7 @@ class DetailsRenderer extends AtomicBlockRenderer {
       ..textHeight = painter.height
       ..boxHeight = painter.height + _padV * 2
       ..detailsOpen = !collapsed
+      ..absorbs = absorbs
       ..detailsToggle = Rect.fromLTWH(
         left,
         y,

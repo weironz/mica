@@ -8,10 +8,13 @@
 //!   stored as a guess.
 //! - **Listing** needs it too, to map each stored anchor back onto current text.
 //!   An anchor that no longer resolves (or resolves to nothing — yrs keeps
-//!   tombstones, so a deleted range collapses instead of failing) is an ORPHAN:
-//!   the thread comes back with `anchor: null` and is flagged in the database, so
-//!   the client shows the discussion against its saved quote and draws no
-//!   highlight over unrelated words.
+//!   tombstones, so a deleted range collapses instead of failing) gets ONE more
+//!   chance: its saved quote is searched for in the current text and, on a
+//!   confident match, the thread is re-anchored in place (`store::rematch` /
+//!   `store::reanchor`). Only if that fails is it an ORPHAN: the thread comes
+//!   back with `anchor: null` and is flagged in the database, so the client shows
+//!   the discussion against its quote and draws no highlight over unrelated
+//!   words.
 //!
 //! Writing is gated on the `commenter` role via `permissions_for_role` — a
 //! commenter can comment without being able to edit the document, which is the
@@ -222,16 +225,22 @@ pub async fn list(
   let doc = store::load_doc(&state.db, document_id).await?;
 
   let mut newly_orphaned = Vec::new();
+  let mut reanchored: Vec<(Uuid, store::Anchor)> = Vec::new();
+  // `&mut None`: the quote index is built on the first thread that needs
+  // re-anchoring, so a listing where every anchor resolves pays nothing.
+  let mut quotes: Option<store::QuoteIndex> = None;
   let mut threads = Vec::with_capacity(rows.len());
   for row in rows {
-    // "Unresolvable" and "collapsed to nothing" are the same thing to a reader:
-    // the anchored text is gone.
-    let live = doc
-      .resolve_range(&row.anchor())
-      .filter(|range| !range.is_empty());
-    let orphaned_now = live.is_none() && row.status == store::STATUS_OPEN;
-    if orphaned_now {
+    // Dead anchor ≠ dead thread: `set_blocks` (any REST/MCP write, any version
+    // restore) replaces every block's text object, killing anchors over text
+    // that never changed. `anchor_state` re-anchors from the saved quote when it
+    // is confident, and leaves a real deletion an orphan.
+    let resolved = store::anchor_state(&doc, &mut quotes, &row);
+    if resolved.status == store::STATUS_ORPHANED && row.status != store::STATUS_ORPHANED {
       newly_orphaned.push(row.id);
+    }
+    if let Some(anchor) = resolved.fresh_anchor {
+      reanchored.push((row.id, anchor));
     }
     let comments = replies
       .iter()
@@ -241,23 +250,23 @@ pub async fn list(
       .collect();
     threads.push(ThreadDto {
       id: row.id,
-      status: if orphaned_now {
-        store::STATUS_ORPHANED.to_string()
-      } else {
-        row.status.clone()
-      },
+      status: resolved.status,
       quote: row.quote,
       created_by: row.created_by,
       created_at: row.created_at.to_rfc3339(),
       resolved_by: row.resolved_by,
       resolved_at: row.resolved_at.map(|t| t.to_rfc3339()),
-      anchor: live.map(anchor_dto),
+      anchor: resolved.range.map(anchor_dto),
       comments,
     });
   }
-  // Best-effort bookkeeping: the response above is already correct even if this
-  // write fails, so a read never fails because of it.
+  // Best-effort bookkeeping: the response above is already correct even if these
+  // writes fail, so a read never fails because of them (the next listing derives
+  // the same answers from the document again).
   let _ = store::mark_orphaned(&state.db, &newly_orphaned).await;
+  for (thread_id, anchor) in &reanchored {
+    let _ = store::reanchor(&state.db, *thread_id, anchor).await;
+  }
 
   Ok(Json(ThreadsResponse { threads }))
 }

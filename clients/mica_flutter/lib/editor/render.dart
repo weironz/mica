@@ -351,6 +351,21 @@ class _NodeLayout {
   /// Null on every other block, including a `<details>` shown as raw source.
   Rect? detailsToggle;
   bool detailsOpen = false;
+
+  /// Node indices this layout's renderer ABSORBED: they belong to the element
+  /// this block heads (a blank-line `<details>` owns its body and its
+  /// `</details>`) and must not draw themselves.
+  ///
+  /// They still get a layout — a [hidden], zero-height one — because
+  /// `_layouts` is indexed by node position everywhere in this file; skipping
+  /// nodes would shift every index after them. Always FORWARD of this layout's
+  /// own index, so [performLayout] can collect them as it goes.
+  Set<int> absorbs = const {};
+
+  /// This layout stands in for a node another block absorbed. It occupies no
+  /// height, paints nothing ([RenderDocument._nodeVisible] is false for it),
+  /// and is skipped by caret navigation and hit testing.
+  bool hidden = false;
   String langText = ''; // resolved code language
   bool langAuto = false; // resolved by detection, not pinned by the author
 
@@ -878,6 +893,7 @@ class RenderDocument extends RenderBox {
     if (local != null) {
       for (var i = 0; i < _layouts.length; i++) {
         final l = _layouts[i];
+        if (l.hidden) continue; // folded away: nothing to hover
         if (l.kind == 'image') {
           if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) {
             image = i;
@@ -909,6 +925,7 @@ class RenderDocument extends RenderBox {
     if (local != null) {
       for (var i = 0; i < _layouts.length; i++) {
         final l = _layouts[i];
+        if (l.hidden) continue;
         if (local.dy >= l.boxTop && local.dy < l.boxTop + l.boxHeight) {
           block = i;
           break;
@@ -975,6 +992,7 @@ class RenderDocument extends RenderBox {
   int? blockAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      if (l.hidden) continue;
       if (local.dy >= l.boxTop && local.dy < l.boxTop + l.boxHeight) {
         return i;
       }
@@ -1012,6 +1030,10 @@ class RenderDocument extends RenderBox {
   int dropIndexAt(double dy) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      // A folded-away node has zero height, so its midpoint is the fold's seam
+      // and it would swallow every drop aimed at the block after it — dropping
+      // INTO a collapsed `<details>` body, invisibly.
+      if (l.hidden) continue;
       if (dy < l.boxTop + l.boxHeight / 2) return i;
     }
     return _layouts.length;
@@ -1096,7 +1118,7 @@ class RenderDocument extends RenderBox {
     // only those are disposed here; text-pipeline painters live in _painterCache
     // and are reused (freed on eviction/prune/dispose, not per pass).
     for (final l in _layouts) {
-      if (l.renderedBy != null) l.painter.dispose();
+      if (l.renderedBy != null || l.hidden) l.painter.dispose();
       for (final cell in l.tableCells) {
         cell.painter.dispose();
       }
@@ -1123,8 +1145,18 @@ class RenderDocument extends RenderBox {
     // when the quote ends or a `qbreak` starts a non-alert group. Mirrors the
     // quote-bar grouping so the tint/bar span the whole callout.
     String? quoteAlert;
+    // Nodes an earlier renderer absorbed (see [_NodeLayout.absorbs]). Filled as
+    // the loop goes; a renderer only ever absorbs nodes ahead of itself.
+    final absorbed = <int>{};
     for (var nodeIndex = 0; nodeIndex < _nodes.length; nodeIndex++) {
       final node = _nodes[nodeIndex];
+      // Absorbed: emit a zero-height placeholder so `_layouts[i]` keeps meaning
+      // "node i" for every index-keyed path in this file, and take no gap, no
+      // prevKind and no list-counter step — the node is not on the page.
+      if (absorbed.contains(nodeIndex)) {
+        _layouts.add(_hiddenLayout(node, y));
+        continue;
+      }
       y += EditorTheme.gapAbove(node.kind, prevKind);
 
       // Callout membership: a head block (`data.alert`) opens the group; later
@@ -1154,6 +1186,7 @@ class RenderDocument extends RenderBox {
         if (layout == null) continue;
         layout.renderedBy = renderer;
         _layouts.add(layout);
+        absorbed.addAll(layout.absorbs);
         y += layout.boxHeight;
         prevKind = node.kind;
         claimed = true;
@@ -1716,8 +1749,27 @@ class RenderDocument extends RenderBox {
   double _visBottom = double.infinity;
   static const double _cullSlack = 600;
 
+  /// Whether this layout should be painted at all. Two reasons it might not
+  /// be: viewport culling, and a renderer having absorbed the node into the
+  /// block above it (a collapsed `<details>` body). Every paint layer routes
+  /// through this one predicate, so a folded-away node cannot leak a quote bar,
+  /// a selection wash or a scrollbar into the gap it left behind.
   bool _nodeVisible(_NodeLayout l) =>
-      l.boxTop + l.boxHeight >= _visTop && l.boxTop <= _visBottom;
+      !l.hidden && l.boxTop + l.boxHeight >= _visTop && l.boxTop <= _visBottom;
+
+  /// A zero-height stand-in for a node another block absorbed. It keeps
+  /// `_layouts` index-aligned with `_nodes` without drawing anything.
+  _NodeLayout _hiddenLayout(EditorNode node, double y) =>
+      _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+        ..kind = node.kind
+        ..nodeId = node.id
+        ..hidden = true
+        ..boxLeft = EditorTheme.gutter
+        ..contentLeft = EditorTheme.gutter
+        ..boxTop = y
+        ..textTop = y
+        ..textHeight = 0
+        ..boxHeight = 0;
 
   /// Paint-time clip rect, set at the top of [paint]. `Rect.zero` before the first
   /// paint — nothing that reads it can run earlier than that.
@@ -3186,6 +3238,12 @@ class RenderDocument extends RenderBox {
     if (pos.node < 0 || pos.node >= _layouts.length) return null;
     final l = _layouts[pos.node];
     if (EditorNode.isAtomicKind(l.kind)) return null; // no inline caret
+    // Folded away: there is nowhere on screen for this caret. The LOCAL caret
+    // never lands here — a selection touching a fold makes its renderer decline,
+    // so the node is laid out for real on that same pass — but a REMOTE cursor
+    // can be anywhere, and drawing it on the fold's seam would claim a
+    // collaborator is editing a line nobody can see.
+    if (l.hidden) return null;
     final doc = pos.offset.clamp(0, _nodes[pos.node].text.length);
     // Folding is unconditional now, so the caret's own node is folded too
     // (local and remote alike). docToPainter maps the caret onto the
@@ -3210,9 +3268,13 @@ class RenderDocument extends RenderBox {
   DocPosition positionAt(Offset local) {
     if (_layouts.isEmpty) return const DocPosition(0, 0);
     final y = local.dy.clamp(0.0, size.height);
-    var idx = _layouts.length - 1;
+    // Folded-away nodes are not on the page: a click can never mean them, and
+    // the "past the end" fallback must not land on one either.
+    var idx = _layouts.lastIndexWhere((l) => !l.hidden);
+    if (idx < 0) return const DocPosition(0, 0);
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      if (l.hidden) continue;
       if (y < l.boxTop + l.boxHeight) {
         idx = i;
         break;
@@ -3225,18 +3287,26 @@ class RenderDocument extends RenderBox {
     if (_nodes[idx].isAtomic) {
       final l = _layouts[idx];
       final belowMid = y >= l.boxTop + l.boxHeight / 2;
-      if (belowMid && idx + 1 < _nodes.length) {
-        return DocPosition(idx + 1, 0);
+      // The neighbour to snap to is the next/previous node that is actually on
+      // the page — a folded-away one would put the caret nowhere.
+      var next = idx + 1;
+      while (next < _layouts.length && _layouts[next].hidden) {
+        next++;
+      }
+      if (belowMid && next < _nodes.length) {
+        return DocPosition(next, 0);
       }
       var alt = idx - 1;
-      while (alt >= 0 && _nodes[alt].isAtomic) {
+      while (alt >= 0 &&
+          (_nodes[alt].isAtomic ||
+              (alt < _layouts.length && _layouts[alt].hidden))) {
         alt--;
       }
       if (alt >= 0) {
         return DocPosition(alt, _nodes[alt].text.length);
       }
       // No text node above: fall back to the next node, else this one.
-      if (idx + 1 < _nodes.length) return DocPosition(idx + 1, 0);
+      if (next < _nodes.length) return DocPosition(next, 0);
       return DocPosition(idx, 0);
     }
 
@@ -3305,6 +3375,14 @@ class RenderDocument extends RenderBox {
   /// node becomes a whole-block stop (offset 0); a text node gets the line
   /// nearest goal-x ([fromBottom] picks its last vs first line).
   DocPosition? _stepToNode(int index, double? x, {required bool fromBottom}) {
+    // Step OVER folded-away nodes, in the direction of travel. Without this the
+    // caret sticks: a hidden node's textTop is the fold's seam, so probing it
+    // resolves back to the visible node the caret came from and Up/Down stops
+    // moving at the edge of a collapsed `<details>`.
+    final step = fromBottom ? -1 : 1;
+    while (index >= 0 && index < _layouts.length && _layouts[index].hidden) {
+      index += step;
+    }
     if (index < 0 || index >= _layouts.length) return null;
     if (_isAtomicNode(index)) return DocPosition(index, 0);
     final l = _layouts[index];
@@ -3354,6 +3432,18 @@ class RenderDocument extends RenderBox {
   @visibleForTesting
   Rect? debugDetailsHeaderAt(int i) => _layouts[i].detailsToggle;
 
+  /// Whether node [i] was absorbed by the block above it — folded away, taking
+  /// no height and painting nothing. There is no other way to tell "hidden"
+  /// from "laid out but empty" from outside.
+  @visibleForTesting
+  bool debugHiddenAt(int i) => _layouts[i].hidden;
+
+  /// Node [i]'s box top and height, so a test can assert a fold actually
+  /// removed the space its body used to take.
+  @visibleForTesting
+  (double, double) debugBoxAt(int i) =>
+      (_layouts[i].boxTop, _layouts[i].boxHeight);
+
   /// The code block currently showing the "copied" check, or null.
   @visibleForTesting
   int? get debugCopiedCode => _copiedCode;
@@ -3380,6 +3470,7 @@ class RenderDocument extends RenderBox {
   int? blockSelectAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
+      if (l.hidden) continue;
       final claimers = _renderersByKind[l.kind] ?? const <AtomicBlockRenderer>[];
       if (!claimers.any((r) => r.selectsWholeBlockOnClick)) continue;
       final box = Rect.fromLTWH(
@@ -3445,7 +3536,7 @@ class RenderDocument extends RenderBox {
     // Text-pipeline painters are owned by _painterCache; disposing them here too
     // would double-free (a text _NodeLayout only references the cached painter).
     for (final l in _layouts) {
-      if (l.renderedBy != null) l.painter.dispose();
+      if (l.renderedBy != null || l.hidden) l.painter.dispose();
       for (final cell in l.tableCells) {
         cell.painter.dispose();
       }

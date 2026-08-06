@@ -23,6 +23,41 @@ claim one node is still a bug, and the fix is to be strict in `layout()`.
 `test/details_fold_test.dart` pins that both `code_block` renderers survive
 registration.
 
+## Decision 5: a renderer can absorb the nodes after it — zero-height, not skipped
+
+A `<details>` written the way GitHub's docs recommend (blank lines, so the
+body is Markdown) is not one block: the parser emits the opening tags, the
+body as ordinary blocks, and a bare `</details>` (pinned in
+`crates/markdown/tests/details_fold.rs`). Folding it means hiding a RANGE.
+
+`_layouts[i]` means "node i" in roughly forty places in render.dart —
+selection painting, caret rects, click and hover hit-testing, drop indices,
+comment anchors. **Skipping nodes in the layout pass would shift every index
+after the fold**, so the mechanism is the opposite: absorbed nodes still get
+a `_NodeLayout`, marked `hidden`, of zero height.
+
+- A renderer declares what it took in `_NodeLayout.absorbs` (forward indices
+  only). `performLayout` collects them as it goes and emits the placeholders.
+  This is the only new concept in the loop; there are no per-kind branches,
+  and any future renderer that owns a run of blocks (a real toggle block, a
+  columns layout) gets it for free.
+- `_nodeVisible` — already the single cull predicate every paint layer runs
+  through — returns false for `hidden`, so *nothing* paints: no quote bar, no
+  selection wash, no scrollbar, no backdrop.
+- Zero height is not enough on its own. Four paths needed explicit skips
+  because they answer with an index rather than by geometry, and each has a
+  red test in `test/details_fold_test.dart`: `positionAt`'s "past the last
+  block" fallback (a document ending in a fold parked the caret in the hidden
+  closer), `dropIndexAt` (a zero-height midpoint swallows the drop aimed at
+  the block below), `_stepToNode` (it answers `DocPosition(i, 0)` outright for
+  an ATOMIC node, so Down off the header landed on a folded-away divider), and
+  `caretRectFor` (a remote cursor would be drawn on the fold's seam).
+
+The escape hatch is the same one the tight form already had, narrowed: the
+renderer declines when the selection touches the tags **or anything the fold
+hides** — so the source is always reachable — but NOT when the caret is in an
+expanded body, which is the normal place to type.
+
 Still open: collapsing _NodeLayout's per-kind fields into a rendererData
 slot (still unneeded); hit-test dispatch is NOT "unneeded" anymore —
 TableRenderer needs it today and does it ad-hoc via RenderDocument methods

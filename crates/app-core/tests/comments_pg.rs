@@ -270,6 +270,156 @@ async fn mark_orphaned_never_overwrites_a_deliberate_resolve() {
     cleanup(&db, ws, user).await;
 }
 
+/// Rewrite the whole document through the sync path, exactly as a REST or MCP
+/// write does (`apply_derived_operations` → `set_blocks` → `push_update`).
+///
+/// `edit` gets the current blocks and returns the blocks to write, so a test can
+/// rewrite with IDENTICAL content — which is the point: the text does not change,
+/// yet every block's yrs text object is replaced and every anchor on the document
+/// dies with it.
+async fn rewrite_document(
+    db: &PgPool,
+    ws: Uuid,
+    doc: Uuid,
+    user: Uuid,
+    edit: impl FnOnce(Vec<mica_core::Block>) -> Vec<mica_core::Block>,
+) {
+    let mut editing = comments::load_doc(db, doc).await.unwrap();
+    let sv = editing.state_vector();
+    let blocks = edit(editing.to_blocks());
+    editing.set_blocks("r", &blocks);
+    let update = editing.encode_diff(&sv).unwrap();
+    sync::push_update(db, ws, doc, user, &update, &sync::SyncTuning::default())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_full_rewrite_kills_the_anchor_and_the_quote_re_anchors_the_thread() {
+    // The case Phase 2 ① exists for, end to end through Postgres: any REST/MCP
+    // write rewrites every block, so a thread orphans over text that never
+    // changed. Matching the saved quote against the reloaded document is what
+    // tells that apart from a real deletion.
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    let live = comments::load_doc(&db, doc).await.unwrap();
+    let anchor = live.sticky_for_range("a", 0, "a", 5).unwrap();
+    let (thread, _) = comments::create_thread(&db, doc, user, &anchor, "Hello", "note")
+        .await
+        .unwrap();
+
+    // Same content, new text objects — plus a paragraph after it, so the match
+    // has to be found rather than assumed to be at offset 0 of the first block.
+    rewrite_document(&db, ws, doc, user, |mut blocks| {
+        blocks[0].children.push("c".into());
+        blocks.push(mica_core::Block::new("c", "paragraph").with_text("Goodbye"));
+        blocks
+    })
+    .await;
+
+    let after = comments::load_doc(&db, doc).await.unwrap();
+    let stored = comments::fetch_thread(&db, thread.id).await.unwrap().unwrap();
+    assert!(
+        after
+            .resolve_range(&stored.anchor())
+            .filter(|r| !r.is_empty())
+            .is_none(),
+        "the rewrite must have killed the anchor — otherwise this test proves nothing"
+    );
+
+    let index = comments::QuoteIndex::from_blocks(&after.to_blocks());
+    let (range, fresh) = comments::rematch(&after, &index, &stored.quote, &stored.anchor_start_block)
+        .expect("the quoted text is still in the document");
+    assert_eq!(range.start_block, "a");
+    assert_eq!((range.start_offset, range.end_offset), (0, 5));
+
+    comments::reanchor(&db, thread.id, &fresh).await.unwrap();
+
+    // Persisted, and the stored bytes resolve against the live document again.
+    let reread = comments::fetch_thread(&db, thread.id).await.unwrap().unwrap();
+    assert_ne!(
+        reread.anchor_start_sticky, stored.anchor_start_sticky,
+        "the new sticky bytes must have replaced the dead ones"
+    );
+    let back = after
+        .resolve_range(&reread.anchor())
+        .expect("the persisted anchor resolves");
+    assert_eq!((back.start_offset, back.end_offset), (0, 5));
+
+    cleanup(&db, ws, user).await;
+}
+
+#[tokio::test]
+async fn re_anchoring_reopens_an_orphan_but_leaves_a_resolved_thread_resolved() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let live = comments::load_doc(&db, doc).await.unwrap();
+    let anchor = live.sticky_for_range("a", 0, "a", 5).unwrap();
+    let (orphan, _) = comments::create_thread(&db, doc, user, &anchor, "Hello", "note")
+        .await
+        .unwrap();
+    let (done, _) = comments::create_thread(&db, doc, user, &anchor, "Hello", "settled")
+        .await
+        .unwrap();
+    comments::mark_orphaned(&db, &[orphan.id]).await.unwrap();
+    comments::set_resolved(&db, done.id, user, true).await.unwrap();
+
+    let after = comments::load_doc(&db, doc).await.unwrap();
+    let index = comments::QuoteIndex::from_blocks(&after.to_blocks());
+    let (_, fresh) = comments::rematch(&after, &index, "Hello", "a").unwrap();
+    comments::reanchor(&db, orphan.id, &fresh).await.unwrap();
+    comments::reanchor(&db, done.id, &fresh).await.unwrap();
+
+    let orphan = comments::fetch_thread(&db, orphan.id).await.unwrap().unwrap();
+    assert_eq!(
+        orphan.status,
+        comments::STATUS_OPEN,
+        "it has text under it again"
+    );
+    let done = comments::fetch_thread(&db, done.id).await.unwrap().unwrap();
+    assert_eq!(
+        done.status,
+        comments::STATUS_RESOLVED,
+        "re-anchoring is bookkeeping — it must not re-open a finished discussion"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
+#[tokio::test]
+async fn a_thread_whose_text_was_really_deleted_is_not_re_anchored() {
+    // The other half of the previous test: when the words are gone, nothing may
+    // be matched — a wrong anchor is worse than an orphan.
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let live = comments::load_doc(&db, doc).await.unwrap();
+    let anchor = live.sticky_for_range("a", 0, "a", 5).unwrap();
+    let (thread, _) = comments::create_thread(&db, doc, user, &anchor, "Hello", "note")
+        .await
+        .unwrap();
+
+    rewrite_document(&db, ws, doc, user, |mut blocks| {
+        for b in blocks.iter_mut() {
+            if b.id == "a" {
+                b.text = "Something else entirely".to_string();
+            }
+        }
+        blocks
+    })
+    .await;
+
+    let after = comments::load_doc(&db, doc).await.unwrap();
+    let stored = comments::fetch_thread(&db, thread.id).await.unwrap().unwrap();
+    let index = comments::QuoteIndex::from_blocks(&after.to_blocks());
+    assert!(
+        comments::rematch(&after, &index, &stored.quote, &stored.anchor_start_block).is_none(),
+        "the quoted text is gone — the thread stays an orphan"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
 #[tokio::test]
 async fn replies_are_ordered_and_deleting_a_thread_cascades() {
     let Some(db) = pool().await else { return };

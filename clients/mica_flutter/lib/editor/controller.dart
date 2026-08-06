@@ -2063,12 +2063,13 @@ class EditorController extends ChangeNotifier {
     // is what the HTML says (`<details open>` = expanded), not a line count.
     // Reading the wrong default makes the FIRST click a no-op — it would write
     // the state the block was already in.
-    final details = node.data['raw'] == true
-        ? parseDetailsBlock(node.text)
+    // Both `<details>` forms answer here: the tight one-block element and the
+    // opening tags of the blank-line form whose body is separate blocks.
+    final detailsOpen = node.data['raw'] == true
+        ? detailsOpenByDefault(node.text)
         : null;
-    if (details != null) {
-      final wasCollapsed =
-          (node.data['collapsed'] as bool?) ?? !details.openByDefault;
+    if (detailsOpen != null) {
+      final wasCollapsed = (node.data['collapsed'] as bool?) ?? !detailsOpen;
       node.data = {...node.data}..['collapsed'] = !wasCollapsed;
       _sendNow([
         {'type': 'update_block', 'block_id': node.id, 'data': node.data},

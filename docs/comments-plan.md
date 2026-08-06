@@ -16,6 +16,7 @@
 | 客户端 API 层(DTO + 5 方法) | ✅ 6 单测 | `api/models.dart`、`api/client.dart`(af03743) |
 | **渲染期高亮(纯 paint,不影响布局)** | ✅ 5 widget 测 | `render.dart` `commentHighlights`(08f221d) |
 | **评论面板 + 选区→「添加评论」入口 + main.dart 接线** | ✅ 9 widget 测(**观感待真机**) | `ui/comment_panel.dart`、`editor.dart` 右键项、`main.dart`(f3bf181) |
+| **orphan 模糊重锚(Phase 2 ①)** | ✅ 13 单测 + 5 单测 + 3 PG 集成测 | `mica-core/quote_match.rs`、`app-core/comments.rs` `anchor_state`/`rematch`/`reanchor` |
 | 建议(suggest mode) | ⏸️ 有意不做(独立立项,见文末) | — |
 
 **两个实测修正了本文档的原设计假设**(照原文写会埋 bug):
@@ -135,13 +136,34 @@ comment
 2. **两端都解出** → 得 `(start_block,start_offset)`/`(end_block,end_offset)`(当前 UTF-16)。交给编辑器
    当**临时装饰**——复用 marks-over-plaintext 高亮渲染路(每帧算的合成"comment" mark,**绝不**写进块
    `data`)。这就是你设想的"marks 只复用于编辑器内高亮"。
-3. **任一端解成 None** → 该 range 被删:`status='orphaned'`,不画高亮,面板里带 `quote` 显示该 thread
-   (比 BlockSuite 硬删更软、保住讨论;可选按 `quote` 模糊重锚)。
+3. **任一端解成 None(或塌缩成零长)** → 先按 `quote` 尝试重锚(下节);重锚不成才是 orphan:
+   `status='orphaned'`,不画高亮,面板里带 `quote` 显示该 thread(比 BlockSuite 硬删更软、保住讨论)。
 4. resolve = `status='resolved'`,**不删锚点**,"显示已解决"能重新高亮。
 
 Rust 锚点辅助放 `doc.rs` 旁(它已管 `TextRef` 访问):建时 `sticky_for_range(doc,block,start,end)->(bytes,bytes)`,
 读时 `resolve_range(doc,thread)->Option<LiveRange>`。**Dart 端只收解好的 `(block,startOffset,endOffset)`
 去画,永远不碰 CRDT 内部。**
+
+## orphan 模糊重锚(Phase 2 ①,2026-08-06 落地)
+
+**先纠正一个前提**:原文把 orphan 归因为"锚定文字被删"。真跑下来**高发因由是另一个** ——
+`MicaDoc::set_blocks` 会把每个块条目删掉重建(新的 `TextRef`),而**任何 REST/MCP 写入、任何版本恢复**
+都走它。于是**正文一个字没变,整篇文档的锚点全部失效**。文字真被删是另一回事,那时确实该 orphan。
+`quote` 正是用来区分这两者的:去当前正文里找它,找到就重锚,找不到就继续 orphan。
+
+- **判定放在 Rust**(`crates/mica-core/src/quote_match.rs`),因为解析锚点本来就在这层
+  (`resolve_range`);Dart 只收算好的 `(block, startOffset, endOffset)`,不知道 sticky index 是什么。
+  匹配对文档**只读**,重锚只改 `comment_threads` 的 sticky 字节 —— 正文永远不动。
+- **两级,且一律偏向拒绝**(错锚比没锚更糟:orphan 至少看得出是 orphan,错锚是把讨论悄悄挂到别人身上):
+  ① **精确层**(忽略大小写、忽略空白种类);同一段文字出现多处时,只信**原始块**里那处,
+  否则必须全文唯一才采纳;② **模糊层**(Sellers 近似匹配,编辑距离 ≤ 25%),要求 quote ≥ 8 字符,
+  且**最佳位置唯一** —— 两处并列一样好就判定歧义、维持 orphan。
+- **块边界**:索引把各块文本用一个边界字符连起来,与客户端用 `\n` 拼跨块选区的方式对齐,
+  所以跨块 quote 同样能重锚;`…`(客户端 300 字截断标记)在匹配前剥掉,代价是超长选区重锚后会**变短**。
+- **状态**:重锚成功且原状态是 `orphaned` → 回到 `open`;`resolved` **保持 resolved**(重锚是记账,
+  不是重开讨论)。写库是 best-effort(下一次列举会重新推导,读请求不因它失败)。
+- **成本**:quote 索引在列表端点里**按需构建**(全部锚点都还活着就一次都不建);模糊层有
+  DP 单元上限(约 30k 字 × 300 字 quote),超了只跑精确层。
 
 ## 端点(gated on commenter 角色)
 `POST .../documents/{doc}/comments`(建 thread+首条,body 里带锚 range)、`GET .../comments`(列 + 解析
@@ -157,7 +179,7 @@ Rust 锚点辅助放 `doc.rs` 旁(它已管 `TextRef` 访问):建时 `sticky_for
 ## 分期
 - **Phase 1(评论 MVP)**:上表两张表 + Rust `sticky_for_range`/`resolve_range` + 端点 + 列表/建/回复/resolve
   + 高亮渲染 + orphan 处理。round-trip 零改动(正文不动)。
-- **Phase 2**:orphan 模糊重锚、评论面板 UX、@提及/通知(需通知底座)。
+- **Phase 2**:~~orphan 模糊重锚~~ ✅(2026-08-06,见上节)、评论面板 UX、@提及/通知(需通知底座)。
 - **建议**:独立立项(见上)。
 
 ## 参考

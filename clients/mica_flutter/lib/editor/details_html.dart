@@ -7,20 +7,27 @@
 // byte-identical. This is only the recognizer that lets the RENDERER show a
 // fold instead of four lines of source.
 //
-// **Only the tight form is recognized** — the whole element in one block:
+// TWO forms are recognized, by two different functions.
+//
+// **Tight** — the whole element in one block, read by [parseDetailsBlock]:
 //
 //     <details>
 //     <summary>label</summary>
 //     body
 //     </details>
 //
-// The form GitHub's docs actually recommend puts a BLANK LINE before the body
-// so the body is parsed as Markdown. A blank line ends a type-6 HTML block, so
-// that form arrives as THREE blocks (`<details>…<summary>`, the real Markdown
-// body, `</details>`) and folding it means hiding a RANGE of nodes — a
-// different mechanism, since `_layouts` is indexed by node position throughout
-// the renderer. See docs/render-architecture.md and the toggle entry in
-// docs/roadmap.md.
+// **Blank-line** — the form GitHub's docs actually recommend, which puts a
+// blank line before the body so the body is parsed as Markdown. A blank line
+// ends a type-6 HTML block, so this arrives as N+2 blocks: the opening tags
+// ([parseDetailsOpenTag]), the real Markdown body, and a bare `</details>`
+// ([isDetailsCloseTag]). Verified against the authoritative Rust parser
+// (`crates/markdown`) — see `test/details_fold_test.dart` for the block shapes
+// that test pins.
+//
+// Folding the blank-line form hides a RANGE of nodes, which the renderer does
+// with zero-height "absorbed" layouts rather than by skipping nodes —
+// `_layouts` is indexed by node position throughout render.dart. See
+// docs/render-architecture.md.
 library;
 
 /// A `<details>` element that this file was able to read whole.
@@ -104,3 +111,71 @@ DetailsShape? parseDetailsBlock(String text) {
     openByDefault: head.group(1) != null,
   );
 }
+
+/// The opening half of a blank-line-form `<details>` — the tags only. The body
+/// lives in the blocks that follow, and the element ends at a separate
+/// `</details>` block ([isDetailsCloseTag]).
+class DetailsOpenTag {
+  const DetailsOpenTag({required this.summary, required this.openByDefault});
+
+  /// The `<summary>` text, or '' when the element has none.
+  final String summary;
+
+  /// See [DetailsShape.openByDefault] — same tri-state with `data.collapsed`.
+  final bool openByDefault;
+}
+
+/// Read [text] as JUST the opening tags of a blank-line-form `<details>`, or
+/// null to leave the block alone.
+///
+/// Strict on purpose, and strictly disjoint from [parseDetailsBlock]: a block
+/// containing `</details>` is never an opener (that is the tight form, or
+/// something this file does not understand). Accepted shapes are exactly the
+/// two the parser produces for GitHub's recommended source:
+///
+///     <details>
+///     <details open>
+///     <details>\n<summary>label</summary>
+///
+/// Anything else — extra HTML lines, a multi-line `<summary>`, a nested
+/// `<details` — declines, and the block keeps rendering as the source it is.
+DetailsOpenTag? parseDetailsOpenTag(String text) {
+  final lines = text.split('\n');
+  while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+    lines.removeLast();
+  }
+  if (lines.isEmpty || lines.length > 2) return null;
+
+  final head = _open.firstMatch(lines.first.trim());
+  if (head == null) return null;
+
+  var summary = '';
+  if (lines.length == 2) {
+    final m = _summary.firstMatch(lines[1].trim());
+    if (m == null) return null;
+    summary = m.group(1)!.trim();
+  }
+  return DetailsOpenTag(summary: summary, openByDefault: head.group(1) != null);
+}
+
+final _close = RegExp(r'^</details\s*>$', caseSensitive: false);
+
+/// True when [text] is nothing but a `</details>` closing tag — the block the
+/// parser emits for the last line of the blank-line form.
+bool isDetailsCloseTag(String text) {
+  final lines = text.split('\n');
+  while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+    lines.removeLast();
+  }
+  return lines.length == 1 && _close.hasMatch(lines.first.trim());
+}
+
+/// Whether a `<details>` block starts expanded, in EITHER form, or null when
+/// [text] is not a `<details>` opener at all.
+///
+/// One function because two callers need the same answer and reading the wrong
+/// default makes the first click on a fold a visible no-op (it writes the state
+/// the block was already in).
+bool? detailsOpenByDefault(String text) =>
+    parseDetailsBlock(text)?.openByDefault ??
+    parseDetailsOpenTag(text)?.openByDefault;

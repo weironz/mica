@@ -4,7 +4,12 @@
 //! body stays byte-identical, so the round-trip invariant needs no changes and a
 //! comment can never leak into an export. The anchor primitives themselves are
 //! `mica_core::doc::{CommentAnchor, CommentRange}` (`sticky_for_range` to take
-//! one, `resolve_range` to map it back onto the live text).
+//! one, `resolve_range` to map it back onto the live text), plus
+//! `mica_core::quote_match` for putting a dead anchor back on its text.
+//!
+//! [`anchor_state`] is the one place that decides what a thread's anchor means
+//! today — highlight, re-anchor, or orphan — so a listing can never disagree with
+//! what the document says.
 //!
 //! Every query below is a literal string (sqlx 0.9 only accepts `&'static str`,
 //! and column lists spelled out beat a `SELECT *` that drifts with the schema).
@@ -19,6 +24,7 @@ use uuid::Uuid;
 /// Re-exported so callers (the API layer) can name an anchor/range without taking
 /// a direct dependency on `mica-core` — this module is their door to comments.
 pub use mica_core::doc::{CommentAnchor as Anchor, CommentRange};
+pub use mica_core::QuoteIndex;
 
 pub const STATUS_OPEN: &str = "open";
 pub const STATUS_RESOLVED: &str = "resolved";
@@ -255,6 +261,120 @@ pub async fn mark_orphaned(db: &PgPool, thread_ids: &[Uuid]) -> ApiResult<()> {
   Ok(())
 }
 
+/// Try to bring a dead anchor back to life from the thread's saved `quote`.
+///
+/// Call ONLY when the stored anchor no longer resolves (or resolves empty). The
+/// common cause is not a deletion at all: `set_blocks` — every REST/MCP write and
+/// every version restore — rewrites each block's text object, so anchors die with
+/// the text untouched. Matching the quote tells that apart from a real deletion,
+/// where nothing is found and the thread rightly stays an orphan.
+///
+/// Returns the range it now covers plus a FRESH anchor for it; the caller
+/// persists that with [`reanchor`]. None means "no confident match" — the rules
+/// live in `mica_core::quote_match` and deliberately refuse ambiguity.
+///
+/// The document is never written: comments are a side store, and re-anchoring
+/// only replaces bytes in `comment_threads`.
+pub fn rematch(
+  doc: &MicaDoc,
+  index: &QuoteIndex,
+  quote: &str,
+  prefer_block: &str,
+) -> Option<(CommentRange, CommentAnchor)> {
+  let range = index.find(quote, Some(prefer_block))?;
+  let anchor = doc.sticky_for_range(
+    &range.start_block,
+    range.start_offset,
+    &range.end_block,
+    range.end_offset,
+  )?;
+  Some((range, anchor))
+}
+
+/// What a listing must say about one thread, derived from the document as it is
+/// now — never from the stored `status`, which is only a cache of this.
+#[derive(Debug, Clone)]
+pub struct AnchorState {
+  /// Where to highlight now. None → orphaned: show the thread against its quote
+  /// and draw nothing.
+  pub range: Option<CommentRange>,
+  /// Set when the thread was re-anchored from its quote — persist it with
+  /// [`reanchor`], or the next listing repeats the work.
+  pub fresh_anchor: Option<CommentAnchor>,
+  /// The status to report (and to write, if it differs from the stored one).
+  pub status: String,
+}
+
+/// Resolve one thread's anchor, re-anchoring from its quote if it died.
+///
+/// `index` is the listing's lazily-built quote index: pass `&mut None` and it is
+/// built on the first thread that needs it, so a document whose anchors all still
+/// resolve — the normal case — never pays for flattening its text.
+pub fn anchor_state(
+  doc: &MicaDoc,
+  index: &mut Option<QuoteIndex>,
+  row: &ThreadRow,
+) -> AnchorState {
+  // "Unresolvable" and "collapsed to nothing" are the same thing to a reader:
+  // yrs keeps tombstones, so deleting the anchored text usually collapses the
+  // range instead of failing to resolve.
+  if let Some(range) = doc.resolve_range(&row.anchor()).filter(|r| !r.is_empty()) {
+    return AnchorState {
+      range: Some(range),
+      fresh_anchor: None,
+      status: row.status.clone(),
+    };
+  }
+  let idx = index.get_or_insert_with(|| QuoteIndex::from_blocks(&doc.to_blocks()));
+  if let Some((range, anchor)) = rematch(doc, idx, &row.quote, &row.anchor_start_block) {
+    return AnchorState {
+      range: Some(range),
+      fresh_anchor: Some(anchor),
+      // It has text under it again. A resolved thread stays resolved — getting
+      // its anchor back is not a reason to re-open a finished discussion.
+      status: if row.status == STATUS_ORPHANED {
+        STATUS_OPEN.to_string()
+      } else {
+        row.status.clone()
+      },
+    };
+  }
+  AnchorState {
+    range: None,
+    fresh_anchor: None,
+    status: if row.status == STATUS_OPEN {
+      STATUS_ORPHANED.to_string()
+    } else {
+      row.status.clone()
+    },
+  }
+}
+
+/// Store a re-anchored thread's new sticky pair.
+///
+/// An `orphaned` thread becomes `open` again — it has text under it once more.
+/// A `resolved` one keeps its status: re-anchoring is bookkeeping, not a reason
+/// to re-open a finished discussion.
+pub async fn reanchor(db: &PgPool, thread_id: Uuid, anchor: &CommentAnchor) -> ApiResult<()> {
+  sqlx::query(
+    r#"
+      UPDATE comment_threads
+      SET anchor_start_block = $2, anchor_start_sticky = $3,
+          anchor_end_block = $4, anchor_end_sticky = $5,
+          status = CASE WHEN status = 'orphaned' THEN 'open' ELSE status END
+      WHERE id = $1
+    "#,
+  )
+  .bind(thread_id)
+  .bind(&anchor.start_block)
+  .bind(&anchor.start_sticky)
+  .bind(&anchor.end_block)
+  .bind(&anchor.end_sticky)
+  .execute(db)
+  .await?;
+  Ok(())
+}
+
 /// Delete a thread and (by cascade) its replies.
 pub async fn delete_thread(db: &PgPool, thread_id: Uuid) -> ApiResult<()> {
   sqlx::query("DELETE FROM comment_threads WHERE id = $1")
@@ -262,4 +382,131 @@ pub async fn delete_thread(db: &PgPool, thread_id: Uuid) -> ApiResult<()> {
     .execute(db)
     .await?;
   Ok(())
+}
+
+/// `anchor_state` is where a listing decides "highlight here", "re-anchor" or
+/// "orphan". Those three answers are what the client renders, so they are pinned
+/// here without a database — the Postgres tests (`tests/comments_pg.rs`) cover
+/// the storage half.
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use mica_core::Block;
+
+  fn doc_with(text: &str) -> MicaDoc {
+    MicaDoc::from_blocks(
+      "r",
+      &[
+        Block::new("r", "page").with_children(vec!["a".into()]),
+        Block::new("a", "paragraph").with_text(text.to_string()),
+      ],
+    )
+  }
+
+  fn row(anchor: &CommentAnchor, quote: &str, status: &str) -> ThreadRow {
+    ThreadRow {
+      id: Uuid::new_v4(),
+      document_id: Uuid::new_v4(),
+      anchor_start_block: anchor.start_block.clone(),
+      anchor_start_sticky: anchor.start_sticky.clone(),
+      anchor_end_block: anchor.end_block.clone(),
+      anchor_end_sticky: anchor.end_sticky.clone(),
+      quote: quote.to_string(),
+      status: status.to_string(),
+      created_by: Uuid::new_v4(),
+      created_at: Utc::now(),
+      resolved_by: None,
+      resolved_at: None,
+    }
+  }
+
+  /// A rewritten document: identical text, brand-new text objects — what every
+  /// REST/MCP write and every version restore does to a document.
+  fn rewrite(doc: &mut MicaDoc) {
+    let blocks = doc.to_blocks();
+    doc.set_blocks("r", &blocks);
+  }
+
+  #[test]
+  fn a_living_anchor_is_reported_as_is_and_costs_no_quote_index() {
+    let doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    let mut index = None;
+    let state = anchor_state(&doc, &mut index, &row(&anchor, "world", STATUS_OPEN));
+    assert_eq!(
+      state.range.map(|r| (r.start_offset, r.end_offset)),
+      Some((6, 11))
+    );
+    assert!(state.fresh_anchor.is_none(), "nothing to re-anchor");
+    assert_eq!(state.status, STATUS_OPEN);
+    assert!(
+      index.is_none(),
+      "flattening the document must stay off the normal path"
+    );
+  }
+
+  #[test]
+  fn a_dead_anchor_over_unchanged_text_is_re_anchored_and_reopened() {
+    let mut doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    rewrite(&mut doc);
+    assert!(
+      doc.resolve_range(&anchor).filter(|r| !r.is_empty()).is_none(),
+      "the rewrite must kill the anchor — otherwise this proves nothing"
+    );
+
+    let state = anchor_state(&doc, &mut None, &row(&anchor, "world", STATUS_ORPHANED));
+    assert_eq!(
+      state.range.map(|r| (r.start_offset, r.end_offset)),
+      Some((6, 11))
+    );
+    let fresh = state.fresh_anchor.expect("a fresh anchor to persist");
+    assert_eq!(
+      doc
+        .resolve_range(&fresh)
+        .map(|r| (r.start_offset, r.end_offset)),
+      Some((6, 11)),
+      "the fresh anchor must resolve to the same words"
+    );
+    assert_eq!(
+      state.status, STATUS_OPEN,
+      "it has text under it again, so it is no longer an orphan"
+    );
+  }
+
+  #[test]
+  fn re_anchoring_never_reopens_a_resolved_thread() {
+    let mut doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    rewrite(&mut doc);
+    let state = anchor_state(&doc, &mut None, &row(&anchor, "world", STATUS_RESOLVED));
+    assert!(state.fresh_anchor.is_some(), "re-anchored");
+    assert_eq!(
+      state.status, STATUS_RESOLVED,
+      "recovering an anchor is bookkeeping, not a reason to re-open"
+    );
+  }
+
+  #[test]
+  fn text_that_is_really_gone_orphans_an_open_thread() {
+    let mut doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    doc.text_delete("a", 6, 5); // delete "world"
+    let state = anchor_state(&doc, &mut None, &row(&anchor, "world", STATUS_OPEN));
+    assert!(state.range.is_none(), "no highlight over unrelated words");
+    assert!(state.fresh_anchor.is_none());
+    assert_eq!(state.status, STATUS_ORPHANED);
+  }
+
+  #[test]
+  fn a_resolved_thread_whose_text_is_gone_stays_resolved() {
+    // `mark_orphaned` refuses to overwrite a resolve; the derived status must
+    // agree with it, or the listing and the database would disagree forever.
+    let mut doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    doc.text_delete("a", 6, 5);
+    let state = anchor_state(&doc, &mut None, &row(&anchor, "world", STATUS_RESOLVED));
+    assert!(state.range.is_none());
+    assert_eq!(state.status, STATUS_RESOLVED);
+  }
 }
