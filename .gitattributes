@@ -3,3 +3,11 @@
 # CRLF, corrupting the shebang inside a Docker image:
 #   /usr/bin/env: 'bash\r': No such file or directory
 *.sh text eol=lf
+
+# The markdown conformance fixtures are compared BYTE FOR BYTE against exporter
+# output, and both exporters always emit LF. Checked out CRLF they fail on
+# Windows only — `export drift in 17-quotes.md` with two strings that look
+# identical in the diff, because the difference is invisible. That has already
+# cost two subagents a false "pre-existing failure" report (see 83b5eae), and it
+# comes back every time a rebase re-checks-out a gold file.
+crates/markdown/tests/fixtures/** text eol=lf
