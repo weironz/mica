@@ -118,10 +118,33 @@ impl S3Config {
     })
   }
 
-  /// Presigned `PUT` URL a client uses to upload an object directly.
+  /// Presigned `PUT` URL a **client** uses to upload an object directly.
+  ///
+  /// Signed against the browser-facing endpoint. If this process is going to
+  /// send the request itself, use [`presign_put_server`](Self::presign_put_server).
   pub fn presign_put(&self, key: &str) -> PresignedUpload {
     PresignedUpload {
       url: self.presign("PUT", key, Utc::now()),
+      method: "PUT",
+      expires_in: self.presign_ttl_seconds,
+    }
+  }
+
+  /// Presigned `PUT` for an upload **this process** performs: avatars, imported
+  /// images, anything re-hosted server-side.
+  ///
+  /// The distinction is not cosmetic. Handing these paths the browser-facing
+  /// URL is why "the API in a container cannot do server-side uploads" is a
+  /// documented dev-stack limitation (`docs/lessons.md`): `127.0.0.1:9000`
+  /// means the api container itself, so the PUT fails with
+  /// `error sending request`. In production the public address usually does
+  /// resolve from inside, which makes this the worst kind of coupling — it
+  /// works until DNS, TLS or the proxy in front of the store hiccups.
+  pub fn presign_put_server(&self, key: &str) -> PresignedUpload {
+    let (base_url, host, canonical_uri) =
+      self.location(self.server_endpoint(), &uri_encode(key, false));
+    PresignedUpload {
+      url: self.sign_at("PUT", &base_url, &host, &canonical_uri, Utc::now()),
       method: "PUT",
       expires_in: self.presign_ttl_seconds,
     }
@@ -527,10 +550,15 @@ mod tests {
       "browsers must keep the public endpoint: {client_upload}"
     );
 
+    // Every URL THIS PROCESS sends. Missing one is invisible: browsers keep
+    // working, and only the server-side path quietly cannot reach the store —
+    // which is exactly how three of these (avatar, import_url, store_bytes)
+    // were left behind when the first two were fixed.
     for server_url in [
       config.presign_head_bucket(),
       config.presign_create_bucket(),
       config.presign_delete("a/b.png"),
+      config.presign_put_server("a/b.png").url,
     ] {
       assert!(
         server_url.starts_with("http://rustfs:9000/"),

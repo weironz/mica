@@ -77,9 +77,15 @@ services:
       ACCESS_TOKEN_TTL_SECONDS: 86400
       RUST_LOG: mica_api_server=debug,mica_app_core=debug,mica_infra=debug
       CARGO_TERM_COLOR: never
-      # The backend only SIGNS presigned URLs, so this must be the host the
-      # BROWSER can reach — not the compose service name.
+      # The URL handed to a BROWSER must name a host the browser can reach —
+      # not the compose service name.
       S3_ENDPOINT: http://127.0.0.1:9000
+      # ...but the api does not ONLY sign: avatars, `import_url` and imported
+      # images are uploaded by this process. Those used to be signed for the
+      # line above, where `127.0.0.1` is the api container itself, so every one
+      # of them failed in here — the reason `docs/lessons.md` told you to run
+      # the api on the host instead. They now sign against this address.
+      S3_INTERNAL_ENDPOINT: http://rustfs:9000
       S3_REGION: us-east-1
       S3_BUCKET: mica
       S3_ACCESS_KEY: rustfsadmin

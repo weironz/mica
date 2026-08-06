@@ -319,7 +319,7 @@ pub(crate) async fn fetch_and_store_image_url(
   };
 
   // Upload via a self-issued presigned PUT (storage signs; we do the PUT).
-  let upload = storage.presign_put(&object_key);
+  let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
     .header(reqwest::header::CONTENT_TYPE, &mime)
@@ -468,7 +468,7 @@ pub(crate) async fn store_bytes(
     None => format!("workspaces/{workspace_id}/{hash}"),
   };
 
-  let upload = storage.presign_put(&object_key);
+  let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
     .header(reqwest::header::CONTENT_TYPE, &mime)

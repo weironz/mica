@@ -112,7 +112,9 @@ pub async fn put_avatar(
 
   // Same self-issued presigned PUT the importer uses (files::store_bytes).
   let client = reqwest::Client::new();
-  let upload = storage.presign_put(&object_key);
+  // Server-side upload: this process sends the PUT, so it must be signed for
+  // the address THIS process can reach, not the browser's.
+  let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
     .header(reqwest::header::CONTENT_TYPE, &mime)
