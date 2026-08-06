@@ -4004,7 +4004,14 @@ fn push_list_item(lines: &mut Vec<String>, block: &Block, indent: &str, marker: 
     if i == 0 {
       lines.push(format!("{indent}{marker}{l}"));
     } else {
-      lines.push(format!("{indent}{pad}{l}"));
+      // A continuation line lands ON the item's content column, so a line that
+      // merely LOOKS like a block leader starts a real block on re-import.
+      // CommonMark ex. 312 imports `    - e` under `   - d` as the literal text
+      // `d\n- e`; writing it back unescaped produced `  - e`, a nested item —
+      // export(import(md)) stopped parsing to the blocks it came from. The
+      // paragraph path has escaped its leader all along (that is how the `===`
+      // setext drift was fixed); item continuations never did.
+      lines.push(format!("{indent}{pad}{}", escape_block_leader(l.to_string())));
     }
   }
 }

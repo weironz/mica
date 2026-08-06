@@ -1108,7 +1108,12 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     // the line is paragraph continuation or code, never a new item.
     if ((kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo') &&
         col >= 4 &&
-        listStack.isEmpty) {
+        // ... at top level, OR indented past every open item's content column
+        // (spec ex. 312: the 4-space `- e` is lazy text of item `d`). `every`
+        // is vacuously true on an empty stack, so it subsumes the old
+        // `isEmpty` — which was the same blind spot as the HTML-block guard
+        // above: a list stays on the stack long after it stops being relevant.
+        listStack.every((cc) => col < cc)) {
       kind = 'paragraph';
       text = line;
       data = {};

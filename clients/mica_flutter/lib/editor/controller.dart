@@ -1007,10 +1007,19 @@ class EditorController extends ChangeNotifier {
       if (!inline.contains('\n')) return '$head$inline';
       final cont = _continuationPrefix(node);
       final lines = inline.split('\n');
+      // A list item's continuation line lands ON its content column, so a line
+      // that merely LOOKS like a block leader starts a real block on re-import:
+      // `d\n- e` (CommonMark ex. 312) came back as `- d` + a nested `- e`, one
+      // block turning into two on copy-paste. Mirrors Rust `push_list_item`,
+      // which escapes exactly here — quote continuations keep their `>` prefix
+      // instead and are deliberately NOT escaped, on either side.
+      final escapeCont = node.isListKind;
       return [
         '$head${lines.first}',
         for (final l in lines.skip(1))
-          l.isEmpty ? cont.trimRight() : '$cont$l',
+          l.isEmpty
+              ? cont.trimRight()
+              : '$cont${escapeCont ? escapeBlockLeader(l) : l}',
       ].join('\n');
     }
 

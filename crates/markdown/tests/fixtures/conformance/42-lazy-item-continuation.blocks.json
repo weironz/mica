@@ -1,0 +1,44 @@
+[
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "a"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "b"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "c"
+  },
+  {
+    "data": {},
+    "kind": "bulleted_list",
+    "text": "d\n- e"
+  },
+  {
+    "data": {
+      "loose": true
+    },
+    "kind": "numbered_list",
+    "text": "w"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "x"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "y"
+  },
+  {
+    "data": {},
+    "kind": "numbered_list",
+    "text": "z\n1. zz"
+  }
+]
