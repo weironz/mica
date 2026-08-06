@@ -72,15 +72,10 @@
 ## 编辑器与功能广度
 
 - 🟡 **结构块 callout/toggle/embed** —— **callout 已做**(GFM alert `> [!TYPE]` 5 类型,复用 quote 扁平模型、round-trip 干净、记分牌未降,e7ff038)。**残留/定论**(2026-07-22 调研):① **toggle** —— **已拍板(2026-07-29):分两步,先做渲染层折叠 UI**。关键区分:`<details><summary>` 是**合法的 CommonMark/GFM raw-HTML block**(GitHub 官方推荐写法),属于"我们的解析器没接住",**不是**像合并单元格那样"标准 md 表达不了"——所以**不适用**那条的「红线不做」先例。现状比参照产品还弱一档:AppFlowy(原生 `toggle_list` block)和 AFFiNE(`collapsed` 做成 list/heading 通用属性)**编辑器里都有可点的折叠 UI**,只在导出 md 时降级;我们是连折叠 UI 都没有,`<details>` 源码当代码块摆着。~~**第一步(S)**~~ ✅ **已做(2026-08-03)**:纯渲染层折叠上线,`code_block`+`raw:true` 的解析/序列化一字未动,折叠态复用 `data.collapsed`(**实测 round-trip 字节不变**:点开折叠只写 `data.collapsed`,服务端读回的 `<details>` 仍无 `open`)。走 `AtomicBlockRenderer` 注册表 —— **顺带关掉了 P3-1**:注册表原本是 kind→renderer 的 Map,而 `code_block` 已被 Mermaid 占住,第二个 renderer 会**静默替换**它、无编译错误;现在是 kind→List,按注册顺序第一个不返回 null 的胜出(`render-architecture.md` 已改)。**但覆盖面比原计划小,原因是解析形态**:`<details>` 两种形态解析结果完全不同 —— **紧凑形态**(不留空行)是**一个** raw 块,已折叠;**GitHub 文档推荐的空行形态**(留空行让正文按 Markdown 解析)因为空行终止 type-6 HTML 块,解析成**三个块**(`<details>+<summary>` / 真正的 Markdown 正文 / `</details>`)。折叠后者要隐藏的是**一段范围**,而 `_layouts[i]` 在渲染器里全按节点下标索引,跳过节点会整体错位 → 得改成「零高度隐藏布局」,牵动选区/光标/命中测试/拖拽把手多条路径 —— **那是第二步的量级,不是第一步的尾巴**。~~空行形态今天仍是「两段源码夹着正文」~~ ✅ **空行形态已折叠(2026-08-06,第二步的渲染那半)**:`AtomicBlockRenderer` 加了一条通用机制 —— renderer 在 `_NodeLayout.absorbs` 里声明它**吃掉了后面哪几个节点**,`performLayout` 给这些节点发**零高度 `hidden` 布局**(不是跳过 —— 跳过会让 `_layouts[i]` 之后全体错位,这正是当初挡住的那条)。`_nodeVisible` 是全部 paint 层唯一的裁剪判据,让它对 `hidden` 返回 false 就一次性关掉了所有绘制。**零高度不够**:四条按下标(而非几何)回答的路径要单独跳过,每条都配了能变红的回归测试 —— `positionAt` 的「点到文档末尾之后」兜底(文档以折叠结尾时光标落进隐藏的 `</details>`)、`dropIndexAt`(零高度的中点会吞掉本该落在下一块的拖放)、`_stepToNode`(它对 **atomic** 节点直接返回 `DocPosition(i,0)`,所以 Down 会停在折叠区里的 divider 上)、`caretRectFor`(远端光标会画在折叠缝上)。逃生口沿用紧凑形态那条但收窄:选区碰到**标签本身**或**被折叠隐藏的节点**才退回源码,展开态正文里打字**不会**把标签叫回来。round-trip 由 `crates/markdown/tests/details_fold.rs` 在权威侧钉死(三块形态 + `data.collapsed` 不动一个字节)。**已知边界**(都与改动前一致,未变差):正文不缩进、没有容器竖线;拖动折叠头只搬走开标签那一块;在折叠后第一块行首按 Backspace 仍会与隐藏的 `</details>` 合并(与改动前同一行为,只是改前你看得见它)。**剩下的第二步(M–L,另议)**:规范子集结构化成新 kind(summary 富文本 + body 复用 `data.li` 扁平容器),非规范形态退回现状直通;成本大头在教导入器反解析真实世界五花八门的 `<details>`。**顺带定论**:折叠状态**是文档数据不是视图状态**——AppFlowy(`updateNode` 事务)、AFFiNE(`store.updateBlock`)、以及本仓库自己的代码块折叠先例(`controller.dart` `toggleCollapsed` 走 `update_block`,但 `collapsed` **从不进 md 字节**)三方一致;`<details open>` 让我们有机会比前两家更彻底(折叠态也能 round-trip),但那意味着"点一下折叠"变成一次真实文本编辑,留到第二步再定;② embed 未做。附:render 注册表 P3-1 对这两种块**不是前置**(仅撞已有 kind 如 Graphviz 时才需)。(各 S–L)
-- **无屏幕阅读器语义(a11y) / 无 RTL 双向文本** —— 自绘 RenderBox 无 Semantics;硬编码 `TextDirection.ltr`(editor-engine, `render.dart`)。
-  **2026-08-03 核实:比原文写的更糟** —— 编辑器目录里 `Semantics` **0 处**(不是「少」,是没有),
-  `TextDirection.ltr` **31 处**(2026-08-05 复数;原文写「10+」,08-03 写 32)。缓解:设置里有 85–140% 应用内字号(`EditorAppearance.fontScale`),覆盖低视力一部分。(各 L)
-- **AI 离线为空 stub / 无拼写检查**;~~字数统计~~ ✅ 已做(右下角角标,253c53f)。(M / M)
 ## 平台覆盖
 
-- **无触屏选择手势** —— 无长按选词/选择手柄/放大镜,手机端文本选择基本不可用。(L)
-
-- **window_manager→nativeapi / Turso 观望**(各 S,已隔离在 trait 后)。
+> **这一节空了(2026-08-06)。** 拍板不做的条目已整条删除,理由留在那次提交的信息里。
+> 留着标题是因为这是一个真实存在的分类 —— 空是个**状态**,不是这一档不存在。
 
 ## 客户端质量与兜底 🆕
 
@@ -91,7 +86,8 @@
 
 ## 性能
 
-- **frb v2 热路径 FFI 基准待测** —— IME/逐字输入若过慢,热路径留 Dart(phase2 §12)。(M)
+> **这一节空了(2026-08-06)。** 拍板不做的条目已整条删除,理由留在那次提交的信息里。
+> 留着标题是因为这是一个真实存在的分类 —— 空是个**状态**,不是这一档不存在。
 
 ## 开发者体验 / CI / Markdown
 
@@ -102,8 +98,6 @@
   **已做的处置**:③ 的复现器发到 #415;**PR y-crdt/y-crdt#644** 修 ②③ 两类(`any.rs` 的 `with_capacity` → `try_reserve`,沿用该仓库自己在 `block.rs`/`update.rs` 的既有模式;两处 `from_utf8_unchecked` → 检查版),含回归测试,yrs 全量 375+34 通过,回滚任一处补丁测试即 abort。
   **残留 = 等上游**。这一侧兜不住:限制输入大小没用(才 21 字节),预校验等于重写解码器,进程隔离业界无一家这么做、在单用户实例上不成比例。本地 `proptest_yrs.rs` 全部 `#[ignore]`(两类会 abort 测试进程,不 ignore 就是把 CI 打挂而不是报告),上游合并后去掉 ignore 即变回归门。
   **⚠️ 触发条件:开放注册前必须解决。** 今天风险低是因为注册关闭、只有一个账号;有第二个用户那天,任何普通成员都能让实例反复重启,而且不需要技巧 —— 我是随机灌字节撞出来的。(残留:等上游) `[需后端]`
-
-- **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
 
 ## 产品与公开发布合规 🆕
 
