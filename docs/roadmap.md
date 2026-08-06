@@ -35,23 +35,15 @@
 > 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
 
 - 🟡 **备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**(2026-07-30)—— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,而它被一条刻意的安全边界挡着**:CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练,得在节点上装一条新的 pinned 命令 + 一把新 key —— 那是生产侧的凭据/策略变更(deploy.yml 自己写着 CI「may READ the fence that limits it, never install it」),**该由用户决定并执行**,不该由 agent 代办。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)`[等用户]`
-- 🆕 **Traefik:证书过期重新变成无人看守 + 配置仍不在仓库**(2026-08-04 更新)——
-  ~~`uptime.yml` 每天查两域名(app + s3)证书剩余有效期,< 10 天即告警~~ **该 workflow 已于
-  2026-08-04 删除**(它声称 `cron: */15` 拨测,实测 21 小时只跑了 12 次而非 84 次 —— GitHub
-  Actions 的 schedule 是 best-effort,08-03 那次故障窗口它一次都没跑),所以**证书过期这条线
-  又空了**。这一半本来是工作正常的:证书是天级的,即便退化到
-  每 1–3.5 小时跑一次也完全够用 —— 删掉是删应用拨测的连带损失,不是因为它不好使。
-  重建时它属于 blackbox 探测那一档,不是 `/metrics` 那一档 —— 而 **blackbox 探测已拍板不做**
-  (2026-08-04)。所以这条线是**明知空着**,不是忘了。
-  **残留照旧**:Traefik 配置本体在仓库外未纳管;ACME 卡死那类故障仍靠 `deploy.md:86` 的
-  手动 runbook。
-  **⚠️ 但证书这半和被否决的应用拨测不是一回事**:应用拨测要分钟级,GH Actions 给不了;
-  证书是**天级**的,那 14% 的触发率对它绰绰有余。两者当初被归成一档一起砍了,约束却完全不同。
-  后果也不对称 —— 证书过期 = **全站不可访问**,而现在没有任何东西在看。(S,external)`[等用户]`
 - 🆕 **provisioning 层不存在:「给台新机器就能起全套」今天做不到**(2026-08-02 写下方案,未实施)——
   仓库里只有 `deploy/docker-compose.yml`;Traefik、`/data/mica` 目录、`.env`、受限部署账号与
-  `/usr/local/sbin/mica-deploy`、ACR 登录全是当年手工装的,没有一条能重放的路径(上面 Traefik
-  那条是它的一个切片)。同源的第二个症状:**一个 `vX.Y.Z` tag 焊住三条节奏不同的发布线** ——
+  `/usr/local/sbin/mica-deploy`、ACR 登录全是当年手工装的,没有一条能重放的路径。
+  **Traefik 那一片的具体形状**(2026-08-06 从原「证书过期无人看守」条并入,该条已删):配置
+  本体在仓库外未纳管;ACME **平时自动续期,不需要盯** —— 唯一已知的卡死场景是**改过 DNS 之后**
+  进 issuance backoff、一直挂着 TRAEFIK DEFAULT CERT,处置是重启 Traefik
+  (`docs/deploy.md` 的 “Behind Traefik” 一节)。原条目标题写成「证书过期无人看守」,
+  读起来像随时会炸,**实际触发窗口只在你主动改 DNS 时存在**,那时人本来就在盯 —— 这是它被
+  删掉的原因。同源的第二个症状:**一个 `vX.Y.Z` tag 焊住三条节奏不同的发布线** ——
   0.13.6 为送一行 compose 配置付了一次完整 Windows 构建 + 给所有桌面用户推了个空更新,
   0.13.7 因单个 `images (cli)` job 挂掉整版作废。症状、拆分方案与优先级在 `docs/cd-plan.md`。
   **刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
