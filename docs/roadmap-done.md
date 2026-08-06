@@ -386,6 +386,15 @@
 
 - 🟡 **页面属性/标签**(**M1 已完成**,2026-07-22)—— 走 front matter 权威路(调研定论:同类 md 权威系均如此,见 `docs/page-properties.md`)。**M1 全部落地**:① 数据/权威层——Rust `crates/markdown/src/properties.rs`(解析扁平子集 + 类型推断 + 外科式写回,round-trip 不变量经用户批准从字节保真降为规范化子集稳定)+ Dart 镜像 `properties.dart`,两端逐条测试一致(Rust 9 / Dart 10 全绿);② 页头属性面板 `property_panel.dart`(读 root 块 `data['front_matter']` → 类型化编辑:文本/数字/日期文本框、勾选、tags chips 增删 + 增/删属性 → 编辑经 `onApplyOperations` 单入口自分派写回 root 块,local/cloud-CRDT/cloud-REST 三模式通用,无需穿层新回调);flutter build windows 通过。tags = `tags:` list 属性。**Obsidian-lite 闭环已完成**:增删改属性(类型 text/number/checkbox/date/list)、tags chips、**可搜**(属性值折进 content_text,list 值以 `#值` 存)、**tag 点击精确跳页**(搜 `#值` 只命中真正带该标签的页,ce13cef)、**默认隐藏在页头 ⓘ 图标后**(不占版)+ **AppFlowy 式面包屑路径**(579272f)、AFFiNE 式紧凑面板(7379444)。**故意不做/另立项**:① 数据库视图级「按属性筛选/排序/看板」——是 Notion 数据库那套,与 markdown 权威+round-trip 架构互斥(要豁免 md 权威,AFFiNE/siyuan 路),独立大决策;~~② 存量页要下次编辑才索引属性~~ ✅ **v0.13.14 顺带关掉,不是单独做的**:migration 0019 把每行 `link_targets` 置 NULL,而回填条件是 `content_text = '' OR link_targets IS NULL` —— 于是**每一行的 content_text 都被重新推导**,其中就含 front matter 的属性值。生产快照上做过哨兵验证(把某行 content_text 改成哨兵、link_targets 置 NULL,跑真回填后哨兵被覆盖)。存量页无需逐页编辑即可搜属性;③ 日期选择器 UI(现文本输入)。**数据库视图(带类型列/筛选/relation)另立项**——与 markdown 权威+round-trip 架构互斥,要么破双表示红线要么豁免 md 权威(AFFiNE/siyuan 路),是独立大决策。(L) `[需后端]`
 
+- 🆕 **评论 Phase 2 + 建议(suggest mode)**(2026-08-03 立,Phase 1 整条已归档)—— Phase 1 已闭环并
+  经真机验收(评论栏、跨块高亮、锚点随文字位移),整条见 `roadmap-done.md`。**原本没做的三件,②③ 已于 2026-08-06 拍板不做(理由见提交信息),① 已做**:
+  ~~① **orphan 模糊重锚**~~ ✅ **已做(2026-08-06)**:列表端点解不出锚点时按 `quote` 重锚
+  (`mica-core/quote_match.rs` + `comments::anchor_state`),命中则原地换 sticky 字节、
+  `orphaned` 回 `open`;不确定就**保持 orphan**(错锚比没锚更糟)。**真正的高发因由与原文写的不同**:
+  不是"文字被删",是 `set_blocks`(任何 REST/MCP 写入、任何版本恢复)重建每个块的 text 对象 ——
+  正文一个字没变,整篇的锚点全死。文字真被删时依然找不到,thread 照旧是 orphan;
+  (① S,已完成;②③ 2026-08-06 拍板不做,理由见那两次提交)
+
 ## 平台覆盖
 
 - ~~🟡 **自动更新器不校验下载完整性/哈希/签名**~~ ✅ **整条关闭(2026-08-05)** —— 完整性校验早已做
