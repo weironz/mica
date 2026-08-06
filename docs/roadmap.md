@@ -6,7 +6,9 @@
 > 2026-08-03 那轮核实,29 条未做项里有 3 条是幻影、1 条工作量标反 —— 而那还是在
 > **只扫未做项**的前提下。
 >
-> 影响力从高到低;`(S/M/L)` = 工作量;`[需后端]` = 要动 Rust。
+> 影响力从高到低;`(S/M/L)` = 工作量;`[需后端]` = 要动 Rust;
+> **`[等用户]` = 卡在只有用户能做的一步**(生产凭据/策略变更、要在真机上先走一遍),
+> 不是没排上 —— 分开标是因为这两者留在清单上的样子一模一样,但前者催我没用。
 >
 > **维护规矩(否则它会再烂一遍)**:
 > 1. **一条做完了就当场整条搬走**,别只加 ✅ —— 发版流程里有这一步(`release.md` 步骤 5)。
@@ -33,33 +35,20 @@
 > 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
 
 - 🆕 **磁盘慢渗(降级 low,2026-07-23 复核)** —— 原列 medium,核对后大半已做:① ✅ **日志上限**——compose 5 个服务全走 `*default-logging`(10m×3),最吓人的"日志无限涨"已堵;② ✅ **悬空镜像 prune**——`node-deploy-policy.sh:139` 每次部署 `docker image prune -f --filter until=168h`。**残留(慢渗、低危)**:③ 旧的**带 tag** 版本镜像累积(上面 prune 故意 NO `-a`、只清悬空、留回滚,每版多 3 个带 tag 镜像几百 MB);④ `/data/mica/pre-*.sql.gz` 手动还原点不自动清;⑤ 无磁盘水位告警。云盘几十 GB、慢渗不急。要做就是 `node-deploy-policy.sh` 尾部再加"保留最近 N 版镜像 + N 个还原点"。(S)
-- 🟡 **备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**(2026-07-30)—— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,而它被一条刻意的安全边界挡着**:CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练,得在节点上装一条新的 pinned 命令 + 一把新 key —— 那是生产侧的凭据/策略变更(deploy.yml 自己写着 CI「may READ the fence that limits it, never install it」),**该由用户决定并执行**,不该由 agent 代办。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)
-- 🆕 **生产当前没有任何自动化告警 —— 挂了只能靠人发现**(2026-08-04,`uptime.yml` 已删除)——
-  **为什么删**:那个 workflow 声称 `cron: */15` 拨测 `/api/ready`,实测(08-02T17:14Z →
-  08-03T14:23Z,21 小时)只跑了 **12 次**而非应有的 84 次(**14%**),间隔从 ~60 分钟退化到
-  95 / 214 / 214 / 212 / 149 分钟;而 08-03 的故障窗口是 16:19–16:45Z,上一次运行停在
-  14:23Z —— **整段故障它一次都没跑**,是用户自己发现服务挂了。根因不是配置写错:
-  **GitHub Actions 的 schedule 是 best-effort**,短间隔被丢得最狠。它把一个可靠性承诺建在
-  尽力而为的调度上,而**没有任何东西会在这个前提失效时报错** —— 维护规矩第 2 条的活标本。
-  留着比没有更糟:它让人以为有人看着。
-  **本条已收敛,但不是靠告警补上的**(2026-08-04):`/metrics` 已上;**采集刻意不在 Mica 的
-  部署里**(示例栈在 `deploy/monitoring/`,谁抓是运维的决定);**告警已拍板不做**。所以标题
-  这句"挂了只能靠人发现"到今天**仍然字面为真** —— 它现在是一个被接受的代价,不是待办。
-  **删除同时丢掉的两样,别忘了**:① 应用层拨测;② **TLS 证书过期检查**(见下条)。
-  ②和应用监控不是一回事,Prometheus 本体也不覆盖(要 blackbox_exporter),而 ACME 卡死是
-  **静默的全站故障**。(M) `[需后端]`
-  〔08-03 故障复盘,存这里免得重查:同机跑 `docker build`(neostor 的 vite + cargo,~1.4G)
-  把 3.5G 无 swap 的机器压到 load 23 / IO 压力 98%,所有健康探针卡在 D 状态 → api/pg 标
-  unhealthy,Mica 进程本身没死。已加 4G swap(`vm.swappiness=10`,写进 fstab)作缓冲;
-  **真正的解是把构建挪走**。〕
+- 🟡 **备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**(2026-07-30)—— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,而它被一条刻意的安全边界挡着**:CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练,得在节点上装一条新的 pinned 命令 + 一把新 key —— 那是生产侧的凭据/策略变更(deploy.yml 自己写着 CI「may READ the fence that limits it, never install it」),**该由用户决定并执行**,不该由 agent 代办。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)`[等用户]`
 - 🆕 **Traefik:证书过期重新变成无人看守 + 配置仍不在仓库**(2026-08-04 更新)——
-  ~~`uptime.yml` 每天查两域名(app + s3)证书剩余有效期,< 10 天即告警~~ **该 workflow 已删**
-  (上一条),所以**证书过期这条线又空了**。这一半本来是工作正常的:证书是天级的,即便退化到
+  ~~`uptime.yml` 每天查两域名(app + s3)证书剩余有效期,< 10 天即告警~~ **该 workflow 已于
+  2026-08-04 删除**(它声称 `cron: */15` 拨测,实测 21 小时只跑了 12 次而非 84 次 —— GitHub
+  Actions 的 schedule 是 best-effort,08-03 那次故障窗口它一次都没跑),所以**证书过期这条线
+  又空了**。这一半本来是工作正常的:证书是天级的,即便退化到
   每 1–3.5 小时跑一次也完全够用 —— 删掉是删应用拨测的连带损失,不是因为它不好使。
   重建时它属于 blackbox 探测那一档,不是 `/metrics` 那一档 —— 而 **blackbox 探测已拍板不做**
   (2026-08-04)。所以这条线是**明知空着**,不是忘了。
   **残留照旧**:Traefik 配置本体在仓库外未纳管;ACME 卡死那类故障仍靠 `deploy.md:86` 的
-  手动 runbook。(S,external)
+  手动 runbook。
+  **⚠️ 但证书这半和被否决的应用拨测不是一回事**:应用拨测要分钟级,GH Actions 给不了;
+  证书是**天级**的,那 14% 的触发率对它绰绰有余。两者当初被归成一档一起砍了,约束却完全不同。
+  后果也不对称 —— 证书过期 = **全站不可访问**,而现在没有任何东西在看。(S,external)`[等用户]`
 - 🆕 **provisioning 层不存在:「给台新机器就能起全套」今天做不到**(2026-08-02 写下方案,未实施)——
   仓库里只有 `deploy/docker-compose.yml`;Traefik、`/data/mica` 目录、`.env`、受限部署账号与
   `/usr/local/sbin/mica-deploy`、ACR 登录全是当年手工装的,没有一条能重放的路径(上面 Traefik
@@ -67,7 +56,7 @@
   0.13.6 为送一行 compose 配置付了一次完整 Windows 构建 + 给所有桌面用户推了个空更新,
   0.13.7 因单个 `images (cli)` job 挂掉整版作废。症状、拆分方案与优先级在 `docs/cd-plan.md`。
   **刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
-  没走过就写 IaC 等于把猜测固化。(L)
+  没走过就写 IaC 等于把猜测固化。(L)`[等用户]`
   **2026-08-06 缩掉一块**:要人肉配的凭据从三样降到**零**(v0.13.16)—— `JWT_SECRET`
   服务端首启自铸存库;`POSTGRES_PASSWORD` 默认(两份 compose 都不发布 postgres 端口,安全);
   **S3 那对也默认了 —— 这一个不安全,是用户当天明确拍板的取舍**:rustfs `:9000` 有意对外,
@@ -168,55 +157,6 @@
 
 - 🟡 **cli 测试 + 覆盖率度量**(2026-07-23:起步)—— 原 `crates/cli` 零测试 + 无覆盖率工具。**已做**:9 个纯逻辑单测(`url_file_name`/`slugify`/`sanitize_rel` 路径防穿越/`workspace_dir`/`mirror` 备份 reconcile 增删剪/`Config` serde),`ci.yml` 测试步补 `-p mica-cli`(进 CI),`just coverage`(`cargo llvm-cov`,不入 CI 门)。**残留**:REST `Client` 方法需活服务端未测;`config_path/load/save` 走进程级 env + 真实用户配置目录,未注入点故略(用 serde 落盘形状覆盖)。覆盖率数字化了但远非高覆盖。(S)
 - 🆕 **Linux 桌面在仓库但从不在 CI 构建**(low) —— `linux/` runner + 托盘降级逻辑在库,CLAUDE.md 还为它写了约束,但 CI/release 都无 `flutter build linux` → 编译债不可见。flaky 债本身很轻(仅 2 个带理由 `#[ignore]`)。(M)
-- 🟡 **可观测性:`/metrics` + dashboard 已上,抓取器移出部署改为示例栈,告警不做,缺机外黑盒探测**(2026-08-04)——
-  ~~仅结构化日志,无 /metrics~~ ✅ 已做。**顺带修正原条目的两处错**:它写 `telemetry.rs`,
-  而那文件在 `crates/infra` 不在 api-server,且只有 **12 行**——只初始化 tracing 的输出格式,
-  没有任何计数器。所以起点不是「有 telemetry 但没暴露」,是**什么都没数**。
-  已落地:自研 exporter(`api-server/src/metrics.rs`,**不引第三方 metrics 库** —— 文本格式
-  + 计数器 map 约 150 行,CLAUDE.md「粘合层用成熟包」针对的是要背三套平台原生层的情形,
-  这里没有那个乘数)。指标选的是**能解释 08-03 那次故障**的:HTTP 请求数/延迟直方图(按
-  **路由模式**打标签,不是原始路径 —— 实测两个不同 UUID 合并成一条 `{workspace_id}`,
-  爬虫撑不爆基数)、**PG 连接池 idle/in_use**(那次的真实症状是 acquire 3.3s)、WS 连接数
-  (drop guard,提前返回或 panic 都不会漏计)、build_info。
-  **暴露方式是结构性的**:挂在顶层 `/metrics` 而非 `/api` 下,nginx 只转发 `/api|/ws|/s|`
-  两个邮件链接,所以公网够不到。**实测机制与直觉相反**:公网 `GET /metrics` **不是 404**,
-  是 SPA 兜底 `try_files` 返回 **200 + index.html**(text/html,不含任何 `mica_` 序列)。
-  安全结论不变,但「它会 404」是会被人当依据的半对说法。
-  采集:**不在 Mica 的部署里**(2026-08-04 用户拍板:「prometheus 不是必须的,属于可选项」)。
-  它先是作为一个 service 进了 prod compose,当天就被摘出来 —— `/metrics` 是应用的一部分,
-  谁抓、留多久、谁能看是运维的决定;分开之后监控栈升级/挂掉/写满磁盘都带不走应用,而已经有
-  Prometheus 的人可以直接指过来。示例栈(prometheus + grafana,含 provisioning 好的数据源)
-  在 `deploy/monitoring/`,以**外部网络**接进 Mica 的 compose 网络 —— 那是通往 `/metrics`
-  的唯一路径。两个 UI 都只绑 127.0.0.1,看图走 SSH 隧道。
-  **2026-08-04 二轮补齐(5 族 → 23 族,80 条序列)**,按「这个产品会怎么坏」而不是「监控
-  系统通常有什么」选:
-  ① **CRDT 完整性**`mica_crdt_integrity_failures_total{kind}` —— 红线 #1 是「绝不静默分歧」,
-  而被拒绝的更新此前只是一行日志。**刻意以 0 值序列出现**:只在触发后才存在的计数器无法在
-  触发前配告警,而那正是唯一重要的时刻(`absent()` 规则是不这么做的补丁);
-  ② **push 成本**`mica_crdt_push_{duration_seconds,bytes_total,rejected_total}` —— 写放大
-  那条从此有数,不再是争论;③ **客户端落后**`mica_crdt_lag_notices_total`;
-  ④ **池 acquire 探针**`mica_db_acquire_probe_seconds` —— idle/in_use 是 15s 采样的瞬时
-  gauge,会在两次采样间漏掉尖峰,而 08-03 的真实症状正是「acquire 3.3s」。**是探针不是全量
-  埋点**(sqlx 在每个 `fetch_*` 内部隐式 acquire,全量要动所有调用点),名字里写明了;
-  ⑤ **进程 RSS / FD**(读 `/proc`,Linux only —— Windows 开发机**省略该序列而不是报 0**,
-  报 0 会被读成「没用内存」);⑥ **in-flight 请求数**;⑦ **blob GC** sweeps/scanned/deleted/
-  bytes_freed/failures(日志里本来就有这些数字);⑧ **容量**:users/workspaces/documents 计数 +
-  `mica_storage_bytes{scope="total"}` + **每工作区** `mica_workspace_bytes_used{workspace_id}`
-  + `mica_workspace_info{workspace_id,name}` + 生效中的配额值,DB 快照缓存 60s(抓取每 15s,
-  不能让「看系统」变成系统的负载),查询失败**返回陈旧值而非丢序列**(丢序列看起来和「归零了」
-  一模一样)。
-  **per-workspace 这一版是纠错**:第一版只发聚合(总量 + 最大的那个),理由是「工作区数量无界」。
-  错在原则上 —— **exporter 只暴露事实,策略归告警规则**,node_exporter 从不预先滤掉「还没满的
-  盘」。预筛的代价具体有三:阈值被烤进二进制(改一次要重新部署)、**丢历史**(工作区跨过阈值才
-  突然出现,于是算不出增长速率,而增长速率是唯一能提前预警的东西)、画不出「用量前 N」。名字走
-  **info metric** 而不是打在每个样本上,否则一次改名就会把序列历史劈成两半。基数上限 1000 是
-  **上限不是过滤**,按用量降序,撞上了由 `mica_workspace_series_truncated` **明说**。
-  容量 gauge 与配额执行是**同一张表上的两条 SQL**=典型双表示,`the_capacity_gauge_matches_
-  what_the_quota_enforces` 把两者钉在一起。
-  **残留**:① **告警规则与通知通道:已拍板不做**(2026-08-04 用户决定 —— 单人自托管、
-  没有值班轮转,一条没人 ack 的告警和没有告警区别有限);
-  ② **node 级指标**(CPU/磁盘/内存)要 node_exporter;③ **外部黑盒探测**(含 TLS 证书剩余
-  天数)必须跑在这台机器之外 —— 08-03 那次整机 IO 饥饿,同机采集器一样会被饿死。(残留 M)
 - **可选/later 基建:Redis、OTel、索引块表** —— 索引块表是搜索/反链/分析的底座(architecture.md)。(L) `[需后端]`
 
 ## 产品与公开发布合规 🆕
