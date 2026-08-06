@@ -67,6 +67,19 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   且直接标记为已验证(否则全新自托管装不起来)。每工作区字节配额默认 **1 GiB**
   (`MICA_WORKSPACE_QUOTA_BYTES`)。**注意**:节点 `.env` 里设了还不够 ——
   `deploy/docker-compose.yml` 的 `environment:` 是显式允许清单,没列进去的变量到不了进程。
+- **部署零凭据可起**(2026-08-06,v0.13.16):`JWT_SECRET` 不设时服务端首启自铸 32 字节存进
+  `server_secrets`(migration 0020)、之后复用,设了则仍走严格校验;`POSTGRES_PASSWORD` 默认
+  `mica`(两份 compose 都不发布 postgres 端口,安全);**S3 那对也给了默认**
+  `mica`/`mica-default-not-a-secret` —— ⚠️ **这一个不安全,是用户 2026-08-06 明确拍板的取舍**:
+  rustfs `:9000` 有意对外(浏览器直接 presign),默认值又写在公开仓库里,等于装机不改就是
+  可写的桶。所以生产环境用着默认值时 `AppState::new` 会 `warn!`(`default_s3_secret_in_use`)——
+  只写在文档里的风险等于没写。另:`rustfs-init` 负责建桶(RustFS 是文件系统后端、自己不建;
+  以前是埋在 Traefik 章节里的一句手工 `mkdir`,快速上手的人看不到,后果是全栈 healthy 但上传全 404)。
+  ⚠️ **"没设"在容器里有两种形态,别只测其中一种**:compose 的 `${VAR:-}` 把未设变量解析成
+  **空字符串**,`env::var` 因此返回 `Ok("")` 而不是 `Err` —— 自铸功能第一版就栽在这:手跑二进制
+  (变量真的不存在)能自铸,一进 compose 全部 crash-loop。**空白必须等同于未提供**
+  (`resolve_jwt_secret`)。另外 `${VAR:?}` 会**先于**进程拒绝空值,改 compose 时一并注意。
+  本地(离线)模式**不涉及**:它走 FFI 直连本地库,没有 session/token 这一层。
 - **op 模型已完全退役**(S0–S5,migration 0016):`document_snapshots` / `document_updates` /
   `document_versions` 三表已删,文档内容只存在于 `document_yrs_base`。
 - **web 端有 e2e 了**(`just web-e2e` + CI `web-e2e` job):浏览器里的 yjs 与服务端 yrs 经真 WS

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mica_infra::{AiConfig, AppConfig, Mailer, S3Config};
+use mica_infra::{AiConfig, AppConfig, Environment, Mailer, S3Config};
 use serde::Serialize;
 use sqlx::PgPool;
 use tokio::sync::RwLock;
@@ -104,6 +104,20 @@ impl AppState {
       !config.jwt_secret.trim().is_empty(),
       "AppState built with an empty jwt_secret — ensure_jwt_secret() was not called"
     );
+    // The object store's default credentials are published (see
+    // `DEFAULT_S3_SECRET_KEY`) and :9000 is internet-facing, so an operator who
+    // never touched them is running a bucket anyone can write. That trade is
+    // deliberate — it buys a quickstart with nothing to fill in — but it must
+    // not be silent on a production node, where documentation would otherwise be
+    // the only place it was ever mentioned.
+    if config.environment == Environment::Production && mica_infra::default_s3_secret_in_use() {
+      tracing::warn!(
+        "S3_SECRET_KEY is the published default — anyone can read and write this \
+         instance's files over :9000. Set S3_ACCESS_KEY and S3_SECRET_KEY in \
+         .env.prod (openssl rand -hex 32) and restart."
+      );
+    }
+
     Self {
       config: Arc::new(config),
       db,

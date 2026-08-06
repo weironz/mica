@@ -35,13 +35,22 @@ mkdir -p /data/mica && cd /data/mica
 curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/docker-compose.single.yml
 curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/.env.prod.example -o .env.prod
 
-vi .env.prod          # UNCOMMENT SERVER_IP (it ships commented out) and fill
-                      # JWT_SECRET (ships empty). `compose config` refuses to
-                      # resolve until both are set. MICA_VERSION is already
-                      # pinned to a release; bump it when you want a newer one.
-                      # Secrets: openssl rand -hex 32
+vi .env.prod          # Two lines to edit by hand:
+                      #   SERVER_IP     — UNCOMMENT it; the address BROWSERS use
+                      #   MICA_VERSION  — ships EMPTY on purpose; pick a release
+                      #                   from github.com/weironz/mica/releases
+                      # `compose config` refuses to resolve until both are set.
+
 docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
+
+> **The object-store credentials default to a value published in this
+> repository**, and `:9000` is internet-facing. That is what makes the block
+> above two lines instead of five — but on any node strangers can reach, set
+> `S3_ACCESS_KEY` and `S3_SECRET_KEY` before the first start, or anyone who
+> reads the repo can read and write your files. The api warns about it in the
+> log on every production start; see
+> [Secrets](#secrets-what-you-generate-and-what-generates-itself).
 
 Already have the repo checked out on the server? Then it is just
 `cp deploy/.env.prod.example .env.prod` and point `-f` at
@@ -91,6 +100,87 @@ reload picks up new releases (asset files are content-hashed).
   collaboration; without them rooms silently fall back to errors.
 - RustFS CORS is pinned to the app origin (`http://SERVER_IP`), no longer
   `*` as in dev.
+- **`rustfs-init` creates the bucket.** RustFS is filesystem-backed — a bucket
+  is a directory under `/data` — and it creates none on its own. Without that
+  one-shot service the stack comes up entirely healthy and then 404s every
+  upload, which is the worst shape a missing step can have: nothing looks
+  wrong until a user tries to paste an image. It used to be a manual
+  `docker exec … mkdir` documented only in the Traefik section, so a
+  quickstart reader never saw it. It runs as root to `chown` the directory to
+  the `rustfs` user, and `rustfs` waits on
+  `service_completed_successfully`.
+
+## Secrets: what you generate, and what generates itself
+
+An operator can start the stack without setting any credential. Two of the three
+are safe that way for reasons that hold on their own; the third is a deliberate
+trade, and it is the one to read.
+
+| Credential | Default | Safe to leave? |
+| --- | --- | --- |
+| `JWT_SECRET` | **none — the server mints its own** | Yes. There is no published value to leak; every install's key differs. |
+| `POSTGRES_PASSWORD` | `mica` | Yes. Neither compose file publishes a postgres port, so the database is reachable only from the other containers on the stack's own network. |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `mica` / `mica-default-not-a-secret` | **No, not on a public node.** RustFS serves `:9000` to the internet on purpose — browsers presign against it directly — so anyone who reads this repository can read and write the files of any install that kept the default. |
+
+The last row is the honest cost of a two-line quickstart: it removes the last
+thing an operator had to generate, and in exchange a node left alone has a
+bucket the internet can write. The api therefore warns on every production
+start while the default is in use — a risk that lives only in documentation is
+one nobody meets until it matters:
+
+```
+S3_SECRET_KEY is the published default — anyone can read and write this
+instance's files over :9000. Set S3_ACCESS_KEY and S3_SECRET_KEY in
+.env.prod (openssl rand -hex 32) and restart.
+```
+
+Set both before the **first** start if you are going to set them. Changing them
+afterwards means reconciling what RustFS already stored under the old
+credentials, which is far easier on an empty volume.
+
+### How the signing key mints itself
+
+On startup the api runs `ensure_jwt_secret` (`crates/infra/src/db.rs`) inside a
+transaction against `server_secrets`, a one-row table added by migration 0020:
+
+1. `JWT_SECRET` set in the environment → validated as before (32+ characters, no
+   template placeholder) and used as-is. Nothing is written to the database.
+2. Not set, no row yet → generate 32 random bytes, store the hex, use it.
+3. Not set, row exists → reuse it.
+
+Step 3 is why sessions survive `docker compose up -d --pull always`: the key
+lives with the data, not with the process.
+
+**Why the database and not a file.** Two constraints, both from the deployment
+shape rather than from taste. The api container mounts no volume, so a file
+would be recreated on every image upgrade — silently logging out every user.
+And the Traefik stack can run more than one api replica; two replicas writing
+two files would each reject the other's tokens. One row is shared by
+construction.
+
+**Why this is not the `change-me` mistake again.** No default is published.
+The key is generated on your machine, differs on every install, and cannot be
+looked up in this repository. The old hole was shipping a working constant; the
+fix is shipping nothing at all. Gitea, Vaultwarden and AFFiNE all treat the
+signing key as the program's responsibility for the same reason — though Gitea
+shows the cost of getting there late: with no `SECRET_KEY` set it still falls
+back to a hardcoded constant, because it cannot rotate without breaking
+existing installs.
+
+**Rotation.** Clear the stored row and restart; every existing access token
+stops verifying, which is the point.
+
+```sh
+docker exec mica-postgres-1 psql -U mica -d mica -c "TRUNCATE server_secrets;"
+docker compose --env-file .env.prod -f docker-compose.single.yml restart api
+```
+
+**Upgrading an existing install.** Nothing to do — a `JWT_SECRET` already in
+your `.env.prod` keeps working unchanged. Do **not** remove `POSTGRES_PASSWORD`
+from an `.env.prod` that already has one: the volume keeps whatever password
+`initdb` ran with, so dropping the line points the api at `mica` while the
+database still expects the old value. Changing it later requires an
+`ALTER USER` by hand.
 
 ## Data & backups
 
@@ -203,9 +293,9 @@ for both the app (`DOMAIN`) and RustFS (`S3_DOMAIN`, e.g.
 `s3.mica.cloudcele.com` — needs its own DNS A record; presigned URLs embed
 it and SigV4 survives the proxy because Traefik forwards Host unchanged).
 Ship images by `docker save | scp | docker load` when the server can't
-reach Docker Hub. First boot: create the bucket once
-(`docker exec mica-rustfs-1 mkdir -p /data/<bucket>` + restart) — RustFS is
-filesystem-backed. If the ACME cert stays on TRAEFIK DEFAULT CERT after a
+reach Docker Hub. (Creating the bucket is no longer a manual first-boot step —
+the `rustfs-init` service does it; see below.) If the ACME cert stays on
+TRAEFIK DEFAULT CERT after a
 DNS change, restart Traefik to clear its issuance backoff. The API must
 bind `HTTP_ADDR=0.0.0.0:8080` in containers (compose files set it).
 

@@ -38,7 +38,10 @@ services:
     logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mica}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.prod}
+      # Defaulted, and safe to default: this service publishes no port, so the
+      # database is reachable only from the other containers on this stack's
+      # network. Override it in .env.prod if you expose the database at all.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mica}
       POSTGRES_DB: ${POSTGRES_DB:-mica}
     volumes:
       - mica-prod-postgres:/var/lib/postgresql/data
@@ -47,6 +50,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # RustFS is filesystem-backed: a "bucket" is a directory under /data, and it
+  # creates none itself. Without this the stack comes up perfectly healthy and
+  # then 404s every upload — which used to be a manual `docker exec … mkdir`
+  # buried in the Traefik section of docs/deploy.md, i.e. a step a quickstart
+  # reader never saw. Reuses the rustfs image (already pulled, and it carries the
+  # `rustfs` user this has to chown to) rather than adding one for `mkdir`.
+  rustfs-init:
+    image: rustfs/rustfs:1.0.0-beta.6
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mkdir -p /data/${S3_BUCKET:-mica} && chown rustfs:rustfs /data/${S3_BUCKET:-mica}"]
+    user: root
+    volumes:
+      - mica-prod-rustfs:/data
 
   rustfs:
     image: rustfs/rustfs:1.0.0-beta.6
@@ -60,12 +77,21 @@ services:
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: "false"
-      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?set in .env.prod}
-      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?set in .env.prod}
+      # DEFAULTED — and unlike the postgres password, this one IS internet-facing:
+      # the ports above publish :9000 so browsers can presign against it directly.
+      # A default therefore means every install that leaves it alone shares one
+      # key, and that key is published in this repository. That is a deliberate
+      # trade for a one-command quickstart, NOT a safe default: change both on
+      # any instance whose :9000 is reachable by people you do not trust.
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-mica}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
       # Browsers presign-PUT/GET directly against :9000 from the app origin.
       RUSTFS_CORS_ALLOWED_ORIGINS: "http://${SERVER_IP:?set in .env.prod}"
     volumes:
       - mica-prod-rustfs:/data
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
 
   # MICA_VERSION has no default on purpose: a quickstart that silently installs
   # whatever version happened to be pinned here months ago is worse than one that
@@ -84,7 +110,7 @@ services:
       # Development even in prod (config.rs `Environment`).
       APP_ENV: production
       HTTP_ADDR: 0.0.0.0:8080
-      DATABASE_URL: postgres://${POSTGRES_USER:-mica}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mica}
+      DATABASE_URL: postgres://${POSTGRES_USER:-mica}:${POSTGRES_PASSWORD:-mica}@postgres:5432/${POSTGRES_DB:-mica}
       # NOT `:?` any more: blank is legitimate. The server mints its own signing
       # key on first boot and keeps it in `server_secrets` — refusing to start on
       # a blank value here would make that unreachable. A value the operator DOES
@@ -93,8 +119,8 @@ services:
       # Must be BROWSER-reachable — presigned URLs embed this host.
       S3_ENDPOINT: http://${SERVER_IP}:9000
       S3_BUCKET: ${S3_BUCKET:-mica}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-mica}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
       # S3_PUBLIC_BASE_URL stays UNSET: the bucket is private, GETs are signed.

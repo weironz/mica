@@ -85,6 +85,17 @@
   0.13.7 因单个 `images (cli)` job 挂掉整版作废。症状、拆分方案与优先级在 `docs/cd-plan.md`。
   **刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
   没走过就写 IaC 等于把猜测固化。(L)
+  **2026-08-06 缩掉一块**:要人肉配的凭据从三样降到**零**(v0.13.16)—— `JWT_SECRET`
+  服务端首启自铸存库;`POSTGRES_PASSWORD` 默认(两份 compose 都不发布 postgres 端口,安全);
+  **S3 那对也默认了 —— 这一个不安全,是用户当天明确拍板的取舍**:rustfs `:9000` 有意对外,
+  默认值又在公开仓库里,装机不改就是可写的桶,因此生产用着默认值会 `warn!`。
+  同批还补了 `rustfs-init` 建桶(以前是埋在 Traefik 章节的手工 `mkdir`,快速上手看不到 →
+  全栈 healthy 但上传全 404)。主干没动(Traefik / 受限部署账号仍无可重放路径),
+  但「新机器起栈」现在只要填 `SERVER_IP` + `MICA_VERSION`。
+  **剩下的真问题不是"要填几个变量",是那个不安全的默认** —— 要彻底解掉,得让 `:9000` 不再
+  对外(nginx 同源反代 S3),那样这对凭据就能像 PG 口令一样安全地默认。当时评估为工作量与风险
+  都更大(SigV4 经代理、CORS、Traefik 栈同步),没做。文档见 `docs/deploy.md` 的
+  “Secrets: what you generate, and what generates itself” 一节。
 
 ## 数据生命周期与增长 🆕
 

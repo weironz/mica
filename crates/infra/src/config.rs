@@ -185,15 +185,7 @@ impl AppConfig {
     // charged every self-hoster a chore with no decision in it. Self-minting
     // closes the hole differently and better: there is no default to leak,
     // because every instance's value is its own.
-    let jwt_secret = match env::var("JWT_SECRET") {
-      Ok(raw) => {
-        // Explicitly set: hold it to the same bar as before. An operator who
-        // says what the key is has to say something defensible.
-        validate_jwt_secret(&raw, environment)?;
-        raw
-      }
-      Err(_) => String::new(),
-    };
+    let jwt_secret = resolve_jwt_secret(env::var("JWT_SECRET").ok(), environment)?;
 
     // 1h default (was 24h). Because the client refreshes transparently, a
     // shorter access token shrinks the window in which a token that SHOULD be
@@ -344,6 +336,39 @@ pub enum ConfigError {
   InvalidSocketAddr { source: std::net::AddrParseError },
 }
 
+/// Turn the raw `JWT_SECRET` environment reading into the value to sign with,
+/// where an empty string means "the server will mint one".
+///
+/// Split out from [`AppConfig::from_env`] so the BLANK case is testable without
+/// a process-wide environment, because blank is the case that matters and the
+/// one that shipped broken: `from_env` used to send `Ok("")` straight to
+/// [`validate_jwt_secret`], which refuses empty in every environment, so the api
+/// exited at startup with `JWT_SECRET is empty` instead of minting a key.
+///
+/// Blank is not an edge case — it is what the documented install PRODUCES.
+/// `deploy/.env.prod.example` ships the key with an empty value, and compose
+/// resolves `${JWT_SECRET:-}` to an empty string rather than leaving the
+/// variable unset, so the container always sees `JWT_SECRET=""`. Only a hand-run
+/// binary with the variable genuinely absent took the mint path; every real
+/// deployment took the refuse path. Absent and blank therefore have to mean the
+/// same thing.
+fn resolve_jwt_secret(
+  raw: Option<String>,
+  environment: Environment,
+) -> Result<String, ConfigError> {
+  match raw {
+    // Explicitly set to something: hold it to the same bar as before. An
+    // operator who says what the key is has to say something defensible.
+    Some(value) if !value.trim().is_empty() => {
+      validate_jwt_secret(&value, environment)?;
+      Ok(value)
+    }
+    // Unset, empty, or whitespace — nothing was supplied. `ensure_jwt_secret`
+    // fills it in from the database.
+    _ => Ok(String::new()),
+  }
+}
+
 /// Is this `JWT_SECRET` fit to sign tokens?
 ///
 /// A free function so the policy is testable without building a whole
@@ -423,12 +448,65 @@ mod jwt_secret_strength {
     assert!(validate_jwt_secret("change-me-in-development", Environment::Development).is_ok());
   }
 
-  // `JWT_SECRET=` reads as SET — env::var returns Ok(""). That is the one shape
-  // that has to fail even in development.
+  // The validator itself still refuses empty in every environment — nothing may
+  // sign with an empty key. What changed is that `resolve_jwt_secret` no longer
+  // ASKS it about a blank value; see the tests below.
   #[test]
   fn empty_is_refused_in_every_environment() {
     assert!(validate_jwt_secret("", Environment::Development).is_err());
     assert!(validate_jwt_secret("   ", Environment::Production).is_err());
+  }
+}
+
+/// The blank case, which is the one the deployment actually produces.
+///
+/// These exist because the feature shipped broken in exactly the shape nothing
+/// covered: the end-to-end check that "proved" self-minting ran a binary with
+/// `JWT_SECRET` genuinely UNSET, while compose always sets it to an empty
+/// string. Every container therefore hit `JWT_SECRET is empty` and crash-looped.
+/// A test over the real input shape catches that; one over the happy path does
+/// not.
+#[cfg(test)]
+mod jwt_secret_resolution {
+  use super::{resolve_jwt_secret, Environment};
+
+  const GOOD: &str = "0123456789abcdef0123456789abcdef";
+
+  /// What `docker compose` hands the container for an unset `JWT_SECRET`, and
+  /// what `deploy/.env.prod.example` ships. Must mean "mint one", not "refuse".
+  #[test]
+  fn blank_means_mint_it_in_production() {
+    let resolved = resolve_jwt_secret(Some(String::new()), Environment::Production)
+      .expect("a blank JWT_SECRET must reach the self-minting path, not fail startup");
+    assert!(resolved.is_empty(), "blank must resolve to the mint sentinel");
+  }
+
+  /// A value that is only whitespace is not a key either.
+  #[test]
+  fn whitespace_means_mint_it_too() {
+    let resolved = resolve_jwt_secret(Some("   ".into()), Environment::Production).unwrap();
+    assert!(resolved.is_empty());
+  }
+
+  #[test]
+  fn absent_means_mint_it() {
+    let resolved = resolve_jwt_secret(None, Environment::Production).unwrap();
+    assert!(resolved.is_empty());
+  }
+
+  /// The operator-supplies-it path is untouched: a real value passes through.
+  #[test]
+  fn a_supplied_value_is_used_as_is() {
+    let resolved = resolve_jwt_secret(Some(GOOD.into()), Environment::Production).unwrap();
+    assert_eq!(resolved, GOOD);
+  }
+
+  /// And a weak one still refuses to boot — treating blank as absent must not
+  /// have widened the door for a value that WAS supplied.
+  #[test]
+  fn a_supplied_weak_value_still_fails_production() {
+    assert!(resolve_jwt_secret(Some("short".into()), Environment::Production).is_err());
+    assert!(resolve_jwt_secret(Some("change-me".into()), Environment::Production).is_err());
   }
 }
 

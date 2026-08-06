@@ -123,11 +123,24 @@ mkdir -p /data/mica && cd /data/mica
 curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/docker-compose.single.yml
 curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/.env.prod.example -o .env.prod
 
-vi .env.prod          # UNCOMMENT SERVER_IP (ships commented out) and fill
-                      # JWT_SECRET (ships empty) — compose refuses to resolve
-                      # until both are set.  openssl rand -hex 32
+vi .env.prod          # UNCOMMENT SERVER_IP (ships commented out) and pick a
+                      # MICA_VERSION (ships empty). Compose refuses to resolve
+                      # until both are set.
 docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
+
+**You generate no secrets.** The server mints its own JWT signing key on first
+boot and stores it in the database, so sessions survive restarts and upgrades
+and no two installs share a key. Postgres publishes no port, so its password is
+defaulted too.
+
+⚠️ **The object-store credentials are defaulted to a value published in this
+repository, and `:9000` is internet-facing.** That is what makes the install two
+lines — and it means anyone who reads this repo can read and write the files of
+an install that kept the default. On a node strangers can reach, set
+`S3_ACCESS_KEY` and `S3_SECRET_KEY` in `.env.prod` before the first start
+(`openssl rand -hex 32`). The API warns in its log on every production start
+while the default is in use.
 
 Nothing is built — every image is pulled, so the server needs Docker and
 nothing else. Then open `http://<SERVER_IP>/`; migrations run at API startup.

@@ -11,4 +11,4 @@ pub use config::{AppConfig, Environment, SyncTuning};
 pub use db::{connect_pg_pool, ensure_jwt_secret, ping_pg_pool, run_migrations};
 pub use error::{ApiError, ApiResult};
 pub use mail::{LogMailer, Mail, Mailer};
-pub use storage::{PresignedUpload, S3Config};
+pub use storage::{default_s3_secret_in_use, PresignedUpload, S3Config, DEFAULT_S3_SECRET_KEY};

@@ -69,7 +69,9 @@ pub async fn ensure_jwt_secret(db: &PgPool, configured: &str) -> Result<String, 
         .unwrap_or_else(|| minted.clone());
     if stored == minted {
         tracing::info!(
-            "no JWT_SECRET configured — minted one for this instance and stored it              (server_secrets.jwt_secret). Sessions survive restarts; set JWT_SECRET              only if you want to supply your own."
+            "no JWT_SECRET configured — minted one for this instance and stored it \
+             (the `jwt_secret` row of `server_secrets`). Sessions survive restarts; \
+             set JWT_SECRET only if you want to supply your own."
         );
     }
     Ok(stored)

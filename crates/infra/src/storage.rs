@@ -6,6 +6,30 @@ use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// The `S3_SECRET_KEY` both compose files fall back to when the operator sets
+/// none (`${S3_SECRET_KEY:-…}`).
+///
+/// It exists so the quickstart is one command with nothing to fill in. It is NOT
+/// a secret: it is written in this file and in a public repository, and unlike
+/// the postgres password — which is safe to default because that service
+/// publishes no port — the object store IS published, on :9000, because browsers
+/// presign against it directly. Anyone who knows this constant can read and
+/// write the bucket of any install that kept it.
+///
+/// [`default_s3_secret_in_use`] is what makes that visible at runtime instead of
+/// only in documentation.
+pub const DEFAULT_S3_SECRET_KEY: &str = "mica-default-not-a-secret";
+
+/// Is this instance signing S3 requests with the published default?
+///
+/// Separate from [`S3Config::from_env`] so the caller can decide what to do
+/// about it — in practice, warn once at startup in production.
+pub fn default_s3_secret_in_use() -> bool {
+  env::var("S3_SECRET_KEY")
+    .map(|value| value == DEFAULT_S3_SECRET_KEY)
+    .unwrap_or(false)
+}
+
 /// Configuration for an S3-compatible object store (AWS S3, MinIO, etc.).
 ///
 /// Built from the environment; absent configuration disables the file
@@ -37,10 +61,17 @@ impl S3Config {
   /// Load from `S3_*` environment variables. Returns `None` when the required
   /// variables are missing, leaving file features disabled.
   pub fn from_env() -> Option<Self> {
-    let endpoint = env::var("S3_ENDPOINT").ok()?;
-    let bucket = env::var("S3_BUCKET").ok()?;
-    let access_key = env::var("S3_ACCESS_KEY").ok()?;
-    let secret_key = env::var("S3_SECRET_KEY").ok()?;
+    // `.ok()` alone would accept an EMPTY string: `env::var` returns `Ok("")`
+    // for `FOO=`, and compose resolves an unset `${FOO:-}` to exactly that. An
+    // empty key would configure S3 and then fail every upload with a signature
+    // error instead of leaving file features cleanly disabled. Same shape as the
+    // JWT_SECRET bug — see `config::resolve_jwt_secret`.
+    let non_blank = |name: &str| env::var(name).ok().filter(|v| !v.trim().is_empty());
+
+    let endpoint = non_blank("S3_ENDPOINT")?;
+    let bucket = non_blank("S3_BUCKET")?;
+    let access_key = non_blank("S3_ACCESS_KEY")?;
+    let secret_key = non_blank("S3_SECRET_KEY")?;
 
     let region = env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
     let presign_ttl_seconds = env::var("S3_PRESIGN_TTL_SECONDS")
