@@ -424,8 +424,22 @@
 - ~~🆕 **编辑器 op 管道 `catchError((_){})` 吞掉本应浮出的 outbox 写失败**~~ ✅ 已做(校准复核)—— `controller.dart` 现 `opFaultCount++` + `onOpFault?.call` 上浮,不再吞(红线 #1)。
 - ~~🆕 **云文档离线/未同步状态零指示**~~ ✅ 2026-07-26 完成(69ff98f 地基+信号 / 8e1318d 徽标 / 6832dea 心跳)—— 扒了 8 家(AFFiNE/SiYuan/Logseq/Anytype/Google Docs/Notion/Obsidian/AppFlowy)后定**最小形态**:三态克制徽标(已同步→**什么都不画**、同步中→faint 慢转圈、离线→cloud-off + tooltip),摆文档面包屑右上、**仅云工作区**显示。**不做数字计数**(同类无一家做)、**不可点击/不做手动同步**(AFFiNE/AppFlowy/Anytype 同样没有;mica 本就自动重连 + 自动 flush)。信号从 `CloudSyncSession` 四个真实转移点 emit,推导是纯函数 `deriveSyncPhase`(`sync_status.dart`,4 单测)。**关键补丁**:加了**心跳**(8s ping + 20s 帧静默看门狗)——否则拔网线是 TCP 半开、不发 WS close 帧,`_onDone` 永不触发 → 一直误判在线(用户实测拔线发现徽标不动才暴露);服务端 `ws.rs:267` 本就 `ping→pong`,零改动。〔"别人都没做"的印象来自 AppFlowy:它的 `sync_indicator.dart` 当前是**死代码**(重构后未挂载),且有未关闭的需求 #5729 求做回。〕
 
-## 客户端质量与兜底 🆕
-
+- ~~🆕 **页内查找输入框不接受粘贴与删除键**~~ ✅ **已做(2026-08-07)** —— **根因不是"输入框没拿到
+  焦点"**(症状读起来像,原条目也是这么猜的):焦点是对的,问题是**查找栏是编辑器那个 `Focus` 的
+  子节点**(`editor.dart` build 里 `Positioned(child: _buildFindBar())` 在 `Focus(onKeyEvent: _onKey)`
+  之内),输入框的按键**冒泡**到 `_onKey`,而 `_onKey` 的每一条分支改的都是**文档**。于是
+  Backspace 删的是文档(而且删的正是当前匹配 —— 那个选区是 `_revealFind` 自己设上去的),
+  Ctrl+V 走 `_pasteFromClipboard()`。**比报的更严重**:粘贴不是"粘不进去",是**粘进了正文、
+  覆盖掉当前匹配**。而「框里的内容能复制出去」是**巧合不是功能**:Ctrl+C 复制的是文档里那个
+  匹配,它的文本恰好等于查找词。
+  **修法是一行守卫**:`if (_findOpen && !_focus.hasPrimaryFocus) return KeyEventResult.ignored;`。
+  两个取舍都有理由:① 判 **primary focus** 而不是 `_findFocus.hasFocus` —— 查找栏的图标按钮
+  点一下也会拿焦点,那条路径同样吞键;② 用 `_findOpen` **收窄** —— 保证查找栏关着时行为逐字
+  不变。放行之后不必自己实现任何编辑行为:Backspace / 粘贴 / 全选都是
+  `DefaultTextEditingShortcuts` 给每个 `TextField` 的,**前提只是别在半路把事件吃掉**。
+  回归 `test/in_page_find_keys_test.dart` 3 条(退格、Ctrl+V、以及"栏关着时编辑器仍拥有退格"的
+  对照)。**实测证明修复必需**:把守卫短路掉,前两条立刻红(查找词还是 `world`、粘贴没进框),
+  对照那条仍绿。相邻 10 个编辑器/查找测试 50 条全过,`flutter analyze` 干净。(S)
 - ~~🆕 **i18n 漏网**~~ ✅ **已做(2026-08-05)** —— 两处都改了,而且形状和条目描述不同。
   ① **默认页名**:`kUntitledPage='未命名页面'` 是**持久化数据**不是界面文案 —— 服务端拒绝空
   view 名,所以新建页必须带名字,那串中文会进标题、进导出、进搜索。英文用户建页得到中文标题。

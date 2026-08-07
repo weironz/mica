@@ -1952,6 +1952,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // ---------------------------------------------------------------------------
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    // The find bar is a child of THIS Focus (see build), so its text fields and
+    // buttons bubble their key events up to here — and every branch below edits
+    // the DOCUMENT. That is how Backspace in the find field deleted document
+    // text, and Ctrl+V pasted over the current match instead of into the query
+    // (the match IS the document selection, courtesy of _revealFind).
+    // Bailing out costs nothing: the bar carries its own CallbackShortcuts for
+    // Escape / F3 / Shift+Enter, and everything else it needs (Backspace, paste,
+    // select-all…) is what DefaultTextEditingShortcuts gives any TextField —
+    // once the event is allowed to keep bubbling past us.
+    // Keyed on primary focus, not `_findFocus.hasFocus`, because the bar's icon
+    // buttons take focus when clicked and were swallowing keys the same way.
+    if (_findOpen && !_focus.hasPrimaryFocus) return KeyEventResult.ignored;
     if (!widget.canEdit) return KeyEventResult.ignored;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
