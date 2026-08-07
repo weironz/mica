@@ -40,7 +40,9 @@
    脑子里「必须 X 才能 Y」那类前提 —— 给出"几选一"前先问这些选项的**共同前提**验证过没有。
    参照系:AppFlowy(Flutter 同构)、AFFiNE(web/Yjs)。手段:调研子代理 + GitHub MCP 读真实源码。
    〔两次教训见 `docs/lessons.md#7`:mermaid 曾误以为"服务端渲染必须 headless 浏览器";
-   merman 的主题曾误以为"只能改 CSS"。〕
+   merman 的主题曾误以为"只能改 CSS"。第三次见 `docs/markdown-boundary-comparison.md`:
+   曾误以为"web 没 FFI 所以 markdown 必须两端各写一份",实际根因是**服务端要能解析**这条
+   产品选择 —— 两家同类都把 markdown 只放客户端,且都用现成解析器。〕
 
 ### 依赖豁免清单
 
