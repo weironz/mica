@@ -7261,9 +7261,25 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       color: MicaTheme.of(context).surface.base,
       child: MouseRegion(
         onEnter: (_) => setState(() => _navHovered = true),
-        onExit: (_) => setState(() => _navHovered = false),
+        // Leaving the sidebar RELEASES the located node, so the top New
+        // buttons go back to creating at the workspace root. The whole pane,
+        // not just the tree: moving from a row up to the New buttons must keep
+        // the location you just set, or the feature could never be used.
+        //
+        // The row highlight is unaffected — see `activeId`, which falls back to
+        // the open document. Releasing is about where new pages LAND.
+        onExit: (_) => setState(() {
+          _navHovered = false;
+          _focusedNavId = null;
+          _rootFocused = true;
+        }),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          // Tighter than the 16 all round it used to be. The sidebar's scarce
+          // axis is VERTICAL — every point spent above the tree is a row of
+          // pages you cannot see — so the vertical padding is cut hardest and
+          // the horizontal is left roomy enough that rows keep a comfortable
+          // hit area away from the window edge.
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -7318,9 +7334,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               // you happen to have selected. Same reason home is on the row
               // above rather than inside the workspace section.
               _searchBox(context),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
               Divider(height: 1, color: MicaTheme.of(context).border.subtle),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -7403,14 +7419,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ),
                   ),
               ],
-              const SizedBox(height: 12),
-              // Section label + actions (design 03). The old row was four equal
-              // icons, which read as a toolbar competing with the tree below it.
-              // Now the tree gets a quiet label and only its PRIMARY action —
-              // new page — stays visible; refresh / recycle bin / new folder
-              // move into the overflow. Nothing is removed: they are one click
-              // deeper, not gone.
               const SizedBox(height: 10),
+              // Section label + actions. This was a label plus ONE visible
+              // action (new page) with refresh / new folder / recycle bin
+              // folded into a `⋯` overflow, on the theory that four equal icons
+              // read as a toolbar competing with the tree.
+              //
+              // In use that traded the wrong way round: new folder is a primary
+              // action here (the tree is folders), and burying it behind a menu
+              // costs a click on the sidebar's whole reason for existing. So
+              // new page + new folder + refresh are all visible now, and the
+              // overflow is gone rather than left holding one stray item — the
+              // recycle bin moved down beside the account row, which is where
+              // the other "not part of the tree" entries live.
               Row(
                 children: [
                   Padding(
@@ -7426,7 +7447,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ),
                   ),
                   const Spacer(),
-                  if (canEdit)
+                  if (canEdit) ...[
                     IconButton(
                       tooltip: context.l10n.newPage,
                       visualDensity: VisualDensity.compact,
@@ -7436,67 +7457,27 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onPressed: () => _createLocated(folder: false),
                       icon: const Icon(Icons.add, size: 18),
                     ),
-                  PopupMenuButton<String>(
-                    tooltip: context.l10n.sidebarMoreActions,
-                    icon: Icon(
-                      Icons.more_horiz,
-                      size: 18,
-                      color: MicaTheme.of(context).text.muted,
-                    ),
-                    padding: EdgeInsets.zero,
-                    onSelected: (value) {
-                      switch (value) {
-                        case 'refresh':
-                          widget.onRefresh();
-                        case 'recycle':
-                          _openRecycleBin();
-                        case 'newFolder':
-                          _createLocated(folder: true);
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                        value: 'refresh',
-                        child: Row(
-                          children: [
-                            const Icon(Icons.refresh, size: 18),
-                            const SizedBox(width: 10),
-                            Text(context.l10n.recycleRefresh),
-                          ],
-                        ),
+                    IconButton(
+                      tooltip: context.l10n.newFolder,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _createLocated(folder: true),
+                      icon: const Icon(
+                        Icons.create_new_folder_outlined,
+                        size: 18,
                       ),
-                      if (canEdit) ...[
-                        PopupMenuItem(
-                          value: 'newFolder',
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.create_new_folder_outlined,
-                                size: 18,
-                              ),
-                              const SizedBox(width: 10),
-                              Text(context.l10n.newFolder),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'recycle',
-                          child: Row(
-                            children: [
-                              const Icon(Icons.delete_outline, size: 18),
-                              const SizedBox(width: 10),
-                              Text(context.l10n.recycleBinTitle),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ],
+                    ),
+                  ],
+                  IconButton(
+                    tooltip: context.l10n.recycleRefresh,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onRefresh,
+                    icon: const Icon(Icons.refresh, size: 18),
                   ),
                 ],
               ),
               const SizedBox(height: 2),
               Expanded(child: _pageTree(context, canEdit)),
-              const Divider(height: 24),
+              const Divider(height: 16),
               // AI entry points exist only when the feature is enabled in
               // Settings AND a provider is configured.
               if (widget.showAi) ...[
@@ -7510,13 +7491,32 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ),
                 const SizedBox(height: 12),
               ],
-              _accountTile(context),
+              // Account + recycle bin share the bottom row. The bin is not part
+              // of the page tree — it is where pages GO when they leave it — so
+              // it sits with the other whole-app entries rather than in the
+              // tree's own action row.
+              Row(
+                children: [
+                  Expanded(child: _accountTile(context)),
+                  IconButton(
+                    tooltip: context.l10n.recycleBinTitle,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _openRecycleBin,
+                    icon: Icon(
+                      Icons.delete_outline,
+                      size: 20,
+                      color: MicaTheme.of(context).text.muted,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
       ),
     );
   }
+
 
   /// Search-box-shaped button: looks like an input, opens the search dialog
   /// (Notion-style — the real query field lives in the dialog).
@@ -7656,11 +7656,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       builder: (context, controller, child) => InkWell(
         onTap: () => controller.isOpen ? controller.close() : controller.open(),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          // Slimmer than it was (vertical 6, radius-16 avatar): this row is
+          // always on screen and never scrolls, so its height comes straight
+          // out of the page tree's.
+          padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
           child: Row(
             children: [
-              UserAvatar(url: _myAvatarUrl(), fallback: initial),
-              const SizedBox(width: 10),
+              UserAvatar(url: _myAvatarUrl(), fallback: initial, radius: 14),
+              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -7868,9 +7871,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // The single highlighted row = the located node (last-tapped folder/page),
     // falling back to the open doc. So a focused folder highlights just like the
     // open page, and the two never light up at once.
-    final activeId = _rootFocused
-        ? null
-        : (_focusedNavId ?? widget.selectedView?.id);
+    //
+    // `_rootFocused` deliberately does NOT blank this. Releasing the location
+    // (pointer left the sidebar, or a tap on empty tree space) is about WHERE
+    // the New buttons create — it is not a claim that no page is open. Blanking
+    // here meant the open page lost its highlight the moment the mouse moved
+    // to the editor, which is most of the time you are reading it.
+    final activeId = _focusedNavId ?? widget.selectedView?.id;
     // Tapping the tree's blank area (below/around the rows) deselects the
     // located node so the top New buttons create at the root. Rows keep their
     // own tap handlers (they win the gesture arena); only taps that miss a row
@@ -9635,21 +9642,59 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   ///    parent, so it lands in the same group, in order),
   ///  - nothing located → create at the workspace root (the old behaviour).
   void _createLocated({required bool folder}) {
-    final parent = createParentForLocated(widget.views, _locatedView());
+    final located = _locatedView();
+    final parent = createParentForLocated(widget.views, located);
     if (parent != null) {
       setState(() => _expandForChildOf(parent.id)); // reveal the new child
     }
     final folderName = context.l10n.folderNewDefault;
-    _createThenRename(() {
+    final untitled = context.l10n.untitledPage;
+    // Located a PAGE → the new row goes on the next line, not at the end of the
+    // group. Creation carries no position (neither the HTTP API nor the local
+    // store takes one), so the row is created under the right parent and then
+    // slid into place with the SAME reorder drag-and-drop uses. Reusing that
+    // rather than adding a position parameter down three layers keeps one
+    // answer to "how does a row change places".
+    final after = located != null && located.objectType != 'folder'
+        ? located
+        : null;
+    _createThenRename(() async {
+      final String? id;
       if (parent == null) {
-        return folder
-            ? widget.onCreateFolder(folderName)
-            : widget.onCreateDocument(context.l10n.untitledPage);
+        id = folder
+            ? await widget.onCreateFolder(folderName)
+            : await widget.onCreateDocument(untitled);
+      } else {
+        id = folder
+            ? await widget.onCreateChildFolder(parent, folderName)
+            : await widget.onCreateChildDocument(parent, untitled);
       }
-      return folder
-          ? widget.onCreateChildFolder(parent, folderName)
-          : widget.onCreateChildDocument(parent, context.l10n.untitledPage);
+      if (id != null && after != null) await _placeRightAfter(id, after);
+      return id;
     });
+  }
+
+  /// Move the freshly created [newId] to sit directly below [after].
+  ///
+  /// Best-effort on purpose: if the new row is not in `widget.views` yet, or
+  /// the anchor moved, this returns and the row keeps the position the create
+  /// gave it (last in the group) — the behaviour before this rule existed. A
+  /// failed tidy-up must not look like a failed create.
+  Future<void> _placeRightAfter(String newId, DocumentView after) async {
+    // The create's setState has run on the HOST; this widget sees the new view
+    // only after the next build. Wait for it rather than reading a list that
+    // provably does not contain the row yet.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final created = _viewById(newId);
+    if (created == null) return;
+    final ordered = orderedSiblingsPlacingAfter(
+      views: widget.views,
+      anchor: after,
+      created: created,
+    );
+    if (ordered == null) return; // already in place, or the anchor is gone
+    await widget.onReorderViews(after.parentViewId, ordered);
   }
 
   Future<void> _confirmDeleteWorkspace(WorkspaceEntry entry) async {
@@ -9994,10 +10039,25 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// — otherwise the switch races the async apply and drops the edits. The host
   /// then drains the cloud session before disposing it.
   Future<void> _navigateToView(DocumentView view) async {
-    // Re-tapping the already-open page keeps `selectedView` unchanged (so
-    // didUpdateWidget won't clear it) — drop root focus here so the tap
-    // re-locates the row.
-    if (_rootFocused) setState(() => _rootFocused = false);
+    // Locate the tapped row HERE, not as a side effect of the document
+    // changing. `didUpdateWidget` moves the highlight when `selectedView`
+    // changes, and that covers most taps — but not a tap on the page that is
+    // already open: `_selectView` short-circuits it (needsBootstrapOnSelect),
+    // `selectedView` never changes, and the highlight stayed wherever it was.
+    //
+    // Visible as: tap a folder (which DOES locate itself, in _toggleViewExpand),
+    // then tap the first page under it — the page never lit up and the folder
+    // stayed lit. Tapping a second page and back "fixed" it, because that round
+    // trip does change `selectedView`.
+    //
+    // So: tapping a row locates that row, always. One rule, one place — the
+    // folder path already worked this way, the page path only appeared to.
+    if (_rootFocused || _focusedNavId != view.id) {
+      setState(() {
+        _focusedNavId = view.id;
+        _rootFocused = false;
+      });
+    }
     await _commandHook.flush();
     if (!mounted) return;
     // On the narrow shell the drawer covers the page it just opened — get out of

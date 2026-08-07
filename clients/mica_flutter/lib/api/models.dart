@@ -1037,6 +1037,36 @@ DocumentView? createParentForLocated(
 /// part that must walk the WHOLE subtree (not just direct children) so trashing a
 /// folder carries its deep descendants, matching the server's recursive-CTE
 /// handlers. Returns empty if [rootId] isn't present; cycle-safe.
+/// The sibling order that puts [created] directly below [anchor], or null when
+/// nothing needs to move.
+///
+/// Creating a page/folder carries no position — neither the HTTP API nor the
+/// local store takes one — so a new row always lands LAST in its group. When
+/// the user located a page, "new page" means the next line, not the end of the
+/// folder, and the row has to be slid up afterwards.
+///
+/// Null is a real answer, not a failure: when [anchor] is already the last
+/// sibling, the create put the row exactly where it belongs and reordering
+/// would be a round trip that changes nothing. Also null when [anchor] is no
+/// longer among [views] (moved or deleted while the create was in flight) —
+/// leaving the row at the end beats reordering around a stale anchor.
+List<DocumentView>? orderedSiblingsPlacingAfter({
+  required Iterable<DocumentView> views,
+  required DocumentView anchor,
+  required DocumentView created,
+}) {
+  final parentId = anchor.parentViewId;
+  final siblings =
+      views
+          .where((v) => v.parentViewId == parentId && v.id != created.id)
+          .toList()
+        ..sort((a, b) => a.position.compareTo(b.position));
+  final index = siblings.indexWhere((v) => v.id == anchor.id);
+  if (index < 0) return null;
+  if (index == siblings.length - 1) return null;
+  return [...siblings.take(index + 1), created, ...siblings.skip(index + 1)];
+}
+
 /// The ids of every ANCESTOR of [id] (walking parentViewId up). Pure + testable
 /// core of the sidebar "reveal a nested node" logic — expanding these makes a
 /// deep node visible. Cycle-safe; returns empty if [id] is a root/unknown.
