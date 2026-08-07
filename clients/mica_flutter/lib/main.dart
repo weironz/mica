@@ -1699,10 +1699,53 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? parentViewId,
     List<DocumentView> orderedSiblings,
   ) {
+    String pad(int n) => n.toString().padLeft(10, '0');
+
+    // Show the new order NOW; tell the server after.
+    //
+    // This used to await one moveView round trip PER row and only then
+    // setState, so the rows sat visibly in their old places for N requests
+    // before jumping. For a drag that reads as lag; for a freshly created page
+    // being slid up beside the located row it read as a bug — "it appears at
+    // the bottom and then moves" — and no care in the caller could hide it,
+    // because the caller was already done.
+    //
+    // Optimistic, with the server as the correction: the loop below overwrites
+    // these rows with what actually came back, and a failure surfaces through
+    // _run like any other write. The local guess uses the SAME step-of-ten rule
+    // the request does, so guess and answer agree instead of racing.
+    final optimisticWorkspace = _selectedWorkspace;
+    if (optimisticWorkspace != null) {
+      setState(() {
+        final views = [...?_viewsByWorkspace[optimisticWorkspace.id]];
+        for (var i = 0; i < orderedSiblings.length; i++) {
+          final v = orderedSiblings[i];
+          final placed = DocumentView(
+            id: v.id,
+            parentViewId: parentViewId,
+            objectId: v.objectId,
+            objectType: v.objectType,
+            name: v.name,
+            position: pad((i + 1) * 10),
+            icon: v.icon,
+            updatedAt: v.updatedAt,
+          );
+          final idx = views.indexWhere((x) => x.id == v.id);
+          // Not present yet happens on the create path: the row was added by
+          // the create's own setState in this same turn, or is about to be.
+          if (idx >= 0) {
+            views[idx] = placed;
+          } else {
+            views.add(placed);
+          }
+        }
+        _viewsByWorkspace = {..._viewsByWorkspace, optimisticWorkspace.id: views};
+      });
+    }
+
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      String pad(int n) => n.toString().padLeft(10, '0');
 
       final moved = <DocumentView>[];
       for (var i = 0; i < orderedSiblings.length; i++) {
@@ -7032,10 +7075,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // host — and a desktop window dragged narrow crosses it just like a phone.
     return CallbackShortcuts(
       bindings: _appShortcuts(),
-      child: LayoutBuilder(
-        builder: (context, c) => c.maxWidth < kNarrowShellWidth
-            ? _narrowShell(context, c.maxWidth)
-            : _wideShell(context),
+      // Clicking OUTSIDE the sidebar releases the located row — the other half
+      // of the rule whose first half is the blank-space tap inside it. Moving
+      // the mouse away is not enough: you have to act somewhere else.
+      //
+      // A Listener, not a GestureDetector: this must not enter the gesture
+      // arena at all. Competing there would put it up against every tap in the
+      // editor — including text selection and drags — and losing or winning
+      // either one would change behaviour that has nothing to do with the
+      // sidebar. onPointerDown only observes.
+      //
+      // `_navHovered` is the test for "inside", reusing the MouseRegion that is
+      // already tracking exactly that rather than measuring the pane's rect a
+      // second time and letting the two disagree.
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) {
+          if (!_navHovered) _focusRoot();
+        },
+        child: LayoutBuilder(
+          builder: (context, c) => c.maxWidth < kNarrowShellWidth
+              ? _narrowShell(context, c.maxWidth)
+              : _wideShell(context),
+        ),
       ),
     );
   }
@@ -7242,18 +7304,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       color: MicaTheme.of(context).surface.base,
       child: MouseRegion(
         onEnter: (_) => setState(() => _navHovered = true),
-        // Leaving the sidebar RELEASES the located node, so the top New
-        // buttons go back to creating at the workspace root. The whole pane,
-        // not just the tree: moving from a row up to the New buttons must keep
-        // the location you just set, or the feature could never be used.
+        // Merely LEAVING the sidebar does not release the location.
         //
-        // The row highlight is unaffected — see `activeId`, which falls back to
-        // the open document. Releasing is about where new pages LAND.
-        onExit: (_) => setState(() {
-          _navHovered = false;
-          _focusedNavId = null;
-          _rootFocused = true;
-        }),
+        // It used to, and that was wrong twice over: the highlight vanished the
+        // instant the mouse drifted off — you never got to see the thing you
+        // had just located — and "released" is a decision, not a side effect of
+        // where the cursor happens to be. A click is the decision. So the
+        // release lives on taps: blank space inside the sidebar (the wrapper
+        // below), or a click anywhere outside it (the Listener in `build`).
+        onExit: (_) => setState(() => _navHovered = false),
         // A tap on ANY blank part of the sidebar releases the location, not
         // just blank space inside the tree. The gap beside the search box is
         // sidebar too, and a click there that left a row lit was claiming a
