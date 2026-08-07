@@ -238,6 +238,7 @@
   "closeTrayTitle": "最小化到系统托盘",
   "closeTraySub": "窗口隐藏,只在右下角托盘留图标;点图标或右键菜单回来。",
   "settingsTitle": "设置",
+  "accountSwitchWorld": "切换世界…",
   "settingsData": "数据",
   "settingsShortcuts": "快捷键",
   "settingsAccount": "账户",

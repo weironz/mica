@@ -331,21 +331,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// already filed per origin (`authToken:$origin`, …), so N servers cost
   /// nothing to keep — switching back to one restores its sign-in.
   ///
-  /// `'local'` is deliberately NOT in here: it is a peer of these in the
-  /// account menu, but it is not a server and has no URL, credentials or
-  /// session. See [_connections].
+  /// `'local'` is deliberately NOT in here: it is a peer of these wherever the
+  /// worlds are listed, but it is not a server and has no URL, credentials or
+  /// session. The world picker adds it back on its own side (`kLocalOrigin`).
   List<String> _servers = const [];
-
-  /// What the account menu offers, in order: this device, then every server.
-  /// One list, one choice — [_activeOrigin] is whichever is picked.
-  ///
-  /// 本地模式 is only a choice where there is a local store to switch to:
-  /// [_local.available] is false on web, which is why startup at :289 falls
-  /// back to the cloud there. Nothing observable turns on this today — the menu
-  /// that reads this list is desktop-only anyway, so the two guards say the
-  /// same thing. It is here so the list states what is true on its own, rather
-  /// than being wrong and covered for by its one consumer's gate.
-  List<String> get _connections => [if (_local.available) 'local', ..._servers];
 
   AuthSession? _session;
   List<Workspace> _workspaces = const [];
@@ -5624,9 +5613,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdateProfile: local ? null : _updateProfile,
       onChangePassword: local ? null : _changePassword,
       onDeleteAccount: local ? null : _deleteAccount,
-      connections: _connections,
-      onSetActiveConnection: _setActiveConnection,
-      onAddServer: promptAddServer,
+      onSwitchWorld: _promptSignIn,
       onRemoveServer: confirmRemoveServer,
       // Assembled here, not stored: the palette comes from the theme above us
       // and the rest from prefs. A stored copy would go stale the moment the
@@ -6361,9 +6348,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onUpdateProfile,
     required this.onChangePassword,
     required this.onDeleteAccount,
-    required this.connections,
-    required this.onSetActiveConnection,
-    required this.onAddServer,
+    required this.onSwitchWorld,
     required this.onRemoveServer,
     required this.appearance,
     required this.pageWidth,
@@ -6626,19 +6611,15 @@ class WorkspaceView extends StatefulWidget {
 
   /// `['local', ...servers]` — this device and every configured server, one
   /// list because they are the same kind of choice: which single world the app
-  /// shows. The account menu offers exactly these.
-  ///
-  /// A plain list. It used to be a getter, because Settings is a separate route
-  /// that never rebuilds with its parent and a snapshot went stale the moment a
-  /// server was added. The menu lives in this tree and rebuilds with us, so
-  /// that whole class of bug has nowhere to land here.
-  final List<String> connections;
+  /// Open the world picker (the sign-in route's pane: pick a server or
+  /// 本地模式, add one, remove one). Not named `onSignIn` because it is
+  /// reachable while signed in — switching worlds is the point, and
+  /// signing in is only what happens if the world you pick wants it.
+  final VoidCallback onSwitchWorld;
 
-  final Future<void> Function(String origin) onSetActiveConnection;
-
-  /// Ask-and-add / confirm-and-remove, owned by the shell so the sign-in
-  /// screen and the account menu run the same flow.
-  final Future<void> Function() onAddServer;
+  /// Confirm-and-remove, owned by the shell. (Adding is no longer offered from
+  /// here — the world picker this opens does it, so the menu does not carry a
+  /// second copy of that flow.)
   final Future<void> Function(String origin) onRemoveServer;
   final EditorAppearance appearance;
   final double pageWidth;
@@ -7273,244 +7254,258 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _focusedNavId = null;
           _rootFocused = true;
         }),
-        child: Padding(
-          // Tighter than the 16 all round it used to be. The sidebar's scarce
-          // axis is VERTICAL — every point spent above the tree is a row of
-          // pages you cannot see — so the vertical padding is cut hardest and
-          // the horizontal is left roomy enough that rows keep a comfortable
-          // hit area away from the window edge.
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Top row: HOME on the left, the collapse button on the right.
-              //
-              // No logo/wordmark — the window title bar already says "Mica" with
-              // the same icon directly above, and two of them read as two apps
-              // stacked. Removing it left the row holding nothing but a Spacer,
-              // i.e. a blank band across the most valuable strip in the sidebar;
-              // home moved up into it rather than sitting a row lower under
-              // whitespace.
-              Row(
-                children: [
-                  if (widget.onOpenHome != null)
-                    Expanded(
-                      child: _HomeNavRow(
-                        label: context.l10n.navHome,
-                        selected: widget.selectedBootstrap == null,
-                        onTap: widget.onOpenHome!,
+        // A tap on ANY blank part of the sidebar releases the location, not
+        // just blank space inside the tree. The gap beside the search box is
+        // sidebar too, and a click there that left a row lit was claiming a
+        // location the next New button would not use.
+        //
+        // Translucent, and leaning on the gesture arena exactly as the tree
+        // already does: rows and buttons carry their own tap recognizers and
+        // win it, so this only ever sees taps that hit nothing. It MUST stay
+        // that way — firing alongside the New buttons would clear the
+        // location microseconds before the create reads it.
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: _focusRoot,
+          child: Padding(
+            // Tighter than the 16 all round it used to be. The sidebar's scarce
+            // axis is VERTICAL — every point spent above the tree is a row of
+            // pages you cannot see — so the vertical padding is cut hardest and
+            // the horizontal is left roomy enough that rows keep a comfortable
+            // hit area away from the window edge.
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Top row: HOME on the left, the collapse button on the right.
+                //
+                // No logo/wordmark — the window title bar already says "Mica" with
+                // the same icon directly above, and two of them read as two apps
+                // stacked. Removing it left the row holding nothing but a Spacer,
+                // i.e. a blank band across the most valuable strip in the sidebar;
+                // home moved up into it rather than sitting a row lower under
+                // whitespace.
+                Row(
+                  children: [
+                    if (widget.onOpenHome != null)
+                      Expanded(
+                        child: _HomeNavRow(
+                          label: context.l10n.navHome,
+                          selected: widget.selectedBootstrap == null,
+                          onTap: widget.onOpenHome!,
+                        ),
+                      )
+                    else
+                      const Spacer(),
+                    if (widget.isBusy)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 4),
+                        child: SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
                       ),
-                    )
-                  else
-                    const Spacer(),
-                  if (widget.isBusy)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 4),
-                      child: SizedBox(
-                        height: 16,
-                        width: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
-                  IconButton(
-                    tooltip: narrow
-                        ? context.l10n.sidebarCloseDrawer
-                        : context.l10n.sidebarCollapse,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: narrow
-                        ? _closeNavDrawer
-                        : () => setState(() => _navCollapsed = true),
-                    icon: Icon(
-                      narrow ? Icons.close : Icons.view_sidebar_outlined,
-                      size: 20,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              // Search still sits ABOVE the workspace switcher (design 03), and
-              // that order is the meaning: it spans every workspace, so putting
-              // it under a workspace picker would imply it is scoped to the one
-              // you happen to have selected. Same reason home is on the row
-              // above rather than inside the workspace section.
-              _searchBox(context),
-              const SizedBox(height: 10),
-              Divider(height: 1, color: MicaTheme.of(context).border.subtle),
-              const SizedBox(height: 10),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: _WorkspaceSelector(
-                      entries: widget.entries,
-                      activeIsLocal: widget.activeIsLocal,
-                      // Counts PAGES, not rows: a switcher that says "12 个页面"
-                      // while four of them are folders is lying in a way the user
-                      // can check against the tree right below it.
-                      //
-                      // The second half names the WORLD, not the host. Using
-                      // `cloudOriginLabel` here shipped "802 个页面 ·
-                      // mica.cloudcele...." — a truncated hostname that fills the
-                      // line and says nothing. The design's own meta reads
-                      // "已同步"/"云端": which world this is, not which server.
-                      activeMeta: widget.selectedWorkspace == null
-                          ? null
-                          : '${context.l10n.pageCount(countPages(widget.views))}'
-                                ' · '
-                                '${widget.activeIsLocal ? context.l10n.worldLocalName : context.l10n.worldCloudLabel}',
-                      selectedRef: widget.selectedRef,
-                      cloudEmail: widget.session?.user.email,
-                      onSignIn: widget.onSignIn,
-                      onSelect: widget.onSelectEntry,
-                      onRename: _promptRenameWorkspace,
-                      onDelete: _confirmDeleteWorkspace,
-                      onExport: _exportWorkspaceFile,
-                      onCreate: _promptCreateWorkspace,
-                      onImport: (notion) =>
-                          _importWorkspaceFile(notion: notion),
-                      onImportFilesInto: _importFilesIntoWorkspace,
-                      onImportFolderInto: _importFolderIntoWorkspace,
-                      onMigrate: widget.onMigrateEntry,
-                      onDetach: widget.onDetachEntry,
-                      onReorder: widget.onReorderWorkspaces,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  // The graph is WORKSPACE-scoped, so it belongs here rather
-                  // than next to search: search sits above the switcher because
-                  // it spans every workspace, and this one shows the links
-                  // inside the workspace you have selected.
-                  IconButton(
-                    tooltip: context.l10n.graphTitle,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onLoadGraph == null ||
-                            widget.selectedWorkspace == null
-                        ? null
-                        : _openGraph,
-                    icon: const Icon(Icons.hub_outlined, size: 20),
-                  ),
-                  IconButton(
-                    tooltip: context.l10n.workspaceSettings,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.selectedWorkspace == null
-                        ? null
-                        : _openWorkspaceSettingsDialog,
-                    icon: const Icon(Icons.tune, size: 20),
-                  ),
-                ],
-              ),
-              if (widget.message != null) ...[
-                const SizedBox(height: 12),
-                ErrorBanner(widget.message!),
-              ],
-              if (widget.importProgress case final p?) ...[
-                const SizedBox(height: 12),
-                MicaProgressRow(
-                  label: context.l10n.importProgress(p.done, p.total),
-                  done: p.done,
-                  total: p.total,
-                ),
-                if (widget.onCancelImport case final cancel?)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: cancel,
-                      child: Text(context.l10n.importCancel),
-                    ),
-                  ),
-              ],
-              const SizedBox(height: 10),
-              // Section label + actions. This was a label plus ONE visible
-              // action (new page) with refresh / new folder / recycle bin
-              // folded into a `⋯` overflow, on the theory that four equal icons
-              // read as a toolbar competing with the tree.
-              //
-              // In use that traded the wrong way round: new folder is a primary
-              // action here (the tree is folders), and burying it behind a menu
-              // costs a click on the sidebar's whole reason for existing. So
-              // new page + new folder + refresh are all visible now, and the
-              // overflow is gone rather than left holding one stray item — the
-              // recycle bin moved down beside the account row, which is where
-              // the other "not part of the tree" entries live.
-              Row(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4),
-                    child: Text(
-                      context.l10n.sidebarPagesLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        letterSpacing: 1.5,
-                        fontWeight: FontWeight.w500,
-                        color: MicaTheme.of(context).text.faint,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  if (canEdit) ...[
                     IconButton(
-                      tooltip: context.l10n.newPage,
+                      tooltip: narrow
+                          ? context.l10n.sidebarCloseDrawer
+                          : context.l10n.sidebarCollapse,
                       visualDensity: VisualDensity.compact,
-                      // Creates relative to the located sidebar node (see
-                      // _createLocated) — inside a focused folder, or beside a
-                      // focused page.
-                      onPressed: () => _createLocated(folder: false),
-                      icon: const Icon(Icons.add, size: 18),
-                    ),
-                    IconButton(
-                      tooltip: context.l10n.newFolder,
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _createLocated(folder: true),
-                      icon: const Icon(
-                        Icons.create_new_folder_outlined,
-                        size: 18,
+                      onPressed: narrow
+                          ? _closeNavDrawer
+                          : () => setState(() => _navCollapsed = true),
+                      icon: Icon(
+                        narrow ? Icons.close : Icons.view_sidebar_outlined,
+                        size: 20,
                       ),
                     ),
                   ],
-                  IconButton(
-                    tooltip: context.l10n.recycleRefresh,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onRefresh,
-                    icon: const Icon(Icons.refresh, size: 18),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 2),
-              Expanded(child: _pageTree(context, canEdit)),
-              const Divider(height: 16),
-              // AI entry points exist only when the feature is enabled in
-              // Settings AND a provider is configured.
-              if (widget.showAi) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.tonalIcon(
-                    onPressed: _openAiDialog,
-                    icon: const Icon(Icons.auto_awesome, size: 18),
-                    label: Text(context.l10n.aiAskTitle),
-                  ),
                 ),
-                const SizedBox(height: 12),
-              ],
-              // Account + recycle bin share the bottom row. The bin is not part
-              // of the page tree — it is where pages GO when they leave it — so
-              // it sits with the other whole-app entries rather than in the
-              // tree's own action row.
-              Row(
-                children: [
-                  Expanded(child: _accountTile(context)),
-                  IconButton(
-                    tooltip: context.l10n.recycleBinTitle,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _openRecycleBin,
-                    icon: Icon(
-                      Icons.delete_outline,
-                      size: 20,
-                      color: MicaTheme.of(context).text.muted,
+                const SizedBox(height: 10),
+                // Search still sits ABOVE the workspace switcher (design 03), and
+                // that order is the meaning: it spans every workspace, so putting
+                // it under a workspace picker would imply it is scoped to the one
+                // you happen to have selected. Same reason home is on the row
+                // above rather than inside the workspace section.
+                _searchBox(context),
+                const SizedBox(height: 10),
+                Divider(height: 1, color: MicaTheme.of(context).border.subtle),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: _WorkspaceSelector(
+                        entries: widget.entries,
+                        activeIsLocal: widget.activeIsLocal,
+                        // Counts PAGES, not rows: a switcher that says "12 个页面"
+                        // while four of them are folders is lying in a way the user
+                        // can check against the tree right below it.
+                        //
+                        // The second half names the WORLD, not the host. Using
+                        // `cloudOriginLabel` here shipped "802 个页面 ·
+                        // mica.cloudcele...." — a truncated hostname that fills the
+                        // line and says nothing. The design's own meta reads
+                        // "已同步"/"云端": which world this is, not which server.
+                        activeMeta: widget.selectedWorkspace == null
+                            ? null
+                            : '${context.l10n.pageCount(countPages(widget.views))}'
+                                  ' · '
+                                  '${widget.activeIsLocal ? context.l10n.worldLocalName : context.l10n.worldCloudLabel}',
+                        selectedRef: widget.selectedRef,
+                        cloudEmail: widget.session?.user.email,
+                        onSignIn: widget.onSignIn,
+                        onSelect: widget.onSelectEntry,
+                        onRename: _promptRenameWorkspace,
+                        onDelete: _confirmDeleteWorkspace,
+                        onExport: _exportWorkspaceFile,
+                        onCreate: _promptCreateWorkspace,
+                        onImport: (notion) =>
+                            _importWorkspaceFile(notion: notion),
+                        onImportFilesInto: _importFilesIntoWorkspace,
+                        onImportFolderInto: _importFolderIntoWorkspace,
+                        onMigrate: widget.onMigrateEntry,
+                        onDetach: widget.onDetachEntry,
+                        onReorder: widget.onReorderWorkspaces,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    // The graph is WORKSPACE-scoped, so it belongs here rather
+                    // than next to search: search sits above the switcher because
+                    // it spans every workspace, and this one shows the links
+                    // inside the workspace you have selected.
+                    IconButton(
+                      tooltip: context.l10n.graphTitle,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: widget.onLoadGraph == null ||
+                              widget.selectedWorkspace == null
+                          ? null
+                          : _openGraph,
+                      icon: const Icon(Icons.hub_outlined, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: context.l10n.workspaceSettings,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: widget.selectedWorkspace == null
+                          ? null
+                          : _openWorkspaceSettingsDialog,
+                      icon: const Icon(Icons.tune, size: 20),
+                    ),
+                  ],
+                ),
+                if (widget.message != null) ...[
+                  const SizedBox(height: 12),
+                  ErrorBanner(widget.message!),
+                ],
+                if (widget.importProgress case final p?) ...[
+                  const SizedBox(height: 12),
+                  MicaProgressRow(
+                    label: context.l10n.importProgress(p.done, p.total),
+                    done: p.done,
+                    total: p.total,
+                  ),
+                  if (widget.onCancelImport case final cancel?)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: cancel,
+                        child: Text(context.l10n.importCancel),
+                      ),
+                    ),
+                ],
+                const SizedBox(height: 10),
+                // Section label + actions. This was a label plus ONE visible
+                // action (new page) with refresh / new folder / recycle bin
+                // folded into a `⋯` overflow, on the theory that four equal icons
+                // read as a toolbar competing with the tree.
+                //
+                // In use that traded the wrong way round: new folder is a primary
+                // action here (the tree is folders), and burying it behind a menu
+                // costs a click on the sidebar's whole reason for existing. So
+                // new page + new folder + refresh are all visible now, and the
+                // overflow is gone rather than left holding one stray item — the
+                // recycle bin moved down beside the account row, which is where
+                // the other "not part of the tree" entries live.
+                Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Text(
+                        context.l10n.sidebarPagesLabel,
+                        style: TextStyle(
+                          fontSize: 12,
+                          letterSpacing: 1.5,
+                          fontWeight: FontWeight.w500,
+                          color: MicaTheme.of(context).text.faint,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    if (canEdit) ...[
+                      IconButton(
+                        tooltip: context.l10n.newPage,
+                        visualDensity: VisualDensity.compact,
+                        // Creates relative to the located sidebar node (see
+                        // _createLocated) — inside a focused folder, or beside a
+                        // focused page.
+                        onPressed: () => _createLocated(folder: false),
+                        icon: const Icon(Icons.add, size: 18),
+                      ),
+                      IconButton(
+                        tooltip: context.l10n.newFolder,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _createLocated(folder: true),
+                        icon: const Icon(
+                          Icons.create_new_folder_outlined,
+                          size: 18,
+                        ),
+                      ),
+                    ],
+                    IconButton(
+                      tooltip: context.l10n.recycleRefresh,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: widget.onRefresh,
+                      icon: const Icon(Icons.refresh, size: 18),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Expanded(child: _pageTree(context, canEdit)),
+                const Divider(height: 16),
+                // AI entry points exist only when the feature is enabled in
+                // Settings AND a provider is configured.
+                if (widget.showAi) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: _openAiDialog,
+                      icon: const Icon(Icons.auto_awesome, size: 18),
+                      label: Text(context.l10n.aiAskTitle),
                     ),
                   ),
+                  const SizedBox(height: 12),
                 ],
-              ),
-            ],
+                // Account + recycle bin share the bottom row. The bin is not part
+                // of the page tree — it is where pages GO when they leave it — so
+                // it sits with the other whole-app entries rather than in the
+                // tree's own action row.
+                Row(
+                  children: [
+                    Expanded(child: _accountTile(context)),
+                    IconButton(
+                      tooltip: context.l10n.recycleBinTitle,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _openRecycleBin,
+                      icon: Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: MicaTheme.of(context).text.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -7626,9 +7621,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         // Desktop only — the same gate the Settings page had. Web has no local
         // store to switch to (_local.available is false there) and is served
         // BY a server, so its menu stays exactly what it has always been.
+        // One entry, not a list of worlds plus an add-server row. The world
+        // picker already exists as a full screen (the sign-in route: tabs,
+        // server list, add, remove, health probes) and it was the better one —
+        // this menu had a second, smaller implementation of the same idea that
+        // could only ever drift from it.
+        //
+        // Reachable while SIGNED IN, which is the whole point: the sign-in
+        // screen is otherwise only shown when there is no session, so before
+        // this the only way into 本地模式 from a signed-in app was to sign out.
         if (!kIsWeb) ...[
-          for (final origin in widget.connections) _connectionRow(origin),
-          _addServerRow(),
+          _menuAction(
+            Icons.swap_horiz,
+            context.l10n.accountSwitchWorld,
+            widget.onSwitchWorld,
+          ),
           const Divider(height: 8),
         ],
         _menuAction(
@@ -7707,121 +7714,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// state — signing in does not happen here (it is the action below, in the
   /// world you are actually in), and a server you just added is always
   /// signed-out, so the marker could only ever state the obvious.
-  Widget _connectionRow(String origin) {
-    final local = origin == 'local';
-    final selected = origin == widget.activeOrigin;
-    return SizedBox(
-      width: _kAccountMenuWidth,
-      child: Row(
-        children: [
-          Expanded(
-            child: InkWell(
-              // _setActiveConnection no-ops when this is already the world, so
-              // tapping the checked row costs nothing.
-              onTap: () {
-                _accountMenu.close();
-                widget.onSetActiveConnection(origin);
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    // The check LEADS; it does not replace the type icon the
-                    // way the workspace switcher's does. 🖥 vs ☁ is the entire
-                    // statement that these two are not the same kind of thing,
-                    // and the selected row is exactly where it still matters.
-                    SizedBox(
-                      width: 14,
-                      child: selected
-                          ? Icon(
-                              Icons.check,
-                              size: 14,
-                              color: MicaTheme.of(context).accent.primary,
-                            )
-                          : null,
-                    ),
-                    const SizedBox(width: 6),
-                    Icon(
-                      local ? Icons.computer_outlined : Icons.cloud_outlined,
-                      size: 16,
-                      color: MicaTheme.of(context).text.muted,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        local
-                            ? context.l10n.worldLocalName
-                            : serverLabel(origin),
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          color: MicaTheme.of(context).text.primary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          // 本地模式 is not deletable: it is not a server, it is where the
-          // on-device workspaces live — a server's mirror can be re-fetched,
-          // those exist nowhere else. One action needs no ⋮ submenu.
-          if (!local)
-            IconButton(
-              tooltip: context.l10n.serverRemoveTooltip,
-              visualDensity: VisualDensity.compact,
-              onPressed: () {
-                _accountMenu.close();
-                widget.onRemoveServer(origin);
-              },
-              icon: Icon(
-                Icons.delete_outline,
-                size: 16,
-                color: MicaTheme.of(context).text.faint,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _addServerRow() => SizedBox(
-    width: _kAccountMenuWidth,
-    child: InkWell(
-      onTap: () {
-        _accountMenu.close();
-        widget.onAddServer();
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            const SizedBox(width: 20),
-            Icon(
-              Icons.add,
-              size: 16,
-              color: MicaTheme.of(context).accent.primary,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              context.l10n.serverAddRow,
-              style: TextStyle(
-                color: MicaTheme.of(context).accent.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-
   Widget _menuAction(IconData icon, String label, VoidCallback onTap) =>
       SizedBox(
         width: _kAccountMenuWidth,
@@ -7872,12 +7764,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // falling back to the open doc. So a focused folder highlights just like the
     // open page, and the two never light up at once.
     //
-    // `_rootFocused` deliberately does NOT blank this. Releasing the location
-    // (pointer left the sidebar, or a tap on empty tree space) is about WHERE
-    // the New buttons create — it is not a claim that no page is open. Blanking
-    // here meant the open page lost its highlight the moment the mouse moved
-    // to the editor, which is most of the time you are reading it.
-    final activeId = _focusedNavId ?? widget.selectedView?.id;
+    // Released location = NO highlight, deliberately. The highlight's whole job
+    // is to answer "where will the New buttons put this"; leaving it lit on the
+    // open page after the location was released answers a question nobody asked
+    // and lies about the one that was.
+    //
+    // (This was briefly the other way round — falling back to the open document
+    // so the row stayed lit. It reads better in a screenshot and worse in use:
+    // you cannot tell a located row from a merely-open one, which is the single
+    // thing this highlight exists to tell you.)
+    final activeId = _rootFocused
+        ? null
+        : (_focusedNavId ?? widget.selectedView?.id);
     // Tapping the tree's blank area (below/around the rows) deselects the
     // located node so the top New buttons create at the root. Rows keep their
     // own tap handlers (they win the gesture arena); only taps that miss a row
@@ -7901,23 +7799,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             isRenaming: item.view.id == _renamingViewId,
             onToggle: () => _toggleViewExpand(item.view),
             onPressed: () => _navigateToView(item.view),
-            onCreateChild: () {
-              setState(
-                () => _expandForChildOf(item.view.id),
-              ); // reveal the new child
-              _createThenRename(
-                () => widget.onCreateChildDocument(item.view, context.l10n.untitledPage),
-              );
-            },
-            onCreateChildFolder: () {
-              setState(() => _expandForChildOf(item.view.id));
-              _createThenRename(
-                () => widget.onCreateChildFolder(
-                  item.view,
-                  context.l10n.folderNewDefault,
-                ),
-              );
-            },
+            onCreateChild: () => _createInFolder(item.view, folder: false),
+            onCreateChildFolder: () =>
+                _createInFolder(item.view, folder: true),
             onExportFolder: widget.onExportFolderZip == null
                 ? null
                 : () => _exportFolderFile(item.view),
@@ -9669,6 +9553,37 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ? await widget.onCreateChildFolder(parent, folderName)
             : await widget.onCreateChildDocument(parent, untitled);
       }
+      if (id != null && after != null) await _placeRightAfter(id, after);
+      return id;
+    });
+  }
+
+  /// Create inside [parent] from that folder row's own New buttons.
+  ///
+  /// Still "in THIS folder" — the button is on the folder's row and means
+  /// nothing else. What it additionally honours is WHERE in the folder: if the
+  /// located row is a page sitting in this same folder, the new row goes on the
+  /// next line rather than at the bottom of the group. Same rule the top New
+  /// buttons follow; having the two disagree was the complaint.
+  ///
+  /// A location pointing anywhere else (another folder, the root, released)
+  /// does not reach in here: the anchor has to be a child of [parent], so the
+  /// fallback is the plain append this button always did.
+  void _createInFolder(DocumentView parent, {required bool folder}) {
+    setState(() => _expandForChildOf(parent.id)); // reveal the new child
+    final located = _locatedView();
+    final after =
+        located != null &&
+            located.objectType != 'folder' &&
+            located.parentViewId == parent.id
+        ? located
+        : null;
+    final folderName = context.l10n.folderNewDefault;
+    final untitled = context.l10n.untitledPage;
+    _createThenRename(() async {
+      final id = folder
+          ? await widget.onCreateChildFolder(parent, folderName)
+          : await widget.onCreateChildDocument(parent, untitled);
       if (id != null && after != null) await _placeRightAfter(id, after);
       return id;
     });

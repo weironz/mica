@@ -368,6 +368,7 @@
   "closeTrayTitle": "Minimize to system tray",
   "closeTraySub": "The window hides, leaving only a tray icon at the bottom right; click the icon or its right-click menu to return.",
   "settingsTitle": "Settings",
+  "accountSwitchWorld": "Switch world…",
   "settingsData": "Data",
   "settingsShortcuts": "Shortcuts",
   "settingsAccount": "Account",
