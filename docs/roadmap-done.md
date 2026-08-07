@@ -424,6 +424,34 @@
 - ~~🆕 **编辑器 op 管道 `catchError((_){})` 吞掉本应浮出的 outbox 写失败**~~ ✅ 已做(校准复核)—— `controller.dart` 现 `opFaultCount++` + `onOpFault?.call` 上浮,不再吞(红线 #1)。
 - ~~🆕 **云文档离线/未同步状态零指示**~~ ✅ 2026-07-26 完成(69ff98f 地基+信号 / 8e1318d 徽标 / 6832dea 心跳)—— 扒了 8 家(AFFiNE/SiYuan/Logseq/Anytype/Google Docs/Notion/Obsidian/AppFlowy)后定**最小形态**:三态克制徽标(已同步→**什么都不画**、同步中→faint 慢转圈、离线→cloud-off + tooltip),摆文档面包屑右上、**仅云工作区**显示。**不做数字计数**(同类无一家做)、**不可点击/不做手动同步**(AFFiNE/AppFlowy/Anytype 同样没有;mica 本就自动重连 + 自动 flush)。信号从 `CloudSyncSession` 四个真实转移点 emit,推导是纯函数 `deriveSyncPhase`(`sync_status.dart`,4 单测)。**关键补丁**:加了**心跳**(8s ping + 20s 帧静默看门狗)——否则拔网线是 TCP 半开、不发 WS close 帧,`_onDone` 永不触发 → 一直误判在线(用户实测拔线发现徽标不动才暴露);服务端 `ws.rs:267` 本就 `ping→pong`,零改动。〔"别人都没做"的印象来自 AppFlowy:它的 `sync_indicator.dart` 当前是**死代码**(重构后未挂载),且有未关闭的需求 #5729 求做回。〕
 
+- ~~🆕 **换头像后不同步到其他设备**~~ ✅ **已做(2026-08-07)** —— **原条目的建议是错的**,值得记下来:
+  它猜「让 `avatar_version` 参与对端的缓存键」,而 `ui/avatar_url.dart` **一直就把版本放在 `?v=`
+  里**,缓存键从第一天起就是对的。真正的缺口是**对端根本没有"再拉一次用户信息"这条路径**:
+  `session.user` 是登录那一刻的快照,写进 prefs 持久化(`authUser:<origin>`),此后只在 access
+  token 快过期(≤1h)时随 `/auth/refresh` 的响应顺带更新。所以重启也不管用 —— 它读回的正是
+  那份旧快照;只有重新登录能修,这正是用户观察到的现象。
+  **服务端一直是好的,而且早就备好了**:`GET /api/auth/me` 路由存在且返回 `avatar_version`
+  (`routes/mod.rs`),但 Dart 客户端**从来没调用过它** —— `models.dart` 里那句注释甚至写着
+  「a restart draws the picture on the first frame instead of popping it in after /me returns」,
+  那个 `/me` 调用一直不存在。所以这是一条**从未被走过**的路由,不是"改坏了"。
+  **做法**:`ApiClient.fetchMe` + `api/profile_watch.dart`(`ProfileWatch`,照 `SessionRefresher`
+  的形状写:两条规则 —— **有变化才回报**,否则每次动作都要重建外壳并重写 prefs;**有速率下限**
+  (2 分钟),否则挂在用户动作上就是一次点击一个 GET)。挂两处:`_restoreSession` 末尾(修掉
+  "重启也不更新")和 `_run()` 末尾(**点开任意一页就走这条**,`_selectView` 本身就是 `_run`)。
+  **刻意不做推送**:头像不需要秒级,需要的是"下次看用户信息时能发现它变了"。
+  **诚实的边界**:纯发呆的对端(不点任何东西)仍不会更新 —— 没有定时器,这是取舍不是遗漏。
+  验证:`test/profile_watch_test.dart` 7 条单测;**并在本地栈上跑了真的两会话回放** ——
+  两次独立登录拿到同一快照 `b5bb…`,会话 A 换头像得 `c414…`,会话 B 的 `GET /api/auth/me`
+  当即返回 `c414…`,字段名与 Dart 解析器逐个对上,`/api/users/<id>/avatar?v=<new>` 200。
+  这条路由此前**没有任何调用方**,所以它是"从没被走过"而不是"坏了" —— 值得真去走一遍。
+  `flutter test` 1169 全过,`flutter analyze` 无新增提示。
+  **⚠️ 没验到的那一段(别当成验过了)**:两个 `unawaited(_refreshProfile())` 调用点在**跑着的
+  桌面应用里真的触发**,只做了读代码确认,没有实机跑过。挡路的是单实例互斥
+  (`windows/runner/main.cpp`)—— 同一台机器起不了第二个实例,而 web 那条路子不适用(Flutter web
+  画在 canvas 上、`e2e/web_e2e.mjs` 自己就写着不驱动 UI;何况 web 每次刷新都走 cookie refresh,
+  本来就不会陈旧)。做成 widget 测试需要把 `ApiClient` 从 `_MicaAppState` 里挖出来做注入 ——
+  那是为了测一行 `unawaited` 去改 app 根的依赖结构,不成比例。**真正的确认是用户在他那两台
+  设备上看一眼。**(S)
 - ~~🆕 **页内查找输入框不接受粘贴与删除键**~~ ✅ **已做(2026-08-07)** —— **根因不是"输入框没拿到
   焦点"**(症状读起来像,原条目也是这么猜的):焦点是对的,问题是**查找栏是编辑器那个 `Focus` 的
   子节点**(`editor.dart` build 里 `Positioned(child: _buildFindBar())` 在 `Focus(onKeyEvent: _onKey)`

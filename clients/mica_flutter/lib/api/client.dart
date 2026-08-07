@@ -740,6 +740,17 @@ class ApiClient {
     );
   }
 
+  /// The signed-in user as the server has them NOW.
+  ///
+  /// The session carries a copy, but it is a snapshot: written at login, renewed
+  /// only when the access token is, persisted verbatim across restarts. This is
+  /// the one way a profile changed on ANOTHER device gets noticed — see
+  /// `ProfileWatch` for when it is worth asking.
+  Future<User> fetchMe(String token) async {
+    final response = await _get('/api/auth/me', token);
+    return User.fromJson(response['user'] as Map<String, dynamic>);
+  }
+
   Future<User> updateMe(String token, String displayName) async {
     final response = await _patch('/api/auth/me', {
       'display_name': displayName,

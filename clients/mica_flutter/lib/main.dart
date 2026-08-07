@@ -64,6 +64,7 @@ import 'window_setup.dart';
 import 'upload/zip_writer.dart';
 import 'api/client.dart';
 import 'api/models.dart';
+import 'api/profile_watch.dart';
 import 'api/session_refresher.dart';
 import 'api/sync_client.dart';
 
@@ -792,6 +793,39 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     refresh: (token) => _api.refreshSession(token),
   );
 
+  /// Notices a profile edited on another device — see [ProfileWatch] for why
+  /// this is a look and not a push.
+  late final ProfileWatch _profileWatch = ProfileWatch(
+    fetch: (token) => _api.fetchMe(token),
+  );
+
+  /// Adopt a profile change made elsewhere. Rate-limited and change-gated by
+  /// [ProfileWatch], so calling it from the app's hot paths is cheap and does
+  /// not churn state.
+  ///
+  /// Silent on failure by design: it rides along on other work, and a blip here
+  /// must not put a banner over an action that succeeded.
+  Future<void> _refreshProfile() async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final user = await _profileWatch.poll(session);
+      // Re-read the session: the poll awaited a round trip, and a sign-out or a
+      // token rotation in that window would make `session` the wrong thing to
+      // build on — copyWith on the stale one would resurrect a dead token.
+      final current = _session;
+      if (user == null || current == null || !mounted) return;
+      final updated = current.copyWith(user: user);
+      setState(() => _session = updated);
+      _persistSession(updated);
+      // No ImageCache evict needed: the address carries the version
+      // (`ui/avatar_url.dart`), so a new picture is a new URL and the stale
+      // entry is simply never asked for again.
+    } catch (_) {
+      // Offline, or a 401 that the surrounding action already handles.
+    }
+  }
+
   Future<void> _ensureFreshSession() async {
     final session = _session;
     if (session == null) return;
@@ -939,6 +973,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedWorkspace = restoredWs;
       });
       unawaited(_refreshAiConfigured());
+      // The session we just restored carries the profile as it was at LAST
+      // login — it came off disk, which is why a restart was not what fixed a
+      // stale avatar. This is the startup counterpart to the _run() call.
+      unawaited(_refreshProfile());
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
       // The startup restore isn't a _run() action, so nothing else wires the
@@ -997,6 +1035,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       await _ensureFreshSession();
       await action();
       _reconcileSync();
+      // Unawaited: the action is done and the user is waiting on nothing here.
+      // This is the app's most frequent "we just talked to the server anyway"
+      // moment, which is what makes a profile changed elsewhere show up without
+      // anything polling on a timer.
+      unawaited(_refreshProfile());
     } on ApiException catch (error) {
       // A 401 that survived the renewal above: revoked, or the server's JWT
       // secret rotated. The session is unusable — say so instead of parroting
