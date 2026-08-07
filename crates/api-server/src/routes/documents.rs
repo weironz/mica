@@ -12,7 +12,7 @@ use mica_app_core::{
   AppState,
   documents::{
     DocumentOperation, DocumentSnapshotPayload, export_html, export_html_document,
-    export_markdown_with_assets, import_markdown, set_image_srcs,
+    export_markdown_with_assets, import_markdown, import_markdown_fragment, set_image_srcs,
   },
   store::{self, DocumentRecord},
 };
@@ -1629,7 +1629,19 @@ fn markdown_update_ops(
   // Parse the incoming markdown up front so an empty body is rejected BEFORE any
   // destructive delete (a replace_all with empty markdown must not wipe the doc).
   let tmp_root = format!("block_{}", Uuid::new_v4().simple());
-  let mut parsed = import_markdown(&request.markdown, &tmp_root);
+  // FRAGMENT parsing for the modes that graft into an existing document, and
+  // whole-document parsing only for the one that IS the whole document.
+  //
+  // Every mode used to call `import_markdown`, which strips YAML front matter
+  // off the front of what it is handed. For a fragment that is a position
+  // error: appending `---\nbody\n---\ntail` had `body` lifted out as YAML and
+  // dropped on `tmp_root` (thrown away below), so the caller silently got only
+  // `tail`. A leading `---` in an appended chunk is a thematic break — that is
+  // what the format says and what the caller meant.
+  let mut parsed = match request.mode {
+    MarkdownUpdateMode::ReplaceAll => import_markdown(&request.markdown, &tmp_root),
+    _ => import_markdown_fragment(&request.markdown, &tmp_root),
+  };
   rewire_blob_hrefs(&mut parsed.blocks, workspace_id);
   let has_content = parsed
     .blocks
@@ -1653,6 +1665,42 @@ fn markdown_update_ops(
             block_id: child.clone(),
           });
         }
+      }
+      // Front matter belongs to the DOCUMENT, not to any block, so grafting the
+      // parsed children leaves it behind on `tmp_root` — where it used to be
+      // thrown away. Exporting a page with properties and replace_all-ing it
+      // straight back therefore lost them, silently: a round-trip the dialect
+      // is supposed to hold (CLAUDE.md §4). Carry it onto the real root.
+      //
+      // Only when the incoming markdown HAS front matter: a body-only
+      // replace_all must not wipe properties the caller never mentioned.
+      // And built from the root's CURRENT data, because UpdateBlock replaces
+      // `data` wholesale rather than merging into it.
+      if let Some(fm) = parsed
+        .blocks
+        .iter()
+        .find(|b| b.id == tmp_root)
+        .and_then(|b| b.data.get("front_matter"))
+        .cloned()
+      {
+        let mut data = current
+          .blocks
+          .iter()
+          .find(|b| b.id == root_id)
+          .map(|b| b.data.clone())
+          .unwrap_or(serde_json::Value::Null);
+        if !data.is_object() {
+          data = serde_json::Value::Object(serde_json::Map::new());
+        }
+        if let Some(map) = data.as_object_mut() {
+          map.insert("front_matter".to_string(), fm);
+        }
+        ops.push(DocumentOperation::UpdateBlock {
+          block_id: root_id.to_string(),
+          kind: None,
+          text: None,
+          data: Some(data),
+        });
       }
       None
     }
@@ -3666,6 +3714,137 @@ fn topo_order_subtree(subtree: &[TransferRow]) -> Vec<&TransferRow> {
     }
   }
   out
+}
+
+#[cfg(test)]
+mod markdown_update_tests {
+  use super::*;
+
+  /// A one-paragraph document to write into.
+  fn current_doc() -> mica_app_core::documents::DocumentSnapshotPayload {
+    mica_app_core::documents::DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        mica_app_core::documents::Block {
+          id: "root".to_string(),
+          kind: "paragraph".to_string(),
+          text: String::new(),
+          data: serde_json::json!({"front_matter": "title: Kept"}),
+          children: vec!["p1".to_string()],
+        },
+        mica_app_core::documents::Block {
+          id: "p1".to_string(),
+          kind: "paragraph".to_string(),
+          text: "existing".to_string(),
+          data: serde_json::Value::Null,
+          children: Vec::new(),
+        },
+      ],
+    }
+  }
+
+  fn request(mode: MarkdownUpdateMode, markdown: &str) -> UpdateMarkdownRequest {
+    UpdateMarkdownRequest {
+      mode,
+      markdown: markdown.to_string(),
+      anchor: None,
+      find: None,
+      replace: None,
+      expected_seq: None,
+    }
+  }
+
+  /// Every text an InsertBlock op carries, in order.
+  fn inserted_texts(ops: &[DocumentOperation]) -> Vec<String> {
+    ops
+      .iter()
+      .filter_map(|op| match op {
+        DocumentOperation::InsertBlock { block, .. } if !block.text.is_empty() => {
+          Some(block.text.clone())
+        }
+        _ => None,
+      })
+      .collect()
+  }
+
+  /// Appending content that OPENS with `---` used to lose everything up to the
+  /// closing fence: the fragment was parsed as a whole document, so the parser
+  /// read that as YAML front matter and stashed it on a throwaway root. The
+  /// caller got the tail and no error. Reported 2026-08-07 from an MCP write.
+  #[test]
+  fn append_does_not_swallow_content_between_dashes() {
+    let ops = markdown_update_ops(
+      &current_doc(),
+      &request(MarkdownUpdateMode::Append, "---\nbody\n---\ntail"),
+      Uuid::new_v4(),
+    )
+    .expect("append should build ops");
+
+    assert_eq!(
+      inserted_texts(&ops),
+      vec!["body", "tail"],
+      "the body between the fences must reach the document"
+    );
+  }
+
+  /// Same position error, same fix, other grafting mode.
+  #[test]
+  fn insert_at_does_not_swallow_content_between_dashes() {
+    let mut req = request(MarkdownUpdateMode::InsertAt, "---\nbody\n---\ntail");
+    req.anchor = Some("p1".to_string());
+    let ops =
+      markdown_update_ops(&current_doc(), &req, Uuid::new_v4()).expect("insert_at should build ops");
+    assert_eq!(inserted_texts(&ops), vec!["body", "tail"]);
+  }
+
+  /// `replace_all` IS the whole document, so it keeps reading front matter —
+  /// and now carries it onto the real root instead of dropping it with the
+  /// temporary one. Without this, export → replace_all → export lost the page's
+  /// properties silently.
+  #[test]
+  fn replace_all_carries_front_matter_onto_the_root() {
+    let ops = markdown_update_ops(
+      &current_doc(),
+      &request(MarkdownUpdateMode::ReplaceAll, "---\ntitle: New\n---\nbody"),
+      Uuid::new_v4(),
+    )
+    .expect("replace_all should build ops");
+
+    let fm = ops
+      .iter()
+      .find_map(|op| match op {
+        DocumentOperation::UpdateBlock {
+          block_id,
+          data: Some(data),
+          ..
+        } if block_id == "root" => data.get("front_matter").and_then(|v| v.as_str()),
+        _ => None,
+      })
+      .expect("replace_all must write the front matter to the root");
+    assert_eq!(fm, "title: New");
+    assert_eq!(inserted_texts(&ops), vec!["body"]);
+  }
+
+  /// A body-only `replace_all` must not wipe properties the caller never
+  /// mentioned — "replace the text" is not "delete my metadata".
+  #[test]
+  fn replace_all_without_front_matter_leaves_existing_properties_alone() {
+    let ops = markdown_update_ops(
+      &current_doc(),
+      &request(MarkdownUpdateMode::ReplaceAll, "just body"),
+      Uuid::new_v4(),
+    )
+    .expect("replace_all should build ops");
+
+    assert!(
+      !ops.iter().any(|op| matches!(
+        op,
+        DocumentOperation::UpdateBlock { block_id, .. } if block_id == "root"
+      )),
+      "no root update means the existing front matter survives untouched"
+    );
+  }
 }
 
 #[cfg(test)]

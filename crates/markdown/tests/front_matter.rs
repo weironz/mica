@@ -4,7 +4,7 @@
 //! ignored on HTML export. Boundary cases pin "read the full spec / write a
 //! normalized subset": only a true opening + closing fence counts.
 
-use mica_markdown::{export_html, export_markdown, import_markdown};
+use mica_markdown::{export_html, export_markdown, import_markdown, import_markdown_fragment};
 
 fn root_front_matter(md: &str) -> Option<String> {
   let snap = import_markdown(md, "root");
@@ -133,4 +133,87 @@ fn html_export_ignores_front_matter() {
   let html = export_html(&import_markdown(md, "root")).unwrap();
   assert!(!html.contains("title"), "html leaked front matter: {html}");
   assert!(html.contains("<h1>"), "html: {html}");
+}
+
+// ---- Fragments -------------------------------------------------------------
+//
+// Front matter exists exactly once, at the very top of a file. Content grafted
+// INTO an existing document is never at that position, so reading a leading
+// `---` as front matter there swallows real text. Reported 2026-08-07: an MCP
+// append whose body sat between two `---` lines arrived with only the tail, no
+// error — the caller concluded "avoid `---` in Mica", a rule the format has no
+// reason to have.
+
+#[test]
+fn a_fragment_keeps_the_body_between_two_dividers() {
+  // The exact reported shape. Before the fix this yielded ONE block ("tail").
+  let md = "---\nbody\n---\ntail";
+  let snap = import_markdown_fragment(md, "root");
+  let root = snap.blocks.iter().find(|b| b.id == "root").unwrap();
+  assert!(
+    root.data.get("front_matter").is_none(),
+    "a fragment must not produce front matter: {:?}",
+    root.data
+  );
+
+  // Note the SECOND `---`: pressed straight against the line above it, that is
+  // a setext underline, so `body` is an h2 and not paragraph-then-divider. That
+  // is CommonMark, not a Mica quirk, and it is why this test asserts the TEXT
+  // rather than a pretty block sequence — the bug being fixed is "the text
+  // disappeared", and pinning the exact kinds here would pin the wrong thing.
+  let kinds: Vec<String> = snap
+    .blocks
+    .iter()
+    .filter(|b| b.id != "root")
+    .map(|b| b.kind.clone())
+    .collect();
+  assert_eq!(kinds, vec!["divider", "heading", "paragraph"]);
+
+  let texts: Vec<String> = snap
+    .blocks
+    .iter()
+    .filter(|b| b.id != "root" && !b.text.is_empty())
+    .map(|b| b.text.clone())
+    .collect();
+  assert_eq!(
+    texts,
+    vec!["body", "tail"],
+    "the body between the fences must survive"
+  );
+}
+
+#[test]
+fn a_fragment_with_blank_lines_gives_real_dividers() {
+  // The shape a caller usually means when they open with `---`: blank lines on
+  // both sides, so neither `---` can be a setext underline.
+  let snap = import_markdown_fragment("---\n\nbody\n\n---\n\ntail", "root");
+  let kinds: Vec<String> = snap
+    .blocks
+    .iter()
+    .filter(|b| b.id != "root")
+    .map(|b| b.kind.clone())
+    .collect();
+  assert_eq!(kinds, vec!["divider", "paragraph", "divider", "paragraph"]);
+}
+
+#[test]
+fn a_whole_document_still_reads_the_same_text_as_front_matter() {
+  // The two entry points must genuinely disagree here — otherwise the fix is
+  // just a rename and the document path lost its front matter too.
+  let md = "---\nbody\n---\ntail";
+  assert_eq!(root_front_matter(md).as_deref(), Some("body"));
+}
+
+#[test]
+fn a_fragment_that_only_looks_like_front_matter_is_not_swallowed() {
+  // No close fence: both entry points agree, and neither eats anything.
+  let md = "---\njust a line\n";
+  for snap in [
+    import_markdown_fragment(md, "root"),
+    import_markdown(md, "root"),
+  ] {
+    let root = snap.blocks.iter().find(|b| b.id == "root").unwrap();
+    assert!(root.data.get("front_matter").is_none());
+    assert_eq!(root.children.len(), 2, "divider + paragraph");
+  }
 }

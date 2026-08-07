@@ -435,11 +435,48 @@ fn append_footnotes_section(snapshot: &DocumentSnapshotPayload, out: &mut String
 /// block; structural nesting beyond fenced code is intentionally out of scope
 /// for the MVP importer.
 pub fn import_markdown(markdown: &str, root_block_id: &str) -> DocumentSnapshotPayload {
+  import_markdown_inner(markdown, root_block_id, true)
+}
+
+/// Parse a Markdown FRAGMENT — content grafted into an existing document rather
+/// than content that starts one.
+///
+/// The only difference from [`import_markdown`] is that a leading `---` is a
+/// thematic break here, never front matter. Front matter exists exactly once, at
+/// the very top of a file; an appended or inserted chunk is by definition not
+/// there, so reading it that way is reading a position the text does not have.
+///
+/// Not a nicety. Appending
+///
+/// ```text
+/// ---
+/// body
+/// ---
+/// tail
+/// ```
+///
+/// used to lift `body` out as YAML and drop it on a throwaway root: the caller
+/// got `tail`, no error, and no way to tell what happened. Reported 2026-08-07
+/// by an MCP caller who lost the middle of a page and concluded "avoid `---` in
+/// Mica" — a rule the format does not have.
+pub fn import_markdown_fragment(markdown: &str, root_block_id: &str) -> DocumentSnapshotPayload {
+  import_markdown_inner(markdown, root_block_id, false)
+}
+
+fn import_markdown_inner(
+  markdown: &str,
+  root_block_id: &str,
+  parse_front_matter: bool,
+) -> DocumentSnapshotPayload {
   // YAML front matter: a leading `---` fence with a later `---`/`...` close.
   // We don't parse the YAML — just lift the raw inner text off the block
   // stream so it can't degrade into thematic breaks / paragraphs, and stash
   // it on the root for verbatim round-trip on export.
-  let (front_matter, body) = split_front_matter(markdown);
+  let (front_matter, body) = if parse_front_matter {
+    split_front_matter(markdown)
+  } else {
+    (None, markdown)
+  };
 
   let raw_lines: Vec<&str> = body.lines().collect();
   let mut blocks: Vec<Block> = Vec::new();
