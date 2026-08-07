@@ -159,9 +159,6 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   当不了回滚点。**带数据改动的迁移必须自己先落还原点**:
   `docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-<x>-<ts>.sql.gz`,
   再 `gzip -t` 验完整性 + `zcat | grep -c "^COPY public.<表>"` 确认目标表在内。
-- ⚠️ **SSH 连太密会被上游掐**(不是节点干的,是云上游限流):一个会话连十几次后清一色
-  `Connection closed`。**别猛敲重试,那只会续期**,等 ~7 分钟自然恢复。
-  **验证脚本一次 ssh 里用 heredoc 跑完所有 psql**,别一条命令一个 ssh。
 - **分层生效**:服务端改动随 api 部署即生效;**MCP 代理层的改动在 `mica-cli` 二进制里**,用户不把
   MCP 指向新版并重连就还是旧行为。排查"我明明改了怎么没生效"先分清这层。
 - **迁移是 `sqlx::migrate!` 编译期嵌入的**:新增迁移文件不触发 `mica-infra` 重编 →
