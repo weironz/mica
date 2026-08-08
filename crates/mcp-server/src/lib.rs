@@ -86,10 +86,7 @@ impl MicaMcp {
         "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
       ))
       .await?;
-    let full = match value {
-      Value::String(s) => s,
-      other => other.to_string(),
-    };
+    let full = unwrap_markdown(value);
     self.cache_put(document_id, &full);
     Ok(full)
   }
@@ -236,6 +233,38 @@ struct ReadDocumentsArgs {
   /// token-cheaply, then read the few you need in full.
   #[serde(default)]
   mode: Option<String>,
+}
+
+/// The markdown string out of whatever `/export/markdown` answered with.
+///
+/// That endpoint returns `Json<MarkdownExportResponse>` — a JSON OBJECT
+/// `{"markdown": "..."}` — not a bare JSON string. This used to be
+/// `other => other.to_string()`, so `full` became the SERIALIZED object: a
+/// single line in which every newline is the two characters `\` and `n`.
+///
+/// Nothing errored. It broke the three things that read `full` as lines:
+///
+///   * `section` never matched — no line starts with `#`, so every call came
+///     back "[no heading contains ...]" even for headings `mica_get_outline`
+///     had just listed.
+///   * `offset`/`limit` always reported "[lines 1-1 of 1]" and returned the
+///     whole blob, so the token-saving window saved nothing.
+///   * a plain read handed the model `{"markdown":"..."}` instead of markdown.
+///
+/// The last one was visible in every response and still read as an envelope
+/// rather than a bug, which is why it survived: a wrong answer that looks like
+/// a format is the kind that does not get reported.
+fn unwrap_markdown(value: Value) -> String {
+  match value {
+    Value::String(s) => s,
+    Value::Object(mut map) => match map.remove("markdown") {
+      Some(Value::String(s)) => s,
+      // Some other object: keep the old behaviour rather than inventing one.
+      Some(other) => other.to_string(),
+      None => Value::Object(map).to_string(),
+    },
+    other => other.to_string(),
+  }
 }
 
 /// Return only the requested slice of a document's markdown, with a one-line
@@ -1946,7 +1975,9 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 
 #[cfg(test)]
 mod tests {
-  use super::{MicaMcp, reject_mangled_latex, section_markdown, urlencode, window_markdown};
+  use super::{
+    MicaMcp, reject_mangled_latex, section_markdown, unwrap_markdown, urlencode, window_markdown,
+  };
 
   #[test]
   fn warm_cache_put_get_invalidate() {
@@ -1986,6 +2017,57 @@ mod tests {
   }
 
   #[test]
+  /// `/export/markdown` answers with an OBJECT. Taking `.to_string()` of it
+  /// yielded the serialized JSON, whose newlines are the literal characters
+  /// `\` + `n` — so `full` was one line and every windowed read silently
+  /// degraded: `section` matched nothing, `offset`/`limit` reported
+  /// "[lines 1-1 of 1]", and a plain read returned `{"markdown":"..."}`.
+  #[test]
+  fn the_markdown_is_unwrapped_out_of_the_export_object() {
+    let body = serde_json::json!({ "markdown": "# Title
+
+body" });
+    let full = unwrap_markdown(body);
+    assert_eq!(full, "# Title
+
+body");
+    assert_eq!(full.lines().count(), 3, "must be real newlines, not \n");
+  }
+
+  /// The windows are what the fix exists for — assert them, not just the
+  /// unwrap, so a regression in either layer is caught here.
+  #[test]
+  fn a_window_over_the_export_object_is_a_real_slice() {
+    let body = serde_json::json!({ "markdown": "# Title
+
+## Setup
+
+step
+
+## Next
+
+more" });
+    let full = unwrap_markdown(body);
+    assert_eq!(section_markdown(&full, "Setup"), "## Setup
+
+step
+");
+    assert!(
+      window_markdown(&full, Some(1), Some(2), None).starts_with("[lines 1-2 of 9]"),
+      "got {:?}",
+      window_markdown(&full, Some(1), Some(2), None)
+    );
+  }
+
+  /// A bare JSON string still works (older servers), and an object without the
+  /// field keeps the old visible-but-honest behaviour rather than returning "".
+  #[test]
+  fn unwrap_falls_back_instead_of_inventing_an_empty_document() {
+    assert_eq!(unwrap_markdown(serde_json::json!("plain")), "plain");
+    let odd = serde_json::json!({ "unexpected": 1 });
+    assert_eq!(unwrap_markdown(odd), "{\"unexpected\":1}");
+  }
+
   fn section_returns_heading_through_next_same_or_higher() {
     let doc = "# Title\n\nintro\n\n## Setup\n\nstep one\n\n### Sub\n\ndeep\n\n## Usage\n\nrun it";
     // ## Setup through just before ## Usage (## Sub is deeper, stays in)
