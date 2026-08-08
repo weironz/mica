@@ -351,6 +351,7 @@
   "loginForgotPassword": "忘记密码？",
   "loginForgotEnterEmail": "请先在上方填写邮箱。",
   "authVerifySent": "账号已创建。请查收确认邮件，点击链接后再登录。",
+  "authFirstAccountReady": "账号已创建，直接登录即可 —— 服务器上的第一个账号无需邮箱确认。",
   "loginEmailNotVerified": "这个邮箱还没确认。请查收确认邮件，或重新发送一封。",
   "authResendVerification": "重新发送确认邮件",
   "authResendSent": "确认邮件已发送（如果该邮箱确实待确认）。",

@@ -1428,11 +1428,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // first, so there is no session to take. Say so and stop here — navigating
       // into the app would be a lie about what just happened.
       if (mode == AuthMode.register) {
-        await _api.register(form);
+        // The FIRST account on an empty instance is verified server-side on
+        // the spot, so telling it to go check its email is two lies in one
+        // sentence: nothing was sent, and nothing needs clicking. Ask the
+        // server which case this is instead of assuming the common one.
+        final verified = await _api.register(form);
         if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(context.l10n.authVerifySent)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              verified
+                  ? context.l10n.authFirstAccountReady
+                  : context.l10n.authVerifySent,
+            ),
+          ),
+        );
         return;
       }
       final AuthSession session;

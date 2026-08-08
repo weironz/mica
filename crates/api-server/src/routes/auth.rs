@@ -108,13 +108,27 @@ struct Claims {
 
 /// `POST /api/auth/register`
 ///
+/// Whether the account that was just created can sign in RIGHT NOW.
+///
+/// The server is the only side that knows: the first account on an empty
+/// instance is verified on the spot (see [`register`]), every later one has to
+/// confirm its address. This used to be invisible — both cases answered
+/// `204 No Content`, so the client had to guess, guessed "check your email",
+/// and told the very first operator of a fresh install to wait for a message
+/// that was never sent and was never needed. A fact the server acts on has to
+/// be a fact the server reports.
+#[derive(Debug, Serialize)]
+pub struct RegisterResponse {
+  pub verified: bool,
+}
+
 /// Answers `204 No Content`, not a session: the account cannot be signed in to
 /// until its address is confirmed, so handing back tokens would contradict the
 /// gate in [`login`]. The client's next step is "check your email".
 pub async fn register(
   State(state): State<AppState>,
   Json(payload): Json<RegisterRequest>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Json<RegisterResponse>> {
   // Registration is CLOSED unless the operator opened it
   // (`MICA_REGISTRATION_ENABLED=true`). Login and refresh for existing users are
   // unaffected — this gate is only about minting NEW accounts.
@@ -171,7 +185,7 @@ pub async fn register(
       .bind(user.id)
       .execute(&state.db)
       .await?;
-    return Ok(StatusCode::NO_CONTENT);
+    return Ok(Json(RegisterResponse { verified: true }));
   }
 
   // Otherwise: the account exists but cannot be signed in to until the address is
@@ -184,7 +198,7 @@ pub async fn register(
 
   // 204, not a session: handing back tokens here would contradict the login gate
   // two lines below. Same shape as `forgot` — "we sent you mail" carries no body.
-  Ok(StatusCode::NO_CONTENT)
+  Ok(Json(RegisterResponse { verified: false }))
 }
 
 pub async fn login(
@@ -1205,6 +1219,19 @@ mod tests {
     assert!(is_public("/api/auth/register"));
     assert!(!is_public("/api/workspaces"));
     assert!(!is_public("/api/auth/tokens"));
+  }
+
+  /// The first account on an empty instance is verified on the spot, but both
+  /// cases used to answer `204 No Content` — so the client could not tell them
+  /// apart, guessed "check your email", and sent the very first operator of a
+  /// fresh install to wait for a message that was never sent and was never
+  /// needed. The response has to carry the fact the server acted on.
+  #[test]
+  fn the_register_response_states_whether_the_account_can_sign_in_now() {
+    let first = serde_json::to_value(RegisterResponse { verified: true }).unwrap();
+    assert_eq!(first, serde_json::json!({"verified": true}));
+    let later = serde_json::to_value(RegisterResponse { verified: false }).unwrap();
+    assert_eq!(later, serde_json::json!({"verified": false}));
   }
 
   #[test]

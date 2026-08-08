@@ -622,6 +622,7 @@
   "loginForgotPassword": "Forgot password?",
   "loginForgotEnterEmail": "Enter your email above first.",
   "authVerifySent": "Account created. Confirm your email address, then sign in.",
+  "authFirstAccountReady": "Account created — sign in now. The first account on a server needs no email confirmation.",
   "loginEmailNotVerified": "This email is not confirmed yet. Check your inbox, or send a new link.",
   "authResendVerification": "Resend confirmation email",
   "authResendSent": "Confirmation email sent, if that address was waiting for one.",
