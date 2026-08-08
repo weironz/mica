@@ -59,10 +59,20 @@ services:
       - "no-new-privileges:true"
     ports:
       - "9000:9000" # S3 API — public: browsers use presigned URLs directly
+      # Admin console. Published on purpose, but know what it is: a browser UI
+      # that can browse, download and DELETE the bucket, and it authenticates
+      # with S3_ACCESS_KEY / S3_SECRET_KEY. Left at their defaults, those are
+      # published in this repository — so on a node strangers can reach, this
+      # port hands them the file manager, not just the files. Set both keys
+      # (see .env.prod.example) or drop this line on anything public.
+      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
     environment:
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: 0.0.0.0:9000
-      RUSTFS_CONSOLE_ENABLE: "false"
+      # Serves the console on :9001 (published above). Flip to "false" to close
+      # it without touching the ports.
+      RUSTFS_CONSOLE_ENABLE: "${RUSTFS_CONSOLE_ENABLE:-true}"
+      RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "*"
       # DEFAULTED — and unlike the postgres password, this one IS internet-facing:
       # the ports above publish :9000 so browsers can presign against it directly.
       # A default therefore means every install that leaves it alone shares one
