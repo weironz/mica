@@ -79,13 +79,22 @@ services:
   # (.github/workflows/release.yml) and MUST move as a set —
   # MICA_VERSION keys all of them.
   #
+  # `:?` and NOT a default. This read `${MICA_VERSION:-v0.5.0}` until 2026-08-07,
+  # so an operator who copied .env.prod.example (which ships MICA_VERSION empty,
+  # deliberately) and forgot this one line got v0.5.0 — a tag from long before
+  # they read the file — with nothing printed. The quickstart stack has always
+  # used `:?`, and all three docs describing this said "empty refuses to start";
+  # this file was the outlier, almost certainly a leftover from when v0.5.0 was
+  # current. A default that is silently wrong is worse than a refusal that is
+  # loud.
+  #
   # MICA_REGISTRY defaults to Aliyun ACR: prod is in CN, and pulling from
   # Docker Hub there only worked through a third-party pull-through mirror
   # (docker.1ms.run) that caches tag->digest — a stale-image trap. ACR is
   # first-party; Docker Hub stays an off-site copy you can switch to with
   # MICA_REGISTRY=willdockerhub. Tags are immutable versions, never `latest`.
   api:
-    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-api:${MICA_VERSION:-v0.5.0}
+    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -179,7 +188,7 @@ services:
         condition: service_started
 
   web:
-    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-web:${MICA_VERSION:-v0.5.0}
+    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-web:${MICA_VERSION:?set MICA_VERSION in .env — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
     networks: [default, traefik]
@@ -201,7 +210,7 @@ services:
   #   docker compose --profile backup up -d backup
   # Talks to the API over the internal network (no token ever leaves the host).
   backup:
-    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-cli:${MICA_VERSION:-v0.5.0}
+    image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-cli:${MICA_VERSION:?set MICA_VERSION in .env — pick one from https://github.com/weironz/mica/releases}
     profiles: ["backup"]
     restart: unless-stopped
     logging: *default-logging

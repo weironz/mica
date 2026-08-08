@@ -202,11 +202,14 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 —— `SERVER_IP` 打开、`DOMAIN`/`S3_DOMAIN` 注释掉。当天曾拆成两份又合回来:拆开会把
 凭据/邮件/注册那 60 行完全相同的说明复制一遍,而那正是本仓库反复付代价的漂移。)
 
-> ⚠️ **但「留空会拒绝启动」只对单机那套成立。** `docker-compose.single.yml` 用
-> `${MICA_VERSION:?}`,空值当场报错;`docker-compose.yml`(Traefik/生产)用的却是
-> `${MICA_VERSION:-v0.5.0}` —— 空值**静默**装上 v0.5.0。生产节点不受影响(`.env` 里的值由
-> `deploy-prod` 写死),受影响的是照文档装新机的人。模板里已就地写明,但那只是文档;要真堵住
-> 得把那三处改成 `:?`,而 compose 一改,下次上线必须走 `just deploy-prod`。
+> **两套 compose 现在都用 `${MICA_VERSION:?}`**,空值一律拒绝解析并说明原因。
+> 2026-08-07 之前 `docker-compose.yml` 用的是 `${MICA_VERSION:-v0.5.0}` —— 空值**静默**
+> 装上 v0.5.0,而模板出厂就是空的。生产节点当时不受影响(`.env` 里的值由 `deploy-prod` 写死),
+> 受影响的是照文档装新机的人。
+>
+> ⚠️ **这次改动动了 `deploy/docker-compose.yml`,所以下一次上线必须走 `just deploy-prod`**
+> —— `gh workflow run Deploy` 只传 compose 的 sha256 指纹,节点上那份还是旧的,会被拒绝。
+> 这是刻意的边界(CI 不能往节点注入文件),不是故障;跑一次 `deploy-prod` 即同步。
 - **节点必须能 pull ACR**:仓库设为公开,或在节点上 `docker login registry.cn-shenzhen.aliyuncs.com`
   一次(凭据只存在节点本地)。
 - **`--no-deps`**:只重建 api + web + backup,postgres / rustfs 不动。
