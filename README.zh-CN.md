@@ -108,16 +108,16 @@ mkdir -p /data/mica && cd /data/mica
 
 # 服务器只需要这两个文件。用 **release tag** 而不是 `main`:compose 文件和它
 # 拉的镜像(MICA_VERSION)必须是同一代,而 `main` 可能比最新发布还新。
-curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/docker-compose.single.yml
-curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.15/deploy/.env.prod.example -o .env.prod
+curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/docker-compose.single.yml
+curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/.env.single.example -o .env.single
 
-vi .env.prod          # 把 SERVER_IP **取消注释**并填上(默认是注释掉的),
-                      # JWT_SECRET 默认为空也要填 —— 这两项没填,
-                      # compose 直接拒绝解析。 openssl rand -hex 32
-docker compose --env-file .env.prod -f docker-compose.single.yml up -d
+vi .env.single        # 只有两行要填:SERVER_IP(浏览器用的地址)和
+                      # MICA_VERSION(挑一个真实发布)。这两项没填,
+                      # compose 直接拒绝解析。凭据一个都不用生成。
+docker compose --env-file .env.single -f docker-compose.single.yml up -d
 ```
 
-服务器上已经 clone 了仓库?那就 `cp deploy/.env.prod.example .env.prod`、
+服务器上已经 clone 了仓库?那就 `cp deploy/.env.single.example .env.single`、
 `-f` 指向 `deploy/docker-compose.single.yml` 即可 —— 但**并不需要** clone,
 这正是重点:服务器上只要有 Docker。
 
@@ -127,7 +127,7 @@ docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 对外端口是 **80**(应用)和 **9000**(RustFS —— 浏览器直接对它做预签名上传下载,
 所以 `SERVER_IP` **必须是浏览器可达的地址**)。Postgres 只在 compose 网络内部可达。
 
-升级:改 `.env.prod` 里的 `MICA_VERSION`,再用 `--pull always` 跑同一条命令。
+升级:改 `.env.single` 里的 `MICA_VERSION`,再用 `--pull always` 跑同一条命令。
 这是明文 HTTP —— 没人能给一个裸 IP 签发证书,所以在它承载你不希望被路上读到的
 东西之前,先在前面放一个带真实域名的反向代理。
 

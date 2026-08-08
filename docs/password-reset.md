@@ -50,7 +50,7 @@ v1 RPC 签名 HMAC-SHA1),复用 `reqwest`,只加了 `sha1`/`hmac` 两个小 crat
 4. 建一个 **RAM 用户 + AccessKey**,授权 DirectMail(`AliyunDirectMailFullAccess` 或更细的发信权限),
    记下 AccessKeyId / AccessKeySecret。
 
-### 节点 `.env`(`/data/mica/.env.prod`)填这几项后 `deploy-prod` 即生效
+### 节点 `.env`(`/data/mica/.env`)填这几项后 `deploy-prod` 即生效
 
 ```env
 MICA_MAIL_BACKEND=directmail

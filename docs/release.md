@@ -196,10 +196,16 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
   - `MICA_REGISTRY=registry.cn-shenzhen.aliyuncs.com/willspace`(compose 默认值也是它)
   - `MICA_VERSION=vX.Y.Z`(由 `just deploy-prod` 改写)
 
-`deploy/.env.prod.example` 的 `MICA_VERSION` **不用跟着发版改** —— 它故意留空,
-compose 用 `${MICA_VERSION:?}` 引用,空值直接拒绝启动,逼使用者自己选一个真实发布。
-2026-08-05 它一度钉着 `v0.13.6`(落后 9 个版本),照文档走的人装到的就是那一版;
-改成留空既恢复了 compose 的原意,也让这里没有会烂的东西。
+两份模板的 `MICA_VERSION` **都不用跟着发版改** —— 故意留空,逼使用者自己选一个真实发布。
+2026-08-05 它一度钉着 `v0.13.6`(落后 9 个版本),照文档走的人装到的就是那一版;留空让这里
+没有会烂的东西。(2026-08-07 起两套栈各有自己的模板:单机 `deploy/.env.single.example`,
+Traefik `deploy/.env.prod.example` —— 以前共用一份,结果两边的操作者都要面对对方的变量。)
+
+> ⚠️ **但「留空会拒绝启动」只对单机那套成立。** `docker-compose.single.yml` 用
+> `${MICA_VERSION:?}`,空值当场报错;`docker-compose.yml`(Traefik/生产)用的却是
+> `${MICA_VERSION:-v0.5.0}` —— 空值**静默**装上 v0.5.0。生产节点不受影响(`.env` 里的值由
+> `deploy-prod` 写死),受影响的是照文档装新机的人。模板里已就地写明,但那只是文档;要真堵住
+> 得把那三处改成 `:?`,而 compose 一改,下次上线必须走 `just deploy-prod`。
 - **节点必须能 pull ACR**:仓库设为公开,或在节点上 `docker login registry.cn-shenzhen.aliyuncs.com`
   一次(凭据只存在节点本地)。
 - **`--no-deps`**:只重建 api + web + backup,postgres / rustfs 不动。
