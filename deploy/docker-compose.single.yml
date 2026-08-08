@@ -1,7 +1,7 @@
 # QUICKSTART: one server, reached by IP, no reverse proxy to set up.
 #
-#   cp deploy/.env.single.example .env.single   # then edit (SERVER_IP, MICA_VERSION)
-#   docker compose --env-file .env.single -f deploy/docker-compose.single.yml up -d
+#   cp deploy/.env.prod.example .env.prod   # then edit (SERVER_IP, MICA_VERSION)
+#   docker compose --env-file .env.prod -f deploy/docker-compose.single.yml up -d
 #
 # Then open http://<SERVER_IP>/. Migrations are embedded in the API binary and
 # run at startup, so there is no separate migrate step.
@@ -40,7 +40,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-mica}
       # Defaulted, and safe to default: this service publishes no port, so the
       # database is reachable only from the other containers on this stack's
-      # network. Override it in .env.single if you expose the database at all.
+      # network. Override it in .env.prod if you expose the database at all.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mica}
       POSTGRES_DB: ${POSTGRES_DB:-mica}
     volumes:
@@ -72,7 +72,7 @@ services:
       RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-mica}
       RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
       # Browsers presign-PUT/GET directly against :9000 from the app origin.
-      RUSTFS_CORS_ALLOWED_ORIGINS: "http://${SERVER_IP:?set in .env.single}"
+      RUSTFS_CORS_ALLOWED_ORIGINS: "http://${SERVER_IP:?set in .env.prod}"
     volumes:
       - mica-prod-rustfs:/data
 
@@ -84,7 +84,7 @@ services:
   # the world. The maintainer's own stack defaults to Aliyun ACR instead, because
   # it runs in CN where Docker Hub is not dependable.
   api:
-    image: ${MICA_REGISTRY:-willdockerhub}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env.single — pick one from https://github.com/weironz/mica/releases}
+    image: ${MICA_REGISTRY:-willdockerhub}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env.prod — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -127,7 +127,7 @@ services:
   # mounted config. Nothing here reads the repo, so the compose file is the only
   # file you need on the server.
   web:
-    image: ${MICA_REGISTRY:-willdockerhub}/mica-web:${MICA_VERSION:?set MICA_VERSION in .env.single — pick one from https://github.com/weironz/mica/releases}
+    image: ${MICA_REGISTRY:-willdockerhub}/mica-web:${MICA_VERSION:?set MICA_VERSION in .env.prod — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
     ports:

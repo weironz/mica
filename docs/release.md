@@ -198,8 +198,9 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 
 两份模板的 `MICA_VERSION` **都不用跟着发版改** —— 故意留空,逼使用者自己选一个真实发布。
 2026-08-05 它一度钉着 `v0.13.6`(落后 9 个版本),照文档走的人装到的就是那一版;留空让这里
-没有会烂的东西。(2026-08-07 起两套栈各有自己的模板:单机 `deploy/.env.single.example`,
-Traefik `deploy/.env.prod.example` —— 以前共用一份,结果两边的操作者都要面对对方的变量。)
+没有会烂的东西。(2026-08-07:`deploy/.env.prod.example` **一份**服务两套栈,默认值以单机为准
+—— `SERVER_IP` 打开、`DOMAIN`/`S3_DOMAIN` 注释掉。当天曾拆成两份又合回来:拆开会把
+凭据/邮件/注册那 60 行完全相同的说明复制一遍,而那正是本仓库反复付代价的漂移。)
 
 > ⚠️ **但「留空会拒绝启动」只对单机那套成立。** `docker-compose.single.yml` 用
 > `${MICA_VERSION:?}`,空值当场报错;`docker-compose.yml`(Traefik/生产)用的却是

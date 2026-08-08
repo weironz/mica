@@ -33,15 +33,15 @@ mkdir -p /data/mica && cd /data/mica
 # compose file and the images it pulls (MICA_VERSION) have to be the same
 # generation, and `main` can be ahead of the newest release.
 curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/docker-compose.single.yml
-curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/.env.single.example -o .env.single
+curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/.env.prod.example -o .env.prod
 
-vi .env.single        # Two empty lines to fill:
+vi .env.prod          # Two empty lines to fill:
                       #   SERVER_IP     — the address BROWSERS use
                       #   MICA_VERSION  — pick a release from
                       #                   github.com/weironz/mica/releases
                       # `compose config` refuses to resolve until both are set.
 
-docker compose --env-file .env.single -f docker-compose.single.yml up -d
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
 
 > **The object-store credentials default to a value published in this
@@ -53,7 +53,7 @@ docker compose --env-file .env.single -f docker-compose.single.yml up -d
 > [Secrets](#secrets-what-you-generate-and-what-generates-itself).
 
 Already have the repo checked out on the server? Then it is just
-`cp deploy/.env.single.example .env.single` and point `-f` at
+`cp deploy/.env.prod.example .env.prod` and point `-f` at
 `deploy/docker-compose.single.yml` — but a checkout is not required, and that is
 the point: the server needs Docker and nothing else.
 
@@ -72,12 +72,12 @@ binary and run automatically at startup.
 
 ```bash
 cd /data/mica
-vi .env.single        # bump MICA_VERSION to the release you want
-docker compose --env-file .env.single -f docker-compose.single.yml up -d --pull always
+vi .env.prod        # bump MICA_VERSION to the release you want
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d --pull always
 ```
 
 No `git pull` — the compose file is the only repo file this stack needs, and
-the version it runs is the tag in `.env.single`, not whatever your checkout is at.
+the version it runs is the tag in `.env.prod`, not whatever your checkout is at.
 
 `index.html` / the service worker are served with `no-cache`, so a plain
 reload picks up new releases (asset files are content-hashed).
@@ -183,7 +183,7 @@ stops verifying, which is the point.
 
 ```sh
 docker exec mica-postgres-1 psql -U mica -d mica -c "TRUNCATE server_secrets;"
-docker compose --env-file .env.single -f docker-compose.single.yml restart api
+docker compose --env-file .env.prod -f docker-compose.single.yml restart api
 ```
 
 **Upgrading an existing install.** Nothing to do — a `JWT_SECRET` already in
@@ -314,6 +314,6 @@ bind `HTTP_ADDR=0.0.0.0:8080` in containers (compose files set it).
 
 1. Point DNS at the server; put Caddy (auto-TLS) or nginx+certbot in front
    of port 80/443.
-2. `.env.single`: `SERVER_IP=app.example.com` and switch the two `http://`
+2. `.env.prod`: `SERVER_IP=app.example.com` and switch the two `http://`
    references for S3/CORS to `https://` (compose file).
 3. Rebuild nothing client-side — same-origin resolution adapts.

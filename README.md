@@ -121,12 +121,12 @@ mkdir -p /data/mica && cd /data/mica
 # compose file and the images it pulls (MICA_VERSION) must be the same
 # generation, and `main` can be ahead of the newest release.
 curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/docker-compose.single.yml
-curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/.env.single.example -o .env.single
+curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/.env.prod.example -o .env.prod
 
-vi .env.single        # Two empty lines to fill: SERVER_IP (the address BROWSERS
-                      # use) and MICA_VERSION (pick a release). Compose refuses
-                      # to resolve until both are set.
-docker compose --env-file .env.single -f docker-compose.single.yml up -d
+vi .env.prod          # Two empty lines to fill: SERVER_IP (the address
+                      # BROWSERS use) and MICA_VERSION (pick a release).
+                      # Compose refuses to resolve until both are set.
+docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
 
 **You generate no secrets.** The server mints its own JWT signing key on first
@@ -138,7 +138,7 @@ defaulted too.
 repository, and `:9000` is internet-facing.** That is what makes the install two
 lines — and it means anyone who reads this repo can read and write the files of
 an install that kept the default. On a node strangers can reach, set
-`S3_ACCESS_KEY` and `S3_SECRET_KEY` in `.env.single` before the first start
+`S3_ACCESS_KEY` and `S3_SECRET_KEY` in `.env.prod` before the first start
 (`openssl rand -hex 32`). The API warns in its log on every production start
 while the default is in use.
 
@@ -149,7 +149,7 @@ Public ports are **80** (app) and **9000** (RustFS, because the browser
 presigns straight against it — so `SERVER_IP` must be browser-reachable).
 Postgres stays inside the compose network.
 
-To upgrade, change `MICA_VERSION` in `.env.single` and re-run the same command
+To upgrade, change `MICA_VERSION` in `.env.prod` and re-run the same command
 with `--pull always`. This is plain HTTP: nobody can issue a certificate for a
 bare IP, so put a reverse proxy with a real hostname in front before it carries
 anything you would mind being read off the wire.
