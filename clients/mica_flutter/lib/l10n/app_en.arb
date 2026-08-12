@@ -66,6 +66,8 @@
   "rowSetIcon": "Set icon",
   "rowOpenInNewTab": "Open in new tab",
   "searchRecentLabel": "Recently edited",
+  "searchWorkspaceLabel": "Workspaces",
+  "searchWorkspaceSwitch": "Switch",
   "tabNewTooltip": "New tab",
   "tabNewPage": "New page",
   "tabOpenExisting": "Open an existing page…",

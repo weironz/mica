@@ -154,7 +154,20 @@ class _SearchDialog extends StatefulWidget {
     this.workspaceName,
     this.initialQuery,
     this.recents = const [],
+    this.workspaces = const [],
+    this.onOpenWorkspace,
   });
+
+  /// Every workspace the user belongs to, matched by NAME as you type.
+  ///
+  /// Filtered here rather than on the server because the list is already in
+  /// memory — switching among 50 workspaces should not cost a round trip, and
+  /// there is no endpoint that would answer it anyway.
+  final List<({String id, String name})> workspaces;
+
+  /// Switch to a workspace. Null drops workspace matching entirely (the local
+  /// world, where the picker has one implicit workspace and nothing to find).
+  final void Function(String workspaceId)? onOpenWorkspace;
 
   /// Recently edited pages in THIS workspace, shown before anything is typed.
   /// Built by the host (`buildRecents`), so this dialog does not grow a second
@@ -250,9 +263,11 @@ class _SearchDialogState extends State<_SearchDialog> {
         _lastQuery = query;
         _loading = false;
         _failed = false;
-        // Preselect the top hit: ↵ should open the obvious answer without an
-        // extra ↓ first. -1 when the query found nothing.
-        _selected = results.isEmpty ? -1 : 0;
+        // Preselect the top row: ↵ should act on the obvious answer without an
+        // extra ↓ first. Counts workspace hits too — searching a workspace by
+        // name normally finds no PAGE of that name, and keying off `results`
+        // alone left ↵ inert on exactly the query that matched a workspace.
+        _selected = (results.isEmpty && _workspaceHits.isEmpty) ? -1 : 0;
       });
     } catch (_) {
       // Surface the failure — a swallowed error reads as "no results" and
@@ -389,20 +404,46 @@ class _SearchDialogState extends State<_SearchDialog> {
     );
   }
 
+  /// Workspaces whose NAME contains the query, newest-typed-first order kept.
+  ///
+  /// Synchronous: unlike the page search this needs no request, so a workspace
+  /// appears on the first keystroke while the page results are still debounced.
+  /// That is also why they render above — the fast half should not sit below a
+  /// spinner.
+  ///
+  /// Capped, and the cap is visible in the UI as "just the closest few": an
+  /// uncapped list of similarly-named workspaces would push the page results
+  /// off the panel entirely.
+  List<({String id, String name})> get _workspaceHits {
+    if (widget.onOpenWorkspace == null) return const [];
+    return matchingWorkspaces(
+      workspaces: widget.workspaces,
+      query: _query.text,
+    );
+  }
+
+  /// The keyboard sequence runs over workspace hits FIRST, then page results —
+  /// the same order they are drawn in, because a selection that jumps around
+  /// relative to what is on screen is worse than no keyboard nav at all.
+  int get _rowCount => _workspaceHits.length + _results.length;
+
   /// Move the keyboard selection and keep it on screen.
   void _move(int delta) {
     final next = moveSelection(
       current: _selected,
-      count: _results.length,
+      count: _rowCount,
       delta: delta,
     );
     if (next == _selected) return;
     setState(() => _selected = next);
-    if (next < 0 || !_listScroll.hasClients) return;
+    // Workspace rows sit above the scroll view and are always visible, so only
+    // a selection that landed among the page results needs scrolling into view.
+    final inResults = next - _workspaceHits.length;
+    if (inResults < 0 || !_listScroll.hasClients) return;
     // Rows are a fixed height here, so the offset is computable — no need for a
     // per-row GlobalKey just to scroll.
     const rowExtent = _searchRowHeight;
-    final target = next * rowExtent;
+    final target = inResults * rowExtent;
     final top = _listScroll.offset;
     final bottom = top + _listScroll.position.viewportDimension - rowExtent;
     if (target < top) {
@@ -430,10 +471,18 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
   }
 
-  /// Act on the keyboard-selected result, if there is one.
+  /// Act on the keyboard-selected row, if there is one.
+  ///
+  /// Dispatches on the same index space [_move] walks: the first
+  /// `_workspaceHits.length` rows are workspaces, the rest are page results.
   void _openSelected() {
-    if (_selected < 0 || _selected >= _results.length) return;
-    _activate(_results[_selected]);
+    if (_selected < 0 || _selected >= _rowCount) return;
+    final hits = _workspaceHits;
+    if (_selected < hits.length) {
+      widget.onOpenWorkspace?.call(hits[_selected].id);
+      return;
+    }
+    _activate(_results[_selected - hits.length]);
   }
 
   /// The pre-typing list. Rows route through the same [_SearchDialog.onOpen] as
@@ -510,6 +559,80 @@ class _SearchDialogState extends State<_SearchDialog> {
         detail: context.l10n.searchEmptyDetail,
       );
     }
+
+    // Workspace matches ride ABOVE whatever the page half has to say — including
+    // its "no matches" state. Typing a workspace name usually finds no PAGE by
+    // that name, so putting this below the early return meant the panel
+    // answered 「无匹配结果」 while holding the exact thing the user asked for.
+    final workspaceHits = _workspaceHits;
+    if (workspaceHits.isEmpty) return _buildPageResults(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _workspaceSection(context, workspaceHits),
+        Expanded(child: _buildPageResults(context)),
+      ],
+    );
+  }
+
+  Widget _workspaceSection(
+    BuildContext context,
+    List<({String id, String name})> hits,
+  ) {
+    final theme = MicaTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 4),
+          child: Text(
+            context.l10n.searchWorkspaceLabel,
+            style: TextStyle(fontSize: 12, color: theme.text.faint),
+          ),
+        ),
+        for (var i = 0; i < hits.length; i++)
+          Material(
+            color: _selected == i ? theme.accent.wash : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => widget.onOpenWorkspace?.call(hits[i].id),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.workspaces_outline,
+                      size: 16,
+                      color: theme.text.muted,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        hits[i].name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(
+                      context.l10n.searchWorkspaceSwitch,
+                      style: TextStyle(fontSize: 12, color: theme.text.faint),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  Widget _buildPageResults(BuildContext context) {
     if (!_loading && _results.isEmpty) {
       // A failure is not an empty result set. Both used to render under the
       // title 「无匹配结果」, which told the user their workspace has no such
@@ -564,7 +687,10 @@ class _SearchDialogState extends State<_SearchDialog> {
                 views: widget.views,
                 startedAt: _results[i].viewId,
               ),
-              selected: i == _selected,
+              // Offset by the workspace rows drawn above: `_selected` indexes
+              // both sections, so comparing it to the raw list index would
+              // highlight the wrong page whenever a workspace also matched.
+              selected: i + _workspaceHits.length == _selected,
               onTap: () => _activate(_results[i]),
             ),
           ),

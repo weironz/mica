@@ -1753,6 +1753,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Switch to a workspace by id, ignoring an id that is no longer in the list.
+  ///
+  /// Silent on a miss rather than raising: the only caller is the search panel,
+  /// whose rows are built from this same list, so a miss means the list changed
+  /// under the click — and "nothing happened" beats an error about an id the
+  /// user never saw.
+  void _selectWorkspaceById(String workspaceId) {
+    for (final w in _workspaces) {
+      if (w.id != workspaceId) continue;
+      if (_selectedWorkspace?.id == workspaceId) return;
+      unawaited(_selectWorkspace(w));
+      return;
+    }
+  }
+
   Future<void> _selectWorkspace(Workspace workspace) {
     savePref('lastWorkspaceId', workspace.id);
     return _run(() async {
@@ -5774,6 +5789,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onNewTabPage: local
           ? null
           : () => _createDocumentInNewTab(context.l10n.newPage),
+      // Cloud only: the local world has one implicit workspace, so there is
+      // nothing for a name search to disambiguate.
+      onSelectWorkspaceById: local ? null : _selectWorkspaceById,
       searchRecents: buildWorkspaceRecents(
         context,
         workspaceId: local ? _localSelectedWorkspace?.id : _selectedWorkspace?.id,
@@ -6604,6 +6622,7 @@ class WorkspaceView extends StatefulWidget {
     this.onOpenInNewTabById,
     this.onNewTabPage,
     this.searchRecents = const [],
+    this.onSelectWorkspaceById,
     required this.selectedMarkdown,
     required this.presence,
     required this.message,
@@ -6832,6 +6851,13 @@ class WorkspaceView extends StatefulWidget {
   /// Recently edited pages, for the search dialog's pre-typing list. Built by
   /// the host with the same `buildRecents` the home screen uses.
   final List<HomeDocEntry> searchRecents;
+
+  /// Switch workspaces by id — the search panel's workspace matches.
+  ///
+  /// By id rather than by [Workspace] because the panel only ever holds the
+  /// (id, name) pairs it was given; handing it the models would let it start
+  /// reading fields that are the host's to interpret.
+  final void Function(String workspaceId)? onSelectWorkspaceById;
   final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
@@ -10333,6 +10359,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         workspaceName: widget.selectedWorkspace?.name,
         initialQuery: initialQuery,
         recents: widget.searchRecents,
+        workspaces: [
+          for (final w in widget.workspaces) (id: w.id, name: w.name),
+        ],
+        onOpenWorkspace: widget.onSelectWorkspaceById == null
+            ? null
+            : (id) {
+                Navigator.of(context).pop();
+                widget.onSelectWorkspaceById!(id);
+              },
         onOpen: (viewId) {
           Navigator.of(context).pop();
           if (inNewTab && openInNewTab != null) {

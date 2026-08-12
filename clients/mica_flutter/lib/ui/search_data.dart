@@ -43,6 +43,39 @@ List<HighlightRun> highlightRuns(String text, String query) {
   return runs;
 }
 
+/// How many workspace name matches the search panel shows at once.
+///
+/// Small on purpose: they sit above the page results and do not scroll, so an
+/// uncapped run of similarly-named workspaces would push the page half off the
+/// panel. Five is enough to disambiguate a typed name; past that, type more.
+const int kMaxWorkspaceHits = 5;
+
+/// Workspaces whose NAME contains [query], case-insensitively, capped at [limit].
+///
+/// Client-side because the whole list is already in memory: switching among
+/// fifty workspaces should not cost a round trip, and no endpoint answers it.
+/// Input order is preserved — that is the user's own workspace order, and
+/// re-ranking it by match position would reshuffle a list they arranged.
+///
+/// An empty or whitespace query matches NOTHING rather than everything: the
+/// panel shows recents before anything is typed, and a full workspace dump
+/// would bury them.
+List<({String id, String name})> matchingWorkspaces({
+  required List<({String id, String name})> workspaces,
+  required String query,
+  int limit = kMaxWorkspaceHits,
+}) {
+  final needle = query.trim().toLowerCase();
+  if (needle.isEmpty || limit <= 0) return const [];
+  final hits = <({String id, String name})>[];
+  for (final w in workspaces) {
+    if (!w.name.toLowerCase().contains(needle)) continue;
+    hits.add(w);
+    if (hits.length == limit) break;
+  }
+  return hits;
+}
+
 /// The next selected index when the user presses ↓ ([delta] 1) or ↑ ([delta] -1).
 ///
 /// Wraps at both ends: with a short result list, walking off the bottom and

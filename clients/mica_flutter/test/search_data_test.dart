@@ -151,4 +151,87 @@ void main() {
       expect(moveSelection(current: 9, count: 3, delta: -1), lessThan(3));
     });
   });
+
+  // Workspace names are matched here, in memory, and never reach the server:
+  // there is no endpoint for it, and with fifty workspaces a round trip per
+  // keystroke would be the slowest part of the fastest half of the panel.
+  group('matchingWorkspaces', () {
+    final all = [
+      (id: 'w1', name: '推理引擎'),
+      (id: 'w2', name: '大语言模型'),
+      (id: 'w3', name: 'AI开发框架'),
+      (id: 'w4', name: 'Infra Notes'),
+    ];
+
+    test('matches a substring anywhere in the name', () {
+      expect(
+        matchingWorkspaces(workspaces: all, query: '语言').map((w) => w.id),
+        ['w2'],
+      );
+    });
+
+    test('is case-insensitive, like the server-side ILIKE for pages', () {
+      // The two halves of this panel must agree on case, or a query finds the
+      // page and misses the workspace of the same name.
+      expect(
+        matchingWorkspaces(workspaces: all, query: 'infra').map((w) => w.id),
+        ['w4'],
+      );
+      expect(
+        matchingWorkspaces(workspaces: all, query: 'INFRA').map((w) => w.id),
+        ['w4'],
+      );
+    });
+
+    test('an empty or blank query matches NOTHING, not everything', () {
+      // The panel shows recents before anything is typed; dumping every
+      // workspace there would bury them.
+      expect(matchingWorkspaces(workspaces: all, query: ''), isEmpty);
+      expect(matchingWorkspaces(workspaces: all, query: '   '), isEmpty);
+    });
+
+    test('keeps the caller order rather than re-ranking', () {
+      // That order is the user's own arrangement of their workspaces.
+      final many = matchingWorkspaces(
+        workspaces: [
+          (id: 'a', name: 'zzz project'),
+          (id: 'b', name: 'project'),
+        ],
+        query: 'project',
+      );
+      expect(many.map((w) => w.id), ['a', 'b'], reason: 'input order kept');
+    });
+
+    test('caps the number of hits', () {
+      final many = [
+        for (var i = 0; i < 12; i++) (id: 'w$i', name: 'project $i'),
+      ];
+      expect(matchingWorkspaces(workspaces: many, query: 'project').length, 5);
+      expect(
+        matchingWorkspaces(workspaces: many, query: 'project', limit: 2).length,
+        2,
+      );
+    });
+
+    test('a non-positive limit yields nothing rather than everything', () {
+      expect(matchingWorkspaces(workspaces: all, query: 'a', limit: 0), isEmpty);
+    });
+
+    test('the query is a literal, not a pattern', () {
+      // Same trap `highlightRuns` guards: a workspace called "50% done" must be
+      // findable by typing "50%", and "(" must not blow up.
+      final odd = [
+        (id: 'p', name: '50% done'),
+        (id: 'q', name: 'notes (draft)'),
+      ];
+      expect(
+        matchingWorkspaces(workspaces: odd, query: '50%').map((w) => w.id),
+        ['p'],
+      );
+      expect(
+        matchingWorkspaces(workspaces: odd, query: '(dr').map((w) => w.id),
+        ['q'],
+      );
+    });
+  });
 }
