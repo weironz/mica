@@ -21,7 +21,7 @@ import 'local/local_offline.dart';
 import 'editor/word_count.dart';
 import 'web/yjs_probe.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
-import 'editor/model.dart' show kMonoFont;
+import 'editor/model.dart' show headingButtonTarget, kMonoFont;
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/open_url.dart';
@@ -9477,6 +9477,32 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final k = _activeBlockHook.kind;
     final lvl = _activeBlockHook.level;
     bool onHeading(int n) => k == 'heading' && lvl == n;
+
+    /// A heading button TOGGLES: pressing the level you are already on puts the
+    /// block back to body text.
+    ///
+    /// Reported 2026-08-12. Each level used to re-apply itself unconditionally,
+    /// which made the lit button the only control on this bar that did nothing
+    /// when pressed — every neighbour (bold, quote, list) has always toggled.
+    ///
+    /// One builder rather than three near-identical `btn(...)` calls, because
+    /// the toggle has to be identical across the levels and this bar and the
+    /// floating one already disagreed once by being written out twice.
+    Widget headingBtn(IconData icon, String label, int level) => btn(
+      icon,
+      label,
+      () {
+        final target = headingButtonTarget(
+          kind: k,
+          // Null level on a non-heading block; 0 is never a heading level, so
+          // it can only ever answer "not the one you pressed".
+          level: lvl ?? 0,
+          pressed: level,
+        );
+        h.setBlock(target.kind, target.data);
+      },
+      active: onHeading(level),
+    );
     // TextFieldTapRegion: clicking the toolbar must not read as a tap OUTSIDE
     // the table-cell editor's TextField — onTapOutside would unfocus/commit the
     // cell on pointer-down, so the command would land after the cell closed.
@@ -9511,23 +9537,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         () => h.setBlock('paragraph'),
                         active: k == 'paragraph',
                       ),
-                      btn(
+                      headingBtn(
                         Icons.looks_one_outlined,
                         context.l10n.pageFormatHeading1,
-                        () => h.setBlock('heading', {'level': 1}),
-                        active: onHeading(1),
+                        1,
                       ),
-                      btn(
+                      headingBtn(
                         Icons.looks_two_outlined,
                         context.l10n.pageFormatHeading2,
-                        () => h.setBlock('heading', {'level': 2}),
-                        active: onHeading(2),
+                        2,
                       ),
-                      btn(
+                      headingBtn(
                         Icons.looks_3_outlined,
                         context.l10n.pageFormatHeading3,
-                        () => h.setBlock('heading', {'level': 3}),
-                        active: onHeading(3),
+                        3,
                       ),
                       divider(),
                       btn(

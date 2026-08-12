@@ -201,3 +201,25 @@ class DocSelection {
   @override
   String toString() => 'DocSelection($anchor -> $focus)';
 }
+
+/// What pressing the heading-[pressed] button should do to a block that is
+/// currently [kind] (at [level] when it is a heading).
+///
+/// Toggling: pressing the level you are ALREADY on returns the block to body
+/// text. Reported 2026-08-12 — the lit button was the one control on the format
+/// bars that did nothing when pressed, while every neighbour (bold, quote,
+/// list) has always toggled.
+///
+/// Shared, because there are TWO heading button rows — the page toolbar in
+/// `main.dart` and the floating format bar in `editor.dart` — and they had this
+/// written out twice. Nothing kept them agreeing; this does.
+({String kind, Map<String, dynamic> data}) headingButtonTarget({
+  required String? kind,
+  required int level,
+  required int pressed,
+}) {
+  final onThisLevel = kind == 'heading' && level == pressed;
+  return onThisLevel
+      ? (kind: 'paragraph', data: const <String, dynamic>{})
+      : (kind: 'heading', data: <String, dynamic>{'level': pressed});
+}

@@ -3523,10 +3523,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 : MicaTheme.of(context).text.muted,
           ),
         ),
-        onPressed: () => _controller.setSelectedBlocksKind(
-          'heading',
-          data: {'level': level},
-        ),
+        // Clicking the level you are ALREADY on turns the heading back into
+        // body text — the same press that applied it removes it, like every
+        // other button on this bar (bold, italic, quote…).
+        //
+        // Reported 2026-08-12. It used to re-apply the level it was already
+        // showing, so the lit button was the one control here that did nothing
+        // when pressed, and there was no way back to a paragraph except the
+        // separate 「正文」 button — which this floating bar does not carry.
+        onPressed: () {
+          final target = headingButtonTarget(
+            kind: currentLevel == 0 ? null : 'heading',
+            level: currentLevel,
+            pressed: level,
+          );
+          _controller.setSelectedBlocksKind(target.kind, data: target.data);
+        },
       );
     }
 
