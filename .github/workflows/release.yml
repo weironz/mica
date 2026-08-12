@@ -346,8 +346,12 @@ jobs:
         run: |
           out=$(file "${{ steps.stage.outputs.asset }}")
           echo "$out"
+          # BOTH spellings. A musl release build is position-independent, so
+          # `file` says "static-pie linked", not "statically linked" — matching
+          # only the latter fails every good binary and takes the release with
+          # it. Caught by building one locally before trusting this check.
           case "$out" in
-            *"statically linked"*) ;;
+            *"statically linked"* | *"static-pie linked"*) ;;
             *)
               echo "::error::mica-cli is not statically linked — it will refuse to start on older distros"
               exit 1
