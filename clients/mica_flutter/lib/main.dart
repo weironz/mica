@@ -8275,6 +8275,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // Tapping the tree's blank area (below/around the rows) deselects the
     // located node so the top New buttons create at the root. Rows keep their
     // own tap handlers (they win the gesture arena); only taps that miss a row
+    // A reveal is requested before the row it wants exists — ancestors expand
+    // in the same setState, and a cross-workspace hit waits on that tree
+    // loading. Retrying after each frame is what makes both land.
+    if (_pendingRevealId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _flushPendingReveal();
+      });
+    }
     // reach this. Opaque so the empty space below the last row is hittable.
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -8284,7 +8292,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         controller: _treeScroll,
         children: _visibleDocumentTree().map((item) {
           final row = DocumentListItem(
-            key: ValueKey(item.view.id),
+            // The row being revealed carries the GlobalKey instead, so
+            // [_flushPendingReveal] has a BuildContext to scroll to. Exactly
+            // one row can hold it — a GlobalKey attached twice throws.
+            key: item.view.id == _pendingRevealId
+                ? _revealRowKey
+                : ValueKey(item.view.id),
             view: item.view,
             depth: item.depth,
             hasChildren: item.hasChildren,
@@ -8689,6 +8702,58 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   ///
   /// Reuses `_focusedNavId` rather than inventing a second notion of "the
   /// current folder" — two of those would drift, and the tree already has one.
+  /// Row currently being revealed, so exactly one row carries [_revealRowKey]
+  /// — a GlobalKey may only be attached to one widget at a time.
+  String? _pendingRevealId;
+  final GlobalKey _revealRowKey = GlobalKey();
+
+  /// Expand a view's ancestors and scroll it into view in the sidebar.
+  ///
+  /// The expand half already existed for folder hits; the scroll half did not,
+  /// so "locate this" quietly did nothing whenever the row sat below the fold —
+  /// which on a 434-page workspace is most of them.
+  ///
+  /// Kept as a PENDING id rather than scrolling here, because the row usually
+  /// does not exist yet at this moment: its ancestors are expanded in the same
+  /// `setState`, and a cross-workspace hit has to wait for the other
+  /// workspace's tree to load at all. [_flushPendingReveal] retries per frame
+  /// until the row is on screen.
+  void _revealInTree(String viewId) {
+    final byId = {for (final view in widget.views) view.id: view};
+    if (!byId.containsKey(viewId)) {
+      // Not in THIS workspace's tree yet. Remember it: a search hit from
+      // another workspace arrives before that workspace's views do.
+      setState(() => _pendingRevealId = viewId);
+      return;
+    }
+    _revealFolder(viewId);
+    setState(() => _pendingRevealId = viewId);
+  }
+
+  /// Scroll the pending row into view once it exists, then stop asking.
+  void _flushPendingReveal() {
+    final id = _pendingRevealId;
+    if (id == null) return;
+    // The tree may have arrived since (workspace switch): expand ancestors now.
+    if (!_expandedViewIds.contains(id) &&
+        widget.views.any((v) => v.id == id)) {
+      _revealFolder(id);
+    }
+    final ctx = _revealRowKey.currentContext;
+    if (ctx == null) return; // still collapsed or not built — try again next frame
+    _pendingRevealId = null;
+    // 0.5 puts it mid-pane rather than flush against an edge, so the rows
+    // around it — the reason a tree is useful — stay visible.
+    unawaited(
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      ),
+    );
+  }
+
   void _revealFolder(String viewId) {
     final byId = {for (final view in widget.views) view.id: view};
     // Not in this workspace's tree (a stale result, or it was moved away): do
@@ -10503,10 +10568,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           } else {
             widget.onOpenSearchResult(viewId);
           }
+          // Locate it in the sidebar too, not just open it. A hit arrives with
+          // no context — the tree is what says where the page lives, and
+          // leaving it parked wherever it happened to be scrolled makes every
+          // search feel like it teleported you somewhere unrelated. Folder hits
+          // already did this; pages did not.
+          //
+          // Safe for a cross-workspace hit: the request is pending until that
+          // workspace's tree loads (see [_flushPendingReveal]).
+          _revealInTree(viewId);
         },
         onReveal: (viewId) {
           Navigator.of(context).pop();
-          _revealFolder(viewId);
+          _revealInTree(viewId);
         },
       ),
     );
