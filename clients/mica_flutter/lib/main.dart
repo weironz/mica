@@ -8583,7 +8583,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final onSelectTab = widget.onSelectTab;
     final onCloseTab = widget.onCloseTab;
     final body = _editorPaneBody(context);
-    if (onSelectTab == null || onCloseTab == null || widget.tabs.length < 2) {
+    // Only the local world skips the strip now — it has no tab model at all.
+    // The "fewer than two tabs" case used to skip it too; the strip is resident
+    // since 2026-08-12 (user's call), because hiding it also hid the `+`, and
+    // that left a single-tab window with no visible way to open a second one.
+    if (onSelectTab == null || onCloseTab == null || widget.tabs.isEmpty) {
       return body;
     }
     return Column(

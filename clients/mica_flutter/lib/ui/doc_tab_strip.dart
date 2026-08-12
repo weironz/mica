@@ -61,12 +61,18 @@ class DocTabStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A single tab shows no strip. The row would be a permanent height tax for
-    // a control with nothing to switch between — AppFlowy and Notion both hide
-    // it too. It appears the moment a second page opens and leaves again when
-    // that one closes, so the common case pays nothing.
-    if (tabs.length < 2) return const SizedBox.shrink();
-
+    // Always on, including for a single tab.
+    //
+    // This was the other way round first, matching both references — AppFlowy
+    // returns `SizedBox.shrink()` at one tab (`tabs_manager.dart`), Notion
+    // hides it too — on the reasoning that a strip with nothing to switch
+    // between is a permanent height tax. The user overruled it (2026-08-12),
+    // and the reason is one the references do not face: their `+` is not the
+    // only way to reach a second tab, and hiding the strip hides the `+` with
+    // it, so a single-tab window had no visible affordance for opening one.
+    //
+    // The cost is real and accepted: [kDocTabStripHeight] of editor height,
+    // always.
     final theme = MicaTheme.of(context);
     return Container(
       height: kDocTabStripHeight,
@@ -88,7 +94,10 @@ class DocTabStrip extends StatelessWidget {
                 label: _labelFor(tabs[i]),
                 active: i == activeIndex,
                 onTap: () => onSelect(i),
-                onClose: () => onClose(i),
+                // No close button on the only tab: the host refuses to close
+                // the last one (`_tabs` is invariant-non-empty), so drawing an
+                // X there is an affordance that does nothing when clicked.
+                onClose: tabs.length < 2 ? null : () => onClose(i),
               ),
             ),
           ),
@@ -143,7 +152,9 @@ class _Tab extends StatefulWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  final VoidCallback onClose;
+
+  /// Null on the only open tab — see the call site.
+  final VoidCallback? onClose;
 
   @override
   State<_Tab> createState() => _TabState();
@@ -158,7 +169,8 @@ class _TabState extends State<_Tab> {
     // The close button appears on hover or on the active tab. Showing it on
     // every tab at rest turns the strip into a row of X's and makes the titles
     // — the thing being read — narrower for no gain.
-    final showClose = _hovered || widget.active;
+    final onClose = widget.onClose;
+    final showClose = onClose != null && (_hovered || widget.active);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -201,7 +213,7 @@ class _TabState extends State<_Tab> {
                         color: theme.text.muted,
                         // Tooltip omitted on purpose: it would cover the
                         // neighbouring tab in a 34px row.
-                        onPressed: widget.onClose,
+                        onPressed: onClose,
                       )
                     : null,
               ),

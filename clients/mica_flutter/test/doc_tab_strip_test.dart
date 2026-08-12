@@ -136,9 +136,12 @@ void main() {
   });
 
   group('DocTabStrip', () {
-    testWidgets('draws nothing for a single tab', (tester) async {
-      // A one-tab strip would be a permanent height tax on the editor for a
-      // control with nothing to switch between.
+    testWidgets('is resident: a single tab still draws the strip', (
+      tester,
+    ) async {
+      // It used to hide here, matching AppFlowy. It must not any more: hiding
+      // the strip hides the `+`, which is the only visible way to open a
+      // second tab.
       await tester.pumpWidget(
         _host(
           DocTabStrip(
@@ -147,10 +150,50 @@ void main() {
             onSelect: (_) {},
             onClose: (_) {},
             untitledLabel: 'Untitled',
+            onNewTab: (_) {},
           ),
         ),
       );
-      expect(find.text('Alpha'), findsNothing);
+      expect(find.text('Alpha'), findsOneWidget);
+      expect(find.byIcon(Icons.add), findsOneWidget);
+    });
+
+    testWidgets('the only tab has no close button', (tester) async {
+      // The host refuses to close the last tab, so an X there would be an
+      // affordance that does nothing.
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [DocTab(view: _view('a', 'Alpha'))],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+            onNewTab: (_) {},
+          ),
+        ),
+      );
+      expect(find.byIcon(Icons.close), findsNothing);
+    });
+
+    testWidgets('the close button comes back with a second tab', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [
+              DocTab(view: _view('a', 'Alpha')),
+              DocTab(view: _view('b', 'Beta')),
+            ],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+          ),
+        ),
+      );
+      expect(find.byIcon(Icons.close), findsOneWidget);
     });
 
     testWidgets('shows every tab title once a second one opens', (
