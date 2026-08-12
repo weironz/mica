@@ -804,6 +804,13 @@ class EditorController extends ChangeNotifier {
 
     // An atomic neighbor (divider/table) can't absorb text — delete it instead
     // of merging, keeping the current node and its caret.
+    //
+    // DELIBERATELY UNCHANGED (user's call, 2026-08-12) even though Notion
+    // selects the block here rather than deleting it, and the accidental-delete
+    // risk is the same one the empty-line branch above was just fixed for. It
+    // was raised and declined: this path has real text to protect, which is the
+    // reason the rule exists, and the empty-line case was the one actually
+    // being hit. Do not "finish the job" without asking again.
     if (prev.isAtomic) {
       nodes.removeAt(i - 1);
       _sendNow([
