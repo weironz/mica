@@ -86,6 +86,41 @@
   **另需想清**:标签要不要持久化(重启后恢复)?窄壳(`kNarrowShellWidth` 以下)怎么退化?
   与刚做完的「定位/新建落点」规则如何共存(在新标签打开是否改变定位)?(L)
 
+  **2026-08-08 已扒 AppFlowy(commit `5cf3a36`),两个问题有答案了**:
+
+  - **结构(答①)**:`workspace/application/tabs/tabs_bloc.dart` 里 `TabsBloc` 持
+    `List<PageManager>` + `currentPageManager`;`PageManager`(在
+    `presentation/home/home_stack.dart`)**每标签一个**,内部装一个 `plugin`。UI 是
+    `home/tabs/tabs_manager.dart`(栏) + `flowy_tab.dart`(单个),关闭走
+    `TabsEvent.closeTab(pageManager.plugin.id)`。顺带:它**支持固定标签**
+    (`indexOfFirstUnpinnedTab` 的插入逻辑)。
+    **关键差异**:它的 per-tab 状态不是「一个 view id」,而是一整个可实例化的
+    `PageManager`。Mica 的 `_selectedView`/`_selectedBootstrap` 是**全局单数字段** ——
+    所以加标签对 AppFlowy 是自然的,对 Mica 不是,**真正的工作量在把这两个字段收成一个
+    可实例化对象**,不在标签栏本身。
+
+  - **生命周期(答②的一半)**:`PageManager.setPlugin` 里
+    `if (newPlugin.id != plugin.id && disposeExisting) _plugin.dispose();` ——
+    dispose **只发生在「这个标签换了内容」**。切换标签不走这条路,只改
+    `currentPageManager`,其余 `PageManager` 与其 plugin **原地留着**。
+    即 **N 个标签 = N 个活着的实例,后台不降级不断开**。
+
+  **⚠️ 但这一条不能照抄。** AppFlowy 敢这么做是因为同步走本地 Rust 后端,多开一个文档
+  几乎没有远端成本;**Mica 的云工作区每个文档是一条真 WebSocket**,照搬就是「开 8 个标签
+  = 8 条常驻连接 + 8 份 CRDT 内存」。这是 Mica 特有的约束,AppFlowy 没有 ——
+  **CLAUDE.md #6 说的「相同约束下」在这里不成立,所以它的答案只能参考不能采纳。**
+
+  **待拍板(动手前必须先定,别在写 UI 时顺手选)**:
+  | 方案 | 代价 |
+  | --- | --- |
+  | 全连(照抄 AppFlowy) | 简单、切换零延迟;连接数与内存随标签线性增长 |
+  | 只前台连、后台留快照 | 连接恒为 1;切回要重连 + 重新 bootstrap,有可感知延迟且后台内容是旧的 |
+  | 全连但设上限(如 ≤3,超出按 LRU 降级) | 兼顾,但多一套 LRU 要维护 |
+
+  倾向第三种(日常 2–3 个标签全连没问题,偶尔开一堆时才需要降级),但这是产品取舍,**等用户定**。
+
+  **仍未扒**:`TabsEvent.closeTab` 的完整处理、标签是否持久化到磁盘。
+
 > **这一节空了(2026-08-06)。** 做完的搬进 [`roadmap-done.md`](roadmap-done.md),拍板不做的整条删除(理由留在那几次提交的信息里)。
 > 留着标题是因为这是一个真实存在的分类 —— 空是个**状态**,不是这一档不存在。
 
