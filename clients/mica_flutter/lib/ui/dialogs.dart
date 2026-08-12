@@ -232,6 +232,10 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// per-workspace one — a preference that quietly persisted would make search
   /// permanently slow for someone who tried it once.
   bool _allWorkspaces = false;
+
+  /// The last failure was "this server has no cross-workspace search", not a
+  /// network problem. Kept apart from [_failed] so the panel can say which.
+  bool _scopeUnsupported = false;
   final _listScroll = ScrollController();
 
   @override
@@ -289,13 +293,22 @@ class _SearchDialogState extends State<_SearchDialog> {
         // alone left ↵ inert on exactly the query that matched a workspace.
         _selected = (results.isEmpty && _workspaceHits.isEmpty) ? -1 : 0;
       });
-    } catch (_) {
+    } catch (e) {
       // Surface the failure — a swallowed error reads as "no results" and
       // hides real breakage (this dialog masked a 404 for a while).
+      //
+      // A 404 while searching ALL workspaces is not a broken network: it is a
+      // server too old to have `GET /search` (added 2026-08-12). Mica is
+      // self-hosted, so old servers are a normal thing to be talking to, and
+      // telling that user to check their network sends them to debug the one
+      // thing that is working. Observed for real against a v0.13.17 node.
+      final unsupported =
+          _allWorkspaces && e is ApiException && e.statusCode == 404;
       if (mounted) {
         setState(() {
           _loading = false;
           _failed = true;
+          _scopeUnsupported = unsupported;
           _results = const [];
           _lastQuery = query;
           _selected = -1;
@@ -706,6 +719,23 @@ class _SearchDialogState extends State<_SearchDialog> {
       // title 「无匹配结果」, which told the user their workspace has no such
       // page when in fact the request never reached the server — and it hid
       // the one useful next step (retry). Separate icon, title and action.
+      if (_scopeUnsupported) {
+        // Not a failure the user can retry their way out of — the action is to
+        // untick the box, so that is the action offered.
+        return EmptyState(
+          icon: Icons.update,
+          title: context.l10n.searchAllUnsupportedTitle,
+          detail: context.l10n.searchAllUnsupportedDetail,
+          actionLabel: context.l10n.searchAllUnsupportedAction,
+          onAction: () {
+            setState(() {
+              _allWorkspaces = false;
+              _scopeUnsupported = false;
+            });
+            _run(_query.text);
+          },
+        );
+      }
       if (_failed) {
         return EmptyState(
           icon: Icons.cloud_off,

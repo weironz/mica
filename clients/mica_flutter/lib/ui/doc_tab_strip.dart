@@ -80,14 +80,27 @@ class DocTabStrip extends StatelessWidget {
         color: theme.surface.sunken,
         border: Border(bottom: BorderSide(color: theme.border.subtle)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              itemCount: tabs.length,
-              itemBuilder: (context, i) => _Tab(
+      // The `+` sits immediately AFTER the last tab, inside the same scrolling
+      // row — AppFlowy puts it there and the user asked for the same
+      // (2026-08-12). It was pinned to the strip's right edge first, which left
+      // it stranded at the far end of an empty strip whenever few tabs were
+      // open.
+      //
+      // Pinning had been to keep it reachable once tabs overflow. Letting the
+      // tabs SHRINK instead (AppFlowy's `Flexible` + maxWidth) would remove
+      // overflow entirely and was tried — but a tab squeezed below its own
+      // content overflows internally: its label and its 20px close slot do not
+      // fit, and `RenderFlex overflowed by 17 pixels` replaces the strip with
+      // stripes. Scrolling keeps every tab legible; the cost is that with
+      // enough tabs open the `+` scrolls off, and reaching it means scrolling
+      // right — which is what a browser does too.
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            const SizedBox(width: 4),
+            for (var i = 0; i < tabs.length; i++)
+              _Tab(
                 // The tab's own title, NOT the active document's — every tab
                 // renders its own `view`, which is what makes the strip
                 // readable while a background tab is still loading.
@@ -99,13 +112,10 @@ class DocTabStrip extends StatelessWidget {
                 // X there is an affordance that does nothing when clicked.
                 onClose: tabs.length < 2 ? null : () => onClose(i),
               ),
-            ),
-          ),
-          // OUTSIDE the scroll view, so it stays reachable once the tabs
-          // overflow. Inside, it would scroll off the right edge exactly when
-          // there are enough tabs to want another one.
-          if (onNewTab != null) _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
-        ],
+            if (onNewTab != null)
+              _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
+          ],
+        ),
       ),
     );
   }
