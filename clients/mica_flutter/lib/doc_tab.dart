@@ -45,6 +45,21 @@ class DocTab {
   /// or deleted out from under an open tab.
   DocumentBootstrap? bootstrap;
 
+  /// Which workspace this tab's page belongs to.
+  ///
+  /// Tabs outlive a workspace switch — switching clears only the ACTIVE tab, so
+  /// the others go on holding pages from wherever they were opened. Without
+  /// this the strip becomes a mix of workspaces that all claim to be in the
+  /// current one, and acting on such a tab bootstraps its document against the
+  /// wrong workspace: a 404 that reads as "this page is broken".
+  ///
+  /// AFFiNE keeps the same thing in `WorkbenchMeta.basename` (`/workspace/<id>`)
+  /// — a tab there carries its workspace in its URL for exactly this reason.
+  ///
+  /// Null while the tab holds no document. That is NOT "the current workspace":
+  /// a fresh tab must not force a switch to anywhere.
+  String? workspaceId;
+
   /// The document id this tab is synced to, or null when it holds no document.
   /// The sync layer is keyed by document id, so this is the tab's identity as
   /// far as connections are concerned.
@@ -73,6 +88,21 @@ class DocTab {
   /// renders and still reads. It just stops receiving other people's edits
   /// until it is activated again.
   bool get isLive => sync != null;
+}
+
+/// The workspace a tab switch must land in, or null when no switch is needed.
+///
+/// The subtle case is [tabWorkspaceId] being null — an empty tab, or one still
+/// loading. That is not "the current workspace" and it is not "unknown, go find
+/// out": it means the tab has no page yet, so switching anywhere on its behalf
+/// would move the user somewhere they did not ask to go.
+String? workspaceToSwitchTo({
+  required String? tabWorkspaceId,
+  required String? currentWorkspaceId,
+}) {
+  if (tabWorkspaceId == null) return null;
+  if (tabWorkspaceId == currentWorkspaceId) return null;
+  return tabWorkspaceId;
 }
 
 /// Which live tabs must give up their sockets so that at most [max] stay live.

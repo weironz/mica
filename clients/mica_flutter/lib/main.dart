@@ -371,8 +371,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   set _selectedView(DocumentView? value) => _activeTab.view = value;
 
   DocumentBootstrap? get _selectedBootstrap => _activeTab.bootstrap;
-  set _selectedBootstrap(DocumentBootstrap? value) =>
-      _activeTab.bootstrap = value;
+
+  /// Setting a document also stamps WHICH WORKSPACE it came from.
+  ///
+  /// Done here, in the one setter, rather than at the ~70 assignment sites: the
+  /// invariant is simply "a tab belongs to whichever workspace was current when
+  /// its document loaded", and every one of those sites already goes through
+  /// here. Stamping at the call sites would mean finding all of them, and then
+  /// finding the next one somebody adds.
+  ///
+  /// Clearing does NOT clear the stamp — `null` is the loading/closed state,
+  /// not a change of workspace, and forgetting the workspace there would strand
+  /// the tab exactly when it is about to reload its page.
+  set _selectedBootstrap(DocumentBootstrap? value) {
+    _activeTab.bootstrap = value;
+    if (value != null) _activeTab.workspaceId = _selectedWorkspace?.id;
+  }
 
   String? _selectedMarkdown;
   String? _message;
@@ -1145,10 +1159,32 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   void _selectTab(int index) {
     if (index < 0 || index >= _tabs.length || index == _activeTabIndex) return;
+    final target = _tabs[index];
     setState(() {
       _activeTabIndex = index;
       _activeTab.lastActivated = ++_activationTick;
     });
+    // A tab from ANOTHER workspace takes the workspace with it. Without this the
+    // sidebar, the breadcrumb and every create action stay pointed at the
+    // workspace we left, while the editor shows a page from this one — and the
+    // next action on that page bootstraps against the wrong workspace and 404s.
+    //
+    // `keepOpenPage`, because the page is the reason for the switch: the plain
+    // switch closes the open document, which would blank the tab just clicked.
+    final switchTo = workspaceToSwitchTo(
+      tabWorkspaceId: target.workspaceId,
+      currentWorkspaceId: _selectedWorkspace?.id,
+    );
+    if (switchTo != null) {
+      for (final w in _workspaces) {
+        if (w.id != switchTo) continue;
+        // Fire-and-forget on purpose: `_reconcileSync` below only depends on
+        // the tab's own document, which is already in memory. The switch is
+        // catching the SHELL up (sidebar, members), not gating the page.
+        unawaited(_selectWorkspace(w, keepOpenPage: true));
+        break;
+      }
+    }
     // The editor reads the active tab's bootstrap, which is already in memory —
     // switching never refetches. The socket follows: a tab still holding its
     // own is recognised as connected and reconnects nothing, while one that was
@@ -1181,11 +1217,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _reconcileSync();
   }
 
+  /// The workspace [tab]'s document lives in, falling back to the selected one.
+  ///
+  /// The fallback covers a tab that has not loaded anything yet (no stamp): it
+  /// is about to open a page in the current workspace, so that is the right
+  /// answer. A stamped tab always wins over the selection.
+  Workspace? _workspaceForTab(DocTab tab) {
+    final id = tab.workspaceId;
+    if (id == null) return _selectedWorkspace;
+    if (_selectedWorkspace?.id == id) return _selectedWorkspace;
+    for (final w in _workspaces) {
+      if (w.id == id) return w;
+    }
+    // Stamped with a workspace we are no longer a member of. Returning the
+    // selected one would sync this tab's document into the wrong workspace, so
+    // return nothing and let the caller close the socket instead.
+    return null;
+  }
+
   /// Open, switch, or close the document WebSocket so it always tracks the
   /// currently selected document.
   void _reconcileSync() {
     final session = _session;
-    final workspace = _selectedWorkspace;
+    // The socket belongs to the DOCUMENT, so it takes the workspace from the
+    // tab holding it — not from `_selectedWorkspace`. Those differ for a moment
+    // whenever a tab switch also switches workspaces (the shell catches up
+    // asynchronously), and for that moment this would otherwise open
+    // `/ws/workspaces/<the one we left>/documents/<this tab's doc>`, which the
+    // server rejects because its document lookup is workspace-scoped too.
+    final workspace = _workspaceForTab(_activeTab);
     final documentId = _selectedBootstrap?.document.id;
 
     if (session == null || workspace == null || documentId == null) {
@@ -1768,14 +1828,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  Future<void> _selectWorkspace(Workspace workspace) {
+  /// [keepOpenPage] leaves the active tab's document alone.
+  ///
+  /// Normally switching workspaces closes the open page — it belongs to the
+  /// workspace being left. A TAB switch is the exception: the page is the
+  /// reason for the switch, it is already loaded, and clearing it here would
+  /// blank the very tab the user just clicked.
+  Future<void> _selectWorkspace(Workspace workspace, {bool keepOpenPage = false}) {
     savePref('lastWorkspaceId', workspace.id);
     return _run(() async {
       setState(() {
         _selectedWorkspace = workspace;
-        _selectedView = null;
-        _selectedBootstrap = null;
-        _selectedMarkdown = null;
+        if (!keepOpenPage) {
+          _selectedView = null;
+          _selectedBootstrap = null;
+          _selectedMarkdown = null;
+        }
       });
       // P3e: offline workspace switching. Already in degraded (offline) nav →
       // read the mirror directly, no per-switch network timeout. Otherwise try

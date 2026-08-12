@@ -41,6 +41,47 @@ DocTab _liveTab(int tick) => DocTab()
   );
 
 void main() {
+  group('workspaceToSwitchTo', () {
+    test('a tab from another workspace takes the workspace with it', () {
+      expect(
+        workspaceToSwitchTo(tabWorkspaceId: 'ws-b', currentWorkspaceId: 'ws-a'),
+        'ws-b',
+      );
+    });
+
+    test('no switch when the tab is already in the current workspace', () {
+      expect(
+        workspaceToSwitchTo(tabWorkspaceId: 'ws-a', currentWorkspaceId: 'ws-a'),
+        isNull,
+      );
+    });
+
+    test('an unstamped tab never forces a switch', () {
+      // The subtle one. A tab with no page yet has a null workspace, and that
+      // is NOT "unknown, go find out" — treating it as a switch target would
+      // move the user out of the workspace they are working in every time they
+      // click an empty tab.
+      expect(
+        workspaceToSwitchTo(tabWorkspaceId: null, currentWorkspaceId: 'ws-a'),
+        isNull,
+      );
+    });
+
+    test('a stamped tab still switches when nothing is selected yet', () {
+      expect(
+        workspaceToSwitchTo(tabWorkspaceId: 'ws-b', currentWorkspaceId: null),
+        'ws-b',
+      );
+    });
+
+    test('null on both sides is not a switch', () {
+      expect(
+        workspaceToSwitchTo(tabWorkspaceId: null, currentWorkspaceId: null),
+        isNull,
+      );
+    });
+  });
+
   group('tabsToPark', () {
     test('parks nothing while the live tabs fit under the cap', () {
       final active = _liveTab(3);
