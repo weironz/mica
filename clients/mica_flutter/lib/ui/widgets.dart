@@ -121,8 +121,34 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             widget.onSignIn != null)
           _signInRow()
         else
-          for (final e in (widget.activeIsLocal ? locals : cloud))
-            _row(e, widget.activeIsLocal ? locals : cloud),
+          // The workspaces go in ONE bounded, self-scrolling child rather than
+          // N menu children.
+          //
+          // Two things were wrong with letting the menu hold them directly.
+          // The mouse wheel did nothing (reported 2026-08-12, 20 workspaces on
+          // screen): `MenuAnchor`'s panel has its own `SingleChildScrollView`
+          // — which is why a scrollbar was visible — but the wheel never drove
+          // it, and depending on the menu's internals to fix that is a bet on
+          // framework behaviour we do not control. A plain `ListView` is what
+          // the page tree uses, and that one scrolls.
+          //
+          // And with a long list the rows pushed 「新建」/「导入」 off the
+          // bottom of the window — the two things reachable no other way.
+          // Bounding the list keeps them on screen at any workspace count.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: SizedBox(
+              width: 320,
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final e in (widget.activeIsLocal ? locals : cloud))
+                    _row(e, widget.activeIsLocal ? locals : cloud),
+                ],
+              ),
+            ),
+          ),
         const Divider(height: 8),
         _createRow(),
         SizedBox(
