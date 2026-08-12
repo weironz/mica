@@ -625,6 +625,30 @@ class ApiClient {
         .toList();
   }
 
+  /// The same search across EVERY workspace the signed-in user belongs to.
+  ///
+  /// Its own endpoint rather than a flag, because the path is what states the
+  /// scope. Hits carry `workspace_id`, which is what makes them openable — see
+  /// [SearchResult.workspaceId].
+  ///
+  /// Slower than the per-workspace search by roughly the number of workspaces:
+  /// the body match reads every visible document's text. That is why it sits
+  /// behind a toggle instead of replacing the default.
+  Future<List<SearchResult>> searchAllWorkspaces(
+    String token,
+    String query,
+  ) async {
+    final response = await _get(
+      '/api/search'
+      '?q=${Uri.encodeQueryComponent(query)}&include_folders=true',
+      token,
+    );
+    final items = response['results'] as List<dynamic>;
+    return items
+        .map((item) => SearchResult.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
   /// The pages in [workspaceId] that link TO [viewId] (reverse references).
   /// Cloud only — the local (offline) world has no backlinks endpoint, so the
   /// panel is hidden there rather than calling this.

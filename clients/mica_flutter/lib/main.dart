@@ -2405,6 +2405,38 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.searchWorkspace(session.accessToken, workspace.id, query);
   }
 
+  Future<List<SearchResult>> _searchAllWorkspaces(String query) async {
+    final session = _session;
+    if (session == null) return const [];
+    return _api.searchAllWorkspaces(session.accessToken, query);
+  }
+
+  /// Open a search hit that may belong to ANOTHER workspace.
+  ///
+  /// Switching first is not an optimisation, it is the only order that works:
+  /// [_openViewById] resolves the view out of the CURRENT workspace's loaded
+  /// page tree, and a workspace the user has never visited has no tree in
+  /// memory. `_selectWorkspace` is what loads it.
+  ///
+  /// A null [workspaceId] means the server did not say — an older build, where
+  /// the only search was per-workspace. Treat it as "the one we searched", i.e.
+  /// the current one, and open in place.
+  Future<void> _openSearchHit(String viewId, String? workspaceId) async {
+    if (workspaceId != null && workspaceId != _selectedWorkspace?.id) {
+      Workspace? target;
+      for (final w in _workspaces) {
+        if (w.id == workspaceId) {
+          target = w;
+          break;
+        }
+      }
+      if (target == null) return;
+      await _selectWorkspace(target);
+      if (!mounted || _selectedWorkspace?.id != workspaceId) return;
+    }
+    await _openViewById(viewId);
+  }
+
   /// Open a local search hit.
   ///
   /// Without this, local search finds pages and clicking one does nothing —
@@ -5860,6 +5892,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // Cloud only: the local world has one implicit workspace, so there is
       // nothing for a name search to disambiguate.
       onSelectWorkspaceById: local ? null : _selectWorkspaceById,
+      // Cloud only: the local world is a single implicit workspace, so there is
+      // nothing to widen the scope to.
+      onSearchAllWorkspaces: local ? null : _searchAllWorkspaces,
+      onOpenSearchHit: local
+          ? null
+          : (viewId, workspaceId) =>
+                unawaited(_openSearchHit(viewId, workspaceId)),
       searchRecents: buildWorkspaceRecents(
         context,
         workspaceId: local ? _localSelectedWorkspace?.id : _selectedWorkspace?.id,
@@ -6691,6 +6730,8 @@ class WorkspaceView extends StatefulWidget {
     this.onNewTabPage,
     this.searchRecents = const [],
     this.onSelectWorkspaceById,
+    this.onSearchAllWorkspaces,
+    this.onOpenSearchHit,
     required this.selectedMarkdown,
     required this.presence,
     required this.message,
@@ -6926,6 +6967,16 @@ class WorkspaceView extends StatefulWidget {
   /// (id, name) pairs it was given; handing it the models would let it start
   /// reading fields that are the host's to interpret.
   final void Function(String workspaceId)? onSelectWorkspaceById;
+
+  /// The same search across every workspace. Null hides the scope toggle.
+  final Future<List<SearchResult>> Function(String query)? onSearchAllWorkspaces;
+
+  /// Open a hit that belongs to [workspaceId], switching there first.
+  ///
+  /// Separate from [onOpenSearchResult] because that one resolves the view out
+  /// of the CURRENT workspace's page tree — which a workspace the user has
+  /// never visited does not have in memory at all.
+  final void Function(String viewId, String workspaceId)? onOpenSearchHit;
   final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
@@ -10423,6 +10474,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       context: context,
       builder: (context) => _SearchDialog(
         onSearch: widget.onSearch,
+        onSearchAll: widget.onSearchAllWorkspaces,
         views: widget.views,
         workspaceName: widget.selectedWorkspace?.name,
         initialQuery: initialQuery,
@@ -10436,9 +10488,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 Navigator.of(context).pop();
                 widget.onSelectWorkspaceById!(id);
               },
-        onOpen: (viewId) {
+        onOpen: (viewId, workspaceId) {
           Navigator.of(context).pop();
-          if (inNewTab && openInNewTab != null) {
+          // A hit from another workspace has to go through the host's
+          // switch-then-open path; the in-new-tab and in-place callbacks both
+          // resolve the view out of the CURRENT workspace's tree.
+          final elsewhere =
+              workspaceId != null &&
+              workspaceId != widget.selectedWorkspace?.id;
+          if (elsewhere) {
+            widget.onOpenSearchHit?.call(viewId, workspaceId);
+          } else if (inNewTab && openInNewTab != null) {
             openInNewTab(viewId);
           } else {
             widget.onOpenSearchResult(viewId);

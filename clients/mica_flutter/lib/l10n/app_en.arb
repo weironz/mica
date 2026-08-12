@@ -66,6 +66,7 @@
   "rowSetIcon": "Set icon",
   "rowOpenInNewTab": "Open in new tab",
   "searchRecentLabel": "Recently edited",
+  "searchAllWorkspaces": "Search all workspaces (slower)",
   "searchWorkspaceLabel": "Workspaces",
   "searchWorkspaceSwitch": "Switch",
   "tabNewTooltip": "New tab",

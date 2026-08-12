@@ -355,6 +355,7 @@ class SearchResult {
     required this.titleMatch,
     this.isFolder = false,
     this.parentViewId,
+    this.workspaceId,
   });
 
   factory SearchResult.fromJson(Map<String, dynamic> json) {
@@ -369,6 +370,12 @@ class SearchResult {
       // handler that refuses to open it.
       isFolder: json['is_folder'] == true,
       parentViewId: json['parent_view_id'] as String?,
+      // Null against a server older than this field. Callers must treat null as
+      // "the workspace I searched", NOT as "unknown" — the per-workspace route
+      // has always returned hits from exactly one workspace, so falling back to
+      // the searched one is correct there and is the only thing that keeps this
+      // client working against an older server.
+      workspaceId: json['workspace_id'] as String?,
     );
   }
 
@@ -377,6 +384,13 @@ class SearchResult {
   final String name;
   final String snippet;
   final bool titleMatch;
+
+  /// Which workspace the hit lives in; null from a server that predates it.
+  ///
+  /// Load-bearing for cross-workspace search: opening a page is workspace-scoped
+  /// and this client only holds page trees for workspaces it has visited, so a
+  /// hit from an unvisited workspace cannot be located any other way.
+  final String? workspaceId;
 
   /// A folder rather than a page. Folders match on their NAME only — they carry
   /// no body — so a folder hit never has a snippet.

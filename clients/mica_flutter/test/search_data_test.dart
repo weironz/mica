@@ -23,6 +23,18 @@ void main() {
       ...extra,
     };
 
+    test('reads the hit workspace, and absent stays absent', () {
+      // Cross-workspace search is unopenable without this: the client only
+      // holds page trees for workspaces it has visited, so a hit from an
+      // unvisited one cannot be located any other way.
+      expect(SearchResult.fromJson(hit({'workspace_id': 'ws-b'})).workspaceId,
+          'ws-b');
+      // Absent must NOT become some default workspace id. The caller reads null
+      // as "the workspace we searched" — inventing one here would send it to
+      // switch somewhere the user never asked for.
+      expect(SearchResult.fromJson(hit({})).workspaceId, isNull);
+    });
+
     test('a missing is_folder means PAGE, never folder', () {
       final r = SearchResult.fromJson(hit({}));
       expect(r.isFolder, isFalse);

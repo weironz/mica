@@ -28,6 +28,7 @@
   "rowSetIcon": "设置图标",
   "rowOpenInNewTab": "在新标签页打开",
   "searchRecentLabel": "最近编辑",
+  "searchAllWorkspaces": "搜索所有工作区(较慢)",
   "searchWorkspaceLabel": "工作区",
   "searchWorkspaceSwitch": "切换",
   "tabNewTooltip": "新建标签页",

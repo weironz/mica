@@ -150,6 +150,7 @@ class _SearchDialog extends StatefulWidget {
     required this.onSearch,
     required this.onOpen,
     required this.onReveal,
+    this.onSearchAll,
     this.views = const [],
     this.workspaceName,
     this.initialQuery,
@@ -189,7 +190,14 @@ class _SearchDialog extends StatefulWidget {
   /// to a stub returning `const []`, so every local query answered 「没有找到与
   /// 「x」匹配的内容」 — the app stating as fact that the page isn't there.
   final Future<List<SearchResult>> Function(String query)? onSearch;
-  final void Function(String viewId) onOpen;
+
+  /// The same search across every workspace. Null hides the toggle entirely —
+  /// the local world has one workspace, so there is nothing to widen to.
+  final Future<List<SearchResult>> Function(String query)? onSearchAll;
+
+  /// Open a hit. The second argument is the hit's workspace, null when the
+  /// server did not say — callers read that as "the workspace we searched".
+  final void Function(String viewId, String? workspaceId) onOpen;
 
   /// A FOLDER hit. Folders cannot be opened — there is no document behind one —
   /// so they get their own exit: locate the folder in the sidebar tree instead.
@@ -216,6 +224,14 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// Keyboard-highlighted row, -1 when none. Separate from "hovered": the whole
   /// point is to be able to pick a result without touching the mouse.
   int _selected = -1;
+
+  /// Whether the query runs across every workspace.
+  ///
+  /// Off by default and NOT remembered between openings. Cross-workspace search
+  /// reads every visible document's body, so it costs roughly N times the
+  /// per-workspace one — a preference that quietly persisted would make search
+  /// permanently slow for someone who tried it once.
+  bool _allWorkspaces = false;
   final _listScroll = ScrollController();
 
   @override
@@ -243,7 +259,11 @@ class _SearchDialogState extends State<_SearchDialog> {
   }
 
   Future<void> _run(String value) async {
-    final search = widget.onSearch;
+    // The toggle picks the endpoint. `onSearch` still gates the whole thing:
+    // a world with no search at all has neither.
+    final search = _allWorkspaces
+        ? (widget.onSearchAll ?? widget.onSearch)
+        : widget.onSearch;
     if (search == null) return; // no search in this world; see [_buildResults]
     final query = value.trim();
     if (query.isEmpty) {
@@ -347,6 +367,53 @@ class _SearchDialogState extends State<_SearchDialog> {
                 ),
               ),
             ),
+            // The scope toggle. A checkbox rather than a mode the panel
+            // remembers: it costs roughly N times a normal search, so it should
+            // be a thing you reach for, not a state you can end up in.
+            if (widget.onSearchAll != null) ...[
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: () {
+                    setState(() => _allWorkspaces = !_allWorkspaces);
+                    // Re-run immediately: flipping the scope with a query
+                    // already typed and leaving the old results on screen would
+                    // show the previous scope's answer under the new label.
+                    _run(_query.text);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _allWorkspaces
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                          size: 16,
+                          color: _allWorkspaces
+                              ? MicaTheme.of(context).accent.primary
+                              : MicaTheme.of(context).text.muted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          context.l10n.searchAllWorkspaces,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: MicaTheme.of(context).text.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Expanded(child: _buildResults(context)),
             // Only with results on screen: advertising ↑↓/↵ over an empty list
@@ -467,7 +534,7 @@ class _SearchDialogState extends State<_SearchDialog> {
     if (result.isFolder) {
       widget.onReveal(result.viewId);
     } else {
-      widget.onOpen(result.viewId);
+      widget.onOpen(result.viewId, result.workspaceId);
     }
   }
 
@@ -523,7 +590,8 @@ class _SearchDialogState extends State<_SearchDialog> {
                   entry.meta,
                   style: TextStyle(fontSize: 12, color: theme.text.faint),
                 ),
-                onTap: () => widget.onOpen(entry.id),
+                // Recents are this workspace's, so no workspace to carry.
+                onTap: () => widget.onOpen(entry.id, null),
               );
             },
           ),
