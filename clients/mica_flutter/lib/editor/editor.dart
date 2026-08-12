@@ -3653,23 +3653,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       context.l10n.shortcutsLink,
                       custom: _promptLink,
                     ),
-                    // Rewrite the selection with AI. On this bar because this
-                    // bar IS "things you do to the text you just selected" —
-                    // the same place AppFlowy and AFFiNE put their Ask AI, and
-                    // it inherits the rule that the bar only exists while there
-                    // is a selection to act on.
-                    //
-                    // Hidden, not disabled, when the world has no AI: 本地模式
-                    // has no provider, and a lit button that answers nothing is
-                    // worse than one that is not there.
-                    if (widget.onAiStream != null)
-                      IconButton(
-                        iconSize: 18,
-                        visualDensity: VisualDensity.compact,
-                        tooltip: context.l10n.aiRewriteSelection,
-                        icon: const Icon(Icons.auto_awesome),
-                        onPressed: () => unawaited(_runSelectionAi()),
-                      ),
                   ],
                   if (showBlocks) ...[
                     const VerticalDivider(width: 9, indent: 8, endIndent: 8),
@@ -3698,6 +3681,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       Icons.format_quote,
                       'quote',
                       context.l10n.pageFormatQuote,
+                    ),
+                  ],
+                  // Rewrite the selection with AI — LAST, and outside every
+                  // section flag above.
+                  //
+                  // It was first written inside the `singleText` group with the
+                  // inline marks, which hid it for any selection spanning more
+                  // than one block — i.e. for the case it is most wanted, and
+                  // literally the example this was built for (7 list items).
+                  // Nothing about asking AI to rewrite text needs the selection
+                  // to sit in one block; `selectionText()` serialises any range.
+                  if (widget.onAiStream != null) ...[
+                    const VerticalDivider(width: 9, indent: 8, endIndent: 8),
+                    IconButton(
+                      iconSize: 18,
+                      visualDensity: VisualDensity.compact,
+                      tooltip: context.l10n.aiRewriteSelection,
+                      icon: const Icon(Icons.auto_awesome),
+                      onPressed: () => unawaited(_runSelectionAi()),
                     ),
                   ],
                 ],

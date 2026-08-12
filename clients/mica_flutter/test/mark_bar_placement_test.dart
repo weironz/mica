@@ -113,4 +113,80 @@ void main() {
       reason: 'should still prefer above when it fits: $bar',
     );
   });
+
+  // Reported 2026-08-12: the AI button was invisible for the selection it was
+  // built for. It had been written inside the `singleText` group with bold and
+  // italic, which the bar hides whenever the selection spans more than one
+  // block — so selecting seven list items to rewrite them showed no AI button.
+  group('the AI button', () {
+    Future<void> pumpWithAi(
+      WidgetTester tester,
+      List<EditorNode> nodes, {
+      required bool hasAi,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: MicaEditor(
+              rootBlockId: 'root',
+              nodes: nodes,
+              version: 0,
+              canEdit: true,
+              onApplyOperations: (_) async {},
+              onAiStream: hasAi
+                  ? (_, {String? system}) => const Stream<String>.empty()
+                  : null,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    /// Select from the first line into the third — a MULTI-block range.
+    Future<void> selectAcrossBlocks(WidgetTester tester) async {
+      await tester.tapAt(
+        tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 14),
+      );
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.home);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pumpAndSettle();
+    }
+
+    List<EditorNode> lines() => [
+      EditorNode(id: 'a', kind: 'paragraph', text: 'first line of the document'),
+      EditorNode(id: 'b', kind: 'paragraph', text: 'second line'),
+      EditorNode(id: 'c', kind: 'paragraph', text: 'third line'),
+    ];
+
+    testWidgets('shows for a selection spanning several blocks', (tester) async {
+      await pumpWithAi(tester, lines(), hasAi: true);
+      await selectAcrossBlocks(tester);
+      // Bold is hidden for a multi-block selection — that is exactly the group
+      // the AI button must NOT be inside.
+      expect(find.byIcon(Icons.format_bold), findsNothing);
+      expect(find.byIcon(Icons.auto_awesome), findsOneWidget);
+    });
+
+    testWidgets('shows for a single-line selection too', (tester) async {
+      await pumpWithAi(tester, lines(), hasAi: true);
+      await selectLineAt(tester, 14);
+      expect(find.byIcon(Icons.auto_awesome), findsOneWidget);
+    });
+
+    testWidgets('is absent when the world has no AI', (tester) async {
+      // 本地模式 has no provider; a lit button that answers nothing is worse
+      // than no button.
+      await pumpWithAi(tester, lines(), hasAi: false);
+      await selectLineAt(tester, 14);
+      expect(find.byIcon(Icons.auto_awesome), findsNothing);
+    });
+  });
 }
