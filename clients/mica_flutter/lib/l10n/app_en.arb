@@ -65,6 +65,7 @@
   "sidebarMoreActions": "More actions",
   "rowSetIcon": "Set icon",
   "rowOpenInNewTab": "Open in new tab",
+  "searchRecentLabel": "Recently edited",
   "tabNewTooltip": "New tab",
   "tabNewPage": "New page",
   "tabOpenExisting": "Open an existing page…",

@@ -41,6 +41,7 @@ import 'ui/emoji_picker.dart';
 import 'ui/format_bytes.dart';
 import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
 import 'ui/page_graph_view.dart';
+import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/panel_kit.dart';
@@ -5726,6 +5727,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onNewTabPage: local
           ? null
           : () => _createDocumentInNewTab(context.l10n.newPage),
+      searchRecents: buildWorkspaceRecents(
+        context,
+        workspaceId: local ? _localSelectedWorkspace?.id : _selectedWorkspace?.id,
+        workspaceName:
+            (local ? _localSelectedWorkspace : _selectedWorkspace)?.name ?? '',
+        views: local
+            ? _localViews
+            : _selectedWorkspace == null
+            ? const []
+            : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
+      ),
       selectedMarkdown: local ? null : _selectedMarkdown,
       presence: local ? const [] : _presence,
       message: _message,
@@ -6544,6 +6556,7 @@ class WorkspaceView extends StatefulWidget {
     this.onOpenInNewTab,
     this.onOpenInNewTabById,
     this.onNewTabPage,
+    this.searchRecents = const [],
     required this.selectedMarkdown,
     required this.presence,
     required this.message,
@@ -6768,6 +6781,10 @@ class WorkspaceView extends StatefulWidget {
   /// Create a page and open it in a new tab. Null hides the `+` entirely, which
   /// is what the local world gets.
   final VoidCallback? onNewTabPage;
+
+  /// Recently edited pages, for the search dialog's pre-typing list. Built by
+  /// the host with the same `buildRecents` the home screen uses.
+  final List<HomeDocEntry> searchRecents;
   final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
@@ -10268,6 +10285,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         views: widget.views,
         workspaceName: widget.selectedWorkspace?.name,
         initialQuery: initialQuery,
+        recents: widget.searchRecents,
         onOpen: (viewId) {
           Navigator.of(context).pop();
           if (inNewTab && openInNewTab != null) {

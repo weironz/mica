@@ -153,7 +153,13 @@ class _SearchDialog extends StatefulWidget {
     this.views = const [],
     this.workspaceName,
     this.initialQuery,
+    this.recents = const [],
   });
+
+  /// Recently edited pages in THIS workspace, shown before anything is typed.
+  /// Built by the host (`buildRecents`), so this dialog does not grow a second
+  /// notion of "recent" alongside the home screen's.
+  final List<HomeDocEntry> recents;
 
   /// The workspace tree, for turning a hit's `parent_view_id` into the trail
   /// shown beside its name. Resolved locally on purpose: the tree is already in
@@ -430,6 +436,53 @@ class _SearchDialogState extends State<_SearchDialog> {
     _activate(_results[_selected]);
   }
 
+  /// The pre-typing list. Rows route through the same [_SearchDialog.onOpen] as
+  /// a search hit, so "open in a new tab" and every other host behaviour applies
+  /// to a recent exactly as it does to a result.
+  Widget _recentsList(BuildContext context) {
+    final theme = MicaTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 6),
+          child: Text(
+            context.l10n.searchRecentLabel,
+            style: TextStyle(fontSize: 12, color: theme.text.faint),
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: widget.recents.length,
+            itemBuilder: (context, i) {
+              final entry = widget.recents[i];
+              return ListTile(
+                dense: true,
+                leading: entry.icon != null && entry.icon!.isNotEmpty
+                    ? Text(entry.icon!, style: const TextStyle(fontSize: 16))
+                    : Icon(
+                        Icons.description_outlined,
+                        size: 18,
+                        color: theme.text.muted,
+                      ),
+                title: Text(
+                  entry.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Text(
+                  entry.meta,
+                  style: TextStyle(fontSize: 12, color: theme.text.faint),
+                ),
+                onTap: () => widget.onOpen(entry.id),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildResults(BuildContext context) {
     // Say the true thing: this world has no workspace search yet, and point at
     // the tool that does work here (in-page find). The old stub claimed instead
@@ -442,6 +495,15 @@ class _SearchDialogState extends State<_SearchDialog> {
       );
     }
     if (_query.text.trim().isEmpty) {
+      // Recently edited, before a single keystroke — AppFlowy's command palette
+      // does the same (`command_palette/widgets/recent_views_list.dart`), and
+      // for the same reason: most of the time the page you want is one you had
+      // open recently, and typing its name is a worse way to say so.
+      //
+      // These are the CURRENT workspace's pages, matching what the search below
+      // can actually find. Offering pages from other workspaces would put rows
+      // here that no query in this box could ever return.
+      if (widget.recents.isNotEmpty) return _recentsList(context);
       return EmptyState(
         icon: Icons.search,
         title: context.l10n.searchEmptyTitle,

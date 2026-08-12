@@ -15,6 +15,40 @@ import '../l10n/locale_controller.dart';
 import 'home_data.dart';
 import 'home_screen.dart';
 
+/// Recently edited pages for ONE workspace, phrased for display.
+///
+/// The search dialog's pre-typing list. It lives here, beside the home pane,
+/// because both need the same `RelativeTimeStrings` built from l10n — assembling
+/// that a second time in main.dart is how "2 hours ago" ends up worded two ways.
+///
+/// Scoped to one workspace, unlike [buildHomePane]: search itself is
+/// per-workspace, so offering recents from elsewhere would list pages no query
+/// in that box could return.
+List<HomeDocEntry> buildWorkspaceRecents(
+  BuildContext context, {
+  required String? workspaceId,
+  required String workspaceName,
+  required List<DocumentView> views,
+  int limit = 6,
+  DateTime? now,
+}) {
+  if (workspaceId == null) return const [];
+  final l10n = context.l10n;
+  return buildRecents(
+    viewsByWorkspace: {workspaceId: views},
+    workspaceNames: {workspaceId: workspaceName},
+    strings: RelativeTimeStrings(
+      justNow: l10n.homeJustNow,
+      minutesAgo: l10n.homeMinutesAgo,
+      hoursAgo: l10n.homeHoursAgo,
+      yesterday: l10n.homeYesterday,
+      daysAgo: l10n.homeDaysAgo,
+    ),
+    limit: limit,
+    now: now,
+  );
+}
+
 /// Build the home pane for the current state.
 ///
 /// [viewsByWorkspace] and [workspaceNames] span EVERY workspace of the active
