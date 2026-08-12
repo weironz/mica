@@ -3653,6 +3653,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       context.l10n.shortcutsLink,
                       custom: _promptLink,
                     ),
+                    // Rewrite the selection with AI. On this bar because this
+                    // bar IS "things you do to the text you just selected" —
+                    // the same place AppFlowy and AFFiNE put their Ask AI, and
+                    // it inherits the rule that the bar only exists while there
+                    // is a selection to act on.
+                    //
+                    // Hidden, not disabled, when the world has no AI: 本地模式
+                    // has no provider, and a lit button that answers nothing is
+                    // worse than one that is not there.
+                    if (widget.onAiStream != null)
+                      IconButton(
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        tooltip: context.l10n.aiRewriteSelection,
+                        icon: const Icon(Icons.auto_awesome),
+                        onPressed: () => unawaited(_runSelectionAi()),
+                      ),
                   ],
                   if (showBlocks) ...[
                     const VerticalDivider(width: 9, indent: 8, endIndent: 8),
@@ -5748,12 +5765,61 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Future<void> _runInlineAi() async {
     final stream = widget.onAiStream;
     if (stream == null) return;
-    final markdown = await showDialog<String>(
+    final result = await showDialog<_AiResult>(
       context: context,
       builder: (context) => _InlineAiDialog(onStream: stream),
     );
-    if (markdown == null || markdown.trim().isEmpty) return;
-    _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
+    if (result == null || result.markdown.trim().isEmpty) return;
+    _controller.insertBlocksAfterFocus(markdownToBlocks(result.markdown));
+    _rehostExternalImages();
+    _syncImeFromSelection(force: true);
+  }
+
+  /// Rewrite the SELECTED text with AI.
+  ///
+  /// Nothing reaches the document until the user picks 「replace」 or 「insert
+  /// below」 — closing the dialog, an error mid-stream, or a model that answers
+  /// with prose all leave the page exactly as it was. That staging is what all
+  /// three references do (Notion previews, AFFiNE panels, AppFlowy writes into
+  /// its own block); none of them types into the document as it streams,
+  /// because an accepted rewrite has to be ONE undoable step and a stream is
+  /// hundreds of them.
+  Future<void> _runSelectionAi() async {
+    final stream = widget.onAiStream;
+    final sel = _controller.selection;
+    if (stream == null || sel == null || sel.isCollapsed) return;
+    final source = _controller.selectionText(imageUrls: _imageUrlCache);
+    if (source.trim().isEmpty) return;
+    final l10n = context.l10n;
+
+    final result = await showDialog<_AiResult>(
+      context: context,
+      builder: (context) => _InlineAiDialog(
+        onStream: stream,
+        system: kAiRewriteSystem,
+        contextText: source,
+        allowReplace: true,
+        presets: [
+          (label: l10n.aiPresetImprove, prompt: l10n.aiPresetImprovePrompt),
+          (label: l10n.aiPresetFix, prompt: l10n.aiPresetFixPrompt),
+          (label: l10n.aiPresetShorter, prompt: l10n.aiPresetShorterPrompt),
+          (label: l10n.aiPresetLonger, prompt: l10n.aiPresetLongerPrompt),
+        ],
+      ),
+    );
+    if (result == null || result.markdown.trim().isEmpty || !mounted) return;
+
+    final specs = markdownToBlocks(result.markdown);
+    if (specs.isEmpty) return;
+    if (result.replace) {
+      _controller.insertBlocksReplacingSelection(specs);
+    } else {
+      // Collapse to the END first: `insertBlocksAfterFocus` works off the
+      // focus, and a backwards drag leaves that at the selection's START —
+      // which would drop the rewrite ABOVE the text it rewrote.
+      _controller.collapseTo(sel.end);
+      _controller.insertBlocksAfterFocus(specs);
+    }
     _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }
@@ -5835,7 +5901,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     final code = _controller.nodes[nodeIndex].text;
-    final markdown = await showDialog<String>(
+    final result = await showDialog<_AiResult>(
       context: context,
       builder: (_) => _InlineAiDialog(
         onStream: stream,
@@ -5843,12 +5909,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         autoStart: autoStart,
       ),
     );
-    if (markdown == null || markdown.trim().isEmpty || !mounted) return;
+    if (result == null || result.markdown.trim().isEmpty || !mounted) return;
     // Insert the AI output right after the code block.
     _controller.collapseTo(
       DocPosition(nodeIndex, _controller.nodes[nodeIndex].text.length),
     );
-    _controller.insertBlocksAfterFocus(markdownToBlocks(markdown));
+    _controller.insertBlocksAfterFocus(markdownToBlocks(result.markdown));
     _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }
@@ -6010,11 +6076,45 @@ const _SlashOption _aiSlashOption = _SlashOption(
 
 /// In-editor "Ask AI": streams the response live, then returns the accumulated
 /// Markdown (via Navigator.pop) for the editor to insert as blocks.
+/// System prompt for rewriting a selection.
+///
+/// The constraints are load-bearing, not politeness. A model that answers
+/// 「好的,这是修改后的内容:」 turns that sentence into the user's document the
+/// moment they press replace — so "no preamble" is a data-safety rule here, the
+/// same one `kAiDocSystem` already states for whole-document generation.
+const String kAiRewriteSystem =
+    'You rewrite a fragment of a Markdown document in place. Output ONLY the '
+    'rewritten Markdown — no preamble, no explanation, no code fence around the '
+    'whole answer, no commentary before or after. Preserve the structure and '
+    'formatting of the input (headings stay headings, list items stay list '
+    'items, tables stay tables) unless the instruction asks otherwise. Keep the '
+    "original language of the text unless asked to translate. If the instruction "
+    'cannot be applied, return the input unchanged rather than explaining why.';
+
+/// What the AI dialog was asked to do with its output.
+///
+/// Two exits, not one, because replacing the user's text and adding to it are
+/// different promises — AppFlowy names them `replace` / `insertBelow` and Notion
+/// 「Replace selection」 / 「Insert below」. Only ever built when the user picks
+/// one: closing or cancelling returns null and the document is untouched.
+class _AiResult {
+  const _AiResult(this.markdown, {required this.replace});
+
+  final String markdown;
+
+  /// True = replace the selection, false = insert after it (original kept).
+  final bool replace;
+}
+
 class _InlineAiDialog extends StatefulWidget {
   const _InlineAiDialog({
     required this.onStream,
     this.initialPrompt,
     this.autoStart = false,
+    this.system,
+    this.contextText,
+    this.presets = const [],
+    this.allowReplace = false,
   });
 
   final Stream<String> Function(String prompt, {String? system}) onStream;
@@ -6024,6 +6124,26 @@ class _InlineAiDialog extends StatefulWidget {
 
   /// Start streaming immediately on open (for one-click presets).
   final bool autoStart;
+
+  /// System prompt. For a rewrite this is what keeps the model from wrapping
+  /// its answer in 「好的,这是修改后的内容:」 — that prose would become the
+  /// user's text.
+  final String? system;
+
+  /// Material the instruction applies TO — the selected Markdown for a rewrite.
+  ///
+  /// Kept out of the prompt FIELD on purpose: the box should hold what you are
+  /// asking for, not a copy of the page you are asking about. Appended when the
+  /// request is sent.
+  final String? contextText;
+
+  /// One-click instructions. AppFlowy ships six of these next to its free-form
+  /// box (`AiWriterCommand`), Notion the same — the common intents are worth a
+  /// button, and the box is still there for everything else.
+  final List<({String label, String prompt})> presets;
+
+  /// Offer 「replace the selection」 as well as 「insert below」.
+  final bool allowReplace;
 
   @override
   State<_InlineAiDialog> createState() => _InlineAiDialogState();
@@ -6063,8 +6183,14 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
       _error = null;
       _buffer.clear();
     });
+    // The material rides along with the instruction, separated so the model can
+    // tell "what to do" from "what to do it to".
+    final ctx = widget.contextText;
+    final sent = (ctx == null || ctx.trim().isEmpty)
+        ? prompt
+        : '$prompt\n\n---\n\n$ctx';
     _sub = widget
-        .onStream(prompt)
+        .onStream(sent, system: widget.system)
         .listen(
           (delta) {
             setState(() => _buffer.write(delta));
@@ -6114,6 +6240,26 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (widget.presets.isNotEmpty) ...[
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final p in widget.presets)
+                    ActionChip(
+                      label: Text(p.label),
+                      // Fills the box rather than firing immediately: the
+                      // preset is a starting point you can still edit, and a
+                      // one-click request that spends tokens on a misread is
+                      // worse than one more click.
+                      onPressed: _streaming
+                          ? null
+                          : () => setState(() => _prompt.text = p.prompt),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
             TextField(
               controller: _prompt,
               autofocus: true,
@@ -6202,11 +6348,28 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
             icon: const Icon(Icons.refresh, size: 18),
             label: Text(context.l10n.aiRegenerate),
           ),
-          FilledButton.icon(
-            onPressed: () => Navigator.of(context).pop(_buffer.toString()),
-            icon: const Icon(Icons.check, size: 18),
-            label: Text(context.l10n.aiInsert),
+          // Insert-below stays a plain button even when replacing is offered:
+          // keeping the original is the reversible choice, so it must not be
+          // the one that looks like the default.
+          TextButton.icon(
+            onPressed: () => Navigator.of(
+              context,
+            ).pop(_AiResult(_buffer.toString(), replace: false)),
+            icon: const Icon(Icons.south, size: 18),
+            label: Text(
+              widget.allowReplace
+                  ? context.l10n.aiInsertBelow
+                  : context.l10n.aiInsert,
+            ),
           ),
+          if (widget.allowReplace)
+            FilledButton.icon(
+              onPressed: () => Navigator.of(
+                context,
+              ).pop(_AiResult(_buffer.toString(), replace: true)),
+              icon: const Icon(Icons.check, size: 18),
+              label: Text(context.l10n.aiReplaceSelection),
+            ),
         ],
       ],
     );
