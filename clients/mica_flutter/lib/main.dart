@@ -1103,16 +1103,38 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // operations do not touch, and giving it tabs would mean a second copy of
   // every operation below for no user demand.
 
-  /// Open [view] in a NEW tab and switch to it.
+  /// Append an empty tab and make it active.
   ///
-  /// The tab is created empty and filled by the caller's normal open path, so
-  /// "open in new tab" and "open here" load a page exactly the same way — the
-  /// only difference is which [DocTab] is active while it loads.
-  void _openViewInNewTab(DocumentView view) {
+  /// The caller then loads into it through the ordinary open/create path, so
+  /// "in a new tab" and "here" reach the server identically — the only
+  /// difference is which [DocTab] is active while it happens.
+  void _pushTab() {
     setState(() {
       _tabs.add(DocTab()..lastActivated = ++_activationTick);
       _activeTabIndex = _tabs.length - 1;
     });
+  }
+
+  /// Open an existing page, by id, in a new tab. The `+` menu's picker.
+  void _openViewByIdInNewTab(String viewId) {
+    _pushTab();
+    unawaited(_openViewById(viewId));
+  }
+
+  /// Create a page and open it in a new tab. The `+` menu's first entry.
+  ///
+  /// No parent: the sidebar's placement rules follow where the POINTER is, and
+  /// the `+` sits in the tab strip, which is nowhere in the tree. Root is the
+  /// only honest answer — guessing the last-focused folder would put pages
+  /// somewhere the user never pointed at.
+  void _createDocumentInNewTab(String name) {
+    _pushTab();
+    unawaited(_createDocument(name));
+  }
+
+  /// Open [view] in a NEW tab and switch to it. The sidebar row's context menu.
+  void _openViewInNewTab(DocumentView view) {
+    _pushTab();
     // Deliberately AFTER the new tab is active: `_selectView` skips the load
     // when the target is already open, and it tests that against the ACTIVE
     // tab. A fresh tab has a null view, so the same page opening in a second
@@ -5700,6 +5722,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onSelectTab: local ? null : _selectTab,
       onCloseTab: local ? null : _closeTab,
       onOpenInNewTab: local ? null : _openViewInNewTab,
+      onOpenInNewTabById: local ? null : _openViewByIdInNewTab,
+      onNewTabPage: local
+          ? null
+          : () => _createDocumentInNewTab(context.l10n.newPage),
       selectedMarkdown: local ? null : _selectedMarkdown,
       presence: local ? const [] : _presence,
       message: _message,
@@ -6516,6 +6542,8 @@ class WorkspaceView extends StatefulWidget {
     this.onSelectTab,
     this.onCloseTab,
     this.onOpenInNewTab,
+    this.onOpenInNewTabById,
+    this.onNewTabPage,
     required this.selectedMarkdown,
     required this.presence,
     required this.message,
@@ -6733,6 +6761,13 @@ class WorkspaceView extends StatefulWidget {
 
   /// Open a page in a new tab, from the sidebar row's context menu.
   final void Function(DocumentView view)? onOpenInNewTab;
+
+  /// Same, by id — the tab strip's `+` picks through search, which yields ids.
+  final void Function(String viewId)? onOpenInNewTabById;
+
+  /// Create a page and open it in a new tab. Null hides the `+` entirely, which
+  /// is what the local world gets.
+  final VoidCallback? onNewTabPage;
   final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
@@ -8560,10 +8595,64 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           onSelect: onSelectTab,
           onClose: onCloseTab,
           untitledLabel: context.l10n.untitledPage,
+          onNewTab: widget.onNewTabPage == null ? null : _showNewTabMenu,
+          newTabTooltip: context.l10n.tabNewTooltip,
         ),
         Expanded(child: body),
       ],
     );
+  }
+
+  /// The tab strip's `+`: create a page, or pick an existing one — both into a
+  /// new tab.
+  ///
+  /// The picker is the app's EXISTING search dialog, not a list built here.
+  /// AppFlowy's `+` opens its command palette (search + recents + "new page")
+  /// and Mica already has the search half of that; a second page list would be
+  /// the two-representations trap this repo keeps paying for. The visible
+  /// difference from AppFlowy is that ours has no recents — search shows
+  /// nothing until you type. Adding recents is a change to search itself, and
+  /// it would then apply everywhere search is opened from, which is the right
+  /// way to get it and not something to bolt onto this menu.
+  Future<void> _showNewTabMenu(Offset globalPosition) async {
+    final onNewPage = widget.onNewTabPage;
+    if (onNewPage == null) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final local = overlay.globalToLocal(globalPosition);
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        local.dx,
+        local.dy,
+        overlay.size.width - local.dx,
+        0,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'new',
+          child: _MenuRow(
+            icon: Icons.add,
+            label: context.l10n.tabNewPage,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'open',
+          child: _MenuRow(
+            icon: Icons.search,
+            label: context.l10n.tabOpenExisting,
+          ),
+        ),
+      ],
+    );
+    if (!mounted) return;
+    switch (picked) {
+      case 'new':
+        onNewPage();
+      case 'open':
+        _openSearch(inNewTab: true);
+    }
   }
 
   Widget _editorPaneBody(BuildContext context) {
@@ -9154,7 +9243,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     // precise token the index stores for list/tag values, so it
                     // finds pages that CARRY the tag, not ones that merely
                     // mention the word in their body (M2).
-                    onOpenTag: (v) => _openSearch('#$v'),
+                    onOpenTag: (v) => _openSearch(initialQuery: '#$v'),
                     onCommit: (fm) {
                       final data = Map<String, dynamic>.from(
                         bootstrap.rootData,
@@ -10162,7 +10251,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  void _openSearch([String? initialQuery]) {
+  /// [inNewTab] routes the chosen page into a fresh tab instead of replacing
+  /// what is open — the tab strip's `+` is the only caller that passes it.
+  /// Folder hits still reveal in the sidebar either way: there is no document
+  /// behind a folder, so "open it in a tab" has nothing to mean.
+  void _openSearch({String? initialQuery, bool inNewTab = false}) {
+    final openInNewTab = widget.onOpenInNewTabById;
     showDialog<void>(
       context: context,
       builder: (context) => _SearchDialog(
@@ -10172,7 +10266,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         initialQuery: initialQuery,
         onOpen: (viewId) {
           Navigator.of(context).pop();
-          widget.onOpenSearchResult(viewId);
+          if (inNewTab && openInNewTab != null) {
+            openInNewTab(viewId);
+          } else {
+            widget.onOpenSearchResult(viewId);
+          }
         },
         onReveal: (viewId) {
           Navigator.of(context).pop();

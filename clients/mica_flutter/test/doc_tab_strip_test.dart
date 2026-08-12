@@ -214,6 +214,74 @@ void main() {
       expect(selected, 1);
     });
 
+    testWidgets('no + button without a handler', (tester) async {
+      // The local world passes none — it has no tab model to add to.
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [
+              DocTab(view: _view('a', 'Alpha')),
+              DocTab(view: _view('b', 'Beta')),
+            ],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+          ),
+        ),
+      );
+      expect(find.byIcon(Icons.add), findsNothing);
+    });
+
+    testWidgets('the + reports where it was tapped, for anchoring a menu', (
+      tester,
+    ) async {
+      Offset? at;
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [
+              DocTab(view: _view('a', 'Alpha')),
+              DocTab(view: _view('b', 'Beta')),
+            ],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+            onNewTab: (p) => at = p,
+          ),
+        ),
+      );
+      await tester.tap(find.byIcon(Icons.add));
+      expect(at, isNotNull);
+    });
+
+    testWidgets('the + stays put when the tabs overflow', (tester) async {
+      // It lives outside the horizontal scroll view on purpose: inside, it
+      // would scroll off the right edge exactly when there are enough tabs to
+      // want another one.
+      await tester.pumpWidget(
+        _host(
+          SizedBox(
+            width: 300,
+            child: DocTabStrip(
+              tabs: [
+                for (var i = 0; i < 12; i++)
+                  DocTab(view: _view('v$i', 'Page number $i')),
+              ],
+              activeIndex: 0,
+              onSelect: (_) {},
+              onClose: (_) {},
+              untitledLabel: 'Untitled',
+              onNewTab: (_) {},
+            ),
+          ),
+        ),
+      );
+      expect(find.byIcon(Icons.add), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.add));
+    });
+
     testWidgets('the close button reports the index, not the selection', (
       tester,
     ) async {

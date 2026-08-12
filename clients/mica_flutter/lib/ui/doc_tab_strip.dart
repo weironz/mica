@@ -38,12 +38,22 @@ class DocTabStrip extends StatelessWidget {
     required this.onSelect,
     required this.onClose,
     required this.untitledLabel,
+    this.onNewTab,
+    this.newTabTooltip,
   });
 
   final List<DocTab> tabs;
   final int activeIndex;
   final void Function(int index) onSelect;
   final void Function(int index) onClose;
+
+  /// The trailing `+`. Receives the button's global position so the host can
+  /// anchor a menu under it — the same shape the sidebar row's context menu
+  /// uses, rather than a second way of locating a popup.
+  ///
+  /// Null hides the button entirely.
+  final void Function(Offset globalPosition)? onNewTab;
+  final String? newTabTooltip;
 
   /// `l10n.untitledPage`, passed in rather than read here so this file stays
   /// free of the localization import and can be widget-tested on its own.
@@ -64,19 +74,29 @@ class DocTabStrip extends StatelessWidget {
         color: theme.surface.sunken,
         border: Border(bottom: BorderSide(color: theme.border.subtle)),
       ),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        itemCount: tabs.length,
-        itemBuilder: (context, i) => _Tab(
-          // The tab's own title, NOT the active document's — every tab renders
-          // its own `view`, which is what makes the strip readable while a
-          // background tab is still loading.
-          label: _labelFor(tabs[i]),
-          active: i == activeIndex,
-          onTap: () => onSelect(i),
-          onClose: () => onClose(i),
-        ),
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              itemCount: tabs.length,
+              itemBuilder: (context, i) => _Tab(
+                // The tab's own title, NOT the active document's — every tab
+                // renders its own `view`, which is what makes the strip
+                // readable while a background tab is still loading.
+                label: _labelFor(tabs[i]),
+                active: i == activeIndex,
+                onTap: () => onSelect(i),
+                onClose: () => onClose(i),
+              ),
+            ),
+          ),
+          // OUTSIDE the scroll view, so it stays reachable once the tabs
+          // overflow. Inside, it would scroll off the right edge exactly when
+          // there are enough tabs to want another one.
+          if (onNewTab != null) _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
+        ],
       ),
     );
   }
@@ -84,6 +104,31 @@ class DocTabStrip extends StatelessWidget {
   String _labelFor(DocTab tab) {
     final name = tab.view?.name.trim() ?? '';
     return name.isEmpty ? untitledLabel : name;
+  }
+}
+
+class _NewTabButton extends StatelessWidget {
+  const _NewTabButton({required this.onTap, this.tooltip});
+
+  final void Function(Offset globalPosition) onTap;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MicaTheme.of(context);
+    final button = GestureDetector(
+      // onTapDown, not onTap: the menu is anchored to where the pointer landed,
+      // and onTap does not carry a position.
+      onTapDown: (d) => onTap(d.globalPosition),
+      child: Container(
+        width: 30,
+        height: 26,
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(6)),
+        child: Icon(Icons.add, size: 16, color: theme.text.muted),
+      ),
+    );
+    return tooltip == null ? button : Tooltip(message: tooltip!, child: button);
   }
 }
 
