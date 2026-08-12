@@ -8739,9 +8739,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // Not in THIS workspace's tree yet. Remember it: a search hit from
       // another workspace arrives before that workspace's views do.
       setState(() {
-      _pendingRevealId = viewId;
-      _revealAttempts = 0;
-    });
+        _pendingRevealId = viewId;
+        _revealAttempts = 0;
+      });
       return;
     }
     _revealFolder(viewId);
@@ -8776,10 +8776,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       _revealAttempts = 0;
       return;
     }
-    // The tree may only have arrived now (workspace switch): expand ancestors.
+    // The tree may only have arrived now (workspace switch): expand ancestors,
+    // then WAIT A FRAME before scrolling.
+    //
+    // Scrolling in the same pass lands short, which is what the user saw:
+    // expanding adds rows, so the list gets taller — but `maxScrollExtent`
+    // still describes the layout measured BEFORE those rows existed, and the
+    // clamp below pins the target to that stale, smaller maximum. The shortfall
+    // is exactly the height of the rows just revealed, which is why it looked
+    // like "scrolled, but you still have to drag a bit further".
     if (widget.views.any((v) => v.id == id) &&
         !_expandedViewIds.contains(id)) {
       _revealFolder(id);
+      return; // re-entered next frame, against the grown list
     }
     final rows = _visibleDocumentTree();
     final index = rows.indexWhere((r) => r.view.id == id);
