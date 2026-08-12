@@ -818,6 +818,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // Credentials are keyed per cloud origin (P3c-2), so pointing the app at a
   // different server doesn't destroy the previous server's session — switching
   // back restores it without retyping.
+  /// Servers we hold credentials for — entering one costs no password.
+  ///
+  /// Keyed off `authUser:$origin` rather than the access token: the token is the
+  /// part that expires (and on web is never on disk at all), while the stored
+  /// user is what [_restoreSession] needs to rebuild a session from the refresh
+  /// token. Using the token here would mark a perfectly good sign-in as absent
+  /// every time it lapsed, which is most mornings.
+  Set<String> _signedInOrigins() => {
+    for (final origin in _servers)
+      if ((loadPref('authUser:$origin') ?? '').isNotEmpty) origin,
+  };
+
   void _persistSession(AuthSession session) {
     savePref('authToken:$_cloudOrigin', session.accessToken);
     savePref('authUser:$_cloudOrigin', jsonEncode(session.user.toJson()));
@@ -2533,6 +2545,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       localTitle: l10n.signInLocalTitle,
       localBody: l10n.signInLocalBody,
       localAction: l10n.signInLocalAction,
+      signedIn: l10n.worldSignedInBadge,
     );
   }
 
@@ -4408,12 +4421,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 // 「桌面端」 qualifier.
                 hero: _signInHero(context, offlineIsReal: true),
                 // Closeable, unlike the gate: you got here from a world that
-                // works, so there is something to go back to.
+                // works, so there is something to go back to — and now it says
+                // so, because "there is a whole app behind this" was the part
+                // nobody could see.
                 onClose: () => Navigator.of(routeContext).pop(),
+                closeLabel: l10n.worldBackToApp,
                 pane: SignInPane(
                   strings: _signInPaneStrings(context),
                   origins: _servers,
                   active: _activeOrigin,
+                  signedInOrigins: _signedInOrigins(),
                   probeHealth: _probeServer,
                   onSelect: (origin) async {
                     await _setActiveConnection(origin);
@@ -4443,23 +4460,48 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                       setLocal(() {});
                     }
                   },
-                  authForm: AuthFormCard(
-                    allowRegister: _activeRegistrationOpen ?? true,
-                    strings: _authFormStrings(
-                      context,
-                      title: migrate ? l10n.worldMigrateSignInTitle : null,
-                    ),
-                    note: migrate
-                        ? l10n.worldMigrateSignInDesc(migrateWorkspace)
-                        : null,
-                    actionLabelOverride: migrate
-                        ? l10n.worldMigrateAction
-                        : null,
-                    isBusy: _isBusy,
-                    onSubmit: (mode, form) async =>
-                        Navigator.of(routeContext).pop((mode, form)),
-                    onForgotPassword: _forgotPassword,
-                  ),
+                  // ALREADY signed in to the server this screen is pointing at?
+                  // Then it has nothing to ask for. Say so, and make the way
+                  // back a labelled button.
+                  //
+                  // The empty email/password form here is what made switching
+                  // worlds read as being logged out (2026-08-12) — the session
+                  // was never touched, it was just hidden behind an opaque
+                  // screen whose only content was a request to sign in again.
+                  //
+                  // Not during a migration: that flow genuinely needs a
+                  // sign-in, and its own copy explains why.
+                  authForm: (!migrate && _session != null && !_activeIsLocal)
+                      ? SignedInCard(
+                          strings: SignedInCardStrings(
+                            title: l10n.worldAlreadySignedInTitle,
+                            body:
+                                '${_session!.user.displayName} · '
+                                '${serverLabel(_cloudOrigin)}',
+                            action: l10n.worldBackToApp,
+                            switchHint: l10n.worldAlreadySignedInHint,
+                          ),
+                          onContinue: () => Navigator.of(routeContext).pop(),
+                        )
+                      : AuthFormCard(
+                          allowRegister: _activeRegistrationOpen ?? true,
+                          strings: _authFormStrings(
+                            context,
+                            title: migrate
+                                ? l10n.worldMigrateSignInTitle
+                                : null,
+                          ),
+                          note: migrate
+                              ? l10n.worldMigrateSignInDesc(migrateWorkspace)
+                              : null,
+                          actionLabelOverride: migrate
+                              ? l10n.worldMigrateAction
+                              : null,
+                          isBusy: _isBusy,
+                          onSubmit: (mode, form) async =>
+                              Navigator.of(routeContext).pop((mode, form)),
+                          onForgotPassword: _forgotPassword,
+                        ),
                 ),
               ),
             ),

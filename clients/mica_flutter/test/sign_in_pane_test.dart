@@ -19,6 +19,7 @@ void main() {
     localTitle: '在此设备上使用',
     localBody: '无需账户',
     localAction: '开始使用',
+    signedIn: '已登录',
   );
 
   late List<String> selected;
@@ -42,6 +43,7 @@ void main() {
     Future<bool> Function(String)? probe,
     bool canAdd = true,
     bool canRemove = true,
+    Set<String> signedInOrigins = const {},
   }) async {
     await tester.binding.setSurfaceSize(const Size(520, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -53,6 +55,7 @@ void main() {
               strings: strings,
               origins: origins,
               active: active,
+              signedInOrigins: signedInOrigins,
               onSelect: selected.add,
               onEnterLocal: () => locals.add(1),
               onAdd: canAdd ? () => adds.add(1) : null,
@@ -319,5 +322,75 @@ void main() {
     await tester.tap(find.byTooltip('重试'));
     await tester.pump();
     expect(probed.length, before + 1);
+  });
+
+  // Reported 2026-08-12: switching worlds while signed in showed an empty
+  // password form, so every world in this list looked equally expensive to
+  // enter. The badge is what separates "one tap" from "type your password".
+  group('已登录 badge', () {
+    testWidgets('marks only the servers we hold credentials for', (
+      tester,
+    ) async {
+      await pump(tester, signedInOrigins: {'https://b.example'});
+      await tester.tap(find.byIcon(Icons.expand_more));
+      await tester.pumpAndSettle();
+
+      expect(find.text('已登录'), findsOneWidget);
+      // The badge sits on b, not on the active-but-not-signed-in a.
+      final badge = tester.getTopLeft(find.text('已登录'));
+      final bRow = tester.getTopLeft(find.text('b.example'));
+      final aRow = tester.getTopLeft(find.text('a.example').last);
+      expect((badge.dy - bRow.dy).abs(), lessThan(4));
+      expect((badge.dy - aRow.dy).abs(), greaterThan(4));
+    });
+
+    testWidgets('no badge when nothing is signed in', (tester) async {
+      await pump(tester);
+      await tester.tap(find.byIcon(Icons.expand_more));
+      await tester.pumpAndSettle();
+      expect(find.text('已登录'), findsNothing);
+    });
+
+    testWidgets('a caller that supplies no badge string shows none', (
+      tester,
+    ) async {
+      // The web gate cannot know which origins have sessions; claiming they all
+      // do would be worse than saying nothing.
+      await tester.binding.setSurfaceSize(const Size(520, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: SignInPane(
+                strings: const SignInPaneStrings(
+                  cloudTab: '云端账户',
+                  localTab: '本地模式',
+                  connected: '已连接到服务器',
+                  unreachable: '连不上服务器',
+                  checking: '正在检测…',
+                  serversLabel: '服务器',
+                  addServer: '添加服务器',
+                  removeServer: '删除',
+                  retry: '重试',
+                  localTitle: '在此设备上使用',
+                  localBody: '无需账户',
+                  localAction: '开始使用',
+                ),
+                origins: const ['https://a.example'],
+                active: 'https://a.example',
+                signedInOrigins: const {'https://a.example'},
+                onSelect: (_) {},
+                onEnterLocal: () {},
+                authForm: const Text('AUTH-FORM'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byIcon(Icons.expand_more));
+      await tester.pumpAndSettle();
+      expect(find.text('已登录'), findsNothing);
+    });
   });
 }

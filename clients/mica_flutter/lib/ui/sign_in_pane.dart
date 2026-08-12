@@ -57,7 +57,15 @@ class SignInPaneStrings {
     required this.localTitle,
     required this.localBody,
     required this.localAction,
+    this.signedIn = '',
   });
+
+  /// Badge on a server you already have a session for — 「已登录」.
+  ///
+  /// The point is that picking it costs no password. Without it a list of
+  /// servers gives no way to tell "switch instantly" from "type your
+  /// credentials again", so every switch looks equally expensive.
+  final String signedIn;
 
   final String cloudTab;
   final String localTab;
@@ -93,8 +101,15 @@ class SignInPane extends StatefulWidget {
     this.onAdd,
     this.onRemove,
     this.probeHealth,
+    this.signedInOrigins = const {},
     super.key,
   });
+
+  /// Origins with stored credentials — entering one of these needs no password.
+  ///
+  /// Empty by default so a caller that does not know (the web gate) simply
+  /// shows no badges rather than claiming everything is a fresh sign-in.
+  final Set<String> signedInOrigins;
 
   final SignInPaneStrings strings;
 
@@ -523,6 +538,20 @@ class _SignInPaneState extends State<SignInPane> {
                 ),
               ),
             ),
+            // 「已登录」 — this one costs no password. The row is otherwise
+            // identical whether picking it drops you straight in or hands you a
+            // login form, which is the difference that actually matters here.
+            if (widget.strings.signedIn.isNotEmpty &&
+                widget.signedInOrigins.contains(origin)) ...[
+              const SizedBox(width: 8),
+              Text(
+                widget.strings.signedIn,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: MicaTheme.of(context).status.success,
+                ),
+              ),
+            ],
             if (widget.onRemove != null)
               IconButton(
                 onPressed: () {

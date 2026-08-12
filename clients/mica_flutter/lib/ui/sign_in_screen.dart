@@ -29,6 +29,7 @@ class SignInScreen extends StatelessWidget {
     required this.hero,
     required this.pane,
     this.onClose,
+    this.closeLabel,
     super.key,
   });
 
@@ -44,6 +45,10 @@ class SignInScreen extends StatelessWidget {
   /// 本地模式 without an account, so this screen must be leaveable. Null on web,
   /// where there is nothing behind it to go back to.
   final VoidCallback? onClose;
+
+  /// Label for the close affordance. Null keeps the bare × (web's gate, where
+  /// there is nothing behind this screen to describe going back to).
+  final String? closeLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -67,11 +72,27 @@ class SignInScreen extends StatelessWidget {
           Positioned(
             top: 8,
             right: 8,
-            child: IconButton(
-              onPressed: onClose,
-              icon: const Icon(Icons.close),
-              tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-            ),
+            // A LABELLED button when the caller supplies a label.
+            //
+            // This screen is opaque and fills the window, so a signed-in user
+            // who opened it to switch worlds sees what looks like a logged-out
+            // app — the session and every open page are still there, directly
+            // behind it. Reported 2026-08-12: 「原来是页面被登录页遮挡住了，
+            // 不过这个好难注意到」. A bare × in the corner is not a way back
+            // that anyone finds; a word is.
+            child: closeLabel == null
+                ? IconButton(
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close),
+                    tooltip: MaterialLocalizations.of(
+                      context,
+                    ).closeButtonTooltip,
+                  )
+                : TextButton.icon(
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close, size: 18),
+                    label: Text(closeLabel!),
+                  ),
           ),
       ],
     );

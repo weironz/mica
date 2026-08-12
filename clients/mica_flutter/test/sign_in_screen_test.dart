@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/ui/auth_form.dart';
 import 'package:mica_flutter/ui/sign_in_screen.dart';
 
 /// Design 01 is brand-left / form-right, and the shipped screen had them
@@ -14,6 +15,7 @@ void main() {
   Future<void> pump(
     WidgetTester tester, {
     VoidCallback? onClose,
+    String? closeLabel,
     Size size = const Size(1280, 800),
   }) async {
     await tester.binding.setSurfaceSize(size);
@@ -28,6 +30,7 @@ void main() {
             ),
             pane: const Text('FORM'),
             onClose: onClose,
+            closeLabel: closeLabel,
           ),
         ),
       ),
@@ -88,5 +91,65 @@ void main() {
     await pump(tester, onClose: () => closed++);
     await tester.tap(find.byIcon(Icons.close));
     expect(closed, 1);
+  });
+
+  // Reported 2026-08-12: opening this screen while signed in looked like being
+  // logged out. The whole app was behind it — the only way back was an unlabelled
+  // × in the corner, which the user did not find until told it was there.
+  testWidgets('a label turns the corner × into a button that says what it does',
+      (tester) async {
+    var closed = 0;
+    await pump(tester, onClose: () => closed++, closeLabel: '返回');
+    expect(find.text('返回'), findsOneWidget);
+    await tester.tap(find.text('返回'));
+    expect(closed, 1);
+  });
+
+  testWidgets('without a label it stays the bare × (web has nothing to name)',
+      (tester) async {
+    await pump(tester, onClose: () {});
+    expect(find.byIcon(Icons.close), findsOneWidget);
+    expect(find.byType(TextButton), findsNothing);
+  });
+
+  group('SignedInCard', () {
+    const strings = SignedInCardStrings(
+      title: '你已经登录了',
+      body: 'willmica · mica.example.com',
+      action: '返回',
+      switchHint: '要去别处的话,在上面选另一个服务器。',
+    );
+
+    testWidgets('states WHO and WHERE, and offers the way back', (
+      tester,
+    ) async {
+      // The empty password form it replaces said neither, which is why an
+      // intact session read as a logged-out app.
+      var back = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SignedInCard(strings: strings, onContinue: () => back++),
+          ),
+        ),
+      );
+      expect(find.text('你已经登录了'), findsOneWidget);
+      expect(find.text('willmica · mica.example.com'), findsOneWidget);
+      expect(find.text('要去别处的话,在上面选另一个服务器。'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, '返回'));
+      expect(back, 1);
+    });
+
+    testWidgets('asks for nothing — no fields to fill', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SignedInCard(strings: strings, onContinue: () {}),
+          ),
+        ),
+      );
+      expect(find.byType(TextField), findsNothing);
+    });
   });
 }

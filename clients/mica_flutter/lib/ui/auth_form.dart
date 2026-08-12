@@ -271,3 +271,89 @@ class _AuthFormCardState extends State<AuthFormCard> {
     );
   }
 }
+
+/// Copy for [SignedInCard]. Localized by the caller, like everything else here.
+@immutable
+class SignedInCardStrings {
+  const SignedInCardStrings({
+    required this.title,
+    required this.body,
+    required this.action,
+    required this.switchHint,
+  });
+
+  /// e.g. 「你已经登录了」
+  final String title;
+
+  /// Who and where — e.g. 「willmica · mica.cloudcele.com」.
+  final String body;
+
+  /// The primary way out: back to the app you came from.
+  final String action;
+
+  /// One line telling them what this screen is FOR, now that it is not asking
+  /// for a password: pick another world below.
+  final String switchHint;
+}
+
+/// What the sign-in screen shows when you are ALREADY signed in.
+///
+/// This screen doubles as the world picker (see `_promptCloudAuth`), so a
+/// signed-in user opening it used to get an empty email/password form — which
+/// reads as "you have been logged out". Reported 2026-08-12: the app was still
+/// there, whole and signed in, behind an opaque overlay whose only exit was a
+/// small × in the corner.
+///
+/// Nothing here authenticates. It states the session that already exists and
+/// gives it a labelled way back, so the world list below becomes what the
+/// screen is obviously for.
+class SignedInCard extends StatelessWidget {
+  const SignedInCard({
+    required this.strings,
+    required this.onContinue,
+    super.key,
+  });
+
+  final SignedInCardStrings strings;
+  final VoidCallback onContinue;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MicaTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(strings.title, style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Icon(Icons.check_circle, size: 16, color: theme.status.success),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                strings.body,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: onContinue,
+            icon: const Icon(Icons.arrow_back, size: 18),
+            label: Text(strings.action),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          strings.switchHint,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: theme.text.muted,
+          ),
+        ),
+      ],
+    );
+  }
+}
