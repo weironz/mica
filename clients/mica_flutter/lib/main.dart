@@ -56,6 +56,7 @@ import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart' show LocalCacheStats;
 import 'cjk_fonts.dart';
+import 'doc_tab.dart';
 import 'prefs.dart';
 import 'theme_controller.dart';
 import 'server_list.dart';
@@ -341,8 +342,36 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
   Workspace? _selectedWorkspace;
-  DocumentView? _selectedView;
-  DocumentBootstrap? _selectedBootstrap;
+
+  /// The open tabs, left to right. Always holds at least one — a tab with a
+  /// null [DocTab.view] is the empty state ("no page open"), NOT the absence of
+  /// a tab. Closing the last tab is therefore not a thing that can happen, the
+  /// same call AFFiNE makes (`closeTab` returns early when one tab is left).
+  ///
+  /// Single-element today: the tab strip is not built yet. This list existing is
+  /// the point — it is what the ~70 `_selectedBootstrap` call sites now read
+  /// through, so adding tabs later touches this file in one place instead of 70.
+  final List<DocTab> _tabs = [DocTab()];
+
+  /// Index into [_tabs] of the tab the editor is showing.
+  ///
+  /// Nothing assigns it yet — there is only one tab — so the analyzer suggests
+  /// `final`. Do not take that suggestion: switching tabs is the next commit.
+  int _activeTabIndex = 0;
+
+  DocTab get _activeTab => _tabs[_activeTabIndex];
+
+  // `_selectedView` / `_selectedBootstrap` used to be plain fields. They are
+  // proxies onto the active tab now so the call sites did not have to move in
+  // the same commit that introduced the tab model — the two are independent
+  // changes and reviewing them together would hide whichever one has the bug.
+  DocumentView? get _selectedView => _activeTab.view;
+  set _selectedView(DocumentView? value) => _activeTab.view = value;
+
+  DocumentBootstrap? get _selectedBootstrap => _activeTab.bootstrap;
+  set _selectedBootstrap(DocumentBootstrap? value) =>
+      _activeTab.bootstrap = value;
+
   String? _selectedMarkdown;
   String? _message;
   bool _isBusy = false;
