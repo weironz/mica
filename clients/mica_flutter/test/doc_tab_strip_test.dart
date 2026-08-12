@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
+import 'package:mica_flutter/api/sync_client.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/ui/doc_tab_strip.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
@@ -27,7 +28,72 @@ Widget _host(Widget child) => MaterialApp(
   ),
 );
 
+/// A tab holding a socket. `DocumentSyncClient`'s constructor is inert —
+/// `connect()` is a separate call — so this opens nothing.
+DocTab _liveTab(int tick) => DocTab()
+  ..lastActivated = tick
+  ..sync = DocumentSyncClient(
+    documentId: 'doc-$tick',
+    uri: Uri.parse('ws://localhost/ws'),
+    selfName: 'tester',
+    onRemoteSeq: (_, _) {},
+    onPresence: (_) {},
+  );
+
 void main() {
+  group('tabsToPark', () {
+    test('parks nothing while the live tabs fit under the cap', () {
+      final active = _liveTab(3);
+      final tabs = [_liveTab(1), _liveTab(2), active];
+      expect(tabsToPark(tabs, active, max: 3), isEmpty);
+    });
+
+    test('parks the least-recently-activated once the cap is exceeded', () {
+      final oldest = _liveTab(1);
+      final active = _liveTab(4);
+      final tabs = [oldest, _liveTab(2), _liveTab(3), active];
+      expect(tabsToPark(tabs, active, max: 3), [oldest]);
+    });
+
+    test('parks several at once, oldest first', () {
+      final a = _liveTab(1);
+      final b = _liveTab(2);
+      final active = _liveTab(5);
+      final tabs = [a, b, _liveTab(3), _liveTab(4), active];
+      // Only the active tab plus the two newest survive a cap of 3.
+      expect(tabsToPark(tabs, active, max: 3), [b, a]);
+    });
+
+    test('never parks the active tab, even when it is the oldest', () {
+      // The regression this guards: the active tab is stamped on activation, so
+      // it should sort first — but a tab restored or opened without a stamp
+      // would sort last and get its socket pulled while the user types in it.
+      final active = _liveTab(0);
+      final tabs = [active, _liveTab(7), _liveTab(8), _liveTab(9)];
+      expect(tabsToPark(tabs, active, max: 3), isNot(contains(active)));
+    });
+
+    test('the active tab occupies one of the slots', () {
+      // Three live BACKGROUND tabs plus the active one is four connections; a
+      // cap of 3 has to park one. Counting only the background tabs against the
+      // cap would admit max + 1 sockets.
+      final active = _liveTab(9);
+      final oldest = _liveTab(1);
+      final tabs = [oldest, _liveTab(2), _liveTab(3), active];
+      expect(tabsToPark(tabs, active, max: 3).length, 1);
+      expect(tabsToPark(tabs, active, max: 3), [oldest]);
+    });
+
+    test('ignores tabs that are already parked', () {
+      // A parked tab has no socket to give up. Returning it again would make
+      // the caller drain-and-dispose a null session on every reconcile.
+      final active = _liveTab(4);
+      final parked = DocTab()..lastActivated = 1;
+      final tabs = [parked, _liveTab(2), _liveTab(3), active];
+      expect(tabsToPark(tabs, active, max: 3), isEmpty);
+    });
+  });
+
   group('activeIndexAfterClose', () {
     test('closing a tab to the RIGHT of the active one leaves it alone', () {
       expect(activeIndexAfterClose(closing: 2, active: 0, count: 3), 0);

@@ -404,7 +404,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   bool _aiEnabled = false;
   bool _aiConfigured = false;
 
-  DocumentSyncClient? _sync;
+  // The ACTIVE tab's sockets. Proxies, for the same reason `_selectedBootstrap`
+  // is one: every call site here means "the open document's session", and that
+  // is exactly the active tab's. Background tabs keep their own pair in
+  // [DocTab.sync] / [DocTab.cloudSession] and are reached only by the cap.
+  //
+  // Switching tabs therefore needs no special case: `_reconcileSync`'s existing
+  // "already on this document?" test reads the tab being switched TO, so a tab
+  // that kept its socket is recognised as connected and nothing reconnects.
+  DocumentSyncClient? get _sync => _activeTab.sync;
+  set _sync(DocumentSyncClient? value) => _activeTab.sync = value;
+
   List<PresenceUser> _presence = const [];
   Timer? _syncRefetchTimer;
 
@@ -414,7 +424,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // diffs, remote updates merge + reconcile. It activates only once bootstrap
   // succeeds (`isReady`), so against an older server the app falls back to the
   // op/REST path transparently. `DocumentSyncClient` stays up for presence.
-  CloudSyncSession? _cloudSession;
+  CloudSyncSession? get _cloudSession => _activeTab.cloudSession;
+  set _cloudSession(CloudSyncSession? value) => _activeTab.cloudSession = value;
+
+  /// Bumped on every tab activation; each tab records the value it saw. See
+  /// [DocTab.lastActivated].
+  int _activationTick = 0;
+
   BigInt? _deviceClientId;
 
   /// Guards [_sweepPendingOutboxes] so only one cross-document drain runs at a
@@ -1094,7 +1110,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// only difference is which [DocTab] is active while it loads.
   void _openViewInNewTab(DocumentView view) {
     setState(() {
-      _tabs.add(DocTab());
+      _tabs.add(DocTab()..lastActivated = ++_activationTick);
       _activeTabIndex = _tabs.length - 1;
     });
     // Deliberately AFTER the new tab is active: `_selectView` skips the load
@@ -1106,10 +1122,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   void _selectTab(int index) {
     if (index < 0 || index >= _tabs.length || index == _activeTabIndex) return;
-    setState(() => _activeTabIndex = index);
+    setState(() {
+      _activeTabIndex = index;
+      _activeTab.lastActivated = ++_activationTick;
+    });
     // The editor reads the active tab's bootstrap, which is already in memory —
-    // switching does not refetch. Only the socket has to follow, and it is
-    // still one-at-a-time until the connection cap lands.
+    // switching never refetches. The socket follows: a tab still holding its
+    // own is recognised as connected and reconnects nothing, while one that was
+    // parked under the cap reconnects here.
     _reconcileSync();
   }
 
@@ -1121,6 +1141,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// place (the tab to the right), falling back to the new last tab.
   void _closeTab(int index) {
     if (_tabs.length <= 1 || index < 0 || index >= _tabs.length) return;
+    // BEFORE the removal, and unconditionally: once the tab is out of `_tabs`
+    // nothing reaches its sockets, and `_reconcileSync` below only ever touches
+    // the ACTIVE tab — so a closed background tab would keep a live WebSocket
+    // and an undrained replica for the rest of the session.
+    _parkTabSync(_tabs[index]);
     setState(() {
       final next = activeIndexAfterClose(
         closing: index,
@@ -1161,7 +1186,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       selfName: session.user.displayName,
       onRemoteSeq: _handleRemoteSeq,
       onPresence: (users) {
-        if (mounted) {
+        // Only the tab being LOOKED AT owns the presence row. A background tab
+        // is still connected under the cap, and without this test its roster
+        // would overwrite the visible one — the reader would see the avatars of
+        // whoever is editing some other page. `_handleRemoteSeq` already
+        // self-filters on documentId; this is the same guard for presence.
+        if (mounted && _selectedBootstrap?.document.id == documentId) {
           setState(() => _presence = users);
         }
       },
@@ -1169,6 +1199,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _sync = sync;
     setState(() => _presence = const []);
     sync.connect();
+
+    // A new connection just came up — park the least-recently-used ones that no
+    // longer fit under the cap.
+    _enforceSyncCap();
 
     // Open a yrs CRDT session for this doc (desktop = Rust FFI replica, web = JS
     // yjs replica — both wire-compatible). P3d: _reconcileSync itself only runs
@@ -1345,6 +1379,44 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     } catch (_) {}
   }
 
+  /// Drop [tab]'s sockets while keeping everything the reader can see.
+  ///
+  /// The tab keeps its `view` and `bootstrap`, so it still renders the page it
+  /// was showing — it just stops receiving remote edits until it is activated
+  /// again, which reconnects it through [_reconcileSync].
+  ///
+  /// `drainAndDispose` rather than `dispose`: the outgoing replica may hold
+  /// edits the server has not acked, and dropping the session without draining
+  /// them loses content. This is the same call [_closeDocumentSync] makes, for
+  /// the same reason.
+  void _parkTabSync(DocTab tab) {
+    tab.sync?.dispose();
+    tab.sync = null;
+    final cloud = tab.cloudSession;
+    tab.cloudSession = null;
+    if (cloud != null) unawaited(cloud.drainAndDispose());
+  }
+
+  /// Park live tabs past [kMaxLiveSyncTabs]; see [tabsToPark] for the choice.
+  void _enforceSyncCap() {
+    for (final tab in tabsToPark(_tabs, _activeTab)) {
+      _parkTabSync(tab);
+    }
+  }
+
+  /// Tear down EVERY tab's sockets, not just the active one.
+  ///
+  /// For sign-out, server switch and app dispose. [_closeDocumentSync] is
+  /// active-tab-scoped by design (it is the doc-switch path), so those callers
+  /// would otherwise leave background tabs holding open sockets — still
+  /// authenticated with the credentials that were just discarded.
+  void _closeAllDocumentSync() {
+    for (final tab in _tabs) {
+      if (!identical(tab, _activeTab)) _parkTabSync(tab);
+    }
+    _closeDocumentSync();
+  }
+
   void _closeDocumentSync() {
     _syncRefetchTimer?.cancel();
     _syncRefetchTimer = null;
@@ -1501,7 +1573,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   void dispose() {
-    _closeDocumentSync();
+    _closeAllDocumentSync();
     super.dispose();
   }
 
@@ -4868,7 +4940,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// credentials — used by sign-out (after wiping creds) and by switching
   /// cloud servers (which deliberately keeps the old origin's creds, P3c-2).
   void _disconnectCloudSession() {
-    _closeDocumentSync();
+    _closeAllDocumentSync();
     setState(() {
       _session = null;
       _workspaces = const [];

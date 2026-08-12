@@ -13,6 +13,23 @@
 // its sockets, so those have to be nullable *per tab*, not per app.
 
 import 'api/models.dart';
+import 'api/sync_client.dart';
+import 'cloud/cloud_sync_session.dart';
+
+/// How many tabs may hold live sockets at once.
+///
+/// Mica opens one WebSocket PER DOCUMENT
+/// (`/ws/workspaces/{workspace_id}/documents/{document_id}`), so tabs cost real
+/// connections — unlike either reference product. AppFlowy syncs through a
+/// local Rust backend, and AFFiNE multiplexes every doc over ONE socket per
+/// renderer with `docId` as a message field, so neither pays this and neither
+/// caps anything.
+///
+/// Three is "the tabs a person is actually working between", not a measured
+/// limit. The honest fix is to change Mica's connection granularity to match
+/// AFFiNE's; this cap is the cheap stand-in until then, which is why it is one
+/// integer and one comparison rather than a cache framework.
+const int kMaxLiveSyncTabs = 3;
 
 class DocTab {
   DocTab({this.view, this.bootstrap});
@@ -32,6 +49,53 @@ class DocTab {
   /// The sync layer is keyed by document id, so this is the tab's identity as
   /// far as connections are concerned.
   String? get documentId => bootstrap?.document.id;
+
+  /// This tab's presence/op socket, and its CRDT replica. Non-null exactly when
+  /// the tab is LIVE — connected and receiving remote edits.
+  ///
+  /// Per tab, not per app, so a background tab can keep syncing. The shell's
+  /// `_sync` / `_cloudSession` are proxies onto the ACTIVE tab's pair, which is
+  /// what lets the ~40 call sites that mean "the open document's session" keep
+  /// reading a single field.
+  DocumentSyncClient? sync;
+  CloudSyncSession? cloudSession;
+
+  /// Monotonic stamp of when this tab was last activated, for the LRU choice of
+  /// what to park when more than [kMaxLiveSyncTabs] tabs want to be live.
+  ///
+  /// A counter rather than a clock: it only has to ORDER activations, and a
+  /// wall clock would make the tests depend on timing and could go backwards.
+  int lastActivated = 0;
+
+  /// Whether this tab currently holds sockets.
+  ///
+  /// A parked tab is not broken — it keeps [view] and [bootstrap], so it still
+  /// renders and still reads. It just stops receiving other people's edits
+  /// until it is activated again.
+  bool get isLive => sync != null;
+}
+
+/// Which live tabs must give up their sockets so that at most [max] stay live.
+///
+/// Least-recently-activated first. [active] is never returned: it is by
+/// definition the most recently activated, but it is excluded explicitly so a
+/// misconfigured [max] cannot disconnect the page the user is typing into.
+///
+/// Pure and separate from the shell for the same reason as
+/// [activeIndexAfterClose] — this is the decision, and the caller is only the
+/// disposal. A wrong answer here silently stops a tab from receiving other
+/// people's edits, which is invisible until someone loses work.
+List<DocTab> tabsToPark(
+  List<DocTab> tabs,
+  DocTab active, {
+  int max = kMaxLiveSyncTabs,
+}) {
+  final live = tabs.where((t) => t.isLive && !identical(t, active)).toList()
+    ..sort((a, b) => b.lastActivated.compareTo(a.lastActivated));
+  // The active tab holds one of the slots whether or not it is live yet, so the
+  // others compete for max - 1. Without this the cap would admit max + 1.
+  final keep = max - 1;
+  return live.length <= keep ? const [] : live.sublist(keep);
 }
 
 /// Which tab is active after the one at [closing] is removed, given [active]
