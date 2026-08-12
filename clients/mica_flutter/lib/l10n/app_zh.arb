@@ -254,6 +254,8 @@
   "worldAlreadySignedInTitle": "你已经登录了",
   "worldAlreadySignedInHint": "要去别处的话,在上面选另一个服务器或本地模式;否则点「返回」回到刚才的页面。",
   "worldSignedInBadge": "已登录",
+  "worldEnterAction": "进入",
+  "worldAlreadySignedInEnterHint": "凭据还在,点「进入」直接用这台服务器,不用再输密码。",
   "settingsData": "数据",
   "settingsShortcuts": "快捷键",
   "settingsAccount": "账户",

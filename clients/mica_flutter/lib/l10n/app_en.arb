@@ -384,6 +384,8 @@
   "worldAlreadySignedInTitle": "You're already signed in",
   "worldAlreadySignedInHint": "To go elsewhere, pick another server or local mode above. Otherwise press Back to return to what you were reading.",
   "worldSignedInBadge": "Signed in",
+  "worldEnterAction": "Enter",
+  "worldAlreadySignedInEnterHint": "Your credentials are still here — press Enter to use this server, no password needed.",
   "settingsData": "Data",
   "settingsShortcuts": "Shortcuts",
   "settingsAccount": "Account",

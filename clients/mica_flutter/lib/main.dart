@@ -830,6 +830,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if ((loadPref('authUser:$origin') ?? '').isNotEmpty) origin,
   };
 
+  /// The display name stored for [origin], or null if we hold none.
+  ///
+  /// Read from prefs rather than `_session`, because the two disagree exactly
+  /// where it matters: entering 本地模式 drops the in-memory session while the
+  /// credentials stay on disk. Asking `_session` there answers "nobody is signed
+  /// in", which is how the world picker ended up demanding a password for a
+  /// server it could have walked straight into.
+  String? _storedDisplayName(String origin) {
+    final raw = loadPref('authUser:$origin');
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return User.fromJson(jsonDecode(raw) as Map<String, dynamic>).displayName;
+    } catch (_) {
+      return null; // corrupt value: treat as no stored identity
+    }
+  }
+
   void _persistSession(AuthSession session) {
     savePref('authToken:$_cloudOrigin', session.accessToken);
     savePref('authUser:$_cloudOrigin', jsonEncode(session.user.toJson()));
@@ -4460,28 +4477,52 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                       setLocal(() {});
                     }
                   },
-                  // ALREADY signed in to the server this screen is pointing at?
-                  // Then it has nothing to ask for. Say so, and make the way
-                  // back a labelled button.
+                  // Do we hold credentials for the server this screen points
+                  // at? Then it has nothing to ask for.
                   //
-                  // The empty email/password form here is what made switching
-                  // worlds read as being logged out (2026-08-12) — the session
-                  // was never touched, it was just hidden behind an opaque
-                  // screen whose only content was a request to sign in again.
+                  // Keyed on STORED credentials, not on `_session`. Those differ
+                  // in the case this was first shipped broken for: 本地模式
+                  // drops the in-memory session but keeps the credentials, so
+                  // `_session != null` answered "signed in to nothing" and the
+                  // password form came back (reported 2026-08-12, twice).
                   //
-                  // Not during a migration: that flow genuinely needs a
+                  // Two shapes, one card. Already IN this world → the button
+                  // goes BACK to the app hiding behind this screen. Somewhere
+                  // else (本地模式, another server) → it ENTERS this one, which
+                  // `_setActiveConnection` does off the stored credentials with
+                  // no password.
+                  //
+                  // Not during a migration: that flow genuinely needs a fresh
                   // sign-in, and its own copy explains why.
-                  authForm: (!migrate && _session != null && !_activeIsLocal)
+                  authForm:
+                      worldCardMode(
+                            migrating: migrate,
+                            storedName: _storedDisplayName(_cloudOrigin),
+                            cloudOrigin: _cloudOrigin,
+                            activeOrigin: _activeOrigin,
+                          ) !=
+                          WorldCardMode.signIn
                       ? SignedInCard(
                           strings: SignedInCardStrings(
                             title: l10n.worldAlreadySignedInTitle,
                             body:
-                                '${_session!.user.displayName} · '
+                                '${_storedDisplayName(_cloudOrigin)} · '
                                 '${serverLabel(_cloudOrigin)}',
-                            action: l10n.worldBackToApp,
-                            switchHint: l10n.worldAlreadySignedInHint,
+                            action: _activeOrigin == _cloudOrigin
+                                ? l10n.worldBackToApp
+                                : l10n.worldEnterAction,
+                            switchHint: _activeOrigin == _cloudOrigin
+                                ? l10n.worldAlreadySignedInHint
+                                : l10n.worldAlreadySignedInEnterHint,
                           ),
-                          onContinue: () => Navigator.of(routeContext).pop(),
+                          onContinue: () async {
+                            if (_activeOrigin != _cloudOrigin) {
+                              await _setActiveConnection(_cloudOrigin);
+                            }
+                            if (routeContext.mounted) {
+                              Navigator.of(routeContext).pop();
+                            }
+                          },
                         )
                       : AuthFormCard(
                           allowRegister: _activeRegistrationOpen ?? true,
@@ -6725,6 +6766,40 @@ List<String> ancestorPathSegments({
     if (workspaceName != null && workspaceName.trim().isNotEmpty) workspaceName,
     ...folders.reversed,
   ];
+}
+
+/// What the world picker should offer for the server it is pointing at.
+enum WorldCardMode {
+  /// Ask for credentials — we hold none, or this flow needs a fresh sign-in.
+  signIn,
+
+  /// We are already in this world: the app is behind this screen, go back to it.
+  back,
+
+  /// We hold credentials but are somewhere else (本地模式, another server):
+  /// enter this one, no password.
+  enter,
+}
+
+/// Pure, because this decision was wrong twice in a row (2026-08-12).
+///
+/// First it keyed on the live `_session` — which 本地模式 clears while the
+/// credentials stay on disk, so entering local mode and opening the picker
+/// asked for a password to a server it could have walked into. Then it also
+/// excluded local mode outright, hiding the one case that made the bug visible.
+///
+/// [storedName] is the identity persisted for [cloudOrigin] (null = none), NOT
+/// whatever session happens to be in memory. That distinction is the fix.
+WorldCardMode worldCardMode({
+  required bool migrating,
+  required String? storedName,
+  required String cloudOrigin,
+  required String activeOrigin,
+}) {
+  // A migration genuinely needs a sign-in, whatever we have stored.
+  if (migrating) return WorldCardMode.signIn;
+  if (storedName == null || storedName.isEmpty) return WorldCardMode.signIn;
+  return activeOrigin == cloudOrigin ? WorldCardMode.back : WorldCardMode.enter;
 }
 
 /// Scroll offset that centres row [index] of the sidebar tree in the viewport.
