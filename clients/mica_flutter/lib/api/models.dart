@@ -1042,6 +1042,27 @@ DocumentView? createParentForLocated(
 ///
 /// Creating a page/folder carries no position — neither the HTTP API nor the
 /// local store takes one — so a new row always lands LAST in its group. When
+/// Which workspace holds [viewId], or null when none of them does.
+///
+/// Exists because losing this answer is a bug that does not look like one.
+/// Home lists pages from EVERY workspace; the open path is workspace-scoped
+/// (`GET /workspaces/{workspace_id}/documents/{id}`, and the server's
+/// `fetch_document` is scoped too). Code that flattens `viewsByWorkspace.values`
+/// to find a view by id throws away the one field the open needs, and the
+/// result is a 404 that reads as "that row is broken" rather than "the app
+/// asked the wrong workspace".
+String? workspaceIdOfView({
+  required Map<String, List<DocumentView>> viewsByWorkspace,
+  required String viewId,
+}) {
+  for (final entry in viewsByWorkspace.entries) {
+    for (final view in entry.value) {
+      if (view.id == viewId) return entry.key;
+    }
+  }
+  return null;
+}
+
 /// the user located a page, "new page" means the next line, not the end of the
 /// folder, and the row has to be slid up afterwards.
 ///

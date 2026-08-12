@@ -3153,20 +3153,67 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// so the view object is looked up here; a stale id — the page was deleted
   /// between render and tap — is simply ignored rather than guessed at.
   void _openViewFromHome(String viewId, {required bool local}) {
-    final candidates = local
-        ? _localViews
-        : _viewsByWorkspace.values.expand((views) => views);
-    for (final view in candidates) {
-      if (view.id != viewId) continue;
-      // A FOLDER is not a document — opening it as one did nothing at all, which
-      // is what the home screen's directory list used to do. Show its contents.
-      if (view.isFolder) {
-        setState(() => _overviewFolderId = view.id);
+    if (local) {
+      for (final view in _localViews) {
+        if (view.id != viewId) continue;
+        // A FOLDER is not a document — opening it as one did nothing at all,
+        // which is what the home screen's directory list used to do. Show its
+        // contents.
+        if (view.isFolder) {
+          setState(() => _overviewFolderId = view.id);
+          return;
+        }
+        unawaited(_localSelectView(view));
         return;
       }
-      unawaited(local ? _localSelectView(view) : _selectView(view));
       return;
     }
+    // Which workspace the hit came from is what this used to throw away by
+    // flattening `.values` — and it is exactly what the open needs.
+    final workspaceId = workspaceIdOfView(
+      viewsByWorkspace: _viewsByWorkspace,
+      viewId: viewId,
+    );
+    if (workspaceId == null) return;
+    for (final view in _viewsByWorkspace[workspaceId] ?? const <DocumentView>[]) {
+      if (view.id != viewId) continue;
+      unawaited(_openAcrossWorkspaces(workspaceId, view));
+      return;
+    }
+  }
+
+  /// Open a page — or reveal a folder — that may live in a DIFFERENT workspace,
+  /// switching there first when it does.
+  ///
+  /// Home lists recents and directories from EVERY workspace (`buildRecents`
+  /// says so in as many words), but the open path bootstraps against
+  /// `_selectedWorkspace`: `GET /workspaces/{workspace_id}/documents/{id}`
+  /// is workspace-scoped, and so is the server's `fetch_document`. Clicking a
+  /// recent that belonged to another workspace therefore asked the CURRENT
+  /// workspace for a document it does not contain, and got a 404 — the row
+  /// looked broken rather than the app looking wrong.
+  Future<void> _openAcrossWorkspaces(String workspaceId, DocumentView view) async {
+    if (_selectedWorkspace?.id != workspaceId) {
+      Workspace? target;
+      for (final w in _workspaces) {
+        if (w.id == workspaceId) {
+          target = w;
+          break;
+        }
+      }
+      // Not a member any more (or the list is stale): say nothing and do
+      // nothing rather than switching to a workspace that will 403.
+      if (target == null) return;
+      await _selectWorkspace(target);
+      // The switch surfaces its own failure through `_run`; if it did not land,
+      // opening would fail the same way it used to, so stop here.
+      if (!mounted || _selectedWorkspace?.id != workspaceId) return;
+    }
+    if (view.isFolder) {
+      setState(() => _overviewFolderId = view.id);
+      return;
+    }
+    await _selectView(view);
   }
 
   /// The folder whose contents the overview is showing. Non-null takes precedence
