@@ -1968,13 +1968,34 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
-    final sel = _controller.selection;
-    if (sel == null) return KeyEventResult.ignored;
-
     final key = event.logicalKey;
     final hw = HardwareKeyboard.instance;
     final shift = hw.isShiftPressed;
     final accel = hw.isControlPressed || hw.isMetaPressed;
+
+    // Undo / redo run BEFORE the "is there a caret?" bail below, because they
+    // are the only document commands that do not need one.
+    //
+    // Reported 2026-08-12 as "Ctrl+Z does nothing in a table": dragging a column
+    // border (or the table width handle) changes the document without ever
+    // placing a caret in the body, so `selection` stayed null and this handler
+    // returned `ignored` several branches above the undo case. The controller
+    // was fine the whole time — `table_undo_test.dart` drives the same edits and
+    // undoes them — which is exactly why this looked like a table bug rather
+    // than a key-routing one.
+    if (accel &&
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
+      if (key == LogicalKeyboardKey.keyY || shift) {
+        _controller.redo();
+      } else {
+        _controller.undo();
+      }
+      _syncImeFromSelection(force: true);
+      return KeyEventResult.handled;
+    }
+
+    final sel = _controller.selection;
+    if (sel == null) return KeyEventResult.ignored;
 
     // The `[[` page-link picker, when open, captures the same keys as the
     // slash menu.
@@ -2035,21 +2056,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
     }
 
-    // Undo / redo: Ctrl/Cmd+Z, and Ctrl/Cmd+Shift+Z or Ctrl+Y to redo.
-    if (accel && key == LogicalKeyboardKey.keyZ) {
-      if (shift) {
-        _controller.redo();
-      } else {
-        _controller.undo();
-      }
-      _syncImeFromSelection(force: true);
-      return KeyEventResult.handled;
-    }
-    if (accel && key == LogicalKeyboardKey.keyY) {
-      _controller.redo();
-      _syncImeFromSelection(force: true);
-      return KeyEventResult.handled;
-    }
+    // (Undo / redo moved above the `selection == null` bail — see there.)
 
     if (accel && key == LogicalKeyboardKey.keyA) {
       _selectAll();
@@ -2822,6 +2829,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           HardwareKeyboard.instance.isControlPressed ||
           HardwareKeyboard.instance.isMetaPressed;
       if (accel) {
+        // Ctrl+Z / Ctrl+Y inside a cell mean the DOCUMENT's history, not this
+        // TextField's.
+        //
+        // Left to itself the field gets `DefaultTextEditingShortcuts`, whose
+        // undo walks the field's own buffer — so Ctrl+Z after Ctrl+B did
+        // nothing visible (the bold came from `toggleMark` rewriting the value
+        // programmatically, which that history does not record), and Ctrl+Z
+        // after typing would step back inside the cell while the document's own
+        // stack drifted out of sync with it.
+        //
+        // Commit first: the cell's edit has to BE a document change before it
+        // can be undone as one. That also makes the granularity match the body
+        // editor, where a typing burst is one step.
+        if (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY) {
+          final redo =
+              key == LogicalKeyboardKey.keyY ||
+              HardwareKeyboard.instance.isShiftPressed;
+          _closeCellEditor();
+          if (redo) {
+            _controller.redo();
+          } else {
+            _controller.undo();
+          }
+          return KeyEventResult.handled;
+        }
         // Ctrl+C / Ctrl+X inside a cell. The default TextField copy puts ONLY
         // the cell's raw markdown (`**bold**`) on the clipboard as text/plain —
         // so pasting it into the body inserted the literal source (the body's
