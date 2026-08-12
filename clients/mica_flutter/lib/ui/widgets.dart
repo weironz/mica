@@ -907,6 +907,7 @@ class DocumentListItem extends StatefulWidget {
     required this.onClone,
     required this.onRename,
     this.onSetIcon,
+    this.onOpenInNewTab,
     required this.onRenameSubmit,
     required this.onRenameCancel,
     required this.onDelete,
@@ -955,6 +956,13 @@ class DocumentListItem extends StatefulWidget {
   /// persisted (the local store has no icon column), and then the menu entry is
   /// simply absent rather than present-but-dead.
   final VoidCallback? onSetIcon;
+
+  /// Open this page in a new tab. Null on folder rows (a folder has no document
+  /// to open) and in the local world, which has no tabs.
+  ///
+  /// NOT gated on [canEdit], unlike the rest of this menu: opening a second tab
+  /// is a read. A viewer who can open the page at all can open it twice.
+  final VoidCallback? onOpenInNewTab;
 
   /// Commit the inline-edited name (Enter or blur); cancel on Esc.
   final ValueChanged<String> onRenameSubmit;
@@ -1077,6 +1085,21 @@ class _DocumentListItemState extends State<DocumentListItem> {
       context: context,
       position: position,
       items: [
+        // First, because it is the only entry that opens something rather than
+        // changing it — the same slot browsers and AppFlowy put it in.
+        if (widget.onOpenInNewTab != null)
+          PopupMenuItem(
+            value: 'openInNewTab',
+            child: _MenuRow(
+              icon: Icons.tab_outlined,
+              label: context.l10n.rowOpenInNewTab,
+            ),
+          ),
+        // Everything below edits. A viewer reaches this menu only for the entry
+        // above, so the edit half is built only when they could act on it —
+        // showing a rename that is guaranteed to 403 is worse than showing
+        // nothing, the same rule the rest of this file follows.
+        if (widget.canEdit) ...[
         // A page is a leaf: only folders can hold children, so the two
         // "new child" entries appear on folder rows only.
         if (widget._isFolder) ...[
@@ -1188,10 +1211,13 @@ class _DocumentListItemState extends State<DocumentListItem> {
             danger: true,
           ),
         ),
+        ],
       ],
     );
     if (!mounted) return;
     switch (selected) {
+      case 'openInNewTab':
+        widget.onOpenInNewTab?.call();
       case 'child':
         widget.onCreateChild();
       case 'childFolder':
@@ -1238,7 +1264,10 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // place (file-manager style). Documents open in the editor. While
           // renaming, taps stay inside the inline field (click-away commits).
           onTap: w.isRenaming ? null : (w._isFolder ? w.onToggle : w.onPressed),
-          onSecondaryTapDown: w.canEdit
+          // A viewer gets the menu too when it has something for them: every
+          // other entry is an edit, but "open in new tab" is a read. Gating the
+          // whole menu on canEdit hid the one entry a viewer can actually use.
+          onSecondaryTapDown: (w.canEdit || w.onOpenInNewTab != null)
               ? (d) => _openMenuAtGlobal(d.globalPosition)
               : null,
           child: ConstrainedBox(

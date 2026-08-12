@@ -34,6 +34,7 @@ import 'ui/autoscroll.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/copy_button.dart';
+import 'ui/doc_tab_strip.dart';
 import 'ui/destructive_confirm.dart';
 import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
@@ -1077,6 +1078,59 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _isBusy = false;
       });
     }
+  }
+
+  // --- Tabs ---------------------------------------------------------------
+  //
+  // The strip is cloud-only. The local world keeps the single-page shell: it
+  // has its own `_localSelectedView` / `_localBootstrap` pair that these
+  // operations do not touch, and giving it tabs would mean a second copy of
+  // every operation below for no user demand.
+
+  /// Open [view] in a NEW tab and switch to it.
+  ///
+  /// The tab is created empty and filled by the caller's normal open path, so
+  /// "open in new tab" and "open here" load a page exactly the same way — the
+  /// only difference is which [DocTab] is active while it loads.
+  void _openViewInNewTab(DocumentView view) {
+    setState(() {
+      _tabs.add(DocTab());
+      _activeTabIndex = _tabs.length - 1;
+    });
+    // Deliberately AFTER the new tab is active: `_selectView` skips the load
+    // when the target is already open, and it tests that against the ACTIVE
+    // tab. A fresh tab has a null view, so the same page opening in a second
+    // tab is correctly treated as "not open here" and loads.
+    unawaited(_selectView(view));
+  }
+
+  void _selectTab(int index) {
+    if (index < 0 || index >= _tabs.length || index == _activeTabIndex) return;
+    setState(() => _activeTabIndex = index);
+    // The editor reads the active tab's bootstrap, which is already in memory —
+    // switching does not refetch. Only the socket has to follow, and it is
+    // still one-at-a-time until the connection cap lands.
+    _reconcileSync();
+  }
+
+  /// Close the tab at [index].
+  ///
+  /// Refuses to close the last one: [_tabs] is an invariant-non-empty list, and
+  /// "no tabs at all" is not a state the shell can render. AFFiNE makes the
+  /// same call. Closing the ACTIVE tab activates the one that slides into its
+  /// place (the tab to the right), falling back to the new last tab.
+  void _closeTab(int index) {
+    if (_tabs.length <= 1 || index < 0 || index >= _tabs.length) return;
+    setState(() {
+      final next = activeIndexAfterClose(
+        closing: index,
+        active: _activeTabIndex,
+        count: _tabs.length,
+      );
+      _tabs.removeAt(index);
+      _activeTabIndex = next;
+    });
+    _reconcileSync();
   }
 
   /// Open, switch, or close the document WebSocket so it always tracks the
@@ -5568,6 +5622,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
       selectedView: local ? _localSelectedView : _selectedView,
       selectedBootstrap: local ? _localBootstrap : _selectedBootstrap,
+      // Cloud only — the local world has no tab model (see _openViewInNewTab).
+      tabs: local ? const [] : _tabs,
+      activeTabIndex: local ? 0 : _activeTabIndex,
+      onSelectTab: local ? null : _selectTab,
+      onCloseTab: local ? null : _closeTab,
+      onOpenInNewTab: local ? null : _openViewInNewTab,
       selectedMarkdown: local ? null : _selectedMarkdown,
       presence: local ? const [] : _presence,
       message: _message,
@@ -6379,6 +6439,11 @@ class WorkspaceView extends StatefulWidget {
     required this.views,
     required this.selectedView,
     required this.selectedBootstrap,
+    this.tabs = const [],
+    this.activeTabIndex = 0,
+    this.onSelectTab,
+    this.onCloseTab,
+    this.onOpenInNewTab,
     required this.selectedMarkdown,
     required this.presence,
     required this.message,
@@ -6579,6 +6644,23 @@ class WorkspaceView extends StatefulWidget {
   final List<DocumentView> views;
   final DocumentView? selectedView;
   final DocumentBootstrap? selectedBootstrap;
+
+  /// The open tabs, left to right, and which one is showing.
+  ///
+  /// [selectedView] / [selectedBootstrap] stay the source of truth for what the
+  /// editor renders — these are the STRIP's data, not a second copy of the
+  /// selection. Keeping them separate is what lets the local world (which has
+  /// no tabs) pass an empty list and get the old single-page shell unchanged.
+  final List<DocTab> tabs;
+  final int activeTabIndex;
+
+  /// Null in the local world, which has no tabs — the strip hides itself rather
+  /// than rendering a row that cannot respond.
+  final void Function(int index)? onSelectTab;
+  final void Function(int index)? onCloseTab;
+
+  /// Open a page in a new tab, from the sidebar row's context menu.
+  final void Function(DocumentView view)? onOpenInNewTab;
   final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
@@ -7925,6 +8007,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             onSetIcon: widget.onSetViewIcon == null
                 ? null
                 : () => widget.onSetViewIcon!(item.view),
+            // Pages only — a folder has no document to open in a tab. Also null
+            // in the local world, where the host passes no tab callbacks.
+            onOpenInNewTab:
+                (widget.onOpenInNewTab == null ||
+                    item.view.objectType == 'folder')
+                ? null
+                : () => widget.onOpenInNewTab!(item.view),
             onRenameSubmit: (name) => _commitRename(item.view, name),
             onRenameCancel: _cancelRename,
             onDelete: () => widget.onDeleteView(item.view),
@@ -8377,7 +8466,35 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     });
   }
 
+  /// The editor pane, with the tab strip on top of whatever it renders.
+  ///
+  /// The strip wraps [_editorPaneBody] rather than living inside it because the
+  /// body returns early for every empty state — no workspace, no page open. A
+  /// strip nested below those returns would vanish the moment one of its tabs
+  /// held nothing, which is exactly when the user needs it to switch away.
   Widget _editorPane(BuildContext context) {
+    final onSelectTab = widget.onSelectTab;
+    final onCloseTab = widget.onCloseTab;
+    final body = _editorPaneBody(context);
+    if (onSelectTab == null || onCloseTab == null || widget.tabs.length < 2) {
+      return body;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DocTabStrip(
+          tabs: widget.tabs,
+          activeIndex: widget.activeTabIndex,
+          onSelect: onSelectTab,
+          onClose: onCloseTab,
+          untitledLabel: context.l10n.untitledPage,
+        ),
+        Expanded(child: body),
+      ],
+    );
+  }
+
+  Widget _editorPaneBody(BuildContext context) {
     final workspace = widget.selectedWorkspace;
     if (workspace == null) {
       return EmptyState(

@@ -33,3 +33,28 @@ class DocTab {
   /// far as connections are concerned.
   String? get documentId => bootstrap?.document.id;
 }
+
+/// Which tab is active after the one at [closing] is removed, given [active]
+/// now and [count] tabs BEFORE the removal.
+///
+/// Pure, and separate from the widget, because this is the only arithmetic in
+/// the tab model that can be wrong in a way the user notices — closing a tab
+/// and landing on the wrong page. Everything else is a list mutation.
+///
+/// Closing the active tab lands on the tab that slides into its place (the one
+/// to its right), which is what every browser does; closing the last tab in the
+/// row falls back to the new last tab. Closing a tab to the LEFT of the active
+/// one shifts the active index down so the same page stays open — the bug this
+/// function exists to prevent is that shift being forgotten.
+int activeIndexAfterClose({
+  required int closing,
+  required int active,
+  required int count,
+}) {
+  // Callers refuse to close the last tab; this mirrors that rather than
+  // inventing an answer for a state that cannot occur.
+  if (count <= 1) return active;
+  if (closing > active) return active;
+  if (closing < active) return active - 1;
+  return closing.clamp(0, count - 2);
+}
