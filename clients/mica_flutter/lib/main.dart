@@ -6685,6 +6685,28 @@ List<String> ancestorPathSegments({
   ];
 }
 
+/// Scroll offset that centres row [index] of the sidebar tree in the viewport.
+///
+/// Top-level and pure because getting it wrong is invisible: the first attempt
+/// at "reveal in tree" used `Scrollable.ensureVisible` on the row's GlobalKey,
+/// which cannot work — the tree is a lazy `ListView`, so a row below the fold
+/// has no element and no context, and the call silently did nothing for exactly
+/// the rows that needed it. Arithmetic over a widget lookup, and tested.
+///
+/// Clamped into the scrollable's real range, so revealing the first or last row
+/// asks for a position that exists rather than one the list will refuse.
+double treeRevealOffset({
+  required int index,
+  required double rowExtent,
+  required double viewportHeight,
+  required double maxScrollExtent,
+  double minScrollExtent = 0,
+}) {
+  final centred = (index * rowExtent) - (viewportHeight / 2) + (rowExtent / 2);
+  if (maxScrollExtent <= minScrollExtent) return minScrollExtent;
+  return centred.clamp(minScrollExtent, maxScrollExtent);
+}
+
 class WorkspaceView extends StatefulWidget {
   const WorkspaceView({
     required this.apiBase,
@@ -8292,12 +8314,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         controller: _treeScroll,
         children: _visibleDocumentTree().map((item) {
           final row = DocumentListItem(
-            // The row being revealed carries the GlobalKey instead, so
-            // [_flushPendingReveal] has a BuildContext to scroll to. Exactly
-            // one row can hold it — a GlobalKey attached twice throws.
-            key: item.view.id == _pendingRevealId
-                ? _revealRowKey
-                : ValueKey(item.view.id),
+            key: ValueKey(item.view.id),
             view: item.view,
             depth: item.depth,
             hasChildren: item.hasChildren,
@@ -8702,10 +8719,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   ///
   /// Reuses `_focusedNavId` rather than inventing a second notion of "the
   /// current folder" — two of those would drift, and the tree already has one.
-  /// Row currently being revealed, so exactly one row carries [_revealRowKey]
-  /// — a GlobalKey may only be attached to one widget at a time.
+  /// The row a reveal is still trying to reach, or null when none is pending.
   String? _pendingRevealId;
-  final GlobalKey _revealRowKey = GlobalKey();
 
   /// Expand a view's ancestors and scroll it into view in the sidebar.
   ///
@@ -8723,36 +8738,77 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (!byId.containsKey(viewId)) {
       // Not in THIS workspace's tree yet. Remember it: a search hit from
       // another workspace arrives before that workspace's views do.
-      setState(() => _pendingRevealId = viewId);
+      setState(() {
+      _pendingRevealId = viewId;
+      _revealAttempts = 0;
+    });
       return;
     }
     _revealFolder(viewId);
-    setState(() => _pendingRevealId = viewId);
+    setState(() {
+      _pendingRevealId = viewId;
+      _revealAttempts = 0;
+    });
   }
 
-  /// Scroll the pending row into view once it exists, then stop asking.
+  /// Frames spent waiting for the pending row, so a reveal that can never land
+  /// (id vanished, tree never loads) stops scheduling callbacks.
+  int _revealAttempts = 0;
+
+  /// Scroll the pending row into view, then stop asking.
+  ///
+  /// Computed from the row's INDEX, not from its widget. The first version
+  /// asked `Scrollable.ensureVisible` for the row's `BuildContext` via a
+  /// GlobalKey — which is null for exactly the rows that need scrolling: the
+  /// tree is a lazy `ListView`, so a row below the fold has no element at all.
+  /// It worked only for rows already on screen, i.e. never usefully. Reported
+  /// as "看着没效果".
+  ///
+  /// Rows are a uniform height inside one workspace ([_treeRowExtent]), so
+  /// index × extent lands within a pixel or two, and centring absorbs that.
   void _flushPendingReveal() {
     final id = _pendingRevealId;
     if (id == null) return;
-    // The tree may have arrived since (workspace switch): expand ancestors now.
-    if (!_expandedViewIds.contains(id) &&
-        widget.views.any((v) => v.id == id)) {
+    if (++_revealAttempts > 120) {
+      // ~2s of frames. Something is not coming (deleted page, a workspace that
+      // failed to load); stop rather than run a callback every frame forever.
+      _pendingRevealId = null;
+      _revealAttempts = 0;
+      return;
+    }
+    // The tree may only have arrived now (workspace switch): expand ancestors.
+    if (widget.views.any((v) => v.id == id) &&
+        !_expandedViewIds.contains(id)) {
       _revealFolder(id);
     }
-    final ctx = _revealRowKey.currentContext;
-    if (ctx == null) return; // still collapsed or not built — try again next frame
+    final rows = _visibleDocumentTree();
+    final index = rows.indexWhere((r) => r.view.id == id);
+    // Not in the tree yet, or still inside a parent this frame's expand has not
+    // rendered through — keep waiting.
+    if (index < 0 || !_treeScroll.hasClients) return;
+
     _pendingRevealId = null;
-    // 0.5 puts it mid-pane rather than flush against an edge, so the rows
-    // around it — the reason a tree is useful — stay visible.
+    _revealAttempts = 0;
+    final position = _treeScroll.position;
     unawaited(
-      Scrollable.ensureVisible(
-        ctx,
-        alignment: 0.5,
-        duration: const Duration(milliseconds: 180),
+      _treeScroll.animateTo(
+        treeRevealOffset(
+          index: index,
+          rowExtent: _treeRowExtent,
+          viewportHeight: position.viewportDimension,
+          maxScrollExtent: position.maxScrollExtent,
+          minScrollExtent: position.minScrollExtent,
+        ),
+        duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
       ),
     );
   }
+
+  /// Height of one tree row. `DocumentListItem` sets a 38px floor; a read-only
+  /// workspace adds the 8px gap the builder wraps each row in.
+  double get _treeRowExtent =>
+      matchesEditRole(widget.selectedWorkspace?.role) ? 38.0 : 46.0;
 
   void _revealFolder(String viewId) {
     final byId = {for (final view in widget.views) view.id: view};
