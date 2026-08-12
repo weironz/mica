@@ -160,4 +160,116 @@ void main() {
       expect(selected, isNot(contains('d')));
     });
   });
+
+  // Both reported 2026-08-12 against a page with an image in it.
+  group('an image is a thing you can stand next to, cut, and keep', () {
+    late List<Map<String, dynamic>> ops;
+    late EditorController c;
+
+    void load(List<EditorNode> nodes) {
+      ops = [];
+      c = EditorController(
+        rootBlockId: 'root',
+        onOps: (b) async => ops.addAll(b),
+      );
+      c.load(nodes);
+    }
+
+    List<String> kinds() => c.nodes.map((n) => n.kind).toList();
+
+    test('backspace on the blank line under an image removes the LINE', () {
+      // It removed the IMAGE. The rule it fell into — "an atomic neighbour
+      // cannot absorb text, so delete it and keep the current node" — is there
+      // to salvage text, and an empty line has none to salvage.
+      load([
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
+        EditorNode(id: 'p', kind: 'paragraph', text: ''),
+      ]);
+      c.collapseTo(const DocPosition(1, 0));
+
+      expect(c.mergeBackward(), isTrue);
+      expect(
+        kinds(),
+        ['image'],
+        reason: 'the blank line went, the image stayed',
+      );
+      expect(c.nodes.single.data['file_id'], 'f1');
+      expect(
+        c.selection!.focus,
+        const DocPosition(0, 0),
+        reason: 'the caret parks on the image, ready to delete it next',
+      );
+    });
+
+    test('a SECOND backspace then deletes the image', () {
+      // Two presses, not one — the pause between them is what makes an
+      // accidental keystroke recoverable.
+      load([
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
+        EditorNode(id: 'p', kind: 'paragraph', text: ''),
+      ]);
+      c.collapseTo(const DocPosition(1, 0));
+      c.mergeBackward();
+      expect(c.mergeBackward(), isTrue);
+      expect(kinds().where((k) => k == 'image'), isEmpty);
+    });
+
+    test('backspace at the start of a NON-empty line is unchanged', () {
+      // The old rule still applies where it was meant to: there is real text
+      // here, and it must survive.
+      load([
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
+        EditorNode(id: 'p', kind: 'paragraph', text: 'keep me'),
+      ]);
+      c.collapseTo(const DocPosition(1, 0));
+
+      expect(c.mergeBackward(), isTrue);
+      expect(kinds(), ['paragraph']);
+      expect(c.nodes.single.text, 'keep me');
+    });
+
+    test('an image at the caret serializes for the clipboard', () {
+      // Cut/copy both bail on an empty payload, and a collapsed selection used
+      // to produce one — so Ctrl+X on an image did nothing at all.
+      load([
+        EditorNode(id: 'p', kind: 'paragraph', text: 'above'),
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
+      ]);
+      c.collapseTo(const DocPosition(1, 0));
+
+      final urls = {'f1': 'https://example.test/f1.png'};
+      expect(c.selectionPlainText(imageUrls: urls), isNotEmpty);
+      expect(c.selectionHtml(imageUrls: urls), contains('img'));
+    });
+
+    test('cutting an image removes it', () async {
+      // The other half: copying it and leaving it on the page is not a cut.
+      load([
+        EditorNode(id: 'p', kind: 'paragraph', text: 'above'),
+        EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
+      ]);
+      c.collapseTo(const DocPosition(1, 0));
+
+      expect(c.deleteSelection(), isTrue);
+      expect(kinds(), ['paragraph']);
+      // Ops are dispatched through the send chain, so they land a microtask
+      // later — asserting synchronously reads an empty list and says nothing.
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        ops.any((o) => o['type'] == 'delete_block' && o['block_id'] == 'i'),
+        isTrue,
+        reason: 'the deletion has to reach the server, not just the screen',
+      );
+    });
+
+    test('a collapsed caret in ordinary TEXT still selects nothing', () {
+      // The guard that keeps the above from turning every stray caret into a
+      // selection: Ctrl+C with no selection must stay a no-op.
+      load([EditorNode(id: 'p', kind: 'paragraph', text: 'hello')]);
+      c.collapseTo(const DocPosition(0, 2));
+
+      expect(c.selectionPlainText(), isEmpty);
+      expect(c.deleteSelection(), isFalse);
+    });
+  });
 }

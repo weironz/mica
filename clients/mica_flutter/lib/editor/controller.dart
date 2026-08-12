@@ -700,6 +700,27 @@ class EditorController extends ChangeNotifier {
 
   /// Backspace at offset 0: merge the focused node into the previous one.
   /// Returns false if there is no previous node (caller may fall through).
+  /// Delete the atomic block at [i] and leave the caret somewhere sane.
+  ///
+  /// Shared by Backspace-on-the-block and cut, so the two cannot disagree about
+  /// what removing a picture means — they were one copy of this apiece, and the
+  /// cut half simply did not exist.
+  void _removeAtomicBlock(int i) {
+    final node = nodes[i];
+    nodes.removeAt(i);
+    _sendNow([
+      {'type': 'delete_block', 'block_id': node.id},
+    ]);
+    if (nodes.isEmpty) {
+      ensureNotEmpty();
+      return;
+    }
+    // Land where the block was: end of the block above, else start of the one
+    // that slid up into its place.
+    final target = (i - 1).clamp(0, nodes.length - 1);
+    collapseTo(DocPosition(target, i > 0 ? nodes[target].text.length : 0));
+  }
+
   bool mergeBackward() {
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
@@ -713,18 +734,7 @@ class EditorController extends ChangeNotifier {
     // paragraph" rule below would otherwise claim it and quietly turn the
     // picture into a blank line, wiping its file_id instead of deleting it.
     if (cur.isAtomic) {
-      nodes.removeAt(i);
-      _sendNow([
-        {'type': 'delete_block', 'block_id': cur.id},
-      ]);
-      if (nodes.isEmpty) {
-        ensureNotEmpty();
-        return true;
-      }
-      // Land where the block was: end of the block above, else start of the
-      // one that slid up into its place.
-      final target = (i - 1).clamp(0, nodes.length - 1);
-      collapseTo(DocPosition(target, i > 0 ? nodes[target].text.length : 0));
+      _removeAtomicBlock(i);
       return true;
     }
 
@@ -771,6 +781,26 @@ class EditorController extends ChangeNotifier {
     // Nothing before the first block to merge into.
     if (i == 0) return false;
     final prev = nodes[i - 1];
+
+    // Standing on an EMPTY line below an atomic block: remove THIS line and
+    // park the caret on the block. Backspace again then deletes the block
+    // itself, through the `cur.isAtomic` branch at the top.
+    //
+    // Reported 2026-08-12: Backspace on the blank line under an image deleted
+    // the IMAGE. The rule below — "an atomic neighbour cannot absorb text, so
+    // delete it and keep the current node" — exists to salvage TEXT that would
+    // otherwise be lost, and an empty line has none. Applied here it destroyed
+    // the one irreplaceable thing on screen in order to preserve a line with
+    // nothing in it. Two presses to remove a picture is also what Notion does,
+    // and the pause between them is the point.
+    if (prev.isAtomic && cur.text.isEmpty) {
+      nodes.removeAt(i);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': cur.id},
+      ]);
+      collapseTo(DocPosition(i - 1, 0));
+      return true;
+    }
 
     // An atomic neighbor (divider/table) can't absorb text — delete it instead
     // of merging, keeping the current node and its caret.
@@ -1168,7 +1198,23 @@ class EditorController extends ChangeNotifier {
   /// flavors ([selectionText] keeps its own walk for the quote-group newline).
   List<({int node, int from, int to})> _selectionSlices() {
     final sel = selection;
-    if (sel == null || sel.isCollapsed) return const [];
+    if (sel == null) return const [];
+    // A caret parked ON an atomic block IS that block being selected — the app
+    // has no other way to say so (`positionAt` refuses to put a text caret
+    // inside a divider or an image, so clicking one collapses here).
+    //
+    // Reported 2026-08-12: Ctrl+X could not cut an image. The clipboard paths
+    // both start from these slices, a collapsed selection yielded none, so
+    // `plain.isEmpty` sent copy AND cut home before either looked at what the
+    // caret was on. The serializer below has always known how to write an image
+    // out; nothing ever handed it one.
+    if (sel.isCollapsed) {
+      final i = sel.focus.node;
+      if (i >= 0 && i < nodes.length && nodes[i].isAtomic) {
+        return [(node: i, from: 0, to: nodes[i].text.length)];
+      }
+      return const [];
+    }
     final s = sel.start, e = sel.end;
     if (s.node == e.node) {
       return [(node: s.node, from: s.offset, to: e.offset)];
@@ -1516,7 +1562,18 @@ class EditorController extends ChangeNotifier {
   /// Returns false when the selection is absent or collapsed.
   bool deleteSelection() {
     final sel = selection;
-    if (sel == null || sel.isCollapsed) return false;
+    if (sel == null) return false;
+    // Cutting an image: the caret parked on an atomic block means that block is
+    // the selection (see [_selectionSlices]), so deleting the selection deletes
+    // the block. Without this, cut copied the picture and then left it in place.
+    if (sel.isCollapsed) {
+      final i = sel.focus.node;
+      if (i >= 0 && i < nodes.length && nodes[i].isAtomic) {
+        _removeAtomicBlock(i);
+        return true;
+      }
+      return false;
+    }
     final start = sel.start;
     final end = sel.end;
 
