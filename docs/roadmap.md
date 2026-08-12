@@ -110,16 +110,61 @@
   = 8 条常驻连接 + 8 份 CRDT 内存」。这是 Mica 特有的约束,AppFlowy 没有 ——
   **CLAUDE.md #6 说的「相同约束下」在这里不成立,所以它的答案只能参考不能采纳。**
 
+  **2026-08-12 又扒了 AFFiNE(commit `26c515e`),它的答案跟 AppFlowy 完全不同**:
+
+  - **标签不在 app 里,在 Electron 主进程里** ——
+    `apps/electron/src/main/windows-manager/tab-views.ts` 的 `WebContentViewsManager`,
+    **每个标签一个 `WebContentsView`**(独立渲染进程,各自 `loadURL` 到
+    `/workspace/<id>/<docId>`)。一个标签 = 一整个 app 实例。
+  - **web 版压根没有标签**:`desktop/components/app-container/index.tsx` 里
+    `LayoutComponent = BUILD_CONFIG.isElectron ? DesktopLayout : BrowserLayout`,
+    浏览器版直接用浏览器自己的标签页。
+  - **标签持久化(答上一轮"仍未扒"之一):有。** `tabViewsMetaSchema`(zod,
+    `main/shared-state-schema.ts`)写进 `globalStateStorage`,重启恢复。
+  - **恢复是懒加载的**:启动只 `showTab(activeWorkbenchId)`,其余标签**只有 meta 没有 view**
+    (`tabsStatus$` 里 `loaded: views.has(w.id)`),点到才 `loadTab`。但一旦加载**就不再卸载**
+    —— 只有 `setBackgroundThrottling(true)`(Chromium 后台节流,停 timer/rAF,**不断连接**)。
+  - **关标签(答另一半)**:不允许关最后一个;延迟 500ms 再 dispose「避免闪烁」;dispose 是逐级
+    升压的 `close(waitForBeforeUnload:true)` → 等 1s → `forcefullyCrashRenderer()` →
+    `close(false)`;有 `closedWorkbenches` 栈支持**撤销关闭标签**;固定标签不会被隐式关掉。
+  - **一个标签里还能再分屏**:`WorkbenchMeta.views: WorkbenchViewMeta[]`,`separateView`
+    把分屏里的一个 view 拆成新标签。
+
+  **⚠️ 最重要的一条 —— 上一轮那张表的共同前提是错的。**
+  AFFiNE 的同步**不是每文档一条连接**:`common/nbstore/src/impls/cloud/socket.ts` 里 socket 是
+  **按 endpoint 缓存的进程内单例 + 引用计数**(`SOCKET_MANAGER_CACHE` / `refCount`),
+  `space:join` 只带 `spaceType`/`spaceId`,**`docId` 是消息里的一个字段**
+  (`space:push-doc-update` / `space:broadcast-doc-update`)。一个渲染进程里开多少文档
+  **都只有一条连接**。
+  Mica 是 `/ws/workspaces/{workspace_id}/documents/{document_id}`(`routes/mod.rs:28`),
+  `document_id` 在 upgrade 时绑死、一路传进 `run_connection`(`ws.rs:70`)——
+  **「N 个标签 = N 条 WS」是 Mica 自己的连接粒度造成的,不是多标签的固有代价。两个参照系都没有
+  这个约束。** 这正是 CLAUDE.md #6 点名的那类错误:给「几选一」之前先问这些选项的**共同前提**
+  验证过没有。所以表加第四行:
+
   **待拍板(动手前必须先定,别在写 UI 时顺手选)**:
   | 方案 | 代价 |
   | --- | --- |
   | 全连(照抄 AppFlowy) | 简单、切换零延迟;连接数与内存随标签线性增长 |
   | 只前台连、后台留快照 | 连接恒为 1;切回要重连 + 重新 bootstrap,有可感知延迟且后台内容是旧的 |
   | 全连但设上限(如 ≤3,超出按 LRU 降级) | 兼顾,但多一套 LRU 要维护 |
+  | **改连接粒度:一条工作区连接多路复用文档**(AFFiNE 的做法) | 连接恒为 1、无降级、无 LRU、切换零延迟 —— **长期正解**;但要动协议两端(路由、`run_connection` 里的文档态、服务端广播分组)并升 `WS_PROTOCOL_VERSION`(该机制已就位:`check_protocol` / `ws_min_protocol`)。**明显比标签栏本身贵** |
 
-  倾向第三种(日常 2–3 个标签全连没问题,偶尔开一堆时才需要降级),但这是产品取舍,**等用户定**。
+  倾向:**先按第三种做标签,第四种日后单独改** —— 粒度换掉时标签这层不用重写,所以不必为了标签
+  先做完协议改造。但如果打算做第四种,**别把 LRU 做复杂**,它是过渡件。
 
-  **仍未扒**:`TabsEvent.closeTab` 的完整处理、标签是否持久化到磁盘。
+  **答③(格式工具栏被挤)—— 两家做法相反,但都不是「给工具栏单开一行」**:
+  - AFFiNE:标签行是**整宽一行,压在侧边栏上面**(JSX 结构
+    `desktopAppViewContainer` → `desktopTabsHeader` + `desktopAppViewMain`(sidebar + main))。
+    而且这行**不是纯增量** —— 侧边栏开关与前进后退按钮搬进了标签行的 `left` 槽
+    (`<AppTabsHeader left={<SidebarSwitch/><NavigationButtons/>}/>`),把自己占的高度赚回来一部分。
+  - AppFlowy:`TabsManager` 在 `HomeStack` **内容列内部**(侧边栏右边,带 `menuSpacing` 左内边距),
+    侧边栏保持满高。
+  - 另:AppFlowy 切标签时**主动 unfocus 编辑器以收起浮动选择工具栏**
+    (`home_stack.dart` 的 `onIndexChanged` 注释原话)—— 这条与横向空间无关,对我们直接适用。
+
+  **所以③的前提也要修正**:标签行是**纵向**多占一行,**不与格式工具栏抢横向空间**,
+  用户当时担心的「估计要新开一行放格式工具栏」按两家的做法并不需要;真正要重算的是编辑器可用**高度**。
 
 > **这一节空了(2026-08-06)。** 做完的搬进 [`roadmap-done.md`](roadmap-done.md),拍板不做的整条删除(理由留在那几次提交的信息里)。
 > 留着标题是因为这是一个真实存在的分类 —— 空是个**状态**,不是这一档不存在。
