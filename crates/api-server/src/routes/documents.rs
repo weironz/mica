@@ -273,6 +273,23 @@ async fn search_views(
   // and no amount of restructuring here touches that — see the search entry in
   // docs/roadmap.md for why fixing THAT needs a CJK-capable text index.
   //
+  // ORDERING: title hits first, recency second.
+  //
+  // It was recency alone, and that read to users as "search does not match page
+  // names" (reported 2026-08-12) even though the predicate above has always
+  // matched `v.name`. Two separate ways it went wrong:
+  //
+  //   - A page whose NAME is the query, last edited months ago, sorted below
+  //     every page that merely mentions it and was touched yesterday.
+  //   - Worse, `LIMIT 50` then cut from the bottom, so on a common word the
+  //     title hit could be dropped from the response entirely — indistinguishable
+  //     from "not found" at the client.
+  //
+  // `(v.name ILIKE $2)` is a boolean; DESC puts true first. It repeats the
+  // predicate rather than reusing the `title_match` computed in Rust below,
+  // because that one is derived AFTER the rows come back — by then the LIMIT has
+  // already chosen which rows exist, which is the half that mattered.
+  //
   // Built by `concat!` into TWO `&'static str` constants rather than formatted at
   // runtime: sqlx 0.9 refuses a dynamic SQL string outright ("dynamic SQL strings
   // should be audited for possible injections"), and that refusal is right — the
@@ -291,7 +308,7 @@ async fn search_views(
         $type_filter,
         r#"
         AND (v.name ILIKE $2 ESCAPE '\' OR yb.content_text ILIKE $2 ESCAPE '\')
-      ORDER BY v.updated_at DESC
+      ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC, v.updated_at DESC
       LIMIT 50
     "#
       )
@@ -4924,6 +4941,59 @@ mod tests {
       assert!(f.title_match, "folders can only ever match on their name");
       assert!(f.snippet.is_empty(), "a folder has no body to snippet");
       assert_eq!(f.parent_view_id, None, "this folder sits at the root");
+    }
+
+    /// A name hit outranks a body hit, even one edited far more recently.
+    ///
+    /// The ordering was `updated_at DESC` alone, which users read as "search
+    /// does not match page names" (2026-08-12) although the predicate always
+    /// has. Looking up a page BY ITS OWN NAME put it below every page that
+    /// merely mentions the phrase, and once `LIMIT 50` was reached the name hit
+    /// was cut from the response outright — at the client, indistinguishable
+    /// from the page not existing.
+    #[tokio::test]
+    async fn a_name_hit_outranks_a_newer_body_hit() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      // What the user is looking for, by name — but untouched for months.
+      let (wanted, _) =
+        seed_document(&db, ws, user, "性能基准测试", serde_json::json!([])).await;
+      // A page that merely mentions the phrase, edited just now.
+      let (mentions, _) = seed_document(
+        &db,
+        ws,
+        user,
+        "周会记录",
+        serde_json::json!([
+          { "id": "b1", "type": "paragraph", "text": "下周开始做性能基准测试" }
+        ]),
+      )
+      .await;
+
+      sqlx::query("UPDATE views SET updated_at = now() - interval '90 days' WHERE id = $1")
+        .bind(wanted)
+        .execute(&db)
+        .await
+        .unwrap();
+      sqlx::query("UPDATE views SET updated_at = now() WHERE id = $1")
+        .bind(mentions)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let hits = search_views(&db, ws, "性能基准测试", false).await.unwrap();
+      assert_eq!(hits.len(), 2, "both rows match the needle: {hits:?}");
+      assert_eq!(
+        hits[0].view_id, wanted,
+        "the NAME hit must lead, though it is 90 days staler: {hits:?}"
+      );
+      assert!(hits[0].title_match);
+      assert_eq!(hits[1].view_id, mentions);
+      assert!(
+        !hits[1].title_match,
+        "the second hit matched on body text, not on its name"
+      );
     }
 
     /// FTS M1 end-to-end over the real query: title hits, CJK body substrings
