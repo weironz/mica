@@ -406,7 +406,35 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           local.dx.clamp(0.0, maxX),
           clampTop ? math.max(0.0, local.dy) : local.dy,
         ),
-        child: child,
+        // NO TOOLTIPS BELOW THIS POINT — they crash here, and it is structural.
+        //
+        // Reported 2026-08-12: drag-selecting text spammed red boxes. The stack
+        // (from the real app; a widget test does not reproduce it) named an
+        // `IconButton` in the format bar, and the cause underneath it:
+        //
+        //   The paint transform cannot be reliably computed because of
+        //   RenderFollowerLayer(s) … RenderFollowerLayer establishes its paint
+        //   transform only after the layout phase.
+        //
+        // A `Tooltip` on this Flutter is an `OverlayPortal` whose
+        // `_OverlayChildLayoutBuilder` asks its ANCHOR for a paint transform
+        // DURING layout. Every bar routed through here is anchored by the
+        // `CompositedTransformFollower` above — which has no transform yet at
+        // that moment. So any tooltip in this subtree asserts, once per frame,
+        // for as long as the bar is up.
+        //
+        // `TooltipVisibility(visible: false)` is not a cosmetic suppression: it
+        // makes `Tooltip.build` skip constructing `RawTooltip` entirely (see
+        // material/tooltip.dart, `if (_visible)`), so the OverlayPortal never
+        // enters the tree and there is nothing left to assert.
+        //
+        // THE COST IS REAL: the format bar, link bar, slash menu and cell editor
+        // lose their hover tooltips. The framework's own advice is to replace
+        // the follower with `OverlayPortal.overlayChildLayoutBuilder`, which
+        // would keep both — but that rewrites how these bars follow the canvas
+        // (777c07c / 9c367b2 exist to make them follow it), so it is its own
+        // change. Recorded in docs/roadmap.md.
+        child: TooltipVisibility(visible: false, child: child),
       ),
     );
   }

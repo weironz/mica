@@ -195,6 +195,16 @@
 > [`roadmap-done.md`](roadmap-done.md)。留着标题是因为这是一个真实存在的分类 ——
 > 空是个**状态**,不是这一档不存在。
 
+- 🆕 **跟随画布的浮层里没有 tooltip 了**(2026-08-12,`_followCanvas`)——
+  格式条 / 链接条 / 斜杠菜单 / 单元格编辑器都由 `CompositedTransformFollower` 定位,
+  而本版 Flutter 的 `Tooltip` 是 `OverlayPortal`,它的 `_OverlayChildLayoutBuilder`
+  **在布局期**就向锚点要 paint transform —— `RenderFollowerLayer` 那时还没有,于是每帧一次
+  断言(用户拖选时刷红框,真机栈点名 `editor.dart` 的 `IconButton`)。
+  现在整棵子树 `TooltipVisibility(visible: false)`,**代价是这些浮层的悬停提示全没了**。
+  Flutter 官方给的正解是把 follower 换成 `OverlayPortal.overlayChildLayoutBuilder`,
+  两者都能保住 —— 但那要重写这些条如何跟随画布(`777c07c` / `9c367b2` 正是为了让它们跟随),
+  所以单独算一件事。**未拍板**。(M)
+
 ## 性能
 
 - 🆕 **搜索正文靠 `ILIKE` 全表扫,没有文本索引**(2026-08-12 重新记入)——

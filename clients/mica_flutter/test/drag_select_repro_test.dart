@@ -13,6 +13,7 @@
 // (a real text-input connection, a real overlay route, the tab strip above the
 // editor) — and that is worth knowing too, so they stay either way.
 
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
@@ -53,6 +54,48 @@ Future<void> _pump(WidgetTester tester, List<EditorNode> nodes) async {
 }
 
 void main() {
+  testWidgets('drag-selecting text raises the format bar without asserting', (
+    tester,
+  ) async {
+    // THE repro. The floating format bar only appears for a RANGED selection in
+    // a FOCUSED editor, which is why the plain drags below never raised it — and
+    // the bar is what carries the crash: it is positioned with
+    // `CompositedTransformFollower`, and every IconButton in it has a Tooltip,
+    // which on this Flutter is an OverlayPortal that asks its anchor for a paint
+    // transform DURING layout. A RenderFollowerLayer has none until after.
+    await _pump(tester, [
+      _para('p1', 'The first paragraph of the page, long enough to select.'),
+      _para('p2', 'A second paragraph, below it.'),
+    ]);
+
+    final box = tester.getRect(find.byType(MicaEditor));
+    // Click to focus and place a caret, THEN drag to extend.
+    await tester.tapAt(Offset(box.left + 40, box.top + 20));
+    await tester.pump();
+
+    final gesture = await tester.startGesture(
+      Offset(box.left + 40, box.top + 20),
+    );
+    for (var i = 1; i <= 14; i++) {
+      await gesture.moveTo(Offset(box.left + 40 + i * 14, box.top + 20));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+    // Hovering a bar button is what mounts the tooltip's overlay child.
+    final buttons = find.byType(IconButton);
+    if (buttons.evaluate().isNotEmpty) {
+      final pointer = TestPointer(1, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(
+        pointer.hover(tester.getCenter(buttons.first)),
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+    }
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('dragging a selection across plain paragraphs', (tester) async {
     await _pump(tester, [
       _para('p1', 'The first paragraph of the page.'),
