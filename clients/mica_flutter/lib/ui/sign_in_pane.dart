@@ -102,8 +102,18 @@ class SignInPane extends StatefulWidget {
     this.onRemove,
     this.probeHealth,
     this.signedInOrigins = const {},
+    this.initialCloud,
     super.key,
   });
+
+  /// Force which tab opens, instead of deriving it from [active].
+  ///
+  /// Null keeps the derivation, which is right almost always: the screen should
+  /// describe where you are. The exception is arriving here straight from
+  /// signing out — the app has just been put into 本地模式 so the local world
+  /// stays usable, but the thing you were doing was leaving a cloud account,
+  /// and the cloud tab is the continuation of that.
+  final bool? initialCloud;
 
   /// Origins with stored credentials — entering one of these needs no password.
   ///
@@ -145,7 +155,7 @@ class SignInPane extends StatefulWidget {
 class _SignInPaneState extends State<SignInPane> {
   /// Which tab. Starts on the one matching the world already in effect, so the
   /// screen opens describing where you actually are.
-  late bool _cloud = widget.active != kLocalOrigin;
+  late bool _cloud = widget.initialCloud ?? widget.active != kLocalOrigin;
   bool _serversOpen = false;
 
   ServerReach? _reach;

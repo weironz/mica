@@ -44,6 +44,7 @@ void main() {
     bool canAdd = true,
     bool canRemove = true,
     Set<String> signedInOrigins = const {},
+    bool? initialCloud,
   }) async {
     await tester.binding.setSurfaceSize(const Size(520, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -56,6 +57,7 @@ void main() {
               origins: origins,
               active: active,
               signedInOrigins: signedInOrigins,
+              initialCloud: initialCloud,
               onSelect: selected.add,
               onEnterLocal: () => locals.add(1),
               onAdd: canAdd ? () => adds.add(1) : null,
@@ -322,6 +324,27 @@ void main() {
     await tester.tap(find.byTooltip('重试'));
     await tester.pump();
     expect(probed.length, before + 1);
+  });
+
+  // Signing out lands here (2026-08-12). The app has just been put into
+  // 本地模式 so it stays usable without an account — but what the user was
+  // doing was leaving a cloud account, so the cloud tab is the continuation.
+  // Deriving the tab from `active` would open on 本地模式 and hide the login
+  // form behind a tab nobody would think to click after pressing "sign out".
+  testWidgets('initialCloud overrides the tab derived from the active world', (
+    tester,
+  ) async {
+    await pump(tester, active: kLocalOrigin, initialCloud: true);
+    expect(find.text('AUTH-FORM'), findsOneWidget);
+    expect(find.text('在此设备上使用'), findsNothing);
+  });
+
+  testWidgets('without the override the tab still follows the world', (
+    tester,
+  ) async {
+    // The default must not change: normally this screen describes where you are.
+    await pump(tester, active: kLocalOrigin);
+    expect(find.text('在此设备上使用'), findsOneWidget);
   });
 
   // Reported 2026-08-12: switching worlds while signed in showed an empty

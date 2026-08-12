@@ -4416,6 +4416,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Only the copy differs — the returned creds and the behavior are identical.
   Future<(AuthMode, AuthFormValue)?> _promptCloudAuth({
     String? migrateWorkspace,
+    bool startOnCloud = false,
   }) {
     final migrate = migrateWorkspace != null;
     final l10n = context.l10n;
@@ -4448,6 +4449,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   origins: _servers,
                   active: _activeOrigin,
                   signedInOrigins: _signedInOrigins(),
+                  initialCloud: startOnCloud ? true : null,
                   probeHealth: _probeServer,
                   onSelect: (origin) async {
                     await _setActiveConnection(origin);
@@ -5202,6 +5204,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     _clearPersistedSession();
     _disconnectCloudSession();
+    // Land on the sign-in screen, not silently in 本地模式.
+    //
+    // Teardown puts the app in the local world so it stays usable without an
+    // account — that part is right and unchanged. What was wrong is stopping
+    // there: signing out then dropped you into a DIFFERENT world you never
+    // asked for, and getting back to a login form meant finding
+    // 账户菜单 → 切换世界, which nobody does (2026-08-12).
+    //
+    // This screen dominates the alternative because it offers BOTH ways on:
+    // sign in again, or its own 本地模式 tab — one click each, both visible.
+    // Landing in 本地模式 offers one, buried in a menu.
+    //
+    // Web is excluded: it has no local world, and its empty cloud state already
+    // renders the sign-in panel in place. Pushing a route there would stack a
+    // second copy of the same screen on top of it.
+    if (!kIsWeb) unawaited(_promptSignIn(startOnCloud: true));
   }
 
   /// Tear down the live cloud session/state WITHOUT touching stored
@@ -5622,8 +5640,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Sign in to the configured cloud server from the switcher / account UI
   /// (desktop: the login gate is gone — auth is a dialog, P3c §1.3).
-  Future<void> _promptSignIn() async {
-    final creds = await _promptCloudAuth();
+  Future<void> _promptSignIn({bool startOnCloud = false}) async {
+    final creds = await _promptCloudAuth(startOnCloud: startOnCloud);
     if (creds == null || !mounted) return;
     await _run(() async {
       if (creds.$1 == AuthMode.register) {
