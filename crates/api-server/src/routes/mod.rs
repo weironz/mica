@@ -151,6 +151,10 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/search",
       get(documents::search_workspace),
     )
+    // Cross-workspace search. NOT a flag on the route above: the path is what
+    // states the scope, and widening it by query parameter would make
+    // `/workspaces/{id}/search` return things from other workspaces.
+    .route("/search", get(documents::search_all_workspaces))
     .route(
       "/workspaces/{workspace_id}/views/{view_id}",
       patch(documents::update_view).delete(documents::delete_view),

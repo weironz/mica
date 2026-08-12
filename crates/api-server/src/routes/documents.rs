@@ -174,6 +174,14 @@ pub struct SearchQuery {
 struct SearchResult {
   view_id: Uuid,
   object_id: Uuid,
+  /// Which workspace the hit lives in.
+  ///
+  /// Redundant on the per-workspace route (the caller named it in the URL) and
+  /// load-bearing on the cross-workspace one: opening a page is workspace-scoped
+  /// (`GET /workspaces/{workspace_id}/documents/{id}`), so a hit that does not
+  /// say where it lives cannot be opened. The client cannot infer it either —
+  /// it only holds page trees for workspaces it has actually visited.
+  workspace_id: Uuid,
   name: String,
   snippet: String,
   title_match: bool,
@@ -210,7 +218,44 @@ pub async fn search_workspace(
     return Ok(Json(SearchResponse { results: vec![] }));
   }
 
-  let results = search_views(&state.db, workspace_id, needle, query.include_folders).await?;
+  let results = search_views(&state.db, &[workspace_id], needle, query.include_folders).await?;
+  Ok(Json(SearchResponse { results }))
+}
+
+/// `GET /search` — the same search across EVERY workspace the caller belongs to.
+///
+/// A separate route rather than a flag on the per-workspace one, because the URL
+/// is what states the scope: `/workspaces/{id}/search` promises results from that
+/// workspace, and a query parameter that quietly widens it would make the path
+/// lie. Same query underneath, so ranking and folder handling cannot drift.
+///
+/// COST: the body match is an `ILIKE` over every document's text, so this scales
+/// with the number of documents the caller can see — linearly with workspace
+/// count. That is the same bottleneck the per-workspace search already has
+/// (measured 2026-08-06: ~75 ms of an 81 ms query was reading 798 bodies), only
+/// multiplied. The fix for both is a CJK-capable text index, not this route; see
+/// the search entry in docs/roadmap.md.
+pub async fn search_all_workspaces(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Query(query): Query<SearchQuery>,
+) -> ApiResult<Json<SearchResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+
+  let needle = query.q.trim();
+  if needle.is_empty() {
+    return Ok(Json(SearchResponse { results: vec![] }));
+  }
+
+  // Membership decides the scope, so there is no per-workspace authorization
+  // left to do: a workspace the caller is not a member of never enters the list.
+  let workspace_ids: Vec<Uuid> =
+    sqlx::query_scalar("SELECT workspace_id FROM workspace_members WHERE user_id = $1")
+      .bind(user_id)
+      .fetch_all(&state.db)
+      .await?;
+
+  let results = search_views(&state.db, &workspace_ids, needle, query.include_folders).await?;
   Ok(Json(SearchResponse { results }))
 }
 
@@ -220,6 +265,7 @@ pub async fn search_workspace(
 struct SearchRow {
   view_id: Uuid,
   object_id: Uuid,
+  workspace_id: Uuid,
   name: String,
   content_text: Option<String>,
   parent_view_id: Option<Uuid>,
@@ -245,12 +291,19 @@ struct SearchRow {
 /// happens — `sync::backfill_content_text` at startup and the write paths (a bad
 /// update is a 400 in `push_update`). A base that failed to decode has empty
 /// `content_text` and is warn-logged there, not silently missing here.
+/// [workspace_ids] is a LIST so one statement serves both the per-workspace
+/// route and the cross-workspace one — a second copy of this query would be the
+/// double-representation this repo keeps paying for, and the two would drift on
+/// the next ranking change. A single-workspace search simply passes one id.
 async fn search_views(
   db: &PgPool,
-  workspace_id: Uuid,
+  workspace_ids: &[Uuid],
   needle: &str,
   include_folders: bool,
 ) -> ApiResult<Vec<SearchResult>> {
+  if workspace_ids.is_empty() {
+    return Ok(vec![]);
+  }
   let pattern = like_pattern(needle);
   // Folders ride the SAME statement rather than getting their own: they have no
   // `document_yrs_base` row, so the LEFT JOIN already leaves `content_text` NULL
@@ -298,11 +351,11 @@ async fn search_views(
     ($type_filter:literal) => {
       concat!(
         r#"
-      SELECT v.id AS view_id, v.object_id, v.name, yb.content_text,
+      SELECT v.id AS view_id, v.object_id, v.workspace_id, v.name, yb.content_text,
              v.parent_view_id, v.object_type::text AS object_type
       FROM views v
       LEFT JOIN document_yrs_base yb ON yb.document_id = v.object_id
-      WHERE v.workspace_id = $1
+      WHERE v.workspace_id = ANY($1)
         AND v.is_deleted = false
         "#,
         $type_filter,
@@ -320,7 +373,7 @@ async fn search_views(
     search_sql!("AND v.object_type = 'document'")
   };
   let rows = sqlx::query_as::<_, SearchRow>(sql)
-    .bind(workspace_id)
+    .bind(workspace_ids)
     .bind(&pattern)
     .fetch_all(db)
     .await?;
@@ -342,6 +395,7 @@ async fn search_views(
         SearchResult {
           view_id: row.view_id,
           object_id: row.object_id,
+          workspace_id: row.workspace_id,
           name: row.name,
           snippet,
           title_match,
@@ -4923,7 +4977,7 @@ mod tests {
         .unwrap();
 
       // Default: the folder is invisible even though its name matches.
-      let hits = search_views(&db, ws, "部署", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "部署", false).await.unwrap();
       assert_eq!(hits.len(), 1, "pages only by default: {hits:?}");
       assert_eq!(hits[0].view_id, page);
       assert!(!hits[0].is_folder);
@@ -4934,13 +4988,70 @@ mod tests {
       );
 
       // Opt in: the folder shows up, flagged, and matched by NAME.
-      let hits = search_views(&db, ws, "部署", true).await.unwrap();
+      let hits = search_views(&db, &[ws], "部署", true).await.unwrap();
       assert_eq!(hits.len(), 2, "page + folder: {hits:?}");
       let f = hits.iter().find(|h| h.view_id == folder).expect("folder hit");
       assert!(f.is_folder);
       assert!(f.title_match, "folders can only ever match on their name");
       assert!(f.snippet.is_empty(), "a folder has no body to snippet");
       assert_eq!(f.parent_view_id, None, "this folder sits at the root");
+    }
+
+    /// Cross-workspace search spans the list it is given, and every hit says
+    /// which workspace it came from.
+    ///
+    /// The `workspace_id` on the row is not decoration: opening a page is
+    /// workspace-scoped, and the client only holds page trees for workspaces it
+    /// has visited — so a hit from an unvisited workspace is unopenable without
+    /// this field. Scope is proven both ways here, because the dangerous
+    /// direction is the quiet one: a search that silently reached into a
+    /// workspace the caller did not ask about would leak its page names.
+    #[tokio::test]
+    async fn search_spans_the_given_workspaces_and_labels_every_hit() {
+      let Some(db) = pool().await else { return };
+      let (ws_a, user_a) = seed_workspace(&db).await;
+      let (ws_b, user_b) = seed_workspace(&db).await;
+
+      let (page_a, _) =
+        seed_document(&db, ws_a, user_a, "部署手册", serde_json::json!([])).await;
+      let (page_b, _) =
+        seed_document(&db, ws_b, user_b, "部署脚本", serde_json::json!([])).await;
+
+      // One workspace: the other one's page must not appear.
+      let only_a = search_views(&db, &[ws_a], "部署", false).await.unwrap();
+      assert_eq!(only_a.len(), 1, "scoped to one workspace: {only_a:?}");
+      assert_eq!(only_a[0].view_id, page_a);
+      assert_eq!(
+        only_a[0].workspace_id, ws_a,
+        "even a single-workspace hit carries its workspace"
+      );
+
+      // Both: two hits, each labelled with where it lives.
+      let both = search_views(&db, &[ws_a, ws_b], "部署", false).await.unwrap();
+      assert_eq!(both.len(), 2, "both workspaces searched: {both:?}");
+      let a = both.iter().find(|h| h.view_id == page_a).expect("ws_a hit");
+      let b = both.iter().find(|h| h.view_id == page_b).expect("ws_b hit");
+      assert_eq!(a.workspace_id, ws_a);
+      assert_eq!(
+        b.workspace_id, ws_b,
+        "a hit from the second workspace must not be labelled with the first"
+      );
+    }
+
+    /// No workspaces means no results — not "every workspace".
+    ///
+    /// The empty slice reaches this from a caller whose membership query came
+    /// back empty. `ANY('{}')` is already false for every row, so this pins the
+    /// early return as an intent rather than an optimization: the failure it
+    /// prevents is a future refactor turning "no scope" into "no filter".
+    #[tokio::test]
+    async fn search_with_no_workspaces_finds_nothing() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      seed_document(&db, ws, user, "部署手册", serde_json::json!([])).await;
+
+      let hits = search_views(&db, &[], "部署", false).await.unwrap();
+      assert!(hits.is_empty(), "an empty scope finds nothing: {hits:?}");
     }
 
     /// A name hit outranks a body hit, even one edited far more recently.
@@ -4982,7 +5093,7 @@ mod tests {
         .await
         .unwrap();
 
-      let hits = search_views(&db, ws, "性能基准测试", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "性能基准测试", false).await.unwrap();
       assert_eq!(hits.len(), 2, "both rows match the needle: {hits:?}");
       assert_eq!(
         hits[0].view_id, wanted,
@@ -5010,31 +5121,31 @@ mod tests {
       set_content_text(&db, doc_b, "no chinese here, just english text").await;
 
       // 3+ char CJK body hit → doc A only, title_match=false, snippet has the hit.
-      let hits = search_views(&db, ws, "全文搜索", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "全文搜索", false).await.unwrap();
       assert_eq!(hits.len(), 1, "one body hit: {hits:?}");
       assert_eq!(hits[0].view_id, view_a);
       assert!(!hits[0].title_match, "matched the body, not the title");
       assert!(hits[0].snippet.contains("全文搜索"), "snippet: {}", hits[0].snippet);
 
       // 2-char CJK substring still matches (substring fallback, no tokenizer).
-      let hits = search_views(&db, ws, "索引", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "索引", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
 
       // Title hit → title_match=true (body may or may not also match).
-      let hits = search_views(&db, ws, "会议", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "会议", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
       assert!(hits[0].title_match);
 
       // A latin title hit resolves the other doc.
-      let hits = search_views(&db, ws, "roadmap", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "roadmap", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_b);
       assert!(hits[0].title_match);
 
       // A query matching neither returns nothing.
-      assert!(search_views(&db, ws, "缺失关键词", false).await.unwrap().is_empty());
+      assert!(search_views(&db, &[ws], "缺失关键词", false).await.unwrap().is_empty());
     }
 
     /// A `%` in the query is a LITERAL, not a wildcard: a search for `100%` must
@@ -5050,7 +5161,7 @@ mod tests {
       set_content_text(&db, doc_q, "confident to 100 percent sure").await;
 
       // Literal "100%" matches only the doc that actually contains "100%".
-      let hits = search_views(&db, ws, "100%", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "100%", false).await.unwrap();
       assert_eq!(
         hits.len(),
         1,
@@ -5137,13 +5248,13 @@ mod tests {
       )
       .await;
 
-      let hits = search_views(&db, ws, "正文内容", false).await.unwrap();
+      let hits = search_views(&db, &[ws], "正文内容", false).await.unwrap();
       assert_eq!(hits.len(), 1, "body searchable at once: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
 
       assert_eq!(
-        search_views(&db, ws, "导入页", false).await.unwrap().len(),
+        search_views(&db, &[ws], "导入页", false).await.unwrap().len(),
         1,
         "the title is searchable too"
       );
