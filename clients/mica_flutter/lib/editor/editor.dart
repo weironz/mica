@@ -3256,17 +3256,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     });
   }
 
-  /// The href of a link mark covering [pos], or null if none.
+  /// The href of a link a click at [pos] should open, or null.
+  ///
+  /// Uses [linkClickHit], NOT plain containment — see there for why the very
+  /// start of the link does not count.
   String? _linkAt(DocPosition pos) {
     if (pos.node < 0 || pos.node >= _controller.nodes.length) return null;
     final node = _controller.nodes[pos.node];
     for (final m in marksFromData(node.data)) {
-      if (m.type == 'link' &&
-          m.href != null &&
-          pos.offset >= m.start &&
-          pos.offset < m.end) {
-        return m.href;
-      }
+      if (linkClickHit(m, pos.offset)) return m.href;
     }
     return null;
   }
@@ -3296,12 +3294,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if ((local.dx - rect.left).abs() > 24) return null;
     final node = _controller.nodes[pos.node];
     for (final m in marksFromData(node.data)) {
-      if (m.type == 'link' &&
-          m.href != null &&
-          pos.offset >= m.start &&
-          pos.offset < m.end) {
-        return (node: pos.node, mark: m);
-      }
+      // Same predicate as the click path, deliberately: the hover toolbar must
+      // not appear where clicking would place a caret, or it would cover the
+      // spot the user is aiming at.
+      if (linkClickHit(m, pos.offset)) return (node: pos.node, mark: m);
     }
     return null;
   }

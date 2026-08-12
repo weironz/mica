@@ -2014,3 +2014,23 @@ String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
   }
   return out.toString();
 }
+
+/// Whether a click landing at caret [offset] should ACTIVATE link [m].
+///
+/// Not the same question as "is this offset inside the link". `offset ==
+/// m.start` is the caret slot BEFORE the link's first character — clicking
+/// there means "put the caret at the start of this line", which is the only way
+/// to type above a line that begins with a link. Counting it as a hit made that
+/// impossible: every click at the start opened the URL instead (reported
+/// 2026-08-12, 「行首的超链接很难插入光标」). The renderer snaps to the nearest
+/// boundary, so this gives the left half of the first glyph — plus the whole
+/// left margin, which snaps there too — back to the caret.
+///
+/// A ONE-character link is the exception: `start` is then its only interior
+/// slot, and excluding it would make such a link unclickable altogether.
+bool linkClickHit(Mark m, int offset) {
+  if (m.type != 'link' || m.href == null) return false;
+  if (offset >= m.end) return false;
+  final firstInterior = (m.end - m.start) > 1 ? m.start + 1 : m.start;
+  return offset >= firstInterior;
+}
