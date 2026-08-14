@@ -50,9 +50,18 @@ claude mcp add --scope user mica \
 ⚠️ 这样令牌会进 **shell 历史**和终端回滚缓冲,粘贴时也极易连同令牌一起发进聊天/工单。
 能用上面那种不带 `-e` 的写法就用它。
 
-**优先级**(先到先得):`MICA_API_BASE_URL` / `MICA_PAT` → `--server` / `MICA_SERVER` /
-`MICA_TOKEN` → `auth login` 存下的配置。所以环境变量总能盖过本机已登录的账号 —— 想让
-MCP 用另一个身份连,不必先登出。
+**优先级**(先到先得):
+
+- **服务器**:`MICA_API_BASE_URL` → `--server` / `MICA_SERVER` → `auth login` 存下的配置
+- **令牌**:`--token` → `MICA_PAT` → `MICA_TOKEN` → `auth login` 存下的配置
+
+所以环境变量总能盖过本机已登录的账号 —— 想让 MCP 用另一个身份连,不必先登出。
+
+`MICA_PAT` 与 `MICA_TOKEN` 是同一件事的两个名字,**两个都对所有命令生效**。此前不是:
+`mcp` 认 `MICA_PAT`,其余命令只认 `MICA_TOKEN` —— 照着本文档配好 MCP 的人,一跑
+`mica-cli ws list` 就得到「not logged in」,而提示里不会告诉他要换个变量名(2026-08-12 修)。
+
+**空值等同未设置**:`MICA_TOKEN=` 会继续往下一个来源找,而不是拿一个空串去换 401。
 
 > **token 只在创建时显示一次**,`auth token list` 只看得到名字和元数据,看不到明文。
 > 弄丢了就 `auth token create` 建个新的(旧的可以撤销)。
@@ -198,7 +207,9 @@ GC 会把字节回收掉,这边的页面就烂了。
 
 ## 排错
 
-- `no token`:三条链都没解析到凭证 —— 传 `MICA_PAT`,或先 `auth login`。
+- `not signed in`:整条链都没解析到凭证 —— 传 `--token` / `MICA_PAT` / `MICA_TOKEN`,
+  或先 `auth login`。**先确认变量不是空串**:空值按未设置处理,所以 `MICA_PAT=` 和没设是
+  一个效果。
 - `Mica API 401`:PAT 被吊销或过期,`mica-cli auth token list` 查,重建一个。
 - 写工具报 read-only:去掉 `--read-only` / `MICA_MCP_READ_ONLY`,且 PAT 要有
   `write` scope(`token create --scope read --scope write`)。

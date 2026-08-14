@@ -30,6 +30,13 @@ struct Cli {
   /// Server base URL, e.g. https://mica.example.com (overrides the saved config).
   #[arg(long, global = true, env = "MICA_SERVER")]
   server: Option<String>,
+  /// API token (a PAT from `auth token create`) — overrides the saved login.
+  ///
+  /// Deliberately NOT wired to clap's `env`: the token has two accepted
+  /// variable names and clap takes one, so the whole order is written down
+  /// once in [`pick_token`] instead of half here and half there.
+  #[arg(long, global = true, value_name = "TOKEN")]
+  token: Option<String>,
   /// Emit machine-readable JSON (for scripts / agents).
   #[arg(long, global = true)]
   json: bool,
@@ -552,11 +559,9 @@ fn cmd_mcp(cli: &Cli, cfg: &Config, args: &McpArgs) -> Result<()> {
     .context(
       "no server — set MICA_API_BASE_URL / --server / MICA_SERVER, or run `mica-cli auth login`",
     )?;
-  let pat = std::env::var("MICA_PAT")
-    .ok()
-    .or_else(|| std::env::var("MICA_TOKEN").ok())
-    .or_else(|| cfg.token.clone())
-    .context("no token — set MICA_PAT / MICA_TOKEN, or run `mica-cli auth login`")?;
+  // Same resolver as every other command — see [`pick_token`] for why this is
+  // no longer a second, slightly different chain.
+  let pat = resolve_token(cli, cfg).context(NO_TOKEN_HINT)?;
   let read_only = args.read_only
     || matches!(
       std::env::var("MICA_MCP_READ_ONLY").as_deref(),
@@ -573,16 +578,58 @@ fn cmd_mcp(cli: &Cli, cfg: &Config, args: &McpArgs) -> Result<()> {
 
 // ---------------------------------------------------------------- helpers
 
+/// The token to authenticate with, in precedence order.
+///
+/// Pure so the order can be tested; [`resolve_token`] is the thin wrapper that
+/// reads the environment.
+///
+/// ONE definition, because there were two and they disagreed: the `mcp`
+/// subcommand accepted `MICA_PAT` while every other command accepted only
+/// `MICA_TOKEN` — so a user who followed the MCP docs and then ran `mica-cli
+/// ws list` got "not logged in" with no hint that the variable it wanted had a
+/// different name (reported 2026-08-12). Both names now work everywhere, and
+/// `--token` works too.
+///
+/// BLANK IS NOT A TOKEN. `MICA_TOKEN=` in a systemd unit or a compose file
+/// resolves to an empty string, not to "unset" — spending it earns a 401 that
+/// says nothing about the real problem. This is the same rule the server learned
+/// for `JWT_SECRET` (see `resolve_jwt_secret`).
+pub(crate) fn pick_token(
+  flag: Option<&str>,
+  pat_env: Option<&str>,
+  token_env: Option<&str>,
+  saved: Option<&str>,
+) -> Option<String> {
+  [flag, pat_env, token_env, saved]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+    .map(str::to_string)
+}
+
+fn resolve_token(cli: &Cli, cfg: &Config) -> Option<String> {
+  let pat = std::env::var("MICA_PAT").ok();
+  let token = std::env::var("MICA_TOKEN").ok();
+  pick_token(
+    cli.token.as_deref(),
+    pat.as_deref(),
+    token.as_deref(),
+    cfg.token.as_deref(),
+  )
+}
+
+/// Shared by every command, so the advice matches what is actually accepted.
+const NO_TOKEN_HINT: &str =
+  "not signed in — pass --token, set MICA_PAT or MICA_TOKEN, or run `mica-cli auth login`";
+
 pub(crate) fn authed_client(cli: &Cli, cfg: &Config) -> Result<Client> {
   let server = cli
     .server
     .clone()
     .or_else(|| cfg.server.clone())
     .context("no server — run `mica-cli auth login --server <url>` or set MICA_SERVER")?;
-  let token = std::env::var("MICA_TOKEN")
-    .ok()
-    .or_else(|| cfg.token.clone())
-    .context("not logged in — run `mica-cli auth login` or set MICA_TOKEN")?;
+  let token = resolve_token(cli, cfg).context(NO_TOKEN_HINT)?;
   Client::new(server, Some(token))
 }
 
@@ -737,6 +784,65 @@ fn prune_empty_dirs(dir: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// The token order, pinned — it used to be written twice and the two copies
+  /// accepted different variable names.
+  #[test]
+  fn the_flag_beats_every_environment_variable() {
+    assert_eq!(
+      pick_token(Some("flag"), Some("pat"), Some("tok"), Some("saved")).as_deref(),
+      Some("flag")
+    );
+  }
+
+  #[test]
+  fn mica_pat_beats_mica_token_beats_the_saved_login() {
+    assert_eq!(
+      pick_token(None, Some("pat"), Some("tok"), Some("saved")).as_deref(),
+      Some("pat")
+    );
+    assert_eq!(
+      pick_token(None, None, Some("tok"), Some("saved")).as_deref(),
+      Some("tok")
+    );
+    assert_eq!(
+      pick_token(None, None, None, Some("saved")).as_deref(),
+      Some("saved")
+    );
+  }
+
+  #[test]
+  fn both_variable_names_work_on_their_own() {
+    // The whole point of the change: following the MCP docs (MICA_PAT) used to
+    // leave every other command reporting "not logged in".
+    assert_eq!(pick_token(None, Some("pat"), None, None).as_deref(), Some("pat"));
+    assert_eq!(pick_token(None, None, Some("tok"), None).as_deref(), Some("tok"));
+  }
+
+  #[test]
+  fn a_blank_value_is_not_a_token_and_does_not_shadow_the_next_source() {
+    // `MICA_TOKEN=` in a unit file resolves to an empty string, not to unset.
+    // Spending it buys a 401 that explains nothing; falling through to the
+    // saved login is what the user meant. Same rule as `resolve_jwt_secret`.
+    assert_eq!(pick_token(None, Some(""), None, Some("saved")).as_deref(), Some("saved"));
+    assert_eq!(pick_token(None, Some("   "), Some("tok"), None).as_deref(), Some("tok"));
+    assert_eq!(pick_token(Some(""), None, None, None), None);
+  }
+
+  #[test]
+  fn surrounding_whitespace_is_trimmed() {
+    // A trailing newline is what `MICA_TOKEN=$(cat token.txt)` gives you, and
+    // it travels all the way into the Authorization header.
+    assert_eq!(
+      pick_token(None, Some(" mica_pat_x\n"), None, None).as_deref(),
+      Some("mica_pat_x")
+    );
+  }
+
+  #[test]
+  fn nothing_anywhere_is_none() {
+    assert_eq!(pick_token(None, None, None, None), None);
+  }
 
   #[test]
   fn url_file_name_variants() {

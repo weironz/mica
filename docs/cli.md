@@ -78,9 +78,17 @@ fully stateless (nothing written to disk):
 | Setting | Flag | Env var | Precedence |
 | ------- | ---- | ------- | ---------- |
 | Server URL | `--server` | `MICA_SERVER` | flag/env override the config file |
-| Access token | — | `MICA_TOKEN` | env overrides the saved token |
+| Access token | `--token` | `MICA_PAT`, then `MICA_TOKEN` | flag > env > saved token |
 | Login email | `--email` | `MICA_EMAIL` | — |
 | Login password | `--password` | `MICA_PASSWORD` | else read from stdin |
+
+`MICA_PAT` and `MICA_TOKEN` are the same setting under two names, and BOTH work
+for every command. They used to differ — `mcp` read `MICA_PAT`, everything else
+read only `MICA_TOKEN` — so following the MCP instructions and then running any
+other command reported "not logged in" without saying which name it wanted.
+
+A blank value counts as unset, not as an empty token: `MICA_TOKEN=` in a unit
+file falls through to the next source instead of buying a 401.
 
 Stateless example (nothing saved, ideal for CI / a backup container):
 
