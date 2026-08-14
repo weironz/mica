@@ -103,6 +103,8 @@ MICA_SERVER=https://mica.example.com MICA_PAT=mica_pat_… mica-cli export --out
 Available on every command:
 
 - `--server <URL>` — server base URL (overrides the saved config; `MICA_SERVER`).
+- `--token <TOKEN>` — API token, overriding `MICA_PAT` and the saved login. Note
+  it lands in your shell history; prefer the env var for anything you type twice.
 - `--json` — emit machine-readable JSON instead of human text (for scripts/agents).
 - `-h, --help` / `-V, --version`.
 
@@ -194,7 +196,7 @@ claude mcp add --scope user mica -- /path/to/mica-cli mcp
 Passing no `-e` is the cleanest form: the server walks the same credential chain
 as every other subcommand, so **no token lands in the client config or in your
 shell history**. The trade is that it rides your saved login, which can expire —
-re-run `auth login` if the MCP server starts reporting `no token`.
+re-run `auth login` if the MCP server starts reporting `not signed in`.
 
 To pin a token instead (copying the config to another machine, or not wanting to
 depend on a saved login):
