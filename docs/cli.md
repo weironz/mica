@@ -78,22 +78,24 @@ fully stateless (nothing written to disk):
 | Setting | Flag | Env var | Precedence |
 | ------- | ---- | ------- | ---------- |
 | Server URL | `--server` | `MICA_SERVER` | flag/env override the config file |
-| Access token | `--token` | `MICA_PAT`, then `MICA_TOKEN` | flag > env > saved token |
+| Access token | `--token` | `MICA_PAT` | flag > env > saved token |
 | Login email | `--email` | `MICA_EMAIL` | — |
 | Login password | `--password` | `MICA_PASSWORD` | else read from stdin |
 
-`MICA_PAT` and `MICA_TOKEN` are the same setting under two names, and BOTH work
-for every command. They used to differ — `mcp` read `MICA_PAT`, everything else
-read only `MICA_TOKEN` — so following the MCP instructions and then running any
-other command reported "not logged in" without saying which name it wanted.
+`MICA_PAT` is the only token variable. There used to be two: `mcp` read
+`MICA_PAT`, every other command read only `MICA_TOKEN`, so following the MCP
+instructions and then running any other command reported "not logged in" without
+saying which name it wanted. `MICA_TOKEN` is retired — setting it now produces an
+error naming the replacement, rather than silently doing nothing.
 
-A blank value counts as unset, not as an empty token: `MICA_TOKEN=` in a unit
-file falls through to the next source instead of buying a 401.
+A blank value counts as unset, not as an empty token: `MICA_PAT=` in a unit file
+falls through to the next source instead of buying a 401. Surrounding whitespace
+is trimmed, so `MICA_PAT=$(cat token.txt)` works.
 
 Stateless example (nothing saved, ideal for CI / a backup container):
 
 ```bash
-MICA_SERVER=https://mica.example.com MICA_TOKEN=mica_pat_… mica-cli export --out /export
+MICA_SERVER=https://mica.example.com MICA_PAT=mica_pat_… mica-cli export --out /export
 ```
 
 ## Global options
@@ -221,6 +223,6 @@ production stack wires `export` + `rustic` into one container — see
 ## Scripting / agents
 
 - `--json` on any command yields structured output.
-- Set `MICA_SERVER` + `MICA_TOKEN` in the environment to run without any saved
+- Set `MICA_SERVER` + `MICA_PAT` in the environment to run without any saved
   config (nothing written to disk).
 - Non-zero exit on failure; error detail goes to stderr.

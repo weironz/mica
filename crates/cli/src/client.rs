@@ -118,12 +118,12 @@ impl Client {
       return Ok(resp);
     }
     if status.as_u16() == 401 {
-      // Names every accepted source, not just one of them: this line used to
-      // say "set MICA_TOKEN" while the `mcp` path wanted MICA_PAT, so it sent
-      // people to change the variable they had already set correctly.
+      // Names the accepted sources, and only those. It used to say "set
+      // MICA_TOKEN" — a variable the `mcp` path did not even read — which sent
+      // people to change one they had already set correctly.
       bail!(
-        "unauthorized (401) — the token was rejected. Pass --token, set MICA_PAT \
-         or MICA_TOKEN, or run `mica-cli auth login`"
+        "unauthorized (401) — the token was rejected. Pass --token, set MICA_PAT, \
+         or run `mica-cli auth login`"
       );
     }
     let body = resp.text().unwrap_or_default();

@@ -31,7 +31,7 @@ binary per platform rather than two. There is no separate `mica-mcp` executable
 (there was, briefly; it was never published, which is exactly why it merged).
 
 It resolves the server URL and PAT through the CLI's usual chain — `--server` /
-`MICA_SERVER`, `MICA_TOKEN`, or a saved `mica-cli auth login` — and still honours
+`MICA_SERVER`, `MICA_PAT`, or a saved `mica-cli auth login` — and still honours
 the historical `MICA_API_BASE_URL` / `MICA_PAT` so existing MCP configs keep
 working. `MICA_MCP_READ_ONLY=1` registers the write tools but refuses them at
 call time.
