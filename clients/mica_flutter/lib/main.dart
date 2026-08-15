@@ -392,6 +392,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String? _message;
   bool _isBusy = false;
 
+  /// The server's per-file upload cap, cached from the last `/usage` response.
+  /// 0 means never learned — the server has not been asked yet, predates the
+  /// field, or has no storage configured. Only used to put a real number in the
+  /// `file_too_large` message, so a stale value is harmless and a missing one
+  /// just costs a less specific sentence.
+  int _maxUploadBytes = 0;
+
   /// Pages finished / pages planned for a running cloud import, straight from
   /// the job status. Null when no import is in flight — [_isBusy] alone can't
   /// carry this, since it's true for every operation and says nothing about size.
@@ -1101,7 +1108,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // the workspace is full (free space). Worse, the first fires while the
       // storage bar honestly shows room left, so relaying the server's English
       // sentence left the refusal looking like the bar was lying.
-      'file_too_large' => context.l10n.uploadFileTooLarge,
+      // The cap is named only when it is actually known: `/usage` is fetched
+      // lazily (settings dialog), so someone whose first action is an oversized
+      // paste has never been told the number. Quoting a guess would be worse
+      // than omitting it — the whole point of this copy is to be believable.
+      'file_too_large' => _maxUploadBytes > 0
+          ? context.l10n.uploadFileTooLargeWithLimit(
+              formatBytesBinary(_maxUploadBytes),
+            )
+          : context.l10n.uploadFileTooLarge,
       'workspace_quota_exceeded' => context.l10n.uploadWorkspaceFull,
       _ => error.toString(),
     };
@@ -5114,11 +5129,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// that reports failures as a banner, and a storage row that cannot load is
   /// not worth interrupting someone who opened the dialog to rename their
   /// workspace. Null simply omits the row.
-  Future<({int used, int quota})?> _loadWorkspaceUsage(Workspace workspace) async {
+  Future<({int used, int quota, int maxUpload})?> _loadWorkspaceUsage(
+    Workspace workspace,
+  ) async {
     final session = _session;
     if (session == null) return null;
     try {
-      return await _api.workspaceUsage(session.accessToken, workspace.id);
+      final usage = await _api.workspaceUsage(session.accessToken, workspace.id);
+      // Remember the per-file cap for the upload error copy. This call is the
+      // only place the client is told it — a presign carries it too, but the
+      // presign for an oversized file is precisely the one that fails. Cached
+      // rather than fetched on failure so the error path stays synchronous.
+      if (usage.maxUpload > 0) _maxUploadBytes = usage.maxUpload;
+      return usage;
     } catch (_) {
       return null;
     }
@@ -7337,7 +7360,9 @@ class WorkspaceView extends StatefulWidget {
 
   /// Storage this workspace occupies + the limit in force. Null in 本地模式:
   /// there is no server to ask and no quota to be near.
-  final Future<({int used, int quota})?> Function(Workspace workspace)?
+  final Future<({int used, int quota, int maxUpload})?> Function(
+    Workspace workspace,
+  )?
   onLoadWorkspaceUsage;
   final Future<void> Function(WorkspaceMember member, WorkspaceRole role)?
   onUpdateMember;

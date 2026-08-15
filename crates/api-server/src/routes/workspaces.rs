@@ -358,6 +358,18 @@ pub struct WorkspaceUsageResponse {
   pub bytes_used: i64,
   /// The limit in force, or `0` when quotas are disabled.
   pub quota_bytes: i64,
+  /// The per-file upload cap — a SECOND limit, unrelated to the quota above.
+  ///
+  /// Sent here so a rejected upload can name the number it exceeded. The client
+  /// otherwise learns this only from a SUCCESSFUL presign, which is exactly the
+  /// call that fails when the file is too big; the alternative was digging the
+  /// figure out of the error's English prose, which is the message-matching this
+  /// codebase refuses to do.
+  ///
+  /// `0` means unknown — this server has no storage configured, so there is no
+  /// cap because there are no uploads at all. Same convention as `quota_bytes`
+  /// and the workspace list's `page_count`: 0 is "no answer", not "zero bytes".
+  pub max_upload_bytes: i64,
 }
 
 /// `GET /workspaces/{workspace_id}/usage`
@@ -382,6 +394,11 @@ pub async fn workspace_usage(
   Ok(Json(WorkspaceUsageResponse {
     bytes_used: mica_app_core::store::workspace_bytes_used(&state.db, workspace_id).await?,
     quota_bytes: state.config.workspace_quota_bytes,
+    // Read straight off the optional config rather than through
+    // `files::storage`, which turns a missing one into a 503: a server without
+    // object storage still has a real quota answer, and failing the whole screen
+    // over the field that is merely nice to have would be backwards.
+    max_upload_bytes: state.storage.as_ref().map_or(0, |s| s.max_upload_bytes),
   }))
 }
 
@@ -710,6 +727,52 @@ fn normalize_member_role(role: &str) -> ApiResult<String> {
 
 fn can_update_workspace(role: &str) -> bool {
   matches!(role, "owner" | "admin")
+}
+
+#[cfg(test)]
+mod usage_wire {
+  use super::*;
+
+  /// The `/usage` body's FIELD NAMES are a contract with
+  /// `clients/mica_flutter/lib/api/client.dart`, which indexes them as string
+  /// literals (`response['max_upload_bytes']`). Renaming one here compiles
+  /// fine and breaks nothing visibly: the Dart side reads null, falls back to
+  /// 0, and the upload error quietly drops to the vaguer sentence with no
+  /// number — a regression nobody would notice until a user complained twice.
+  ///
+  /// `max_upload_bytes` in particular is the per-file cap, NOT the quota. It
+  /// rides on this response because the only other place the server states it
+  /// is a successful presign, and the presign for an oversized file is the one
+  /// that fails.
+  #[test]
+  fn the_usage_body_keeps_the_keys_the_client_indexes() {
+    let json = serde_json::to_value(WorkspaceUsageResponse {
+      bytes_used: 3500,
+      quota_bytes: 5_368_709_120,
+      max_upload_bytes: 26_214_400,
+    })
+    .unwrap();
+
+    assert_eq!(json["bytes_used"], 3500);
+    assert_eq!(json["quota_bytes"], 5_368_709_120i64);
+    assert_eq!(json["max_upload_bytes"], 26_214_400);
+
+    // 0 is the "no answer" sentinel on every one of these — a server without
+    // storage configured, or with quotas off. The client must be able to tell
+    // that apart from a real limit, so it has to survive serialization as 0
+    // rather than being skipped.
+    let empty = serde_json::to_value(WorkspaceUsageResponse {
+      bytes_used: 0,
+      quota_bytes: 0,
+      max_upload_bytes: 0,
+    })
+    .unwrap();
+    assert_eq!(empty["max_upload_bytes"], 0);
+    assert!(
+      empty.get("max_upload_bytes").is_some(),
+      "the field must be present-and-zero, not omitted"
+    );
+  }
 }
 
 #[cfg(test)]

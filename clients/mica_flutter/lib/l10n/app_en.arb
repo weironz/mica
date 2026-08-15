@@ -940,6 +940,16 @@
   "@uploadFileTooLarge": {
     "description": "Shown for the `file_too_large` error code. Says 'this file', not 'storage is full': this refusal fires even with quota to spare, and the two are otherwise easy to confuse."
   },
+  "uploadFileTooLargeWithLimit": "This file is too large: the per-file upload limit is {limit}. Compress it or choose a smaller one — the workspace itself may still have room.",
+  "@uploadFileTooLargeWithLimit": {
+    "description": "The `file_too_large` copy once the cap is known, cached from /usage. Preferred over uploadFileTooLarge whenever a real number is available; never shown with a guessed one.",
+    "placeholders": {
+      "limit": {
+        "type": "String",
+        "example": "25.0 MiB"
+      }
+    }
+  },
   "uploadWorkspaceFull": "This workspace is out of storage. Deleting images frees space only once the cleanup sweep runs, so the figure may not drop right away.",
   "@uploadWorkspaceFull": {
     "description": "Shown for the `workspace_quota_exceeded` error code. Names the delay explicitly because deleted-but-unswept bytes still count toward the quota by design."

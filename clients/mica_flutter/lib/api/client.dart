@@ -170,7 +170,10 @@ class ApiClient {
   /// Its own call rather than a field on the workspace list: the list is
   /// fetched on every start and every switch, and this number is only looked at
   /// when someone opens the settings dialog.
-  Future<({int used, int quota})> workspaceUsage(
+  /// `maxUpload` is the PER-FILE cap, a different limit from `quota`. Absent on
+  /// a server older than the field, and 0 there as well as on a server with no
+  /// storage configured — 0 means "no answer", never "nothing may be uploaded".
+  Future<({int used, int quota, int maxUpload})> workspaceUsage(
     String token,
     String workspaceId,
   ) async {
@@ -178,6 +181,7 @@ class ApiClient {
     return (
       used: (response['bytes_used'] as num).toInt(),
       quota: (response['quota_bytes'] as num).toInt(),
+      maxUpload: (response['max_upload_bytes'] as num?)?.toInt() ?? 0,
     );
   }
 
