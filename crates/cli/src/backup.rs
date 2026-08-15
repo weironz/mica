@@ -41,6 +41,30 @@ impl Leg {
   }
 }
 
+/// Whether the content leg really ran, given how many workspaces the export
+/// announced and which of them never reached the repository.
+///
+/// The two counts come from the same token and the same manifest, so they are
+/// equal by construction — which is exactly why a difference has to fail the
+/// run: something between "listed it" and "stored it" dropped a workspace.
+/// (Reconciling against `mica-cli ws list` instead would be comparing the
+/// manifest with itself, and would never catch anything.)
+///
+/// Split out from [run_once] because that function shells out to rustic and
+/// rclone, so the decision it makes could not otherwise be tested — and this
+/// decision is the whole feature: before it, a missing workspace was a log line
+/// and the run still reported success.
+fn coverage_leg(total: usize, missed: &[String]) -> Leg {
+  if missed.is_empty() {
+    return Leg::Ran;
+  }
+  Leg::skipped(format!(
+    "{} of {total} workspace(s) were listed but never snapshotted: {}",
+    missed.len(),
+    missed.join(", ")
+  ))
+}
+
 /// What a run did, leg by leg.
 #[derive(Debug, Default)]
 pub struct Report {
@@ -391,10 +415,19 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   .context("parsing the export manifest")?;
 
   let mut count = 0usize;
+  let mut missed: Vec<String> = Vec::new();
   for ws in &manifest.workspaces {
     let path = settings.export_dir.join(&ws.dir);
     if !path.is_dir() {
-      log(&format!("skip {}: {} missing", ws.id, path.display()));
+      // A workspace the export announced but did not write. This used to be a
+      // log line and nothing else: the run still reported success and still
+      // pinged the healthcheck, so a workspace could quietly stop being backed
+      // up while every signal said the backups were fine. Collected here and
+      // turned into a skipped leg below — the whole point of the dead man's
+      // switch is that "less than you think" and "everything" must not look
+      // the same.
+      log(&format!("MISSING {}: {} not written", ws.id, path.display()));
+      missed.push(format!("{} (ws={})", ws.id, ws.name));
       continue;
     }
     log(&format!(
@@ -417,8 +450,11 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
     )?;
     count += 1;
   }
-  log(&format!("snapshotted {count} workspace(s)"));
-  report.add("content", Leg::Ran);
+  log(&format!(
+    "snapshotted {count}/{} workspace(s)",
+    manifest.workspaces.len()
+  ));
+  report.add("content", coverage_leg(manifest.workspaces.len(), &missed));
 
   // 3b) The dump gets its own lineage (stable label `_pgdump`, never a workspace
   //     id) so retention below applies to it on the same policy.
@@ -583,6 +619,65 @@ mod tests {
   #[test]
   fn a_full_run_passes() {
     assert!(verdict(&report(&[("content", None), ("database", None)]), false).is_ok());
+  }
+
+  /// A workspace listed by the export but never written was a log line and
+  /// nothing more: `content` was marked `Ran` unconditionally, so the run
+  /// passed, the healthcheck was pinged, and the only trace was a line in a
+  /// container log nobody reads. The reason names the workspace, because
+  /// "some workspace is missing" is not something you can act on.
+  #[test]
+  fn a_workspace_that_never_reached_the_repo_fails_the_run() {
+    // Driven through the real decision, not a hand-written leg: the bug was
+    // that this branch always produced `Ran`.
+    let leg = coverage_leg(24, &["0fc35d86 (ws=IDC)".to_string()]);
+    let mut r = Report::default();
+    r.add("content", leg);
+    r.add("database", Leg::Ran);
+
+    let err = verdict(&r, false).unwrap_err().to_string();
+    assert!(err.contains("content"), "must name the leg: {err}");
+    assert!(err.contains("ws=IDC"), "must name WHICH workspace: {err}");
+    assert!(err.contains("24"), "must show it against the total: {err}");
+  }
+
+  #[test]
+  fn a_run_that_stored_every_workspace_is_not_marked_skipped() {
+    assert_eq!(coverage_leg(24, &[]), Leg::Ran);
+  }
+
+  /// Every missing workspace is named. Reporting only a count would leave the
+  /// operator diffing two lists by hand at the worst possible moment.
+  #[test]
+  fn every_missing_workspace_is_named() {
+    let leg = coverage_leg(
+      3,
+      &["a (ws=one)".to_string(), "b (ws=two)".to_string()],
+    );
+    let Leg::Skipped(why) = leg else {
+      panic!("two missing workspaces must not count as a clean run");
+    };
+    assert!(why.contains("ws=one") && why.contains("ws=two"), "{why}");
+    assert!(why.contains("2 of 3"), "{why}");
+  }
+
+  /// `allow_partial` is for a deliberately reduced configuration (content-only,
+  /// no database). It must NOT wave through a workspace that silently vanished
+  /// — that is not a configuration choice, it is data loss in progress. Pinned
+  /// because the two look identical at the `Leg::Skipped` level, and the next
+  /// person to add an escape hatch will be tempted to reuse this one.
+  #[test]
+  fn allow_partial_still_reports_a_vanished_workspace_in_the_summary() {
+    let r = report(&[(
+      "content",
+      Some("1 of 24 workspace(s) were listed but never snapshotted: 0fc35d86 (ws=IDC)"),
+    )]);
+    assert!(
+      r.summary().contains("ws=IDC"),
+      "the summary is what reaches the log and the failure mail: {}",
+      r.summary()
+    );
+    assert_eq!(r.skipped().len(), 1);
   }
 
   // Content-only IS a legitimate configuration — it just has to be chosen, not

@@ -20,6 +20,18 @@ snapshotting to Aliyun OSS. `mica-cli` itself has no `backup` command anymore.
   rustic forget --group-by label --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
 ```
 
+**Coverage is checked, not assumed.** Every workspace the export announces in
+`manifest.json` must reach the repository; one that does not fails the run and
+names itself in the reason. This used to be a log line and nothing else — the
+run still succeeded and still pinged the healthcheck, so a workspace could stop
+being backed up while every signal you had said the backups were fine.
+
+> Note what this does NOT check: the export only ever covers **the workspaces
+> the backup token's own account can see**. That is by design, and reconciling
+> against `mica-cli ws list` would be comparing the manifest with itself. Other
+> accounts' content is captured by the `pg_dump` leg (the whole database), just
+> not as portable Markdown.
+
 The daily loop also drives a **dead man's switch**: on a successful run it pings
 `${HEALTHCHECK_URL}`, on a failed one `${HEALTHCHECK_URL}/fail`. Point it at a
 monitor (e.g. healthchecks.io) and you get paged when the *expected* success
