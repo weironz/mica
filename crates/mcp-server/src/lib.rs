@@ -580,6 +580,64 @@ struct ViewArg {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BatchViewsArgs {
+  workspace_id: String,
+  /// The VIEW ids (pages or folders) to act on — one call instead of N. A
+  /// folder carries its whole subtree, so list the folder, not its children.
+  view_ids: Vec<String>,
+  /// Must be true to proceed. Deliberate friction on a bulk destructive call:
+  /// the single-view form asks for it too, and here the blast radius is larger.
+  #[serde(default)]
+  confirm: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListPagesArgs {
+  workspace_id: String,
+  /// List only what is under this VIEW id. Omit to start at the top level.
+  #[serde(default)]
+  parent_view_id: Option<String>,
+  /// Levels to descend from there; 1 = direct children only. Omit for all.
+  #[serde(default)]
+  depth: Option<i32>,
+  /// Page size. Omit for everything (no silent ceiling is applied).
+  #[serde(default)]
+  limit: Option<i64>,
+  #[serde(default)]
+  offset: Option<i64>,
+  /// Add `state_bytes` per page. Small = nearly empty; large does NOT mean
+  /// long. Off by default because it joins the content table.
+  #[serde(default)]
+  with_stats: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ConfirmArg {
+  workspace_id: String,
+  /// Must be true to proceed with an unrecoverable delete.
+  #[serde(default)]
+  confirm: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BatchRestoreArgs {
+  workspace_id: String,
+  /// The VIEW ids to bring back out of the recycle bin (from mica_list_trash).
+  view_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BatchMoveArgs {
+  workspace_id: String,
+  /// The VIEW ids to re-parent, in the order they should end up in.
+  view_ids: Vec<String>,
+  /// The destination FOLDER's view id. Omit for the workspace root. Only a
+  /// folder can hold children; a page id is refused with a readable reason.
+  #[serde(default)]
+  parent_view_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CreateVersionArgs {
   workspace_id: String,
   /// The document's object id (a page view's `object_id`).
@@ -783,7 +841,16 @@ fn slim_pages(value: Value) -> Value {
       // id → the view id, for move/trash. object_id → the document id, for
       // read/outline/update. object_type → folder vs document. The rest is what
       // a human-facing tree needs and a model does not.
-      for key in ["id", "object_id", "object_type", "name", "parent_view_id"] {
+      // `state_bytes` rides along only when with_stats asked for it; the
+      // endpoint omits the field entirely otherwise, so this costs nothing.
+      for key in [
+        "id",
+        "object_id",
+        "object_type",
+        "name",
+        "parent_view_id",
+        "state_bytes",
+      ] {
         if let Some(found) = v.get(key)
           && !found.is_null()
         {
@@ -813,16 +880,52 @@ impl MicaMcp {
 
   #[tool(
     description = "List a workspace's page tree (documents + folders, with ids, names, \
-                       parents). Use a page's object_id with the read/write tools.",
+                       parents). Use a page's object_id with the read/write tools.\n\
+                       NARROW IT: on a large workspace the whole tree is a big result that can \
+                       be truncated in transit, leaving you with no structure at all. Pass \
+                       parent_view_id to list one folder, depth=1 for just its direct children, \
+                       or limit/offset to page through. with_stats=true adds `state_bytes` per \
+                       page — SMALL means nearly empty (that is how you find the stubs without \
+                       reading every page), but large does NOT mean long: deleted text leaves \
+                       weight behind, so never read it as a word count.",
     annotations(read_only_hint = true)
   )]
   async fn mica_list_pages(
     &self,
-    Parameters(WorkspaceArg { workspace_id }): Parameters<WorkspaceArg>,
+    Parameters(ListPagesArgs {
+      workspace_id,
+      parent_view_id,
+      depth,
+      limit,
+      offset,
+      with_stats,
+    }): Parameters<ListPagesArgs>,
   ) -> Result<CallToolResult, McpError> {
+    let mut qs: Vec<String> = Vec::new();
+    if let Some(parent) = parent_view_id {
+      qs.push(format!("parent_view_id={parent}"));
+    }
+    if let Some(depth) = depth {
+      qs.push(format!("depth={depth}"));
+    }
+    if let Some(limit) = limit {
+      qs.push(format!("limit={limit}"));
+    }
+    if let Some(offset) = offset {
+      qs.push(format!("offset={offset}"));
+    }
+    if with_stats {
+      qs.push("with_stats=true".to_string());
+    }
+    let query = if qs.is_empty() {
+      String::new()
+    } else {
+      format!("?{}", qs.join("&"))
+    };
     let listed = self
-      .get(&format!("/api/workspaces/{workspace_id}/views"))
+      .get(&format!("/api/workspaces/{workspace_id}/views{query}"))
       .await;
+    // `slim_pages` keeps state_bytes when it is there — see its field list.
     tool_result(listed.map(slim_pages))
   }
 
@@ -1123,10 +1226,13 @@ impl MicaMcp {
           "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
         ))
         .await?;
-      let full = match v {
-        Value::String(s) => s,
-        other => other.to_string(),
-      };
+      // Must UNWRAP, not stringify. The endpoint answers `{"markdown": "..."}`,
+      // so `to_string()` counted matches against the JSON *encoding* of the
+      // page — every newline a literal `\n`, every quote escaped. A `find`
+      // spanning a line break then occurred 0 times and this guard rejected a
+      // perfectly good edit. Same bug the read path was fixed for; this branch
+      // predates the shared helper and was missed.
+      let full = unwrap_markdown(v);
       let n = full.matches(find).count();
       if n != 1 {
         return Err(McpError::invalid_params(
@@ -1764,8 +1870,9 @@ impl MicaMcp {
 
   #[tool(
     description = "Move a page (and its subtree) to the recycle bin — a SOFT delete, \
-                       recoverable in the app. Requires confirm=true. Permanent deletion is \
-                       not exposed here.",
+                       recoverable in the app. Requires confirm=true. For several pages use \
+                       mica_trash_views instead of calling this N times; to delete for good, \
+                       mica_purge_view / mica_empty_trash.",
     annotations(title = "Trash page", read_only_hint = false, destructive_hint = true)
   )]
   async fn mica_trash_view(
@@ -1789,6 +1896,154 @@ impl MicaMcp {
       .delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
       .await;
     action_ack(trashed, "trashed", &view_id)
+  }
+
+  #[tool(
+    description = "Trash MANY pages/folders at once (soft delete, recoverable). Requires \
+                   confirm=true. Prefer this over calling mica_trash_view N times — a cleanup \
+                   sweep is one call, not one per page. Each id carries its whole subtree, so \
+                   pass the folder rather than listing its children. The reply reports what was \
+                   ACTUALLY trashed (`affected`, counting subtrees) and which requested ids were \
+                   `skipped` because they were already gone.",
+    annotations(title = "Trash pages (bulk)", read_only_hint = false, destructive_hint = true)
+  )]
+  async fn mica_trash_views(
+    &self,
+    Parameters(BatchViewsArgs {
+      workspace_id,
+      view_ids,
+      confirm,
+    }): Parameters<BatchViewsArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    if !confirm {
+      return Err(McpError::invalid_params(
+        format!("refusing to trash {} view(s) without confirm=true", view_ids.len()),
+        None,
+      ));
+    }
+    tool_result(
+      self
+        .post(
+          &format!("/api/workspaces/{workspace_id}/views/batch-trash"),
+          json!({ "view_ids": view_ids }),
+        )
+        .await,
+    )
+  }
+
+  #[tool(
+    description = "Restore MANY pages/folders from the recycle bin in one call — the undo for \
+                   mica_trash_views. Each id brings back the subtree that was trashed with it.",
+    annotations(title = "Restore pages (bulk)", read_only_hint = false)
+  )]
+  async fn mica_restore_views(
+    &self,
+    Parameters(BatchRestoreArgs {
+      workspace_id,
+      view_ids,
+    }): Parameters<BatchRestoreArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    tool_result(
+      self
+        .post(
+          &format!("/api/workspaces/{workspace_id}/views/batch-restore"),
+          json!({ "view_ids": view_ids }),
+        )
+        .await,
+    )
+  }
+
+  #[tool(
+    description = "Move MANY pages/folders under one parent in a single call, in the given order. \
+                   Only a FOLDER can hold children; passing a page as the parent is refused with \
+                   a reason. Validated per id before anything is written, so a bad id leaves the \
+                   tree untouched rather than half-moved.",
+    annotations(title = "Move pages (bulk)", read_only_hint = false)
+  )]
+  async fn mica_move_views(
+    &self,
+    Parameters(BatchMoveArgs {
+      workspace_id,
+      view_ids,
+      parent_view_id,
+    }): Parameters<BatchMoveArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    tool_result(
+      self
+        .post(
+          &format!("/api/workspaces/{workspace_id}/views/batch-move"),
+          json!({ "view_ids": view_ids, "parent_view_id": parent_view_id }),
+        )
+        .await,
+    )
+  }
+
+  #[tool(
+    description = "PERMANENTLY delete everything in the recycle bin. This is NOT recoverable — \
+                   unlike mica_trash_views, nothing survives it. Requires confirm=true. Returns \
+                   how many views and documents were destroyed.",
+    annotations(title = "Empty recycle bin", read_only_hint = false, destructive_hint = true)
+  )]
+  async fn mica_empty_trash(
+    &self,
+    Parameters(ConfirmArg {
+      workspace_id,
+      confirm,
+    }): Parameters<ConfirmArg>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    if !confirm {
+      return Err(McpError::invalid_params(
+        "refusing to empty the recycle bin without confirm=true — this cannot be undone"
+          .to_string(),
+        None,
+      ));
+    }
+    tool_result(
+      self
+        .delete(&format!("/api/workspaces/{workspace_id}/trash"))
+        .await,
+    )
+  }
+
+  #[tool(
+    description = "PERMANENTLY delete ONE trashed page/folder (and its subtree) from the recycle \
+                   bin. Not recoverable. Requires confirm=true. Use mica_empty_trash to clear the \
+                   whole bin.",
+    annotations(title = "Purge one from bin", read_only_hint = false, destructive_hint = true)
+  )]
+  async fn mica_purge_view(
+    &self,
+    Parameters(TrashArgs {
+      workspace_id,
+      view_id,
+      confirm,
+    }): Parameters<TrashArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    if !confirm {
+      return Err(McpError::invalid_params(
+        "refusing to purge without confirm=true — this cannot be undone".to_string(),
+        None,
+      ));
+    }
+    let purged = self
+      .delete(&format!("/api/workspaces/{workspace_id}/trash/{view_id}"))
+      .await;
+    action_ack(purged, "purged", &view_id)
   }
 
   #[tool(
@@ -1927,6 +2182,19 @@ impl ServerHandler for MicaMcp {
          single precise edit — refused if the text is not unique); replace_all (only when you \
          truly mean to rewrite the whole page). For MANY edits to one doc, mica_apply_edits \
          runs them all in ONE call (one turn instead of N).\n\
+         \n\
+         REORGANISE in bulk. Whenever you are about to call a per-page tool in a loop, stop and \
+         use the batch form — it is one request, not N, and it is the difference between a \
+         cleanup that finishes and one that runs out of context: mica_trash_views (many pages to \
+         the bin), mica_restore_views (the undo), mica_move_views (re-parent many under one \
+         folder, in order). Each takes `view_ids`. A folder id carries its whole subtree, so \
+         pass the folder rather than enumerating its children. They report what they ACTUALLY \
+         touched — `affected` counts subtrees too, and `skipped` lists requested ids that were \
+         already gone; do not read the count you sent as the count that happened.\n\
+         \n\
+         The recycle bin: mica_list_trash to see it, mica_restore_views to undo in bulk, and — \
+         PERMANENT, not recoverable — mica_purge_view for one subtree or mica_empty_trash for \
+         all of it. Trashing is safe and reversible; purging is neither.\n\
          \n\
          Write acks return `seq` and `last_block_id` (the new end anchor) — chain further edits \
          from those instead of re-reading. For safe concurrent editing, pass the outline/ack \
@@ -2449,7 +2717,12 @@ mod handshake_tests {
   fn no_tool_declares_an_output_schema() {
     let router = MicaMcp::tool_router();
     let tools = router.list_all();
-    assert_eq!(tools.len(), 27, "every tool must be listed");
+    assert_eq!(
+      tools.len(),
+      32,
+      "every tool must be listed — if you added one, bump this AND add it to the \
+       get_info instructions, or it ships discoverable-but-unused"
+    );
     for t in &tools {
       assert!(
         t.output_schema.is_none(),

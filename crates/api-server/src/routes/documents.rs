@@ -71,6 +71,43 @@ pub struct ReorderResponse {
   reordered: usize,
 }
 
+/// Ids for a batch view operation (trash / restore).
+///
+/// One request instead of N: reorganising a workspace means touching pages by
+/// the hundred, and the per-view routes made that N round trips — enough that
+/// one report gave up on the tools entirely and scripted raw HTTP instead.
+#[derive(Debug, Deserialize)]
+pub struct BatchViewsRequest {
+  view_ids: Vec<Uuid>,
+}
+
+/// Ids plus the destination for a batch move.
+#[derive(Debug, Deserialize)]
+pub struct BatchMoveRequest {
+  view_ids: Vec<Uuid>,
+  /// Parent every listed view becomes a child of (null = top level).
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+}
+
+/// What a batch operation actually did.
+///
+/// [affected] counts every row the statement touched — for trash and restore
+/// that INCLUDES descendants pulled along with a folder, so it is normally
+/// larger than `view_ids.len()`. [skipped] lists requested ids the statement
+/// did not reach: already in that state, or gone. Echoing the requested count
+/// back as the result would be the lie `reorder_views` was fixed for (P1-3) —
+/// a partial batch reads as a full one and the caller stops looking.
+#[derive(Debug, Serialize)]
+pub struct BatchViewsResponse {
+  affected: usize,
+  skipped: Vec<Uuid>,
+}
+
+/// Ceiling on one batch. Guards the recursive CTE and the request body against a
+/// runaway caller; well above the few hundred a real reorganisation needs.
+const MAX_BATCH_VIEWS: usize = 1000;
+
 #[derive(Debug, Deserialize)]
 pub struct ApplyDocumentUpdateRequest {
   operations: Vec<DocumentOperation>,
@@ -142,17 +179,62 @@ pub struct View {
   created_by: Uuid,
   created_at: DateTime<Utc>,
   updated_at: DateTime<Utc>,
+  /// Size in bytes of this page's stored CRDT state, present only when the
+  /// listing was asked for `with_stats`. Absent everywhere else, so every other
+  /// response keeps its exact shape.
+  ///
+  /// Read it in ONE direction only: **small means nearly empty**, which is what
+  /// makes "find the pages that are just a title" a listing instead of a read
+  /// of every page. Large does NOT mean lots of text — a CRDT keeps tombstones,
+  /// so a page whose content was deleted stays big. Anyone using this as a word
+  /// count will be wrong.
+  #[sqlx(default)]
+  #[serde(skip_serializing_if = "Option::is_none")]
+  state_bytes: Option<i64>,
+}
+
+/// Filters for [list_views]. All optional, and with none of them the response
+/// is byte-for-byte what it always was.
+///
+/// Listing a 437-page workspace returned every page in one 125 KB body, which
+/// is both more than a caller usually wants and enough to be truncated by
+/// whatever sits in the middle — leaving no way to get the structure at all.
+#[derive(Debug, Deserialize)]
+pub struct ListViewsQuery {
+  /// Only views under this one. Omitted, the listing starts at the top level.
+  parent_view_id: Option<Uuid>,
+  /// How many levels below the starting point to descend; 1 = direct children
+  /// only. Omitted = all the way down.
+  depth: Option<i32>,
+  limit: Option<i64>,
+  offset: Option<i64>,
+  /// Include [View::state_bytes]. Off by default: it joins the content table,
+  /// and a plain listing should not pay for what it does not ask for.
+  #[serde(default)]
+  with_stats: bool,
 }
 
 pub async fn list_views(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
+  Query(query): Query<ListViewsQuery>,
 ) -> ApiResult<Json<ViewListResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
-  let views = fetch_workspace_views(&state.db, workspace_id).await?;
+  if let Some(depth) = query.depth
+    && depth < 1
+  {
+    return Err(ApiError::BadRequest("depth must be at least 1".to_string()));
+  }
+  if let Some(limit) = query.limit
+    && limit < 1
+  {
+    return Err(ApiError::BadRequest("limit must be at least 1".to_string()));
+  }
+
+  let views = fetch_views_filtered(&state.db, workspace_id, &query).await?;
 
   Ok(Json(ViewListResponse { views }))
 }
@@ -1296,6 +1378,173 @@ pub async fn reorder_views(
   }))
 }
 
+/// Reject an empty, oversized, or duplicate-bearing id list once, so each batch
+/// handler below is just its statement. Duplicates are an error rather than
+/// silently deduped: in a set operation they mean the caller's list is not what
+/// it thinks it is, and the counts it gets back would not add up.
+fn check_batch_ids(view_ids: &[Uuid]) -> ApiResult<()> {
+  if view_ids.is_empty() {
+    return Err(ApiError::BadRequest("view_ids cannot be empty".to_string()));
+  }
+  if view_ids.len() > MAX_BATCH_VIEWS {
+    return Err(ApiError::BadRequest(format!(
+      "at most {MAX_BATCH_VIEWS} view_ids per request, got {}",
+      view_ids.len()
+    )));
+  }
+  let mut seen = std::collections::HashSet::new();
+  for id in view_ids {
+    if !seen.insert(*id) {
+      return Err(ApiError::BadRequest(format!("duplicate view id {id}")));
+    }
+  }
+  Ok(())
+}
+
+/// The requested ids the statement did not reach, given the seed ids it did.
+fn skipped_ids(requested: &[Uuid], touched: &[Uuid]) -> Vec<Uuid> {
+  let hit: std::collections::HashSet<Uuid> = touched.iter().copied().collect();
+  requested.iter().copied().filter(|id| !hit.contains(id)).collect()
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-trash`
+///
+/// Soft-delete many pages (each with its whole subtree) in ONE statement. Same
+/// recursive CTE as [delete_view], seeded from a set instead of a single id, so
+/// 300 pages cost one query rather than 300 round trips.
+pub async fn batch_trash_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<BatchViewsRequest>,
+) -> ApiResult<Json<BatchViewsResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  check_batch_ids(&payload.view_ids)?;
+
+  let touched = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
+      UPDATE views
+      SET is_deleted = true, updated_at = now()
+      WHERE id IN (SELECT id FROM subtree)
+        AND workspace_id = $2
+        AND is_deleted = false
+      RETURNING id
+    "#,
+  )
+  .bind(&payload.view_ids)
+  .bind(workspace_id)
+  .fetch_all(&state.db)
+  .await?;
+
+  Ok(Json(BatchViewsResponse {
+    affected: touched.len(),
+    skipped: skipped_ids(&payload.view_ids, &touched),
+  }))
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-restore`
+///
+/// Bring many pages back out of the recycle bin, each with the subtree that was
+/// deleted with it. The mirror of [batch_trash_views], and the reason a bulk
+/// delete is safe to attempt: it is one call to undo.
+pub async fn batch_restore_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<BatchViewsRequest>,
+) -> ApiResult<Json<BatchViewsResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  check_batch_ids(&payload.view_ids)?;
+
+  let touched = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
+      UPDATE views
+      SET is_deleted = false, updated_at = now()
+      WHERE id IN (SELECT id FROM subtree)
+        AND workspace_id = $2
+        AND is_deleted = true
+      RETURNING id
+    "#,
+  )
+  .bind(&payload.view_ids)
+  .bind(workspace_id)
+  .fetch_all(&state.db)
+  .await?;
+
+  Ok(Json(BatchViewsResponse {
+    affected: touched.len(),
+    skipped: skipped_ids(&payload.view_ids, &touched),
+  }))
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-move`
+///
+/// Re-parent many views at once. Unlike trash/restore this cannot be one
+/// statement: the folder-only container rule and the cycle check are per view,
+/// so every id is validated against the destination BEFORE anything is written
+/// — the same order [reorder_views] uses, and for the same reason. The writes
+/// then run in one transaction, so a view deleted underneath us rolls the whole
+/// move back instead of leaving the tree half-reorganised.
+pub async fn batch_move_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<BatchMoveRequest>,
+) -> ApiResult<Json<BatchViewsResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  check_batch_ids(&payload.view_ids)?;
+
+  for id in &payload.view_ids {
+    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
+    if let Some(parent) = payload.parent_view_id {
+      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
+    }
+  }
+
+  let mut tx = state.db.begin().await?;
+  for (i, id) in payload.view_ids.iter().enumerate() {
+    let position = format!("{:010}", (i + 1) * 10);
+    let affected = sqlx::query(
+      r#"
+        UPDATE views
+        SET parent_view_id = $1, position = $2, updated_at = now()
+        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
+      "#,
+    )
+    .bind(payload.parent_view_id)
+    .bind(&position)
+    .bind(id)
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if affected == 0 {
+      return Err(ApiError::Conflict(format!(
+        "view {id} was modified concurrently during the move; refetch and retry"
+      )));
+    }
+  }
+  tx.commit().await?;
+
+  Ok(Json(BatchViewsResponse {
+    affected: payload.view_ids.len(),
+    skipped: Vec::new(),
+  }))
+}
+
 pub async fn bootstrap_document(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -1386,6 +1635,84 @@ pub async fn export_document_markdown(
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
   Ok(Json(MarkdownExportResponse { markdown }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchReadRequest {
+  document_ids: Vec<Uuid>,
+}
+
+/// One document's result. Either `markdown` or `error` is present, never both.
+#[derive(Debug, Serialize)]
+pub struct BatchReadItem {
+  document_id: Uuid,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  markdown: Option<String>,
+  /// Why this ONE document could not be read. Inlined rather than failing the
+  /// request: a survey of a few hundred pages should not be lost because one of
+  /// them was deleted between listing and reading.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchReadResponse {
+  documents: Vec<BatchReadItem>,
+}
+
+/// `POST /api/workspaces/{workspace_id}/documents/batch-read`
+///
+/// Read many pages' Markdown in ONE request. Scanning a workspace — "which of
+/// these are empty?" — meant a request per page, thousands of them; this makes
+/// it one, and checks workspace membership once instead of per document.
+///
+/// It is one ROUND TRIP, not one query: the documents are still assembled one
+/// at a time, because each is a CRDT payload rendered to Markdown separately.
+/// The win is the network, which is where the cost actually was.
+pub async fn batch_read_documents(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<BatchReadRequest>,
+) -> ApiResult<Json<BatchReadResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  check_batch_ids(&payload.document_ids)?;
+
+  let mut documents = Vec::with_capacity(payload.document_ids.len());
+  for document_id in payload.document_ids {
+    let rendered = read_one_markdown(&state, workspace_id, document_id).await;
+    documents.push(match rendered {
+      Ok(markdown) => BatchReadItem {
+        document_id,
+        markdown: Some(markdown),
+        error: None,
+      },
+      Err(error) => BatchReadItem {
+        document_id,
+        markdown: None,
+        error: Some(error.to_string()),
+      },
+    });
+  }
+
+  Ok(Json(BatchReadResponse { documents }))
+}
+
+/// The body of [export_document_markdown] without the HTTP wrapper, so the
+/// batch route renders pages exactly the way the single route does.
+async fn read_one_markdown(
+  state: &AppState,
+  workspace_id: Uuid,
+  document_id: Uuid,
+) -> ApiResult<String> {
+  ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+  let payload = store::current_payload(&state.db, document_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  let assets = blob_asset_map(&payload.blocks, workspace_id);
+  export_markdown_with_assets(&payload, &assets)
+    .map_err(|error| ApiError::BadRequest(error.to_string()))
 }
 
 #[derive(Debug, Serialize)]
@@ -2836,6 +3163,82 @@ fn escape_html_min(s: &str) -> String {
   s.replace('&', "&amp;")
     .replace('<', "&lt;")
     .replace('>', "&gt;")
+}
+
+/// [list_views] with its filters applied.
+///
+/// Two shapes on purpose. With no `parent_view_id` and no `depth` this is the
+/// same flat SELECT the endpoint always ran — reachability is NOT introduced as
+/// a new condition, so a view whose parent somehow went missing keeps showing
+/// up exactly as before. Ask for a subtree and it becomes a recursive walk,
+/// where reachability is the whole point.
+async fn fetch_views_filtered(
+  db: &PgPool,
+  workspace_id: Uuid,
+  query: &ListViewsQuery,
+) -> ApiResult<Vec<View>> {
+  // Both statements are whole literals rather than fragments assembled at
+  // runtime: sqlx only accepts `&'static str`, and the rule is a good one to
+  // keep even when every piece would have been a constant. The column list is
+  // therefore spelled twice — adding a column means touching both.
+  //
+  // `$5` (with_stats) gates the join itself, so a plain listing never touches
+  // the content table.
+  const FLAT: &str = r#"
+      SELECT
+        v.id, v.workspace_id, v.parent_view_id, v.object_id,
+        v.object_type::text AS object_type, v.name, v.icon, v.position,
+        v.is_deleted, v.created_by, v.created_at, v.updated_at,
+        octet_length(b.state)::bigint AS state_bytes
+      FROM views v
+      LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
+      WHERE v.workspace_id = $1 AND v.is_deleted = false
+      ORDER BY v.parent_view_id NULLS FIRST, v.position ASC
+      LIMIT $3 OFFSET $4
+  "#;
+  const SUBTREE: &str = r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, 1 AS lvl
+        FROM views
+        WHERE workspace_id = $1 AND is_deleted = false
+          AND parent_view_id IS NOT DISTINCT FROM $2
+        UNION ALL
+        SELECT c.id, s.lvl + 1
+        FROM views c
+        JOIN subtree s ON c.parent_view_id = s.id
+        WHERE c.workspace_id = $1 AND c.is_deleted = false
+          AND ($6::int IS NULL OR s.lvl < $6)
+      )
+      SELECT
+        v.id, v.workspace_id, v.parent_view_id, v.object_id,
+        v.object_type::text AS object_type, v.name, v.icon, v.position,
+        v.is_deleted, v.created_by, v.created_at, v.updated_at,
+        octet_length(b.state)::bigint AS state_bytes
+      FROM views v
+      JOIN subtree ON subtree.id = v.id
+      LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
+      WHERE v.workspace_id = $1 AND v.is_deleted = false
+      ORDER BY v.parent_view_id NULLS FIRST, v.position ASC
+      LIMIT $3 OFFSET $4
+  "#;
+
+  let filtered = query.parent_view_id.is_some() || query.depth.is_some();
+  let sql = if filtered { SUBTREE } else { FLAT };
+
+  let mut sqlx_query = sqlx::query_as::<_, View>(sql)
+    .bind(workspace_id)
+    .bind(query.parent_view_id)
+    // Postgres reads `LIMIT NULL` as no limit, so an unasked-for `limit` stays
+    // exactly the old "everything". A default ceiling here would have been a
+    // silent truncation: the caller gets a short list that looks complete.
+    .bind(query.limit)
+    .bind(query.offset.unwrap_or(0))
+    .bind(query.with_stats);
+  if filtered {
+    sqlx_query = sqlx_query.bind(query.depth);
+  }
+
+  Ok(sqlx_query.fetch_all(db).await?)
 }
 
 async fn fetch_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec<View>> {

@@ -15,7 +15,7 @@ mod backup;
 mod client;
 mod config;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use client::Client;
 use config::Config;
@@ -61,10 +61,19 @@ enum Command {
   /// is code and not shell is in `backup.rs`: a shell run is an exit code, so
   /// "backed up less than you think" and "backed up everything" looked the same
   /// — and did, in production, for months.
+  /// Pages and folders: list, read, move, trash. The bulk forms take many ids
+  /// and send ONE request, which is what makes reorganising a workspace from a
+  /// script practical instead of a few hundred round trips.
+  #[command(subcommand)]
+  Page(PageCmd),
+  /// The recycle bin: see it, restore from it, empty it.
+  #[command(subcommand)]
+  Trash(TrashCmd),
   #[command(subcommand)]
   Backup(BackupCmd),
-  /// Serve the Mica MCP server over stdio (for Claude Code / Desktop and any
-  /// MCP client): list, read, create and write documents through the REST API.
+  /// Serve the Mica MCP server over stdio, for any MCP client (Claude Code and
+  /// Desktop, Cursor, Codex, Gemini, Windsurf, …): list, read, create and write
+  /// documents through the REST API.
   ///
   /// Register it with the client's own command — there is deliberately no
   /// `install` subcommand. A second way to write the same config file was only
@@ -155,6 +164,112 @@ enum WsCmd {
 }
 
 #[derive(Subcommand)]
+enum PageCmd {
+  /// List pages and folders. Prints the VIEW id (for move/trash) and the
+  /// OBJECT id (for read) side by side, because they are not the same id.
+  List(PageListArgs),
+  /// Print pages' Markdown to stdout. Several ids are fetched in one request.
+  Read(PageReadArgs),
+  /// Move pages/folders under one parent, in the order given. One request.
+  Move(PageMoveArgs),
+  /// Send pages/folders (with their subtrees) to the recycle bin. One request,
+  /// reversible with `trash restore`.
+  Trash(PageTrashArgs),
+}
+
+#[derive(Args)]
+struct PageListArgs {
+  #[arg(long)]
+  ws: Uuid,
+  /// Only what is under this VIEW id. Omit to start at the top level.
+  #[arg(long)]
+  parent: Option<Uuid>,
+  /// Levels to descend; 1 = direct children only. Omit for all.
+  #[arg(long)]
+  depth: Option<i32>,
+  #[arg(long)]
+  limit: Option<i64>,
+  #[arg(long)]
+  offset: Option<i64>,
+  /// Add each page's stored size. SMALL means nearly empty — this is how you
+  /// find stub pages without reading every one of them. Large does NOT mean
+  /// long: deleted text leaves weight behind, so it is not a word count.
+  #[arg(long)]
+  with_stats: bool,
+}
+
+#[derive(Args)]
+struct PageReadArgs {
+  #[arg(long)]
+  ws: Uuid,
+  /// The pages' OBJECT ids (the `object=` column of `page list`). Give several
+  /// and they are fetched in ONE request — surveying a workspace should not be
+  /// one round trip per page. A page that cannot be read reports inline instead
+  /// of failing the rest.
+  #[arg(required = true)]
+  document_ids: Vec<Uuid>,
+}
+
+#[derive(Args)]
+struct PageMoveArgs {
+  #[arg(long)]
+  ws: Uuid,
+  /// Destination FOLDER's view id. Omit to move to the workspace root. Only a
+  /// folder can hold children; a page id is refused with a reason.
+  #[arg(long)]
+  to: Option<Uuid>,
+  /// VIEW ids to move.
+  #[arg(required = true)]
+  view_ids: Vec<Uuid>,
+}
+
+#[derive(Args)]
+struct PageTrashArgs {
+  #[arg(long)]
+  ws: Uuid,
+  /// Required. Bulk deletion is reversible here, but still deliberate.
+  #[arg(long)]
+  confirm: bool,
+  /// VIEW ids to trash. A folder takes its whole subtree with it.
+  #[arg(required = true)]
+  view_ids: Vec<Uuid>,
+}
+
+#[derive(Subcommand)]
+enum TrashCmd {
+  /// List what is in the recycle bin.
+  List(WsArgs),
+  /// Restore views (with the subtrees deleted alongside them). One request.
+  Restore(TrashRestoreArgs),
+  /// PERMANENTLY delete everything in the bin. Not recoverable.
+  Empty(TrashEmptyArgs),
+}
+
+#[derive(Args)]
+struct WsArgs {
+  #[arg(long)]
+  ws: Uuid,
+}
+
+#[derive(Args)]
+struct TrashRestoreArgs {
+  #[arg(long)]
+  ws: Uuid,
+  /// VIEW ids from `trash list`.
+  #[arg(required = true)]
+  view_ids: Vec<Uuid>,
+}
+
+#[derive(Args)]
+struct TrashEmptyArgs {
+  #[arg(long)]
+  ws: Uuid,
+  /// Required, and it means it: unlike `page trash`, this cannot be undone.
+  #[arg(long)]
+  confirm: bool,
+}
+
+#[derive(Subcommand)]
 enum BackupCmd {
   /// Run one backup now and exit non-zero if it covered less than it should.
   Run,
@@ -201,6 +316,13 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::List)) => cmd_token_list(&cli, &cfg),
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
+    Command::Page(PageCmd::List(args)) => cmd_page_list(&cli, &cfg, args),
+    Command::Page(PageCmd::Read(args)) => cmd_page_read(&cli, &cfg, args),
+    Command::Page(PageCmd::Move(args)) => cmd_page_move(&cli, &cfg, args),
+    Command::Page(PageCmd::Trash(args)) => cmd_page_trash(&cli, &cfg, args),
+    Command::Trash(TrashCmd::List(args)) => cmd_trash_list(&cli, &cfg, args),
+    Command::Trash(TrashCmd::Restore(args)) => cmd_trash_restore(&cli, &cfg, args),
+    Command::Trash(TrashCmd::Empty(args)) => cmd_trash_empty(&cli, &cfg, args),
     Command::Export(args) => cmd_export(&cli, &cfg, args),
     Command::Backup(BackupCmd::Run) => cmd_backup_run(&cli, &cfg),
     Command::Backup(BackupCmd::Daemon) => cmd_backup_daemon(&cli, &cfg),
@@ -279,6 +401,152 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
     print_json(&serde_json::json!({ "rehosted": rehosted, "failed": failed }))?;
   } else {
     println!("Done: {rehosted} re-hosted, {failed} failed.");
+  }
+  Ok(())
+}
+
+// ------------------------------------------------------- pages & recycle bin
+
+/// One row per view. The two ids are printed together on purpose: `view_id`
+/// is what move/trash take, `object_id` is what read takes, and reaching for
+/// the wrong one is the mistake this layout exists to prevent.
+fn print_views(views: &[client::View], with_stats: bool) {
+  if views.is_empty() {
+    println!("(none)");
+    return;
+  }
+  for v in views {
+    let kind = if v.object_type == "folder" { "folder" } else { "page  " };
+    let size = match (with_stats, v.state_bytes) {
+      (true, Some(bytes)) => format!("  {bytes:>9}"),
+      (true, None) => "          -".to_string(),
+      _ => String::new(),
+    };
+    println!("{kind}  view={}  object={}{size}  {}", v.id, v.object_id, v.name);
+  }
+  println!("\n{} view(s).", views.len());
+}
+
+fn cmd_page_list(cli: &Cli, cfg: &Config, args: &PageListArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+  let filter = client::ViewFilter {
+    parent_view_id: args.parent,
+    depth: args.depth,
+    limit: args.limit,
+    offset: args.offset,
+    with_stats: args.with_stats,
+  };
+  let views = client.list_views_filtered(args.ws, &filter)?;
+  if cli.json {
+    print_json(&serde_json::json!({ "views": views }))?;
+  } else {
+    print_views(&views, args.with_stats);
+  }
+  Ok(())
+}
+
+fn cmd_page_read(cli: &Cli, cfg: &Config, args: &PageReadArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+
+  // One id keeps the single-page endpoint so `page read … > out.md` writes the
+  // Markdown and nothing else. Several take the batch endpoint: one round trip.
+  if let [document_id] = args.document_ids.as_slice() {
+    let markdown = client.read_markdown(args.ws, *document_id)?;
+    if cli.json {
+      print_json(&serde_json::json!({ "markdown": markdown }))?;
+    } else {
+      println!("{markdown}");
+    }
+    return Ok(());
+  }
+
+  let result = client.batch_read_documents(args.ws, &args.document_ids)?;
+  if cli.json {
+    print_json(&result)?;
+    return Ok(());
+  }
+  for doc in result.get("documents").and_then(|d| d.as_array()).unwrap_or(&vec![]) {
+    let id = doc.get("document_id").and_then(|v| v.as_str()).unwrap_or("?");
+    match doc.get("error").and_then(|v| v.as_str()) {
+      // Named, not swallowed: a survey that quietly drops pages is worse than
+      // one that says which it could not read.
+      Some(error) => eprintln!("--- {id}: {error}"),
+      None => {
+        println!("--- {id}");
+        println!("{}", doc.get("markdown").and_then(|v| v.as_str()).unwrap_or(""));
+      }
+    }
+  }
+  Ok(())
+}
+
+fn cmd_page_move(cli: &Cli, cfg: &Config, args: &PageMoveArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+  let outcome = client.batch_move_views(args.ws, &args.view_ids, args.to)?;
+  report_batch(cli, "moved", &outcome)
+}
+
+fn cmd_page_trash(cli: &Cli, cfg: &Config, args: &PageTrashArgs) -> Result<()> {
+  if !args.confirm {
+    bail!(
+      "refusing to trash {} view(s) without --confirm (reversible with `mica-cli trash restore`)",
+      args.view_ids.len()
+    );
+  }
+  let client = authed_client(cli, cfg)?;
+  let outcome = client.batch_trash_views(args.ws, &args.view_ids)?;
+  report_batch(cli, "trashed", &outcome)
+}
+
+fn cmd_trash_list(cli: &Cli, cfg: &Config, args: &WsArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+  let views = client.list_trash(args.ws)?;
+  if cli.json {
+    print_json(&serde_json::json!({ "views": views }))?;
+  } else {
+    print_views(&views, false);
+  }
+  Ok(())
+}
+
+fn cmd_trash_restore(cli: &Cli, cfg: &Config, args: &TrashRestoreArgs) -> Result<()> {
+  let client = authed_client(cli, cfg)?;
+  let outcome = client.batch_restore_views(args.ws, &args.view_ids)?;
+  report_batch(cli, "restored", &outcome)
+}
+
+fn cmd_trash_empty(cli: &Cli, cfg: &Config, args: &TrashEmptyArgs) -> Result<()> {
+  if !args.confirm {
+    bail!("refusing to empty the recycle bin without --confirm — this cannot be undone");
+  }
+  let client = authed_client(cli, cfg)?;
+  let result = client.empty_trash(args.ws)?;
+  if cli.json {
+    print_json(&result)?;
+  } else {
+    println!("Recycle bin emptied: {result}");
+  }
+  Ok(())
+}
+
+/// Report what a batch call DID, never what was asked of it. `affected` counts
+/// subtrees too, so it is normally larger than the id list; `skipped` names the
+/// ids that were already gone. Printing the request size as the result is the
+/// failure `reorder_views` was fixed for — a partial run reads as a full one.
+fn report_batch(cli: &Cli, verb: &str, outcome: &client::BatchOutcome) -> Result<()> {
+  if cli.json {
+    print_json(outcome)?;
+    return Ok(());
+  }
+  println!("{} {verb} (subtrees included).", outcome.affected);
+  if !outcome.skipped.is_empty() {
+    println!(
+      "{} requested id(s) were skipped — already in that state, or gone:",
+      outcome.skipped.len()
+    );
+    for id in &outcome.skipped {
+      println!("  {id}");
+    }
   }
   Ok(())
 }

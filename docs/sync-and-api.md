@@ -1,5 +1,13 @@
 # Sync, History, and API Draft
 
+> **The endpoint lists below are a DESIGN DRAFT, not the API.** Some were never
+> built — `POST /api/workspaces/{id}/views` and
+> `GET /api/workspaces/{id}/documents/{id}` do not exist — so calling what is
+> written here returns 404. This page is kept for the sync and history *design*
+> it records.
+>
+> **For the endpoints that exist, see [`api.md`](api.md).**
+
 ## API Style
 
 Use REST for ordinary request/response workflows and WebSocket for document rooms.

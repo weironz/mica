@@ -1,7 +1,9 @@
 use anyhow::Context;
 use axum::Router;
 use mica_app_core::AppState;
-use mica_infra::{AppConfig, Environment, connect_pg_pool, run_migrations, telemetry::init_tracing};
+use mica_infra::{
+  ApiError, AppConfig, Environment, connect_pg_pool, run_migrations, telemetry::init_tracing,
+};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
@@ -140,10 +142,19 @@ async fn main() -> anyhow::Result<()> {
 fn app_router(state: AppState) -> Router {
   // Authenticate + enforce token scopes on every /api route (public ones opt out
   // inside the guard). WebSocket routes keep their own query-token auth.
-  let api = routes::api_router().layer(axum::middleware::from_fn_with_state(
-    state.clone(),
-    routes::auth::scope_guard,
-  ));
+  let api = routes::api_router()
+    .layer(axum::middleware::from_fn_with_state(
+      state.clone(),
+      routes::auth::scope_guard,
+    ))
+    // An unmatched /api path answered with axum's default 404: status only,
+    // EMPTY body. Every other error here carries `{code, message}`, so the one
+    // response you get while guessing at the API was the one that told you
+    // nothing — and with no published spec, guessing is how people find it.
+    // Registered AFTER the scope guard on purpose: a path that does not exist
+    // is a 404 for everyone, and answering 401 first sends people hunting for a
+    // credential problem they do not have.
+    .fallback(|| async { ApiError::NotFound });
   Router::new()
     .nest("/api", api)
     .merge(routes::ws_router())
@@ -167,6 +178,37 @@ fn app_router(state: AppState) -> Router {
     .layer(axum::Extension(rate_limit::AuthGuard::from_env()))
     .layer(cors_layer(&state.config))
     .with_state(state)
+}
+
+#[cfg(test)]
+mod not_found_body_tests {
+  use super::*;
+  use axum::response::IntoResponse;
+
+  /// The payload `app_router`'s `/api` fallback answers with. Pinned because an
+  /// unmatched path used to come back as a bare status with NO body, which is
+  /// precisely the response someone gets while guessing at an undocumented API
+  /// — the one place a machine-readable reason is worth most. Covers the shape,
+  /// not the wiring: that the fallback sits AFTER the scope guard (so a missing
+  /// path reads as 404, never 401) is asserted by the comment there and by the
+  /// deploy smoke check, since building the real router needs an AppState.
+  #[tokio::test]
+  async fn unmatched_api_path_answers_with_a_json_reason() {
+    let response = ApiError::NotFound.into_response();
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+      .await
+      .expect("error body should be readable");
+    let body: serde_json::Value =
+      serde_json::from_slice(&bytes).expect("error body should be JSON, not empty");
+
+    assert_eq!(body["code"], "not_found");
+    assert!(
+      body["message"].as_str().is_some_and(|m| !m.is_empty()),
+      "a reason with no message is the empty body again, wearing JSON: {body}"
+    );
+  }
 }
 
 /// CORS policy. The bundled web app is served same-origin with `/api`, so it

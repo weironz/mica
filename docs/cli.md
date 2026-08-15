@@ -142,6 +142,50 @@ mica-cli auth token revoke <ID>
 mica-cli ws list        # list your workspaces (add --json for scripts)
 ```
 
+### `page` — pages and folders
+
+```bash
+mica-cli page list --ws <WS> [--parent <VIEW>] [--depth <N>] [--limit <N>] [--offset <N>] [--with-stats]
+mica-cli page read --ws <WS> <DOC_ID>...
+mica-cli page move --ws <WS> [--to <FOLDER_VIEW>] <VIEW_ID>...
+mica-cli page trash --ws <WS> --confirm <VIEW_ID>...
+```
+
+**Two ids, and they are not interchangeable.** `page list` prints both: `view=`
+addresses a node in the tree (move, trash, restore), `object=` addresses the
+document it points at (read). Reaching for the wrong one is the usual mistake.
+
+`move` and `trash` take **many ids and send one request** — that is the point of
+them. A folder carries its whole subtree, so pass the folder rather than listing
+its children. They report what actually happened:
+
+```
+320 trashed (subtrees included).
+2 requested id(s) were skipped — already in that state, or gone:
+```
+
+The count includes descendants, so it is normally larger than the list you
+passed; never read your own request size back as the result.
+
+`page read` with several ids uses the batch endpoint (one round trip). A page
+that cannot be read is named on stderr and the rest still print. With exactly
+one id the output is the bare Markdown, so `page read … > out.md` works.
+
+`--with-stats` adds each page's stored size. **Small means nearly empty** — that
+is how you find stub pages without reading every one of them. Large does NOT
+mean long: deleted text leaves weight behind, so it is not a word count.
+
+### `trash` — the recycle bin
+
+```bash
+mica-cli trash list --ws <WS>
+mica-cli trash restore --ws <WS> <VIEW_ID>...      # bulk undo, subtrees included
+mica-cli trash empty --ws <WS> --confirm           # PERMANENT
+```
+
+`page trash` is reversible with `trash restore`; `trash empty` is not reversible
+at all. Both ask for `--confirm`, and only one of them can be taken back.
+
 ### `export` — export workspaces to Markdown + images
 
 ```bash

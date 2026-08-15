@@ -51,14 +51,46 @@ struct WorkspaceListResponse {
   workspaces: Vec<Workspace>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct View {
-  // `id` (the view id) is in the JSON but unused here — serde ignores it.
+  /// The VIEW id — what move / trash / restore address. Distinct from
+  /// [View::object_id], the document a view points at, which is what the read
+  /// and write endpoints take. Confusing the two is the easiest mistake here,
+  /// so `page list` prints both.
+  pub id: Uuid,
   pub object_id: Uuid,
   pub object_type: String,
   pub name: String,
   #[serde(default)]
   pub is_deleted: bool,
+  #[serde(default)]
+  pub parent_view_id: Option<Uuid>,
+  /// Size of the stored CRDT state, present only when the listing asked for
+  /// stats. Small means nearly empty; large does NOT mean long (deleted text
+  /// leaves weight behind), so never read it as a word count.
+  #[serde(default)]
+  pub state_bytes: Option<i64>,
+}
+
+/// What a batch call actually did. `affected` counts every view touched —
+/// including descendants that came along with a folder — so it is normally
+/// larger than the number of ids sent. `skipped` names the requested ids that
+/// were not touched: already in that state, or gone.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct BatchOutcome {
+  pub affected: usize,
+  #[serde(default)]
+  pub skipped: Vec<Uuid>,
+}
+
+/// Filters for [Client::list_views_filtered]; all optional.
+#[derive(Debug, Default)]
+pub struct ViewFilter {
+  pub parent_view_id: Option<Uuid>,
+  pub depth: Option<i32>,
+  pub limit: Option<i64>,
+  pub offset: Option<i64>,
+  pub with_stats: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +205,126 @@ impl Client {
       .send()?;
     let list: ViewListResponse = Self::ok(resp)?.json()?;
     Ok(list.views)
+  }
+
+  /// Views, narrowed. The unfiltered call returns the whole tree, which on a
+  /// large workspace is a lot of JSON to move in order to look at one folder.
+  pub fn list_views_filtered(&self, workspace_id: Uuid, filter: &ViewFilter) -> Result<Vec<View>> {
+    let mut query: Vec<(&str, String)> = Vec::new();
+    if let Some(parent) = filter.parent_view_id {
+      query.push(("parent_view_id", parent.to_string()));
+    }
+    if let Some(depth) = filter.depth {
+      query.push(("depth", depth.to_string()));
+    }
+    if let Some(limit) = filter.limit {
+      query.push(("limit", limit.to_string()));
+    }
+    if let Some(offset) = filter.offset {
+      query.push(("offset", offset.to_string()));
+    }
+    if filter.with_stats {
+      query.push(("with_stats", "true".to_string()));
+    }
+    let resp = self
+      .authed(
+        self
+          .http
+          .get(self.url(&format!("/workspaces/{workspace_id}/views")))
+          .query(&query),
+      )
+      .send()?;
+    let list: ViewListResponse = Self::ok(resp)?.json()?;
+    Ok(list.views)
+  }
+
+  /// What is in the recycle bin. Soft-deleted, so all of it is restorable.
+  pub fn list_trash(&self, workspace_id: Uuid) -> Result<Vec<View>> {
+    let resp = self
+      .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/trash"))))
+      .send()?;
+    let list: ViewListResponse = Self::ok(resp)?.json()?;
+    Ok(list.views)
+  }
+
+  /// One page's Markdown.
+  pub fn read_markdown(&self, workspace_id: Uuid, document_id: Uuid) -> Result<String> {
+    let resp = self
+      .authed(self.http.get(self.url(&format!(
+        "/workspaces/{workspace_id}/documents/{document_id}/markdown"
+      ))))
+      .send()?;
+    let body: serde_json::Value = Self::ok(resp)?.json()?;
+    Ok(
+      body
+        .get("markdown")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string(),
+    )
+  }
+
+  /// Many pages' Markdown in one round trip. Per-document failures come back
+  /// inline rather than failing the request, so one deleted page does not lose
+  /// the rest of a survey.
+  pub fn batch_read_documents(
+    &self,
+    workspace_id: Uuid,
+    document_ids: &[Uuid],
+  ) -> Result<serde_json::Value> {
+    let resp = self
+      .authed(
+        self
+          .http
+          .post(self.url(&format!("/workspaces/{workspace_id}/documents/batch-read")))
+          .json(&serde_json::json!({ "document_ids": document_ids })),
+      )
+      .send()?;
+    Ok(Self::ok(resp)?.json()?)
+  }
+
+  fn batch_views(&self, workspace_id: Uuid, action: &str, body: serde_json::Value) -> Result<BatchOutcome> {
+    let resp = self
+      .authed(
+        self
+          .http
+          .post(self.url(&format!("/workspaces/{workspace_id}/views/{action}")))
+          .json(&body),
+      )
+      .send()?;
+    Self::ok(resp)?.json().context("decoding batch result")
+  }
+
+  /// Soft-delete many views (each with its subtree) in one request.
+  pub fn batch_trash_views(&self, workspace_id: Uuid, view_ids: &[Uuid]) -> Result<BatchOutcome> {
+    self.batch_views(workspace_id, "batch-trash", serde_json::json!({ "view_ids": view_ids }))
+  }
+
+  /// Bring many views back out of the recycle bin in one request.
+  pub fn batch_restore_views(&self, workspace_id: Uuid, view_ids: &[Uuid]) -> Result<BatchOutcome> {
+    self.batch_views(workspace_id, "batch-restore", serde_json::json!({ "view_ids": view_ids }))
+  }
+
+  /// Re-parent many views under one folder (None = workspace root).
+  pub fn batch_move_views(
+    &self,
+    workspace_id: Uuid,
+    view_ids: &[Uuid],
+    parent_view_id: Option<Uuid>,
+  ) -> Result<BatchOutcome> {
+    self.batch_views(
+      workspace_id,
+      "batch-move",
+      serde_json::json!({ "view_ids": view_ids, "parent_view_id": parent_view_id }),
+    )
+  }
+
+  /// Empty the recycle bin. PERMANENT — nothing here is recoverable after.
+  pub fn empty_trash(&self, workspace_id: Uuid) -> Result<serde_json::Value> {
+    let resp = self
+      .authed(self.http.delete(self.url(&format!("/workspaces/{workspace_id}/trash"))))
+      .send()?;
+    Ok(Self::ok(resp)?.json()?)
   }
 
   /// A document's full bootstrap snapshot as raw JSON — the caller navigates

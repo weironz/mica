@@ -187,6 +187,26 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/views/{view_id}/restore",
       post(documents::restore_view),
     )
+    // Batch forms of trash / restore / move. The per-view routes above stay as
+    // they are — the app drives one view at a time and reads the returned tree
+    // — while a reorganisation touching hundreds of pages gets one request
+    // instead of hundreds. Every one reports what it ACTUALLY touched.
+    .route(
+      "/workspaces/{workspace_id}/views/batch-trash",
+      post(documents::batch_trash_views),
+    )
+    .route(
+      "/workspaces/{workspace_id}/views/batch-restore",
+      post(documents::batch_restore_views),
+    )
+    .route(
+      "/workspaces/{workspace_id}/views/batch-move",
+      post(documents::batch_move_views),
+    )
+    .route(
+      "/workspaces/{workspace_id}/documents/batch-read",
+      post(documents::batch_read_documents),
+    )
     .route(
       "/workspaces/{workspace_id}/trash",
       // DELETE on the collection empties the bin; DELETE on a member (next
@@ -236,7 +256,12 @@ pub fn api_router() -> Router<AppState> {
     )
     .route(
       "/workspaces/{workspace_id}/documents/{document_id}/markdown",
-      patch(documents::update_document_markdown),
+      // GET is the same handler as `/export/markdown` above, under the name
+      // people actually reach for. Reading a page was only ever spelled
+      // "export", which nobody guesses and no spec announced — one report of
+      // finding it ran through 404s and `strings` on the binary. The old path
+      // stays valid; this is a second door, not a move.
+      get(documents::export_document_markdown).patch(documents::update_document_markdown),
     )
     .route(
       "/workspaces/{workspace_id}/documents/{document_id}/rehost-image",
@@ -322,4 +347,24 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/files/{file_id}",
       get(files::get_file).delete(files::delete_file),
     )
+}
+
+#[cfg(test)]
+mod router_tests {
+  use super::*;
+
+  /// Building the router is where axum rejects an ambiguous route table — by
+  /// panicking, at startup, long after `cargo check` has said everything is
+  /// fine. Worth one test because the batch routes deliberately put a literal
+  /// segment where a parameter already lives (`/views/batch-trash` alongside
+  /// `/views/{view_id}`): that resolves in favour of the literal, but it is
+  /// exactly the shape that would blow up a deploy if it ever stopped doing so.
+  #[test]
+  fn the_route_table_is_unambiguous() {
+    let _ = api_router();
+    let _ = ws_router();
+    let _ = share_router();
+    let _ = legal_router();
+    let _ = reset_router();
+  }
 }
