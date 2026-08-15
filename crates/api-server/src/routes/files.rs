@@ -546,6 +546,20 @@ async fn ensure_storable(
   Ok(())
 }
 
+/// The two rejections here are not the same kind of thing.
+///
+/// A non-positive size is a client bug — nobody can act on it, so it stays a
+/// generic `bad_request`; inventing friendly copy for it would be lying about a
+/// failure we have not characterised.
+///
+/// Exceeding the per-file cap IS actionable ("compress it, or pick a smaller
+/// one"), and it is the refusal most easily mistaken for the quota: a workspace
+/// with 4 GiB free still rejects one oversized file, so the storage bar honestly
+/// reads "plenty of room" while the upload fails. Without a code of its own the
+/// client could only relay the English sentence or match on its text — the
+/// second representation `docs/design-adoption.md` draws a line against. So it
+/// gets `file_too_large`, a sibling to `workspace_quota_exceeded`, and the two
+/// full-sounding failures become distinguishable without reading prose.
 fn validate_byte_size(byte_size: i64, max_upload_bytes: i64) -> ApiResult<()> {
   if byte_size <= 0 {
     return Err(ApiError::BadRequest(
@@ -553,9 +567,10 @@ fn validate_byte_size(byte_size: i64, max_upload_bytes: i64) -> ApiResult<()> {
     ));
   }
   if byte_size > max_upload_bytes {
-    return Err(ApiError::BadRequest(format!(
-      "file exceeds the maximum upload size of {max_upload_bytes} bytes"
-    )));
+    return Err(ApiError::BadRequestCode(
+      "file_too_large",
+      format!("file exceeds the maximum upload size of {max_upload_bytes} bytes"),
+    ));
   }
 
   Ok(())
@@ -805,17 +820,73 @@ mod tests {
     ));
   }
 
+  /// The refusal a person reads is chosen off the `code` FIELD OF THE JSON, not
+  /// off the enum variant — `clients/mica_flutter/lib/api/client.dart` `_decode`
+  /// lifts `body['code']` and `main.dart` `_apiMessage` switches on the literal
+  /// strings `file_too_large` / `workspace_quota_exceeded`.
+  ///
+  /// That is a contract across two languages with nothing but this test holding
+  /// the ends together. Rename a code here and nothing in Rust complains; the
+  /// Dart switch just stops matching and silently falls back to relaying the
+  /// English sentence — the exact failure the codes were introduced to end, and
+  /// one no compiler on either side can see. So the serialized bytes are
+  /// asserted, not the variant.
+  #[tokio::test]
+  async fn the_size_refusals_serialize_the_codes_the_client_switches_on() {
+    use axum::response::IntoResponse;
+
+    async fn code_of(err: ApiError) -> String {
+      let body = err.into_response().into_body();
+      let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+      let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+      json["code"].as_str().unwrap().to_string()
+    }
+
+    assert_eq!(
+      code_of(validate_byte_size(101, 100).unwrap_err()).await,
+      "file_too_large",
+      "main.dart `_apiMessage` matches this exact string"
+    );
+
+    // Its sibling, asserted here too so the pair cannot drift apart: these are
+    // the two refusals a user cannot tell apart from the storage bar alone.
+    assert_eq!(
+      code_of(ApiError::BadRequestCode(
+        "workspace_quota_exceeded",
+        "x".into()
+      ))
+      .await,
+      "workspace_quota_exceeded"
+    );
+
+    // A generic rejection must NOT gain a specific code: `_apiMessage` falls
+    // through to the raw message for these on purpose, because friendly copy for
+    // an uncharacterised failure is a lie.
+    assert_eq!(
+      code_of(validate_byte_size(0, 100).unwrap_err()).await,
+      "bad_request"
+    );
+  }
+
   #[test]
   fn byte_size_bounds_are_validated() {
     assert!(validate_byte_size(1, 100).is_ok());
+    assert!(validate_byte_size(100, 100).is_ok(), "the cap itself fits");
+    // A client bug nobody can act on stays generic.
     assert!(matches!(
       validate_byte_size(0, 100),
       Err(ApiError::BadRequest(_))
     ));
-    assert!(matches!(
-      validate_byte_size(101, 100),
-      Err(ApiError::BadRequest(_))
-    ));
+    // Too big is actionable, and must be tellable APART from the quota refusal
+    // without reading the English message — the client picks its copy off this
+    // code alone.
+    assert!(
+      matches!(
+        validate_byte_size(101, 100),
+        Err(ApiError::BadRequestCode("file_too_large", _))
+      ),
+      "the per-file cap must carry its own code, not a generic bad_request"
+    );
   }
 
   #[test]

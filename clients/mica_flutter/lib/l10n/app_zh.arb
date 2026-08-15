@@ -533,6 +533,8 @@
   "importSkippedSuffix": "（{count} 个跳过）",
   "importNoMarkdown": "没找到 Markdown 文件",
   "importNoMarkdownHint": "导入失败:压缩包里没有 Markdown 文件。如果是从 Notion 导出的,请选「Markdown & CSV」而不是「HTML」。",
+  "uploadFileTooLarge": "这个文件太大了:超过了服务器的单文件上传上限。压缩后再试,或换一个小一点的 —— 工作区本身可能还有余量。",
+  "uploadWorkspaceFull": "工作区存储已满。删掉图片要等清理扫过之后才真正释放空间,所以数字可能不会马上下降。",
   "importProgress": "正在导入 {done} / {total}",
   "importFailed": "导入失败：{error}",
   "importJobFailed": "导入失败",

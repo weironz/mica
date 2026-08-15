@@ -1096,6 +1096,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String _apiMessage(ApiException error) {
     return switch (error.code) {
       'import_no_markdown' => context.l10n.importNoMarkdownHint,
+      // The two ways an upload gets refused for "size". They are easy to
+      // confuse and the fix differs: one file is too big (compress it) versus
+      // the workspace is full (free space). Worse, the first fires while the
+      // storage bar honestly shows room left, so relaying the server's English
+      // sentence left the refusal looking like the bar was lying.
+      'file_too_large' => context.l10n.uploadFileTooLarge,
+      'workspace_quota_exceeded' => context.l10n.uploadWorkspaceFull,
       _ => error.toString(),
     };
   }
@@ -4754,8 +4761,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (!kIsWeb) _local.putBlobAs(file.id, bytes); // mirror for offline reads
       return (fileId: file.id, name: file.name);
     } on ApiException catch (error) {
-      // Server reachable but rejected the upload — a genuine failure.
-      if (mounted) setState(() => _message = error.toString());
+      // Server reachable but rejected the upload — a genuine failure. Through
+      // `_apiMessage`, not `toString`: this is the one path where the size
+      // refusals surface, and relaying the raw English defeated the codes they
+      // are sent with.
+      if (mounted) setState(() => _message = _apiMessage(error));
       return null;
     } catch (error) {
       // Network failure (offline): desktop keeps a sha256 CAS placeholder and

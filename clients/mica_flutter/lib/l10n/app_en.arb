@@ -936,6 +936,14 @@
   },
   "importNoMarkdown": "No Markdown files found",
   "importNoMarkdownHint": "Import failed: the archive contains no Markdown files. If you exported from Notion, choose \"Markdown & CSV\" rather than \"HTML\".",
+  "uploadFileTooLarge": "This file is too large: it exceeds the server's per-file upload limit. Compress it or choose a smaller one — the workspace itself may still have room.",
+  "@uploadFileTooLarge": {
+    "description": "Shown for the `file_too_large` error code. Says 'this file', not 'storage is full': this refusal fires even with quota to spare, and the two are otherwise easy to confuse."
+  },
+  "uploadWorkspaceFull": "This workspace is out of storage. Deleting images frees space only once the cleanup sweep runs, so the figure may not drop right away.",
+  "@uploadWorkspaceFull": {
+    "description": "Shown for the `workspace_quota_exceeded` error code. Names the delay explicitly because deleted-but-unswept bytes still count toward the quota by design."
+  },
   "importProgress": "Importing {done} / {total}",
   "@importProgress": {
     "placeholders": {
