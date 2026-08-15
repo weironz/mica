@@ -124,6 +124,11 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
+      # Per-FILE ceiling; empty = the code's 25 MiB default. Named because this
+      # block is an explicit ALLOW-LIST — a variable in .env that is not listed
+      # never reaches the process, and the way that surfaces is an operator
+      # setting it, restarting, and watching nothing change.
+      S3_MAX_UPLOAD_BYTES: "${S3_MAX_UPLOAD_BYTES:-}"
       # S3_PUBLIC_BASE_URL stays UNSET: the bucket is private, GETs are signed.
     depends_on:
       postgres:

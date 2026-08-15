@@ -71,6 +71,29 @@ pub struct PresignedUpload {
   pub expires_in: u64,
 }
 
+/// The per-FILE upload ceiling from the raw `S3_MAX_UPLOAD_BYTES`.
+///
+/// Takes the raw string rather than reading the environment itself, for the same
+/// reason `config::workspace_quota` does: the interesting cases are blank and
+/// garbage, and those are untestable through a process-global env var.
+///
+/// **Blank means unset.** Compose resolves an unset `${VAR:-}` to the EMPTY
+/// STRING, so `env::var` hands back `Ok("")` and not `Err` — the shape that
+/// crash-looped the JWT secret. A non-positive or unparseable value falls back
+/// too: a `0` here would otherwise mean "no file may ever be uploaded", which no
+/// operator types on purpose, and the quota's `0 = unlimited` convention does not
+/// transfer (a per-file cap of "unlimited" is what a huge number is for).
+pub fn max_upload_bytes(raw: Option<&str>) -> i64 {
+  const DEFAULT: i64 = 25 * 1024 * 1024;
+  match raw.map(str::trim) {
+    None | Some("") => DEFAULT,
+    Some(v) => match v.parse::<i64>() {
+      Ok(n) if n > 0 => n,
+      _ => DEFAULT,
+    },
+  }
+}
+
 impl S3Config {
   /// Load from `S3_*` environment variables. Returns `None` when the required
   /// variables are missing, leaving file features disabled.
@@ -93,10 +116,7 @@ impl S3Config {
       .ok()
       .and_then(|value| value.parse().ok())
       .unwrap_or(900);
-    let max_upload_bytes = env::var("S3_MAX_UPLOAD_BYTES")
-      .ok()
-      .and_then(|value| value.parse().ok())
-      .unwrap_or(25 * 1024 * 1024);
+    let max_upload_bytes = max_upload_bytes(env::var("S3_MAX_UPLOAD_BYTES").ok().as_deref());
     let public_base_url = env::var("S3_PUBLIC_BASE_URL")
       .ok()
       .filter(|v| !v.is_empty());
@@ -630,6 +650,33 @@ mod tests {
       config.download_url("workspaces/a/b.png"),
       "https://cdn.example.com/workspaces/a/b.png"
     );
+  }
+
+  /// The compose allow-list now passes this knob through as `"${VAR:-}"`, which
+  /// makes BLANK the value production actually sends when the operator sets
+  /// nothing — so blank has to mean "use the default", not "zero".
+  #[test]
+  fn max_upload_bytes_treats_blank_and_garbage_as_unset() {
+    const DEFAULT: i64 = 25 * 1024 * 1024;
+
+    assert_eq!(max_upload_bytes(None), DEFAULT, "genuinely unset");
+    assert_eq!(
+      max_upload_bytes(Some("")),
+      DEFAULT,
+      "compose resolves an unset ${{VAR:-}} to empty, NOT to absent"
+    );
+    assert_eq!(max_upload_bytes(Some("   ")), DEFAULT, "whitespace is blank");
+    assert_eq!(max_upload_bytes(Some("abc")), DEFAULT, "garbage");
+
+    // A real value wins, whitespace and all.
+    assert_eq!(max_upload_bytes(Some("52428800")), 52_428_800);
+    assert_eq!(max_upload_bytes(Some(" 52428800 ")), 52_428_800);
+
+    // 0 / negative are NOT taken literally: unlike the workspace quota, where 0
+    // means unlimited, a per-file cap of 0 would refuse every upload — an
+    // instance bricked by a typo.
+    assert_eq!(max_upload_bytes(Some("0")), DEFAULT);
+    assert_eq!(max_upload_bytes(Some("-1")), DEFAULT);
   }
 
   fn test_config(force_path_style: bool, public_base_url: Option<String>) -> S3Config {

@@ -122,6 +122,17 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
+      # Per-FILE ceiling (the workspace TOTAL is MICA_WORKSPACE_QUOTA_BYTES
+      # below — two different limits, and a file can be refused by this one
+      # while the workspace still has room). Empty = the code's 25 MiB default.
+      #
+      # Missing here until 0.13.19 for a reason worth naming: the pass-through
+      # block further down says "the rest of what CONFIG.RS reads", and this one
+      # is read by storage.rs `S3Config::from_env` instead — so it fell outside
+      # the sweep meant to catch exactly this. .env.example has advertised it as
+      # tunable the whole time; on a node it went nowhere, the same silent no-op
+      # the quota hit in 0.13.5.
+      S3_MAX_UPLOAD_BYTES: "${S3_MAX_UPLOAD_BYTES:-}"
       # Public self-registration. Passed through EMPTY when the node's .env does
       # not set it, so the code's fail-safe default governs: config.rs opens the
       # gate only for an explicit true/1/yes/on, and an empty string matches none
@@ -130,7 +141,7 @@ services:
       # to read, and an instance that loses its .env line would silently reopen
       # to public signup. Set MICA_REGISTRATION_ENABLED=true in .env to open it.
       MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-}"
-      # Per-workspace byte ceiling; unset = the code's 1 GiB default, `0` = no
+      # Per-workspace byte ceiling; unset = the code's 5 GiB default, `0` = no
       # limit. Named here because this block is an explicit ALLOW-LIST: a variable
       # in the node's .env that is not listed never reaches the process. Found by
       # smoke-testing 0.13.5 — the quota was set to 5000 on the node and an
