@@ -4888,12 +4888,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Re-host a pasted image URL server-side, returning the new file id + name.
+  ///
+  /// Our OWN images short-circuit. Copy can only put a url on the clipboard
+  /// (neither HTML nor Markdown has anywhere to keep a `file_id`), so cutting
+  /// an image and pasting it back looked exactly like an external link — and
+  /// the re-host ladder had the server fetch its own blob back over the public
+  /// internet, hash it, and PUT it again, only to land on the same
+  /// content-addressed key and get the same `file_id` back from `insert_file`'s
+  /// `ON CONFLICT`. Idempotent, but a whole round trip (and, when a CN-hosted
+  /// server times out, a second one up the user's own uplink) spent learning
+  /// what the url already said.
   Future<({String fileId, String name})?> _importEditorImageUrl(
     String url,
   ) async {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return null;
+    // THIS workspace only: object keys are `workspaces/<id>/<sha256>` and both
+    // the quota and membership are per workspace, so a link from another one
+    // must be re-hosted for real rather than aliased across the boundary.
+    final own = micaBlobLink(url, apiOrigin(_api.baseUri));
+    if (own != null && own.workspaceId == workspace.id) {
+      return (fileId: own.fileId, name: own.name);
+    }
     try {
       final file = await _api.importImageUrl(
         session.accessToken,
@@ -6841,6 +6858,41 @@ enum WorldCardMode {
 ///
 /// [storedName] is the identity persisted for [cloudOrigin] (null = none), NOT
 /// whatever session happens to be in memory. That distinction is the fix.
+/// The workspace, file and (cosmetic) name behind one of OUR image links, or
+/// null for any other url. The shape is the one `_resolveEditorImageUrls`
+/// builds for copy — keep the two in step:
+///
+///     <origin>/api/workspaces/<workspace_id>/files/<file_id>/blob[/<name>]
+///
+/// Reading the ids back out is what lets a copied image be recognised as
+/// already ours (see `_importEditorImageUrl`) instead of being re-hosted from
+/// scratch. [expectedOrigin] must match: a document can carry any url it likes,
+/// and a look-alike from another host must not be able to name a `file_id` in
+/// this workspace.
+({String workspaceId, String fileId, String name})? micaBlobLink(
+  String url,
+  String expectedOrigin,
+) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null || !uri.hasScheme) return null;
+  if (apiOrigin(uri) != expectedOrigin) return null;
+  // api / workspaces / <ws> / files / <id> / blob [/ <cosmetic name>]
+  final p = uri.pathSegments;
+  if (p.length < 6 || p.length > 7) return null;
+  if (p[0] != 'api' ||
+      p[1] != 'workspaces' ||
+      p[3] != 'files' ||
+      p[5] != 'blob') {
+    return null;
+  }
+  if (p[2].isEmpty || p[4].isEmpty) return null;
+  return (
+    workspaceId: p[2],
+    fileId: p[4],
+    name: p.length == 7 ? p[6] : '',
+  );
+}
+
 WorldCardMode worldCardMode({
   required bool migrating,
   required String? storedName,
