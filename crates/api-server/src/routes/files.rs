@@ -1046,4 +1046,73 @@ mod quota_pg {
 
     cleanup(&db, &[ws], &[user]).await;
   }
+
+  /// The two byte-counting expressions in this codebase must stay DIFFERENT, and
+  /// must differ by exactly the unreferenced bytes.
+  ///
+  /// They read like the same query with a stray `WHERE`, which is why someone
+  /// periodically proposes "unifying" them. They answer different questions:
+  ///
+  /// - `store::workspace_bytes_used` — what the disk holds. The quota refuses on
+  ///   it and `GET /workspaces/{id}/usage` DISPLAYS it. Both halves of the
+  ///   "used / quota" ratio come from this one, or the ratio itself is wrong.
+  /// - `export_all_stats` (routes/documents.rs) — what the export zip would
+  ///   CONTAIN. An unreferenced blob is awaiting the GC sweep and no live page
+  ///   points at it, so it is not in the archive.
+  ///
+  /// Collapsing them breaks whichever side loses: counting unreferenced bytes in
+  /// the export overstates a download the user is about to wait for, and dropping
+  /// them from the quota reopens the trash-and-reupload loop that
+  /// `bytes_awaiting_the_blob_gc_still_count` exists to close.
+  ///
+  /// So what is pinned here is the RELATIONSHIP, not equality.
+  #[tokio::test]
+  async fn the_quota_counts_bytes_the_export_estimate_leaves_out() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+
+    let live = format!("ws/{ws}/live-{}", Uuid::new_v4());
+    let dead = format!("ws/{ws}/dead-{}", Uuid::new_v4());
+    put(&db, ws, user, &live, 1000).await;
+    put(&db, ws, user, &dead, 250).await;
+    sqlx::query("UPDATE files SET unreferenced_since = now() WHERE object_key = $1")
+      .bind(&dead)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    // What the quota enforces AND what /usage reports — the same call the handler
+    // makes (routes/workspaces.rs `workspace_usage`), not a copy of its SQL.
+    let enforced = store::workspace_bytes_used(&db, ws).await.unwrap();
+
+    // The byte predicate `export_all_stats` runs, scoped to this workspace rather
+    // than the caller's memberships so the two numbers are comparable.
+    let in_archive = sqlx::query_scalar::<_, i64>(
+      r#"SELECT coalesce(sum(f.byte_size), 0)::bigint
+         FROM files f
+         WHERE f.workspace_id = $1
+           AND f.unreferenced_since IS NULL"#,
+    )
+    .bind(ws)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    assert_eq!(
+      enforced, 1250,
+      "the quota counts every byte on the disk, swept or not"
+    );
+    assert_eq!(
+      in_archive, 1000,
+      "the export estimate counts only blobs a live page still references"
+    );
+    assert_eq!(
+      enforced - in_archive,
+      250,
+      "the gap is exactly the bytes awaiting the GC sweep; if it is ever zero by \
+       construction, one of the two counts was collapsed into the other"
+    );
+
+    cleanup(&db, &[ws], &[user]).await;
+  }
 }
