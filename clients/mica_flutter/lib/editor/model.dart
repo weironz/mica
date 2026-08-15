@@ -77,6 +77,18 @@ class EditorNode {
   bool get isListKind =>
       kind == 'bulleted_list' || kind == 'numbered_list' || kind == 'todo';
 
+  /// Kinds whose whole content is one run of inline text, so a block of this
+  /// kind can be woven into another block's text flow (see the paste path in
+  /// `editor.dart`). Code blocks are excluded on purpose: their text is
+  /// multi-line and loses its meaning outside a fence.
+  static bool isInlineTextKind(String kind) =>
+      kind == 'paragraph' ||
+      kind == 'heading' ||
+      kind == 'quote' ||
+      kind == 'bulleted_list' ||
+      kind == 'numbered_list' ||
+      kind == 'todo';
+
   int get headingLevel {
     final level = data['level'];
     if (level is int) return level.clamp(1, 6);

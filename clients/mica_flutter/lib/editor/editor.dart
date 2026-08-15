@@ -344,6 +344,39 @@ String? pastedFormulaSource(String line) {
   return m?.group(1)?.trim();
 }
 
+/// Should ONE pasted block be woven into the caret's line as inline text
+/// instead of landing as a block of its own?
+///
+/// A line's kind is a decision the user already made for it, and a paste must
+/// not overrule it — copying an H2 into a sentence used to drop a second H2
+/// under it. So a pasted block kind merges in whenever the target line still
+/// holds text once the paste lands ([selFrom], [selTo] being the range the
+/// paste replaces in a [targetLength]-long line).
+///
+/// A target left EMPTY carries no such decision: it takes the block path and
+/// adopts the pasted kind, which is what keeps "paste a heading onto a blank
+/// line" giving a heading. The exception is an emptied line that is NOT a
+/// default paragraph — an empty heading or quote the user set deliberately —
+/// which keeps its own kind and takes the pasted text inline.
+///
+/// A plain `paragraph` spec always merges: it has no kind to impose.
+///
+/// Same rule, same judgement, as AppFlowy's `pasteSingleLineNode` (empty
+/// default paragraph → replace the block, else insert the delta) and AFFiNE's
+/// `canMerge`; ProseMirror#231 argues the why.
+bool pasteMergesInline({
+  required String specKind,
+  required String targetKind,
+  required int targetLength,
+  required int selFrom,
+  required int selTo,
+}) {
+  if (!EditorNode.isInlineTextKind(specKind)) return false;
+  if (specKind == 'paragraph') return true;
+  final emptied = selTo - selFrom >= targetLength;
+  return !emptied || targetKind != 'paragraph';
+}
+
 /// A linkable page for the `[[` picker.
 class PageLinkTarget {
   const PageLinkTarget({required this.id, required this.title});
@@ -1354,9 +1387,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (markdown.trim().isEmpty) return false;
     // A single-line RICH fragment (a few words copied from a page or from
     // mica itself) weaves INLINE at the caret — landing it as a fresh
-    // paragraph below broke the most common paste gesture. Real block
-    // constructs (a heading, a list item, a table row) still take the block
-    // path: only a lone paragraph spec qualifies.
+    // paragraph below broke the most common paste gesture. A pasted heading /
+    // list item / quote weaves in the same way when the target line survives
+    // with text in it; [pasteMergesInline] owns that call and the reasoning.
     if (rich &&
         !markdown.contains('\n') &&
         node != null &&
@@ -1364,21 +1397,29 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         !node.isCode &&
         node.kind != 'table') {
       final specs = markdownToBlocks(markdown);
-      if (specs.length == 1 && specs.single.kind == 'paragraph') {
+      if (specs.length == 1) {
         final sel = _controller.selection;
         if (sel != null && !sel.isMultiNode) {
           final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
           final to = sel.end.node == sel.focus.node ? sel.end.offset : from;
           final spec = specs.single;
-          _controller.insertInlineSpan(
-            sel.focus.node,
-            from,
-            to,
-            spec.text,
-            marksFromData(spec.data),
-          );
-          _syncImeFromSelection(force: true);
-          return true;
+          if (pasteMergesInline(
+            specKind: spec.kind,
+            targetKind: node.kind,
+            targetLength: node.text.length,
+            selFrom: from,
+            selTo: to,
+          )) {
+            _controller.insertInlineSpan(
+              sel.focus.node,
+              from,
+              to,
+              spec.text,
+              marksFromData(spec.data),
+            );
+            _syncImeFromSelection(force: true);
+            return true;
+          }
         }
       }
     }
