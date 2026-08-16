@@ -2902,9 +2902,10 @@ fn wire__crate__api__store__MicaStore_save_view_impl(
           }
         }
         let api_that_guard = api_that_guard.unwrap();
-        let output_ok = Result::<_, ()>::Ok({
-          crate::api::store::MicaStore::save_view(&*api_that_guard, api_view);
-        })?;
+        let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::save_view(
+          &*api_that_guard,
+          api_view,
+        ))?;
         Ok(output_ok)
       })())
     },
