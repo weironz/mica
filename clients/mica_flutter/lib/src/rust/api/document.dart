@@ -71,6 +71,34 @@ abstract class MicaDocument implements RustOpaqueInterface {
       .api
       .crateApiDocumentMicaDocumentFromMarkdown(markdown: markdown);
 
+  /// [`Self::from_markdown`], but rewiring image references to on-device blobs.
+  ///
+  /// The local vault import kept only `.md` entries and dropped every other
+  /// file on the floor, so a folder whose pages referenced `assets/x.png`
+  /// imported as pages whose images were all dead links — silently, with no
+  /// error and nothing in the result to say so.
+  ///
+  /// [`from_path`] is where this page sits inside the imported tree, and
+  /// [`asset_ids`] maps every non-Markdown entry's path to the blob id Dart
+  /// already stored it under (the local CAS keys by sha256). Resolution goes
+  /// through `mica_interchange::resolve_ref` — the SAME function the server
+  /// import uses — so relative paths, `..`, percent-encoding and the
+  /// unique-basename fallback behave identically on both sides. A second
+  /// implementation here is exactly how one rule becomes two that drift.
+  ///
+  /// A reference that does not resolve keeps its original `url`: an external
+  /// link stays external, and a genuinely missing file stays visibly missing
+  /// rather than being silently repointed at the wrong bytes.
+  static MicaDocument fromMarkdownWithAssets({
+    required String markdown,
+    required String fromPath,
+    required Map<String, String> assetIds,
+  }) => RustLib.instance.api.crateApiDocumentMicaDocumentFromMarkdownWithAssets(
+    markdown: markdown,
+    fromPath: fromPath,
+    assetIds: assetIds,
+  );
+
   /// Rebuild from an encoded yrs state (the local snapshot). Returns null if
   /// the bytes don't decode.
   static MicaDocument? fromState({required List<int> bytes}) =>

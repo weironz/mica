@@ -118,6 +118,75 @@ impl MicaDocument {
         }
     }
 
+    /// [`Self::from_markdown`], but rewiring image references to on-device blobs.
+    ///
+    /// The local vault import kept only `.md` entries and dropped every other
+    /// file on the floor, so a folder whose pages referenced `assets/x.png`
+    /// imported as pages whose images were all dead links — silently, with no
+    /// error and nothing in the result to say so.
+    ///
+    /// [`from_path`] is where this page sits inside the imported tree, and
+    /// [`asset_ids`] maps every non-Markdown entry's path to the blob id Dart
+    /// already stored it under (the local CAS keys by sha256). Resolution goes
+    /// through `mica_interchange::resolve_ref` — the SAME function the server
+    /// import uses — so relative paths, `..`, percent-encoding and the
+    /// unique-basename fallback behave identically on both sides. A second
+    /// implementation here is exactly how one rule becomes two that drift.
+    ///
+    /// A reference that does not resolve keeps its original `url`: an external
+    /// link stays external, and a genuinely missing file stays visibly missing
+    /// rather than being silently repointed at the wrong bytes.
+    #[frb(sync)]
+    pub fn from_markdown_with_assets(
+        markdown: String,
+        from_path: String,
+        asset_ids: std::collections::HashMap<String, String>,
+    ) -> MicaDocument {
+        let root_id = format!("block_{}", uuid::Uuid::new_v4());
+        let payload = mica_markdown::import_markdown(&markdown, &root_id);
+        let paths: std::collections::HashSet<String> = asset_ids.keys().cloned().collect();
+
+        let blocks: Vec<Block> = payload
+            .blocks
+            .into_iter()
+            .map(|b| {
+                // Nested rather than a let-chain: this crate is not on the 2024
+                // edition, where those became legal.
+                let mut data = b.data;
+                if b.kind == "image" {
+                    if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
+                        if let Some(hit) =
+                            mica_interchange::resolve_ref(&from_path, url, &paths)
+                        {
+                            if let Some(file_id) = asset_ids.get(&hit) {
+                                // The shape the cloud import produces and the
+                                // local blob store expects: id + a readable
+                                // name, and no url.
+                                let name =
+                                    hit.rsplit('/').next().unwrap_or(&hit).to_string();
+                                data = serde_json::json!({
+                                    "file_id": file_id,
+                                    "name": name,
+                                });
+                            }
+                        }
+                    }
+                }
+                Block {
+                    id: b.id,
+                    kind: b.kind,
+                    text: b.text,
+                    data,
+                    children: b.children,
+                }
+            })
+            .collect();
+
+        MicaDocument {
+            inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &blocks)),
+        }
+    }
+
     /// Rebuild from an encoded yrs state (the local snapshot). Returns null if
     /// the bytes don't decode.
     #[frb(sync)]
@@ -427,6 +496,87 @@ mod tests {
             json.contains("hello"),
             "document still readable after poisoning: {json}"
         );
+    }
+
+    /// Build the blocks a page imports to, so the assertions below read as
+    /// "what happened to this image reference".
+    fn image_data(markdown: &str, from: &str, assets: &[(&str, &str)]) -> serde_json::Value {
+        let map: std::collections::HashMap<String, String> = assets
+            .iter()
+            .map(|(p, id)| (p.to_string(), id.to_string()))
+            .collect();
+        let doc = MicaDocument::from_markdown_with_assets(
+            markdown.to_string(),
+            from.to_string(),
+            map,
+        );
+        let blocks: Vec<serde_json::Value> =
+            serde_json::from_str(&doc.to_blocks_json()).unwrap();
+        // `to_blocks_json` spells the kind `type`, not `kind`.
+        blocks
+            .iter()
+            .find(|b| b["type"] == "image")
+            .map(|b| b["data"].clone())
+            .unwrap_or_else(|| {
+                panic!(
+                    "no image block; blocks were: {}",
+                    serde_json::to_string(&blocks).unwrap()
+                )
+            })
+    }
+
+    /// The reported failure: a vault import kept the pages and dropped every
+    /// image, leaving `![](assets/…)` pointing at nothing.
+    #[test]
+    fn an_archive_relative_image_is_repointed_at_its_blob() {
+        let data = image_data(
+            "# Page\n\n![shot](assets/diagram.png)\n",
+            "guide/page.md",
+            &[("guide/assets/diagram.png", "sha256-aaa")],
+        );
+        assert_eq!(data["file_id"], "sha256-aaa");
+        assert_eq!(data["name"], "diagram.png");
+        assert!(data.get("url").is_none(), "the dead url must not survive");
+    }
+
+    /// Resolution is `resolve_ref`, so `..` and root-relative forms work the
+    /// same way they do on the server — this is the point of not writing a
+    /// second path resolver.
+    #[test]
+    fn parent_relative_paths_resolve_like_the_server() {
+        let data = image_data(
+            "![](../assets/x.png)",
+            "guide/deep/page.md",
+            &[("guide/assets/x.png", "sha256-bbb")],
+        );
+        assert_eq!(data["file_id"], "sha256-bbb");
+    }
+
+    /// An http(s) image is somebody else's URL, not an archive entry. Leaving
+    /// it alone is what keeps external images working.
+    #[test]
+    fn an_external_url_is_left_untouched() {
+        let data = image_data(
+            "![](https://example.com/x.png)",
+            "page.md",
+            &[("assets/x.png", "sha256-ccc")],
+        );
+        assert_eq!(data["url"], "https://example.com/x.png");
+        assert!(data.get("file_id").is_none());
+    }
+
+    /// A reference to something the archive does not contain stays visibly
+    /// broken. Silently repointing it at a same-named file elsewhere would be
+    /// worse than the dead link: it would be the WRONG image, and look right.
+    #[test]
+    fn an_unresolvable_reference_keeps_its_url() {
+        let data = image_data(
+            "![](assets/missing.png)",
+            "page.md",
+            &[("assets/other.png", "sha256-ddd")],
+        );
+        assert_eq!(data["url"], "assets/missing.png");
+        assert!(data.get("file_id").is_none());
     }
 
     #[test]

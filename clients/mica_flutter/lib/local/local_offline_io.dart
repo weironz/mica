@@ -522,13 +522,38 @@ class LocalOffline implements LocalOfflineApi {
     }
     final errors = <String>[];
 
-    // Markdown files only, skipping anything under a dot-dir.
-    final md = [
+    final visible = [
       for (final e in entries)
-        if (e.path.toLowerCase().endsWith('.md') &&
-            !e.path.split('/').any((s) => s.startsWith('.')))
-          e,
+        if (!e.path.split('/').any((s) => s.startsWith('.'))) e,
+    ];
+
+    // Markdown becomes pages; everything else becomes BLOBS, keyed by content.
+    //
+    // Non-Markdown entries used to be dropped right here, silently. A vault
+    // whose pages said `![](assets/diagram.png)` imported as pages whose every
+    // image was a dead link — no error, and nothing in the result to say a
+    // single file had been discarded. Storing them first gives the page
+    // conversion below a path→blob-id map to rewire references against.
+    final md = [
+      for (final e in visible)
+        if (e.path.toLowerCase().endsWith('.md')) e,
     ]..sort((a, b) => a.path.compareTo(b.path));
+
+    final assetIds = <String, String>{};
+    var scanned = 0;
+    for (final e in visible) {
+      if (e.path.toLowerCase().endsWith('.md')) continue;
+      try {
+        assetIds[e.path] = putBlob(Uint8List.fromList(e.bytes));
+      } catch (err) {
+        // Named, not swallowed: an image that failed to store leaves its page
+        // pointing at something that will not resolve, and the user should
+        // hear which one rather than find out later.
+        errors.add('${e.path}: $err');
+      }
+      // Yield periodically so a big vault doesn't freeze the UI isolate.
+      if (++scanned % 20 == 0) await Future<void>.delayed(Duration.zero);
+    }
 
     // Lazily create folder-pages (only ancestors of a real `.md`, so asset-only
     // dirs don't clutter the tree).
@@ -603,7 +628,15 @@ class LocalOffline implements LocalOfflineApi {
         final viewId = _id('view');
         store.saveDoc(
           docId: docId,
-          doc: MicaDocument.fromMarkdown(markdown: text),
+          // Resolution happens in Rust, against the same `resolve_ref` the
+          // server import uses — relative paths, `..`, percent-encoding and the
+          // unique-basename fallback all behave identically on both sides
+          // rather than being reimplemented here and drifting.
+          doc: MicaDocument.fromMarkdownWithAssets(
+            markdown: text,
+            fromPath: path,
+            assetIds: assetIds,
+          ),
         );
         saveView((
           id: viewId,
