@@ -75,11 +75,41 @@ pub struct ImportParams {
 /// long the failure takes to establish, never the outcome.
 /// External image fetches in flight at once during an import.
 ///
-/// Deliberately modest: these are someone else's servers, and an import that
-/// opens fifty connections to one CDN is a bad citizen and invites rate limits.
-/// Eight turns a wall of serial timeouts into a wall of parallel ones while the
-/// breaker below is deciding, which is the case that hurt.
-const REHOST_CONCURRENCY: usize = 8;
+/// Modest on purpose, twice over. These are someone else's servers, and an
+/// import that opens fifty connections to one CDN is a bad citizen. And each
+/// fetch is not just a download: it also writes to object storage and to the
+/// database, which on a single-box deployment are the SAME machine — so this
+/// number multiplies local IO, not merely outbound requests.
+///
+/// Was 8, chosen against the wall-of-timeouts case with an unstated assumption
+/// that the server had headroom. On a 3.5 GB box also hosting its own object
+/// store, Postgres and unrelated services, an import drove load average past 35
+/// and took the machine off the network — twice. The measurement that settled
+/// what it was: that archive peaked around 135 MB, so this was contention, not
+/// memory. Halved rather than made configurable, per the note in `api.md` — a
+/// default shown to be wrong gets a better default, not a knob.
+const REHOST_CONCURRENCY: usize = 4;
+
+/// Ceiling on an uploaded archive.
+///
+/// `read_zip` decompresses every entry into memory and the raw upload is still
+/// held alongside it, so peak is roughly upload + inflated. Nothing bounded
+/// that: an archive bigger than the server's free memory was not refused, it
+/// took the process — and on a small box, the whole machine — down with it. A
+/// request that cannot be served must fail as a request, not as an outage.
+///
+/// 256 MiB of UPLOAD sits far above real exports (a 1192-entry wiki is ~65 MiB
+/// compressed) and far below what the smallest sane deployment can hold.
+///
+/// Two honest limits on this check:
+///
+/// - It measures the upload, not the inflation, so a deliberately crafted
+///   archive that is small compressed and enormous expanded still gets through.
+///   Catching that needs a walk of the central directory's uncompressed sizes
+///   before inflating anything — worth doing, not done here.
+/// - It would NOT have prevented the outage that prompted it: that archive was
+///   ~65 MiB, nowhere near this. It closes a separate hole found while looking.
+const MAX_ARCHIVE_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Default)]
 struct HostBreaker {
@@ -383,6 +413,15 @@ pub async fn start_import(
   let user_id = user_id_from_headers(&state, &headers).await?;
   if body.is_empty() {
     return Err(ApiError::BadRequest("empty archive".to_string()));
+  }
+  // Refuse before decompressing, not while running out of memory doing it.
+  if body.len() > MAX_ARCHIVE_UPLOAD_BYTES {
+    return Err(ApiError::BadRequest(format!(
+      "archive is {} MiB; this server accepts up to {} MiB — split it and import the parts \
+       (they can go into the same workspace with workspace_id)",
+      body.len() / (1024 * 1024),
+      MAX_ARCHIVE_UPLOAD_BYTES / (1024 * 1024)
+    )));
   }
   if let Some(ws) = params.workspace_id {
     ensure_workspace_editor(&state.db, ws, user_id).await?;
