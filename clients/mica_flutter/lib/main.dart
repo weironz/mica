@@ -5034,27 +5034,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  Future<void> _exportSelectedMarkdown() {
-    return _run(() async {
-      final session = _requireSession();
-      final workspace = _requireWorkspace();
-      final bootstrap = _selectedBootstrap;
-      if (bootstrap == null) {
-        throw ApiException(context.l10n.pageSelectFirst);
-      }
-
-      final markdown = await _api.exportMarkdown(
-        session.accessToken,
-        workspace.id,
-        bootstrap.document.id,
-      );
-
-      setState(() {
-        _selectedMarkdown = markdown;
-      });
-    });
-  }
-
   /// Open version history for the currently-selected cloud page. Each dialog
   /// callback reads the session token FRESH (so a silent refresh mid-dialog is
   /// picked up) and is scoped to this workspace + document.
@@ -6325,7 +6304,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onImportWorkspaceTreeInto: local
           ? _localImportVaultTree
           : _importTreeIntoWorkspace,
-      onExportMarkdown: local ? () async {} : _exportSelectedMarkdown,
       // Null, not a no-op: a local workspace has no members at all. The no-op
       // form still rendered and still accepted an email, because local entries
       // carry role 'owner' so canManage was true — you could invite someone and
@@ -7105,7 +7083,6 @@ class WorkspaceView extends StatefulWidget {
     this.onClearMirrorCache,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
-    required this.onExportMarkdown,
     this.onAddMember,
     this.onLoadWorkspaceUsage,
     this.onUpdateMember,
@@ -7461,7 +7438,6 @@ class WorkspaceView extends StatefulWidget {
   onImportWorkspaceZip;
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   onImportWorkspaceTreeInto;
-  final Future<void> Function() onExportMarkdown;
 
   /// All three are null in 本地模式, where membership does not exist. Absent
   /// rather than inert: see the member section in
