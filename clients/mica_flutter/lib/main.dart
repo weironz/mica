@@ -4224,7 +4224,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (clientId == null) throw StateError(l10n.worldMigrateNoIdentity);
       final result = await _runWorkspaceMigration(session!, clientId, localWs);
       // Refresh the cloud list so the new workspace appears in the switcher.
-      final workspaces = await _api.listWorkspaces(session.accessToken);
+      // `session!` here for the same reason as the line above: it is a mutable
+      // local captured by this closure, so the CFE refuses to promote it from
+      // the null check outside — even though the analyzer accepts it. Only a
+      // real `flutter build` reports the difference; analyze and test do not.
+      final workspaces = await _api.listWorkspaces(session!.accessToken);
       if (!mounted) return;
       migrated = true;
       setState(() {
