@@ -500,8 +500,42 @@ impl MicaStore {
 
     /// Upsert a view (create / rename / move / trash-toggle).
     #[frb(sync)]
-    pub fn save_view(&self, view: LocalView) {
-        let _ = self.store().save_view(&view.into());
+    pub fn save_view(&self, view: LocalView) -> bool {
+        // FOLDERS ARE THE ONLY CONTAINERS — checked here, at the one place every
+        // local view write passes through, so a future write path cannot
+        // quietly opt out of it.
+        //
+        // The server has enforced this for a while (`ensure_parent_accepts_
+        // children`, with a DB trigger behind it); the local store did not. So a
+        // page could sit under a page on device, be edited for weeks, and fail
+        // only at the moment the user pressed "migrate to cloud" — exactly when
+        // they least want to hear it. Found that way: a real vault carried one
+        // such pair from an older import, and the migration refused the whole
+        // workspace over it.
+        //
+        // docs/lessons.md#2 one layer further out: an invariant enforced on
+        // only one side of a boundary is not enforced.
+        // Returns whether it was written, rather than refusing in silence — a
+        // write that quietly does nothing is the failure mode this app has
+        // already shipped twice (a no-op import menu, a no-op export callback).
+        if !self.parent_accepts_children(&view) {
+            return false;
+        }
+        self.store().save_view(&view.into()).is_ok()
+    }
+
+    /// True when [view] may live where it says it does: at the top level, or
+    /// under a FOLDER. A parent the local store cannot see (not yet written, or
+    /// another origin's) is accepted — this guards the shape that is visible
+    /// here, and the server checks again on the way up.
+    fn parent_accepts_children(&self, view: &LocalView) -> bool {
+        let Some(parent_id) = view.parent_id.as_deref() else {
+            return true;
+        };
+        self.list_views("local".to_string())
+            .iter()
+            .find(|v| v.id == parent_id)
+            .is_none_or(|p| p.object_type == "folder")
     }
 
     /// Permanently remove one `origin`'s view row (delete its document via
@@ -548,7 +582,7 @@ impl MicaStore {
         object_type: String,
     ) -> String {
         let id = format!("view_{}", uuid::Uuid::new_v4());
-        self.save_view(LocalView {
+        let written = self.save_view(LocalView {
             id: id.clone(),
             workspace_id,
             position: self.next_position(parent_id.as_deref()),
@@ -559,7 +593,10 @@ impl MicaStore {
             origin: "local".to_string(),
             object_type,
         });
-        id
+        // Empty id when the row was refused (a page as parent). Handing back an
+        // id for a row that does not exist would send the caller off building
+        // children under a ghost.
+        if written { id } else { String::new() }
     }
 
     /// Renumber `ordered_ids` as consecutive children of `parent_id`.
@@ -1124,6 +1161,18 @@ mod clone_view_tests {
         (store, dir)
     }
 
+    /// A FOLDER row. Anything that is a parent in these fixtures has to be one:
+    /// folders are the only containers, and the store now refuses the rest.
+    /// Several of the trees below were built entirely out of `view()` — that is
+    /// documents parenting documents — which is precisely the shape that made
+    /// it into a real vault and blocked its migration.
+    fn folder(id: &str, parent: Option<&str>, name: &str, pos: &str) -> LocalView {
+        LocalView {
+            object_type: "folder".into(),
+            ..view(id, parent, name, pos)
+        }
+    }
+
     fn view(id: &str, parent: Option<&str>, name: &str, pos: &str) -> LocalView {
         LocalView {
             id: id.into(),
@@ -1141,8 +1190,8 @@ mod clone_view_tests {
     #[test]
     fn clones_the_whole_subtree_and_remaps_parents() {
         let (store, _dir) = tmp_store();
-        store.save_view(view("root", None, "Parent", "0000000010"));
-        store.save_view(view("kid", Some("root"), "Child", "0000000020"));
+        store.save_view(folder("root", None, "Parent", "0000000010"));
+        store.save_view(folder("kid", Some("root"), "Child", "0000000020"));
         store.save_view(view("grandkid", Some("kid"), "Grandchild", "0000000030"));
         for id in ["root", "kid", "grandkid"] {
             store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown(format!("# {id}")));
@@ -1203,8 +1252,8 @@ mod clone_view_tests {
     #[test]
     fn trashing_a_folder_takes_its_whole_subtree() {
         let (store, _dir) = tmp_store();
-        store.save_view(view("folder", None, "F", "0000000010"));
-        store.save_view(view("kid", Some("folder"), "K", "0000000020"));
+        store.save_view(folder("folder", None, "F", "0000000010"));
+        store.save_view(folder("kid", Some("folder"), "K", "0000000020"));
         store.save_view(view("grandkid", Some("kid"), "G", "0000000030"));
         store.save_view(view("outside", None, "O", "0000000040"));
 
@@ -1224,7 +1273,7 @@ mod clone_view_tests {
     #[test]
     fn restoring_lifts_a_root_whose_parent_is_still_trashed() {
         let (store, _dir) = tmp_store();
-        store.save_view(view("parent", None, "P", "0000000010"));
+        store.save_view(folder("parent", None, "P", "0000000010"));
         store.save_view(view("child", Some("parent"), "C", "0000000020"));
         // Trash both, then restore ONLY the child.
         store.trash_view_subtree("parent".into());
@@ -1243,7 +1292,7 @@ mod clone_view_tests {
     #[test]
     fn restoring_keeps_the_parent_when_it_is_alive() {
         let (store, _dir) = tmp_store();
-        store.save_view(view("parent", None, "P", "0000000010"));
+        store.save_view(folder("parent", None, "P", "0000000010"));
         store.save_view(view("child", Some("parent"), "C", "0000000020"));
         store.trash_view_subtree("child".into());
         store.restore_view_subtree("child".into());
@@ -1260,8 +1309,8 @@ mod clone_view_tests {
     #[test]
     fn purging_removes_the_subtree_and_its_documents() {
         let (store, _dir) = tmp_store();
-        store.save_view(view("folder", None, "F", "0000000010"));
-        store.save_view(view("kid", Some("folder"), "K", "0000000020"));
+        store.save_view(folder("folder", None, "F", "0000000010"));
+        store.save_view(folder("kid", Some("folder"), "K", "0000000020"));
         store.save_view(view("outside", None, "O", "0000000030"));
         for id in ["folder", "kid", "outside"] {
             store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
@@ -1285,8 +1334,14 @@ mod clone_view_tests {
         let (store, _dir) = tmp_store();
         // Corrupt shape: a points at b, b points at a. Real data should never
         // look like this, but a hang here would be unrecoverable for the user.
-        store.save_view(view("a", Some("b"), "A", "0000000010"));
-        store.save_view(view("b", Some("a"), "B", "0000000020"));
+        //
+        // Written straight to the store, PAST the folders-only check — the
+        // point is that the walk survives data the checks would now refuse, and
+        // such data still exists: written by older builds, or arriving from a
+        // sync peer. A guard on new writes does not clean up what is already
+        // there.
+        store.store().save_view(&view("a", Some("b"), "A", "0000000010").into()).unwrap();
+        store.store().save_view(&folder("b", Some("a"), "B", "0000000020").into()).unwrap();
         let hit = store.trash_view_subtree("a".into());
         assert_eq!(hit.len(), 2, "both, once each");
     }
@@ -1295,7 +1350,7 @@ mod clone_view_tests {
     fn a_new_view_lands_after_its_live_siblings() {
         let (store, _dir) = tmp_store();
         store.save_view(view("a", None, "A", "0000000010"));
-        store.save_view(view("b", None, "B", "0000000020"));
+        store.save_view(folder("b", None, "B", "0000000020"));
 
         let id = store.create_view(
             "ws".into(), None, "doc_x".into(), "C".into(), "document".into(),
@@ -1328,7 +1383,7 @@ mod clone_view_tests {
     #[test]
     fn positions_are_scoped_to_the_parent() {
         let (store, _dir) = tmp_store();
-        store.save_view(view("folder", None, "F", "0000000010"));
+        store.save_view(folder("folder", None, "F", "0000000010"));
         store.save_view(view("deep", Some("folder"), "D", "0000000500"));
 
         let id = store.create_view(
@@ -1339,6 +1394,60 @@ mod clone_view_tests {
             "0000000020",
             "a child's position must not push the top level along",
         );
+    }
+
+    #[test]
+    /// Folders are the only containers — the same rule the server enforces in
+    /// `ensure_parent_accepts_children`. It used to live only up there, so a
+    /// page could sit under a page on device and the workspace failed as a
+    /// whole at migration time, long after the damage was done.
+    #[test]
+    fn a_page_cannot_be_nested_under_a_page() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("parent", None, "Parent", "0000000010"));
+
+        let written = store.save_view(view("child", Some("parent"), "Child", "0000000020"));
+
+        assert!(!written, "a page under a page must be refused");
+        let all = store.list_views("local".to_string());
+        assert!(
+            all.iter().all(|v| v.id != "child"),
+            "the refused row must not be in the store"
+        );
+    }
+
+    #[test]
+    fn a_page_under_a_folder_is_fine() {
+        let (store, _dir) = tmp_store();
+        let mut folder = view("folder", None, "Folder", "0000000010");
+        folder.object_type = "folder".into();
+        store.save_view(folder);
+
+        assert!(store.save_view(view("child", Some("folder"), "Child", "0000000020")));
+    }
+
+    /// Top-level pages are the common case and must stay allowed.
+    #[test]
+    fn a_top_level_page_is_fine() {
+        let (store, _dir) = tmp_store();
+        assert!(store.save_view(view("solo", None, "Solo", "0000000010")));
+    }
+
+    /// `create_view` hands back an empty id rather than one for a row it did
+    /// not write — otherwise the caller builds children under a ghost.
+    #[test]
+    fn create_view_reports_a_refusal_instead_of_a_usable_id() {
+        let (store, _dir) = tmp_store();
+        store.save_view(view("page", None, "Page", "0000000010"));
+
+        let id = store.create_view(
+            "ws".into(),
+            Some("page".into()),
+            "doc_x".into(),
+            "Child".into(),
+            "document".into(),
+        );
+        assert!(id.is_empty(), "got a usable-looking id for a refused row: {id}");
     }
 
     #[test]
@@ -1359,7 +1468,7 @@ mod clone_view_tests {
         let (store, _dir) = tmp_store();
         store.save_view(view("x", None, "X", "0000000010"));
         store.save_view(view("y", None, "Y", "0000000020"));
-        store.save_view(view("folder", None, "F", "0000000030"));
+        store.save_view(folder("folder", None, "F", "0000000030"));
 
         // Drag y above x, and move both under the folder.
         store.reorder_views(

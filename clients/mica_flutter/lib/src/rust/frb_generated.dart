@@ -405,7 +405,7 @@ abstract class RustLibApi extends BaseApi {
     required MicaDocument doc,
   });
 
-  void crateApiStoreMicaStoreSaveView({
+  bool crateApiStoreMicaStoreSaveView({
     required MicaStore that,
     required LocalView view,
   });
@@ -2545,7 +2545,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateApiStoreMicaStoreSaveView({
+  bool crateApiStoreMicaStoreSaveView({
     required MicaStore that,
     required LocalView view,
   }) {
@@ -2561,7 +2561,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 61)!;
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_bool,
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreSaveViewConstMeta,
@@ -5580,7 +5580,7 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
       .crateApiStoreMicaStoreSaveDoc(that: this, docId: docId, doc: doc);
 
   /// Upsert a view (create / rename / move / trash-toggle).
-  void saveView({required LocalView view}) => RustLib.instance.api
+  bool saveView({required LocalView view}) => RustLib.instance.api
       .crateApiStoreMicaStoreSaveView(that: this, view: view);
 
   /// Upsert a workspace (create / rename / reorder).

@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `set_trashed`, `store`, `subtree_ids`
+// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `parent_accepts_children`, `set_trashed`, `store`, `subtree_ids`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
@@ -239,7 +239,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   void saveDoc({required String docId, required MicaDocument doc});
 
   /// Upsert a view (create / rename / move / trash-toggle).
-  void saveView({required LocalView view});
+  bool saveView({required LocalView view});
 
   /// Upsert a workspace (create / rename / reorder).
   void saveWorkspace({required LocalWorkspace workspace});
