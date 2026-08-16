@@ -180,36 +180,7 @@ fn app_router(state: AppState) -> Router {
     .with_state(state)
 }
 
-#[cfg(test)]
-mod not_found_body_tests {
-  use super::*;
-  use axum::response::IntoResponse;
 
-  /// The payload `app_router`'s `/api` fallback answers with. Pinned because an
-  /// unmatched path used to come back as a bare status with NO body, which is
-  /// precisely the response someone gets while guessing at an undocumented API
-  /// — the one place a machine-readable reason is worth most. Covers the shape,
-  /// not the wiring: that the fallback sits AFTER the scope guard (so a missing
-  /// path reads as 404, never 401) is asserted by the comment there and by the
-  /// deploy smoke check, since building the real router needs an AppState.
-  #[tokio::test]
-  async fn unmatched_api_path_answers_with_a_json_reason() {
-    let response = ApiError::NotFound.into_response();
-    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-
-    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-      .await
-      .expect("error body should be readable");
-    let body: serde_json::Value =
-      serde_json::from_slice(&bytes).expect("error body should be JSON, not empty");
-
-    assert_eq!(body["code"], "not_found");
-    assert!(
-      body["message"].as_str().is_some_and(|m| !m.is_empty()),
-      "a reason with no message is the empty body again, wearing JSON: {body}"
-    );
-  }
-}
 
 /// CORS policy. The bundled web app is served same-origin with `/api`, so it
 /// never triggers CORS; this only governs third-party browser reads. In
@@ -264,5 +235,36 @@ async fn shutdown_signal() {
   tokio::select! {
     _ = ctrl_c => {},
     _ = terminate => {},
+  }
+}
+
+#[cfg(test)]
+mod not_found_body_tests {
+  use super::*;
+  use axum::response::IntoResponse;
+
+  /// The payload `app_router`'s `/api` fallback answers with. Pinned because an
+  /// unmatched path used to come back as a bare status with NO body, which is
+  /// precisely the response someone gets while guessing at an undocumented API
+  /// — the one place a machine-readable reason is worth most. Covers the shape,
+  /// not the wiring: that the fallback sits AFTER the scope guard (so a missing
+  /// path reads as 404, never 401) is asserted by the comment there and by the
+  /// deploy smoke check, since building the real router needs an AppState.
+  #[tokio::test]
+  async fn unmatched_api_path_answers_with_a_json_reason() {
+    let response = ApiError::NotFound.into_response();
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+      .await
+      .expect("error body should be readable");
+    let body: serde_json::Value =
+      serde_json::from_slice(&bytes).expect("error body should be JSON, not empty");
+
+    assert_eq!(body["code"], "not_found");
+    assert!(
+      body["message"].as_str().is_some_and(|m| !m.is_empty()),
+      "a reason with no message is the empty body again, wearing JSON: {body}"
+    );
   }
 }

@@ -59,6 +59,37 @@ fn decode_raw_name(raw: &[u8], flags: u16, extra: &[u8]) -> String {
   }
 }
 
+
+
+/// Decode GBK/cp936 bytes. Bytes < 0x80 pass through as ASCII; invalid
+/// sequences become U+FFFD.
+pub fn decode_gbk(bytes: &[u8]) -> String {
+  let table: Vec<char> = GBK_TABLE.chars().collect();
+  let mut out = String::with_capacity(bytes.len());
+  let mut i = 0;
+  while i < bytes.len() {
+    let b = bytes[i];
+    if b < 0x80 {
+      out.push(b as char);
+      i += 1;
+      continue;
+    }
+    if (0x81..=0xFE).contains(&b) && i + 1 < bytes.len() {
+      let t = bytes[i + 1];
+      if (0x40..=0xFE).contains(&t) && t != 0x7F {
+        let idx = (usize::from(b) - 0x81) * 190 + (usize::from(t) - 0x40)
+          - usize::from(t > 0x7F);
+        out.push(table[idx]);
+        i += 2;
+        continue;
+      }
+    }
+    out.push('\u{FFFD}');
+    i += 1;
+  }
+  out
+}
+
 #[cfg(test)]
 mod separator_tests {
   use super::*;
@@ -127,33 +158,4 @@ mod separator_tests {
   fn a_bare_filename_is_unchanged() {
     assert_eq!(decode_name(b"README.md", UTF8_FLAG, &[]), "README.md");
   }
-}
-
-/// Decode GBK/cp936 bytes. Bytes < 0x80 pass through as ASCII; invalid
-/// sequences become U+FFFD.
-pub fn decode_gbk(bytes: &[u8]) -> String {
-  let table: Vec<char> = GBK_TABLE.chars().collect();
-  let mut out = String::with_capacity(bytes.len());
-  let mut i = 0;
-  while i < bytes.len() {
-    let b = bytes[i];
-    if b < 0x80 {
-      out.push(b as char);
-      i += 1;
-      continue;
-    }
-    if (0x81..=0xFE).contains(&b) && i + 1 < bytes.len() {
-      let t = bytes[i + 1];
-      if (0x40..=0xFE).contains(&t) && t != 0x7F {
-        let idx = (usize::from(b) - 0x81) * 190 + (usize::from(t) - 0x40)
-          - usize::from(t > 0x7F);
-        out.push(table[idx]);
-        i += 2;
-        continue;
-      }
-    }
-    out.push('\u{FFFD}');
-    i += 1;
-  }
-  out
 }

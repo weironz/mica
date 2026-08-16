@@ -2284,7 +2284,6 @@ mod tests {
     );
   }
 
-  #[test]
   /// `/export/markdown` answers with an OBJECT. Taking `.to_string()` of it
   /// yielded the serialized JSON, whose newlines are the literal characters
   /// `\` + `n` — so `full` was one line and every windowed read silently
@@ -2336,6 +2335,7 @@ step
     assert_eq!(unwrap_markdown(odd), "{\"unexpected\":1}");
   }
 
+  #[test]
   fn section_returns_heading_through_next_same_or_higher() {
     let doc = "# Title\n\nintro\n\n## Setup\n\nstep one\n\n### Sub\n\ndeep\n\n## Usage\n\nrun it";
     // ## Setup through just before ## Usage (## Sub is deeper, stays in)
