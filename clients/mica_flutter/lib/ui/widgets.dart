@@ -60,7 +60,9 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(WorkspaceEntry entry) onDelete;
   final void Function(WorkspaceEntry entry) onExport;
   final VoidCallback onCreate;
-  final void Function(bool notion) onImport;
+  /// Null hides the entry. Archive import is unsupported in local mode, and a
+  /// menu item that does nothing is worse than no menu item.
+  final void Function(bool notion)? onImport;
   final void Function(WorkspaceEntry entry) onImportFilesInto;
   final void Function(WorkspaceEntry entry) onImportFolderInto;
 
@@ -125,35 +127,38 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             _row(e, widget.activeIsLocal ? locals : cloud),
         const Divider(height: 8),
         _createRow(),
-        SizedBox(
-          width: 320,
-          child: SubmenuButton(
-            leadingIcon: Icon(
-              Icons.upload_file_outlined,
-              size: 18,
-              color: MicaTheme.of(context).text.muted,
-            ),
-            menuChildren: [
-              _importChoice(
-                Icons.folder_zip_outlined,
-                context.l10n.workspaceRowImportFromZip,
-                notion: false,
-              ),
-              _importChoice(
-                Icons.cloud_download_outlined,
-                context.l10n.workspaceRowImportFromNotion,
-                notion: true,
-              ),
-            ],
-            child: Text(
-              context.l10n.workspaceRowImportWorkspace,
-              style: TextStyle(
+        // The whole submenu goes, not just its children: a parent left behind
+        // with nothing under it is its own kind of dead end.
+        if (widget.onImport != null)
+          SizedBox(
+            width: 320,
+            child: SubmenuButton(
+              leadingIcon: Icon(
+                Icons.upload_file_outlined,
+                size: 18,
                 color: MicaTheme.of(context).text.muted,
-                fontWeight: FontWeight.w600,
+              ),
+              menuChildren: [
+                _importChoice(
+                  Icons.folder_zip_outlined,
+                  context.l10n.workspaceRowImportFromZip,
+                  notion: false,
+                ),
+                _importChoice(
+                  Icons.cloud_download_outlined,
+                  context.l10n.workspaceRowImportFromNotion,
+                  notion: true,
+                ),
+              ],
+              child: Text(
+                context.l10n.workspaceRowImportWorkspace,
+                style: TextStyle(
+                  color: MicaTheme.of(context).text.muted,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
-        ),
       ],
       builder: (context, controller, child) {
         final label =
@@ -585,7 +590,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
       ),
       onPressed: () {
         _menu.close();
-        widget.onImport(notion);
+        widget.onImport?.call(notion);
       },
       child: Text(
         label,

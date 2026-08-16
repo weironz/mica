@@ -6321,9 +6321,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onClearMirrorCache: _local.available
           ? () => _local.clearMirrorCache(mirroredOrigins: _servers)
           : null,
-      onImportWorkspaceZip: local
-          ? (_, _, {bool notion = false}) async {}
-          : _importWorkspaceZip,
+      onImportWorkspaceZip: local ? null : _importWorkspaceZip,
       onImportWorkspaceTreeInto: local
           ? _localImportVaultTree
           : _importTreeIntoWorkspace,
@@ -7450,7 +7448,16 @@ class WorkspaceView extends StatefulWidget {
   /// show the result without waiting on a rebuild it never receives.
   final Future<LocalCacheStats> Function()? onClearMirrorCache;
 
-  final Future<void> Function(String fileName, Uint8List bytes, {bool notion})
+  /// Null where importing an archive is not supported — currently local
+  /// (offline) mode, whose importer takes a directory of files and has no zip
+  /// reader behind it.
+  ///
+  /// NULL, not a no-op. It used to be `(_, _, {notion}) async {}`, so local
+  /// mode kept offering "import a workspace archive" and did nothing at all
+  /// when you used it. That is the shape `onAddMember` was fixed for two doors
+  /// down, and the note there already says why: a no-op still renders, still
+  /// accepts the input, and leaves the user believing something happened.
+  final Future<void> Function(String fileName, Uint8List bytes, {bool notion})?
   onImportWorkspaceZip;
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   onImportWorkspaceTreeInto;
@@ -8151,8 +8158,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         onDelete: _confirmDeleteWorkspace,
                         onExport: _exportWorkspaceFile,
                         onCreate: _promptCreateWorkspace,
-                        onImport: (notion) =>
-                            _importWorkspaceFile(notion: notion),
+                        onImport: widget.onImportWorkspaceZip == null
+                            ? null
+                            : (notion) => _importWorkspaceFile(notion: notion),
                         onImportFilesInto: _importFilesIntoWorkspace,
                         onImportFolderInto: _importFolderIntoWorkspace,
                         onMigrate: widget.onMigrateEntry,
@@ -10985,7 +10993,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onAiEnabledChanged: widget.onAiEnabledChanged,
         onShowFormatBarChanged: widget.onShowFormatBarChanged,
         onAppearanceChanged: widget.onAppearanceChanged,
-        onImportWorkspace: () => _importWorkspaceFile(fromSettings: true),
+        onImportWorkspace: widget.onImportWorkspaceZip == null
+            ? null
+            : () => _importWorkspaceFile(fromSettings: true),
         onLoadExportStats: widget.onLoadExportStats,
         onLoadCacheStats: widget.onLoadCacheStats,
         onClearMirrorCache: widget.onClearMirrorCache,
@@ -11050,16 +11060,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     bool fromSettings = false,
     bool notion = false,
   }) async {
+    // Unsupported here (local mode) — the entry points below are hidden when
+    // this is null, so reaching it means one of them was missed.
+    final import = widget.onImportWorkspaceZip;
+    if (import == null) return;
     final picked = await pickImportFile(zipOnly: true);
     if (picked == null || !mounted) return;
     if (fromSettings) {
       Navigator.of(context).pop(); // close settings before the import flow runs
     }
-    await widget.onImportWorkspaceZip(
-      picked.name,
-      picked.bytes,
-      notion: notion,
-    );
+    await import(picked.name, picked.bytes, notion: notion);
   }
 
   /// Multi-select import into an existing workspace: .md files (plus images

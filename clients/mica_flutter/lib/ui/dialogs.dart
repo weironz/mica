@@ -1061,7 +1061,9 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(bool value) onAiEnabledChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
-  final Future<void> Function() onImportWorkspace;
+  /// Null hides the import zone. Local mode has no archive importer, and an
+  /// upload target that silently does nothing is worse than no target at all.
+  final Future<void> Function()? onImportWorkspace;
 
   /// Null in 本地模式 — "export all workspaces" is a cloud endpoint
   /// (`GET /api/workspaces/export.zip`, every workspace this account belongs
@@ -2445,12 +2447,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     const SizedBox(height: 14),
     // A CLICK zone, not a drop zone: the app accepts no drops (see MicaPickZone),
     // so the copy says 「选择…」 and there is no 「拖到这里」 anywhere.
-    MicaPickZone(
-      icon: Icons.upload_file_outlined,
-      title: context.l10n.dataImportButton,
-      subtitle: context.l10n.dataImportZoneHint,
-      onTap: () => widget.onImportWorkspace(),
-    ),
+    if (widget.onImportWorkspace case final import?)
+      MicaPickZone(
+        icon: Icons.upload_file_outlined,
+        title: context.l10n.dataImportButton,
+        subtitle: context.l10n.dataImportZoneHint,
+        onTap: import,
+      ),
     if (widget.onExportAllWorkspaces != null) ...[
       const SizedBox(height: 18),
       MicaEyebrow(context.l10n.commonExport),
