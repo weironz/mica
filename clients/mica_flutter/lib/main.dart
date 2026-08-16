@@ -3012,8 +3012,28 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  /// Upload the archive, poll the import job, then refresh and open the
-  /// resulting workspace.
+  /// Upload the archive, then WATCH the import without holding the app.
+  ///
+  /// Two phases, because only one of them needs the user present. The upload
+  /// streams the archive out of this process, so quitting during it loses the
+  /// import — that part blocks, and AppFlowy words the same constraint the same
+  /// way ("File is uploading. Please do not quit the app"). Once the server has
+  /// the bytes it owns the job: it runs in its own task, keyed by a job id, and
+  /// nothing about it needs a client.
+  ///
+  /// The watching used to run inside [_run] too, which held `_isBusy` for the
+  /// WHOLE import — a 235-page archive locked the app for as long as the server
+  /// took, for no reason except that we were the ones asking how it was going.
+  /// Now it polls detached, and the progress row in the sidebar (always on
+  /// screen, cancel button and all) is where the import lives.
+  ///
+  /// The sidebar is deliberately kept as that home instead of moving this to a
+  /// settings page: Notion, Outline and Slack all park long imports in
+  /// `Settings → Import`, and the reason they do is that progress has to live
+  /// somewhere the user can find AGAIN — which the triggering dialog can never
+  /// be. The sidebar already satisfies that and is visible the whole time. (An
+  /// import HISTORY does belong in settings, but that needs jobs to outlive the
+  /// server process, and they are currently in memory only.)
   Future<void> _runServerImport(
     Uint8List zipBytes, {
     String? name,
@@ -3021,11 +3041,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? workspaceId,
     String? parentViewId,
     String? container,
-  }) {
+  }) async {
     final l10n = context.l10n;
-    return _run(() async {
+    String? started;
+    await _run(() async {
       final session = _requireSession();
-      final jobId = await _api.startWorkspaceImport(
+      started = await _api.startWorkspaceImport(
         session.accessToken,
         zipBytes,
         name: name,
@@ -3035,7 +3056,26 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         container: container,
         reHostImages: _reHostImages,
       );
-      if (mounted) setState(() => _importJobId = jobId);
+    });
+    final jobId = started;
+    // Upload failed — `_run` has already put the reason on screen.
+    if (jobId == null || !mounted) return;
+    setState(() => _importJobId = jobId);
+    // Detached on purpose: this is the line that gives the app back.
+    unawaited(_watchImportJob(jobId, workspaceId, l10n));
+  }
+
+  /// Poll a running import to completion, updating the sidebar progress row.
+  ///
+  /// Outside [_run], so it owns its error reporting: a failure here still has
+  /// to reach the user, but must not pretend the whole app is busy.
+  Future<void> _watchImportJob(
+    String jobId,
+    String? workspaceId,
+    AppLocalizations l10n,
+  ) async {
+    try {
+      final session = _requireSession();
       ImportJobStatus job;
       while (true) {
         job = await _api.importJobStatus(session.accessToken, jobId);
@@ -3096,14 +3136,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ),
         );
       }
-    }).whenComplete(() {
+    } on ApiException catch (error) {
+      // The import is the only thing that failed, so it is the only thing that
+      // gets reported — `_run`'s handler would also have flipped the whole app
+      // out of "busy", which it never was.
+      if (mounted) setState(() => _message = error.message);
+    } catch (error) {
+      if (mounted) setState(() => _message = '$error');
+    } finally {
       if (mounted) {
         setState(() {
           _importProgress = null;
           _importJobId = null;
         });
       }
-    });
+    }
   }
 
   /// Workspace name from an archive filename: drop the extension and the
