@@ -43,12 +43,23 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 # renamed file and exits normally.
 $tmp = "$exe.new"
 Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
-$old = "$exe.old"
-if (Test-Path $old) { Remove-Item $old -Force -ErrorAction SilentlyContinue }
+# A UNIQUE name for the displaced binary, not a fixed `.old`.
+#
+# The fixed name deadlocked with the very situation this dance exists for: the
+# previous update left `.old` behind precisely BECAUSE something was holding it,
+# and if that something is still running, the Remove-Item that used to be here
+# fails silently (-ErrorAction SilentlyContinue) and the rename then lands on a
+# file that is still present — "当文件已存在时，无法创建该文件", update refused.
+# So updating worked once and then blocked, for exactly the users who keep an
+# MCP client running. Windows renames a running image to any FREE name; give it
+# one that cannot collide.
+$old = "$exe.old-$([guid]::NewGuid().ToString('N').Substring(0,8))"
 if (Test-Path $exe) { Move-Item $exe $old -Force }
 Move-Item $tmp $exe -Force
-# Best-effort: only succeeds once nothing is holding the previous binary.
-Remove-Item $old -Force -ErrorAction SilentlyContinue
+# Best-effort sweep of this and any earlier displaced binaries: each disappears
+# only once nothing holds it, and leaving one behind is harmless.
+Get-ChildItem -Path "$exe.old*" -ErrorAction SilentlyContinue |
+  Remove-Item -Force -ErrorAction SilentlyContinue
 
 # Add the install dir to the USER PATH once (idempotent), and to THIS session so
 # `mica-cli` works without reopening the terminal.
