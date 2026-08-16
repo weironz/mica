@@ -61,6 +61,13 @@ enum Command {
   /// is code and not shell is in `backup.rs`: a shell run is an exit code, so
   /// "backed up less than you think" and "backed up everything" looked the same
   /// — and did, in production, for months.
+  /// Import archives — by default one new workspace per archive.
+  ///
+  /// Several archives run one after another, not at once: a big import is
+  /// mostly the server fetching images, and firing them off in parallel only
+  /// makes them contend. Each job is watched to completion before the next
+  /// starts, so the output reads as a straight log of what landed where.
+  Import(ImportArgs),
   /// Pages and folders: list, read, move, trash. The bulk forms take many ids
   /// and send ONE request, which is what makes reorganising a workspace from a
   /// script practical instead of a few hundred round trips.
@@ -161,6 +168,34 @@ struct LoginArgs {
 enum WsCmd {
   /// List your workspaces.
   List,
+}
+
+#[derive(Args)]
+struct ImportArgs {
+  /// Archives to import. Each becomes its own new workspace, named after the
+  /// file (unless --ws sends them all into one).
+  #[arg(required = true)]
+  archives: Vec<PathBuf>,
+  /// Import INTO this existing workspace instead of creating new ones.
+  #[arg(long)]
+  ws: Option<Uuid>,
+  /// Import under this folder (a view in --ws) rather than at the root.
+  #[arg(long)]
+  parent: Option<Uuid>,
+  /// Name for the new workspace. Only meaningful with a single archive —
+  /// several would all land on the same name.
+  #[arg(long)]
+  name: Option<String>,
+  /// Force Notion adaptation (otherwise auto-detected from the contents).
+  #[arg(long)]
+  notion: bool,
+  /// Do NOT pull externally-linked images into Mica.
+  ///
+  /// Much faster when the archive links to hosts this server cannot reach —
+  /// those cost a timeout each. The links keep working; run
+  /// `mica-cli rehost-images` afterwards from a network that CAN reach them.
+  #[arg(long)]
+  no_rehost: bool,
 }
 
 #[derive(Subcommand)]
@@ -316,6 +351,7 @@ fn run(cli: Cli) -> Result<()> {
     Command::Auth(AuthCmd::Token(TokenCmd::List)) => cmd_token_list(&cli, &cfg),
     Command::Auth(AuthCmd::Token(TokenCmd::Revoke { id })) => cmd_token_revoke(&cli, &cfg, *id),
     Command::Ws(WsCmd::List) => cmd_ws_list(&cli, &cfg),
+    Command::Import(args) => cmd_import(&cli, &cfg, args),
     Command::Page(PageCmd::List(args)) => cmd_page_list(&cli, &cfg, args),
     Command::Page(PageCmd::Read(args)) => cmd_page_read(&cli, &cfg, args),
     Command::Page(PageCmd::Move(args)) => cmd_page_move(&cli, &cfg, args),
@@ -401,6 +437,91 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
     print_json(&serde_json::json!({ "rehosted": rehosted, "failed": failed }))?;
   } else {
     println!("Done: {rehosted} re-hosted, {failed} failed.");
+  }
+  Ok(())
+}
+
+// ------------------------------------------------------------------- import
+
+fn cmd_import(cli: &Cli, cfg: &Config, args: &ImportArgs) -> Result<()> {
+  if args.name.is_some() && args.archives.len() > 1 {
+    bail!("--name works with one archive; {} were given (drop it and each is named after its file)", args.archives.len());
+  }
+  let client = authed_client(cli, cfg)?;
+  let mut results: Vec<serde_json::Value> = Vec::new();
+
+  for path in &args.archives {
+    let zip = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    // Workspace name from the filename, the way the app names an import.
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Imported");
+    let name = args.name.as_deref().or(if args.ws.is_some() { None } else { Some(stem) });
+
+    if !cli.json {
+      println!("==> {} ({} bytes)", path.display(), zip.len());
+    }
+    let job_id = client.start_import(
+      zip,
+      name,
+      args.ws,
+      args.parent,
+      args.notion,
+      !args.no_rehost,
+    )?;
+
+    // Watch to completion. The server owns the job — this loop only reports.
+    let mut last_done = usize::MAX;
+    let job = loop {
+      let job = client.import_job(job_id)?;
+      if !cli.json && job.total > 0 && job.done != last_done {
+        println!("    {}/{} pages", job.done, job.total);
+        last_done = job.done;
+      }
+      if job.status != "running" {
+        break job;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(1500));
+    };
+
+    // Report per archive and KEEP GOING. One bad archive in a batch of twenty
+    // must not throw away the nineteen that worked — and it has to be named,
+    // or the run looks like a clean sweep.
+    if !cli.json {
+      match job.status.as_str() {
+        "done" => println!(
+          "    done: {} page(s){}",
+          job.done,
+          if job.skipped.is_empty() {
+            String::new()
+          } else {
+            format!(", {} archive entry(ies) unreferenced and skipped", job.skipped.len())
+          }
+        ),
+        other => eprintln!(
+          "    {other}: {} page(s) landed{}",
+          job.done,
+          job.error.as_deref().map(|e| format!(" — {e}")).unwrap_or_default()
+        ),
+      }
+      if let Some(ws) = job.workspace_id {
+        println!("    workspace {ws}");
+      }
+    }
+    results.push(serde_json::json!({
+      "archive": path.to_string_lossy(),
+      "workspace_id": job.workspace_id,
+      "status": job.status,
+      "done": job.done,
+      "total": job.total,
+      "skipped": job.skipped.len(),
+    }));
+  }
+
+  if cli.json {
+    print_json(&results)?;
+  }
+  // Non-zero when ANY archive did not finish cleanly, so a script can tell.
+  if results.iter().any(|r| r["status"] != "done") {
+    bail!("one or more archives did not import cleanly (see above)");
   }
   Ok(())
 }

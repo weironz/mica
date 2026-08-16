@@ -72,6 +72,27 @@ pub struct View {
   pub state_bytes: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ImportStart {
+  job_id: Uuid,
+}
+
+/// A running (or finished) import, as the polling endpoint reports it.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ImportJobView {
+  /// `running` | `done` | `error` | `cancelled`.
+  pub status: String,
+  pub total: usize,
+  pub done: usize,
+  pub workspace_id: Option<Uuid>,
+  #[serde(default)]
+  pub error: Option<String>,
+  /// Archive entries no imported page references — dropped, not failed. The
+  /// count is what separates "imported everything" from "imported most of it".
+  #[serde(default)]
+  pub skipped: Vec<String>,
+}
+
 /// What a batch call actually did. `affected` counts every view touched —
 /// including descendants that came along with a folder — so it is normally
 /// larger than the number of ids sent. `skipped` names the requested ids that
@@ -325,6 +346,57 @@ impl Client {
       .authed(self.http.delete(self.url(&format!("/workspaces/{workspace_id}/trash"))))
       .send()?;
     Ok(Self::ok(resp)?.json()?)
+  }
+
+  /// Hand an archive to the server and get the job that is now importing it.
+  ///
+  /// The upload is the only part that needs this process: the import itself
+  /// runs server-side, keyed by the returned id, and outlives us leaving.
+  pub fn start_import(
+    &self,
+    zip: Vec<u8>,
+    name: Option<&str>,
+    workspace_id: Option<Uuid>,
+    parent_view_id: Option<Uuid>,
+    notion: bool,
+    rehost_external: bool,
+  ) -> Result<Uuid> {
+    let mut query: Vec<(&str, String)> = Vec::new();
+    if let Some(name) = name {
+      query.push(("name", name.to_string()));
+    }
+    if let Some(ws) = workspace_id {
+      query.push(("workspace_id", ws.to_string()));
+    }
+    if let Some(parent) = parent_view_id {
+      query.push(("parent_view_id", parent.to_string()));
+    }
+    if notion {
+      query.push(("notion", "true".to_string()));
+    }
+    // Only sent when turning it OFF — the server defaults it on.
+    if !rehost_external {
+      query.push(("rehost_external", "false".to_string()));
+    }
+    let resp = self
+      .authed(
+        self
+          .http
+          .post(self.url("/workspaces/import"))
+          .query(&query)
+          .body(zip),
+      )
+      .send()?;
+    let started: ImportStart = Self::ok(resp)?.json().context("decoding import start")?;
+    Ok(started.job_id)
+  }
+
+  /// One poll of a running import.
+  pub fn import_job(&self, job_id: Uuid) -> Result<ImportJobView> {
+    let resp = self
+      .authed(self.http.get(self.url(&format!("/import/jobs/{job_id}"))))
+      .send()?;
+    Self::ok(resp)?.json().context("decoding import job")
   }
 
   /// A document's full bootstrap snapshot as raw JSON — the caller navigates
