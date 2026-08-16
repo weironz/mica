@@ -25,6 +25,32 @@ Map<String, dynamic> _blk(
 };
 
 void main() {
+  // The migration created EVERY view with createDocument, so a local folder
+  // arrived in the cloud as a page — and the first child under it made the
+  // server refuse the whole workspace: "parent_view_id must be a folder — pages
+  // cannot contain pages". The local tree was legal throughout, which is why
+  // emptying the workspace and re-importing changed nothing: the illegal shape
+  // was built on the way up. This file already covered ordering and blob
+  // remapping; the one thing it never asserted was that a folder stays one.
+  group('migratesAsFolder', () {
+    test('a folder migrates as a folder', () {
+      expect(migratesAsFolder('folder'), isTrue);
+    });
+
+    test('a document does not', () {
+      expect(migratesAsFolder('document'), isFalse);
+    });
+
+    // Anything unrecognised takes the page path: a page under a folder is
+    // always legal, whereas guessing "folder" for an unknown type would invent
+    // a container the server may then refuse.
+    test('an unknown type takes the page path', () {
+      expect(migratesAsFolder(''), isFalse);
+      expect(migratesAsFolder('database'), isFalse);
+      expect(migratesAsFolder('Folder'), isFalse);
+    });
+  });
+
   group('isLocalBlobId', () {
     test('sha256 hex is a local id; UUID and junk are not', () {
       expect(isLocalBlobId(_sha), isTrue);

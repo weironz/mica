@@ -4364,11 +4364,34 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     var docCount = 0;
     try {
       for (final v in ordered) {
-        final doc = _local.openDoc(v.objectId);
-        if (doc == null) continue;
         final cloudParent = v.parentId == null
             ? null
             : localToCloudView[v.parentId];
+
+        // A FOLDER migrates as a folder. This used to call createDocument for
+        // every view, so every local folder arrived in the cloud as a PAGE —
+        // and the moment its first child followed, the server refused the whole
+        // migration: "parent_view_id must be a folder — pages cannot contain
+        // pages". Nothing about the local tree was wrong, which is why emptying
+        // the workspace and re-importing changed nothing: the shape was being
+        // created on the way up.
+        //
+        // The `openDoc == null` skip that sat here did not catch it: a local
+        // folder owns a placeholder empty document (see the vault import), so
+        // it opened fine and sailed straight into createDocument.
+        if (migratesAsFolder(v.objectType)) {
+          final folder = await _api.createFolder(
+            token,
+            cloudWs.id,
+            v.name,
+            parentViewId: cloudParent,
+          );
+          localToCloudView[v.id] = folder.id;
+          continue;
+        }
+
+        final doc = _local.openDoc(v.objectId);
+        if (doc == null) continue;
         final created = await _api.createDocument(
           token,
           cloudWs.id,

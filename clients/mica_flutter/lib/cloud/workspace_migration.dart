@@ -108,6 +108,19 @@ List<Map<String, dynamic>> buildMigrationOps({
   return ops;
 }
 
+/// Whether a local view must be created in the cloud as a FOLDER rather than as
+/// a page.
+///
+/// Migration used to create every view with `createDocument`, so each local
+/// folder arrived as a page — and the first child that followed it made the
+/// server refuse the whole migration ("pages cannot contain pages"). Nothing
+/// about the local tree was wrong, which is why emptying the workspace and
+/// re-importing changed nothing: the illegal shape was built on the way up.
+///
+/// A one-line rule, split out because it is the part that was wrong and the
+/// migration loop around it needs a live server to exercise.
+bool migratesAsFolder(String objectType) => objectType == 'folder';
+
 /// A copy of [block]'s `data` map with the image `file_id` rewritten via [idMap]
 /// when present. Inline marks and other props are preserved verbatim.
 Map<String, dynamic> _rewriteData(
