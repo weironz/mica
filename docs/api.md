@@ -160,6 +160,59 @@ Trashing is a soft delete and reversible; purging is neither.
 | GET | `/import/jobs/{job_id}` | Poll progress |
 | POST | `/import/jobs/{job_id}/cancel` | Cancel |
 
+The import runs as a background task on the server: the POST returns a job id
+as soon as the archive is uploaded, and **the client can leave**. Cancelling
+stops it between pages and does NOT roll back — the job reports how many pages
+had already landed.
+
+> ### ⚠️ Do not deploy while an import is running
+>
+> Job state lives in memory (`state.import_jobs`) and the work is a spawned
+> task, so restarting the api **kills a running import** and loses its record.
+> The pages already written stay, which is the bad part: the workspace is left
+> holding part of an archive with nothing saying so, and the job id you were
+> polling returns nothing. Wait for it to finish, or cancel deliberately (which
+> at least reports what landed). This is also why "reopen the app and pick the
+> progress back up" is not offered — it would work only until the next deploy.
+
+#### Why an import can be slow, and what the numbers are
+
+Import time is usually **not** about the page count. It is about images the
+archive links to but does not contain: those are fetched from the open internet,
+and a server that cannot reach them pays a timeout for each one. A CN-hosted
+server routinely cannot reach the CDNs a wiki links to.
+
+These are constants, not settings. They are written down because knowing what
+the import is waiting on is the part you actually need — and because every knob
+here would also have to be threaded through the compose allowlist to reach the
+process at all (see [`deploy.md`](deploy.md)). If a default turns out to be
+wrong for real deployments, the fix is to change the default.
+
+| Behaviour | Value | Where |
+| --- | --- | --- |
+| External image fetch timeout | 8s | `routes/files.rs` |
+| Images fetched at once | 8 | `REHOST_CONCURRENCY`, `routes/import.rs` |
+| Timeouts before a host is written off | 2 | `HostBreaker::LIMIT`, `routes/import.rs` |
+| Ids per batch endpoint | 1000 | `MAX_BATCH_VIEWS`, `routes/documents.rs` |
+
+After two timeouts against one host, the rest of that host's images are skipped
+**unattempted** and keep their original links; the count is logged. Nothing is
+lost — re-run `mica-cli rehost-images` from a network that can reach them, which
+is what that command is for. Or set `rehost_external=false` on the import to
+skip the step entirely and do it later.
+
+Only timeouts trip the breaker. A 404 is about one image and says nothing about
+the next, so it does not count — and in real archives the two arrive mixed
+together.
+
+#### Export
+
+Export has no equivalent tuning because it has no external network: it reads
+this instance's own database and object storage. It does assemble the whole
+archive in memory before responding, so a very large workspace is a memory
+spike rather than a slow trickle — a different failure (OOM), with different
+symptoms, and not one that has been observed in practice.
+
 ## Files and images
 
 | Method | Path | Purpose |

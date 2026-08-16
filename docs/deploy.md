@@ -79,6 +79,14 @@ docker compose --env-file .env.prod -f docker-compose.single.yml up -d --pull al
 No `git pull` — the compose file is the only repo file this stack needs, and
 the version it runs is the tag in `.env.prod`, not whatever your checkout is at.
 
+> **Check for a running workspace import first.** Import jobs live in the api's
+> memory, so restarting it kills the job AND its record, while leaving the pages
+> already written in place — a workspace holding half an archive, with nothing
+> saying so and no job id left to ask. An import of a few hundred pages can run
+> for a while, especially when the archive links to images this server cannot
+> reach. Let it finish, or cancel it deliberately (a cancel at least reports how
+> much landed). See [`api.md`](api.md).
+
 `index.html` / the service worker are served with `no-cache`, so a plain
 reload picks up new releases (asset files are content-hashed).
 
