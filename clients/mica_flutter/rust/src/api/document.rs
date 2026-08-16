@@ -142,8 +142,36 @@ impl MicaDocument {
         from_path: String,
         asset_ids: std::collections::HashMap<String, String>,
     ) -> MicaDocument {
+        // A panic here ABORTS THE PROCESS — it unwinds into C and the app just
+        // vanishes. Seen on a real vault: 155 of ~840 pages imported, the
+        // window closed, and Windows logged 0xc0000409 against this .dll twice
+        // at the same offset. Whatever one page does to the parser, it has to
+        // cost that page, not the other 839 and the user's whole import.
+        //
+        // Caught here rather than "fixed" upstream because the guarantee worth
+        // having is not "no markdown can ever panic" — unprovable against
+        // arbitrary input — but "one bad page cannot take the import down".
+        let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::build_with_assets(&markdown, &from_path, &asset_ids)
+        }));
+        match recovered {
+            Ok(doc) => doc,
+            // Fall back to the page WITHOUT its images. The text is the part
+            // the user cannot recreate, and a page with dead image links beats
+            // no page at all. If the plain path panics too, that is a different
+            // bug and the abort is the honest outcome — better than silently
+            // storing an empty document in its place.
+            Err(_) => Self::from_markdown(markdown),
+        }
+    }
+
+    fn build_with_assets(
+        markdown: &str,
+        from_path: &str,
+        asset_ids: &std::collections::HashMap<String, String>,
+    ) -> MicaDocument {
         let root_id = format!("block_{}", uuid::Uuid::new_v4());
-        let payload = mica_markdown::import_markdown(&markdown, &root_id);
+        let payload = mica_markdown::import_markdown(markdown, &root_id);
         let paths: std::collections::HashSet<String> = asset_ids.keys().cloned().collect();
 
         let blocks: Vec<Block> = payload
@@ -156,7 +184,7 @@ impl MicaDocument {
                 if b.kind == "image" {
                     if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
                         if let Some(hit) =
-                            mica_interchange::resolve_ref(&from_path, url, &paths)
+                            mica_interchange::resolve_ref(from_path, url, &paths)
                         {
                             if let Some(file_id) = asset_ids.get(&hit) {
                                 // The shape the cloud import produces and the
@@ -496,6 +524,73 @@ mod tests {
             json.contains("hello"),
             "document still readable after poisoning: {json}"
         );
+    }
+
+    /// Walk a real vault and report which page, if any, takes the importer
+    /// down. Ignored by default — it needs a directory that only exists on the
+    /// machine reproducing the bug. Run with:
+    ///
+    ///   MICA_VAULT=C:\path\to\vault cargo test -- --ignored --nocapture
+    ///
+    /// Kept in the tree rather than thrown away after the fix: "one page kills
+    /// the import" is the failure mode worth being able to re-check, and the
+    /// next such archive will not be this one.
+    #[test]
+    #[ignore]
+    fn every_page_in_a_real_vault_imports_without_aborting() {
+        let Ok(root) = std::env::var("MICA_VAULT") else {
+            eprintln!("set MICA_VAULT to a vault directory");
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let mut checked = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "md") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        files.sort();
+        eprintln!("{} markdown files under {}", files.len(), root.display());
+
+        for path in files {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            // Printed BEFORE the call and flushed: a stack overflow cannot be
+            // caught, so the last line standing is the file that did it.
+            eprintln!("-> {rel}");
+            use std::io::Write;
+            let _ = std::io::stderr().flush();
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = MicaDocument::from_markdown_with_assets(
+                    text.clone(),
+                    rel.clone(),
+                    std::collections::HashMap::new(),
+                );
+            }));
+            checked += 1;
+            if res.is_err() {
+                eprintln!("PANIC on {rel}");
+                failed.push(rel);
+            }
+        }
+        eprintln!("checked {checked}, panicked {}", failed.len());
+        assert!(failed.is_empty(), "pages that abort the import: {failed:?}");
     }
 
     /// Build the blocks a page imports to, so the assertions below read as

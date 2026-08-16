@@ -1879,13 +1879,35 @@ fn is_divider(content: &str) -> bool {
 }
 
 /// Leading indentation of a line in columns (tabs = 4-column stops).
+/// How many columns one leading whitespace character is worth, or None when the
+/// character is not indentation at all.
+///
+/// THE single answer to "how far is this line indented". Three functions used
+/// to answer it separately — `column_of`, `leading_columns` and
+/// `deindent_columns` — and they disagreed about U+00A0: `trim_start()` (which
+/// decides a line *is* indented, via `char::is_whitespace`) counted it, these
+/// did not. A no-break-space-indented paragraph after a list therefore looked
+/// indented to the dispatcher and unindented to the measurement, the loop
+/// re-fed itself the same line forever, and `import_markdown` allocated until
+/// the process aborted — taking the desktop app down mid-import. Thirty bytes
+/// did it, and CJK documents indent with NBSP routinely.
+///
+/// Keep every indent measurement going through here. A fourth copy is how this
+/// comes back.
+fn indent_width(c: char, col: usize) -> Option<usize> {
+  match c {
+    ' ' | '\u{a0}' => Some(col + 1),
+    '\t' => Some((col / 4 + 1) * 4),
+    _ => None,
+  }
+}
+
 fn leading_columns(line: &str) -> usize {
   let mut col = 0usize;
   for c in line.chars() {
-    match c {
-      ' ' => col += 1,
-      '\t' => col = (col / 4 + 1) * 4,
-      _ => break,
+    match indent_width(c, col) {
+      Some(next) => col = next,
+      None => break,
     }
   }
   col
@@ -1896,10 +1918,9 @@ fn leading_columns(line: &str) -> usize {
 fn deindent_columns(line: &str, columns: usize) -> String {
   let mut col = 0usize;
   for (i, c) in line.char_indices() {
-    match c {
-      ' ' => col += 1,
-      '\t' => col = (col / 4 + 1) * 4,
-      _ => return line[i..].to_string(),
+    match indent_width(c, col) {
+      Some(next) => col = next,
+      None => return line[i..].to_string(),
     }
     if col >= columns {
       let mut rest = " ".repeat(col - columns);
@@ -1914,10 +1935,9 @@ fn deindent_columns(line: &str, columns: usize) -> String {
 fn column_of(line: &str) -> usize {
   let mut col = 0usize;
   for c in line.chars() {
-    match c {
-      ' ' => col += 1,
-      '\t' => col = (col / 4 + 1) * 4,
-      _ => break,
+    match indent_width(c, col) {
+      Some(next) => col = next,
+      None => break,
     }
   }
   col
