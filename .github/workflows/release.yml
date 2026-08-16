@@ -127,6 +127,17 @@ jobs:
           # Distinct from the cli job's `mica-cli` key: different crate, different
           # profile. One shared key would just thrash both.
           key: mica-flutter-ffi
+          # READ-ONLY on a release. GitHub scopes caches per ref, so an entry
+          # written on `refs/tags/v0.13.21` is visible to that tag and nothing
+          # else — never to the next release. Three consecutive releases logged
+          # "No cache found", recompiled the whole dependency tree, and then
+          # saved an entry no run would ever read: the cost paid twice.
+          #
+          # Reads still work, because a tag can read its base branch's caches.
+          # So restore whatever `main` built and write nothing — which also
+          # stops release runs from evicting the entries CI depends on (see the
+          # cache-budget note in ci.yml).
+          save-if: false
 
       - run: flutter pub get
 
@@ -301,8 +312,13 @@ jobs:
         with:
           # One shared cache across the matrix would collide (different OSes);
           # rust-cache already namespaces by runner OS. Key by the crate so the
-          # desktop job's (nonexistent) Rust cache never mixes in.
+          # desktop job's Rust cache never mixes in.
           key: mica-cli
+          # Read-only for the same reason as the windows job above: a cache
+          # written on a tag ref is readable only by that tag, so saving here
+          # costs upload time on every release and is never restored by the
+          # next one.
+          save-if: false
 
       # musl needs its linker; the other legs have no target and skip this.
       - name: Install musl tools
