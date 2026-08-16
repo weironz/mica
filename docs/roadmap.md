@@ -61,7 +61,15 @@
   都更大(SigV4 经代理、CORS、Traefik 栈同步),没做。文档见 `docs/deploy.md` 的
   “Secrets: what you generate, and what generates itself” 一节。
 
-## 导入 / 批量整理(0.13.19 之后剩下的)
+## 导入 / 批量整理(0.13.21 之后剩下的)
+
+- 🟡 **本地模式的 zip 导入入口。** 0.13.21 把它从「空实现、点了没反应」改成了**隐藏**,
+  因为客户端没有 zip 读侧(只有 `buildStoreZip` 打包侧,解包在服务端 Rust 里)。要放出来
+  得新增一个解包 FFI;资产那半已经就绪(`from_markdown_with_assets` + 本地 CAS),
+  剩下的只是「把 zip 解成 `List<ArchiveFile>`」这一步。
+- 🟡 **`_selectedMarkdown` 恒为 null。** 0.13.21 删掉了唯一给它赋值的孤儿方法,状态本身
+  和依赖它的显示还留着 —— 拆要动外壳 widget,单独做。
+
 
 - 🔴 **导入 job 落库。** 现在 `state.import_jobs` 是内存里的 `RwLock<HashMap>`:重启 api
   会杀掉任务**并丢掉记录**,而已写入的页面留着 —— 工作区握着半个归档,没有任何东西说明
