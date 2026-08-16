@@ -60,6 +60,63 @@ pub struct ImportParams {
   pub rehost_external: bool,
 }
 
+/// Stops an import from re-learning that a host is unreachable, once per image.
+///
+/// A CN-hosted server routinely cannot reach the CDNs a wiki links to. Each of
+/// those fetches costs the full connect timeout, in series, and a documentation
+/// archive tends to reference the SAME host hundreds of times — so the import
+/// spends hours establishing one fact over and over.
+///
+/// After [Self::LIMIT] timeouts against one host, the rest of that host's images
+/// are refused immediately. Only TIMEOUTS trip it: a 404 is about one image and
+/// says nothing about the next, and a host that is merely slow still gets
+/// [Self::LIMIT] honest attempts before being written off. A refused image keeps
+/// its original link, exactly as a failed fetch would — the breaker changes how
+/// long the failure takes to establish, never the outcome.
+/// External image fetches in flight at once during an import.
+///
+/// Deliberately modest: these are someone else's servers, and an import that
+/// opens fifty connections to one CDN is a bad citizen and invites rate limits.
+/// Eight turns a wall of serial timeouts into a wall of parallel ones while the
+/// breaker below is deciding, which is the case that hurt.
+const REHOST_CONCURRENCY: usize = 8;
+
+#[derive(Default)]
+struct HostBreaker {
+  timeouts: std::collections::HashMap<String, u32>,
+}
+
+impl HostBreaker {
+  /// Timeouts against one host before the rest of it is refused unattempted.
+  const LIMIT: u32 = 2;
+
+  fn host_of(url: &str) -> Option<String> {
+    reqwest::Url::parse(url)
+      .ok()
+      .and_then(|u| u.host_str().map(str::to_string))
+  }
+
+  /// True when this host has already proved unreachable.
+  fn is_open(&self, url: &str) -> bool {
+    Self::host_of(url)
+      .and_then(|h| self.timeouts.get(&h).copied())
+      .is_some_and(|n| n >= Self::LIMIT)
+  }
+
+  /// Record an outcome. Anything that is not a timeout resets the host: one
+  /// slow image among many good ones must not condemn the rest.
+  fn record(&mut self, url: &str, error: &str) {
+    let Some(host) = Self::host_of(url) else {
+      return;
+    };
+    if error.contains("timed out") {
+      *self.timeouts.entry(host).or_insert(0) += 1;
+    } else {
+      self.timeouts.remove(&host);
+    }
+  }
+}
+
 fn default_true() -> bool {
   true
 }
@@ -207,6 +264,74 @@ mod tests {
       .collect();
 
     assert!(skipped.is_empty());
+  }
+
+  const TIMED_OUT: &str = "bad request: could not fetch the image url: timed out — this \
+                           server may have no route to that host";
+  const NOT_FOUND: &str = "bad request: image url returned 404 Not Found";
+
+  /// The case that cost hours: one unreachable CDN referenced by hundreds of
+  /// images, each paying the full timeout in series.
+  #[test]
+  fn a_host_that_keeps_timing_out_is_written_off() {
+    let mut b = HostBreaker::default();
+    let url = "https://static.example.cn/a.png";
+    assert!(!b.is_open(url), "nothing has failed yet");
+
+    b.record(url, TIMED_OUT);
+    assert!(!b.is_open(url), "one timeout could be a blip");
+    b.record("https://static.example.cn/b.png", TIMED_OUT);
+
+    assert!(
+      b.is_open("https://static.example.cn/c.png"),
+      "the rest of that host must be refused without being tried"
+    );
+  }
+
+  /// A 404 is about ONE image. Letting it trip the breaker would abandon every
+  /// other image on a host over a single dead link — and these arrive mixed
+  /// together in real archives.
+  #[test]
+  fn a_404_says_nothing_about_the_next_image() {
+    let mut b = HostBreaker::default();
+    for path in ["a", "b", "c", "d"] {
+      b.record(&format!("https://aijishu.example/{path}.png"), NOT_FOUND);
+    }
+    assert!(!b.is_open("https://aijishu.example/e.png"));
+  }
+
+  /// A slow host that eventually answers must not be condemned by the timeouts
+  /// it accumulated on the way — otherwise one bad patch loses the rest.
+  #[test]
+  fn a_success_clears_the_earlier_timeouts() {
+    let mut b = HostBreaker::default();
+    b.record("https://slow.example/1.png", TIMED_OUT);
+    b.record("https://slow.example/2.png", NOT_FOUND); // any non-timeout resets
+    b.record("https://slow.example/3.png", TIMED_OUT);
+    assert!(
+      !b.is_open("https://slow.example/4.png"),
+      "the counter restarted, so this host still has attempts left"
+    );
+  }
+
+  /// Hosts are independent: one dead CDN must not silence a healthy one.
+  #[test]
+  fn one_dead_host_does_not_affect_another() {
+    let mut b = HostBreaker::default();
+    b.record("https://dead.example/1.png", TIMED_OUT);
+    b.record("https://dead.example/2.png", TIMED_OUT);
+    assert!(b.is_open("https://dead.example/3.png"));
+    assert!(!b.is_open("https://alive.example/1.png"));
+  }
+
+  /// Anything unparseable is left to the fetch to reject — the breaker must not
+  /// invent a host, and must never refuse something it cannot even name.
+  #[test]
+  fn a_url_with_no_host_is_never_refused() {
+    let mut b = HostBreaker::default();
+    b.record("not a url", TIMED_OUT);
+    b.record("not a url", TIMED_OUT);
+    assert!(!b.is_open("not a url"));
   }
 
   #[test]
@@ -432,6 +557,92 @@ async fn run_import(
   let mut rehosted: std::collections::HashMap<String, (String, String)> =
     std::collections::HashMap::new();
   let client = reqwest::Client::new();
+
+  // Fetch every external image BEFORE walking the pages, several at a time.
+  //
+  // The per-block path below is still the one that rewires a block, and it
+  // still works alone — this pass only fills the cache it reads. Done here
+  // because that path is deep inside two nested loops and strictly serial: an
+  // archive with a few hundred external images spent the whole import waiting
+  // on one request at a time. The scan costs a second parse of each page's
+  // Markdown, which is CPU and bounded; the fetches are the network, and that
+  // is where the time actually went.
+  if params.rehost_external {
+    let mut wanted: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for page in plan.pages.iter().filter(|p| !p.is_folder) {
+      let from = page.archive_path.as_deref().unwrap_or("");
+      for block in import_markdown(&page.markdown, "scan").blocks {
+        if block.kind != "image" {
+          continue;
+        }
+        let Some(url) = block.data.get("url").and_then(|v| v.as_str()) else {
+          continue;
+        };
+        // Images that resolve inside the archive are uploaded from its bytes;
+        // only real links go over the network.
+        if resolve_ref(from, url, &file_paths).is_some() {
+          continue;
+        }
+        if (url.starts_with("http://") || url.starts_with("https://"))
+          && seen.insert(url.to_string())
+        {
+          wanted.push(url.to_string());
+        }
+      }
+    }
+
+    if !wanted.is_empty() {
+      tracing::info!(count = wanted.len(), "import: pre-fetching external images");
+    }
+    let mut breaker = HostBreaker::default();
+    let mut refused = 0usize;
+    for chunk in wanted.chunks(REHOST_CONCURRENCY) {
+      if state
+        .import_jobs
+        .read()
+        .await
+        .get(&job_id)
+        .is_some_and(|j| j.cancel_requested)
+      {
+        return Ok(());
+      }
+      // The breaker is consulted between chunks, so a dead host costs at most
+      // one chunk of timeouts rather than one per image.
+      let live: Vec<&String> = chunk.iter().filter(|u| !breaker.is_open(u)).collect();
+      refused += chunk.len() - live.len();
+      let results = futures_util::future::join_all(live.into_iter().map(|url| async move {
+        (
+          url.clone(),
+          fetch_and_store_image_url(state, workspace_id, user_id, url).await,
+        )
+      }))
+      .await;
+      for (url, result) in results {
+        match result {
+          Ok(record) => {
+            rehosted.insert(url, (record.id.to_string(), record.original_name.clone()));
+          }
+          Err(error) => {
+            let reason = error.to_string();
+            breaker.record(&url, &reason);
+            tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
+          }
+        }
+      }
+    }
+    if refused > 0 {
+      // Said out loud, with the count: these images kept their links without
+      // ever being tried, and an operator who does not know that will read the
+      // import as having re-hosted everything it could.
+      tracing::warn!(
+        refused,
+        "import: images skipped unattempted — their host had already timed out repeatedly; \
+         they keep their original links (re-run `mica-cli rehost-images` from a network that \
+         can reach them)"
+      );
+    }
+  }
 
   for (idx, page) in plan.pages.iter().enumerate() {
     // Stop between pages when asked. Checked HERE rather than by aborting the

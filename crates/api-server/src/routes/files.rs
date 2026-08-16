@@ -251,8 +251,13 @@ pub(crate) async fn fetch_and_store_image_url(
     ));
   }
 
+  // 8s, not 20. This timeout is only ever spent on a fetch that is going to
+  // fail — a reachable host answers in well under a second, and an unreachable
+  // one stays unreachable. The old 20s was paid PER IMAGE, in series, during an
+  // import: one unreachable image host turned a 235-page import into hours of
+  // waiting for answers that were never coming.
   let client = reqwest::Client::builder()
-    .timeout(Duration::from_secs(20))
+    .timeout(Duration::from_secs(8))
     .redirect(reqwest::redirect::Policy::none())
     .build()
     .map_err(|e| ApiError::Internal(e.to_string()))?;
