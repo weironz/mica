@@ -7584,7 +7584,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final ScrollController _treeScroll = ScrollController();
   final GlobalKey _treeListKey = GlobalKey();
   Timer? _autoScrollTimer;
-  double _autoScrollVelocity = 0;
+  /// Where the drag pointer last was, in GLOBAL coordinates. The auto-scroll
+  /// timer re-derives its velocity from this every frame — a cached velocity
+  /// kept scrolling after the pointer had left the edge zone.
+  Offset? _autoScrollPointer;
   // Pointer is over the navigation sidebar — reveals the tree's expand
   // toggles (AppFlowy-style: they live in their own slim column, opacity 0
   // at rest so the page icons keep one aligned column).
@@ -8740,25 +8743,34 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       _stopAutoScroll();
       return;
     }
-    final velocity = edgeAutoScrollVelocity(
-      box.globalToLocal(globalPointer).dy,
-      box.size.height,
-    );
-    if (velocity == 0) {
-      _stopAutoScroll();
-      return;
-    }
-    _autoScrollVelocity = velocity;
-    // A single ticking timer reads the latest velocity each frame; onDragUpdate
-    // only fires while the pointer MOVES, but the pointer often rests inside the
-    // edge zone, so the timer — not the callback — must drive the scroll.
+    // Remember WHERE the pointer is, not how fast that made us scroll once.
+    //
+    // The velocity used to be computed here and cached, with the timer below
+    // just re-applying it. But onDragUpdate fires only while the pointer MOVES:
+    // hold still just inside the edge zone and the last velocity ran forever,
+    // carrying the list all the way to the top or bottom with no way to stop
+    // part-way — so a page could not be dropped anywhere in between.
+    // Recomputing each frame from the live position means leaving the zone
+    // stops the scroll on the next frame, whether or not the pointer moved.
+    _autoScrollPointer = globalPointer;
     _autoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
-      if (!_treeScroll.hasClients) {
+      final live =
+          _treeListKey.currentContext?.findRenderObject() as RenderBox?;
+      final pointer = _autoScrollPointer;
+      if (live == null || pointer == null || !_treeScroll.hasClients) {
+        _stopAutoScroll();
+        return;
+      }
+      final velocity = edgeAutoScrollVelocity(
+        live.globalToLocal(pointer).dy,
+        live.size.height,
+      );
+      if (velocity == 0) {
         _stopAutoScroll();
         return;
       }
       final pos = _treeScroll.position;
-      final next = (pos.pixels + _autoScrollVelocity).clamp(
+      final next = (pos.pixels + velocity).clamp(
         pos.minScrollExtent,
         pos.maxScrollExtent,
       );
@@ -8772,6 +8784,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   void _stopAutoScroll() {
     _autoScrollTimer?.cancel();
     _autoScrollTimer = null;
+    // Cleared with the timer: a stale pointer from the previous drag would let
+    // the next one start scrolling before it had moved anywhere.
+    _autoScrollPointer = null;
   }
 
   void _endTreeDrag() {
