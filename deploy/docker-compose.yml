@@ -141,6 +141,12 @@ services:
       # to read, and an instance that loses its .env line would silently reopen
       # to public signup. Set MICA_REGISTRATION_ENABLED=true in .env to open it.
       MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-}"
+      # Who may change the instance-wide AI provider settings. The first signup
+      # on a fresh instance gets it automatically; this is the lever for an
+      # instance that already had accounts when the flag was introduced, where
+      # nothing can reliably infer which account belongs to the operator.
+      # Idempotent and additive — safe to leave set.
+      MICA_ADMIN_EMAIL: "${MICA_ADMIN_EMAIL:-}"
       # Per-workspace byte ceiling; unset = the code's 5 GiB default, `0` = no
       # limit. Named here because this block is an explicit ALLOW-LIST: a variable
       # in the node's .env that is not listed never reaches the process. Found by

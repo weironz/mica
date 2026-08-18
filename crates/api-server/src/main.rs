@@ -59,6 +59,56 @@ async fn main() -> anyhow::Result<()> {
     tracing::warn!(email = %seed.email, "seeded test user (MICA_SEED_TEST_USER) — test environments only");
   }
 
+  // Who administers this instance. Instance-wide settings (the AI provider and
+  // its key) are admin-only, so an instance with no admin cannot be configured
+  // at all — and migration 0021 could only GUESS at the answer when it added
+  // the flag to an instance that already had accounts.
+  //
+  // That guess was "the oldest account stood the instance up", and it was wrong
+  // the first time it ran for real: the oldest account was `demo@mica.dev`, a
+  // dev seed, while the operator had signed up three days later. Every other
+  // heuristic fails somewhere too (both accounts owned workspaces, so "owns
+  // workspaces" would not have separated them either), and being wrong locks
+  // the operator out or hands the flag to someone else on a shared instance.
+  //
+  // So: no more guessing. New instances are unambiguous — the first signup gets
+  // it inside the same INSERT — and an existing instance gets an explicit lever
+  // here. Idempotent, additive (it never revokes), and safe to leave set.
+  if let Ok(email) = std::env::var("MICA_ADMIN_EMAIL") {
+    let email = email.trim().to_lowercase();
+    if !email.is_empty() {
+      match sqlx::query("UPDATE users SET is_admin = true WHERE lower(email) = $1")
+        .bind(&email)
+        .execute(&db)
+        .await
+      {
+        Ok(result) if result.rows_affected() > 0 => {
+          info!(%email, "granted admin (MICA_ADMIN_EMAIL)")
+        }
+        Ok(_) => tracing::warn!(%email, "MICA_ADMIN_EMAIL names no account on this instance"),
+        Err(error) => tracing::warn!(%error, "could not apply MICA_ADMIN_EMAIL"),
+      }
+    }
+  }
+
+  // An instance with accounts but no admin has no way to reach its own AI
+  // settings. Say so at boot rather than letting it surface as a greyed-out
+  // dialog with no explanation — which is exactly how it surfaced the first
+  // time, and the screen gives the reader no way to know the fix is a database
+  // row.
+  if let Ok(Some((users, admins))) =
+    sqlx::query_as::<_, (i64, i64)>("SELECT count(*), count(*) FILTER (WHERE is_admin) FROM users")
+      .fetch_optional(&db)
+      .await
+  {
+    if users > 0 && admins == 0 {
+      tracing::warn!(
+        users,
+        "no account on this instance is an admin, so nobody can change the AI          provider settings. Set MICA_ADMIN_EMAIL to the operator's address and          restart."
+      );
+    }
+  }
+
   let addr = config.http_addr;
   // Log by default; Aliyun DirectMail when MICA_MAIL_BACKEND=directmail is set.
   let mailer = mail::build_mailer();

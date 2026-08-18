@@ -201,6 +201,41 @@ from an env file that already has one: the volume keeps whatever password
 database still expects the old value. Changing it later requires an
 `ALTER USER` by hand.
 
+## Who administers the instance
+
+The AI provider settings (endpoint, model, API key) are **instance-wide** — one
+config shared by everyone, holding the operator's provider key — so only an
+admin may change them. Everyone else sees the section read-only.
+
+* **A fresh instance needs nothing.** The first account to sign up gets the flag
+  inside the same `INSERT` that creates it, so the person who stands the
+  instance up can configure it.
+* **An instance that already had accounts** when the flag was introduced
+  (migration 0021) got a *guess*: the oldest account. That guess is documented
+  here because it was wrong the first time it ran against real data — the oldest
+  account was `demo@mica.dev`, a dev seed that had been loaded at some point,
+  while the operator had signed up three days later. The operator opened the
+  settings dialog and found every field greyed out, with nothing on screen to
+  suggest the fix lived in a database row.
+
+  Nothing can infer this reliably. "Owns workspaces" would not have separated
+  those two accounts either (both did). So set it explicitly:
+
+  ```
+  MICA_ADMIN_EMAIL=you@example.com
+  ```
+
+  Applied at every boot, idempotent, and additive — it never revokes anyone, so
+  it is safe to leave in `.env`. If it names an address with no account, the
+  server logs a warning and carries on.
+
+* **No admin at all?** The server warns at boot (`no account on this instance is
+  an admin`). Set `MICA_ADMIN_EMAIL` and restart.
+
+Remember that `deploy/docker-compose.yml`'s `environment:` block is an explicit
+allowlist — a variable set in `.env` but absent from that block never reaches
+the process.
+
 ## Data & backups
 
 | Data | Where | Backup |
