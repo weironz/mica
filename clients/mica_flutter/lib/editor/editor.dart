@@ -1438,11 +1438,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// URL/image links, formulas, multi-line markdown); a plain single line falls
   /// through (returns false) and is inserted inline, replacing any selection —
   /// the same outcome the web textarea produced.
-  /// Copy the current ranged selection in both flavors (stripped text/plain +
+  /// Copy the current ranged selection in both flavors (Markdown text/plain +
   /// rich text/html). False when there is nothing to copy. Shared by Ctrl+C
   /// and the context menu.
+  ///
+  /// text/plain is MARKDOWN, not stripped text, and the two have to agree:
+  /// [_pasteFromClipboard] parses a plain-text paste as Markdown (that is what
+  /// makes pasting an LLM answer work). Writing a Markdown-FREE flavor and then
+  /// reading it back as Markdown is a category error, and it bit: when the HTML
+  /// flavor went missing, a copied page's `# 1. check state` — a shell COMMENT
+  /// inside a code block, which the stripped flavor emitted without its fence —
+  /// came back as an h1, and one page turned into 48 blocks of wreckage. Lists
+  /// degraded the same way (`• item` is not list syntax).
+  ///
+  /// Peers split on this, and the split follows the document model: the
+  /// Markdown-backed ones (Logseq, Notion, Obsidian, BlockNote, MarkText) all
+  /// put Markdown in text/plain. The trade is that Notepad now receives
+  /// `**bold**` rather than `bold`.
   bool _copySelection() {
-    final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
+    final plain = _controller.selectionText(imageUrls: _imageUrlCache);
     if (plain.isEmpty) return false;
     final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
     copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
@@ -1451,9 +1465,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return true;
   }
 
-  /// Cut = copy both flavors, then delete the selection.
+  /// Cut = copy both flavors, then delete the selection. Same Markdown
+  /// text/plain as [_copySelection] — they must not diverge.
   bool _cutSelection() {
-    final plain = _controller.selectionPlainText(imageUrls: _imageUrlCache);
+    final plain = _controller.selectionText(imageUrls: _imageUrlCache);
     if (plain.isEmpty) return false;
     final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
     copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
