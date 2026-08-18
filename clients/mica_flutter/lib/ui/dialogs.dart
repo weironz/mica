@@ -1182,6 +1182,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   List<String> _models = const [];
   bool _fetchingModels = false;
   String? _modelsError;
+  /// True after a provider switch while a key from the PREVIOUS provider is
+  /// still stored. Not a failure — just not something the user can see without
+  /// being told, since the key field shows dots either way.
+  bool _keyStale = false;
   // API Tokens tab state.
   List<Map<String, dynamic>>? _tokens;
   bool _tokensLoaded = false;
@@ -1551,6 +1555,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // Baseline: what the server already has. Without it, merely tabbing
       // through the AI fields would look like a change and save on blur.
       _aiSaved = _aiNow;
+      // A stored key with no model is a configured-but-unusable instance, and
+      // it is reachable by simply saving a key before picking anything. Fetch
+      // the list unasked in exactly that state: the user cannot choose a model
+      // whose name they have no way to know, and making them find the button
+      // first is a step with no decision in it.
+      if (_hasKey && _model.text.trim().isEmpty) unawaited(_fetchModels());
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -1620,12 +1630,25 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   void _applyPreset(_AiPreset preset) {
+    final was = _preset;
     setState(() {
       _preset = preset;
       if (preset != _AiPreset.custom) {
         _baseUrl.text = preset.baseUrl;
-        _model.text = preset.model;
+        // A model id belongs to ONE vendor: `deepseek-v4-pro` means nothing to
+        // Kimi. Carrying it across would look like the setting survived while
+        // actually pointing at a model that does not exist there — the same
+        // silent-wrong-default this dialog stopped shipping. Cleared, and the
+        // list below says so and offers the fetch.
+        _model.text = '';
       }
+      // The models on screen are the PREVIOUS provider's.
+      _models = const [];
+      _modelsError = null;
+      // One key per instance, and it belongs to whoever was selected when it
+      // was saved. Switching providers does not switch keys — there is only
+      // one — so say it rather than letting the next request fail as 401.
+      _keyStale = was != preset && _hasKey;
     });
     // Commit it: this rewrites the provider, url and model, and it blurs
     // nothing — so nothing else would ever carry the change to the server.
@@ -2390,6 +2413,27 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         ],
       ),
     ],
+    if (_models.isEmpty && _model.text.trim().isEmpty && _modelsError == null) ...[
+      const SizedBox(height: 6),
+      Row(
+        children: [
+          Icon(
+            Icons.error_outline,
+            size: 15,
+            color: MicaTheme.of(context).text.muted,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              context.l10n.aiModelMissing,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: MicaTheme.of(context).text.muted,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ],
     if (_modelsError != null) ...[
       const SizedBox(height: 6),
       // Danger colour + icon: rendered in the muted grey the hints use, a
@@ -2453,12 +2497,40 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       obscureText: true,
       decoration: InputDecoration(
         labelText: context.l10n.aiApiKey,
+        // Float the label unconditionally so the hint is actually VISIBLE. With
+        // Material's default the label sits inside an empty field and the hint
+        // is hidden underneath it — so the dots that say "a key is stored,
+        // leave this blank to keep it" were never once seen, and the field read
+        // as "nothing configured" even while the badge above said otherwise.
+        floatingLabelBehavior: FloatingLabelBehavior.always,
         hintText: _hasKey
             ? context.l10n.aiApiKeyHintHasKey
             : context.l10n.aiApiKeyHintRequired,
         border: const OutlineInputBorder(),
       ),
     ),
+    if (_keyStale) ...[
+      const SizedBox(height: 6),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.info_outline,
+            size: 15,
+            color: MicaTheme.of(context).status.warning,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              context.l10n.aiKeyBelongsToPreviousProvider,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: MicaTheme.of(context).status.warning,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ],
     const SizedBox(height: 6),
     Text(
       context.l10n.aiKeyHelp,

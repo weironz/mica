@@ -414,6 +414,8 @@
     "placeholders": { "tail": { "type": "String" } }
   },
   "aiKeyMissing": "No API key set",
+  "aiModelMissing": "No model chosen — AI stays off until one is set. Fetch the list on the right.",
+  "aiKeyBelongsToPreviousProvider": "The stored key was saved for the previous provider. Enter this provider's key, or requests will be rejected.",
   "aiFetchModels": "Fetch the provider's model list",
   "aiModelsEmpty": "The provider returned no models.",
   "aiModelHint": "Fetch the list, or type a model id",
