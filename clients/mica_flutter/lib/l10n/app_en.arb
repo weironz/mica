@@ -416,6 +416,8 @@
   "aiKeyMissing": "No API key set",
   "aiFetchModels": "Fetch the provider's model list",
   "aiModelsEmpty": "The provider returned no models.",
+  "aiModelsRouteMissing": "This server has no model-list endpoint — it is older than this app. Deploy the current server build, then try again.",
+  "aiModelsRejected": "The provider rejected the key. Save a valid API key first, or type one above before fetching.",
   "aiAdminOnly": "Only this instance's administrator can change the AI provider. The key is shared by everyone here, so it is not a per-account setting.",
   "aiApiKeyHintRequired": "Required for hosted providers",
   "aiKeyHelp": "Local models (Ollama, LM Studio) usually need no key. The key is stored on the server and never returned.",

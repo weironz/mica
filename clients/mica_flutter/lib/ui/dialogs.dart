@@ -1575,9 +1575,26 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       if (!mounted) return;
       setState(() {
         _fetchingModels = false;
-        _modelsError = error.toString();
+        _modelsError = _modelsFailure(context, error);
       });
     }
+  }
+
+  /// Turn a fetch failure into something the reader can act on.
+  ///
+  /// The raw exception was `not found` — four grey words that read like the
+  /// button did nothing, when in fact the answer was specific and actionable:
+  /// this route does not exist on the server being talked to, i.e. the api is
+  /// older than this build. Status codes, not message text: the message is
+  /// English server prose and matching on it lets a reworded sentence break
+  /// this silently.
+  String _modelsFailure(BuildContext context, Object error) {
+    final status = error is ApiException ? error.statusCode : null;
+    return switch (status) {
+      404 => context.l10n.aiModelsRouteMissing,
+      401 || 403 => context.l10n.aiModelsRejected,
+      _ => error is ApiException ? error.message : error.toString(),
+    };
   }
 
   _AiPreset _presetFor(String provider, String base) {
@@ -2358,11 +2375,27 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ],
     if (_modelsError != null) ...[
       const SizedBox(height: 6),
-      Text(
-        _modelsError!,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: MicaTheme.of(context).text.muted,
-        ),
+      // Danger colour + icon: rendered in the muted grey the hints use, a
+      // failure was indistinguishable from a caption and the button looked
+      // inert. A failed action has to look different from an explanation.
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.error_outline,
+            size: 15,
+            color: MicaTheme.of(context).status.danger,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              _modelsError!,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: MicaTheme.of(context).status.danger,
+              ),
+            ),
+          ),
+        ],
       ),
     ],
     const SizedBox(height: 12),
