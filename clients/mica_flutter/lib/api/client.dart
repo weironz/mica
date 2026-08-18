@@ -874,6 +874,7 @@ class ApiClient {
   Future<Map<String, dynamic>> updateAiSettings(
     String token, {
     required String provider,
+    required String providerId,
     required String baseUrl,
     required String model,
     String? apiKey,
@@ -881,6 +882,7 @@ class ApiClient {
   }) async {
     final body = <String, dynamic>{
       'provider': provider,
+      'provider_id': providerId,
       'base_url': baseUrl,
       'model': model,
     };

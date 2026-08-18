@@ -2877,21 +2877,33 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     } catch (_) {}
   }
 
-  Future<void> _saveAiSettings({
+  /// Write one provider's config and make it active. Returns the server's view
+  /// of THAT provider so the dialog can populate itself from the answer instead
+  /// of assuming the write landed exactly as sent.
+  Future<Map<String, dynamic>> _saveAiSettings({
     required String provider,
+    required String providerId,
     required String baseUrl,
     required String model,
     String? apiKey,
   }) async {
     final session = _requireSession();
-    await _api.updateAiSettings(
+    final settings = await _api.updateAiSettings(
       session.accessToken,
       provider: provider,
+      providerId: providerId,
       baseUrl: baseUrl,
       model: model,
       apiKey: apiKey,
     );
-    if (mounted) setState(() => _aiConfigured = true);
+    // A key alone is not a working AI: without a model the server has nothing
+    // to call. Gate the Ask-AI affordance on both, or the button appears and
+    // then fails.
+    final ready =
+        settings['has_key'] == true &&
+        (settings['model'] as String? ?? '').isNotEmpty;
+    if (mounted) setState(() => _aiConfigured = ready);
+    return settings;
   }
 
   Future<List<Map<String, dynamic>>> _loadTokens() async {
@@ -7405,8 +7417,9 @@ class WorkspaceView extends StatefulWidget {
     String? apiKey,
   })?
   onListAiModels;
-  final Future<void> Function({
+  final Future<Map<String, dynamic>> Function({
     required String provider,
+    required String providerId,
     required String baseUrl,
     required String model,
     String? apiKey,

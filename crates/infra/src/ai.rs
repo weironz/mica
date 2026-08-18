@@ -34,6 +34,12 @@ impl AiProvider {
 /// absent the AI endpoints return `503`.
 #[derive(Debug, Clone)]
 pub struct AiConfig {
+  /// Which VENDOR this config belongs to (`deepseek`, `zhipu`, `kimi`, …) —
+  /// what the settings dropdown selects, and the key under which it is stored.
+  /// Distinct from [`provider`], which is the wire FORMAT: several vendors
+  /// speak `openai`, and conflating the two is what let a Zhipu endpoint, a
+  /// DeepSeek model and a DeepSeek key share one record (migration 0022).
+  pub provider_id: String,
   pub provider: AiProvider,
   pub api_key: String,
   pub model: String,
@@ -56,6 +62,7 @@ impl AiConfig {
     // 1. Anthropic, if a key is present.
     if let Some(api_key) = first_non_empty(&["ANTHROPIC_API_KEY"]) {
       return Some(Self {
+        provider_id: "anthropic".to_string(),
         provider: AiProvider::Anthropic,
         api_key,
         model: first_non_empty(&["AI_MODEL", "ANTHROPIC_MODEL"])
@@ -71,6 +78,7 @@ impl AiConfig {
     // 2. DeepSeek (OpenAI-compatible), via env or the deepseek.conf file.
     if let Some(api_key) = deepseek_key() {
       return Some(Self {
+        provider_id: "deepseek".to_string(),
         provider: AiProvider::OpenAi,
         api_key,
         model: first_non_empty(&["AI_MODEL", "DEEPSEEK_MODEL"])
@@ -87,6 +95,7 @@ impl AiConfig {
     let base_url = first_non_empty(&["AI_BASE_URL", "OPENAI_BASE_URL"]);
     if openai_key.is_some() || base_url.is_some() {
       return Some(Self {
+        provider_id: "openai".to_string(),
         provider: AiProvider::OpenAi,
         api_key: openai_key.unwrap_or_default(),
         model: first_non_empty(&["AI_MODEL"]).unwrap_or_else(|| "gpt-4o-mini".to_string()),
@@ -130,16 +139,86 @@ impl AiConfig {
   /// AI is a convenience feature and a server that will not start is a worse
   /// outcome than one whose assistant is briefly unconfigured.
   pub async fn load(db: &PgPool) -> Option<Self> {
-    let row = sqlx::query_as::<_, (String, String, String, String, i32)>(
-      "SELECT provider, base_url, model, api_key, max_tokens FROM ai_settings WHERE id",
+    let row = sqlx::query_as::<_, (String, String, String, String, String, i32)>(
+      "SELECT provider_id, protocol, base_url, model, api_key, max_tokens        FROM ai_provider_settings WHERE is_active",
     )
     .fetch_optional(db)
     .await
     .ok()
     .flatten()?;
 
+    let provider = AiProvider::parse(&row.1)?;
+    Some(Self {
+      provider_id: row.0,
+      provider,
+      base_url: row.2,
+      model: row.3,
+      api_key: row.4,
+      max_tokens: row.5.max(1) as u32,
+      anthropic_version: match provider {
+        AiProvider::Anthropic => "2023-06-01".to_string(),
+        AiProvider::OpenAi => String::new(),
+      },
+    })
+  }
+
+  /// Every provider that has been configured, newest first. Powers the settings
+  /// screen's "which of these have I set up?" — a question the single-row
+  /// schema could not answer at all, which is how it came to claim a key was
+  /// configured for a provider that had never had one.
+  pub async fn list(db: &PgPool) -> Vec<(String, String, String, bool)> {
+    sqlx::query_as::<_, (String, String, String, bool)>(
+      "SELECT provider_id, model, api_key, is_active        FROM ai_provider_settings ORDER BY updated_at DESC",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default()
+  }
+
+  /// Store this provider's config and make it the active one.
+  ///
+  /// Two statements in one transaction: upsert the row, then clear everyone
+  /// else's `is_active`. The order matters only because the partial unique
+  /// index would reject two active rows — which is the point of having it. A
+  /// writer cannot forget to deactivate the previous provider, so the state the
+  /// settings screen reads back is never two providers claiming to be in use.
+  pub async fn save(&self, db: &PgPool, by: Option<Uuid>) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE ai_provider_settings SET is_active = false WHERE provider_id <> $1")
+      .bind(&self.provider_id)
+      .execute(&mut *tx)
+      .await?;
+    sqlx::query(
+      "INSERT INTO ai_provider_settings          (provider_id, protocol, base_url, model, api_key, max_tokens, is_active, updated_at, updated_by)        VALUES ($1, $2, $3, $4, $5, $6, true, now(), $7)        ON CONFLICT (provider_id) DO UPDATE SET          protocol = EXCLUDED.protocol, base_url = EXCLUDED.base_url, model = EXCLUDED.model,          api_key = EXCLUDED.api_key, max_tokens = EXCLUDED.max_tokens, is_active = true,          updated_at = now(), updated_by = EXCLUDED.updated_by",
+    )
+    .bind(&self.provider_id)
+    .bind(self.provider.as_str())
+    .bind(&self.base_url)
+    .bind(&self.model)
+    .bind(&self.api_key)
+    .bind(self.max_tokens as i32)
+    .bind(by)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+  }
+
+  /// One provider's stored config, whether or not it is the active one. This is
+  /// what makes switching honest: the dropdown loads the selected vendor's OWN
+  /// key and model instead of showing the previous vendor's and explaining the
+  /// discrepancy in prose.
+  pub async fn load_provider(db: &PgPool, provider_id: &str) -> Option<Self> {
+    let row = sqlx::query_as::<_, (String, String, String, String, i32)>(
+      "SELECT protocol, base_url, model, api_key, max_tokens        FROM ai_provider_settings WHERE provider_id = $1",
+    )
+    .bind(provider_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
     let provider = AiProvider::parse(&row.0)?;
     Some(Self {
+      provider_id: provider_id.to_string(),
       provider,
       base_url: row.1,
       model: row.2,
@@ -150,25 +229,6 @@ impl AiConfig {
         AiProvider::OpenAi => String::new(),
       },
     })
-  }
-
-  /// Persist these settings as THE instance settings, replacing whatever was
-  /// there. One row, one statement — the key and the endpoint it belongs to
-  /// have to land together, since a key paired with another provider's base URL
-  /// is a key sent to the wrong host.
-  pub async fn save(&self, db: &PgPool, by: Option<Uuid>) -> Result<(), sqlx::Error> {
-    sqlx::query(
-      "INSERT INTO ai_settings (id, provider, base_url, model, api_key, max_tokens, updated_at, updated_by)        VALUES (true, $1, $2, $3, $4, $5, now(), $6)        ON CONFLICT (id) DO UPDATE SET          provider = EXCLUDED.provider, base_url = EXCLUDED.base_url, model = EXCLUDED.model,          api_key = EXCLUDED.api_key, max_tokens = EXCLUDED.max_tokens,          updated_at = now(), updated_by = EXCLUDED.updated_by",
-    )
-    .bind(self.provider.as_str())
-    .bind(&self.base_url)
-    .bind(&self.model)
-    .bind(&self.api_key)
-    .bind(self.max_tokens as i32)
-    .bind(by)
-    .execute(db)
-    .await
-    .map(|_| ())
   }
 }
 

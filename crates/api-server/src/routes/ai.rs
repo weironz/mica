@@ -21,6 +21,12 @@ pub struct AiCompleteResponse {
 #[derive(Debug, Serialize)]
 pub struct AiSettingsResponse {
   configured: bool,
+  /// The VENDOR in use (`deepseek`, `zhipu`, …). What the dropdown selects.
+  provider_id: String,
+  /// Every vendor that has a stored config, so the dropdown can mark them.
+  /// The single-row schema could not answer this, which is how the screen came
+  /// to show "key configured" for a provider that had never had one.
+  configured_providers: Vec<ConfiguredProvider>,
   /// Whether the CALLER may change these settings. The dialog uses it to show
   /// the fields read-only instead of letting someone fill in a key and then
   /// eat a 403 on save.
@@ -37,8 +43,19 @@ pub struct AiSettingsResponse {
   key_hint: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ConfiguredProvider {
+  provider_id: String,
+  has_key: bool,
+  model: String,
+  active: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateAiSettingsRequest {
+  /// The vendor this write is about. Switching providers is a write with only
+  /// this field: the server answers with THAT vendor's stored config.
+  provider_id: Option<String>,
   provider: Option<String>,
   /// The provider endpoint. Honoured again now that this route is admin-only —
   /// see `update_settings` for why it used to be discarded and what changed.
@@ -99,6 +116,7 @@ pub async fn get_settings(
     .unwrap_or(false);
   let mut response = settings_response(config.as_ref());
   response.can_edit = can_edit;
+  response.configured_providers = configured_providers(&state).await;
   Ok(Json(response))
 }
 
@@ -115,82 +133,92 @@ pub async fn update_settings(
   let mut guard = state.ai.write().await;
   let current = guard.clone();
 
+  // Which vendor this write is about. Absent means "the one in use" — an older
+  // client that only ever knew about a single config.
+  let provider_id = payload
+    .provider_id
+    .map(|value| value.trim().to_lowercase())
+    .filter(|value| !value.is_empty())
+    .or_else(|| current.as_ref().map(|c| c.provider_id.clone()))
+    .unwrap_or_else(|| "custom".to_string());
+
+  // The BASELINE is that vendor's own stored row — not whatever is running.
+  // Getting this wrong is the whole bug 0022 exists for: inheriting the active
+  // config meant selecting Zhipu handed it DeepSeek's key, and the screen then
+  // reported a configured key for a provider that had never had one.
+  let stored = mica_infra::AiConfig::load_provider(&state.db, &provider_id).await;
+  let base = stored.as_ref().or_else(|| {
+    current
+      .as_ref()
+      .filter(|c| c.provider_id == provider_id)
+  });
+
   let provider = match payload.provider.as_deref() {
     Some(value) => AiProvider::parse(value)
-      .ok_or_else(|| ApiError::BadRequest(format!("unknown AI provider: {value}")))?,
-    None => current
-      .as_ref()
-      .map(|c| c.provider)
-      .unwrap_or(AiProvider::OpenAi),
+      .ok_or_else(|| ApiError::BadRequest(format!("unknown AI protocol: {value}")))?,
+    None => base.map(|c| c.provider).unwrap_or(AiProvider::OpenAi),
   };
 
-  // `base_url` used to be discarded here, and the reason was sound at the time:
-  // `state.ai` is a process-wide singleton carrying the operator's provider key,
-  // so a NORMAL USER pointing it at their own host would have exfiltrated that
-  // key. The cost was that the settings dialog showed a Base URL field whose
-  // value went nowhere — switching to a provider on another host silently kept
-  // calling the old one, which is worse than not offering the field.
-  //
-  // The premise is gone: this route is admin-only now, and the admin is the
-  // operator whose key it is. What remains is that the server will fetch a URL
-  // an admin chose, which is also what makes a LOCAL model work (Ollama on
-  // localhost) — so no private-address blocklist, since that would break the
-  // supported case to guard against the account that already owns the key.
-  //
-  // Empty or absent keeps the current endpoint, or the provider default when
-  // the protocol changes.
   let base_url = payload
     .base_url
     .map(|value| value.trim().to_string())
     .filter(|value| !value.is_empty())
-    .or_else(|| match current.as_ref() {
-      Some(c) if c.provider == provider => Some(c.base_url.clone()),
-      _ => None,
-    })
+    .or_else(|| base.map(|c| c.base_url.clone()))
     .unwrap_or_else(|| default_base_url(provider));
 
   let model = payload
     .model
     .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .or_else(|| current.as_ref().map(|c| c.model.clone()))
-    .unwrap_or_else(|| default_model(provider));
+    .or_else(|| base.map(|c| c.model.clone()))
+    .unwrap_or_default();
 
-  let api_key = match payload.api_key {
-    Some(value) => value.trim().to_string(),
-    None => current
-      .as_ref()
-      .map(|c| c.api_key.clone())
-      .unwrap_or_default(),
-  };
+  // Absent keeps this vendor's key; "" clears it. It can never pick up another
+  // vendor's key, because `base` is scoped to this vendor.
+  let api_key = payload
+    .api_key
+    .map(|value| value.trim().to_string())
+    .or_else(|| base.map(|c| c.api_key.clone()))
+    .unwrap_or_default();
 
   let max_tokens = payload
     .max_tokens
-    .or_else(|| current.as_ref().map(|c| c.max_tokens))
+    .or_else(|| base.map(|c| c.max_tokens))
     .unwrap_or(2048);
 
-  let anthropic_version = current
-    .as_ref()
-    .map(|c| c.anthropic_version.clone())
-    .filter(|value| !value.is_empty())
-    .unwrap_or_else(|| "2023-06-01".to_string());
-
   let config = AiConfig {
+    provider_id,
     provider,
     api_key,
     model,
     base_url,
     max_tokens,
-    anthropic_version,
+    anthropic_version: match provider {
+      AiProvider::Anthropic => "2023-06-01".to_string(),
+      AiProvider::OpenAi => String::new(),
+    },
   };
+  config.save(&state.db, Some(admin_id)).await?;
   let mut response = settings_response(Some(&config));
   response.can_edit = true;
-  // Persist BEFORE publishing to the lock: a save that failed would otherwise
-  // leave a running config that silently reverts on the next restart, which is
-  // exactly the failure this table was added to end.
-  config.save(&state.db, Some(admin_id)).await?;
+  response.configured_providers = configured_providers(&state).await;
   *guard = Some(config);
   Ok(Json(response))
+}
+
+/// The stored providers, for the dropdown. `has_key` is per VENDOR here, which
+/// is the point: it used to be a property of the instance and therefore said
+/// "configured" no matter which provider was selected.
+async fn configured_providers(state: &AppState) -> Vec<ConfiguredProvider> {
+  mica_infra::AiConfig::list(&state.db)
+    .await
+    .into_iter()
+    .map(|(provider_id, model, api_key, active)| ConfiguredProvider {
+      provider_id,
+      has_key: !api_key.trim().is_empty(),
+      model,
+      active,
+    })
+    .collect()
 }
 
 fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
@@ -204,6 +232,8 @@ fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
       has_key: config.has_key(),
       key_hint: key_hint(&config.api_key),
       can_edit: false,
+      provider_id: config.provider_id.clone(),
+      configured_providers: Vec::new(),
     },
     None => AiSettingsResponse {
       configured: false,
@@ -214,6 +244,8 @@ fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
       has_key: false,
       key_hint: String::new(),
       can_edit: false,
+      provider_id: String::new(),
+      configured_providers: Vec::new(),
     },
   }
 }
@@ -233,21 +265,6 @@ fn default_base_url(provider: AiProvider) -> String {
     AiProvider::Anthropic => "https://api.anthropic.com".to_string(),
     AiProvider::OpenAi => "https://api.deepseek.com".to_string(),
   }
-}
-
-/// The model to fall back on when a settings write names none and nothing is
-/// stored yet — i.e. the very first save on a fresh instance.
-///
-/// Empty on purpose. A hardcoded name is a claim about a vendor's catalogue
-/// that this binary cannot keep: this function used to answer `deepseek-chat`,
-/// and on 2026-08-19 DeepSeek's own `/v1/models` listed only
-/// `deepseek-v4-flash` and `deepseek-v4-pro`. A retired name does not fail
-/// loudly — it looks like a working default until a completion errors for
-/// reasons that point nowhere near here. Empty means `has_key`-style checks and
-/// the settings UI both report "not configured yet", which is true, and
-/// `GET /api/ai/models` is right there to answer it authoritatively.
-fn default_model(_provider: AiProvider) -> String {
-  String::new()
 }
 
 async fn generate(config: &AiConfig, system: &str, prompt: &str) -> ApiResult<String> {

@@ -964,7 +964,20 @@ extension _AiPresetInfo on _AiPreset {
     _AiPreset.custom => 'Local / Custom',
   };
 
+  /// The wire FORMAT. Several vendors speak `openai`; this is what the request
+  /// code branches on, not what the dropdown selects.
   String get provider => this == _AiPreset.anthropic ? 'anthropic' : 'openai';
+
+  /// The VENDOR id, and the key this provider's config is stored under. Must
+  /// match the ids migration 0022 attributes existing rows to.
+  String get id => switch (this) {
+    _AiPreset.deepseek => 'deepseek',
+    _AiPreset.zhipu => 'zhipu',
+    _AiPreset.kimi => 'kimi',
+    _AiPreset.openai => 'openai',
+    _AiPreset.anthropic => 'anthropic',
+    _AiPreset.custom => 'custom',
+  };
 
   /// Corroborated against cc-switch's provider presets, which are maintained
   /// against these endpoints daily; the ones I could not corroborate are
@@ -1084,8 +1097,12 @@ class _SettingsDialog extends StatefulWidget {
     String? apiKey,
   })?
   onListAiModels;
-  final Future<void> Function({
+  /// Writes one provider's config and makes it active; answers with that
+  /// provider's stored state. Returns the payload so a switch can populate the
+  /// form from the server rather than from a local guess.
+  final Future<Map<String, dynamic>> Function({
     required String provider,
+    required String providerId,
     required String baseUrl,
     required String model,
     String? apiKey,
@@ -1182,10 +1199,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   List<String> _models = const [];
   bool _fetchingModels = false;
   String? _modelsError;
-  /// True after a provider switch while a key from the PREVIOUS provider is
-  /// still stored. Not a failure — just not something the user can see without
-  /// being told, since the key field shows dots either way.
-  bool _keyStale = false;
   // API Tokens tab state.
   List<Map<String, dynamic>>? _tokens;
   bool _tokensLoaded = false;
@@ -1538,29 +1551,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     try {
       final settings = await load();
       if (!mounted) return;
-      final provider = settings['provider'] as String? ?? 'openai';
-      final base = settings['base_url'] as String? ?? '';
-      final model = settings['model'] as String? ?? '';
-      setState(() {
-        _preset = _presetFor(provider, base);
-        _baseUrl.text = base.isEmpty ? _preset.baseUrl : base;
-        _model.text = model.isEmpty ? _preset.model : model;
-        _hasKey = settings['has_key'] == true;
-        _keyHint = settings['key_hint'] as String? ?? '';
-        // Absent on an older server: treat as editable so this dialog does not
-        // lock a self-hoster out of settings their build still lets them save.
-        _canEdit = settings['can_edit'] as bool? ?? true;
-        _loading = false;
-      });
-      // Baseline: what the server already has. Without it, merely tabbing
-      // through the AI fields would look like a change and save on blur.
-      _aiSaved = _aiNow;
-      // A stored key with no model is a configured-but-unusable instance, and
-      // it is reachable by simply saving a key before picking anything. Fetch
-      // the list unasked in exactly that state: the user cannot choose a model
-      // whose name they have no way to know, and making them find the button
-      // first is a step with no decision in it.
-      if (_hasKey && _model.text.trim().isEmpty) unawaited(_fetchModels());
+      setState(() => _loading = false);
+      // Same population path a provider switch takes, so a reload and a switch
+      // cannot end up showing different things.
+      _adoptSettings(settings);
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -1622,39 +1616,81 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     };
   }
 
-  _AiPreset _presetFor(String provider, String base) {
+  /// Which preset a stored `provider_id` corresponds to. Falls back to matching
+  /// the base URL for rows written before providers had ids.
+  _AiPreset _presetFor(String providerId, String provider, String base) {
+    for (final preset in _AiPreset.values) {
+      if (preset.id == providerId) return preset;
+    }
     if (provider == 'anthropic') return _AiPreset.anthropic;
     if (base.contains('deepseek')) return _AiPreset.deepseek;
+    if (base.contains('bigmodel.cn') || base.contains('z.ai')) return _AiPreset.zhipu;
+    if (base.contains('moonshot.cn')) return _AiPreset.kimi;
     if (base.contains('openai.com')) return _AiPreset.openai;
     return base.isEmpty ? _AiPreset.deepseek : _AiPreset.custom;
   }
 
-  void _applyPreset(_AiPreset preset) {
-    final was = _preset;
+  /// Switch provider by ASKING THE SERVER for that vendor's own config.
+  ///
+  /// It used to rewrite the fields locally from the preset table, which is what
+  /// made switching incoherent: the URL and model changed while the key — a
+  /// single instance-wide value — stayed behind, so the screen showed a green
+  /// "key configured" for a provider that had never had one, and a warning
+  /// underneath explaining the contradiction. Each vendor now has its own row
+  /// (migration 0022), so the switch is a write that returns that row and every
+  /// field follows it. Nothing is left over, and the warning is gone rather
+  /// than reworded.
+  Future<void> _applyPreset(_AiPreset preset) async {
+    final save = widget.onSaveAiSettings;
+    if (save == null) return;
     setState(() {
       _preset = preset;
-      if (preset != _AiPreset.custom) {
-        _baseUrl.text = preset.baseUrl;
-        // A model id belongs to ONE vendor: `deepseek-v4-pro` means nothing to
-        // Kimi. Carrying it across would look like the setting survived while
-        // actually pointing at a model that does not exist there — the same
-        // silent-wrong-default this dialog stopped shipping. Cleared, and the
-        // list below says so and offers the fetch.
-        _model.text = '';
-      }
-      // The models on screen are the PREVIOUS provider's.
+      _saving = true;
+      // These belong to the provider being left.
       _models = const [];
       _modelsError = null;
-      // One key per instance, and it belongs to whoever was selected when it
-      // was saved. Switching providers does not switch keys — there is only
-      // one — so say it rather than letting the next request fail as 401.
-      _keyStale = was != preset && _hasKey;
     });
-    // Commit it: this rewrites the provider, url and model, and it blurs
-    // nothing — so nothing else would ever carry the change to the server.
-    // An empty key field means "leave the stored key alone", so switching
-    // preset can't cost you the key you already saved.
-    if (_aiNow != _aiSaved) unawaited(_saveAi());
+    try {
+      final result = await save(
+        provider: preset.provider,
+        providerId: preset.id,
+        // Only a seed: the server keeps this vendor's stored URL when it has one.
+        baseUrl: preset.baseUrl,
+        model: '',
+      );
+      if (!mounted) return;
+      _adoptSettings(result);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _saving = false;
+      });
+    }
+  }
+
+  /// Populate every field from one settings payload — the single place that
+  /// decides what the screen shows, so a switch and a reload cannot disagree.
+  void _adoptSettings(Map<String, dynamic> settings) {
+    final providerId = settings['provider_id'] as String? ?? '';
+    final provider = settings['provider'] as String? ?? 'openai';
+    final base = settings['base_url'] as String? ?? '';
+    final model = settings['model'] as String? ?? '';
+    setState(() {
+      _preset = _presetFor(providerId, provider, base);
+      _baseUrl.text = base.isEmpty ? _preset.baseUrl : base;
+      _model.text = model;
+      _apiKey.clear();
+      _hasKey = settings['has_key'] == true;
+      _keyHint = settings['key_hint'] as String? ?? '';
+      _canEdit = settings['can_edit'] as bool? ?? true;
+      _saving = false;
+      _error = null;
+    });
+    _aiSaved = _aiNow;
+    // A configured provider with no model is configured-but-unusable, and the
+    // user cannot pick a name they have no way to know.
+    if (_hasKey && _model.text.trim().isEmpty) unawaited(_fetchModels());
   }
 
   /// The built-in About popup, marking the current app version. Opened from the
@@ -2140,6 +2176,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     try {
       await save(
         provider: _preset.provider,
+        providerId: _preset.id,
         baseUrl: _baseUrl.text.trim(),
         model: _model.text.trim(),
         apiKey: _apiKey.text.trim().isEmpty ? null : _apiKey.text.trim(),
@@ -2509,28 +2546,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         border: const OutlineInputBorder(),
       ),
     ),
-    if (_keyStale) ...[
-      const SizedBox(height: 6),
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.info_outline,
-            size: 15,
-            color: MicaTheme.of(context).status.warning,
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              context.l10n.aiKeyBelongsToPreviousProvider,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: MicaTheme.of(context).status.warning,
-              ),
-            ),
-          ),
-        ],
-      ),
-    ],
     const SizedBox(height: 6),
     Text(
       context.l10n.aiKeyHelp,
