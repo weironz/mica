@@ -2845,6 +2845,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.getAiSettings(session.accessToken);
   }
 
+  /// The provider's live model list. Kept next to [_loadAiSettings] because it
+  /// takes the same session and the dialog uses them together.
+  Future<Map<String, dynamic>> _listAiModels({
+    String? provider,
+    String? baseUrl,
+    String? apiKey,
+  }) async {
+    final session = _requireSession();
+    return _api.listAiModels(
+      session.accessToken,
+      provider: provider,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+    );
+  }
+
   /// Whether an AI provider is configured server-side (an API key, or a
   /// model for keyless local providers). Failure leaves AI hidden.
   Future<void> _refreshAiConfigured() async {
@@ -6227,6 +6243,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // tab was a live provider form whose Save went into a function that
       // returned immediately.
       onLoadAiSettings: local ? null : _loadAiSettings,
+      onListAiModels: local ? null : _listAiModels,
       onSaveAiSettings: local ? null : _saveAiSettings,
       onLoadTokens: local ? null : _loadTokens,
       onCreateToken: local ? null : _createToken,
@@ -7089,6 +7106,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onAiCurrentPage,
     required this.onAiNewWorkspace,
     required this.onLoadAiSettings,
+    required this.onListAiModels,
     required this.onSaveAiSettings,
     this.onLoadTokens,
     this.onCreateToken,
@@ -7379,6 +7397,14 @@ class WorkspaceView extends StatefulWidget {
   /// Null in 本地模式 — AI settings live on the server, so there is no provider
   /// to configure and Settings drops the tab. Same rule as [onLoadTokens].
   final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
+
+  /// Fetch the provider's model list. Null in 本地模式, like the settings pair.
+  final Future<Map<String, dynamic>> Function({
+    String? provider,
+    String? baseUrl,
+    String? apiKey,
+  })?
+  onListAiModels;
   final Future<void> Function({
     required String provider,
     required String baseUrl,
@@ -11048,6 +11074,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       routeSettings: const RouteSettings(name: 'settings'),
       builder: (context) => _SettingsDialog(
         onLoadAiSettings: widget.onLoadAiSettings,
+        onListAiModels: widget.onListAiModels,
         onSaveAiSettings: widget.onSaveAiSettings,
         onLoadTokens: widget.onLoadTokens,
         onCreateToken: widget.onCreateToken,

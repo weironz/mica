@@ -40,11 +40,8 @@ pub struct AiSettingsResponse {
 #[derive(Debug, Deserialize)]
 pub struct UpdateAiSettingsRequest {
   provider: Option<String>,
-  /// Accepted for backward compatibility but DELIBERATELY IGNORED: `base_url` is
-  /// operator-controlled only (see `update_settings`). A user-supplied value
-  /// would redirect the operator's API key, so old clients that still send it
-  /// are silently no-op'd rather than rejected.
-  #[allow(dead_code)]
+  /// The provider endpoint. Honoured again now that this route is admin-only —
+  /// see `update_settings` for why it used to be discarded and what changed.
   base_url: Option<String>,
   model: Option<String>,
   /// Write-only; omit to keep the existing key, send "" to clear it.
@@ -127,17 +124,30 @@ pub async fn update_settings(
       .unwrap_or(AiProvider::OpenAi),
   };
 
-  // `base_url` is OPERATOR-controlled only. `state.ai` is a process-wide
-  // singleton that carries the operator's provider API key; letting a normal
-  // user point `base_url` at their own host would exfiltrate that key (and open
-  // an SSRF). So the request body's `base_url` is deliberately ignored (old
-  // clients that still send it are not rejected — just no-op'd): keep the
-  // env/config endpoint when the provider is unchanged, else the provider
-  // default on a switch.
-  let base_url = match current.as_ref() {
-    Some(c) if c.provider == provider => c.base_url.clone(),
-    _ => default_base_url(provider),
-  };
+  // `base_url` used to be discarded here, and the reason was sound at the time:
+  // `state.ai` is a process-wide singleton carrying the operator's provider key,
+  // so a NORMAL USER pointing it at their own host would have exfiltrated that
+  // key. The cost was that the settings dialog showed a Base URL field whose
+  // value went nowhere — switching to a provider on another host silently kept
+  // calling the old one, which is worse than not offering the field.
+  //
+  // The premise is gone: this route is admin-only now, and the admin is the
+  // operator whose key it is. What remains is that the server will fetch a URL
+  // an admin chose, which is also what makes a LOCAL model work (Ollama on
+  // localhost) — so no private-address blocklist, since that would break the
+  // supported case to guard against the account that already owns the key.
+  //
+  // Empty or absent keeps the current endpoint, or the provider default when
+  // the protocol changes.
+  let base_url = payload
+    .base_url
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .or_else(|| match current.as_ref() {
+      Some(c) if c.provider == provider => Some(c.base_url.clone()),
+      _ => None,
+    })
+    .unwrap_or_else(|| default_base_url(provider));
 
   let model = payload
     .model
@@ -340,4 +350,288 @@ fn finish(text: String) -> ApiResult<String> {
     ));
   }
   Ok(text)
+}
+
+/// Candidate URLs for a provider's OpenAI-compatible model list, tried in order.
+///
+/// Ported from cc-switch (`src-tauri/src/services/model_fetch.rs`,
+/// `build_models_url_candidates`), which is the one project I found that had
+/// already paid for this knowledge. The reason it is a PROBE and not a per-
+/// provider path table is the interesting part: the table is unmaintainable.
+/// Every vendor's OpenAI-compatible surface sits at a slightly different depth
+/// — some at the root, some already carrying a version segment, some behind an
+/// Anthropic-compat sub-path — and the set of vendors changes faster than
+/// anyone updates a table. Deriving the candidates from the base URL means a
+/// provider nobody has heard of still works.
+///
+/// The rules, each of which exists because a real endpoint needed it:
+///   * a base already ending in a version segment (`/v1`, Zhipu's
+///     `/api/coding/paas/v4`) takes `{base}/models` — appending `/v1` again
+///     gives `.../paas/v4/v1/models`, a 404;
+///   * a non-`/v1` version segment keeps `{base}/v1/models` as a second guess;
+///   * anything else takes `{base}/v1/models`;
+///   * a base ending in a known Anthropic-compat sub-path also tries the root
+///     without it, longest suffix first (`/api/anthropic` must not match as
+///     `/anthropic` and leave a stranded `/api`).
+fn models_url_candidates(base_url: &str) -> Vec<String> {
+  /// Longest first, so the longer path wins the match.
+  const COMPAT_SUFFIXES: &[&str] = &[
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/coding",
+    "/claude",
+  ];
+
+  let base = base_url.trim().trim_end_matches('/');
+  if base.is_empty() {
+    return Vec::new();
+  }
+
+  let ends_with_version = base
+    .rsplit('/')
+    .next()
+    .and_then(|last| last.strip_prefix('v'))
+    .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()));
+
+  let mut out: Vec<String> = Vec::new();
+  if ends_with_version {
+    out.push(format!("{base}/models"));
+    if !base.ends_with("/v1") {
+      out.push(format!("{base}/v1/models"));
+    }
+  } else {
+    out.push(format!("{base}/v1/models"));
+  }
+
+  if let Some(root) = COMPAT_SUFFIXES
+    .iter()
+    .find_map(|suffix| base.strip_suffix(*suffix))
+  {
+    let root = root.trim_end_matches('/');
+    if root.contains("://") {
+      out.push(format!("{root}/v1/models"));
+      out.push(format!("{root}/models"));
+    }
+  }
+
+  out.dedup();
+  out
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListModelsQuery {
+  /// Probe THESE settings instead of the saved ones, so an admin can pick a
+  /// provider and see its models before committing the change. Omitted fields
+  /// fall back to what is stored.
+  base_url: Option<String>,
+  api_key: Option<String>,
+  provider: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListModelsResponse {
+  models: Vec<String>,
+  /// Which candidate answered. Shown in the UI because "it worked, but against
+  /// a URL you did not expect" is a real outcome of probing.
+  endpoint: String,
+}
+
+/// `GET /api/ai/models` — the provider's own model list.
+///
+/// Admin-only, and not merely because it is a settings screen: the probe spends
+/// the operator's key against a URL the caller supplies. That is also why the
+/// model list is never hardcoded — every vendor renames and retires models on
+/// its own schedule, and a list baked into this binary is wrong the day after
+/// it ships. Asking the provider is the only answer that stays true.
+pub async fn list_models(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  axum::extract::Query(query): axum::extract::Query<ListModelsQuery>,
+) -> ApiResult<Json<ListModelsResponse>> {
+  admin_id_from_headers(&state, &headers).await?;
+  let saved = state.ai.read().await.clone();
+
+  let base_url = query
+    .base_url
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .or_else(|| saved.as_ref().map(|c| c.base_url.clone()))
+    .unwrap_or_default();
+  let api_key = query
+    .api_key
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .or_else(|| saved.as_ref().map(|c| c.api_key.clone()))
+    .unwrap_or_default();
+  let provider = query
+    .provider
+    .as_deref()
+    .and_then(AiProvider::parse)
+    .or_else(|| saved.as_ref().map(|c| c.provider))
+    .unwrap_or(AiProvider::OpenAi);
+
+  if base_url.is_empty() {
+    return Err(ApiError::BadRequest(
+      "set a base URL before fetching models".to_string(),
+    ));
+  }
+
+  let candidates = models_url_candidates(&base_url);
+  if candidates.is_empty() {
+    return Err(ApiError::BadRequest(format!(
+      "cannot derive a model-list endpoint from {base_url}"
+    )));
+  }
+
+  let client = reqwest::Client::new();
+  let mut last_status: Option<String> = None;
+  for url in &candidates {
+    let mut request = client
+      .get(url)
+      .timeout(std::time::Duration::from_secs(15));
+    if !api_key.is_empty() {
+      request = match provider {
+        AiProvider::Anthropic => request.header("x-api-key", &api_key),
+        AiProvider::OpenAi => request.header("authorization", format!("Bearer {api_key}")),
+      };
+    }
+    let response = match request.send().await {
+      Ok(response) => response,
+      // A transport error is about the host, not the path — trying the next
+      // candidate would just wait out the same timeout again.
+      Err(error) => {
+        return Err(ApiError::Unavailable(format!(
+          "could not reach {base_url}: {error}"
+        )));
+      }
+    };
+
+    let status = response.status();
+    if status.is_success() {
+      let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| ApiError::Unavailable(format!("unreadable model list: {error}")))?;
+      let mut models: Vec<String> = body
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|entries| {
+          entries
+            .iter()
+            .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
+            .map(str::to_string)
+            .collect()
+        })
+        .unwrap_or_default();
+      models.sort();
+      models.dedup();
+      return Ok(Json(ListModelsResponse {
+        models,
+        endpoint: url.clone(),
+      }));
+    }
+
+    // Only a missing path is worth another guess. A 401 means the key is wrong
+    // and every remaining candidate would say the same thing more slowly.
+    if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::METHOD_NOT_ALLOWED
+    {
+      last_status = Some(status.to_string());
+      continue;
+    }
+    return Err(ApiError::Unavailable(format!(
+      "{url} answered {status}"
+    )));
+  }
+
+  Err(ApiError::Unavailable(format!(
+    "no model list at {} ({})",
+    candidates.join(", "),
+    last_status.unwrap_or_else(|| "no candidates".to_string())
+  )))
+}
+
+#[cfg(test)]
+mod models_endpoint_tests {
+  use super::models_url_candidates;
+
+  /// The plain case: a bare host takes the OpenAI convention.
+  #[test]
+  fn a_bare_host_gets_v1_models() {
+    assert_eq!(
+      models_url_candidates("https://api.deepseek.com"),
+      vec!["https://api.deepseek.com/v1/models"]
+    );
+    // A trailing slash must not produce a double slash.
+    assert_eq!(
+      models_url_candidates("https://api.deepseek.com/"),
+      vec!["https://api.deepseek.com/v1/models"]
+    );
+  }
+
+  /// A base that already carries its version must not get a second one:
+  /// `.../paas/v4/v1/models` is a 404, and it was the reported failure that put
+  /// this rule in cc-switch in the first place.
+  #[test]
+  fn a_versioned_base_takes_models_directly() {
+    assert_eq!(
+      models_url_candidates("https://open.bigmodel.cn/api/coding/paas/v4"),
+      vec![
+        "https://open.bigmodel.cn/api/coding/paas/v4/models",
+        // Kept as a second guess only because /v4 is not /v1 — some gateways
+        // really do nest a /v1 under their own version.
+        "https://open.bigmodel.cn/api/coding/paas/v4/v1/models",
+      ]
+    );
+    // /v1 needs no second guess: it would be the same URL.
+    assert_eq!(
+      models_url_candidates("https://api.moonshot.cn/v1"),
+      vec!["https://api.moonshot.cn/v1/models"]
+    );
+  }
+
+  /// An Anthropic-compat sub-path usually has no model list of its own, so the
+  /// root is worth trying too.
+  #[test]
+  fn a_compat_subpath_also_probes_the_root() {
+    assert_eq!(
+      models_url_candidates("https://api.deepseek.com/anthropic"),
+      vec![
+        "https://api.deepseek.com/anthropic/v1/models",
+        "https://api.deepseek.com/v1/models",
+        "https://api.deepseek.com/models",
+      ]
+    );
+  }
+
+  /// Longest suffix first — matching `/anthropic` inside `/api/anthropic` would
+  /// leave a stranded `https://host/api` root and probe a URL nobody serves.
+  #[test]
+  fn the_longest_compat_suffix_wins() {
+    assert_eq!(
+      models_url_candidates("https://api.z.ai/api/anthropic"),
+      vec![
+        "https://api.z.ai/api/anthropic/v1/models",
+        "https://api.z.ai/v1/models",
+        "https://api.z.ai/models",
+      ]
+    );
+  }
+
+  /// A local model server is a first-class case, not an edge one.
+  #[test]
+  fn a_local_endpoint_works_like_any_other() {
+    assert_eq!(
+      models_url_candidates("http://localhost:11434/v1"),
+      vec!["http://localhost:11434/v1/models"]
+    );
+  }
+
+  #[test]
+  fn an_empty_base_has_no_candidates() {
+    assert!(models_url_candidates("   ").is_empty());
+  }
 }

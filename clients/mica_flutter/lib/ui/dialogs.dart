@@ -941,11 +941,24 @@ enum _AiTarget { newPage, currentPage, newWorkspace }
 /// Preset AI providers. Each maps to a backend provider dialect (openai/anthropic)
 /// plus default base URL + model; "Local / Custom" lets the user point at any
 /// OpenAI-compatible server (Ollama, LM Studio, vLLM, …).
-enum _AiPreset { deepseek, openai, anthropic, custom }
+/// Endpoint shortcuts for the providers people actually reach for. A preset
+/// only fills the Base URL — nothing here is a supported-provider list, because
+/// anything speaking the OpenAI or Anthropic wire format works once its URL is
+/// typed in, and pretending otherwise would mean shipping a list that goes
+/// stale every time a vendor appears.
+///
+/// Deliberately NOT here: model names. Every one of these vendors renames and
+/// retires models on its own schedule, so a name baked into this build is wrong
+/// soon after it ships — and wrong in the worst way, since it looks like a
+/// working default. The model list is fetched from the provider instead
+/// ([_fetchModels]); [model] below is only a seed for a blank form.
+enum _AiPreset { deepseek, zhipu, kimi, openai, anthropic, custom }
 
 extension _AiPresetInfo on _AiPreset {
   String get label => switch (this) {
     _AiPreset.deepseek => 'DeepSeek',
+    _AiPreset.zhipu => '智谱 GLM',
+    _AiPreset.kimi => '月之暗面 Kimi',
     _AiPreset.openai => 'OpenAI',
     _AiPreset.anthropic => 'Anthropic (Claude)',
     _AiPreset.custom => 'Local / Custom',
@@ -953,17 +966,28 @@ extension _AiPresetInfo on _AiPreset {
 
   String get provider => this == _AiPreset.anthropic ? 'anthropic' : 'openai';
 
+  /// Corroborated against cc-switch's provider presets, which are maintained
+  /// against these endpoints daily; the ones I could not corroborate are
+  /// deliberately absent rather than guessed — an endpoint that 404s is worse
+  /// than an empty dropdown, because it looks like the key is wrong.
   String get baseUrl => switch (this) {
     _AiPreset.deepseek => 'https://api.deepseek.com',
+    _AiPreset.zhipu => 'https://open.bigmodel.cn/api/coding/paas/v4',
+    _AiPreset.kimi => 'https://api.moonshot.cn/v1',
     _AiPreset.openai => 'https://api.openai.com/v1',
     _AiPreset.anthropic => 'https://api.anthropic.com',
     _AiPreset.custom => 'http://localhost:11434/v1',
   };
 
+  /// Seed for an empty form only — see the note above. Left blank wherever a
+  /// current name cannot be stated with confidence, which sends the user to the
+  /// fetch button, where the answer is authoritative.
   String get model => switch (this) {
     _AiPreset.deepseek => 'deepseek-chat',
     _AiPreset.openai => 'gpt-4o-mini',
     _AiPreset.anthropic => 'claude-sonnet-4-6',
+    _AiPreset.zhipu => '',
+    _AiPreset.kimi => '',
     _AiPreset.custom => '',
   };
 }
@@ -973,6 +997,7 @@ extension _AiPresetInfo on _AiPreset {
 class _SettingsDialog extends StatefulWidget {
   const _SettingsDialog({
     required this.onLoadAiSettings,
+    required this.onListAiModels,
     required this.onSaveAiSettings,
     this.onLoadTokens,
     this.onCreateToken,
@@ -1034,6 +1059,16 @@ class _SettingsDialog extends StatefulWidget {
   /// a no-op here meant a whole provider form — base URL, model, API key —
   /// that took your typing and dropped it.
   final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
+
+  /// Ask the provider what models it has. Null in 本地模式 and on a server too
+  /// old to have the route — the model field stays free text either way, which
+  /// is the same fallback a failed fetch lands on.
+  final Future<Map<String, dynamic>> Function({
+    String? provider,
+    String? baseUrl,
+    String? apiKey,
+  })?
+  onListAiModels;
   final Future<void> Function({
     required String provider,
     required String baseUrl,
@@ -1127,6 +1162,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// Whether this account may change the instance-wide AI settings. Instance
   /// settings carry the operator's provider key, so only an admin may.
   bool _canEdit = true;
+  /// Models the provider itself reported, empty until fetched. Not seeded from
+  /// any built-in list: a stale name that looks official is worse than no list.
+  List<String> _models = const [];
+  bool _fetchingModels = false;
+  String? _modelsError;
   // API Tokens tab state.
   List<Map<String, dynamic>>? _tokens;
   bool _tokensLoaded = false;
@@ -1501,6 +1541,41 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       setState(() {
         _error = error.toString();
         _loading = false;
+      });
+    }
+  }
+
+  /// Ask the provider for its models, using the values currently in the form so
+  /// a provider can be evaluated before it is saved. A failure is reported and
+  /// nothing else changes — the model field stays a text box, which is the same
+  /// affordance as before this button existed.
+  Future<void> _fetchModels() async {
+    final fetch = widget.onListAiModels;
+    if (fetch == null || _fetchingModels) return;
+    setState(() {
+      _fetchingModels = true;
+      _modelsError = null;
+    });
+    try {
+      final result = await fetch(
+        provider: _preset.provider,
+        baseUrl: _baseUrl.text.trim(),
+        // Only send a key the user just typed; an empty one tells the server to
+        // use the stored key, which is the common case on a configured server.
+        apiKey: _apiKey.text.trim().isEmpty ? null : _apiKey.text.trim(),
+      );
+      if (!mounted) return;
+      final models = (result['models'] as List?)?.cast<String>() ?? const [];
+      setState(() {
+        _models = models;
+        _fetchingModels = false;
+        _modelsError = models.isEmpty ? context.l10n.aiModelsEmpty : null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _fetchingModels = false;
+        _modelsError = error.toString();
       });
     }
   }
@@ -2221,16 +2296,75 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ),
     ),
     const SizedBox(height: 12),
-    TextField(
-      controller: _model,
-      focusNode: _aiFocus[1],
-      enabled: !_saving && _canEdit,
-      decoration: InputDecoration(
-        labelText: context.l10n.aiModel,
-        hintText: 'deepseek-chat',
-        border: const OutlineInputBorder(),
-      ),
+    // Model stays a TEXT FIELD with a fetch button beside it, rather than a
+    // dropdown alone. A dropdown would have to be populated from somewhere, and
+    // the only honest sources are the provider (which needs a network round
+    // trip and a key) or a baked-in list (which is wrong within weeks). So the
+    // field always accepts a typed name, and the button turns it into a
+    // pick-from-list once the provider has answered.
+    Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _model,
+            focusNode: _aiFocus[1],
+            enabled: !_saving && _canEdit,
+            decoration: InputDecoration(
+              labelText: context.l10n.aiModel,
+              hintText: 'deepseek-chat',
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        ),
+        if (widget.onListAiModels != null) ...[
+          const SizedBox(width: 8),
+          Tooltip(
+            message: context.l10n.aiFetchModels,
+            child: IconButton.outlined(
+              onPressed: (_saving || !_canEdit || _fetchingModels)
+                  ? null
+                  : _fetchModels,
+              icon: _fetchingModels
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_download_outlined, size: 18),
+            ),
+          ),
+        ],
+      ],
     ),
+    if (_models.isNotEmpty) ...[
+      const SizedBox(height: 8),
+      // Chips rather than a second dropdown: the list is short enough to scan,
+      // and it keeps the typed field as the single source of the saved value —
+      // there is no second control that could disagree with it.
+      Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final id in _models)
+            ChoiceChip(
+              label: Text(id, style: const TextStyle(fontSize: 12)),
+              selected: _model.text.trim() == id,
+              onSelected: (_saving || !_canEdit)
+                  ? null
+                  : (_) => setState(() => _model.text = id),
+            ),
+        ],
+      ),
+    ],
+    if (_modelsError != null) ...[
+      const SizedBox(height: 6),
+      Text(
+        _modelsError!,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: MicaTheme.of(context).text.muted,
+        ),
+      ),
+    ],
     const SizedBox(height: 12),
     // The saved key is never returned, so the field is always empty on open.
     // It used to say so with a row of dots as the hint — which looks exactly

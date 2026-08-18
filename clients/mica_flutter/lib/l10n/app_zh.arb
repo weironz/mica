@@ -281,6 +281,8 @@
   "aiKeyConfigured": "已配置 API 密钥",
   "aiKeyConfiguredHint": "已配置 API 密钥(尾号 {tail})",
   "aiKeyMissing": "尚未配置 API 密钥",
+  "aiFetchModels": "获取服务商的模型列表",
+  "aiModelsEmpty": "服务商没有返回任何模型。",
   "aiAdminOnly": "只有本实例的管理员能改 AI 服务商。这里的密钥是全实例共用的,不是每个账号各自的设置。",
   "aiApiKeyHintRequired": "托管服务商需要填写",
   "aiKeyHelp": "本地模型(Ollama、LM Studio)通常无需密钥。密钥保存在服务器上,不会被返回。",

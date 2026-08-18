@@ -851,6 +851,26 @@ class ApiClient {
     return _get('/api/ai/settings', token);
   }
 
+  /// The provider's own list of models, fetched server-side with the operator's
+  /// key. Optional overrides let an admin see a provider's models BEFORE saving
+  /// the switch — picking a model you cannot see the name of is not a choice.
+  Future<Map<String, dynamic>> listAiModels(
+    String token, {
+    String? provider,
+    String? baseUrl,
+    String? apiKey,
+  }) async {
+    final query = <String, String>{
+      if (provider != null && provider.isNotEmpty) 'provider': provider,
+      if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
+      if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
+    };
+    final suffix = query.isEmpty
+        ? ''
+        : '?${query.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&')}';
+    return _get('/api/ai/models$suffix', token);
+  }
+
   Future<Map<String, dynamic>> updateAiSettings(
     String token, {
     required String provider,

@@ -120,6 +120,7 @@ pub fn api_router() -> Router<AppState> {
       "/ai/settings",
       get(ai::get_settings).patch(ai::update_settings),
     )
+    .route("/ai/models", get(ai::list_models))
     .route(
       "/workspaces",
       get(workspaces::list).post(workspaces::create),
