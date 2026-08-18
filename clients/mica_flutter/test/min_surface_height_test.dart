@@ -79,12 +79,42 @@ void main() {
     expect(without, withFloor);
   });
 
+  testWidgets('the trailing pad is trimmed for a panel below', (tester) async {
+    // Peers that stack a link panel under the body keep 36-48px between the
+    // last line and the panel (Obsidian 48 / Logseq 44 / Roam 36). Ours was
+    // 96 (this pad) + 28 (the panel's own margin) with no rule in between.
+    //
+    // Both heights are read straight out of pump(): the two pumps reuse one
+    // render object, so holding on to the first RenderDocument would just hand
+    // back the second measurement.
+    final withPad = (await pump(
+      tester,
+      shortPage(),
+      appearance: const EditorAppearance(minSurfaceHeight: 0),
+    )).size.height;
+    final trimmed = (await pump(
+      tester,
+      shortPage(),
+      appearance: const EditorAppearance(minSurfaceHeight: 0, bottomPad: 24),
+    )).size.height;
+
+    expect(withPad - trimmed, EditorTheme.bottomPad - 24);
+    // What the panel actually sees: the canvas's leftover pad below the last
+    // line, plus the 16px the panel puts above its own rule.
+    final content = withPad - EditorTheme.bottomPad;
+    expect(trimmed - content + 16, inInclusiveRange(36, 48));
+  });
+
   test('the floor takes part in appearance equality', () {
     // The render object skips relayout when the appearance compares equal, so a
     // floor left out of == would change nothing until something else did.
     expect(
       const EditorAppearance(),
       isNot(const EditorAppearance(minSurfaceHeight: 0)),
+    );
+    expect(
+      const EditorAppearance(),
+      isNot(const EditorAppearance(bottomPad: 24)),
     );
   });
 }

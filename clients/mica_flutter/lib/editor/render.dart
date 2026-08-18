@@ -26,6 +26,7 @@ class EditorAppearance {
     this.fontFamily,
     this.tokens = MicaTokens.light,
     this.minSurfaceHeight = EditorTheme.minSurfaceHeight,
+    this.bottomPad = EditorTheme.bottomPad,
   });
 
   /// Multiplier applied to every block's font size (0.85–1.4 typically).
@@ -55,6 +56,16 @@ class EditorAppearance {
   /// something to put there; [EditorTheme.bottomPad] still separates the two.
   final double minSurfaceHeight;
 
+  /// Blank space kept below the last block, so the caret never sits against the
+  /// bottom edge while typing (see [EditorTheme.bottomPad]).
+  ///
+  /// A knob for the same reason as [minSurfaceHeight]: it is trailing space the
+  /// canvas claims, and it separates the text from whatever the page stacks
+  /// below. 96px of it plus a panel's own margin put ~124px of nothing between
+  /// the last line and the backlinks panel — Obsidian, Logseq and Roam all sit
+  /// in the 36–48px band there, so the page trims this when something follows.
+  final double bottomPad;
+
   /// CJK fallback chain: crisp system fonts on desktop (Windows 微软雅黑 etc.),
   /// the bundled font on web. See [cjkFontFallback].
   static List<String> get cjkFallback => cjkFontFallback;
@@ -70,6 +81,7 @@ class EditorAppearance {
     fontFamily: fontFamily,
     tokens: value,
     minSurfaceHeight: minSurfaceHeight,
+    bottomPad: bottomPad,
   );
 
   TextStyle applyTo(TextStyle base, {required bool isCode}) {
@@ -88,10 +100,12 @@ class EditorAppearance {
       other is EditorAppearance &&
       other.fontScale == fontScale &&
       other.fontFamily == fontFamily &&
-      other.minSurfaceHeight == minSurfaceHeight;
+      other.minSurfaceHeight == minSurfaceHeight &&
+      other.bottomPad == bottomPad;
 
   @override
-  int get hashCode => Object.hash(fontScale, fontFamily, minSurfaceHeight);
+  int get hashCode =>
+      Object.hash(fontScale, fontFamily, minSurfaceHeight, bottomPad);
 }
 
 /// Visual constants for the editing surface. Kept here so the look stays in one
@@ -1662,7 +1676,7 @@ class RenderDocument extends RenderBox {
       _layoutCache.removeWhere((id, _) => !seenTextIds.contains(id));
     }
 
-    y += EditorTheme.bottomPad;
+    y += _appearance.bottomPad;
     size = constraints.constrain(
       Size(
         maxWidth,

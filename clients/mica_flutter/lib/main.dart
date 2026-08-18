@@ -6522,11 +6522,21 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
   @override
   Widget build(BuildContext context) {
     if (_links.isEmpty) return const SizedBox.shrink();
+    final tokens = MicaTheme.of(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 28),
+      padding: const EdgeInsets.only(top: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // The hairline that says "the page ends here". Without it the panel
+          // read as text floating in the margin — and every peer that puts a
+          // link panel under the body anchors it with either a rule (Obsidian,
+          // AFFiNE) or per-row fills (Logseq, Roam). None of them anchors with
+          // whitespace alone, and none boxes the whole panel: the fill stays on
+          // the individual row so the section still reads as the document
+          // continuing, not as a separate component.
+          Container(height: 1, color: tokens.border.subtle),
+          const SizedBox(height: 12),
           Row(
             children: [
               Icon(
@@ -6550,8 +6560,13 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
             InkWell(
               onTap: () => widget.onOpen(link.viewId),
               borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                decoration: BoxDecoration(
+                  color: tokens.surface.sunken,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
                 child: Row(
                   children: [
                     Icon(
@@ -7545,20 +7560,26 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       _backlinkCountOwner != null &&
       _backlinkCountOwner == widget.selectedView?.id;
 
-  /// The canvas normally claims [EditorTheme.minSurfaceHeight] whether or not
-  /// the text needs it, so a blank page still offers a big click-to-write area.
-  /// That floor is padding BELOW the text, so anything the page stacks under the
-  /// canvas gets pushed down by all of it: a three-line page with a backlink
-  /// drew its text, ~420px of nothing, then the panel stranded mid-window.
-  /// With a panel to show, the canvas hugs its content and the panel follows it
-  /// (the same shape Obsidian and AFFiNE use for their bottom link panels);
-  /// [EditorTheme.bottomPad] still keeps a click-to-write strip between them.
+  /// The canvas claims trailing space on two counts — a
+  /// [EditorTheme.minSurfaceHeight] floor so a blank page offers a big
+  /// click-to-write area, and [EditorTheme.bottomPad] below the last block so
+  /// the caret never types against the bottom edge. Both sit BELOW the text, so
+  /// the backlinks panel stacked under the canvas was pushed down by all of it:
+  /// a short page drew its text, ~420px of nothing, then the panel stranded
+  /// mid-window; a long one still put ~124px of blank between the last line and
+  /// the panel, with nothing in it to say the page had ended.
+  ///
+  /// So the page trims both when it has a panel to show. Obsidian (48px),
+  /// Logseq (44) and Roam (36) all land in the same band there, and the panel
+  /// draws a hairline of its own — none of the four anchors a link section with
+  /// whitespace alone. [_BacklinksPanel] adds the remaining 16.
   EditorAppearance get _editorAppearance => _hasBacklinksBelow
       ? EditorAppearance(
           fontScale: widget.appearance.fontScale,
           fontFamily: widget.appearance.fontFamily,
           tokens: widget.appearance.tokens,
           minSurfaceHeight: 0,
+          bottomPad: 24,
         )
       : widget.appearance;
 
