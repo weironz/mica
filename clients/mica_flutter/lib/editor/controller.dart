@@ -939,9 +939,29 @@ class EditorController extends ChangeNotifier {
   /// (falling back to the external url, then the bare filename).
   String selectionText({Map<String, String>? imageUrls}) {
     final sel = selection;
-    if (sel == null || sel.isCollapsed) return '';
-    final s = sel.start;
-    final e = sel.end;
+    if (sel == null) return '';
+    // A caret parked ON an atomic block IS that block being selected — the same
+    // rule [_selectionSlices] encodes for the HTML flavor, and this walk has to
+    // agree with it because copy/cut gate on THIS string being non-empty.
+    //
+    // It did not, and that re-opened the 2026-08-12 bug (Ctrl+X could not cut an
+    // image) from the other side: 8c20158 moved the text/plain flavor off
+    // `selectionPlainText` — which went through the slices — onto this method,
+    // which bailed on any collapsed selection. So `plain.isEmpty` sent copy AND
+    // cut home before either looked at what the caret was on. The regression
+    // test stayed green through it all because it was still calling the method
+    // production had stopped using.
+    final DocPosition s;
+    final DocPosition e;
+    if (sel.isCollapsed) {
+      final i = sel.focus.node;
+      if (i < 0 || i >= nodes.length || !nodes[i].isAtomic) return '';
+      s = DocPosition(i, 0);
+      e = DocPosition(i, nodes[i].text.length);
+    } else {
+      s = sel.start;
+      e = sel.end;
+    }
 
     String nodeBody(int i, int from, int to) {
       final node = nodes[i];
@@ -1201,8 +1221,10 @@ class EditorController extends ChangeNotifier {
   }
 
   /// The (node, from, to) slices the current ranged selection covers, in order.
-  /// Empty when there is no ranged selection. Shared by the plain/HTML copy
-  /// flavors ([selectionText] keeps its own walk for the quote-group newline).
+  /// Empty when there is no ranged selection. Backs the `text/html` copy flavor
+  /// ([selectionText] keeps its own walk for the quote-group/list-run newline,
+  /// so the collapsed-atomic rule below is spelled out there too — the two must
+  /// agree on what counts as a selection).
   List<({int node, int from, int to})> _selectionSlices() {
     final sel = selection;
     if (sel == null) return const [];
@@ -1237,86 +1259,6 @@ class EditorController extends ChangeNotifier {
       ));
     }
     return out;
-  }
-
-  /// The selection as human-readable PLAIN text — what you see, with no Markdown
-  /// syntax (so pasting into Notepad/etc. doesn't leak `**`/`#`/`` ` ``). Inline
-  /// marks live outside `text`, so a raw slice is already unmarked; only the
-  /// rendered block affordance (bullet / number / checkbox) is added back. The
-  /// clipboard's `text/plain` flavor — the `text/html` one keeps formatting.
-  String selectionPlainText({Map<String, String>? imageUrls}) {
-    final slices = _selectionSlices();
-    if (slices.isEmpty) return '';
-    final buf = StringBuffer();
-    final counters = <int, int>{}; // numbered-list running count per indent
-    for (var i = 0; i < slices.length; i++) {
-      final sl = slices[i];
-      final node = nodes[sl.node];
-      if (i > 0) {
-        final prev = nodes[slices[i - 1].node];
-        final sameQuoteGroup =
-            node.kind == 'quote' &&
-            prev.kind == 'quote' &&
-            node.data['qbreak'] != true;
-        buf.write(sameQuoteGroup ? '\n' : '\n\n');
-      }
-      buf.write(_nodePlain(node, sl.from, sl.to, imageUrls, counters));
-    }
-    return buf.toString();
-  }
-
-  String _nodePlain(
-    EditorNode node,
-    int from,
-    int to,
-    Map<String, String>? imageUrls,
-    Map<int, int> counters,
-  ) {
-    // Numbering mirrors the renderer (render.dart): a non-numbered LIST item
-    // interrupts only its own level and deeper (parents keep counting); any
-    // other block ends every run. Wholesale clear() on a nested bullet made
-    // the copied numbers contradict the numbers on screen.
-    if (node.kind != 'numbered_list') {
-      if (node.isListKind) {
-        counters.removeWhere((k, _) => k >= node.indent);
-      } else {
-        counters.clear();
-      }
-    }
-    switch (node.kind) {
-      case 'table':
-        return TableData.fromBlock(
-          node.data,
-        ).rows.map((r) => r.join('\t')).join('\n');
-      case 'image':
-        final fileId = node.data['file_id'] as String?;
-        return (imageUrls?[fileId] ?? node.data['url'] ?? node.text) as String;
-      case 'divider':
-        return '';
-    }
-    final len = node.text.length;
-    final a = from.clamp(0, len);
-    final b = to.clamp(0, len);
-    final sub = node.text.substring(a, b);
-    if (!(a == 0 && b == len)) return sub; // partial line → bare text
-    final indent = node.isListKind ? '  ' * node.indent : '';
-    switch (node.kind) {
-      case 'bulleted_list':
-        return '$indent• $sub';
-      case 'numbered_list':
-        // Returning to a shallower level restarts the deeper runs, and the
-        // first item of a run seeds from its stored start (`5.` stays `5.`).
-        counters.removeWhere((k, _) => k > node.indent);
-        final n =
-            (counters[node.indent] ?? ((node.data['start'] as int?) ?? 1) - 1) +
-            1;
-        counters[node.indent] = n;
-        return '$indent$n. $sub';
-      case 'todo':
-        return '$indent${node.todoChecked ? '☑' : '☐'} $sub';
-      default:
-        return sub; // heading / quote / paragraph → just the text
-    }
   }
 
   /// A run of consecutive list items → nested `<ul>`/`<ol>` HTML. An item

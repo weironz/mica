@@ -292,28 +292,6 @@ void main() {
     });
   });
 
-  group('plain-text copy fidelity', () {
-    test('numbered runs survive an interrupting nested bullet', () {
-      final c = _doc([
-        EditorNode(id: 'a', kind: 'numbered_list', text: 'alpha'),
-        EditorNode(id: 'x', kind: 'bulleted_list', text: 'x', data: {'indent': 1}),
-        EditorNode(id: 'b', kind: 'numbered_list', text: 'beta'),
-      ]);
-      expect(c.selectionPlainText(), '1. alpha\n\n  • x\n\n2. beta',
-          reason: 'the clipboard numbers must match the rendered numbers');
-    });
-
-    test('returning shallower resets the deeper counter', () {
-      final c = _doc([
-        EditorNode(id: 'a', kind: 'numbered_list', text: 'a'),
-        EditorNode(id: 'x', kind: 'numbered_list', text: 'x', data: {'indent': 1}),
-        EditorNode(id: 'b', kind: 'numbered_list', text: 'b'),
-        EditorNode(id: 'y', kind: 'numbered_list', text: 'y', data: {'indent': 1}),
-      ]);
-      expect(c.selectionPlainText(), '1. a\n\n  1. x\n\n2. b\n\n  1. y');
-    });
-  });
-
   test('paste onto an atomic block goes to a paragraph below, not its text',
       () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});

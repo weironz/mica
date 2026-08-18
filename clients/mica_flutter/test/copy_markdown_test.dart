@@ -83,47 +83,6 @@ void main() {
     expect(c.selectionText(), 'Tit');
   });
 
-  // The clipboard's text/plain flavor: what a PLAIN editor (Notepad) reads —
-  // Markdown syntax stripped, only rendered affordances (bullet/number/box) kept.
-  group('selectionPlainText — no Markdown syntax', () {
-    test('inline marks + block markers are gone; text/bullets rendered', () {
-      final c = _doc([
-        EditorNode(id: 'a', kind: 'heading', text: 'Title', data: {'level': 2}),
-        EditorNode(id: 'b', kind: 'paragraph', text: 'hi there', data: {
-          'marks': marksToJson([Mark(0, 2, 'bold'), Mark(3, 8, 'code')]),
-        }),
-        EditorNode(id: 'c', kind: 'bulleted_list', text: 'one'),
-        EditorNode(id: 'd', kind: 'quote', text: 'wise words'),
-      ]);
-      final plain = c.selectionPlainText();
-      expect(plain, isNot(contains('**')));
-      expect(plain, isNot(contains('`')));
-      expect(plain, isNot(contains('#')));
-      expect(plain, isNot(contains('> ')));
-      expect(plain, contains('Title'));
-      expect(plain, contains('hi there')); // marks live off the text → already clean
-      expect(plain, contains('• one')); // rendered bullet, not Markdown "- "
-      expect(plain, contains('wise words'));
-    });
-
-    test('a link keeps its text and drops the URL', () {
-      final c = _doc([
-        EditorNode(id: 'a', kind: 'paragraph', text: 'see docs', data: {
-          'marks': marksToJson([Mark(4, 8, 'link', href: 'https://x.dev')]),
-        }),
-      ]);
-      expect(c.selectionPlainText(), 'see docs');
-    });
-
-    test('a numbered list renders running numbers', () {
-      final c = _doc([
-        EditorNode(id: 'a', kind: 'numbered_list', text: 'first'),
-        EditorNode(id: 'b', kind: 'numbered_list', text: 'second'),
-      ]);
-      expect(c.selectionPlainText(), '1. first\n\n2. second');
-    });
-  });
-
   // The clipboard's text/html flavor: Typora/Obsidian read this and convert it
   // back to formatted content, so copy→paste there keeps the formatting.
   group('selectionHtml — rich flavor', () {

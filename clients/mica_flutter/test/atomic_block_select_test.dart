@@ -231,6 +231,10 @@ void main() {
     test('an image at the caret serializes for the clipboard', () {
       // Cut/copy both bail on an empty payload, and a collapsed selection used
       // to produce one — so Ctrl+X on an image did nothing at all.
+      //
+      // Asserts the ACTUAL payload, not just `isNotEmpty`: this test used to
+      // call `selectionPlainText`, which production dropped in 8c20158, so it
+      // stayed green for the whole time copy/cut on an image was broken again.
       load([
         EditorNode(id: 'p', kind: 'paragraph', text: 'above'),
         EditorNode(id: 'i', kind: 'image', text: '', data: {'file_id': 'f1'}),
@@ -238,7 +242,8 @@ void main() {
       c.collapseTo(const DocPosition(1, 0));
 
       final urls = {'f1': 'https://example.test/f1.png'};
-      expect(c.selectionPlainText(imageUrls: urls), isNotEmpty);
+      expect(c.selectionText(imageUrls: urls),
+          contains('https://example.test/f1.png'));
       expect(c.selectionHtml(imageUrls: urls), contains('img'));
     });
 
@@ -268,7 +273,7 @@ void main() {
       load([EditorNode(id: 'p', kind: 'paragraph', text: 'hello')]);
       c.collapseTo(const DocPosition(0, 2));
 
-      expect(c.selectionPlainText(), isEmpty);
+      expect(c.selectionText(), isEmpty);
       expect(c.deleteSelection(), isFalse);
     });
   });
