@@ -979,18 +979,33 @@ extension _AiPresetInfo on _AiPreset {
     _AiPreset.custom => 'http://localhost:11434/v1',
   };
 
-  /// Seed for an empty form only — see the note above. Left blank wherever a
-  /// current name cannot be stated with confidence, which sends the user to the
-  /// fetch button, where the answer is authoritative.
-  String get model => switch (this) {
-    _AiPreset.deepseek => 'deepseek-chat',
-    _AiPreset.openai => 'gpt-4o-mini',
-    _AiPreset.anthropic => 'claude-sonnet-4-6',
-    _AiPreset.zhipu => '',
-    _AiPreset.kimi => '',
-    _AiPreset.custom => '',
-  };
+  /// Always blank. There is no seed because a seeded name is a claim about the
+  /// vendor's catalogue that this build cannot keep.
+  ///
+  /// It was `deepseek-chat` here, and on 2026-08-19 a live `/v1/models` against
+  /// api.deepseek.com returned exactly `deepseek-v4-flash` and
+  /// `deepseek-v4-pro` — `deepseek-chat` was gone. The instance in production
+  /// was still configured with it. That is the whole failure mode in one
+  /// example: a retired name does not look broken, it looks like a working
+  /// default, right up until a request fails for reasons that point nowhere
+  /// near this line. The fetch button beside the field is the answer that
+  /// cannot go stale.
+  String get model => '';
 }
+
+/// The provider presets, exposed for the regression that forbids shipping model
+/// NAMES (see test/ai_preset_no_baked_models_test.dart). The enum itself stays
+/// private — this is a read-only window onto it, not a second way to build one.
+@visibleForTesting
+List<({String label, String seedModel, String baseUrlValue})>
+get aiPresetsForTest => [
+  for (final preset in _AiPreset.values)
+    (
+      label: preset.label,
+      seedModel: preset.model,
+      baseUrlValue: preset.baseUrl,
+    ),
+];
 
 /// Settings dialog. Currently hosts the AI provider configuration; appearance and
 /// account sections will slot in alongside it.
@@ -2328,7 +2343,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             enabled: !_saving && _canEdit,
             decoration: InputDecoration(
               labelText: context.l10n.aiModel,
-              hintText: 'deepseek-chat',
+              // No example name here either — a hint is still a claim, and this
+              // one named a model DeepSeek has since retired.
+              hintText: context.l10n.aiModelHint,
               border: const OutlineInputBorder(),
             ),
           ),

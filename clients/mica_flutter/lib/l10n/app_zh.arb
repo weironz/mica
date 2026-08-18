@@ -283,6 +283,7 @@
   "aiKeyMissing": "尚未配置 API 密钥",
   "aiFetchModels": "获取服务商的模型列表",
   "aiModelsEmpty": "服务商没有返回任何模型。",
+  "aiModelHint": "点右侧拉取列表,或直接填模型 id",
   "aiModelsRouteMissing": "这台服务端没有「模型列表」接口 —— 它比当前客户端旧。部署新版服务端后再试。",
   "aiModelsRejected": "服务商拒绝了这个密钥。先保存一个有效的 API 密钥,或在上面填一个再拉取。",
   "aiAdminOnly": "只有本实例的管理员能改 AI 服务商。这里的密钥是全实例共用的,不是每个账号各自的设置。",

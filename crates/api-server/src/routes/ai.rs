@@ -235,11 +235,19 @@ fn default_base_url(provider: AiProvider) -> String {
   }
 }
 
-fn default_model(provider: AiProvider) -> String {
-  match provider {
-    AiProvider::Anthropic => "claude-sonnet-4-6".to_string(),
-    AiProvider::OpenAi => "deepseek-chat".to_string(),
-  }
+/// The model to fall back on when a settings write names none and nothing is
+/// stored yet — i.e. the very first save on a fresh instance.
+///
+/// Empty on purpose. A hardcoded name is a claim about a vendor's catalogue
+/// that this binary cannot keep: this function used to answer `deepseek-chat`,
+/// and on 2026-08-19 DeepSeek's own `/v1/models` listed only
+/// `deepseek-v4-flash` and `deepseek-v4-pro`. A retired name does not fail
+/// loudly — it looks like a working default until a completion errors for
+/// reasons that point nowhere near here. Empty means `has_key`-style checks and
+/// the settings UI both report "not configured yet", which is true, and
+/// `GET /api/ai/models` is right there to answer it authoritatively.
+fn default_model(_provider: AiProvider) -> String {
+  String::new()
 }
 
 async fn generate(config: &AiConfig, system: &str, prompt: &str) -> ApiResult<String> {
