@@ -6465,12 +6465,18 @@ class _BacklinksPanel extends StatefulWidget {
     required this.viewId,
     required this.load,
     required this.onOpen,
+    required this.onLoaded,
     super.key,
   });
 
   final String viewId;
   final Future<List<Backlink>> Function(String viewId) load;
   final Future<void> Function(String viewId) onOpen;
+
+  /// Reports how many links this page ended up showing (0 while loading, and 0
+  /// forever if there are none — the panel renders nothing then). The page
+  /// needs it to size the editor above: see [_WorkspaceViewState._backlinkCount].
+  final void Function(String viewId, int count) onLoaded;
 
   @override
   State<_BacklinksPanel> createState() => _BacklinksPanelState();
@@ -6503,11 +6509,13 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
       // Guard against a late response after the user navigated away.
       if (!mounted || widget.viewId != viewId) return;
       setState(() => _links = links);
+      widget.onLoaded(viewId, links.length);
     } catch (_) {
       // Backlinks are a best-effort convenience; a failed scan just shows no
       // panel rather than surfacing an error over the page.
       if (!mounted || widget.viewId != viewId) return;
       setState(() => _links = const []);
+      widget.onLoaded(viewId, 0);
     }
   }
 
@@ -7525,6 +7533,43 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
   final FocusNode _pageTitleFocus = FocusNode(debugLabel: 'PageTitle');
   Timer? _pageTitleSaveTimer;
+  // How many backlinks the panel below the editor is showing, and which page
+  // that answer is about — a count carried over from the previous page would
+  // size THIS page's canvas wrongly for one frame. See [_editorAppearance].
+  String? _backlinkCountOwner;
+  int _backlinkCount = 0;
+
+  /// True once the backlinks panel below the editor has something to draw.
+  bool get _hasBacklinksBelow =>
+      _backlinkCount > 0 &&
+      _backlinkCountOwner != null &&
+      _backlinkCountOwner == widget.selectedView?.id;
+
+  /// The canvas normally claims [EditorTheme.minSurfaceHeight] whether or not
+  /// the text needs it, so a blank page still offers a big click-to-write area.
+  /// That floor is padding BELOW the text, so anything the page stacks under the
+  /// canvas gets pushed down by all of it: a three-line page with a backlink
+  /// drew its text, ~420px of nothing, then the panel stranded mid-window.
+  /// With a panel to show, the canvas hugs its content and the panel follows it
+  /// (the same shape Obsidian and AFFiNE use for their bottom link panels);
+  /// [EditorTheme.bottomPad] still keeps a click-to-write strip between them.
+  EditorAppearance get _editorAppearance => _hasBacklinksBelow
+      ? EditorAppearance(
+          fontScale: widget.appearance.fontScale,
+          fontFamily: widget.appearance.fontFamily,
+          tokens: widget.appearance.tokens,
+          minSurfaceHeight: 0,
+        )
+      : widget.appearance;
+
+  void _onBacklinksLoaded(String viewId, int count) {
+    if (!mounted) return;
+    if (_backlinkCountOwner == viewId && _backlinkCount == count) return;
+    setState(() {
+      _backlinkCountOwner = viewId;
+      _backlinkCount = count;
+    });
+  }
   // Page properties are hidden by default (AFFiNE-style): revealed by the info
   // toggle next to the breadcrumb, so a page with many properties never pushes
   // the body down until you ask for it.
@@ -10000,7 +10045,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         );
                       });
                     },
-                    appearance: widget.appearance,
+                    appearance: _editorAppearance,
                     onOpenPage: _openPageLink,
                     pageLinks: () => [
                       for (final v in widget.views)
@@ -10022,6 +10067,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       viewId: widget.selectedView!.id,
                       load: widget.onLoadBacklinks!,
                       onOpen: widget.onOpenSearchResult,
+                      onLoaded: _onBacklinksLoaded,
                     ),
                   ),
                 if (widget.selectedMarkdown != null) ...[

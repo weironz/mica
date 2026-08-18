@@ -25,6 +25,7 @@ class EditorAppearance {
     this.fontScale = 1.0,
     this.fontFamily,
     this.tokens = MicaTokens.light,
+    this.minSurfaceHeight = EditorTheme.minSurfaceHeight,
   });
 
   /// Multiplier applied to every block's font size (0.85–1.4 typically).
@@ -43,6 +44,17 @@ class EditorAppearance {
   /// Optional font family override for prose (code blocks keep monospace).
   final String? fontFamily;
 
+  /// Floor on the canvas height, so a blank page offers a large click-to-write
+  /// area instead of a thin strip (see [EditorTheme.minSurfaceHeight]).
+  ///
+  /// A knob rather than the constant because the floor is padding the canvas
+  /// claims whether or not it needs it, and anything the page puts BELOW the
+  /// canvas is pushed down by all of it. With a backlinks panel underneath,
+  /// a short page rendered its content, then ~420px of nothing, then the panel
+  /// stranded halfway down the window. The page drops the floor when it has
+  /// something to put there; [EditorTheme.bottomPad] still separates the two.
+  final double minSurfaceHeight;
+
   /// CJK fallback chain: crisp system fonts on desktop (Windows 微软雅黑 etc.),
   /// the bundled font on web. See [cjkFontFallback].
   static List<String> get cjkFallback => cjkFontFallback;
@@ -57,6 +69,7 @@ class EditorAppearance {
     fontScale: fontScale,
     fontFamily: fontFamily,
     tokens: value,
+    minSurfaceHeight: minSurfaceHeight,
   );
 
   TextStyle applyTo(TextStyle base, {required bool isCode}) {
@@ -74,10 +87,11 @@ class EditorAppearance {
   bool operator ==(Object other) =>
       other is EditorAppearance &&
       other.fontScale == fontScale &&
-      other.fontFamily == fontFamily;
+      other.fontFamily == fontFamily &&
+      other.minSurfaceHeight == minSurfaceHeight;
 
   @override
-  int get hashCode => Object.hash(fontScale, fontFamily);
+  int get hashCode => Object.hash(fontScale, fontFamily, minSurfaceHeight);
 }
 
 /// Visual constants for the editing surface. Kept here so the look stays in one
@@ -1652,7 +1666,7 @@ class RenderDocument extends RenderBox {
     size = constraints.constrain(
       Size(
         maxWidth,
-        y < EditorTheme.minSurfaceHeight ? EditorTheme.minSurfaceHeight : y,
+        y < _appearance.minSurfaceHeight ? _appearance.minSurfaceHeight : y,
       ),
     );
   }
