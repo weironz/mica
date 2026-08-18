@@ -1,5 +1,7 @@
 use std::{env, fs};
 
+use sqlx::{PgPool, types::Uuid};
+
 /// Which API dialect to speak to the model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiProvider {
@@ -108,6 +110,65 @@ impl AiConfig {
 
   pub fn has_key(&self) -> bool {
     !self.api_key.trim().is_empty()
+  }
+
+  /// The instance's SAVED settings, or `None` when an admin has never set any.
+  ///
+  /// Storage exists because the settings used to live only in
+  /// `state.ai` — an in-process lock — so every api restart threw away whatever
+  /// had been configured in the UI, and the settings dialog could not truthfully
+  /// answer "is a key set?". See migration 0021.
+  ///
+  /// A stored row WINS over [`from_env`]: the environment seeds a fresh
+  /// instance, and an admin who then changes the provider in the UI must not
+  /// have it silently reverted on the next deploy. The consequence is worth
+  /// stating plainly — once anything has been saved, editing `.env` no longer
+  /// changes the running config. Clearing the row (or the whole table) hands it
+  /// back to the environment.
+  ///
+  /// Best effort: a decode failure returns `None` rather than refusing to boot.
+  /// AI is a convenience feature and a server that will not start is a worse
+  /// outcome than one whose assistant is briefly unconfigured.
+  pub async fn load(db: &PgPool) -> Option<Self> {
+    let row = sqlx::query_as::<_, (String, String, String, String, i32)>(
+      "SELECT provider, base_url, model, api_key, max_tokens FROM ai_settings WHERE id",
+    )
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+
+    let provider = AiProvider::parse(&row.0)?;
+    Some(Self {
+      provider,
+      base_url: row.1,
+      model: row.2,
+      api_key: row.3,
+      max_tokens: row.4.max(1) as u32,
+      anthropic_version: match provider {
+        AiProvider::Anthropic => "2023-06-01".to_string(),
+        AiProvider::OpenAi => String::new(),
+      },
+    })
+  }
+
+  /// Persist these settings as THE instance settings, replacing whatever was
+  /// there. One row, one statement — the key and the endpoint it belongs to
+  /// have to land together, since a key paired with another provider's base URL
+  /// is a key sent to the wrong host.
+  pub async fn save(&self, db: &PgPool, by: Option<Uuid>) -> Result<(), sqlx::Error> {
+    sqlx::query(
+      "INSERT INTO ai_settings (id, provider, base_url, model, api_key, max_tokens, updated_at, updated_by)        VALUES (true, $1, $2, $3, $4, $5, now(), $6)        ON CONFLICT (id) DO UPDATE SET          provider = EXCLUDED.provider, base_url = EXCLUDED.base_url, model = EXCLUDED.model,          api_key = EXCLUDED.api_key, max_tokens = EXCLUDED.max_tokens,          updated_at = now(), updated_by = EXCLUDED.updated_by",
+    )
+    .bind(self.provider.as_str())
+    .bind(&self.base_url)
+    .bind(&self.model)
+    .bind(&self.api_key)
+    .bind(self.max_tokens as i32)
+    .bind(by)
+    .execute(db)
+    .await
+    .map(|_| ())
   }
 }
 

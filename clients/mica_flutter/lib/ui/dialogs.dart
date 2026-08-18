@@ -1119,6 +1119,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   late bool _loading = widget.onLoadAiSettings != null;
   bool _saving = false;
   bool _hasKey = false;
+  /// Last 4 characters of the saved key, when there is one. The field itself
+  /// can never show the key — the server does not return it — so without this
+  /// the dialog had only a row of dots as a hint, which reads exactly like a
+  /// filled-in field and left "is a key set?" unanswerable.
+  String _keyHint = '';
+  /// Whether this account may change the instance-wide AI settings. Instance
+  /// settings carry the operator's provider key, so only an admin may.
+  bool _canEdit = true;
   // API Tokens tab state.
   List<Map<String, dynamic>>? _tokens;
   bool _tokensLoaded = false;
@@ -1479,6 +1487,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         _baseUrl.text = base.isEmpty ? _preset.baseUrl : base;
         _model.text = model.isEmpty ? _preset.model : model;
         _hasKey = settings['has_key'] == true;
+        _keyHint = settings['key_hint'] as String? ?? '';
+        // Absent on an older server: treat as editable so this dialog does not
+        // lock a self-hoster out of settings their build still lets them save.
+        _canEdit = settings['can_edit'] as bool? ?? true;
         _loading = false;
       });
       // Baseline: what the server already has. Without it, merely tabbing
@@ -2191,7 +2203,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                 DropdownMenuItem(value: preset, child: Text(preset.label)),
           )
           .toList(),
-      onChanged: _saving
+      onChanged: (_saving || !_canEdit)
           ? null
           : (preset) {
               if (preset != null) _applyPreset(preset);
@@ -2201,7 +2213,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     TextField(
       controller: _baseUrl,
       focusNode: _aiFocus[0],
-      enabled: !_saving,
+      enabled: !_saving && _canEdit,
       decoration: InputDecoration(
         labelText: context.l10n.aiBaseUrl,
         hintText: 'https://api.deepseek.com',
@@ -2212,7 +2224,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     TextField(
       controller: _model,
       focusNode: _aiFocus[1],
-      enabled: !_saving,
+      enabled: !_saving && _canEdit,
       decoration: InputDecoration(
         labelText: context.l10n.aiModel,
         hintText: 'deepseek-chat',
@@ -2220,10 +2232,40 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ),
     ),
     const SizedBox(height: 12),
+    // The saved key is never returned, so the field is always empty on open.
+    // It used to say so with a row of dots as the hint — which looks exactly
+    // like a filled-in password field, so "did I ever set this?" had no answer.
+    // A badge answers it, and the last 4 characters answer the follow-up
+    // ("is it the key I think it is?") without revealing anything usable.
+    Row(
+      children: [
+        Icon(
+          _hasKey ? Icons.check_circle : Icons.error_outline,
+          size: 16,
+          color: _hasKey
+              ? MicaTheme.of(context).status.success
+              : MicaTheme.of(context).text.muted,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _hasKey
+              ? (_keyHint.isEmpty
+                    ? context.l10n.aiKeyConfigured
+                    : context.l10n.aiKeyConfiguredHint(_keyHint))
+              : context.l10n.aiKeyMissing,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: _hasKey
+                ? MicaTheme.of(context).status.success
+                : MicaTheme.of(context).text.muted,
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
     TextField(
       controller: _apiKey,
       focusNode: _aiFocus[2],
-      enabled: !_saving,
+      enabled: !_saving && _canEdit,
       obscureText: true,
       decoration: InputDecoration(
         labelText: context.l10n.aiApiKey,
@@ -2240,6 +2282,15 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         context,
       ).textTheme.bodySmall?.copyWith(color: MicaTheme.of(context).text.muted),
     ),
+    if (!_canEdit) ...[
+      const SizedBox(height: 8),
+      Text(
+        context.l10n.aiAdminOnly,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: MicaTheme.of(context).text.muted,
+        ),
+      ),
+    ],
     if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
   ];
 

@@ -4,7 +4,7 @@ use mica_infra::{AiConfig, AiProvider, ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::routes::auth::user_id_from_headers;
+use crate::routes::auth::{admin_id_from_headers, user_id_from_headers};
 
 #[derive(Debug, Deserialize)]
 pub struct AiCompleteRequest {
@@ -21,11 +21,20 @@ pub struct AiCompleteResponse {
 #[derive(Debug, Serialize)]
 pub struct AiSettingsResponse {
   configured: bool,
+  /// Whether the CALLER may change these settings. The dialog uses it to show
+  /// the fields read-only instead of letting someone fill in a key and then
+  /// eat a 403 on save.
+  #[serde(default)]
+  can_edit: bool,
   provider: String,
   base_url: String,
   model: String,
   max_tokens: u32,
   has_key: bool,
+  /// Last 4 characters of the stored key, or empty. Enough to tell "already
+  /// configured, and it is the key I think it is" apart from "never set" —
+  /// which a bare boolean rendered as a row of dots could not do.
+  key_hint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,9 +93,16 @@ pub async fn get_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
 ) -> ApiResult<Json<AiSettingsResponse>> {
-  let _user_id = user_id_from_headers(&state, &headers).await?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
   let config = state.ai.read().await.clone();
-  Ok(Json(settings_response(config.as_ref())))
+  let can_edit = sqlx::query_scalar::<_, bool>("SELECT is_admin FROM users WHERE id = $1")
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or(false);
+  let mut response = settings_response(config.as_ref());
+  response.can_edit = can_edit;
+  Ok(Json(response))
 }
 
 /// `PATCH /api/ai/settings` — choose the provider / base URL / model / key.
@@ -95,7 +111,9 @@ pub async fn update_settings(
   headers: HeaderMap,
   Json(payload): Json<UpdateAiSettingsRequest>,
 ) -> ApiResult<Json<AiSettingsResponse>> {
-  let _user_id = user_id_from_headers(&state, &headers).await?;
+  // Instance-wide settings holding the operator's provider key — being signed
+  // in is not enough. See `admin_id_from_headers`.
+  let admin_id = admin_id_from_headers(&state, &headers).await?;
 
   let mut guard = state.ai.write().await;
   let current = guard.clone();
@@ -155,7 +173,12 @@ pub async fn update_settings(
     max_tokens,
     anthropic_version,
   };
-  let response = settings_response(Some(&config));
+  let mut response = settings_response(Some(&config));
+  response.can_edit = true;
+  // Persist BEFORE publishing to the lock: a save that failed would otherwise
+  // leave a running config that silently reverts on the next restart, which is
+  // exactly the failure this table was added to end.
+  config.save(&state.db, Some(admin_id)).await?;
   *guard = Some(config);
   Ok(Json(response))
 }
@@ -169,6 +192,8 @@ fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
       model: config.model.clone(),
       max_tokens: config.max_tokens,
       has_key: config.has_key(),
+      key_hint: key_hint(&config.api_key),
+      can_edit: false,
     },
     None => AiSettingsResponse {
       configured: false,
@@ -177,8 +202,20 @@ fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
       model: String::new(),
       max_tokens: 2048,
       has_key: false,
+      key_hint: String::new(),
+      can_edit: false,
     },
   }
+}
+
+/// The tail of a key, for recognising it without revealing it. Short keys get
+/// nothing rather than most of themselves.
+fn key_hint(key: &str) -> String {
+  let key = key.trim();
+  if key.chars().count() < 8 {
+    return String::new();
+  }
+  key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect()
 }
 
 fn default_base_url(provider: AiProvider) -> String {

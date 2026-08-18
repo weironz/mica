@@ -63,6 +63,14 @@ async fn main() -> anyhow::Result<()> {
   // Log by default; Aliyun DirectMail when MICA_MAIL_BACKEND=directmail is set.
   let mailer = mail::build_mailer();
   let state = AppState::new(config, db, mailer);
+  // The environment seeded `state.ai` above; a row saved by an admin replaces
+  // it. Settings used to live ONLY in that lock, so every restart — i.e. every
+  // deploy — quietly un-configured AI and the settings dialog could not say
+  // whether a key was set. See `AiConfig::load` for why the stored row wins.
+  if let Some(stored) = mica_infra::AiConfig::load(&state.db).await {
+    info!(provider = %stored.provider.as_str(), model = %stored.model, "loaded saved AI settings");
+    *state.ai.write().await = Some(stored);
+  }
   // Reclaim blobs no page points at any more. Backgrounded and best-effort: a
   // GC that stops is a disk-space problem, never a reason to fail a request.
   // No-op when object storage is not configured — nothing to reclaim.

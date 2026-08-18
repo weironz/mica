@@ -146,15 +146,19 @@ pub async fn register(
 
   let password_hash = hash_password(&payload.password)?;
 
-  // One statement, so "is this the first account?" cannot be answered stale.
+  // One statement, so "is this the first account?" cannot be answered stale —
+  // and `is_admin` is computed from the SAME snapshot as the guard, so the
+  // account that stands the instance up is the one that can configure it
+  // (migration 0021). Asking again afterwards would be a second snapshot, and
+  // on a fresh instance two concurrent signups could both read "no users yet".
   // Counting first and then inserting would let two concurrent requests on a
   // fresh instance both pass the check — the guard has to be part of the write,
   // not a look before it. The `WHERE` is evaluated against the same snapshot as
   // the insert, so the loser gets zero rows instead of a second account.
   let user = sqlx::query_as::<_, UserRow>(
     r#"
-      INSERT INTO users (email, display_name, password_hash)
-      SELECT $1, $2, $3
+      INSERT INTO users (email, display_name, password_hash, is_admin)
+      SELECT $1, $2, $3, NOT EXISTS (SELECT 1 FROM users)
       WHERE $4 OR NOT EXISTS (SELECT 1 FROM users)
       RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
     "#,
@@ -790,6 +794,33 @@ pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) 
     .or_else(|| cookie_value(headers, SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
   Ok(resolve_token(state, &token).await?.user_id)
+}
+
+/// The signed-in user's id, but only when that user administers this instance.
+///
+/// Instance-wide settings — today the AI provider config — carry the OPERATOR's
+/// credentials and are shared by everyone on the deployment, so "is signed in"
+/// is the wrong bar for changing them: on an open-registration instance any
+/// account could repoint the model or spend the operator's credit. `is_admin`
+/// is set on the account that stood the instance up (migration 0021).
+///
+/// 403 rather than 404: the endpoint exists and the caller is authenticated —
+/// hiding that would just send an admin hunting for a routing problem.
+pub(crate) async fn admin_id_from_headers(
+  state: &AppState,
+  headers: &HeaderMap,
+) -> ApiResult<Uuid> {
+  let user_id = user_id_from_headers(state, headers).await?;
+  let is_admin = sqlx::query_scalar::<_, bool>("SELECT is_admin FROM users WHERE id = $1")
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or(false);
+  if is_admin {
+    Ok(user_id)
+  } else {
+    Err(ApiError::Forbidden)
+  }
 }
 
 /// Decode a bare JWT access token into a user id. Used by the WebSocket handler,
