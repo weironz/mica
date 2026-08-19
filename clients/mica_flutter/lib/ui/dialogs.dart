@@ -1104,7 +1104,9 @@ class _SettingsDialog extends StatefulWidget {
     required String provider,
     required String providerId,
     required String baseUrl,
-    required String model,
+    /// Null omits the field entirely — keep what is stored. An empty STRING
+    /// would be sent, and would clear it.
+    String? model,
     String? apiKey,
   })?
   onSaveAiSettings;
@@ -1191,6 +1193,21 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// the dialog had only a row of dots as a hint, which reads exactly like a
   /// filled-in field and left "is a key set?" unanswerable.
   String _keyHint = '';
+  /// The vendor whose values are currently IN the fields. Not the same as
+  /// `_preset` during a switch — and that gap is a bug, not a nicety: the
+  /// fields save on blur, so a blur landing after the dropdown changed would
+  /// write the OLD provider key under the NEW provider id. That is how one
+  /// DeepSeek key ended up stored for both DeepSeek and Zhipu.
+  String _fieldsProviderId = '';
+  /// Vendor ids that have a stored config, from the server. Lets the dropdown
+  /// say which entries are set up — without it the list looks like six equal
+  /// choices and gives no clue which one the instance is actually running.
+  Set<String> _configuredIds = const {};
+  /// Fetched model lists, per vendor. Switching away used to drop the list, so
+  /// coming back showed a bare text box with no way to see that the stored
+  /// model was one of the provider's real ones — the selection looked lost even
+  /// though it was not.
+  final Map<String, List<String>> _modelsByProvider = {};
   /// Whether this account may change the instance-wide AI settings. Instance
   /// settings carry the operator's provider key, so only an admin may.
   bool _canEdit = true;
@@ -1587,6 +1604,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       final models = (result['models'] as List?)?.cast<String>() ?? const [];
       setState(() {
         _models = models;
+        _modelsByProvider[_fieldsProviderId] = models;
         _fetchingModels = false;
         _modelsError = models.isEmpty ? context.l10n.aiModelsEmpty : null;
       });
@@ -1646,17 +1664,25 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _preset = preset;
       _saving = true;
-      // These belong to the provider being left.
-      _models = const [];
+      // Everything here belongs to the provider being left — including anything
+      // half-typed in the key box, which a blur would otherwise hand to the
+      // provider being switched TO.
+      // Restore what this provider fetched last time, if anything — the list
+      // belongs to the vendor, so switching back should not look empty.
+      _models = _modelsByProvider[preset.id] ?? const [];
       _modelsError = null;
+      _apiKey.clear();
+      _fieldsProviderId = preset.id;
     });
     try {
       final result = await save(
         provider: preset.provider,
         providerId: preset.id,
-        // Only a seed: the server keeps this vendor's stored URL when it has one.
+        // Only a seed: the server keeps this vendor stored URL when it has one.
         baseUrl: preset.baseUrl,
-        model: '',
+        // NOT the empty string — an empty model is a VALUE, and the server
+        // wrote it, wiping the model this provider already had. Null omits it.
+        model: null,
       );
       if (!mounted) return;
       _adoptSettings(result);
@@ -1678,12 +1704,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     final model = settings['model'] as String? ?? '';
     setState(() {
       _preset = _presetFor(providerId, provider, base);
+      _fieldsProviderId = _preset.id;
+      _models = _modelsByProvider[_preset.id] ?? _models;
       _baseUrl.text = base.isEmpty ? _preset.baseUrl : base;
       _model.text = model;
       _apiKey.clear();
       _hasKey = settings['has_key'] == true;
       _keyHint = settings['key_hint'] as String? ?? '';
       _canEdit = settings['can_edit'] as bool? ?? true;
+      _configuredIds = {
+        for (final entry
+            in (settings['configured_providers'] as List? ?? const []))
+          if (entry is Map && entry['has_key'] == true)
+            entry['provider_id'] as String,
+      };
       _saving = false;
       _error = null;
     });
@@ -2175,8 +2209,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     });
     try {
       await save(
+        // The vendor these VALUES belong to, not the one the dropdown shows.
         provider: _preset.provider,
-        providerId: _preset.id,
+        providerId: _fieldsProviderId.isEmpty ? _preset.id : _fieldsProviderId,
         baseUrl: _baseUrl.text.trim(),
         model: _model.text.trim(),
         apiKey: _apiKey.text.trim().isEmpty ? null : _apiKey.text.trim(),
@@ -2361,13 +2396,30 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     DropdownButtonFormField<_AiPreset>(
       initialValue: _preset,
       decoration: InputDecoration(
-        labelText: context.l10n.aiProviderLabel,
+        // "In use", not "provider": the selection IS the running config, and a
+        // neutral label made a list of six vendors look like six equal choices
+        // with no way to tell which one the instance was actually calling.
+        labelText: context.l10n.aiProviderInUse,
         border: const OutlineInputBorder(),
       ),
       items: _AiPreset.values
           .map(
-            (preset) =>
-                DropdownMenuItem(value: preset, child: Text(preset.label)),
+            (preset) => DropdownMenuItem(
+              value: preset,
+              child: Row(
+                children: [
+                  Text(preset.label),
+                  if (_configuredIds.contains(preset.id)) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.check_circle,
+                      size: 13,
+                      color: MicaTheme.of(context).status.success,
+                    ),
+                  ],
+                ],
+              ),
+            ),
           )
           .toList(),
       onChanged: (_saving || !_canEdit)
@@ -2375,6 +2427,13 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           : (preset) {
               if (preset != null) _applyPreset(preset);
             },
+    ),
+    const SizedBox(height: 6),
+    Text(
+      context.l10n.aiProviderInUseHelp,
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: MicaTheme.of(context).text.muted),
     ),
     const SizedBox(height: 12),
     TextField(
@@ -2384,6 +2443,56 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       decoration: InputDecoration(
         labelText: context.l10n.aiBaseUrl,
         hintText: 'https://api.deepseek.com',
+        border: const OutlineInputBorder(),
+      ),
+    ),
+    const SizedBox(height: 12),
+    // The saved key is never returned, so the field is always empty on open.
+    // It used to say so with a row of dots as the hint — which looks exactly
+    // like a filled-in password field, so "did I ever set this?" had no answer.
+    // A badge answers it, and the last 4 characters answer the follow-up
+    // ("is it the key I think it is?") without revealing anything usable.
+    Row(
+      children: [
+        Icon(
+          _hasKey ? Icons.check_circle : Icons.error_outline,
+          size: 16,
+          color: _hasKey
+              ? MicaTheme.of(context).status.success
+              : MicaTheme.of(context).text.muted,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _hasKey
+              ? (_keyHint.isEmpty
+                    ? context.l10n.aiKeyConfigured
+                    : context.l10n.aiKeyConfiguredHint(_keyHint))
+              : context.l10n.aiKeyMissing,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: _hasKey
+                ? MicaTheme.of(context).status.success
+                : MicaTheme.of(context).text.muted,
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
+    TextField(
+      controller: _apiKey,
+      focusNode: _aiFocus[2],
+      enabled: !_saving && _canEdit,
+      obscureText: true,
+      decoration: InputDecoration(
+        labelText: context.l10n.aiApiKey,
+        // Float the label unconditionally so the hint is actually VISIBLE. With
+        // Material's default the label sits inside an empty field and the hint
+        // is hidden underneath it — so the dots that say "a key is stored,
+        // leave this blank to keep it" were never once seen, and the field read
+        // as "nothing configured" even while the badge above said otherwise.
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        hintText: _hasKey
+            ? context.l10n.aiApiKeyHintHasKey
+            : context.l10n.aiApiKeyHintRequired,
         border: const OutlineInputBorder(),
       ),
     ),
@@ -2445,12 +2554,24 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               selected: _model.text.trim() == id,
               onSelected: (_saving || !_canEdit)
                   ? null
-                  : (_) => setState(() => _model.text = id),
+                  : (_) {
+                      setState(() => _model.text = id);
+                      // Saving is on BLUR, and assigning `controller.text`
+                      // never blurs anything — so picking a model used to
+                      // change the box and nothing else. The row kept its
+                      // empty model, the server kept reporting "not
+                      // configured", and Ask AI stayed gone with the field
+                      // showing the name the user had just chosen.
+                      unawaited(_saveAi());
+                    },
             ),
         ],
       ),
     ],
-    if (_models.isEmpty && _model.text.trim().isEmpty && _modelsError == null) ...[
+    // Shown whenever no model is chosen — NOT only when the list is empty. It
+    // used to hide the moment the list loaded, which is exactly when the user
+    // has fetched, not yet picked, and is looking for why Ask AI is still gone.
+    if (_model.text.trim().isEmpty) ...[
       const SizedBox(height: 6),
       Row(
         children: [
@@ -2497,55 +2618,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ),
     ],
     const SizedBox(height: 12),
-    // The saved key is never returned, so the field is always empty on open.
-    // It used to say so with a row of dots as the hint — which looks exactly
-    // like a filled-in password field, so "did I ever set this?" had no answer.
-    // A badge answers it, and the last 4 characters answer the follow-up
-    // ("is it the key I think it is?") without revealing anything usable.
-    Row(
-      children: [
-        Icon(
-          _hasKey ? Icons.check_circle : Icons.error_outline,
-          size: 16,
-          color: _hasKey
-              ? MicaTheme.of(context).status.success
-              : MicaTheme.of(context).text.muted,
-        ),
-        const SizedBox(width: 6),
-        Text(
-          _hasKey
-              ? (_keyHint.isEmpty
-                    ? context.l10n.aiKeyConfigured
-                    : context.l10n.aiKeyConfiguredHint(_keyHint))
-              : context.l10n.aiKeyMissing,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: _hasKey
-                ? MicaTheme.of(context).status.success
-                : MicaTheme.of(context).text.muted,
-          ),
-        ),
-      ],
-    ),
-    const SizedBox(height: 8),
-    TextField(
-      controller: _apiKey,
-      focusNode: _aiFocus[2],
-      enabled: !_saving && _canEdit,
-      obscureText: true,
-      decoration: InputDecoration(
-        labelText: context.l10n.aiApiKey,
-        // Float the label unconditionally so the hint is actually VISIBLE. With
-        // Material's default the label sits inside an empty field and the hint
-        // is hidden underneath it — so the dots that say "a key is stored,
-        // leave this blank to keep it" were never once seen, and the field read
-        // as "nothing configured" even while the badge above said otherwise.
-        floatingLabelBehavior: FloatingLabelBehavior.always,
-        hintText: _hasKey
-            ? context.l10n.aiApiKeyHintHasKey
-            : context.l10n.aiApiKeyHintRequired,
-        border: const OutlineInputBorder(),
-      ),
-    ),
     const SizedBox(height: 6),
     Text(
       context.l10n.aiKeyHelp,

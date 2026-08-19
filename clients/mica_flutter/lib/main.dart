@@ -2842,8 +2842,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<Map<String, dynamic>> _loadAiSettings() async {
     final session = _requireSession();
-    return _api.getAiSettings(session.accessToken);
+    final settings = await _api.getAiSettings(session.accessToken);
+    // Keep the Ask-AI affordance in step with what the server actually has.
+    // It used to update only on SAVE, so a state reached any other way — a
+    // provider switched from another window, a key cleared, a restart — left
+    // the button showing or hidden according to a stale answer.
+    if (mounted) setState(() => _aiConfigured = _aiReady(settings));
+    return settings;
   }
+
+  /// A usable AI needs BOTH a key and a model: with either missing the server
+  /// has nothing to call, and an Ask-AI button that appears and then fails is
+  /// worse than one that waits.
+  bool _aiReady(Map<String, dynamic> settings) =>
+      settings['has_key'] == true &&
+      (settings['model'] as String? ?? '').trim().isNotEmpty;
 
   /// The provider's live model list. Kept next to [_loadAiSettings] because it
   /// takes the same session and the dialog uses them together.
@@ -2884,7 +2897,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     required String provider,
     required String providerId,
     required String baseUrl,
-    required String model,
+    String? model,
     String? apiKey,
   }) async {
     final session = _requireSession();
@@ -2899,10 +2912,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // A key alone is not a working AI: without a model the server has nothing
     // to call. Gate the Ask-AI affordance on both, or the button appears and
     // then fails.
-    final ready =
-        settings['has_key'] == true &&
-        (settings['model'] as String? ?? '').isNotEmpty;
-    if (mounted) setState(() => _aiConfigured = ready);
+    if (mounted) setState(() => _aiConfigured = _aiReady(settings));
     return settings;
   }
 
@@ -7421,7 +7431,7 @@ class WorkspaceView extends StatefulWidget {
     required String provider,
     required String providerId,
     required String baseUrl,
-    required String model,
+    String? model,
     String? apiKey,
   })?
   onSaveAiSettings;

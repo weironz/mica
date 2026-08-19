@@ -166,9 +166,15 @@ pub async fn update_settings(
     .or_else(|| base.map(|c| c.base_url.clone()))
     .unwrap_or_else(|| default_base_url(provider));
 
+  // An EMPTY model is treated as "not provided", not as "clear it". A provider
+  // switch used to send `model: ""` and this wrote it, silently wiping the
+  // model that provider already had — so every switch cost you the model you
+  // had picked, and the screen simply showed an empty field. Nothing in the UI
+  // clears a model on purpose, so the permissive reading has no use to lose.
   let model = payload
     .model
     .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
     .or_else(|| base.map(|c| c.model.clone()))
     .unwrap_or_default();
 

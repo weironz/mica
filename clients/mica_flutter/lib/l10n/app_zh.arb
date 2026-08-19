@@ -281,6 +281,8 @@
   "aiKeyConfigured": "已配置 API 密钥",
   "aiKeyConfiguredHint": "已配置 API 密钥(尾号 {tail})",
   "aiKeyMissing": "尚未配置 API 密钥",
+  "aiProviderInUse": "使用中的服务商",
+  "aiProviderInUseHelp": "每家服务商各自保存自己的地址、密钥和模型。这里选中的那家就是实际发请求的那家;打勾的是已经配好的。",
   "aiModelMissing": "还没有选模型 —— 选定之前 AI 不会生效。点右侧按钮拉取列表。",
   "aiKeyBelongsToPreviousProvider": "存着的密钥是上一个服务商的。请填入这家的密钥,否则请求会被拒绝。",
   "aiFetchModels": "获取服务商的模型列表",

@@ -876,7 +876,7 @@ class ApiClient {
     required String provider,
     required String providerId,
     required String baseUrl,
-    required String model,
+    String? model,
     String? apiKey,
     int? maxTokens,
   }) async {
@@ -884,7 +884,9 @@ class ApiClient {
       'provider': provider,
       'provider_id': providerId,
       'base_url': baseUrl,
-      'model': model,
+      // Omitted, not empty: the server treats a present-but-empty model as an
+      // instruction to CLEAR it, which wiped a provider model on every switch.
+      if (model != null) 'model': model,
     };
     if (apiKey != null && apiKey.isNotEmpty) {
       body['api_key'] = apiKey;
