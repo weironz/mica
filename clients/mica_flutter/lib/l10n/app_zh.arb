@@ -384,6 +384,7 @@
   "versionDiffAdded": "新增",
   "versionDiffChanged": "修改",
   "versionDiffRemoved": "删除",
+  "versionDiffNone": "与上一版本无差异",
   "versionGroupToday": "今天",
   "versionGroupEarlier": "更早",
   "versionYesterdayAt": "昨天 {time}",

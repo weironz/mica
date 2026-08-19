@@ -22,6 +22,7 @@ import 'editor/word_count.dart';
 import 'web/yjs_probe.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show headingButtonTarget, kMonoFont;
+import 'editor/version_diff.dart';
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/open_url.dart';

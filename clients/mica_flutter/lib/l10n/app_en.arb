@@ -599,6 +599,7 @@
   "versionDiffAdded": "Added",
   "versionDiffChanged": "Changed",
   "versionDiffRemoved": "Removed",
+  "versionDiffNone": "No changes from the previous version",
   "versionGroupToday": "Today",
   "versionGroupEarlier": "Earlier",
   "versionYesterdayAt": "Yesterday {time}",

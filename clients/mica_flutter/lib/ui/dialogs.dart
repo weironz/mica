@@ -4713,85 +4713,12 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     }
   }
 
-  /// A block equals its predecessor if kind + text + data all match (a cheap
-  /// structural compare; data is order-insensitive via jsonEncode of a sorted
-  /// view is overkill here — the block data is small and written consistently).
-  bool _blockEqual(Map<String, dynamic> a, Map<String, dynamic> b) {
-    return a['type'] == b['type'] &&
-        (a['text'] ?? '') == (b['text'] ?? '') &&
-        jsonEncode(a['data']) == jsonEncode(b['data']);
-  }
-
-  /// The top-level blocks of a version, in tree order (root's children — the
-  /// flat shape the editor mounts).
-  List<Map<String, dynamic>> _topBlocks(
-    ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
-  ) {
-    final byId = {for (final b in content.blocks) (b['id'] as String): b};
-    final childIds =
-        ((byId[content.rootBlockId]?['children'] as List?) ?? const [])
-            .cast<String>();
-    return [
-      for (final id in childIds)
-        if (byId[id] != null) byId[id]!,
-    ];
-  }
-
-  EditorNode _toNode(Map<String, dynamic> b, String? diff) => EditorNode(
-    id: b['id'] as String,
-    kind: b['type'] as String? ?? 'paragraph',
-    text: b['text'] as String? ?? '',
-    data: Map<String, dynamic>.from((b['data'] as Map?) ?? const {}),
-    diffStatus: diff,
-  );
-
-  /// Build read-only editor nodes for the selected version, tagged with a
-  /// block-level diff vs the predecessor: added (in this version, not before),
-  /// changed (same id, different content), deleted (in the predecessor, gone
-  /// now — spliced back in at its old position as a struck-through ghost). No
-  /// predecessor → plain nodes, no tint.
+  /// Read-only editor nodes for the selected version, tagged with the
+  /// block-level diff vs its predecessor. The rule itself lives in
+  /// `editor/version_diff.dart` so it is testable.
   List<EditorNode> _previewNodes(
     ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
-  ) {
-    final current = _topBlocks(content);
-    final prev = _prevContent;
-    if (prev == null) {
-      return [for (final b in current) _toNode(b, null)];
-    }
-    final prevBlocks = _topBlocks(prev);
-    final prevById = {for (final b in prevBlocks) (b['id'] as String): b};
-    final currentIds = {for (final b in current) b['id'] as String};
-
-    // Group deleted blocks (in prev, not in current) by the surviving block they
-    // follow, so they render at roughly their old position ('' = before all).
-    final deletedAfter = <String, List<Map<String, dynamic>>>{};
-    var lastSurviving = '';
-    for (final p in prevBlocks) {
-      final pid = p['id'] as String;
-      if (currentIds.contains(pid)) {
-        lastSurviving = pid;
-      } else {
-        (deletedAfter[lastSurviving] ??= []).add(p);
-      }
-    }
-
-    final nodes = <EditorNode>[];
-    for (final d in deletedAfter[''] ?? const []) {
-      nodes.add(_toNode(d, 'deleted'));
-    }
-    for (final b in current) {
-      final id = b['id'] as String;
-      final before = prevById[id];
-      final status = before == null
-          ? 'added'
-          : (_blockEqual(b, before) ? null : 'changed');
-      nodes.add(_toNode(b, status));
-      for (final d in deletedAfter[id] ?? const []) {
-        nodes.add(_toNode(d, 'deleted'));
-      }
-    }
-    return nodes;
-  }
+  ) => versionDiffNodes(content, _prevContent);
 
   Future<void> _createCheckpoint() async {
     final l10n = context.l10n;
@@ -5033,10 +4960,33 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
     // The SAME editor in canEdit:false — reused, not re-rendered (P-A hardening
     // hides caret/IME/toolbars). Isolated: it renders the version's own blocks,
     // never the live document, so it can't affect the open page.
+    // Computed ONCE and handed to both the header and the body: the legend used
+    // to key off "there is a predecessor" while the tint keyed off "some block
+    // actually differs", so two identical versions produced a legend over a
+    // page with nothing coloured — a legend describing colours that were not
+    // there. Same list, same verdict.
+    final nodes = _previewNodes(content);
+    final hasDiff = nodes.any((n) => n.diffStatus != null);
     return Column(
       children: [
-        // Diff legend — shown only when there's a predecessor to compare against.
-        if (_prevContent != null)
+        // No predecessor (oldest version) → no legend at all; a predecessor but
+        // no differences → say so instead of promising colours.
+        if (_prevContent != null && !hasDiff)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 6),
+            color: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            child: Text(
+              l10n.versionDiffNone,
+              style: TextStyle(
+                fontSize: 12,
+                color: MicaTheme.of(context).text.muted,
+              ),
+            ),
+          ),
+        if (_prevContent != null && hasDiff)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 6),
@@ -5062,7 +5012,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
               ],
             ),
           ),
-        Expanded(child: _buildPreviewBody(content)),
+        Expanded(child: _buildPreviewBody(content, nodes)),
       ],
     );
   }
@@ -5085,6 +5035,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
 
   Widget _buildPreviewBody(
     ({String rootBlockId, List<Map<String, dynamic>> blocks}) content,
+    List<EditorNode> nodes,
   ) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
@@ -5094,7 +5045,7 @@ class _VersionHistoryDialogState extends State<_VersionHistoryDialog> {
           child: MicaEditor(
             key: ValueKey('version-preview-$_selectedId'),
             rootBlockId: content.rootBlockId,
-            nodes: _previewNodes(content),
+            nodes: nodes,
             version: 0,
             canEdit: false,
             onApplyOperations: (_) async {},

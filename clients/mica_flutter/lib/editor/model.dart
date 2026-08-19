@@ -98,8 +98,16 @@ class EditorNode {
 
   bool get todoChecked => data['checked'] == true;
 
-  EditorNode copy() =>
-      EditorNode(id: id, kind: kind, text: text, data: Map<String, dynamic>.from(data));
+  /// A detached duplicate. [diffStatus] MUST ride along: `EditorController.load`
+  /// copies every node it is handed, so a copy that dropped the tag silently
+  /// erased the version-preview diff before the renderer ever saw it.
+  EditorNode copy() => EditorNode(
+    id: id,
+    kind: kind,
+    text: text,
+    data: Map<String, dynamic>.from(data),
+    diffStatus: diffStatus,
+  );
 }
 
 /// A caret location: the [node] index in the flat document and the character
