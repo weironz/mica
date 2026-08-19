@@ -2874,19 +2874,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  /// Whether an AI provider is configured server-side (an API key, or a
-  /// model for keyless local providers). Failure leaves AI hidden.
+  /// Whether the server has a usable AI provider ([_aiReady]). Failure leaves
+  /// AI hidden.
   Future<void> _refreshAiConfigured() async {
     final session = _session;
     if (session == null) return;
     try {
       final s = await _api.getAiSettings(session.accessToken);
-      if (mounted) {
-        setState(() {
-          _aiConfigured =
-              s['has_key'] == true || (s['model'] as String? ?? '').isNotEmpty;
-        });
-      }
+      // Same rule as every other path — [_aiReady], not a second, looser copy
+      // of it. This one said "key OR model", so an instance with a key and no
+      // model showed Ask AI here and hid it everywhere else.
+      if (mounted) setState(() => _aiConfigured = _aiReady(s));
     } catch (_) {}
   }
 
@@ -2894,17 +2892,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// of THAT provider so the dialog can populate itself from the answer instead
   /// of assuming the write landed exactly as sent.
   Future<Map<String, dynamic>> _saveAiSettings({
-    required String provider,
     required String providerId,
-    required String baseUrl,
+    String? provider,
+    String? baseUrl,
     String? model,
     String? apiKey,
   }) async {
     final session = _requireSession();
     final settings = await _api.updateAiSettings(
       session.accessToken,
-      provider: provider,
       providerId: providerId,
+      provider: provider,
       baseUrl: baseUrl,
       model: model,
       apiKey: apiKey,
@@ -2912,6 +2910,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // A key alone is not a working AI: without a model the server has nothing
     // to call. Gate the Ask-AI affordance on both, or the button appears and
     // then fails.
+    if (mounted) setState(() => _aiConfigured = _aiReady(settings));
+    return settings;
+  }
+
+  /// Drop one provider's stored config. Same [_aiReady] sync as the writes:
+  /// deleting the provider in use leaves nothing to call, and Ask AI has to go
+  /// with it rather than wait for the next reload to notice.
+  Future<Map<String, dynamic>> _deleteAiProvider(String providerId) async {
+    final session = _requireSession();
+    final settings = await _api.deleteAiProvider(
+      session.accessToken,
+      providerId,
+    );
     if (mounted) setState(() => _aiConfigured = _aiReady(settings));
     return settings;
   }
@@ -6267,6 +6278,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onLoadAiSettings: local ? null : _loadAiSettings,
       onListAiModels: local ? null : _listAiModels,
       onSaveAiSettings: local ? null : _saveAiSettings,
+      onDeleteAiProvider: local ? null : _deleteAiProvider,
       onLoadTokens: local ? null : _loadTokens,
       onCreateToken: local ? null : _createToken,
       onRevokeToken: local ? null : _revokeToken,
@@ -7130,6 +7142,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onLoadAiSettings,
     required this.onListAiModels,
     required this.onSaveAiSettings,
+    required this.onDeleteAiProvider,
     this.onLoadTokens,
     this.onCreateToken,
     this.onRevokeToken,
@@ -7428,13 +7441,17 @@ class WorkspaceView extends StatefulWidget {
   })?
   onListAiModels;
   final Future<Map<String, dynamic>> Function({
-    required String provider,
     required String providerId,
-    required String baseUrl,
+    String? provider,
+    String? baseUrl,
     String? model,
     String? apiKey,
   })?
   onSaveAiSettings;
+
+  /// Forget one provider entirely. Null in 本地模式, like the pair above.
+  final Future<Map<String, dynamic>> Function(String providerId)?
+  onDeleteAiProvider;
   final Future<List<Map<String, dynamic>>> Function()? onLoadTokens;
   final Future<Map<String, dynamic>> Function(
     String name,
@@ -11099,6 +11116,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onLoadAiSettings: widget.onLoadAiSettings,
         onListAiModels: widget.onListAiModels,
         onSaveAiSettings: widget.onSaveAiSettings,
+        onDeleteAiProvider: widget.onDeleteAiProvider,
         onLoadTokens: widget.onLoadTokens,
         onCreateToken: widget.onCreateToken,
         onRevokeToken: widget.onRevokeToken,

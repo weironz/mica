@@ -871,19 +871,26 @@ class ApiClient {
     return _get('/api/ai/models$suffix', token);
   }
 
+  /// Write one provider's config, and make it the one in use.
+  ///
+  /// Only [providerId] is required, and that asymmetry is the point: the server
+  /// reads an absent field as "keep what this provider already has", so
+  /// SWITCHING provider is a call carrying nothing but the id. Sending the form
+  /// values along with a switch is how the previous provider's endpoint used to
+  /// get written over the new one's.
   Future<Map<String, dynamic>> updateAiSettings(
     String token, {
-    required String provider,
     required String providerId,
-    required String baseUrl,
+    String? provider,
+    String? baseUrl,
     String? model,
     String? apiKey,
     int? maxTokens,
   }) async {
     final body = <String, dynamic>{
-      'provider': provider,
       'provider_id': providerId,
-      'base_url': baseUrl,
+      if (provider != null && provider.isNotEmpty) 'provider': provider,
+      if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
       // Omitted, not empty: the server treats a present-but-empty model as an
       // instruction to CLEAR it, which wiped a provider model on every switch.
       if (model != null) 'model': model,
@@ -895,6 +902,21 @@ class ApiClient {
       body['max_tokens'] = maxTokens;
     }
     return _patch('/api/ai/settings', body, token: token);
+  }
+
+  /// Forget one provider's stored endpoint, key and model.
+  ///
+  /// Returns the settings as they stand afterwards. Deleting the provider in
+  /// use leaves the instance with none selected — a state the settings screen
+  /// renders, not an error, so the answer is a normal payload.
+  Future<Map<String, dynamic>> deleteAiProvider(
+    String token,
+    String providerId,
+  ) async {
+    return _delete(
+      '/api/ai/providers/${Uri.encodeComponent(providerId)}',
+      token,
+    );
   }
 
   Future<DocumentBootstrap> importMarkdown(
