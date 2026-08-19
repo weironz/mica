@@ -89,6 +89,39 @@ pub enum ImportJobStatus {
   /// Stopped on request, at a page boundary. Whatever had already been imported
   /// stays — see [`ImportJob::cancel_requested`].
   Cancelled,
+  /// The api restarted while this import was running, so the task that owned it
+  /// is gone.
+  ///
+  /// Distinct from both neighbours on purpose. `Running` would show a progress
+  /// bar for something with nothing behind it — the poll would never advance
+  /// again. `Error` would be wrong in the way that matters: nothing failed, and
+  /// the pages already written are real and staying. What the user needs to
+  /// know is exactly this: it stopped partway, and the workspace holds part of
+  /// the archive.
+  Interrupted,
+}
+
+impl ImportJobStatus {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Running => "running",
+      Self::Done => "done",
+      Self::Error => "error",
+      Self::Cancelled => "cancelled",
+      Self::Interrupted => "interrupted",
+    }
+  }
+
+  pub fn parse(value: &str) -> Option<Self> {
+    match value {
+      "running" => Some(Self::Running),
+      "done" => Some(Self::Done),
+      "error" => Some(Self::Error),
+      "cancelled" => Some(Self::Cancelled),
+      "interrupted" => Some(Self::Interrupted),
+      _ => None,
+    }
+  }
 }
 
 impl AppState {
@@ -127,5 +160,150 @@ impl AppState {
       import_jobs: Arc::new(RwLock::new(HashMap::new())),
       mailer,
     }
+  }
+}
+
+/// Durable side of the import jobs. The in-memory map stays the hot path — the
+/// import loop touches it once per page — and this mirrors it into `import_jobs`
+/// so the record outlives the process (migration 0023).
+pub mod import_store {
+  use super::{ImportJob, ImportJobStatus};
+  use sqlx::PgPool;
+  use uuid::Uuid;
+
+  /// Rows an import history shows at once. Generous, but bounded: a history
+  /// nobody trimmed is a query that gets slower forever.
+  pub const HISTORY_LIMIT: i64 = 50;
+
+  /// Insert the job as it starts. Failing to record it must NOT stop the
+  /// import: losing the history entry is a smaller harm than refusing to
+  /// import, which is the whole reason this returns nothing.
+  pub async fn create(db: &PgPool, id: Uuid, user_id: Uuid, job: &ImportJob) {
+    let result = sqlx::query(
+      "INSERT INTO import_jobs (id, user_id, workspace_id, status, total, done) \
+       VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(job.workspace_id)
+    .bind(job.status.as_str())
+    .bind(job.total as i32)
+    .bind(job.done as i32)
+    .execute(db)
+    .await;
+    if let Err(error) = result {
+      tracing::warn!(%error, %id, "could not record the import job; it will run unrecorded");
+    }
+  }
+
+  /// Mirror the current progress. Called at a coarser cadence than the loop
+  /// updates memory — see the caller — because one UPDATE per page turns a
+  /// 600-page archive into 600 write round-trips for a number nobody is reading
+  /// between polls.
+  pub async fn update(db: &PgPool, id: Uuid, job: &ImportJob) {
+    let skipped = serde_json::to_value(&job.skipped).unwrap_or_else(|_| serde_json::json!([]));
+    let result = sqlx::query(
+      "UPDATE import_jobs SET status = $2, total = $3, done = $4, error = $5, \
+         skipped = $6, skipped_total = $7, workspace_id = COALESCE($8, workspace_id), \
+         updated_at = now() \
+       WHERE id = $1",
+    )
+    .bind(id)
+    .bind(job.status.as_str())
+    .bind(job.total as i32)
+    .bind(job.done as i32)
+    .bind(job.error.as_deref())
+    .bind(skipped)
+    .bind(job.skipped_total as i32)
+    .bind(job.workspace_id)
+    .execute(db)
+    .await;
+    if let Err(error) = result {
+      tracing::warn!(%error, %id, "could not update the stored import job");
+    }
+  }
+
+  /// One stored job, for a poll that outlived the process that started it.
+  pub async fn get(db: &PgPool, id: Uuid, user_id: Uuid) -> Option<ImportJob> {
+    let row = sqlx::query_as::<_, (String, i32, i32, Option<Uuid>, Option<String>, serde_json::Value, i32)>(
+      "SELECT status, total, done, workspace_id, error, skipped, skipped_total \
+       FROM import_jobs WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+    Some(ImportJob {
+      status: ImportJobStatus::parse(&row.0)?,
+      total: row.1.max(0) as usize,
+      done: row.2.max(0) as usize,
+      workspace_id: row.3,
+      error: row.4,
+      skipped: serde_json::from_value(row.5).unwrap_or_default(),
+      skipped_total: row.6.max(0) as usize,
+      cancel_requested: false,
+    })
+  }
+
+  /// This user's imports, newest first, for the history list.
+  pub async fn history(db: &PgPool, user_id: Uuid) -> Vec<(Uuid, ImportJob, String)> {
+    let rows = sqlx::query_as::<
+      _,
+      (
+        Uuid,
+        String,
+        i32,
+        i32,
+        Option<Uuid>,
+        Option<String>,
+        serde_json::Value,
+        i32,
+        chrono::DateTime<chrono::Utc>,
+      ),
+    >(
+      "SELECT id, status, total, done, workspace_id, error, skipped, skipped_total, created_at \
+       FROM import_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+    )
+    .bind(user_id)
+    .bind(HISTORY_LIMIT)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+    rows
+      .into_iter()
+      .filter_map(|r| {
+        Some((
+          r.0,
+          ImportJob {
+            status: ImportJobStatus::parse(&r.1)?,
+            total: r.2.max(0) as usize,
+            done: r.3.max(0) as usize,
+            workspace_id: r.4,
+            error: r.5,
+            skipped: serde_json::from_value(r.6).unwrap_or_default(),
+            skipped_total: r.7.max(0) as usize,
+            cancel_requested: false,
+          },
+          r.8.to_rfc3339(),
+        ))
+      })
+      .collect()
+  }
+
+  /// At boot: every job still marked `running` belongs to a process that no
+  /// longer exists.
+  ///
+  /// Without this they stay `running` forever and the UI polls a progress bar
+  /// that can never advance — the exact "nothing says what happened" this table
+  /// was added to end. Returns how many were corrected, so the log can say it
+  /// out loud: a deploy that interrupts an import is worth one line.
+  pub async fn mark_interrupted(db: &PgPool) -> u64 {
+    sqlx::query("UPDATE import_jobs SET status = 'interrupted', updated_at = now() WHERE status = 'running'")
+      .execute(db)
+      .await
+      .map(|r| r.rows_affected())
+      .unwrap_or(0)
   }
 }

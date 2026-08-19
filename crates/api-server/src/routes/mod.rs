@@ -226,6 +226,7 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/import",
       post(import::start_import).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
     )
+    .route("/import/jobs", get(import::import_history))
     .route("/import/jobs/{job_id}", get(import::import_job))
     .route(
       "/import/jobs/{job_id}/cancel",

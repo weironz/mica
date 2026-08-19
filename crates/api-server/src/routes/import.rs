@@ -452,25 +452,69 @@ pub async fn start_import(
     },
   );
 
+  {
+    let jobs = state.import_jobs.read().await;
+    if let Some(job) = jobs.get(&job_id) {
+      mica_app_core::import_store::create(&state.db, job_id, user_id, job).await;
+    }
+  }
+
   tokio::spawn(async move {
     let result = run_import(&state, user_id, job_id, params, body).await;
-    let mut jobs = state.import_jobs.write().await;
-    if let Some(job) = jobs.get_mut(&job_id) {
-      match result {
-        // A cancelled run returns Ok — it stopped cleanly — so the flag, not the
-        // result, decides the final status. Reporting "done" for an import the
-        // user stopped halfway would claim their archive is fully in.
-        Ok(()) if job.cancel_requested => job.status = ImportJobStatus::Cancelled,
-        Ok(()) => job.status = ImportJobStatus::Done,
-        Err(e) => {
-          job.status = ImportJobStatus::Error;
-          job.error = Some(e.to_string());
+    let finished = {
+      let mut jobs = state.import_jobs.write().await;
+      let job = jobs.get_mut(&job_id);
+      match job {
+        Some(job) => {
+          match result {
+            // A cancelled run returns Ok — it stopped cleanly — so the flag, not
+            // the result, decides the final status. Reporting "done" for an
+            // import the user stopped halfway would claim their archive is fully
+            // in.
+            Ok(()) if job.cancel_requested => job.status = ImportJobStatus::Cancelled,
+            Ok(()) => job.status = ImportJobStatus::Done,
+            Err(e) => {
+              job.status = ImportJobStatus::Error;
+              job.error = Some(e.to_string());
+            }
+          }
+          Some(job.clone())
         }
+        None => None,
       }
+    };
+    // The row is written OUTSIDE the lock and after the terminal status is
+    // decided: this is the write that matters, because it is the one a restart
+    // cannot take back. Progress updates during the run are throttled and may
+    // lag, but the final state is recorded exactly once, here.
+    if let Some(job) = finished {
+      mica_app_core::import_store::update(&state.db, job_id, &job).await;
     }
   });
 
   Ok(Json(ImportStartResponse { job_id }))
+}
+
+
+/// Mirror progress into `import_jobs`, but only every [`PERSIST_EVERY`] pages.
+///
+/// The in-memory map is the hot path — the loop writes it once per page, and
+/// that is what the polling endpoint reads. The row exists so the record
+/// survives a restart, and for THAT a stale `done` is fine: whatever the last
+/// checkpoint said, plus a status of `interrupted`, already tells the user the
+/// true thing ("it stopped partway, part of the archive is in"). One UPDATE per
+/// page would turn a 600-page archive into 600 write round-trips for a number
+/// nobody reads in between.
+const PERSIST_EVERY: usize = 25;
+
+async fn persist_progress(state: &AppState, job_id: Uuid, done: usize) {
+  if done % PERSIST_EVERY != 0 {
+    return;
+  }
+  let snapshot = state.import_jobs.read().await.get(&job_id).cloned();
+  if let Some(job) = snapshot {
+    mica_app_core::import_store::update(&state.db, job_id, &job).await;
+  }
 }
 
 /// `POST /api/import/jobs/{job_id}/cancel` — ask a running import to stop.
@@ -502,15 +546,51 @@ pub async fn import_job(
   headers: HeaderMap,
   Path(job_id): Path<Uuid>,
 ) -> ApiResult<Json<ImportJob>> {
-  user_id_from_headers(&state, &headers).await?;
-  state
-    .import_jobs
-    .read()
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  if let Some(job) = state.import_jobs.read().await.get(&job_id).cloned() {
+    return Ok(Json(job));
+  }
+  // Not in memory: either this api restarted since the import started, or the
+  // job finished long enough ago to have been dropped. Both used to be a 404,
+  // which is how a client that reopened after a deploy lost the ability to say
+  // ANYTHING about an import that had written half a workspace. Scoped to the
+  // caller so a job id is not a lookup into someone else's history.
+  mica_app_core::import_store::get(&state.db, job_id, user_id)
     .await
-    .get(&job_id)
-    .cloned()
     .map(Json)
     .ok_or(ApiError::NotFound)
+}
+
+/// `GET /api/import/jobs` — this user's recent imports, newest first.
+///
+/// The history the memory map could never hold. Notion, Outline and Slack all
+/// keep long imports under Settings, and the reason is the same one that made
+/// this table necessary: progress has to live somewhere the user can find
+/// AGAIN, after closing the tab, after a restart, after a week.
+pub async fn import_history(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> ApiResult<Json<Vec<ImportHistoryEntry>>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  Ok(Json(
+    mica_app_core::import_store::history(&state.db, user_id)
+      .await
+      .into_iter()
+      .map(|(id, job, created_at)| ImportHistoryEntry {
+        job_id: id,
+        created_at,
+        job,
+      })
+      .collect(),
+  ))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ImportHistoryEntry {
+  job_id: Uuid,
+  created_at: String,
+  #[serde(flatten)]
+  job: ImportJob,
 }
 
 async fn run_import(
@@ -581,6 +661,11 @@ async fn run_import(
       job.workspace_id = Some(workspace_id);
     }
   }
+  // Written immediately rather than at the next checkpoint: the page count and
+  // the workspace are what make a stored job READABLE ("137 of 592, into
+  // Notion 导入"), and an import interrupted early would otherwise be a row
+  // saying 0 of 0 with no destination.
+  persist_progress(state, job_id, 0).await;
 
   // Top-level nodes (no parent in the plan) hang off the import target: the
   // given folder, or the workspace root when none.
@@ -709,10 +794,13 @@ async fn run_import(
         &page.title,
       )
       .await?;
-      let mut jobs = state.import_jobs.write().await;
-      if let Some(job) = jobs.get_mut(&job_id) {
-        job.done = idx + 1;
+      {
+        let mut jobs = state.import_jobs.write().await;
+        if let Some(job) = jobs.get_mut(&job_id) {
+          job.done = idx + 1;
+        }
       }
+      persist_progress(state, job_id, idx + 1).await;
       continue;
     }
     let root_block_id = format!("block_{}", Uuid::new_v4().simple());
@@ -797,10 +885,13 @@ async fn run_import(
     )
     .await?;
 
-    let mut jobs = state.import_jobs.write().await;
-    if let Some(job) = jobs.get_mut(&job_id) {
-      job.done = idx + 1;
+    {
+      let mut jobs = state.import_jobs.write().await;
+      if let Some(job) = jobs.get_mut(&job_id) {
+        job.done = idx + 1;
+      }
     }
+    persist_progress(state, job_id, idx + 1).await;
   }
 
   // Whatever came in the archive that no page ended up pointing at. `uploaded` is
@@ -953,4 +1044,61 @@ async fn insert_page(
 
   tx.commit().await?;
   Ok(())
+}
+
+
+#[cfg(test)]
+mod import_job_persistence_tests {
+  use super::PERSIST_EVERY;
+  use mica_app_core::ImportJobStatus;
+
+  /// The stored `status` column is a string, and every reader (the client, the
+  /// CLI's `ImportJobView`, a human running psql) matches on it. A renamed
+  /// variant would silently turn old rows into unparseable ones, so the wire
+  /// spelling is pinned here rather than left to `#[serde(rename_all)]`.
+  #[test]
+  fn every_status_has_a_stable_spelling() {
+    for (status, text) in [
+      (ImportJobStatus::Running, "running"),
+      (ImportJobStatus::Done, "done"),
+      (ImportJobStatus::Error, "error"),
+      (ImportJobStatus::Cancelled, "cancelled"),
+      (ImportJobStatus::Interrupted, "interrupted"),
+    ] {
+      assert_eq!(status.as_str(), text);
+      assert_eq!(ImportJobStatus::parse(text), Some(status));
+    }
+  }
+
+  /// A row written by a NEWER server must not come back as a crash or as the
+  /// wrong state on an older one — an unknown status reads as absent, and the
+  /// caller falls back to "no record", not to "done".
+  #[test]
+  fn an_unknown_status_is_not_guessed_at() {
+    assert_eq!(ImportJobStatus::parse("teleported"), None);
+    assert_eq!(ImportJobStatus::parse(""), None);
+    assert_eq!(ImportJobStatus::parse("RUNNING"), None);
+  }
+
+  /// Interrupted is its own state, not a synonym. The whole reason migration
+  /// 0023 exists is that a restart needs an answer that is neither "still
+  /// going" (a progress bar with nothing behind it) nor "failed" (the imported
+  /// pages are real and staying).
+  #[test]
+  fn interrupted_is_distinct_from_error_and_cancelled() {
+    assert_ne!(ImportJobStatus::Interrupted, ImportJobStatus::Error);
+    assert_ne!(ImportJobStatus::Interrupted, ImportJobStatus::Cancelled);
+    assert_ne!(ImportJobStatus::Interrupted, ImportJobStatus::Running);
+  }
+
+  /// The throttle must not be 1 (an UPDATE per page — 600 round-trips for a
+  /// 600-page archive) nor so coarse that an interrupted import reports a
+  /// wildly stale count.
+  #[test]
+  fn the_progress_throttle_stays_in_a_sane_band() {
+    assert!(
+      (5..=100).contains(&PERSIST_EVERY),
+      "PERSIST_EVERY = {PERSIST_EVERY}: one write per page is a round-trip storm,        and hundreds of pages between checkpoints makes a stored job a lie"
+    );
+  }
 }

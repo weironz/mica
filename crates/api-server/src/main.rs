@@ -109,6 +109,19 @@ async fn main() -> anyhow::Result<()> {
     }
   }
 
+  // Any import still marked `running` belonged to a process that no longer
+  // exists — this one just started. Left alone they are a progress bar that can
+  // never advance, which is worse than no record at all: the user sees "importing"
+  // forever while the pages that DID land sit there unexplained. See
+  // migration 0023.
+  match mica_app_core::import_store::mark_interrupted(&db).await {
+    0 => {}
+    n => tracing::warn!(
+      jobs = n,
+      "marked import job(s) as interrupted — they were running when the server last stopped,        and whatever they had already imported is still in the workspace"
+    ),
+  }
+
   let addr = config.http_addr;
   // Log by default; Aliyun DirectMail when MICA_MAIL_BACKEND=directmail is set.
   let mailer = mail::build_mailer();
