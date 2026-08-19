@@ -3112,6 +3112,20 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             border: const OutlineInputBorder(),
           ),
         ),
+        // The dots are a PLACEHOLDER FOR A VALUE, so they carry no prose: the
+        // hint used to read `•••••••• (leave blank to keep)`, which put an
+        // instruction inside the shape that stands in for the secret itself.
+        // The instruction is real and still needed, so it moves here, where
+        // explanations belong — and only when there IS a stored key to keep.
+        if (_hasKey) ...[
+          const SizedBox(height: 6),
+          Text(
+            context.l10n.aiKeyKeepHelp,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: MicaTheme.of(context).text.muted,
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         // Model stays a TEXT FIELD with a fetch button beside it, rather than a
         // dropdown alone. A dropdown would have to be populated from somewhere,

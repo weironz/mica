@@ -407,7 +407,7 @@
   "aiBaseUrlHint": "https://api.example.com/v1",
   "aiModel": "Model",
   "aiApiKey": "API key",
-  "aiApiKeyHintHasKey": "•••••••• (leave blank to keep)",
+  "aiApiKeyHintHasKey": "••••••••••••••••••••",
   "aiKeyConfigured": "API key configured",
   "aiKeyConfiguredHint": "API key configured (ends {tail})",
   "@aiKeyConfiguredHint": {
@@ -448,6 +448,7 @@
   "aiAdminOnly": "Only this instance's administrator can change the AI provider. The key is shared by everyone here, so it is not a per-account setting.",
   "aiApiKeyHintRequired": "Required for hosted providers",
   "aiKeyHelp": "Local models (Ollama, LM Studio) usually need no key. The key is stored on the server and never returned.",
+  "aiKeyKeepHelp": "Leave blank to keep the stored key; type a new one to replace it.",
   "dataImportDescription": "Import a workspace from a ZIP — a Mica export or a Notion \"Markdown & CSV\" export. The page tree, ordering and images are rebuilt.",
   "dataImportZoneHint": "Choose a Mica export ZIP, or a Notion \"Markdown & CSV\" export",
   "dataImportButton": "Import workspace (ZIP)",
