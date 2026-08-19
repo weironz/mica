@@ -166,13 +166,31 @@ impl AiConfig {
   /// screen's "which of these have I set up?" — a question the single-row
   /// schema could not answer at all, which is how it came to claim a key was
   /// configured for a provider that had never had one.
-  pub async fn list(db: &PgPool) -> Vec<(String, String, String, bool)> {
-    sqlx::query_as::<_, (String, String, String, bool)>(
-      "SELECT provider_id, model, api_key, is_active        FROM ai_provider_settings ORDER BY updated_at DESC",
+  #[allow(clippy::type_complexity)]
+  pub async fn list(
+    db: &PgPool,
+  ) -> Vec<(String, String, String, bool, String, String, String)> {
+    sqlx::query_as::<_, (String, String, String, bool, String, String, String)>(
+      "SELECT provider_id, model, api_key, is_active, '', base_url, protocol \
+       FROM ai_provider_settings ORDER BY provider_id",
     )
     .fetch_all(db)
     .await
     .unwrap_or_default()
+  }
+
+  /// Forget a provider entirely. Returns whether a row went away.
+  ///
+  /// Deleting the ACTIVE provider leaves the instance with no active row, which
+  /// is a real state (nothing configured) rather than an error: the settings
+  /// screen already renders it, and the operator is standing right there to
+  /// pick another.
+  pub async fn delete(db: &PgPool, provider_id: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM ai_provider_settings WHERE provider_id = $1")
+      .bind(provider_id)
+      .execute(db)
+      .await?;
+    Ok(result.rows_affected() > 0)
   }
 
   /// Store this provider's config and make it the active one.

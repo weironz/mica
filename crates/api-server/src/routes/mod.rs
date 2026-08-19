@@ -122,6 +122,10 @@ pub fn api_router() -> Router<AppState> {
     )
     .route("/ai/models", get(ai::list_models))
     .route(
+      "/ai/providers/{provider_id}",
+      axum::routing::delete(ai::delete_provider),
+    )
+    .route(
       "/workspaces",
       get(workspaces::list).post(workspaces::create),
     )

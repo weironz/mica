@@ -43,11 +43,20 @@ pub struct AiSettingsResponse {
   key_hint: String,
 }
 
+/// One stored provider, as the settings list renders it.
+///
+/// No display name is stored, and none is needed: `provider_id` IS the name for
+/// anything the operator adds — it is a free-text primary key, so
+/// "nvidia-glm5.2" is a perfectly good id — while the built-in presets are
+/// labelled from the client's own table. A `label` column would have to be kept
+/// in step with both and would earn nothing.
 #[derive(Debug, Serialize)]
 pub struct ConfiguredProvider {
   provider_id: String,
   has_key: bool,
   model: String,
+  base_url: String,
+  protocol: String,
   active: bool,
 }
 
@@ -218,13 +227,43 @@ async fn configured_providers(state: &AppState) -> Vec<ConfiguredProvider> {
   mica_infra::AiConfig::list(&state.db)
     .await
     .into_iter()
-    .map(|(provider_id, model, api_key, active)| ConfiguredProvider {
-      provider_id,
-      has_key: !api_key.trim().is_empty(),
-      model,
-      active,
-    })
+    .map(
+      |(provider_id, model, api_key, active, _label, base_url, protocol)| ConfiguredProvider {
+        provider_id,
+        has_key: !api_key.trim().is_empty(),
+        model,
+        base_url,
+        protocol,
+        active,
+      },
+    )
     .collect()
+}
+
+/// `DELETE /api/ai/providers/{id}` — forget one provider's config entirely.
+///
+/// Removing the ACTIVE one leaves the instance with nothing selected. That is a
+/// state the settings screen already renders (unconfigured), not an error, so
+/// this does not refuse it or silently promote another provider — either would
+/// be the server deciding something the operator is standing right there to
+/// decide.
+pub async fn delete_provider(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  axum::extract::Path(provider_id): axum::extract::Path<String>,
+) -> ApiResult<Json<AiSettingsResponse>> {
+  admin_id_from_headers(&state, &headers).await?;
+  if !AiConfig::delete(&state.db, &provider_id).await? {
+    return Err(ApiError::NotFound);
+  }
+  // Re-read rather than mutate in place: the row that is active now is whatever
+  // the database says, and after deleting the active one that is nobody.
+  let mut guard = state.ai.write().await;
+  *guard = AiConfig::load(&state.db).await;
+  let mut response = settings_response(guard.as_ref());
+  response.can_edit = true;
+  response.configured_providers = configured_providers(&state).await;
+  Ok(Json(response))
 }
 
 fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
