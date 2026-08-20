@@ -89,7 +89,10 @@ void main() {
     final local = LocalOffline(rootDirOverride: dir.path);
     await local.open();
 
-    // Mirror a cloud workspace: two pages (parent + child), one with content.
+    // Mirror a cloud workspace: a folder holding one page with content.
+    // The container has to BE a folder — folders are the only containers, and
+    // the local store enforces that on writes now (7788bab), so a document
+    // parenting a document is refused here exactly as the server refuses it.
     const ws = (id: 'cw', name: 'Team', position: '0000000010', role: 'editor');
     const parent = (
       id: 'v1',
@@ -99,7 +102,7 @@ void main() {
       name: 'Parent',
       position: '0000000010',
       trashed: false,
-      objectType: 'document',
+      objectType: 'folder',
     );
     const child = (
       id: 'v2',

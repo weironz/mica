@@ -37,8 +37,14 @@ void main() {
 
   test('create assigns ids and positions across the bridge', () {
     final s = freshStore();
+    // A FOLDER, because it takes a child at the end of this test and folders
+    // are the only containers. It used to be a document, and the local store
+    // let that through until the invariant landed on this side too (7788bab) —
+    // at which point the test started failing for a CORRECT reason: it had
+    // encoded a page parenting a page, the shape that once blocked a real
+    // vault's migration.
     final a = s.createView(
-        workspaceId: 'ws', objectId: 'doc_a', name: 'A', objectType: 'document');
+        workspaceId: 'ws', objectId: 'doc_a', name: 'A', objectType: 'folder');
     final b = s.createView(
         workspaceId: 'ws', objectId: 'doc_b', name: 'B', objectType: 'document');
 
@@ -78,11 +84,12 @@ void main() {
 
   test('clone copies the subtree and its content', () {
     final s = freshStore();
+    // A folder: it parents `kid` below, and folders are the only containers.
     final root = s.createView(
         workspaceId: 'ws',
         objectId: 'd_root',
         name: 'Notes',
-        objectType: 'document');
+        objectType: 'folder');
     final kid = s.createView(
         workspaceId: 'ws',
         parentId: root,
