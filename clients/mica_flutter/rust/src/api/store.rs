@@ -532,7 +532,15 @@ impl MicaStore {
         let Some(parent_id) = view.parent_id.as_deref() else {
             return true;
         };
-        self.list_views("local".to_string())
+        // The view's OWN origin, not a hardcoded "local". Views are namespaced
+        // by origin (v4 composite PK), so a parent lives in the same namespace
+        // as its child — a cloud mirror's folder is under the server URL, never
+        // under "local". Asking the wrong namespace made this answer about a
+        // DIFFERENT view that happened to share an id, and refuse writes that
+        // were fine: cloning a subtree and detaching a cloud workspace each came
+        // out one view short. It went unnoticed for twenty consecutive red runs
+        // of the integration suite, because `just test` does not cover it.
+        self.list_views(view.origin.clone())
             .iter()
             .find(|v| v.id == parent_id)
             .is_none_or(|p| p.object_type == "folder")
@@ -1185,6 +1193,44 @@ mod clone_view_tests {
             origin: "local".into(),
             object_type: "document".into(),
         }
+    }
+
+    /// The parent lookup must ask the view's OWN origin.
+    ///
+    /// Views are namespaced by origin, so ids repeat across namespaces: a cloud
+    /// mirror and the local store can both hold `v_parent`. Checking a
+    /// hardcoded "local" therefore answered about the WRONG row — here a local
+    /// document sharing an id with a cloud FOLDER — and refused a legal write.
+    /// That is what left cloned subtrees and detached workspaces one view short
+    /// for twenty straight integration runs.
+    #[test]
+    fn a_parent_is_looked_up_in_the_views_own_origin() {
+        let (store, _dir) = tmp_store();
+        let remote = "https://example.test".to_string();
+
+        // Same id in two namespaces: a DOCUMENT locally, a FOLDER remotely.
+        assert!(store.save_view(view("v_parent", None, "local page", "0000000010")));
+        let mut remote_parent = folder("v_parent", None, "remote folder", "0000000010");
+        remote_parent.origin = remote.clone();
+        assert!(store.save_view(remote_parent));
+
+        // A child in the REMOTE namespace: its parent there IS a folder, so
+        // this must be accepted. Judged against the local namespace it would
+        // look like a page under a page, and be refused.
+        let mut remote_child = view("v_child", Some("v_parent"), "remote child", "0000000020");
+        remote_child.origin = remote.clone();
+        assert!(
+            store.save_view(remote_child),
+            "a child under a FOLDER in its own origin must be accepted"
+        );
+        assert_eq!(store.list_views(remote).len(), 2);
+
+        // The invariant still holds INSIDE one namespace: locally `v_parent` is
+        // a document, so it may not take children.
+        assert!(
+            !store.save_view(view("v_local_child", Some("v_parent"), "nope", "0000000020")),
+            "a page may still not parent a page within one origin"
+        );
     }
 
     #[test]
