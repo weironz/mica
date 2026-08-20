@@ -50,6 +50,31 @@ class AuthFormValue {
 }
 
 /// Progress of a server-side workspace import job.
+/// One row of the import history: a stored job plus when it started.
+///
+/// The job itself outlives the process that ran it, so this is what the
+/// settings screen lists — including imports that were interrupted by a deploy,
+/// which the in-memory map could never have shown.
+class ImportHistoryEntry {
+  const ImportHistoryEntry({
+    required this.jobId,
+    required this.startedAt,
+    required this.job,
+  });
+
+  factory ImportHistoryEntry.fromJson(Map<String, dynamic> json) =>
+      ImportHistoryEntry(
+        jobId: json['job_id'] as String? ?? '',
+        startedAt:
+            DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+        job: ImportJobStatus.fromJson(json),
+      );
+
+  final String jobId;
+  final DateTime? startedAt;
+  final ImportJobStatus job;
+}
+
 class ImportJobStatus {
   const ImportJobStatus({
     required this.status,
@@ -73,7 +98,12 @@ class ImportJobStatus {
     );
   }
 
-  final String status; // running | done | error
+  /// `running` | `done` | `error` | `cancelled` | `interrupted`.
+  ///
+  /// `interrupted` means the server restarted mid-import (migration 0023). It
+  /// is neither a failure nor a completion: nothing went wrong, and the pages
+  /// already written are real and staying — the archive just is not all in.
+  final String status;
   final int total;
   final int done;
   final String? workspaceId;

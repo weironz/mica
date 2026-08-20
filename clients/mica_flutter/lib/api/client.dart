@@ -1193,6 +1193,20 @@ class ApiClient {
     return ImportJobStatus.fromJson(r);
   }
 
+  /// This account's recent imports, newest first.
+  ///
+  /// Reads the SERVER's record, not a client-side log: an import that a deploy
+  /// interrupted is only knowable from there, and it is precisely the one worth
+  /// showing.
+  Future<List<ImportHistoryEntry>> importHistory(String token) async {
+    final response = await _get('/api/import/jobs', token);
+    final items = (response['jobs'] as List<dynamic>?) ?? const [];
+    return [
+      for (final e in items)
+        if (e is Map<String, dynamic>) ImportHistoryEntry.fromJson(e),
+    ];
+  }
+
   Future<ImportJobStatus> importJobStatus(String token, String jobId) async {
     final response = await _get('/api/import/jobs/$jobId', token);
     return ImportJobStatus.fromJson(response);

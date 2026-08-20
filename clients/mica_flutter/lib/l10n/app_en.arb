@@ -397,6 +397,25 @@
   "aiPresetLongerPrompt": "Expand this with the detail and explanation it is missing.",
   "worldEnterAction": "Enter",
   "worldAlreadySignedInEnterHint": "Your credentials are still here — press Enter to use this server, no password needed.",
+  "importHistoryTitle": "Import history",
+  "importStatusDone": "Completed",
+  "importStatusError": "Failed",
+  "importStatusCancelled": "Stopped",
+  "importStatusRunning": "In progress",
+  "importStatusInterrupted": "Interrupted",
+  "importHistoryProgress": "{label} — {done} of {total} pages",
+  "@importHistoryProgress": {
+    "placeholders": {
+      "label": { "type": "String" },
+      "done": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "importInterruptedHelp": "The server restarted mid-import. The pages already imported are still there; run the import again to bring in the rest.",
+  "importSkippedCount": "{count} archive entries no page referenced",
+  "@importSkippedCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "settingsData": "Data",
   "settingsShortcuts": "Shortcuts",
   "settingsAccount": "Account",

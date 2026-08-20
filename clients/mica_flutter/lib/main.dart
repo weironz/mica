@@ -2859,6 +2859,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       settings['has_key'] == true &&
       (settings['model'] as String? ?? '').trim().isNotEmpty;
 
+  /// This account's past imports, straight from the server. Null-guarded by the
+  /// caller in 本地模式 (there is no server to have a history).
+  Future<List<ImportHistoryEntry>> _loadImportHistory() async {
+    final session = _requireSession();
+    return _api.importHistory(session.accessToken);
+  }
+
   /// The provider's live model list. Kept next to [_loadAiSettings] because it
   /// takes the same session and the dialog uses them together.
   Future<Map<String, dynamic>> _listAiModels({
@@ -6277,6 +6284,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // tab was a live provider form whose Save went into a function that
       // returned immediately.
       onLoadAiSettings: local ? null : _loadAiSettings,
+      onLoadImportHistory: local ? null : _loadImportHistory,
       onListAiModels: local ? null : _listAiModels,
       onSaveAiSettings: local ? null : _saveAiSettings,
       onDeleteAiProvider: local ? null : _deleteAiProvider,
@@ -7141,6 +7149,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onAiCurrentPage,
     required this.onAiNewWorkspace,
     required this.onLoadAiSettings,
+    required this.onLoadImportHistory,
     required this.onListAiModels,
     required this.onSaveAiSettings,
     required this.onDeleteAiProvider,
@@ -7433,6 +7442,9 @@ class WorkspaceView extends StatefulWidget {
   /// Null in 本地模式 — AI settings live on the server, so there is no provider
   /// to configure and Settings drops the tab. Same rule as [onLoadTokens].
   final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
+
+  /// Past imports for the settings screen. Null in 本地模式.
+  final Future<List<ImportHistoryEntry>> Function()? onLoadImportHistory;
 
   /// Fetch the provider's model list. Null in 本地模式, like the settings pair.
   final Future<Map<String, dynamic>> Function({
@@ -11115,6 +11127,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       routeSettings: const RouteSettings(name: 'settings'),
       builder: (context) => _SettingsDialog(
         onLoadAiSettings: widget.onLoadAiSettings,
+        onLoadImportHistory: widget.onLoadImportHistory,
         onListAiModels: widget.onListAiModels,
         onSaveAiSettings: widget.onSaveAiSettings,
         onDeleteAiProvider: widget.onDeleteAiProvider,

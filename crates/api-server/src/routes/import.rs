@@ -570,10 +570,10 @@ pub async fn import_job(
 pub async fn import_history(
   State(state): State<AppState>,
   headers: HeaderMap,
-) -> ApiResult<Json<Vec<ImportHistoryEntry>>> {
+) -> ApiResult<Json<ImportHistoryResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
-  Ok(Json(
-    mica_app_core::import_store::history(&state.db, user_id)
+  Ok(Json(ImportHistoryResponse {
+    jobs: mica_app_core::import_store::history(&state.db, user_id)
       .await
       .into_iter()
       .map(|(id, job, created_at)| ImportHistoryEntry {
@@ -582,7 +582,16 @@ pub async fn import_history(
         job,
       })
       .collect(),
-  ))
+  }))
+}
+
+/// Wrapped in an object rather than returned as a bare array, matching every
+/// other list endpoint here (`{"views": …}`, `{"tokens": …}`). Consistency is
+/// the whole reason: the client has one code path for list responses, and a
+/// lone endpoint answering with a top-level array would need its own.
+#[derive(Debug, serde::Serialize)]
+pub struct ImportHistoryResponse {
+  jobs: Vec<ImportHistoryEntry>,
 }
 
 #[derive(Debug, serde::Serialize)]

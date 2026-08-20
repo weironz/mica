@@ -1054,6 +1054,7 @@ typedef _AiProviderRow = ({
 /// account sections will slot in alongside it.
 class _SettingsDialog extends StatefulWidget {
   const _SettingsDialog({
+    this.onLoadImportHistory,
     required this.onLoadAiSettings,
     required this.onListAiModels,
     required this.onSaveAiSettings,
@@ -1117,6 +1118,13 @@ class _SettingsDialog extends StatefulWidget {
   /// [onUpdateProfile] and [onLoadTokens]. These two were the stragglers, and
   /// a no-op here meant a whole provider form — base URL, model, API key —
   /// that took your typing and dropped it.
+  /// This account's past imports, from the SERVER. Null in 本地模式.
+  ///
+  /// Read on demand rather than kept in the dialog's state: an import that a
+  /// deploy interrupted only becomes knowable when the server says so, and the
+  /// answer changes while this screen is not looking.
+  final Future<List<ImportHistoryEntry>> Function()? onLoadImportHistory;
+
   final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
 
   /// Ask the provider what models it has. Null in 本地模式 and on a server too
@@ -1249,6 +1257,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// write the OLD provider key under the NEW provider id. That is how one
   /// DeepSeek key ended up stored for both DeepSeek and Zhipu.
   String _fieldsProviderId = '';
+  List<ImportHistoryEntry>? _importHistory;
+  bool _importHistoryLoading = false;
 
   /// The wire PROTOCOL of the provider on screen — `openai` or `anthropic`.
   /// A stored property of each provider, not a lookup from a preset table: a
@@ -3464,6 +3474,138 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         .catchError((_) {});
   }
 
+  /// Past imports, read from the server.
+  ///
+  /// It lives in Settings for the reason Notion, Outline and Slack put theirs
+  /// there: a long import outlives the screen that started it, so the progress
+  /// has to be somewhere the user can find AGAIN — after closing the tab, after
+  /// a restart, a week later.
+  ///
+  /// Loaded on first build rather than with the dialog: most visits to Settings
+  /// are not about imports, and this is a round trip.
+  List<Widget> _importHistorySection(BuildContext context) {
+    final load = widget.onLoadImportHistory;
+    if (load == null) return const [];
+    if (_importHistory == null && !_importHistoryLoading) {
+      _importHistoryLoading = true;
+      load()
+          .then((entries) {
+            if (!mounted) return;
+            setState(() {
+              _importHistory = entries;
+              _importHistoryLoading = false;
+            });
+          })
+          .catchError((Object _) {
+            // A history that cannot be read is not worth an error banner over
+            // an import button that still works. It shows as empty.
+            if (mounted) {
+              setState(() {
+                _importHistory = const [];
+                _importHistoryLoading = false;
+              });
+            }
+            return <ImportHistoryEntry>[];
+          });
+    }
+    final entries = _importHistory;
+    if (entries == null || entries.isEmpty) return const [];
+    return [
+      const SizedBox(height: 18),
+      MicaEyebrow(context.l10n.importHistoryTitle),
+      const SizedBox(height: 10),
+      for (final e in entries.take(8)) _importHistoryRow(context, e),
+    ];
+  }
+
+  Widget _importHistoryRow(BuildContext context, ImportHistoryEntry entry) {
+    final tokens = MicaTheme.of(context);
+    final job = entry.job;
+    final (IconData icon, Color color, String label) = switch (job.status) {
+      'done' => (
+        Icons.check_circle,
+        tokens.status.success,
+        context.l10n.importStatusDone,
+      ),
+      'error' => (
+        Icons.error_outline,
+        tokens.status.danger,
+        context.l10n.importStatusError,
+      ),
+      'cancelled' => (
+        Icons.cancel_outlined,
+        tokens.text.muted,
+        context.l10n.importStatusCancelled,
+      ),
+      // Its own row style on purpose: the pages that landed are real, so this
+      // is not a failure — but the archive is not all in either.
+      'interrupted' => (
+        Icons.pause_circle_outline,
+        tokens.status.warning,
+        context.l10n.importStatusInterrupted,
+      ),
+      _ => (
+        Icons.hourglass_empty,
+        tokens.text.muted,
+        context.l10n.importStatusRunning,
+      ),
+    };
+    final when = entry.startedAt;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.l10n.importHistoryProgress(label, job.done, job.total),
+                  style: TextStyle(fontSize: 13, color: tokens.text.primary),
+                ),
+                if (when != null)
+                  Text(
+                    _formatStamp(when),
+                    style: TextStyle(fontSize: 11.5, color: tokens.text.muted),
+                  ),
+                if (job.status == 'interrupted')
+                  Text(
+                    context.l10n.importInterruptedHelp,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: tokens.status.warning,
+                    ),
+                  ),
+                if (job.error != null && job.error!.isNotEmpty)
+                  Text(
+                    job.error!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: tokens.status.danger,
+                    ),
+                  ),
+                if (job.skippedTotal > 0)
+                  Text(
+                    context.l10n.importSkippedCount(job.skippedTotal),
+                    style: TextStyle(fontSize: 11.5, color: tokens.text.muted),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatStamp(DateTime t) =>
+      '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
   List<Widget> _dataSection(BuildContext context) => [
     MicaEyebrow(context.l10n.settingsData, icon: Icons.import_export),
     const SizedBox(height: 12),
@@ -3485,6 +3627,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         subtitle: context.l10n.dataImportZoneHint,
         onTap: import,
       ),
+    ..._importHistorySection(context),
     if (widget.onExportAllWorkspaces != null) ...[
       const SizedBox(height: 18),
       MicaEyebrow(context.l10n.commonExport),
