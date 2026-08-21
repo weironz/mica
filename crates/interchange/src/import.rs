@@ -399,12 +399,48 @@ fn strip_leading_h1(markdown: &str, title: &str) -> String {
 /// the reference is external (has a URL scheme) or matches nothing. Tries
 /// the file's own folder first, then the archive root, then — only if the path
 /// structure doesn't line up — a UNIQUE basename anywhere in the archive.
+/// Whether `s` is a Typora image-size token: `100%`, `629`, `800x600`.
+///
+/// Deliberately narrow. The alternative — cutting at the first space — would
+/// mangle every filename with a space in it, and archives are full of those
+/// ("Screen Shot 2024.png"). A wrong strip is worse than a missed one: it turns
+/// a resolvable reference into an unresolvable one.
+fn is_size_suffix(s: &str) -> bool {
+  let s = s.trim();
+  if s.is_empty() {
+    return false;
+  }
+  let core = s.strip_suffix('%').unwrap_or(s);
+  match core.split_once('x') {
+    Some((w, h)) => {
+      !w.is_empty()
+        && !h.is_empty()
+        && w.bytes().all(|b| b.is_ascii_digit())
+        && h.bytes().all(|b| b.is_ascii_digit())
+    }
+    None => !core.is_empty() && core.bytes().all(|b| b.is_ascii_digit()),
+  }
+}
+
 pub fn resolve_ref(from_file: &str, href: &str, paths: &HashSet<String>) -> Option<String> {
   let mut u = href.trim();
   if u.is_empty() || has_scheme(u) {
     return None;
   }
   u = u.split(['#', '?']).next().unwrap_or(u);
+  // Typora-style size suffix: `![](img.png =100%)`, `=629`, `=800x600`. It is
+  // NOT CommonMark — the whole `img.png =100%` arrives here as one "url", so
+  // the path match AND the basename fallback both miss, and the image is
+  // dropped as "not in the archive". Found in real data: 8 images across 10
+  // pages had come in that way, each leaving behind a relative link no client
+  // can resolve. Stripped only when what follows the space actually looks like
+  // a size, so a filename that genuinely contains " =" keeps it.
+  if let Some((head, size)) = u.rsplit_once(" =")
+    && !head.trim().is_empty()
+    && is_size_suffix(size)
+  {
+    u = head.trim_end();
+  }
   let decoded = percent_decode(u);
 
   let dir: Vec<&str> = match from_file.rsplit_once('/') {

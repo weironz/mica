@@ -178,6 +178,43 @@ fn resolve_ref_rules() {
     Some("assets/图片.png")
   );
   assert_eq!(resolve_ref("a.md", "https://x.com/i.png", &paths), None);
+
+  // Typora writes the display size after the path: `![](x.png =100%)`. That is
+  // not CommonMark, so the whole thing arrives as one "url" — and used to miss
+  // both the path match and the basename fallback, dropping the image and
+  // leaving a dead relative link in the page. Real archives carried 8 of these.
+  for size in ["=100%", "=629", "=800x600"] {
+    assert_eq!(
+      resolve_ref(
+        "Guide/Setup/Linux.md",
+        &format!("../../assets/图片.png {size}"),
+        &paths
+      )
+      .as_deref(),
+      Some("assets/图片.png"),
+      "size suffix {size} must not defeat resolution"
+    );
+  }
+
+  // …but a filename is allowed to contain " =" itself. Stripping blindly at the
+  // last space would break every "Screen Shot 2024.png" in the world, and a
+  // wrong strip turns a RESOLVABLE reference into an unresolvable one — worse
+  // than the bug being fixed.
+  let odd: HashSet<String> = [
+    "assets/budget =2024.png".to_string(),
+    "assets/Screen Shot.png".to_string(),
+  ]
+  .into();
+  assert_eq!(
+    resolve_ref("a.md", "assets/budget =2024.png", &odd).as_deref(),
+    Some("assets/budget =2024.png"),
+    "`=2024` is not a size token — the name keeps it"
+  );
+  assert_eq!(
+    resolve_ref("a.md", "assets/Screen Shot.png", &odd).as_deref(),
+    Some("assets/Screen Shot.png"),
+    "a space in a filename is not a size suffix"
+  );
   assert_eq!(resolve_ref("a.md", "data:image/png;base64,xx", &paths), None);
   assert_eq!(resolve_ref("a.md", "nope.png", &paths), None);
 }
