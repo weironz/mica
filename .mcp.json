@@ -7,6 +7,15 @@
         "@playwright/mcp@latest",
         "--headless"
       ]
+    },
+    "dart": {
+      "command": "dart",
+      "args": [
+        "mcp-server"
+      ],
+      "env": {
+        "FLUTTER_SDK": "C:\\flutter"
+      }
     }
   }
 }

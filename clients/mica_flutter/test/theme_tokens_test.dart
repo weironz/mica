@@ -192,4 +192,77 @@ void main() {
     final light = MicaTokens.light.toMaterialTheme();
     expect(light.colorScheme.brightness, Brightness.light);
   });
+
+  /// Every role carries a DIFFERENT colour in the two palettes.
+  ///
+  /// This is the one structural risk a hand-written token layer has, and the
+  /// compiler cannot see it: add a role, fill it in for light, forget dark —
+  /// and it still compiles, because both fields are non-null `Color`s. The dark
+  /// palette then quietly paints that role with whatever was copy-pasted,
+  /// usually the light value, and nothing fails until someone looks at it.
+  ///
+  /// Deliberately NOT a golden image. The peers that tried pixel comparison
+  /// gave it up — AppFlowy's single golden assertion sits commented out with
+  /// "screenshots are different on different platform" — and a two-target app
+  /// like this one (Windows native and CanvasKit) cannot share a baseline at
+  /// all. An inventory assertion is stable wherever a Dart VM runs.
+  group('every role is defined in both palettes', () {
+    Map<String, Color> roles(MicaTokens t) => {
+      'surface.base': t.surface.base,
+      'surface.raised': t.surface.raised,
+      'surface.sunken': t.surface.sunken,
+      'surface.overlay': t.surface.overlay,
+      'surface.hover': t.surface.hover,
+      'text.primary': t.text.primary,
+      'text.muted': t.text.muted,
+      'text.faint': t.text.faint,
+      'border.subtle': t.border.subtle,
+      'border.normal': t.border.normal,
+      'border.strong': t.border.strong,
+      'accent.primary': t.accent.primary,
+      'accent.wash': t.accent.wash,
+      'status.success': t.status.success,
+      'status.warning': t.status.warning,
+      'status.danger': t.status.danger,
+      'editor.caret': t.editor.caret,
+      'editor.codeBg': t.editor.codeBg,
+    };
+
+    test('light and dark disagree on every one of them', () {
+      final light = roles(MicaTokens.light);
+      final dark = roles(MicaTokens.dark_);
+      expect(
+        dark.keys.toList(),
+        light.keys.toList(),
+        reason: 'the two palettes must list the same roles',
+      );
+
+      final identical = <String>[
+        for (final entry in light.entries)
+          if (dark[entry.key] == entry.value) entry.key,
+      ];
+      expect(
+        identical,
+        isEmpty,
+        reason:
+            'these roles carry the SAME colour in light and dark, which is '
+            'exactly what forgetting to fill one in looks like: $identical',
+      );
+    });
+
+    test('no role is left fully transparent', () {
+      for (final (name, t) in [
+        ('light', MicaTokens.light),
+        ('dark', MicaTokens.dark_),
+      ]) {
+        roles(t).forEach((role, colour) {
+          expect(
+            colour.a,
+            greaterThan(0),
+            reason: '$name.$role is fully transparent — almost certainly unset',
+          );
+        });
+      }
+    });
+  });
 }
