@@ -393,22 +393,7 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
         .cloned()
         .unwrap_or_default();
       for block in &blocks {
-        if block.get("kind").and_then(|k| k.as_str()) != Some("image") {
-          continue;
-        }
-        let Some(data) = block.get("data") else { continue };
-        // Already a Mica file → nothing to do.
-        if data.get("file_id").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
-          continue;
-        }
-        let Some(url) = data
-          .get("url")
-          .and_then(|u| u.as_str())
-          .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
-        else {
-          continue;
-        };
-        let Some(block_id) = block.get("id").and_then(|i| i.as_str()) else {
+        let Some((block_id, url)) = rehostable_image(block) else {
           continue;
         };
         let file_name = url_file_name(url);
@@ -674,6 +659,32 @@ fn report_batch(cli: &Cli, verb: &str, outcome: &client::BatchOutcome) -> Result
 
 /// Last path segment of a URL as a filename (drops the query), defaulting to
 /// "image" when there is nothing usable — the server derives the mime from it.
+/// The block id and external URL of an image block that still lives on someone
+/// else's server — or `None` for every other block.
+///
+/// Split out of the sweep so it can be tested, because the sweep itself cannot:
+/// it needs a server. The first version of this read `block["kind"]`, but the
+/// bootstrap payload names that field `type`, so the test was never `Some` for
+/// any real block and `rehost-images` reported "0 re-hosted" over the whole
+/// database while 917 external images sat there. A no-op that prints a success
+/// line is worse than a crash — it was believed for a release.
+fn rehostable_image(block: &serde_json::Value) -> Option<(&str, &str)> {
+  if block.get("type").and_then(|t| t.as_str()) != Some("image") {
+    return None;
+  }
+  let data = block.get("data")?;
+  // Already a Mica file → nothing to do.
+  if data.get("file_id").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
+    return None;
+  }
+  let url = data
+    .get("url")
+    .and_then(|u| u.as_str())
+    .filter(|u| u.starts_with("http://") || u.starts_with("https://"))?;
+  let block_id = block.get("id").and_then(|i| i.as_str())?;
+  Some((block_id, url))
+}
+
 fn url_file_name(url: &str) -> String {
   url
     .split('?')
@@ -1224,6 +1235,67 @@ mod tests {
   #[test]
   fn nothing_anywhere_is_none() {
     assert_eq!(pick_token(None, None, None), None);
+  }
+
+  /// Shaped like a real `/bootstrap` block, because the bug this pins was a
+  /// field NAME: the code asked for `kind`, the server sends `type`. A test
+  /// built from a hand-invented block would have passed either way.
+  #[test]
+  fn an_external_image_block_is_picked_up_by_its_real_field_names() {
+    let block = serde_json::json!({
+      "id": "block_0db086cc3488414ebc570baddd8b94da",
+      "type": "image",
+      "text": "",
+      "data": { "url": "https://cdn.example.com/v1/blob/abc123.png" },
+      "children": []
+    });
+    assert_eq!(
+      rehostable_image(&block),
+      Some((
+        "block_0db086cc3488414ebc570baddd8b94da",
+        "https://cdn.example.com/v1/blob/abc123.png"
+      ))
+    );
+
+    // The exact shape that shipped: `kind` instead of `type` matched nothing,
+    // so the sweep skipped every block in the database and still exited 0.
+    let with_the_old_field_name = serde_json::json!({
+      "id": "block_1",
+      "kind": "image",
+      "data": { "url": "https://cdn.example.com/a.png" }
+    });
+    assert_eq!(
+      rehostable_image(&with_the_old_field_name),
+      None,
+      "`kind` is not the field the server sends — matching it means matching nothing"
+    );
+  }
+
+  #[test]
+  fn blocks_with_nothing_to_fetch_are_left_alone() {
+    let already_ours = serde_json::json!({
+      "id": "block_2",
+      "type": "image",
+      "data": { "file_id": "7f3d1c92-0000-4000-8000-0000000000aa", "url": "" }
+    });
+    assert_eq!(rehostable_image(&already_ours), None, "already in Mica storage");
+
+    // Import leftovers point at paths, not hosts; there is nothing to download.
+    for url in ["assets/图片.png", "data:image/png;base64,iVBORw0K", ""] {
+      let local = serde_json::json!({ "id": "b", "type": "image", "data": { "url": url } });
+      assert_eq!(rehostable_image(&local), None, "not fetchable: {url}");
+    }
+
+    // Text blocks carrying an image URL as literal characters are NOT image
+    // blocks. Most of this database's external image references are exactly
+    // this — they are a different problem and this sweep must not claim them.
+    let literal = serde_json::json!({
+      "id": "b",
+      "type": "paragraph",
+      "text": "![img](https://cdn.example.com/a.png)",
+      "data": {}
+    });
+    assert_eq!(rehostable_image(&literal), None);
   }
 
   #[test]
