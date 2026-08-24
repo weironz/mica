@@ -303,6 +303,49 @@ fn window_markdown(
 /// The markdown from the first heading whose text contains [needle] (case-
 /// insensitive) through the line before the next heading of the same or higher
 /// level. Empty (with a note) when no heading matches. Pure.
+/// Which heading a piece of anchor text picks out of an outline — the pure half
+/// of `resolve_anchor`, so the matching rules are testable without a server.
+///
+/// `strict` is for `delete`: more than one match is an error naming the
+/// candidates, not the first one silently. Substring matching is generous by
+/// design (a caller says "Setup", not the exact heading), and generosity that
+/// is fine for choosing an insert position is not fine for choosing what to
+/// destroy.
+fn pick_anchor(headings: Option<&Value>, anchor: &str, strict: bool) -> Result<String, String> {
+  let needle = anchor.to_lowercase();
+  let hits: Vec<(&str, &str)> = headings
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter_map(|h| {
+      let text = h.get("text").and_then(Value::as_str)?;
+      let block_id = h.get("block_id").and_then(Value::as_str)?;
+      text.to_lowercase().contains(&needle).then_some((text, block_id))
+    })
+    .collect();
+
+  if strict && hits.len() > 1 {
+    let listed = hits
+      .iter()
+      .map(|(text, id)| format!("{text:?} ({id})"))
+      .collect::<Vec<_>>()
+      .join(", ");
+    return Err(format!(
+      "delete: {anchor:?} matches {} headings — {listed}. Pass the block id of \
+       the one you mean; deleting the wrong block is not undoable from here.",
+      hits.len()
+    ));
+  }
+  match hits.first() {
+    Some((_, block_id)) => Ok((*block_id).to_string()),
+    None => Err(format!(
+      "{mode}: no heading contains {anchor:?}; pass a block id from \
+       mica_get_outline, or the exact text of a heading.",
+      mode = if strict { "delete" } else { "insert_at" }
+    )),
+  }
+}
+
 fn section_markdown(full: &str, needle: &str) -> String {
   let needle_lc = needle.to_lowercase();
   let lines: Vec<&str> = full.lines().collect();
@@ -432,14 +475,20 @@ struct UpdateDocArgs {
   document_id: String,
   /// One of: "append" (add after current content — safe default),
   /// "replace_all" (rewrite the page), "insert_at" (insert after `anchor`),
-  /// "find_replace" (swap text; uses `find`/`replace`, not `markdown`).
+  /// "find_replace" (swap text; uses `find`/`replace`, not `markdown`),
+  /// "delete" (remove the block at `anchor`, and its subtree; no `markdown`).
   mode: String,
-  /// Markdown to write (append/replace_all/insert_at). Omit for find_replace.
+  /// Markdown to write (append/replace_all/insert_at). Omit for find_replace
+  /// and delete.
   #[serde(default)]
   markdown: Option<String>,
   /// insert_at: WHERE to insert after — a block id from `mica_get_outline`, OR
   /// a heading's text (resolved to its block id for you). Heading text is safer
   /// than a position: it survives edits above it.
+  ///
+  /// delete: WHICH block to remove, same two forms — but heading text that
+  /// matches more than one heading is refused rather than resolved, and the
+  /// error lists the candidates.
   #[serde(default)]
   anchor: Option<String>,
   /// find_replace: the text to find and its replacement.
@@ -462,10 +511,11 @@ struct UpdateDocArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct EditOp {
-  /// One of: append, replace_all, insert_at, find_replace — same as
+  /// One of: append, replace_all, insert_at, find_replace, delete — same as
   /// mica_update_document's `mode`.
   mode: String,
-  /// Markdown to write (append/replace_all/insert_at). Omit for find_replace.
+  /// Markdown to write (append/replace_all/insert_at). Omit for find_replace
+  /// and delete.
   #[serde(default)]
   markdown: Option<String>,
   /// insert_at: the block id OR heading text to place after.
@@ -1146,7 +1196,10 @@ impl MicaMcp {
     description = "Write into an EXISTING doc. mode: append (safe default), \
                        replace_all (rewrite), insert_at (place after `anchor` — a block id \
                        or a heading's text, from mica_get_outline), find_replace (swap \
-                       `find`→`replace`; set unique=true for a precise single edit). \
+                       `find`→`replace`; set unique=true for a precise single edit), \
+                       delete (remove the block at `anchor` and its subtree). \
+                       To REMOVE something, use delete — not replace_all: resending a \
+                       whole page to drop one block rewrites every other block too. \
                        Content is Markdown; the server derives the ops.",
     annotations(
       title = "Write document",
@@ -1245,10 +1298,13 @@ impl MicaMcp {
       }
     }
 
-    // insert_at: let the caller anchor by HEADING TEXT, not just a block id — a
-    // heading survives edits above it. Resolve it to the block id insert_at wants.
-    let anchor = if mode == "insert_at" {
-      self.resolve_anchor(workspace_id, document_id, anchor).await?
+    // insert_at and delete both let the caller anchor by HEADING TEXT, not just
+    // a block id — a heading survives edits above it. delete resolves STRICTLY:
+    // a wrong insert position is visible and undoable, a wrong delete is gone.
+    let anchor = if mode == "insert_at" || mode == "delete" {
+      self
+        .resolve_anchor(workspace_id, document_id, anchor, mode == "delete")
+        .await?
     } else {
       anchor
     };
@@ -1281,11 +1337,15 @@ impl MicaMcp {
   /// passes through (the API's append-at-end fallback); anything else is treated
   /// as heading text and resolved to the matching heading's block id via the
   /// outline, so a caller can say "under ## Setup" without knowing block ids.
+  /// `strict` (delete) refuses an ambiguous match instead of taking the first
+  /// one: "Setup" matching three headings is a question, not a target, and
+  /// answering it by position deletes a section the caller never saw.
   async fn resolve_anchor(
     &self,
     ws: &str,
     doc: &str,
     anchor: Option<String>,
+    strict: bool,
   ) -> Result<Option<String>, McpError> {
     let Some(anchor) = anchor else {
       return Ok(None);
@@ -1296,36 +1356,18 @@ impl MicaMcp {
     let outline = self
       .get(&format!("/api/workspaces/{ws}/documents/{doc}/outline"))
       .await?;
-    let needle = anchor.to_lowercase();
-    let hit = outline
-      .get("headings")
-      .and_then(Value::as_array)
-      .into_iter()
-      .flatten()
-      .find(|h| {
-        h.get("text")
-          .and_then(Value::as_str)
-          .is_some_and(|t| t.to_lowercase().contains(&needle))
-      })
-      .and_then(|h| h.get("block_id").and_then(Value::as_str))
-      .map(str::to_string);
-    match hit {
-      Some(block_id) => Ok(Some(block_id)),
-      None => Err(McpError::invalid_params(
-        format!(
-          "insert_at: no heading contains {anchor:?}; pass a block id from \
-           mica_get_outline, or the exact text of a heading."
-        ),
-        None,
-      )),
-    }
+    pick_anchor(outline.get("headings"), &anchor, strict)
+      .map(Some)
+      .map_err(|message| McpError::invalid_params(message, None))
   }
 
   #[tool(
     description = "Apply a BATCH of edits to ONE document in a single call — one agent \
                        turn for a whole burst instead of N round-trips. `edits` run IN ORDER, \
                        each like mica_update_document (append / insert_at / find_replace / \
-                       replace_all); later edits see the effect of earlier ones. NOT atomic: on \
+                       replace_all / delete); later edits see the effect of earlier ones. \
+                       Deleting several blocks is one call: one delete per block id. \
+                       NOT atomic: on \
                        a failure it stops and reports how many landed, so you can resume from \
                        there.",
     annotations(
@@ -2179,9 +2221,16 @@ impl ServerHandler for MicaMcp {
          EDIT in place, do not rewrite the page. mica_update_document modes: append (after the \
          end — safe default); insert_at (place after `anchor`, which is a block id OR a \
          heading's text from the outline); find_replace (swap text; set unique=true for a \
-         single precise edit — refused if the text is not unique); replace_all (only when you \
+         single precise edit — refused if the text is not unique); delete (REMOVE the block at \
+         `anchor` and its subtree); replace_all (only when you \
          truly mean to rewrite the whole page). For MANY edits to one doc, mica_apply_edits \
          runs them all in ONE call (one turn instead of N).\n\
+         \n\
+         To REMOVE content, reach for delete, never replace_all. Re-sending a whole page to \
+         drop one block rewrites every OTHER block as a side effect, and a page you did not \
+         author byte-for-byte will not survive the trip: non-breaking spaces become spaces, \
+         control characters inside code samples vanish, trailing whitespace is trimmed. Those \
+         losses are invisible in the diff you can see and permanent in the document.\n\
          \n\
          REORGANISE in bulk. Whenever you are about to call a per-page tool in a loop, stop and \
          use the batch form — it is one request, not N, and it is the difference between a \
@@ -2244,7 +2293,8 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 #[cfg(test)]
 mod tests {
   use super::{
-    MicaMcp, reject_mangled_latex, section_markdown, unwrap_markdown, urlencode, window_markdown,
+    MicaMcp, pick_anchor, reject_mangled_latex, section_markdown, unwrap_markdown, urlencode,
+    window_markdown,
   };
 
   #[test]
@@ -2282,6 +2332,42 @@ mod tests {
       window_markdown(doc, Some(4), Some(99), None),
       "[lines 4-5 of 5]\nd\ne"
     );
+  }
+
+  /// Anchor text is matched as a SUBSTRING so a caller can say "Setup" instead
+  /// of the exact heading. For `insert_at` that generosity costs a position;
+  /// for `delete` it would cost a section, so `delete` refuses the ambiguity.
+  #[test]
+  fn delete_refuses_an_anchor_that_matches_more_than_one_heading() {
+    let headings = serde_json::json!([
+      { "text": "Setup", "block_id": "block_a" },
+      { "text": "Setup on Windows", "block_id": "block_b" },
+    ]);
+
+    // insert_at takes the first — inserting in the wrong place is visible and
+    // undoable, and this is the behaviour callers already rely on.
+    assert_eq!(pick_anchor(Some(&headings), "setup", false).unwrap(), "block_a");
+
+    let err = pick_anchor(Some(&headings), "setup", true).unwrap_err();
+    assert!(err.contains("matches 2 headings"), "says how many: {err}");
+    assert!(err.contains("block_a") && err.contains("block_b"), "lists them: {err}");
+
+    // Unambiguous text still resolves under strict.
+    assert_eq!(
+      pick_anchor(Some(&headings), "on windows", true).unwrap(),
+      "block_b"
+    );
+  }
+
+  #[test]
+  fn an_anchor_that_matches_nothing_is_an_error_naming_the_mode() {
+    let headings = serde_json::json!([{ "text": "Intro", "block_id": "block_a" }]);
+    let err = pick_anchor(Some(&headings), "Setup", true).unwrap_err();
+    assert!(err.starts_with("delete:"), "the error names delete: {err}");
+    let err = pick_anchor(Some(&headings), "Setup", false).unwrap_err();
+    assert!(err.starts_with("insert_at:"), "the error names insert_at: {err}");
+    // A doc with no headings at all must not panic or resolve to something.
+    assert!(pick_anchor(None, "Setup", true).is_err());
   }
 
   /// `/export/markdown` answers with an OBJECT. Taking `.to_string()` of it

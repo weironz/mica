@@ -1828,6 +1828,16 @@ pub enum MarkdownUpdateMode {
   /// Replace every occurrence of `find` with `replace` across the doc's block
   /// text (no `markdown`). Errors if nothing matches.
   FindReplace,
+  /// Remove the block named by `anchor`, and its subtree (no `markdown`).
+  ///
+  /// The only way to take anything OUT of a page short of rewriting the whole
+  /// body. Without it the four other modes could add and overwrite but never
+  /// remove, so "drop this paragraph" meant `replace_all` — re-sending the
+  /// entire document to delete one block, which is how a caller that cannot
+  /// reproduce the original bytes exactly (an agent retyping a page with
+  /// non-breaking spaces or control characters in it) silently damages the
+  /// rest of the page.
+  Delete,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2049,6 +2059,24 @@ fn markdown_update_ops(
 ) -> Result<Vec<DocumentOperation>, String> {
   let root_id = current.root_block_id.as_str();
 
+  // delete removes an existing block — no markdown parse/graft either.
+  if matches!(request.mode, MarkdownUpdateMode::Delete) {
+    let anchor = request
+      .anchor
+      .as_deref()
+      .filter(|s| !s.is_empty())
+      .ok_or("delete requires an `anchor` block id")?;
+    if anchor == root_id {
+      return Err("delete cannot remove the document root".to_string());
+    }
+    if !current.blocks.iter().any(|b| b.id == anchor) {
+      return Err(format!("no block {anchor:?} in this document"));
+    }
+    return Ok(vec![DocumentOperation::DeleteBlock {
+      block_id: anchor.to_string(),
+    }]);
+  }
+
   // find_replace edits existing block text in place — no markdown parse/graft.
   if matches!(request.mode, MarkdownUpdateMode::FindReplace) {
     let find = request
@@ -2189,7 +2217,9 @@ fn markdown_update_ops(
         .ok_or_else(|| format!("anchor {anchor:?} is not a top-level block"))?;
       Some(pos + 1)
     }
-    MarkdownUpdateMode::FindReplace => unreachable!("handled above"),
+    MarkdownUpdateMode::FindReplace | MarkdownUpdateMode::Delete => {
+      unreachable!("handled above")
+    }
   };
 
   let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
@@ -4715,6 +4745,43 @@ mod tests {
     let mut request = upd(MarkdownUpdateMode::InsertAt, "x");
     request.anchor = Some("ghost".into());
     assert!(markdown_update_ops(&current, &request, Uuid::new_v4()).is_err());
+  }
+
+  #[test]
+  fn markdown_update_delete_removes_exactly_the_anchored_block() {
+    use mica_app_core::documents::DocumentOperation;
+    let current = doc_with_children(&["a", "b"]);
+    let mut request = upd(MarkdownUpdateMode::Delete, "");
+    request.anchor = Some("b".into());
+    let ops = markdown_update_ops(&current, &request, Uuid::new_v4()).unwrap();
+    assert_eq!(
+      ops,
+      [DocumentOperation::DeleteBlock { block_id: "b".into() }],
+      "one targeted op — deleting a block must not rewrite the page around it"
+    );
+  }
+
+  #[test]
+  fn markdown_update_delete_refuses_the_root_and_unknown_anchors() {
+    let current = doc_with_children(&["a"]);
+
+    // Deleting the root would empty the document through a call that reads as
+    // "remove one block". `delete_block` also refuses, but by the time the op
+    // reaches it the caller has already been told the request was accepted.
+    let mut root = upd(MarkdownUpdateMode::Delete, "");
+    root.anchor = Some("root".into());
+    assert!(markdown_update_ops(&current, &root, Uuid::new_v4()).is_err());
+
+    // A stale block id is the normal failure here — an outline read minutes ago,
+    // the block since removed. It must say so, not delete something else.
+    let mut gone = upd(MarkdownUpdateMode::Delete, "");
+    gone.anchor = Some("vanished".into());
+    let err = markdown_update_ops(&current, &gone, Uuid::new_v4()).unwrap_err();
+    assert!(err.contains("vanished"), "the error names the anchor: {err}");
+
+    // No anchor at all must not be read as "delete nothing, succeed".
+    let bare = upd(MarkdownUpdateMode::Delete, "");
+    assert!(markdown_update_ops(&current, &bare, Uuid::new_v4()).is_err());
   }
 
   #[test]
