@@ -108,6 +108,16 @@ struct RehostImagesArgs {
   /// Only this workspace id (default: all your workspaces).
   #[arg(long)]
   ws: Option<Uuid>,
+  /// Fetch some images from somewhere else: a TSV/CSV of `dead-url<TAB>live-url`
+  /// (`#` comments and blank lines ignored). The block keeps its place — only
+  /// the bytes come from the replacement.
+  ///
+  /// For images whose host died but whose content survives elsewhere: a mirror
+  /// of a repo that is still up, or a Wayback capture
+  /// (`https://web.archive.org/web/<ts>id_/<url>` — the `id_` matters, it
+  /// serves the original bytes instead of a wrapped viewer page).
+  #[arg(long, value_name = "FILE")]
+  remap: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -373,6 +383,16 @@ fn run(cli: Cli) -> Result<()> {
 /// file_id are skipped, so re-running only touches what's still a link.
 fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result<()> {
   let client = authed_client(cli, cfg)?;
+  let remap = match &args.remap {
+    Some(path) => parse_remap(
+      &fs::read_to_string(path)
+        .with_context(|| format!("reading remap file {}", path.display()))?,
+    ),
+    None => HashMap::new(),
+  };
+  if !remap.is_empty() && !cli.json {
+    println!("Remapping {} image(s) to a replacement source.", remap.len());
+  }
   let workspaces: Vec<Uuid> = match args.ws {
     Some(ws) => vec![ws],
     None => client.list_workspaces()?.into_iter().map(|w| w.id).collect(),
@@ -396,15 +416,19 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
         let Some((block_id, url)) = rehostable_image(block) else {
           continue;
         };
+        // A remapped image keeps the ORIGINAL url's file name: the replacement
+        // may be a Wayback wrapper path, and the name is what the reader sees.
+        let source = remap.get(url).map(String::as_str).unwrap_or(url);
         let file_name = url_file_name(url);
         let outcome = client
-          .download_bytes(url)
+          .download_bytes(source)
           .and_then(|bytes| client.rehost_image(ws, view.object_id, block_id, &file_name, bytes));
         match outcome {
           Ok(()) => {
             rehosted += 1;
             if !cli.json {
-              println!("  re-hosted [{}] {url}", view.name);
+              let via = if source == url { String::new() } else { format!(" (via {source})") };
+              println!("  re-hosted [{}] {url}{via}", view.name);
             }
           }
           Err(err) => {
@@ -659,6 +683,35 @@ fn report_batch(cli: &Cli, verb: &str, outcome: &client::BatchOutcome) -> Result
 
 /// Last path segment of a URL as a filename (drops the query), defaulting to
 /// "image" when there is nothing usable — the server derives the mime from it.
+/// `dead-url -> live-url`, from a TSV/CSV the operator wrote by hand or built
+/// from a link check.
+///
+/// Tab first, comma only as a fallback: a URL may legitimately contain a comma
+/// (Wayback and CDN paths do), and splitting such a line on the comma would
+/// silently produce a truncated target that 404s — a wrong mapping is worse
+/// than no mapping, because it looks like it worked.
+fn parse_remap(text: &str) -> HashMap<String, String> {
+  let mut out = HashMap::new();
+  for line in text.lines() {
+    let line = line.trim_start_matches('\u{feff}').trim();
+    if line.is_empty() || line.starts_with('#') {
+      continue;
+    }
+    let split = if line.contains('\t') {
+      line.split_once('\t')
+    } else {
+      line.split_once(',')
+    };
+    if let Some((from, to)) = split {
+      let (from, to) = (from.trim(), to.trim());
+      if !from.is_empty() && !to.is_empty() {
+        out.insert(from.to_string(), to.to_string());
+      }
+    }
+  }
+  out
+}
+
 /// The block id and external URL of an image block that still lives on someone
 /// else's server — or `None` for every other block.
 ///
@@ -1268,6 +1321,37 @@ mod tests {
       rehostable_image(&with_the_old_field_name),
       None,
       "`kind` is not the field the server sends — matching it means matching nothing"
+    );
+  }
+
+  #[test]
+  fn remap_reads_tsv_and_ignores_noise() {
+    let m = parse_remap(
+      "\u{feff}# 死图 -> 替代源\n\
+       \n\
+       https://dead.example.com/a.png\thttps://live.example.com/a.png\n\
+       https://dead.example.com/b.png,https://live.example.com/b.png\n\
+       https://dead.example.com/c.png\n",
+    );
+    assert_eq!(m.len(), 2, "a line with no separator is not a mapping");
+    assert_eq!(m["https://dead.example.com/a.png"], "https://live.example.com/a.png");
+    assert_eq!(
+      m["https://dead.example.com/b.png"], "https://live.example.com/b.png",
+      "comma is accepted when there is no tab"
+    );
+  }
+
+  #[test]
+  fn a_comma_inside_a_url_does_not_split_a_tab_separated_line() {
+    // Wayback and CDN paths carry commas. Splitting on the first comma here
+    // would map to "https://web.archive.org/web/20221203143446id_/https://x"
+    // — a URL that 404s while the run still reports success.
+    let m = parse_remap(
+      "https://dead.example.com/x.png\thttps://web.archive.org/web/20221203143446id_/https://dead.example.com/a,b/x.png\n",
+    );
+    assert_eq!(
+      m["https://dead.example.com/x.png"],
+      "https://web.archive.org/web/20221203143446id_/https://dead.example.com/a,b/x.png"
     );
   }
 
