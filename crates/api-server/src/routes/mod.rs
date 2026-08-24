@@ -274,6 +274,13 @@ pub fn api_router() -> Router<AppState> {
       // Body is raw image bytes (≤ the 25 MB upload cap); lift the default 2 MB.
       post(documents::rehost_image).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
     )
+    .route(
+      // The other end of the same job: the image is gone for good, so the block
+      // goes too. No body — the caller names the block and the dead url it
+      // checked, and the server refuses if the block has moved on.
+      "/workspaces/{workspace_id}/documents/{document_id}/drop-image",
+      post(documents::drop_image),
+    )
     // Comments (docs/comments-plan.md). Anchored to the text by yrs sticky index
     // and stored BESIDE the document, so its Markdown — and the round-trip
     // invariant — stay untouched. Writes need the `commenter` role.

@@ -428,6 +428,29 @@ impl Client {
 
   /// Store already-downloaded image [bytes] into Mica and repoint image
   /// [block_id] in [document_id] at the new file (the `rehost-image` endpoint).
+  /// Delete an image block whose source is gone. `url` is what the caller
+  /// checked; the server refuses if the block no longer carries it.
+  pub fn drop_image(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    block_id: &str,
+    url: &str,
+  ) -> Result<()> {
+    let resp = self
+      .authed(
+        self
+          .http
+          .post(self.url(&format!(
+            "/workspaces/{workspace_id}/documents/{document_id}/drop-image"
+          )))
+          .query(&[("block_id", block_id), ("url", url)]),
+      )
+      .send()?;
+    Self::ok(resp)?;
+    Ok(())
+  }
+
   pub fn rehost_image(
     &self,
     workspace_id: Uuid,

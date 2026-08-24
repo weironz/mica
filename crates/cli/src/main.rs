@@ -118,6 +118,16 @@ struct RehostImagesArgs {
   /// serves the original bytes instead of a wrapped viewer page).
   #[arg(long, value_name = "FILE")]
   remap: Option<PathBuf>,
+  /// Delete the image blocks whose url appears in this file, one url per line
+  /// (`#` comments and blank lines ignored).
+  ///
+  /// For images that are gone for good. Deliberately a LIST and not "drop
+  /// whatever 404s this run": a timeout, a DNS blip or a host that blocks this
+  /// machine all look like a dead image at the moment of the request, and a
+  /// sweep that deletes on that reading destroys pages over a bad afternoon.
+  /// The list is written after checking, and can be reviewed before it runs.
+  #[arg(long, value_name = "FILE")]
+  drop: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -393,12 +403,21 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
   if !remap.is_empty() && !cli.json {
     println!("Remapping {} image(s) to a replacement source.", remap.len());
   }
+  let to_drop: std::collections::HashSet<String> = match &args.drop {
+    Some(path) => parse_url_list(
+      &fs::read_to_string(path).with_context(|| format!("reading drop file {}", path.display()))?,
+    ),
+    None => Default::default(),
+  };
+  if !to_drop.is_empty() && !cli.json {
+    println!("Dropping the blocks of {} dead image(s).", to_drop.len());
+  }
   let workspaces: Vec<Uuid> = match args.ws {
     Some(ws) => vec![ws],
     None => client.list_workspaces()?.into_iter().map(|w| w.id).collect(),
   };
 
-  let (mut rehosted, mut failed) = (0usize, 0usize);
+  let (mut rehosted, mut dropped, mut failed) = (0usize, 0usize, 0usize);
   for ws in workspaces {
     for view in client.list_views(ws)? {
       if view.object_type != "document" || view.is_deleted {
@@ -416,6 +435,26 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
         let Some((block_id, url)) = rehostable_image(block) else {
           continue;
         };
+        // Dropping wins over re-hosting: a url in both lists was checked and
+        // found dead, and fetching it again would just fail.
+        if to_drop.contains(url) {
+          match client.drop_image(ws, view.object_id, block_id, url) {
+            Ok(()) => {
+              dropped += 1;
+              if !cli.json {
+                println!("  dropped   [{}] {url}", view.name);
+              }
+            }
+            Err(err) => {
+              failed += 1;
+              if !cli.json {
+                eprintln!("  FAILED    [{}] dropping {url}: {err:#}", view.name);
+              }
+            }
+          }
+          continue;
+        }
+
         // A remapped image keeps the ORIGINAL url's file name: the replacement
         // may be a Wayback wrapper path, and the name is what the reader sees.
         let source = remap.get(url).map(String::as_str).unwrap_or(url);
@@ -443,9 +482,11 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
   }
 
   if cli.json {
-    print_json(&serde_json::json!({ "rehosted": rehosted, "failed": failed }))?;
+    print_json(&serde_json::json!({
+      "rehosted": rehosted, "dropped": dropped, "failed": failed
+    }))?;
   } else {
-    println!("Done: {rehosted} re-hosted, {failed} failed.");
+    println!("Done: {rehosted} re-hosted, {dropped} dropped, {failed} failed.");
   }
   Ok(())
 }
@@ -710,6 +751,21 @@ fn parse_remap(text: &str) -> HashMap<String, String> {
     }
   }
   out
+}
+
+/// One url per line, `#` comments and blank lines dropped.
+///
+/// A line that is not a url is IGNORED rather than accepted: this list drives
+/// deletions, and a stray `427 dead images` header line matching nothing is
+/// harmless, while the same line treated as a url would not be — it is the
+/// shape of mistake that only shows up as "why did that delete nothing".
+fn parse_url_list(text: &str) -> std::collections::HashSet<String> {
+  text
+    .lines()
+    .map(|l| l.trim_start_matches('\u{feff}').trim())
+    .filter(|l| l.starts_with("http://") || l.starts_with("https://"))
+    .map(|l| l.to_string())
+    .collect()
 }
 
 /// The block id and external URL of an image block that still lives on someone
@@ -1338,6 +1394,24 @@ mod tests {
     assert_eq!(
       m["https://dead.example.com/b.png"], "https://live.example.com/b.png",
       "comma is accepted when there is no tab"
+    );
+  }
+
+  #[test]
+  fn the_drop_list_takes_urls_and_nothing_else() {
+    let s = parse_url_list(
+      "\u{feff}# 340 张确认无法恢复\n\
+       \n\
+       https://dead.example.com/a.png\n\
+       340 dead images\n\
+       assets/local.png\n\
+       https://dead.example.com/b.png\n",
+    );
+    assert_eq!(s.len(), 2, "only the two http urls are targets");
+    assert!(s.contains("https://dead.example.com/a.png"));
+    assert!(
+      !s.contains("assets/local.png"),
+      "a relative path is not an external url and must never select a block"
     );
   }
 
