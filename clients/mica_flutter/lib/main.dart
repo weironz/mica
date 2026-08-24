@@ -1892,7 +1892,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       setState(() {
         _selectedWorkspace = workspace;
         if (!keepOpenPage) {
-          _selectedView = null;
+          // Land on the page this workspace was last on, straight from the
+          // tree we already hold, so the switch selects and highlights in the
+          // SAME frame as the click. Only the document body waits for the
+          // network. Null when this workspace has never been opened here —
+          // then there is genuinely nothing to show yet.
+          _selectedView = _rememberedViewOf(workspace.id);
           _selectedBootstrap = null;
           _selectedMarkdown = null;
         }
@@ -1908,7 +1913,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         return;
       }
       try {
-        await _loadSelectedWorkspaceMembers();
+        // Members are for the share sheet, not for the tree or the page. They
+        // used to be awaited FIRST, so every switch spent a whole round trip
+        // before it even asked for the content the user is looking at.
+        unawaited(
+          _loadSelectedWorkspaceMembers().catchError((Object error) {
+            // Not awaited, but not swallowed either: the share sheet would
+            // otherwise just show an empty member list with no reason given.
+            if (mounted) setState(() => _message = '$error');
+          }),
+        );
         await _loadSelectedWorkspaceViews();
       } on ApiException {
         rethrow;
@@ -5408,11 +5422,41 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (_local.available) savePref('activeOrigin', _activeOrigin);
   }
 
+  /// The page a workspace was last on, resolved against the tree ALREADY in
+  /// memory — null when this workspace has not been opened in this session.
+  ///
+  /// Deliberately the same rule `_loadSelectedWorkspaceViews` applies once the
+  /// real tree arrives (remembered id, else the first openable page), so the
+  /// page shown the instant you switch is the page you end up on. A different
+  /// rule here would show one page and then swap it for another.
+  DocumentView? _rememberedViewOf(String workspaceId) {
+    final views = _viewsByWorkspace[workspaceId];
+    if (views == null || views.isEmpty) return null;
+    final remembered = loadPref('lastViewId:$workspaceId');
+    return views.where((view) => view.id == remembered).firstOrNull ??
+        firstOpenableView(views);
+  }
+
   Future<void> _loadSelectedWorkspaceViews() async {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) {
       return;
+    }
+
+    // Which page we are about to open is usually already known — it is the one
+    // this workspace was last on, and its tree is in memory. Asking for its
+    // content only AFTER the tree comes back spends a second round trip
+    // establishing something we could have assumed; ask for both at once and
+    // throw the guess away if the tree disagrees.
+    final guess = _rememberedViewOf(workspace.id);
+    Future<DocumentBootstrap>? guessed;
+    if (guess != null && guess.objectType != 'folder') {
+      guessed = _api.bootstrapDocument(
+        session.accessToken,
+        workspace.id,
+        guess.objectId,
+      );
     }
 
     final views = await _api.listViews(session.accessToken, workspace.id);
@@ -5431,12 +5475,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     DocumentBootstrap? bootstrap;
     String? bootstrapError;
     if (viewToOpen != null && viewToOpen.objectType != 'folder') {
+      final inFlight = guessed != null && guess?.objectId == viewToOpen.objectId
+          ? guessed
+          : null;
+      if (inFlight == null) guessed?.ignore(); // guessed wrong — drop it quietly
       try {
-        bootstrap = await _api.bootstrapDocument(
-          session.accessToken,
-          workspace.id,
-          viewToOpen.objectId,
-        );
+        bootstrap =
+            await (inFlight ??
+                _api.bootstrapDocument(
+                  session.accessToken,
+                  workspace.id,
+                  viewToOpen.objectId,
+                ));
       } on ApiException catch (error) {
         // The auto-open target answered with an error (404/403 — deleted
         // server-side, access revoked, or an unbacked folder object_id from an
@@ -5451,6 +5501,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         bootstrap = null;
         bootstrapError = '$error';
       }
+    } else {
+      // Nothing to open (empty workspace, or a folder was remembered) — the
+      // speculative fetch has no taker. Unignored, its failure would surface as
+      // an unhandled async error with no user-visible cause.
+      guessed?.ignore();
     }
 
     setState(() {
@@ -7727,12 +7782,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // owns its own controller; the key gets its viewport RenderBox to measure how
   // close the pointer is to an edge.
   final ScrollController _treeScroll = ScrollController();
-  final GlobalKey _treeListKey = GlobalKey();
-  Timer? _autoScrollTimer;
-  /// Where the drag pointer last was, in GLOBAL coordinates. The auto-scroll
-  /// timer re-derives its velocity from this every frame — a cached velocity
-  /// kept scrolling after the pointer had left the edge zone.
-  Offset? _autoScrollPointer;
   // Pointer is over the navigation sidebar — reveals the tree's expand
   // toggles (AppFlowy-style: they live in their own slim column, opacity 0
   // at rest so the page icons keep one aligned column).
@@ -7941,7 +7990,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitleSaveTimer?.cancel();
     _outlineHook.dispose();
     _activeBlockHook.dispose();
-    _stopAutoScroll();
     _treeScroll.dispose();
     // Only clear the exit-flush slot if it still points at ours (a remounting
     // sibling may have already claimed it).
@@ -8737,8 +8785,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _focusRoot,
-      child: ListView(
-        key: _treeListKey,
+      // The auto-scroll region wraps the list EXACTLY, so its box is the
+      // viewport the edge zones are measured against.
+      child: DragAutoScrollRegion(
+        enabled: _draggingTree,
+        controller: _treeScroll,
+        child: ListView(
         controller: _treeScroll,
         children: _visibleDocumentTree().map((item) {
           final row = DocumentListItem(
@@ -8800,6 +8852,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           }
           return _draggableTreeRow(item.view, row);
         }).toList(),
+        ),
       ),
     );
   }
@@ -8827,8 +8880,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       child: Draggable<DocumentView>(
         data: view,
         dragAnchorStrategy: pointerDragAnchorStrategy,
+        // No onDragUpdate: it is mounted-guarded, and auto-scrolling this very
+        // list unmounts the row being dragged. DragAutoScrollRegion reads the
+        // raw pointer stream instead — see its doc comment.
         onDragStarted: () => setState(() => _draggingTree = true),
-        onDragUpdate: (d) => _updateTreeAutoScroll(d.globalPosition),
         onDragEnd: (_) => _endTreeDrag(),
         onDraggableCanceled: (_, _) => _endTreeDrag(),
         onDragCompleted: _endTreeDrag,
@@ -8879,63 +8934,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// While dragging, scroll the tree when the pointer nears its top/bottom edge
-  /// so items off-screen become reachable. Called on every drag move with the
-  /// pointer's GLOBAL position.
-  void _updateTreeAutoScroll(Offset globalPointer) {
-    final box = _treeListKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null || !_treeScroll.hasClients) {
-      _stopAutoScroll();
-      return;
-    }
-    // Remember WHERE the pointer is, not how fast that made us scroll once.
-    //
-    // The velocity used to be computed here and cached, with the timer below
-    // just re-applying it. But onDragUpdate fires only while the pointer MOVES:
-    // hold still just inside the edge zone and the last velocity ran forever,
-    // carrying the list all the way to the top or bottom with no way to stop
-    // part-way — so a page could not be dropped anywhere in between.
-    // Recomputing each frame from the live position means leaving the zone
-    // stops the scroll on the next frame, whether or not the pointer moved.
-    _autoScrollPointer = globalPointer;
-    _autoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
-      final live =
-          _treeListKey.currentContext?.findRenderObject() as RenderBox?;
-      final pointer = _autoScrollPointer;
-      if (live == null || pointer == null || !_treeScroll.hasClients) {
-        _stopAutoScroll();
-        return;
-      }
-      final velocity = edgeAutoScrollVelocity(
-        live.globalToLocal(pointer).dy,
-        live.size.height,
-      );
-      if (velocity == 0) {
-        _stopAutoScroll();
-        return;
-      }
-      final pos = _treeScroll.position;
-      final next = (pos.pixels + velocity).clamp(
-        pos.minScrollExtent,
-        pos.maxScrollExtent,
-      );
-      if (next == pos.pixels) {
-        return; // already at an end — keep the timer for when the pointer moves
-      }
-      _treeScroll.jumpTo(next);
-    });
-  }
-
-  void _stopAutoScroll() {
-    _autoScrollTimer?.cancel();
-    _autoScrollTimer = null;
-    // Cleared with the timer: a stale pointer from the previous drag would let
-    // the next one start scrolling before it had moved anywhere.
-    _autoScrollPointer = null;
-  }
-
+  /// Ends the drag. The auto-scroll stops with it: `DragAutoScrollRegion` is
+  /// driven by `_draggingTree`, so clearing the flag is what turns it off.
   void _endTreeDrag() {
-    _stopAutoScroll();
     setState(() => _draggingTree = false);
   }
 
