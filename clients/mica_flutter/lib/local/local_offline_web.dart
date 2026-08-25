@@ -143,13 +143,26 @@ class LocalOffline implements LocalOfflineApi {
 
   void saveView(ViewData v, {String origin = 'local'}) {}
 
-  /// P4-2: mirror the cloud page tree into localStorage (clean replace per
-  /// server origin — same semantics as the desktop store's mirror).
+  /// P4-2: mirror the cloud page tree into localStorage — same semantics as the
+  /// desktop store's mirror, including this one:
+  ///
+  /// Only the workspaces this call CARRIES are replaced. Writing the whole blob
+  /// from memory dropped every workspace not loaded in the current session, so
+  /// the mirror could never be wider than the in-memory cache — the one thing it
+  /// exists to be. Workspaces gone from [workspaces] are dropped either way.
   void mirrorCloudPageTree(
     String serverUrl,
     List<WorkspaceData> workspaces,
     List<ViewData> views,
   ) {
+    final incoming = {for (final v in views) v.workspaceId};
+    final live = {for (final w in workspaces) w.id};
+    final kept = <ViewData>[
+      for (final v
+          in cachedCloudPageTree(serverUrl)?.views ?? const <ViewData>[])
+        if (!incoming.contains(v.workspaceId) && live.contains(v.workspaceId)) v,
+    ];
+    views = [...kept, ...views];
     savePref(
       'cloudPageTree:$serverUrl',
       jsonEncode({

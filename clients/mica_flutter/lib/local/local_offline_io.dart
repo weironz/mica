@@ -276,11 +276,23 @@ class LocalOffline implements LocalOfflineApi {
   ) {
     final store = _store;
     if (store == null) return;
-    // Drop the previous mirror for this origin, then rewrite it. Explicitly
-    // origin-scoped: with the v4 (origin,id) PK it is structurally impossible
-    // for this clean-replace to touch another origin's rows.
+    // Replace the tree of the workspaces this call actually carries, and leave
+    // every other workspace's rows alone.
+    //
+    // This used to purge EVERY view for the origin and rewrite only the
+    // workspaces loaded in the current session, so a workspace opened yesterday
+    // lost its mirrored tree the moment a different one was opened today. The
+    // mirror was therefore never wider than the in-memory cache — which is the
+    // one thing a mirror exists to be.
+    //
+    // A workspace that has disappeared server-side is still cleaned out: its
+    // rows belong to no workspace in [workspaces] any more.
+    final incoming = {for (final v in views) v.workspaceId};
+    final live = {for (final w in workspaces) w.id};
     for (final v in store.listViews(origin: serverUrl)) {
-      store.purgeView(origin: serverUrl, id: v.id);
+      if (incoming.contains(v.workspaceId) || !live.contains(v.workspaceId)) {
+        store.purgeView(origin: serverUrl, id: v.id);
+      }
     }
     for (final w in store.listWorkspaces(origin: serverUrl)) {
       store.deleteWorkspace(origin: serverUrl, id: w.id);

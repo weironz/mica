@@ -67,6 +67,7 @@ import 'updater.dart';
 import 'window_setup.dart';
 import 'upload/zip_writer.dart';
 import 'api/client.dart';
+import 'cloud/body_ownership.dart';
 import 'perf/switch_trace.dart';
 import 'api/models.dart';
 import 'api/profile_watch.dart';
@@ -1063,6 +1064,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _session = session;
         _workspaces = workspaces;
         _selectedWorkspace = restoredWs;
+        // Warm every workspace's tree from the on-device mirror, not just the
+        // one being restored. Without this the FIRST switch to any other
+        // workspace is a cache miss, and a cache miss is not merely slower —
+        // the sidebar renders "还没有页面" while the tree is still in flight,
+        // which is a lie rather than a wait. The server's answer overwrites
+        // this per workspace as it arrives.
+        _viewsByWorkspace = {
+          ..._warmTreesFromMirror(session),
+          ..._viewsByWorkspace,
+        };
       });
       unawaited(_refreshAiConfigured());
       // The session we just restored carries the profile as it was at LAST
@@ -1919,21 +1930,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       workspace.id,
       cached: (_viewsByWorkspace[workspace.id] ?? const []).isNotEmpty,
     );
+    final remembered = keepOpenPage ? null : _rememberedViewOf(workspace.id);
     return _run(() async {
       setState(() {
         _selectedWorkspace = workspace;
         if (!keepOpenPage) {
           // Land on the page this workspace was last on, straight from the
           // tree we already hold, so the switch selects and highlights in the
-          // SAME frame as the click. Only the document body waits for the
-          // network. Null when this workspace has never been opened here —
-          // then there is genuinely nothing to show yet.
-          _selectedView = _rememberedViewOf(workspace.id);
+          // SAME frame as the click. Null when this workspace has never been
+          // opened here — then there is genuinely nothing to show yet.
+          _selectedView = remembered;
           _selectedBootstrap = null;
           _selectedMarkdown = null;
         }
       });
       trace.mark('shell');
+      // …and the BODY from the on-device replica, so the switch lands on the
+      // page rather than dropping to the home pane for a round trip. Local
+      // read, no network. Also hands the document to its CRDT session, which
+      // from here owns the body and merges the server's state into it.
+      if (remembered != null) {
+        await _seedBodyFromMirror(remembered);
+        trace.mark('mirror');
+      }
       // P3e: offline workspace switching. Already in degraded (offline) nav →
       // read the mirror directly, no per-switch network timeout. Otherwise try
       // the server; fall back to the mirror ONLY on connectivity failures —
@@ -5456,6 +5475,45 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (_local.available) savePref('activeOrigin', _activeOrigin);
   }
 
+  /// Every workspace's page tree as the on-device mirror last saw it.
+  ///
+  /// Read once at startup so a switch has something to paint immediately. The
+  /// mirror is not authoritative and does not pretend to be: the server's tree
+  /// replaces it per workspace on arrival, and a failed request still surfaces
+  /// (P1c) rather than being masked by this.
+  ///
+  /// Empty on web without a mirror, and empty before the first successful sync
+  /// — both are the honest "we have nothing yet" that the cold path handles.
+  Map<String, List<DocumentView>> _warmTreesFromMirror(AuthSession session) {
+    final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
+    if (cache == null) return const {};
+    return rebuildCloudNavFromCache(cache, session.user.id).views;
+  }
+
+  /// Show [view]'s body from the on-device replica and hand it to its CRDT
+  /// session — the "先渲染后校正" half of a switch.
+  ///
+  /// Distinct from the offline fallback next door, which stands in for a server
+  /// that failed. This runs while ONLINE and does not suppress anything: the
+  /// page tree request still goes out, and its errors still surface (P1c). All
+  /// it does is stop the editor showing the home pane for the length of a round
+  /// trip when a perfectly good local copy exists.
+  ///
+  /// Silent when there is no mirror (never opened on this device) — then the
+  /// REST snapshot is genuinely the first content available, and the home pane
+  /// is the honest thing to show until it lands.
+  Future<void> _seedBodyFromMirror(DocumentView view) async {
+    if (view.objectType == 'folder') return;
+    final boot = await _offlineCloudBootstrap(view);
+    // The user may have clicked another workspace while the mirror was read.
+    if (boot == null || !mounted || _selectedView?.id != view.id) return;
+    setState(() => _selectedBootstrap = boot);
+    // Ownership of the body transfers here: _reconcileSync opens the yrs
+    // session for this document, and everything the server says afterwards
+    // arrives through it as a merge.
+    _reconcileSync();
+  }
+
   /// The page a workspace was last on, resolved against the tree ALREADY in
   /// memory — null when this workspace has not been opened in this session.
   ///
@@ -5550,12 +5608,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // user already switched away from. Nothing guards the entry point — there
     // is no busy latch on the workspace rows — so it has to be caught here.
     final stillCurrent = _selectedWorkspace?.id == workspace.id;
+    // The REST snapshot cannot merge — it is the yrs base materialised into
+    // plain JSON — so it must not land on a body a CRDT session already holds.
+    // See `restSnapshotMayReplaceBody` for what that costs when it does.
+    final mayWriteBody =
+        viewToOpen == null ||
+        restSnapshotMayReplaceBody(
+          arrivingDocumentId: viewToOpen.objectId,
+          crdtSessionDocumentId: _sync?.documentId,
+        );
     setState(() {
       _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
       if (stillCurrent) {
         _selectedView = viewToOpen;
-        _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
+        if (mayWriteBody) {
+          _selectedBootstrap = bootstrap;
+          _selectedMarkdown = null;
+        }
         if (bootstrapError != null) _message = bootstrapError;
       }
     });
@@ -6237,6 +6306,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           : _selectedWorkspace == null
           ? const []
           : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
+      // The local world's tree is read from disk synchronously — it is never
+      // "on its way". Only a cloud workspace we hold no tree for at all is.
+      treePending:
+          !local &&
+          _selectedWorkspace != null &&
+          !_viewsByWorkspace.containsKey(_selectedWorkspace!.id),
       selectedView: local ? _localSelectedView : _selectedView,
       selectedBootstrap: local ? _localBootstrap : _selectedBootstrap,
       // Cloud only — the local world has no tab model (see _openViewInNewTab).
@@ -7193,6 +7268,7 @@ class WorkspaceView extends StatefulWidget {
     required this.selectedWorkspace,
     required this.members,
     required this.views,
+    this.treePending = false,
     required this.selectedView,
     required this.selectedBootstrap,
     this.tabs = const [],
@@ -7406,6 +7482,11 @@ class WorkspaceView extends StatefulWidget {
   final Workspace? selectedWorkspace;
   final List<WorkspaceMember> members;
   final List<DocumentView> views;
+
+  /// This workspace's tree has never been loaded — [views] being empty says
+  /// nothing about whether the workspace has pages. Distinct from "loaded and
+  /// genuinely empty", which is the only case that may claim so on screen.
+  final bool treePending;
   final DocumentView? selectedView;
   final DocumentBootstrap? selectedBootstrap;
 
@@ -8785,6 +8866,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
     }
 
+    if (widget.views.isEmpty && widget.treePending) {
+      // "还没有页面" is a STATEMENT, and while the tree is still in flight it is
+      // a false one — the workspace may be full. Placeholder rows say the same
+      // thing an empty list would ("nothing to read here yet") without
+      // asserting anything about the workspace, and need no translation.
+      return _treeSkeleton();
+    }
+
     if (widget.views.isEmpty) {
       return EmptyState(
         icon: Icons.note_add,
@@ -8897,6 +8986,40 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           return _draggableTreeRow(item.view, row);
         }).toList(),
         ),
+      ),
+    );
+  }
+
+  /// Placeholder rows for a tree that has not arrived yet.
+  ///
+  /// Static on purpose: an animated shimmer would be a second thing running
+  /// during the very frames this is meant to keep cheap, and the one controlled
+  /// comparison anyone cites found skeletons no better liked than a spinner.
+  /// The job here is only to not lie about the workspace being empty.
+  Widget _treeSkeleton() {
+    final tokens = MicaTheme.of(context);
+    // Varying widths so it reads as "rows of text", not as a broken layout.
+    const widths = [0.72, 0.55, 0.84, 0.48, 0.66, 0.60];
+    return IgnorePointer(
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        children: [
+          for (final w in widths)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: w,
+                child: Container(
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: tokens.surface.hover,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
