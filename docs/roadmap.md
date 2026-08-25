@@ -36,8 +36,11 @@
 
 - 🟡 **备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**(2026-07-30)—— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,~~而它被一条刻意的安全边界挡着~~ —— 那道边界 2026-08-25 拆了,这条阻塞随之消失**:原文的理由是「CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练得在节点上装一条新的 pinned 命令 + 一把新 key,那是该由用户决定的生产侧凭据变更」。改用 Ansible 后 `DEPLOY_SSH_KEY` 已经是一把有 shell 的 root key(这笔取舍的完整账见 `docs/cd-plan.md` §4.1),**「装新 pinned 命令」这件事不再需要**:一个 `ansible/restore-drill.yml` + 一条 `schedule:` workflow 就够,不碰节点凭据。**没顺手做,因为它不在这次改造范围里**,而且「多久跑一次」是运维决策(一次真实恢复演练会占满节点 IO),该由用户定。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)`[等用户]`
 - 🆕 **provisioning 层不存在:「给台新机器就能起全套」今天做不到**(2026-08-02 写下方案,未实施)——
-  仓库里只有 `deploy/docker-compose.yml`;Traefik、`/data/mica` 目录、`.env`、受限部署账号与
-  `/usr/local/sbin/mica-deploy`、ACR 登录全是当年手工装的,没有一条能重放的路径。
+  ~~仓库里只有 `deploy/docker-compose.yml`~~ **2026-08-25 起多了 `ansible/`,但它只管
+  「部署」,不管 provisioning**:Traefik、`/data/mica` 目录、`.env`、部署密钥、ACR 登录
+  仍然全是当年手工装的,没有一条能重放的路径。(受限部署账号 `mica-deploy` 和
+  `/usr/local/sbin/mica-deploy` 已随本次改造从节点删除,不再是待纳管的东西 ——
+  取而代之的是 root 的 `authorized_keys` 里一行带 `restrict` 的 CI 密钥。)
   **Traefik 那一片的具体形状**(2026-08-06 从原「证书过期无人看守」条并入,该条已删):配置
   本体在仓库外未纳管;ACME **平时自动续期,不需要盯** —— 唯一已知的卡死场景是**改过 DNS 之后**
   进 issuance backoff、一直挂着 TRAEFIK DEFAULT CERT,处置是重启 Traefik

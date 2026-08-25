@@ -31,9 +31,12 @@
 # And it runs on the HOST, driving `docker exec` + `psql` against a throwaway
 # database beside the live one. mica-cli lives inside the backup container, so
 # folding this in would mean shipping another binary to the node to buy type
-# safety over "run three queries, compare three numbers". Same reasoning that
-# keeps node-deploy-policy.sh in shell: those two are the deliberate exceptions,
-# and deploy/ holds no other scripts.
+# safety over "run three queries, compare three numbers".
+#
+# It used to have company: node-deploy-policy.sh, the node-side deploy fence,
+# stayed in shell for the same reason. That one is gone (2026-08-25 — deploying
+# is ansible/deploy.yml now, and the fence it enforced was retired with it; see
+# docs/cd-plan.md §4.1). This is the only script left in deploy/.
 set -euo pipefail
 
 DUMP=${1:?usage: restore-drill.sh /data/mica/<dump>.sql.gz}

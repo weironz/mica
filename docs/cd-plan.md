@@ -147,6 +147,13 @@ shell 脚本收进 `mica-cli backup`，而 mica-cli 每次发版都出 linux-x64
 发过去**，所以「漂移」这个概念本身不存在了 —— 节点上的 compose 按构造就是这一版发布时
 的那一份，没有东西可比。
 
+**节点侧已清理（2026-08-25）**：`mica-deploy` 账号、`/etc/sudoers.d/mica-deploy`、
+`/usr/local/sbin/mica-deploy` 全部删除，备份留在节点 `/root/retired-mica-deploy-<ts>/`。
+删之前确认过：无进程、无 crontab、无 systemd 引用，`visudo -c` 删后仍通过。
+⚠️ 它是 **uid 1000**，而这台机器上另一个不相关的 Elasticsearch 栈的数据文件也归 uid 1000
+（容器按数字 uid 跑，与用户名无关）—— 所以**以后别在这台机器上再建 uid 1000 的用户**，
+否则它会凭空「继承」那批文件。
+
 **这确实是净损失的部分，别粉饰**：`DEPLOY_SSH_KEY` 现在是一把有 shell 的 root key。
 被攻破的 CI 能在节点上做任何事，而不只是换版本号。想找回一部分，可行的方向是给
 Ansible 用非 root 用户 + 限定范围的 sudo 规则，或者把部署改成节点侧拉取（节点定时问

@@ -164,7 +164,7 @@ MICA_BACKUP_PGURL=postgres://mica:<POSTGRES_PASSWORD>@postgres:5432/mica
 backup 容器与 postgres 共享默认网络，所以主机名就是 `postgres`。加完后
 `docker compose up -d --no-deps backup`，再手动跑一次，确认日志出现 `snapshot pg_dump → label=_pgdump`
 且 `rustic snapshots --filter-label _pgdump` 不再是 0。
-**这一步不需要发版**（改的是节点 `.env`，与 compose 指纹无关），也不改任何代码。
+**这一步不需要发版**（改的是节点 `.env`，不是 compose），也不改任何代码。
 
 **配套（更小但该做）**：让「跳过 pg_dump」不再算一次成功的运行 —— DB 被跳过时死人开关
 应该 ping `/fail`，或至少走一条不同的信号。否则同一个洞会以另一个变量名再来一次。

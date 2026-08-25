@@ -322,6 +322,14 @@ docker compose stop api
 # 2) Point the postgres service at a NEW image tag AND a NEW named volume
 #    (edit docker-compose.yml: image: postgres:17-alpine, and rename the volume
 #    e.g. mica-prod-postgres17 so the old data dir is untouched), then:
+#
+#    !! ON THE MAINTAINER'S PRODUCTION NODE, MAKE THIS EDIT IN THE REPO AND CUT
+#    A RELEASE — do NOT hand-edit the file on the server. Since 2026-08-25 every
+#    deploy SHIPS docker-compose.yaml from the release tag, so a server-side edit
+#    survives exactly until the next deploy and is then silently reverted. That
+#    is the flip side of "compose drift cannot exist": the node is not allowed an
+#    opinion of its own. Self-hosters who do not deploy via ansible/deploy.yml
+#    are unaffected — edit away.
 docker compose up -d --no-deps postgres          # new empty PG17 volume boots clean
 
 # 3) Load the dump into the new server.

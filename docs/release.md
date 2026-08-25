@@ -65,6 +65,12 @@ sudo 规则,或者改成节点侧拉取。两个都没做 —— 都要等 provi
 (`git show v<version>:deploy/docker-compose.yml`)。节点不再保管一份「自己的」compose,
 所以「漂移」这个概念没有载体 —— 它按构造就是这一版发布时的那一份,没有东西可比。
 
+> ⚠️ **反面同样成立,而且更容易伤到人:在节点上手改 `/data/mica/docker-compose.yaml`
+> 会被下一次部署静默抹掉。** 改动要进仓库、发一版。旧的 backup 文件会留下
+> (`ansible.builtin.copy` 带 `backup: true`),但没有任何东西会提醒你它被覆盖过。
+> 具体会踩到的场景见 `docs/deploy.md` 的 PostgreSQL 大版本升级一节 —— 那套步骤原本
+> 就是让你直接编辑节点上那个文件的。
+
 ⚠️ **compose 一定要从 tag 取,不是工作树。** `scp deploy/docker-compose.yml` 曾经用一个
 已经往前走的分支去部署 0.12.6,给生产发了**另一个版本**的 compose,而且静默成功。所以
 `ansible/deploy.yml` 的 `compose_src` **故意没有默认值**:裸跑 playbook 会带着说明拒绝,
@@ -266,9 +272,10 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 > 装上 v0.5.0,而模板出厂就是空的。生产节点当时不受影响(`.env` 里的值由 `deploy-prod` 写死),
 > 受影响的是照文档装新机的人。
 >
-> ⚠️ **这次改动动了 `deploy/docker-compose.yml`,所以下一次上线必须走 `just deploy-prod`**
-> —— `gh workflow run Deploy` 只传 compose 的 sha256 指纹,节点上那份还是旧的,会被拒绝。
-> 这是刻意的边界(CI 不能往节点注入文件),不是故障;跑一次 `deploy-prod` 即同步。
+> ~~⚠️ 这次改动动了 `deploy/docker-compose.yml`,所以下一次上线必须走 `just deploy-prod`~~
+> —— **2026-08-25 起不再需要**:两条路都从 tag 发 compose,`gh workflow run Deploy`
+> 和 `just deploy-prod` 完全等价。当时那条限制来自节点自存 compose + CI 只传 sha256
+> 指纹的设计,那个设计连同它的代价一起拆掉了(见上面「CI 拿的是 root key」)。
 - **节点必须能 pull ACR**:仓库设为公开,或在节点上 `docker login registry.cn-shenzhen.aliyuncs.com`
   一次(凭据只存在节点本地)。
 - **`--no-deps`**:只重建 api + web + backup,postgres / rustfs 不动。
