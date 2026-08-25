@@ -5,8 +5,18 @@
 推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow,
 生产滚到那个版本。两步,没有第三步。
 
-`just deploy-prod X.Y.Z` **保留**为兜底(GitHub 挂了、或要同步 compose 时用),走的是
-同一个节点入口。
+`just deploy-prod X.Y.Z` **保留**为兜底(GitHub 挂了的时候用),和 CI 走**同一条**路径
+—— 两边都是 `ansible/deploy.yml`,CI 那一步字面上就是在跑 `bash scripts/deploy-prod.sh`。
+「compose 改了必须走兜底」这条**已经不成立**(2026-08-25,见下节)。
+
+先彩排再上线,这一步是免费的:
+
+```bash
+just deploy-prod 0.13.27 --check --diff
+```
+
+它对**真节点**跑一遍整个 playbook 但不改任何东西,把要做的改动逐行 diff 出来。
+docker 那几步是 `community.docker` 原生模块,所以彩排跑的是同一段代码,不是跳过。
 
 | 产物 | 谁构建 | 去哪 |
 |---|---|---|
@@ -15,39 +25,30 @@
 | `mica-api` / `mica-web` / `mica-cli` 镜像 | **CI** job `images` | **阿里云 ACR**(生产拉这里)+ Docker Hub(异地副本) |
 | 生产上线 | **你触发** `Deploy` workflow(兜底:`just deploy-prod X.Y.Z`) | node72 从 ACR pull |
 
-## CI 部署用的不是 root key
+## CI 拿的是 root key —— 这是一次有代价的取舍
 
-这一节以前写的是「**为什么 CI 不做部署**」,论证如下:
+**2026-08-25 之前**这一节讲的是相反的事:CI 那把密钥被 `authorized_keys` 的
+`restrict,command=` 钉死在 `/usr/local/sbin/mica-deploy` 上,泄漏了也只能把生产在
+**已发布版本之间**挪 —— 开不了 shell、读不了 `.env`(JWT_SECRET / 库密码 / OSS AK)、
+`pg_dump` 不了、改不了 compose。那个设计是对的,论证也是对的(「能部署 ⇒ 需要 root
+key」确实是个没验证过的前提,正是 CLAUDE.md 原则 #6 说的那类「必须 X 才能 Y」)。
 
-> 让 CI 能部署,就得把生产 root SSH key 放进 GitHub secrets —— 仓库或 Actions 一旦被
-> 攻破,等于生产被攻破。
+**现在拆掉了。** 完整的账在 [`cd-plan.md` §4.1](cd-plan.md),这里只留结论:
 
-**第一个箭头是错的**,后半截成立。SSH 密钥的权限不是二元的:`authorized_keys` 的
-`command=` 选项在密钥被**接受之前**求值,强制它只能执行一个固定命令,客户端请求落进
-`SSH_ORIGINAL_COMMAND` 由服务端脚本自行校验。「能部署 ⇒ 需要 root key」是个没验证过
-的前提 —— 正是 CLAUDE.md 原则 #6 说的那类「必须 X 才能 Y」,它值得被别人的实现证伪,
-而且确实被证伪了。
+- 栅栏**关的是一间两扇门房间里的一扇** —— 同一个 CI 手里握着 `ACR_PASSWORD`,被攻破
+  的 CI 可以推一个恶意 `mica-api:v0.13.28`,再用那把「只能部署已发布版本」的密钥
+  正大光明地部署它,栅栏全程不反对。
+- 栅栏的**代价是一条真的坏掉的发布路径**:节点自存一份 compose、CI 传 tag 上那份的
+  sha256、不一致就拒绝 —— 于是**每一次 compose 改动**(配额、开关、备份变量)都让下
+  一次部署失败,直到有人上笔记本手工兜底。于是兜底路径变成了实际主路径:一条没人设计
+  过、没人测过、CI 跑不了的主路径。
+- Ansible 把模块推到主机上执行,**天然不能钉死在一条命令后面**。要 Ansible 就得放弃
+  栅栏,没有中间态。
 
-现在的实际配置:
-
-- 节点上有个受限账号 `mica-deploy`,**不在 docker 组**(docker 组成员可 `-v /:/host`
-  挂根目录,等价 root),`sudo -l` 只有一条白名单:`/usr/local/sbin/mica-deploy`。
-- 它的 `authorized_keys` 是
-  `restrict,command="/usr/bin/sudo /usr/local/sbin/mica-deploy"` —— `restrict` 关掉
-  端口转发/PTY/agent 转发,`command=` 钉死入口。
-- 那个脚本([`deploy/node-deploy-policy.sh`](../deploy/node-deploy-policy.sh))只接受
-  `deploy X.Y.Z [compose-sha256]`,版本号必须是不可变的三段式。
-
-**所以这把密钥泄露了能做什么?** 把生产滚到一个**已经发布到 registry 的版本**。仅此
-而已 —— 开不了 shell、读不了 `.env`(JWT_SECRET / 库密码 / OSS AK)、`pg_dump` 不了、
-改不了 compose、装不了后门。实测拒绝路径:
-
-```
-bash / id / sudo -i / cat /data/mica/.env   -> REFUSED: only 'deploy' is permitted
-docker run -v /:/host alpine ls /host       -> REFUSED: unexpected extra arguments
-deploy 0.12.8; cat /data/mica/.env          -> REFUSED: unexpected extra arguments
-deploy latest                               -> REFUSED: version must be X.Y.Z
-```
+**净损失,别粉饰**:`DEPLOY_SSH_KEY` 现在是一把有 shell 的 root key,被攻破的 CI 能在
+节点上做任何事,而不只是换版本号。想找回一部分:给 Ansible 用非 root 用户 + 限定范围的
+sudo 规则,或者改成节点侧拉取。两个都没做 —— 都要等 provisioning 那一层先存在
+(`cd-plan.md` §3)。
 
 **上线仍然是你按的一下**:`deploy.yml` 只有 `workflow_dispatch`,没有 `on: push` ——
 触发本身就是那个决定,只是按钮从你的终端挪到了 Actions 页面。
@@ -56,19 +57,42 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 再加一道审批就是对同一个决定确认两次,对单人项目是摩擦不是安全。哪天不再是单人,
 在 Settings → Environments 里加审批人即可,workflow 不用改。
 
-顺带一个反直觉的事实:CI 本来就持有 `ACR_PASSWORD`,也就是说「往生产镜像里推任意内容」
-这个能力**今天已经在 GitHub 上了**(见下面「镜像与 tag」)。真正的边界差异从来不是
-「CI 能不能部署」,而是「泄露之后拿不拿得到 shell 和明文密钥」—— 受限密钥保住的是这条线。
+### compose 不一致这个问题是怎么消失的
 
-> ⚠️ **`/usr/local/sbin/mica-deploy` 必须由 root 带外安装**(`just sync-deploy-script`),
-> **绝不能让 CI 装**。它是限制 CI 的那道闸 —— 能改写闸的人不受闸约束,把它改成
-> `exec bash` 就拿到了 root shell。`authorized_keys` 和 `sudoers` 同理。CI 只能**读**
-> 部署输出里的 `script_sha=` 来发现漂移。
->
-> **漂移自愈**:`just deploy-prod` 现在会**从 tag 同步 `node-deploy-policy.sh`**(和它同步 compose
-> 一样,`bash -n` 校验 + 原子替换),所以脚本改动后的首次完整部署会自动清掉漂移 —— 不用
-> 记着单独跑 `sync-deploy-script`。gh-Deploy(受限 key)路径按设计**仍只能 WARN 不能装**,
-> 所以看到 `deploy policy … drift` warning 时,跑一次 `just deploy-prod` 即消。
+不是「加了个更好的比对」,是**把可比对的东西删掉了**。
+
+节点上的 `docker-compose.yaml` 现在**每次部署都从 tag 发过去**
+(`git show v<version>:deploy/docker-compose.yml`)。节点不再保管一份「自己的」compose,
+所以「漂移」这个概念没有载体 —— 它按构造就是这一版发布时的那一份,没有东西可比。
+
+⚠️ **compose 一定要从 tag 取,不是工作树。** `scp deploy/docker-compose.yml` 曾经用一个
+已经往前走的分支去部署 0.12.6,给生产发了**另一个版本**的 compose,而且静默成功。所以
+`ansible/deploy.yml` 的 `compose_src` **故意没有默认值**:裸跑 playbook 会带着说明拒绝,
+必须由 `scripts/deploy-prod.sh` 用 `git show` 取出来传进去。
+
+### playbook 保证的事(`ansible/deploy.yml`)
+
+按顺序,每一条都是踩出来的:
+
+1. **动任何东西之前先拒绝** —— 版本号格式、compose 存在、节点 `.env` 存在、`.env` 里有
+   `MICA_VERSION` 可供回滚。全部前置,坏输入不会留下半应用状态。
+2. **`.env` 写 `MICA_VERSION=v<version>`,带 `v`** —— compose 直接拿它当镜像 tag
+   (`mica-api:${MICA_VERSION}`),少写 `v` 就是去拉一个不存在的 tag。彩排抓到的。
+3. **只 pull app 服务(api/web)** —— 不是优化:节点**连不上 `registry-1.docker.io`**,
+   pull 全部会 `i/o timeout` 直接失败。postgres/rustfs 是第三方固定镜像,早在节点上,
+   也不随版本走。
+4. **数据面只查不动** —— `docker compose up -d postgres` 会因为 config-hash 不一致
+   **重建 `mica-postgres-1`**,等于每次发版弹一次库(旧脚本写 `--no-deps api web` 正是
+   为了这个)。改成:确认它在跑且健康;**不健康就拒绝部署**(带病部署会把基础设施故障
+   伪装成一次坏发版);只有它压根没起来才启动它(新机器 / 重启没拉回来)。
+5. **app 服务 `--no-deps` + 等健康** —— `wait` 换掉了原来手写的 `for i in $(seq 1 60)`
+   轮询,那个 go-template 转义错了,对着健康的部署喊 "api NOT healthy"。
+6. **backup sidecar 只刷新已存在的** —— 它跑 mica-cli、吃同一个 `MICA_VERSION`,不跟着
+   滚就漂(曾停在 `willdockerhub/mica-cli:v0.3` 好多个版本);但和别的一起 `up` 会把
+   backup 从关变开,所以按 profile 单独处理。
+7. **任何一步失败就回滚 `MICA_VERSION`** —— 否则 `.env` 停在一个容器根本没起来的版本上,
+   下一次重启(或 OOM)就按它回来。compose **不**跟着回滚:新版本镜像配旧 compose
+   (或反过来)是半个回滚,比不回滚更坏。
 
 ## 镜像与 tag:两条硬规矩
 
@@ -86,6 +110,20 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 
 ## 完整发版流程
 
+> **第 1–3 步和第 6 步的一半,现在是一条命令:**
+>
+> ```bash
+> just release X.Y.Z
+> ```
+>
+> bump → 门禁 → commit → tag,一步做完,**门禁夹在中间**。这个顺序不是可选的:
+> `release-check` 断言三处版本号一致,而它们只有 bump 之后才一致 —— 老的 doc string
+> 写着「先跑 release-check」,那个顺序根本过不了。
+>
+> 它**不推送**。推送是对外不可逆的一步,留成显式的 `git push origin main vX.Y.Z`。
+>
+> 下面第 1–3 步保留是为了说清它在做什么、以及为什么必须这么做,不是让你手动照做。
+
 1. **版本号三处同步**(必须一致):
    - `clients/mica_flutter/pubspec.yaml` 的 `version:`
    - `clients/mica_flutter/lib/main.dart` 的 `kAppVersion`
@@ -93,11 +131,17 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
 2. **判断服务端要不要跟着发**:改动是否触及 `crates/markdown` 等服务端依赖?
    链路 `api-server → mica-app-core → mica-markdown`。用 `cargo tree -p <crate> | grep <dep>`
    实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)
-3. `just test` 全绿。**跑测试时要带 `DATABASE_URL`** —— 否则 `sync_pg` 这类 DB 集成
-   测试会**静默跳过**,整套 0.00s「全过」,那是真空通过不是验证(见 `docs/lessons.md`)。
-   本地栈起着的话:`$env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"`,
-   跑完看耗时 —— 秒级才说明真跑了。容器形态由 CI 的 `container` job 每次推送自动验,
-   不再需要手动跑什么。
+3. 测试全绿,**且是真的跑过**。DB 集成测试在 `DATABASE_URL` 没设时**静默跳过**,而
+   跳过的测试报告为「通过」—— 整套 0.00s「全过」,那是真空通过不是验证
+   (见 `docs/lessons.md`)。
+
+   这条规则以前靠人记,记不住,于是被写进 CLAUDE.md 当提醒 —— 而**一条需要提醒的规则
+   不是规则,是指望**。现在它是 `scripts/release-check.sh` 的第一条:本地 Postgres
+   没起来就**当场拒绝发版**,不是警告后继续。`just release` 必经这一步,跳不过去。
+
+   (单独跑:`just release-check`。它按 CI 的方式跑同样的门 —— `cargo test --workspace`
+   带 `DATABASE_URL`、`clippy -D warnings`、`flutter analyze` + `flutter test`,
+   外加 `Cargo.lock` 不能是脏的。)
 4. **桌面端带本地库迁移时**,先跑一次真库升级冒烟:
    `MICA_REAL_STORE=<一份真 store.db 的拷贝> cargo test -p mica-core --features store -- --ignored upgrade_real_store_smoke`。
    它默认 `#[ignore]`、要手动设环境变量,所以不写进这里就等于不存在 —— 而桌面
@@ -132,23 +176,28 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
      'docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-X.Y.Z-$(date +%Y%m%d-%H%M%S).sql.gz'
    # 验完整性:gzip -t <file>,再 zcat <file> | grep -c "^COPY public.documents " 确认目标表在内
    ```
-9. **部署**。两条路,都走节点上同一个受限入口 `/usr/local/sbin/mica-deploy`:
+9. **部署**。两条路**跑的是同一个 playbook**(`ansible/deploy.yml`):
 
    ```bash
    # 常规:触发即部署(没有审批门 —— 触发本身就是那个决定)
    gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 
-   # 兜底 / 需要同步 compose 时(它会先把 tag 处的 compose 推给节点)
+   # 兜底(GitHub 挂了)。CI 那一步字面上就是在跑这个脚本
    just deploy-prod X.Y.Z
+
+   # 想先看它要改什么:对真节点跑一遍,不动任何东西
+   just deploy-prod X.Y.Z --check --diff
    ```
 
-   节点改 `.env` 的 `MICA_VERSION` → 从 ACR pull → 重建 api+web → 等健康。
-   **失败会自动复原 `.env` 并把上一版拉起来**(trap,覆盖所有非零退出路径),
-   所以不会留下"容器还在跑旧版、但 `.env` 指着一个不存在的 tag"这种重启即挂的状态。
+   顺序:拒绝坏输入 → 从 tag 发 compose → `.env` 写 `MICA_VERSION=vX.Y.Z` → pull
+   api/web(**只** app 服务,节点连不上 Docker Hub)→ 确认数据面健康(**只查不动**)
+   → 重建 api/web 并等健康 → 刷新已存在的 backup sidecar。
+   **任何一步失败都会复原 `.env` 并把上一版拉起来**,所以不会留下「容器还在跑旧版、
+   但 `.env` 指着一个不存在的 tag」这种重启即挂的状态。
 
-   > CI 只传版本号和 **compose 的 sha256 指纹**,不传 compose 文件本身 —— 节点不一致
-   > 就拒绝,并提示你用 `just deploy-prod` 同步。哈希只能拒绝、无法注入;传文件则等于
-   > 把 `-v /:/host` 的能力交出去。**compose 改了之后的第一次部署必须走 `deploy-prod`。**
+   > **「compose 改了必须走 deploy-prod」这条已经作废**(2026-08-25)。compose 现在每次
+   > 从 tag 发过去,节点不再自存一份可比对的副本 —— 详见上面「compose 不一致这个问题
+   > 是怎么消失的」。两条路完全等价,选哪条只取决于 GitHub 在不在。
 
 10. `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**(workflow 里已内置
    这一步)。
@@ -169,6 +218,16 @@ deploy latest                               -> REFUSED: version must be X.Y.Z
   构建 api 镜像并把单机栈起起来验 `/api/ready`。以前这是 `just parity-check`,手动且
   可选,所以几乎没人跑
 - `just docker-build` / `docker-push` —— **CI 挂掉时的兜底**,正常发版用不到
+
+**部署要 Ansible**(2026-08-25 起,只有 `just deploy-prod` 这一条路用得到):
+
+```bash
+pipx install ansible-core
+ansible-galaxy collection install -r ansible/requirements.yml   # community.docker
+```
+
+`deploy-prod` 两样缺一就**拒绝并打出安装命令**,不会跑到一半才发现。**节点侧零新增
+依赖** —— `docker_compose_v2` 直接驱动 docker CLI,不需要 Python docker SDK。
 
 前置:
 ```bash
@@ -240,6 +299,8 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 |---|---|
 | `ACR_USERNAME` / `ACR_PASSWORD` | 推阿里云 ACR(用 ACR 的**镜像仓库登录密码**或只授 ACR 权限的 RAM 子账号,**别用账号级 AK/SK**) |
 | `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 推 Docker Hub(Personal access token,Read & Write) |
+| `DEPLOY_SSH_KEY` | 部署用私钥。**2026-08-25 起是一把有 shell 的 root key**,不再是钉死在一条命令后面的受限 key —— 取舍见上面「CI 拿的是 root key」 |
+| `DEPLOY_KNOWN_HOSTS` | 节点主机公钥,**钉死**而不是运行时 `ssh-keyscan`(当场扫等于信任任何应答的人,那不叫验证) |
 
 设置方式(值不会留在 shell history):
 ```bash

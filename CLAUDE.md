@@ -117,8 +117,10 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 
 ## 发版(权威文档 `docs/release.md`)
 
-推 `v*` tag → CI 产出全部 7 个产物 → 手动触发 `Deploy` workflow 上线。两步。
-`just deploy-prod X.Y.Z` 是**兜底**(GitHub 挂了,或 compose 改过必须走它)。`just --list` 看全部 recipe。
+`just release X.Y.Z`(bump → 门禁 → commit → tag)→ 推 tag → CI 产出全部 7 个产物 →
+手动触发 `Deploy` workflow 上线。`just deploy-prod X.Y.Z` 是**兜底**(GitHub 挂了才用;
+和 CI 跑的是同一个 `ansible/deploy.yml`)。加 `--check --diff` 对真节点先彩排,不改任何东西。
+`just --list` 看全部 recipe。
 
 **节奏(用户定,长期有效)**:
 
@@ -128,7 +130,10 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 - 版本号**三处必须一致**:`pubspec.yaml` / `main.dart` 的 `kAppVersion` / 根 `Cargo.toml`
   (api-server 与 mica-cli 都继承它;顺带 `cargo check` 更新 `Cargo.lock`)。
 - 补丁位递增(新功能也走补丁),**minor 由用户拍板**。
-- 发版前 `just test` **必须带 `DATABASE_URL`**,否则 DB 集成测试**静默跳过**而报告"全过"。
+- ~~发版前 `just test` 必须带 `DATABASE_URL`~~ —— **2026-08-25 起变成门禁,不再靠记性**:
+  `just release` 必经 `scripts/release-check.sh`,本地 Postgres 没起来就当场拒绝。
+  (原因仍然成立:DB 集成测试在 `DATABASE_URL` 没设时**静默跳过**,而跳过的测试报告为
+  「通过」。一条需要写在这里提醒自己的规则,本身就说明它不是规则。)
 - 上线后验证 `/api/health` 报对版本,**并冒烟测这一版真正改了什么** —— 版本号证明不了功能。
 - **发版提交里同步 `docs/roadmap.md`**:这一版关掉的条目当场标掉 —— 「无 X」这类否定式条目
   只会静默变假,发版是唯一的执行点(release.md 步骤 4)。

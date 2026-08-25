@@ -226,33 +226,35 @@ docker-push tag:
 
 # ---------------------------------------------------------------- deploy
 
-# Prod pulls the CI-built images from ACR and restarts. --no-deps keeps
-# postgres / rustfs untouched. api, web AND the backup sidecar (mica-cli) all
-# roll to <version> — CI publishes the three keyed to the same MICA_VERSION, so
-# a deploy must move all three or backup silently drifts (it sat on the old
-# willdockerhub/mica-cli:v0.3 for many releases because deploy skipped it).
-# MICA_VERSION is rewritten in the node's .env so a restart (or a reboot) comes
-# back on the SAME version, not the old one.
-# Install the node-side deploy policy. ROOT-SIDE AND MANUAL ON PURPOSE.
+# Prod pulls the CI-built images from ACR and restarts. The steps live in
+# ansible/deploy.yml, not here: they used to be ~80 lines of nested
+# `ssh "cd … && sed -i … && docker compose …"` whose quoting had to survive
+# bash -> just -> ssh -> bash, and every layer got it wrong at least once.
 #
-# `/usr/local/sbin/mica-deploy` is the fence that limits what the CI key can do,
-# so CI must never be able to write it — anything that can rewrite the fence is
-# not constrained by it. Same reason `authorized_keys` and `sudoers` are hand-
-# installed. Run this yourself, with your own root key, when the script changes.
+# What the playbook guarantees, which the ssh version did not:
+#   - the node's docker-compose.yaml is SHIPPED from the tag every run, so a
+#     compose change can no longer make the next deploy refuse (see below);
+#   - postgres + rustfs come up and are waited for BEFORE api/web, so a
+#     migration never races a database that is still starting;
+#   - the backup sidecar (mica-cli, keyed to the same MICA_VERSION) rolls too,
+#     but only where it is already present — it sat on the old
+#     willdockerhub/mica-cli:v0.3 for many releases because deploy skipped it;
+#   - MICA_VERSION in the node's .env is restored if any step fails, so a
+#     half-applied deploy does not decide what a later reboot comes back on.
 #
-# From the TAG, not the working tree: the first installs of this script were
-# `scp` straight from a dirty checkout — exactly the drift `deploy-prod` was
-# just fixed to avoid. Writes to `.new`, syntax-checks, then moves into place,
-# so a truncated transfer can never leave a half-written policy behind.
-# Defaults to `main`, not to a release tag: the deploy policy and the application
-# version are independent timelines. Pinning it to a tag also breaks for every
-# tag older than the script itself — v0.12.8 has no deploy/node-deploy-policy.sh at all.
-[doc("Install deploy/node-deploy-policy.sh on the node from a ref (root, manual)")]
-sync-deploy-script ref="origin/main":
-    NODE='{{node}}' bash scripts/sync-deploy-script.sh "{{ref}}"
-[doc("Roll prod to an already-published version, e.g. `just deploy-prod 0.5.1`")]
-deploy-prod version:
-    NODE='{{node}}' NODE_DIR='{{node_dir}}' bash scripts/deploy-prod.sh "{{version}}"
+# `just deploy-prod 0.13.27 --check --diff` rehearses the whole thing against
+# the real node and changes nothing. The docker steps are community.docker
+# modules, so the rehearsal runs the same code rather than skipping it — which
+# is how the release-format bug in the first draft was caught before it ran.
+#
+# RETIRED 2026-08-25: `sync-deploy-script`, which installed
+# deploy/node-deploy-policy.sh as /usr/local/sbin/mica-deploy — the pinned
+# command that limited what the CI key could do. Ansible executes modules it
+# pushes to the host, so it cannot run behind a pinned command. What that costs
+# and why it was accepted anyway is in docs/cd-plan.md §4.
+[doc("Roll prod to a published version, e.g. `just deploy-prod 0.5.1` (+ --check --diff to rehearse)")]
+deploy-prod version *flags:
+    bash scripts/deploy-prod.sh "{{version}}" {{flags}}
 # The api must report the version we just rolled to, and the live bundle must
 # not be a cached/stale artifact. Checking only for HTTP 200 would miss both.
 [doc("Prove prod really serves <version>, e.g. `just verify-prod 0.5.1`")]
@@ -296,9 +298,17 @@ web-e2e email="e2e@mica.test" password="e2epassword123":
 # so "I ran the tests" and "the tests ran" were different facts, and only a human
 # remembering the difference stood between them. A gate nobody can forget beats a
 # note in a document every time.
+# The one to use: bump -> gate -> commit -> tag, in that order, as one step.
+# Not four commands you run in the right order — that ordering was itself wrong
+# in the doc string this replaces (it said to run release-check BEFORE the bump,
+# which cannot pass: release-check asserts the three version numbers agree, and
+# they only agree afterwards). Pushing stays separate and explicit.
+[doc("Bump + gate + commit + tag, e.g. `just release 0.13.28`. Does not push.")]
+release version:
+    bash scripts/release.sh "{{version}}"
 [doc("Everything that must be true before tagging. Refuses; does not warn.")]
 release-check:
     bash scripts/release-check.sh
-[doc("Bump the three version numbers + Cargo.lock. Does NOT tag — run release-check first.")]
+[doc("Just the version numbers + Cargo.lock. `just release` is the one you want.")]
 release-bump version:
-     bash scripts/release-bump.sh "{{version}}"
+    bash scripts/release-bump.sh "{{version}}"

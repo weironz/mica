@@ -6,8 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version WITHOUT the leading v, e.g. 0.12.8'
+        description: 'Version WITHOUT the leading v, e.g. 0.13.27'
         required: true
+      check:
+        description: 'Rehearse only (--check --diff) — changes nothing'
+        type: boolean
+        default: false
 
 # Two deploys at once would race on the node's .env (both rewrite MICA_VERSION).
 # Queue instead of cancelling: a half-applied deploy is worse than a slow one.
@@ -31,9 +35,11 @@ jobs:
       url: https://mica.cloudcele.com
 
     steps:
+      # At the tag, and with history: the playbook and the compose it ships must
+      # both be the ones this version was released with, and deploy-prod.sh
+      # reads the compose out of the tag with `git show`.
       - uses: actions/checkout@v5
         with:
-          # Need the tag's tree to fingerprint the compose it was released with.
           ref: v${{ inputs.version }}
 
       - name: Reject anything that is not X.Y.Z
@@ -41,20 +47,28 @@ jobs:
           [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "version must be X.Y.Z"; exit 1; }
 
+      - name: Install ansible
+        run: |
+          pipx install --include-deps ansible-core
+          ansible-galaxy collection install -r ansible/requirements.yml
+
       - name: Deploy
         env:
-          # This key is NOT a root key. `~mica-deploy/.ssh/authorized_keys` pins
-          # it to /usr/local/sbin/mica-deploy via `restrict,command=`, which sshd
-          # evaluates before accepting the key. Leaked, it can move prod between
-          # published versions and nothing else: no shell, no .env, no database.
+          # A key with a SHELL on the node, as root. That is a deliberate
+          # loosening: the old key was pinned to /usr/local/sbin/mica-deploy via
+          # `restrict,command=` in authorized_keys, so leaked it could only move
+          # prod between published versions — no shell, no .env, no database.
+          # Ansible pushes modules to the host and executes them, so it cannot
+          # work behind a pinned command; adopting it means giving that up.
+          #
+          # The trade was made with eyes open (docs/cd-plan.md §4): this same CI
+          # already holds registry push credentials, so a compromised CI could
+          # publish a malicious image that the node would pull and run under the
+          # old fence too. The fence closed one door in a room with another door
+          # standing open — and it cost a working deploy path, see below.
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          # `ssh ... | tee` hides ssh's exit code behind tee's, and the default
-          # runner shell does not set pipefail. On v0.12.9 the node REFUSED the
-          # deploy (compose fingerprint mismatch) and this step still reported
-          # success — only the health check further down caught it. A deploy step
-          # that goes green on a refused deploy is worse than no step at all.
           set -o pipefail
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
@@ -63,38 +77,24 @@ jobs:
           # whatever answers, which is not verification.
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
-          # The compose fingerprint AT THE TAG. The node refuses if its own
-          # compose differs, so a version can never be deployed against a compose
-          # it was not released with. Sending the file instead would hand this
-          # key the power to mount the host root into a container — a hash can
-          # only refuse, never inject.
-          sha=$(sha256sum deploy/docker-compose.yml | cut -d' ' -f1)
-
-          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes \
-            mica-deploy@mica.cloudcele.com \
-            "deploy ${{ inputs.version }} $sha" | tee /tmp/deploy.log
-
-          # The node reports which build of the deploy policy it ran. CI may READ
-          # the fence that limits it, never install it.
+          # What this replaces, and why it had to go:
           #
-          # Compared against the DEFAULT BRANCH, not the tag being deployed. The
-          # deploy policy and the application version are independent timelines:
-          # the first run of this check compared against v0.12.8, which predates
-          # the script entirely, so `sha256sum` came back empty and it reported
-          # drift against nothing ("tag has " with a blank hash) while the node
-          # actually matched main exactly. A false alarm teaches people to ignore
-          # the alarm.
-          git fetch -q --depth 1 origin main 2>/dev/null || true
-          want=$(git show FETCH_HEAD:deploy/node-deploy-policy.sh 2>/dev/null | sha256sum | cut -c1-16)
-          got=$(grep -oP 'script_sha=\K\S+' /tmp/deploy.log || true)
-          if [ -z "$want" ]; then
-            echo "::warning::could not read deploy/node-deploy-policy.sh from the default branch — drift check skipped"
-          elif [ -n "$got" ] && [ "$got" != "$want" ]; then
-            echo "::warning::node runs deploy policy $got, default branch has $want — run 'just sync-deploy-script'"
-          fi
+          #   CI used to send the sha256 of docker-compose.yml AT THE TAG, and
+          #   the node refused unless its own copy matched. Which meant every
+          #   compose change — a quota, a feature flag, a backup variable — made
+          #   the next deploy FAIL until somebody ran the laptop fallback by
+          #   hand. Config changes are a large share of all deploys, so the
+          #   fallback quietly became the main path: a main path nobody
+          #   designed, tested, or could run from CI.
+          #
+          #   The playbook ships the file from the tag instead. Drift cannot
+          #   exist, because the node's compose is by construction the one this
+          #   version was released with. There is nothing left to compare.
+          bash scripts/deploy-prod.sh '${{ inputs.version }}' ${{ inputs.check && '--check --diff' || '' }}
 
-      - name: Verify prod actually serves this version
-        run: |
-          got=$(curl -fsS https://mica.cloudcele.com/api/ready); echo "$got"
-          echo "$got" | grep -q '"version":"${{ inputs.version }}"' \
-            || { echo "VERSION MISMATCH — health does not report ${{ inputs.version }}"; exit 1; }
+      # deploy-prod.sh already runs verify-prod on success. Nothing more to
+      # assert after a rehearsal: prod still reports the PREVIOUS version, and a
+      # check that "passes" by measuring the old state is worse than no check.
+      - name: Note that nothing was deployed
+        if: ${{ inputs.check }}
+        run: echo "::notice::rehearsal only — prod was not changed"

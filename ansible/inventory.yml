@@ -1,0 +1,22 @@
+# The production node. One host, on purpose — see docs/cd-plan.md §5 for why
+# there is no second one.
+#
+# Reached by SSH key as root. That is a DELIBERATE loosening of what came
+# before, where the deploy key was pinned to a single command
+# (`restrict,command=/usr/local/sbin/mica-deploy`) so a compromised CI could
+# only move prod between published versions. Ansible cannot work that way — it
+# pushes modules to the host and executes them — so adopting it means giving
+# that fence up. The reasoning is written down in docs/cd-plan.md §4; the short
+# version is that CI already holds registry push credentials, so a compromised
+# CI could publish a malicious image the node would pull and run anyway. The
+# fence closed one door in a room with another door open.
+all:
+  hosts:
+    mica-prod:
+      ansible_host: mica.cloudcele.com
+      ansible_user: root
+      ansible_python_interpreter: /usr/bin/python3
+  vars:
+    # Everything the node keeps lives here: .env (rendered), docker-compose.yaml
+    # (shipped from the tag), and the backup dumps.
+    mica_dir: /data/mica

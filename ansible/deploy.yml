@@ -1,0 +1,340 @@
+# Roll the production stack to a published version.
+#
+#   just deploy-prod 0.13.27              # real
+#   just deploy-prod 0.13.27 --check --diff   # rehearsal, changes nothing
+#
+# Do not run this playbook directly: it needs `compose_src` pointing at the
+# compose file AS IT EXISTS AT THE TAG, and scripts/deploy-prod.sh is what
+# extracts it with `git show`. Running it bare fails with that message.
+#
+# This replaces the node-side `/usr/local/sbin/mica-deploy` fence. What changed
+# and why is in docs/cd-plan.md; the one thing worth repeating here is the
+# failure it removes:
+#
+#   The node used to keep its OWN copy of docker-compose.yaml, and CI passed the
+#   sha256 of the file AT THE TAG. Any difference and the node refused. Which
+#   meant every compose change — a quota, a feature flag, a backup variable —
+#   made the next deploy fail until somebody ran the laptop fallback. Config
+#   changes are a large share of all deploys, so the fallback became the main
+#   path, which is the definition of a main path nobody designed.
+#
+#   Now the file is SHIPPED from the tag on every run. Drift cannot exist,
+#   because the node's compose is by construction the one this version was
+#   released with. There is nothing left to compare.
+#
+# Provisioning (docker, directories, Traefik, first-time secrets) is NOT here.
+# docs/cd-plan.md §6 is explicit that nobody has walked that path by hand yet,
+# and a runbook nobody has walked should not be frozen into code — the code
+# would preserve the guesses and stop anyone from reading the doc.
+- name: Deploy Mica
+  hosts: mica-prod
+  gather_facts: false
+
+  # Every docker step is a community.docker module rather than `command: docker
+  # compose …`. Two things follow that shelling out cannot give:
+  #   - `--check` becomes a REAL rehearsal (the modules run compose --dry-run)
+  #     instead of `skipping:`, so the dress rehearsal exercises the same code.
+  #   - no quoting. The shell version had to escape through bash -> just -> ssh
+  #     -> bash, and every layer got it wrong at least once.
+  collections: [community.docker]
+
+  vars:
+    # NOT defaulted to the working tree, on purpose. The caller must hand over a
+    # file it materialised from the TAG, and both callers do —
+    # scripts/deploy-prod.sh and .github/workflows/deploy.yml.
+    #
+    # Defaulting to the checkout would restore a bug this repo already paid for:
+    # deploying 0.12.6 from a branch that had moved on shipped prod a compose
+    # from a DIFFERENT version, and nothing announced it — the deploy just
+    # succeeded with a file nobody reviewed as part of that release. A default
+    # that is right most of the time is exactly how that goes unnoticed, so
+    # there is no default and a bare run fails with instructions.
+    compose_src: ""
+    compose_dst: "{{ mica_dir }}/docker-compose.yaml"
+    env_file: "{{ mica_dir }}/.env"
+    # Started first and waited for. A migration that runs against a database
+    # still coming up fails in a way that looks like a code bug — and api mounts
+    # rustfs as its object store, so that is a data service by the same argument.
+    data_services: [postgres, rustfs]
+
+  tasks:
+    # ── Refuse before writing anything ───────────────────────────────────────
+    # Every assertion here runs BEFORE .env or the compose file is touched, so a
+    # bad input leaves the node exactly as it was rather than half-applied.
+    - name: The version must be X.Y.Z
+      ansible.builtin.assert:
+        that: version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+        fail_msg: >-
+          version must be X.Y.Z with no leading v (got '{{ version | default("") }}').
+          Prod pins exact versions so a restart comes back on the same one.
+      delegate_to: localhost
+
+    - name: A compose file must have been handed over
+      ansible.builtin.assert:
+        that: compose_src | length > 0
+        fail_msg: >-
+          compose_src is required and must be the compose file AS AT THE TAG.
+          Run `just deploy-prod {{ version | default("X.Y.Z") }}` instead of this
+          playbook — it extracts the file with `git show`, so the pairing is
+          exact from any checkout state.
+      delegate_to: localhost
+
+    - name: Read the compose that is about to be shipped
+      ansible.builtin.slurp:
+        src: "{{ compose_src }}"
+      delegate_to: localhost
+      register: compose_raw
+      check_mode: false
+
+    # Which services to start is decided by PARSING that file, not by asking the
+    # node `docker compose config --services`. Parsing is native, works under
+    # --check without special-casing, and — the reason that matters — it reads
+    # the file being shipped rather than the one already on the node, so a
+    # service added in this release is started by this release.
+    - name: Work out what it declares
+      ansible.builtin.set_fact:
+        # Plain subscript, not json_query: that filter drags in community.general
+        # AND a jmespath install on whatever machine runs the deploy, to do what
+        # Jinja already does. A deploy path with avoidable dependencies is a
+        # deploy path that stops working on a fresh laptop.
+        compose_services: "{{ (compose_raw.content | b64decode | from_yaml)['services'] }}"
+
+    # Profile-gated services are excluded here and handled separately below.
+    # Rolling them in with the rest would switch a profile ON for a node that
+    # deliberately runs without it.
+    - name: Split them into data / app / profile-gated
+      ansible.builtin.set_fact:
+        profile_services: >-
+          {{ compose_services | dict2items
+             | selectattr('value.profiles', 'defined') | map(attribute='key') | list }}
+        app_services: >-
+          {{ compose_services | dict2items
+             | rejectattr('value.profiles', 'defined') | map(attribute='key') | list
+             | reject('in', data_services) | list }}
+
+    - name: Something must actually serve traffic
+      ansible.builtin.assert:
+        that: app_services | length > 0
+        fail_msg: >-
+          the compose at this tag declares no non-data, non-profile service —
+          nothing would serve traffic. Declared: {{ compose_services.keys() | list }}
+
+    - name: The node's .env must already exist
+      ansible.builtin.stat:
+        path: "{{ env_file }}"
+      register: env_stat
+
+    - name: Refuse to invent one
+      ansible.builtin.assert:
+        that: env_stat.stat.exists
+        fail_msg: >-
+          {{ env_file }} is missing. It holds this instance's secrets and is
+          created ONCE by a human during provisioning — a deploy that wrote a
+          fresh one would silently rotate every credential and orphan the data.
+
+    # ── Ship the compose from the tag ────────────────────────────────────────
+    # The node's file is docker-compose.yaml (not .yml): keep that name, or
+    # compose finds two files and picks the other one.
+    - name: Install docker-compose.yaml from the tag
+      ansible.builtin.copy:
+        src: "{{ compose_src }}"
+        dest: "{{ compose_dst }}"
+        mode: "0644"
+        backup: true
+      register: compose_copy
+
+    # ── Point .env at the version ────────────────────────────────────────────
+    # Remember what it was FIRST. A deploy that fails half way leaves .env naming
+    # a version whose containers never came up, and the next restart — a reboot,
+    # an OOM kill — brings the node back on that. The node script this replaces
+    # restored it on ANY non-zero exit, and that is worth keeping.
+    - name: Read the version currently deployed
+      ansible.builtin.slurp:
+        src: "{{ env_file }}"
+      register: env_before
+      check_mode: false
+
+    - name: Remember it
+      ansible.builtin.set_fact:
+        # splitlines(), not split('\n'): the escape has to survive a YAML folded
+        # scalar before Jinja ever sees it, and it did not — the first rehearsal
+        # of the rescue path announced `.env restored to ''`, which would have
+        # been a rollback that wrote an EMPTY MICA_VERSION and left compose
+        # unable to resolve any image tag at all. A rollback that cannot be
+        # rehearsed is a rollback nobody knows the state of.
+        previous_version: >-
+          {{ (env_before.content | b64decode).splitlines()
+             | select('match', '^MICA_VERSION=') | first | default('')
+             | regex_replace('^MICA_VERSION=', '') | trim }}
+
+    - name: There must be a version to fall back to
+      ansible.builtin.assert:
+        that: previous_version | length > 0
+        fail_msg: >-
+          {{ env_file }} has no MICA_VERSION line, so a failed deploy would have
+          nothing to restore. Refusing before anything is changed.
+
+    # WITH the v prefix: compose uses this value directly as the image tag
+    # (`mica-api:${MICA_VERSION}`) and the published tags carry the v. Writing
+    # the bare number makes compose pull a tag that does not exist — caught by
+    # `--check --diff` before it ever ran, which is the entire point of having a
+    # rehearsal that talks to the real node.
+    - name: Set MICA_VERSION
+      ansible.builtin.lineinfile:
+        path: "{{ env_file }}"
+        regexp: "^MICA_VERSION="
+        line: "MICA_VERSION=v{{ version }}"
+        backup: true
+
+    # ── Roll ─────────────────────────────────────────────────────────────────
+    # Wrapped so a failure puts .env back. The compose file is deliberately NOT
+    # rolled back: restoring an old compose under a new version's images, or the
+    # reverse, is half a rollback, which is worse than none.
+    - name: Roll the stack
+      block:
+        # ONLY the app services. They are the ones keyed to MICA_VERSION and
+        # published to MICA_REGISTRY (an ACR mirror in CN); postgres and rustfs
+        # are pinned third-party images from Docker Hub that are already on the
+        # node and do not move between releases.
+        #
+        # This is not an optimisation. The node cannot reach registry-1.docker.io
+        # at all — pulling everything fails with `dial tcp … i/o timeout`, which
+        # is exactly how the first rehearsal of this playbook ended. The script
+        # it replaces said `docker compose pull api web` and that list was load-
+        # bearing, not a shortcut.
+        - name: Pull the images for this version
+          community.docker.docker_compose_v2_pull:
+            project_src: "{{ mica_dir }}"
+            services: "{{ app_services }}"
+            policy: always
+
+        # The data plane is INSPECTED, not brought up. `docker compose up -d
+        # postgres` looks harmless and is not: compose compares its config hash,
+        # and the containers running on this node were created from an older
+        # compose, so a rehearsal showed it would RECREATE mica-postgres-1 and
+        # mica-rustfs-1 — a database bounce on every version roll. The script
+        # this replaces said `--no-deps api web` and never touched them; that
+        # was the point of the flag, not an optimisation.
+        #
+        # Bouncing the data plane is a real operation with real downtime. It
+        # should be something somebody decides to do, never a side effect of
+        # shipping a new api build.
+        - name: Look at the data services
+          community.docker.docker_container_info:
+            name: "mica-{{ item }}-1"
+          loop: "{{ data_services }}"
+          register: data_info
+          check_mode: false
+
+        # Still the "migrations must not race a starting database" guarantee,
+        # arrived at by refusing rather than by restarting.
+        - name: Refuse to deploy over a data service that is not up and healthy
+          ansible.builtin.assert:
+            # Reads as: IF it is running, it must be healthy. A stopped or
+            # missing one is not an error here — the next task starts it.
+            # Written the other way round first, which would have refused the
+            # deploy on exactly the fresh-node case the next task exists for.
+            that:
+              - >-
+                not (item.container.State.Running | default(false))
+                or (item.container.State.Health.Status | default('healthy')) == 'healthy'
+            fail_msg: >-
+              mica-{{ item.item }}-1 is
+              {{ item.container.State.Status | default('missing') }}
+              ({{ item.container.State.Health.Status | default('no healthcheck') }}).
+              Deploying api on top of a sick data plane turns an infrastructure
+              problem into what looks like a bad release. Fix it first.
+          loop: "{{ data_info.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+
+        # Only when one is genuinely absent or stopped — a fresh node, or after a
+        # reboot that did not bring everything back. Then starting it IS the
+        # right thing, and `wait` makes the next task safe.
+        - name: Start a data service that is not running at all
+          community.docker.docker_compose_v2:
+            project_src: "{{ mica_dir }}"
+            services: "{{ [item.item] }}"
+            state: present
+            wait: true
+            wait_timeout: 240
+          loop: "{{ data_info.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          when: not (item.container.State.Running | default(false))
+
+        # `dependencies: false` is --no-deps: the data services are already up
+        # and waited for above. Without it compose is free to restart them as
+        # dependencies, which is a database bounce nobody asked for mid-deploy.
+        #
+        # `wait` replaces a hand-rolled `for i in $(seq 1 60)` health loop whose
+        # docker-inspect format string was mis-escaped and reported "api NOT
+        # healthy" over healthy deploys. Same 240s budget, none of the quoting.
+        - name: Start the application services and wait for them
+          community.docker.docker_compose_v2:
+            project_src: "{{ mica_dir }}"
+            services: "{{ app_services }}"
+            state: present
+            dependencies: false
+            remove_orphans: true
+            wait: true
+            wait_timeout: 240
+
+        # The backup sidecar runs mica-cli, so it is keyed to the SAME
+        # MICA_VERSION and drifts unless a version roll moves it too — it sat on
+        # willdockerhub/mica-cli:v0.3 for many releases because deploy skipped
+        # it. Refresh it ONLY where it already exists, so a deploy never turns
+        # backup on for a node that runs without it.
+        #
+        # Container name rather than `compose ps`: compose names them
+        # <project>-<service>-1 and the project is the directory, mica. The same
+        # convention was already load-bearing in the script this replaces.
+        - name: Is the backup sidecar present on this node?
+          community.docker.docker_container_info:
+            name: "mica-{{ item }}-1"
+          loop: "{{ profile_services }}"
+          register: sidecars
+          check_mode: false
+
+        - name: Refresh the profile-gated sidecars that are present
+          community.docker.docker_compose_v2:
+            project_src: "{{ mica_dir }}"
+            profiles: "{{ [item.item] }}"
+            services: "{{ [item.item] }}"
+            state: present
+            pull: always
+            dependencies: false
+          loop: "{{ sidecars.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          when: item.exists | default(false)
+      rescue:
+        - name: Put MICA_VERSION back
+          ansible.builtin.lineinfile:
+            path: "{{ env_file }}"
+            regexp: "^MICA_VERSION="
+            line: "MICA_VERSION={{ previous_version }}"
+          when: previous_version | length > 0
+
+        - name: Best-effort restart on the previous version
+          community.docker.docker_compose_v2:
+            project_src: "{{ mica_dir }}"
+            state: present
+            dependencies: false
+          failed_when: false
+          when: previous_version | length > 0
+
+        - name: Fail loudly
+          ansible.builtin.fail:
+            msg: >-
+              deploy of {{ version }} failed; .env restored to
+              '{{ previous_version | default("(unknown)") }}'. The stack was asked
+              to come back up on it — CHECK /api/ready before assuming it did.
+
+    - name: Report what landed
+      ansible.builtin.debug:
+        msg: >-
+          {{ version }} — compose {{ 'UPDATED' if compose_copy.changed else 'unchanged' }};
+          data: {{ data_services | join(', ') }};
+          app: {{ app_services | join(', ') }};
+          profile-gated: {{ profile_services | join(', ') | default('none', true) }}

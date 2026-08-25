@@ -83,6 +83,26 @@ provision（造）  →  deploy（更新）  →  restore（灌数据）
 shell 脚本收进 `mica-cli backup`，而 mica-cli 每次发版都出 linux-x64 二进制，新机器
 一条 `curl` 就有。
 
+> **2026-08-25 更新：上面这段对 provisioning 仍然成立，对「部署」这一半已被推翻。**
+>
+> 部署那半（`ansible/deploy.yml`）改用了 Ansible。推翻的理由不是「Ansible 更好」，
+> 是**原来那段判断算错了代价**：它把成本记在「新依赖 + 新心智模型」上，却没算
+> 已经在付的那笔 —— 部署逻辑是 `ssh "cd … && sed -i … && docker compose …"`，引号要
+> 依次穿过 bash → just → ssh → bash，**每一层都至少错过一次**（go-template 少转义，
+> 对着健康的部署喊 "api NOT healthy"；`{{version}}` 落在单引号里，原样发到节点）。
+> 那不是「一个脚本」的心智模型，是四个。
+>
+> 决定性的一条是**可彩排**：`just deploy-prod X.Y.Z --check --diff` 对真节点跑一遍
+> 而不改任何东西。写这份 playbook 时它当场抓到两个会炸生产的错 ——
+> `MICA_VERSION` 少写 `v`（compose 直接拿它当镜像 tag，会去拉一个不存在的 tag），
+> 以及 `up -d postgres` 会**重建** `mica-postgres-1`（每次发版弹一次数据库；旧脚本
+> 写 `--no-deps api web` 正是为了这个，我一度当成优化而不是不变量）。shell 那版没有
+> 「跑一遍但不动」这个东西，只能上线才知道。
+>
+> 范围刻意小：**只有部署**。provisioning 仍按 §6 的顺序 —— 先手工走通再说。
+> 依赖也刻意小：`community.docker` 一个 collection，节点侧**零新增依赖**
+> （`docker_compose_v2` 直接驱动 docker CLI，不需要 Python docker SDK）。
+
 那四个「新生成」的密钥在脚本里就是四行 `openssl rand -hex 32`，写进 `.env`，
 **你从头到尾不经手**。今天的状态是「填错了会当场拒绝启动」（0.13.8 起），
 那时才是「根本轮不到你填」。
@@ -94,11 +114,43 @@ shell 脚本收进 `mica-cli backup`，而 mica-cli 每次发版都出 linux-x64
 
 现在这套里有三样是真做对了，换发布线时不能一起扔：
 
-1. **`command=/usr/local/sbin/mica-deploy` 钉死的 SSH key** —— CI 只能执行
+1. ~~**`command=/usr/local/sbin/mica-deploy` 钉死的 SSH key** —— CI 只能执行
    `deploy <version> <sha>`。deploy.yml 里那句「CI may READ the fence that limits
-   it, never install it」是清醒的。
+   it, never install it」是清醒的。~~ **2026-08-25 拆掉了**，见下。
 2. **部署后验**摸库的 **`/api/ready`** 并断言版本 —— 不是不摸库的 `/api/health`。
 3. **安装包的安装-启动冒烟** —— 发布前拦，且已根治过一次 mutex 竞态。
+
+### 4.1 第 1 条为什么还是拆了（2026-08-25）
+
+原文写「不能一起扔」，现在扔了，所以得把账算清楚，别让后人以为是顺手删的。
+
+**它挡住了什么**：CI 那把 key 在 `~mica-deploy/.ssh/authorized_keys` 里被
+`restrict,command=` 钉死，泄漏了也只能把生产在**已发布版本之间**挪，拿不到 shell、
+读不到 `.env`、碰不到库。Ansible 的工作方式是把模块推到主机上执行，**天然不能钉死在
+一条命令后面** —— 要 Ansible 就得放弃它，没有中间态。
+
+**为什么还是值**：
+
+- **它把另一扇门当成了不存在。** 同一个 CI 手里握着**镜像仓库的推送凭据**。被攻破的
+  CI 可以直接推一个恶意 `mica-api:v0.13.28`，然后用那把「只能部署已发布版本」的 key
+  正大光明地部署它 —— 栅栏全程不会反对。它关的是一间两扇门的房间里的一扇。
+- **它的成本是一条真的坏掉的发布路径。** 节点自己存一份 compose，CI 传 tag 上那份的
+  sha256，不一致就拒绝。于是**每一次 compose 改动**（配额、开关、备份变量）都会让下一次
+  部署失败，直到有人上笔记本手工兜底。配额/开关这类改动在全部部署里占比不低，于是
+  「兜底路径」实际变成了主路径 —— 一条没人设计过、没人测过、CI 跑不了的主路径。
+  这正是 §1 那个症状的根。
+- **它还在挡别的事。** `roadmap.md` 里「备份恢复演练自动化」被卡住的理由，逐字就是
+  这道栅栏：要让 Actions 定时跑演练，得在节点上再装一条 pinned 命令 + 一把新 key。
+  栅栏拆掉，那条阻塞跟着没了。
+
+**现在换成什么**：root 的 SSH key 直连 + `ansible/deploy.yml`。compose **每次从 tag
+发过去**，所以「漂移」这个概念本身不存在了 —— 节点上的 compose 按构造就是这一版发布时
+的那一份，没有东西可比。
+
+**这确实是净损失的部分，别粉饰**：`DEPLOY_SSH_KEY` 现在是一把有 shell 的 root key。
+被攻破的 CI 能在节点上做任何事，而不只是换版本号。想找回一部分，可行的方向是给
+Ansible 用非 root 用户 + 限定范围的 sudo 规则，或者把部署改成节点侧拉取（节点定时问
+「该跑哪个版本」）—— 两个都没做，因为都需要 provisioning 那一层先存在（§3）。
 
 ## 5. 刻意不做的
 
@@ -123,7 +175,8 @@ shell 脚本收进 `mica-cli backup`，而 mica-cli 每次发版都出 linux-x64
 
 最容易腐烂的是第 1 节那些症状。判据很简单：
 
-- 改一行 compose 之后，Deploy workflow 还会不会被节点拒绝？（今天：**会**）
+- 改一行 compose 之后，Deploy workflow 还会不会被节点拒绝？（**2026-08-25 起：不会**
+  —— compose 每次从 tag 发过去，节点没有自己的一份可以拿来比对。§4.1）
 - 部署一次服务端配置改动，要不要 bump 版本号并构建 Windows 安装包？（今天：**要**）
 - 给一台新机器 + root 密码，有没有一条命令能把整套起来？（今天：**没有**）
 

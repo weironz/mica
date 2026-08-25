@@ -1,0 +1,9 @@
+# Install with:  ansible-galaxy collection install -r ansible/requirements.yml
+#
+# community.docker only. Its docker_compose_v2* modules drive the docker CLI on
+# the target directly, so the node needs nothing installed beyond docker itself —
+# no Python docker SDK, which is the usual reason people give up on the native
+# modules and go back to `command: docker compose …`.
+collections:
+  - name: community.docker
+    version: ">=4.1.0"   # docker_compose_v2: wait / wait_timeout
