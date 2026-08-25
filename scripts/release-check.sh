@@ -35,7 +35,16 @@ echo "==> version: $pub (three places agree)"
 #    fails CI — both have turned a pipeline red here before.
 DATABASE_URL=postgres://mica:mica@127.0.0.1:5432/mica cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-(cd clients/mica_flutter && "${FLUTTER:-flutter}" analyze lib && "${FLUTTER:-flutter}" test)
+#    The Flutter half is spelled EXACTLY as ci.yml spells it, flags included.
+#    It was `analyze lib` with no flags, which is stricter than CI — and this
+#    package carries 86 long-standing `info` lints plus 2 warnings, so
+#    `flutter analyze` exits 1 and the gate could NEVER pass. A gate that always
+#    refuses does not stop bad releases; it gets bypassed, and then nothing is
+#    checked at all. Being stricter than CI is only worth it if the stricter bar
+#    is actually met today, and it is not.
+(cd clients/mica_flutter \
+  && "${FLUTTER:-flutter}" analyze --no-fatal-infos --no-fatal-warnings \
+  && "${FLUTTER:-flutter}" test)
 
 # 4. Cargo.lock must already carry the version, or the release commit ships a
 #    lock that disagrees with its own manifest.

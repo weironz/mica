@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
+import 'package:mica_flutter/editor/table.dart';
 
 /// Regression: Ctrl+A → copy → paste a page containing a table turned every
 /// bold/inline-code cell into visible markdown source (`**你好**`). Cause:
@@ -38,7 +39,17 @@ void main() {
       final blocks = markdownToBlocks(md);
       final table = blocks.single;
       expect(table.kind, 'table');
-      final cellText = (table.data['rows'] as List).first.first as String;
+      // Decoded through TableData, the same path the editor uses, rather than
+      // casting the raw block data. That cast was `as String` and had been
+      // failing since cells gained the unified stored form: a cell WITH marks
+      // is now `{text, marks}` (the shape paragraphs use and Rust
+      // `crates/markdown` emits), and only a mark-free cell stays a plain
+      // string.
+      //
+      // So the crash was good news in disguise — getting a Map here is exactly
+      // the marks surviving. The assertion below is unchanged; only the way the
+      // text is obtained is.
+      final cellText = TableData.fromBlock(table.data).rows.first.first;
       final marks = parseInline(cellText).marks;
       expect(marks, isNotEmpty,
           reason: 'pasted cell <<$cellText>> must parse back to a mark');

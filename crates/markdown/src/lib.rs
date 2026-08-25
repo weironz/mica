@@ -1041,8 +1041,19 @@ fn import_markdown_inner(
           row.push(String::new());
         }
       }
+      // Upgrade each cell from raw inline-Markdown source to the unified
+      // marks-over-plain-text form: a cell carrying inline marks (**bold**,
+      // `code`, links, …) becomes {"text","marks"} — the SAME representation
+      // paragraphs use (crates/markdown is the authority; Dart mirrors it) —
+      // while a mark-free cell stays a plain string, so simple tables are
+      // byte-identical to before and the grid never bloats. Legacy string
+      // cells still round-trip: `decode_table_cell` re-parses them on read.
+      let cell_rows: Vec<Vec<Value>> = rows
+        .iter()
+        .map(|row| row.iter().map(|raw| encode_table_cell(raw)).collect())
+        .collect();
       let mut data = json!({
-        "rows": rows,
+        "rows": cell_rows,
         "header": true,
         "align": "left",
         "widths": vec![1.0f64; width],
@@ -3535,8 +3546,8 @@ fn append_html_block(
           a => format!(" align=\"{a}\""),
         }
       };
-      let cell_html = |raw: &str| -> String {
-        let (text, data) = apply_inline_marks(raw.to_string(), Value::Null, &RefDefs::new());
+      let cell_html = |cell: &Value| -> String {
+        let (text, data) = decode_table_cell(cell);
         html_inline(&Block {
           id: String::new(),
           kind: "paragraph".to_string(),
@@ -3545,20 +3556,9 @@ fn append_html_block(
           children: Vec::new(),
         })
       };
-      let row_cells = |row: &Value| -> Vec<String> {
-        row
-          .as_array()
-          .map(|cells| {
-            cells
-              .iter()
-              .map(|c| c.as_str().unwrap_or("").trim().to_string())
-              .collect()
-          })
-          .unwrap_or_default()
-      };
       out.push_str("<table>\n<thead>\n<tr>\n");
-      if let Some(head) = rows.first() {
-        for (c, cell) in row_cells(head).iter().enumerate() {
+      if let Some(head) = rows.first().and_then(Value::as_array) {
+        for (c, cell) in head.iter().enumerate() {
           out.push_str(&format!("<th{}>{}</th>\n", attr(c), cell_html(cell)));
         }
       }
@@ -3567,8 +3567,10 @@ fn append_html_block(
         out.push_str("<tbody>\n");
         for row in rows.iter().skip(1) {
           out.push_str("<tr>\n");
-          for (c, cell) in row_cells(row).iter().enumerate() {
-            out.push_str(&format!("<td{}>{}</td>\n", attr(c), cell_html(cell)));
+          if let Some(cells) = row.as_array() {
+            for (c, cell) in cells.iter().enumerate() {
+              out.push_str(&format!("<td{}>{}</td>\n", attr(c), cell_html(cell)));
+            }
           }
           out.push_str("</tr>\n");
         }
@@ -5786,6 +5788,55 @@ fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> St
   out
 }
 
+/// Encode a table cell from its raw inline-Markdown source into the unified
+/// stored form: a cell with inline marks becomes `{"text","marks"}` (matching
+/// paragraphs); a mark-free cell stays the plain source string (keeps simple
+/// tables and the conformance golds byte-identical).
+fn encode_table_cell(raw: &str) -> Value {
+  let (text, data) = apply_inline_marks(raw.to_string(), Value::Null, &RefDefs::new());
+  match data.get("marks").and_then(Value::as_array) {
+    Some(marks) if !marks.is_empty() => json!({ "text": text, "marks": marks }),
+    _ => Value::String(raw.to_string()),
+  }
+}
+
+/// Decode a stored table cell to `(plain_text, data-with-marks)`. A cell is
+/// either a JSON string — legacy / mark-free raw inline-Markdown source, parsed
+/// on read so old documents keep rendering their `**bold**` — or the unified
+/// `{"text","marks"}` object. `null`/other → empty (a missing cell must never
+/// leak the literal word "null").
+fn decode_table_cell(cell: &Value) -> (String, Value) {
+  match cell {
+    Value::String(s) => apply_inline_marks(s.clone(), Value::Null, &RefDefs::new()),
+    Value::Object(map) => {
+      let text = map.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+      let mut data = serde_json::Map::new();
+      if let Some(marks) = map.get("marks")
+        && marks.as_array().is_some_and(|a| !a.is_empty())
+      {
+        data.insert("marks".into(), marks.clone());
+      }
+      (text, Value::Object(data))
+    }
+    _ => (String::new(), Value::Null),
+  }
+}
+
+/// Render a decoded cell's `(text, marks)` back to inline Markdown, then apply
+/// GFM cell escaping: literal `|` → `\|`, and a soft line break (which a
+/// single-line pipe row can't hold) → `<br>`.
+fn table_cell_markdown(cell: &Value) -> String {
+  let (text, data) = decode_table_cell(cell);
+  let md = render_inline(&Block {
+    id: String::new(),
+    kind: "paragraph".to_string(),
+    text,
+    data,
+    children: Vec::new(),
+  });
+  md.replace('|', "\\|").replace('\n', "<br>").trim().to_string()
+}
+
 fn append_table_markdown(block: &Block, lines: &mut Vec<String>) {
   let Some(rows) = block.data.get("rows").and_then(Value::as_array) else {
     return;
@@ -5793,20 +5844,9 @@ fn append_table_markdown(block: &Block, lines: &mut Vec<String>) {
   let grid: Vec<Vec<String>> = rows
     .iter()
     .filter_map(|row| {
-      row.as_array().map(|cells| {
-        cells
-          .iter()
-          .map(|cell| {
-            cell
-              .as_str()
-              .unwrap_or("")
-              .replace('|', "\\|")
-              .replace('\n', " ")
-              .trim()
-              .to_string()
-          })
-          .collect()
-      })
+      row
+        .as_array()
+        .map(|cells| cells.iter().map(table_cell_markdown).collect())
     })
     .collect();
   if grid.is_empty() {

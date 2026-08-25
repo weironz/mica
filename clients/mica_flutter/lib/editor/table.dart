@@ -8,6 +8,8 @@
 library;
 
 import 'markdown.dart' show isThematicBreak;
+import 'marks.dart'
+    show inlineToMarkdown, marksFromData, marksToJson, parseInline;
 
 class TableData {
   TableData(
@@ -94,7 +96,9 @@ class TableData {
   ]);
 
   Map<String, dynamic> toBlockData() => {
-    'rows': rows,
+    'rows': [
+      for (final row in rows) [for (final cell in row) _encodeCell(cell)],
+    ],
     'header': header,
     'align': align,
     'widths': widths,
@@ -130,16 +134,38 @@ class TableData {
     if (at < widths.length) widths.removeAt(at);
   }
 
-  /// Coerce a stored cell to its text. A missing/absent cell must become an
-  /// empty string — NOT the stringified placeholder a blind interpolation
-  /// produces (`'$cell'` turns Dart `null` into "null", and on dart2js a
-  /// JS `undefined` array hole into "undefined", which then renders and
-  /// round-trips as that literal word). Real string cells pass through; any
-  /// other JSON scalar (a number, say) keeps its textual form.
+  /// Coerce a stored cell to its inline-Markdown source (the form the renderer
+  /// and cell editor speak). A cell is one of:
+  ///  - `null`/absent → empty string, NOT the stringified placeholder a blind
+  ///    interpolation produces (`'$cell'` turns Dart `null` into "null", and on
+  ///    dart2js a JS `undefined` array hole into "undefined", which then renders
+  ///    and round-trips as that literal word);
+  ///  - a `String` → legacy / mark-free raw source, passes through;
+  ///  - a unified `{text, marks}` object (matching paragraphs; emitted by Rust
+  ///    `crates/markdown` for marked cells) → rendered back to source via
+  ///    [inlineToMarkdown], so every downstream path keeps working unchanged;
+  ///  - any other JSON scalar → its textual form.
   static String _cellText(Object? cell) {
     if (cell == null) return '';
     if (cell is String) return cell;
+    if (cell is Map) {
+      final text = cell['text'];
+      if (text is String) {
+        final marks = marksFromData(Map<String, dynamic>.from(cell));
+        return marks.isEmpty ? text : inlineToMarkdown(text, marks);
+      }
+    }
     return '$cell';
+  }
+
+  /// Encode a cell's inline-Markdown [source] into the unified stored form: a
+  /// cell with inline marks becomes a `{text, marks}` object (the same shape
+  /// paragraphs use and Rust `crates/markdown` emits); a mark-free cell stays a
+  /// plain string. Keeps the two engines byte-identical on the wire.
+  static Object _encodeCell(String source) {
+    final parsed = parseInline(source);
+    if (parsed.marks.isEmpty) return source;
+    return {'text': parsed.text, 'marks': marksToJson(parsed.marks)};
   }
 
   static List<double> _normalizeWidths(List<double>? widths, int columns) {
@@ -224,8 +250,10 @@ bool _startsBlock(String content) {
 /// Serialize a table to GFM pipe-table Markdown.
 String tableToMarkdown(TableData table) {
   if (table.rows.isEmpty) return '';
+  // A soft line break inside a cell can't be a real newline (a pipe row is
+  // single-line) → `<br>`, the GFM convention; literal `|` → `\|`.
   String row(List<String> cells) =>
-      '| ${cells.map((c) => c.replaceAll('|', r'\|').replaceAll('\n', ' ').trim()).join(' | ')} |';
+      '| ${cells.map((c) => c.replaceAll('|', r'\|').replaceAll('\n', '<br>').trim()).join(' | ')} |';
   final out = StringBuffer();
   out.writeln(row(table.rows.first));
   final sep = [

@@ -45,6 +45,7 @@ import 'ui/page_graph_view.dart';
 import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
+import 'ui/page_tree_state.dart';
 import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
@@ -8949,7 +8950,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
 
   Widget _pageTree(BuildContext context, bool canEdit) {
-    if (widget.selectedWorkspace == null) {
+    // Which of the four states this is, is decided by `pageTreeStateFor` in
+    // ui/page_tree_state.dart, NOT by inline ifs here — that function is the
+    // only part of this rule a test can reach, because `_pageTree` cannot be
+    // built without the 97-parameter widget around it. Re-inlining a branch
+    // here silently un-tests it.
+    final treeState = pageTreeStateFor(
+      hasWorkspace: widget.selectedWorkspace != null,
+      viewsEmpty: widget.views.isEmpty,
+      treePending: widget.treePending,
+    );
+
+    if (treeState == PageTreeState.noWorkspace) {
       return EmptyState(
         icon: Icons.ads_click,
         title: context.l10n.workspaceRowSelectWorkspace,
@@ -8957,15 +8969,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       );
     }
 
-    if (widget.views.isEmpty && widget.treePending) {
-      // "还没有页面" is a STATEMENT, and while the tree is still in flight it is
-      // a false one — the workspace may be full. Placeholder rows say the same
-      // thing an empty list would ("nothing to read here yet") without
-      // asserting anything about the workspace, and need no translation.
-      return _treeSkeleton();
+    if (treeState == PageTreeState.skeleton) {
+      return const PageTreeSkeleton();
     }
 
-    if (widget.views.isEmpty) {
+    if (treeState == PageTreeState.empty) {
       return EmptyState(
         icon: Icons.note_add,
         title: context.l10n.sidebarNoPagesTitle,
@@ -9087,34 +9095,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// during the very frames this is meant to keep cheap, and the one controlled
   /// comparison anyone cites found skeletons no better liked than a spinner.
   /// The job here is only to not lie about the workspace being empty.
-  Widget _treeSkeleton() {
-    final tokens = MicaTheme.of(context);
-    // Varying widths so it reads as "rows of text", not as a broken layout.
-    const widths = [0.72, 0.55, 0.84, 0.48, 0.66, 0.60];
-    return IgnorePointer(
-      child: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        children: [
-          for (final w in widths)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: FractionallySizedBox(
-                alignment: Alignment.centerLeft,
-                widthFactor: w,
-                child: Container(
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: tokens.surface.hover,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
   /// Tapping the tree's blank area deselects the located node: nothing is
   /// highlighted and the top New-page/New-folder buttons create at the
   /// workspace root (the only way to reach the root while a doc stays open).
