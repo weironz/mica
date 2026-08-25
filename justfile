@@ -150,24 +150,7 @@ test:
 
 [doc("The integration suite `just test` cannot reach: real Windows app + FFI. Needs a Windows desktop.")]
 test-integration:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd clients/mica_flutter
-    # Serial with a kill between files, exactly as CI does: the app is
-    # single-instance, and a lingering process makes the next launch fail with
-    # "Error waiting for a debug connection".
-    for f in integration_test/*.dart; do
-      case "$(basename "$f")" in
-        # Need the whole dev stack (`just dev`) — run those by hand.
-        cloud_sync_test.dart|migration_sync_test.dart|offline_image_reconcile_test.dart|page_switch_fidelity_test.dart)
-          echo "== skip $f (needs the dev stack; see the workflow header)"; continue;;
-      esac
-      echo "== $f"
-      {{flutter}} test "$f" -d windows
-      powershell -NoProfile -Command "Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force" || true
-      sleep 3
-    done
-
+    FLUTTER='{{flutter}}' bash scripts/test-integration.sh
 [doc("Static analysis on both sides")]
 check:
     cargo clippy --workspace 2>/dev/null || cargo build --workspace
@@ -266,118 +249,15 @@ docker-push tag:
 # tag older than the script itself — v0.12.8 has no deploy/node-deploy-policy.sh at all.
 [doc("Install deploy/node-deploy-policy.sh on the node from a ref (root, manual)")]
 sync-deploy-script ref="origin/main":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tag="{{ref}}"
-    git fetch -q origin main
-    # Same fallback as deploy-prod: tags older than the 2026-07-31 rename carry
-    # it as deploy/mica-deploy.sh.
-    policy=deploy/node-deploy-policy.sh
-    git cat-file -e "$tag:$policy" 2>/dev/null || policy=deploy/mica-deploy.sh
-    git show "$tag:$policy" \
-      | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
-          && chown root:root /usr/local/sbin/mica-deploy.new \
-          && chmod 0755 /usr/local/sbin/mica-deploy.new \
-          && bash -n /usr/local/sbin/mica-deploy.new \
-          && mv /usr/local/sbin/mica-deploy.new /usr/local/sbin/mica-deploy \
-          && sha256sum /usr/local/sbin/mica-deploy"
-    echo "want: $(git show "$tag:$policy" | sha256sum)"
-
+    NODE='{{node}}' bash scripts/sync-deploy-script.sh "{{ref}}"
 [doc("Roll prod to an already-published version, e.g. `just deploy-prod 0.5.1`")]
 deploy-prod version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tag="v{{version}}"
-    # The node's compose is NOT a git checkout — it was hand-placed and drifted:
-    # prod sat on a hardcoded willdockerhub/... image while the repo had already
-    # moved to ACR, so a "deploy" silently kept pulling from the old registry.
-    # Ship the repo's copy every time (backing up first) — repo is the truth.
-    # NB the node's file is docker-compose.yaml; keep that name, or compose
-    # would find two files and pick the other one.
-    # (No backticks anywhere in a recipe body: just runs them as commands,
-    # even inside a # comment.)
-    # Take the compose from the TAG, not the working tree. `scp deploy/...`
-    # shipped whatever happened to be checked out: deploying 0.12.6 from a
-    # branch that had already moved on sent prod a compose from a DIFFERENT
-    # version, and a dirty tree sent uncommitted edits. Nothing announced it —
-    # the deploy just succeeded with a file nobody reviewed as part of that
-    # release. `git show <tag>:<path>` makes the pairing exact and reproducible
-    # from any checkout state.
-    if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-      echo "==> tag $tag not local, fetching"
-      git fetch -q origin "refs/tags/$tag:refs/tags/$tag"
-    fi
-    echo "==> syncing compose (from $tag) + pinning MICA_VERSION=$tag"
-    git show "$tag:deploy/docker-compose.yml" \
-      | ssh {{node}} "cat > {{node_dir}}/docker-compose.yaml.new"
-    # NOTE if you ever add a service to the compose: this recipe ships ONLY
-    # docker-compose.yml, and brings up ONLY the services it names below. A file
-    # the compose bind-mounts but this does not send is not an error docker
-    # reports — it silently creates a DIRECTORY at the mount point and the
-    # container dies on "is a directory". Both bit the 0.13.12 prometheus
-    # service, which is why monitoring now lives in its own stack
-    # (deploy/monitoring/) instead of in Mica's deployment.
-    ssh {{node}} "cd {{node_dir}} \
-      && cp docker-compose.yaml docker-compose.yaml.bak-\$(date +%Y%m%d-%H%M%S) \
-      && mv docker-compose.yaml.new docker-compose.yaml \
-      && sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=$tag|' .env \
-      && grep -E '^MICA_(VERSION|REGISTRY)=' .env"
-    # Self-heal the deploy policy the same way as compose: install the tag's
-    # node-deploy-policy.sh so the node script never drifts from the repo (the gh-Deploy
-    # path can only WARN on drift by design — the restricted key must not install
-    # the policy that restricts it; this root path is the blessed out-of-band
-    # installer, so doing it here means a full deploy always clears any drift).
-    # `bash -n` syntax-checks before the atomic mv, so a broken script can't land.
-    echo "==> syncing deploy policy (node-deploy-policy.sh from $tag)"
-    # Tags cut before the 2026-07-31 rename carry this as deploy/mica-deploy.sh.
-    # Fall back instead of failing: THIS recipe is the fallback deploy path, and
-    # it has to keep working for versions that are already published.
-    policy=deploy/node-deploy-policy.sh
-    git cat-file -e "$tag:$policy" 2>/dev/null || policy=deploy/mica-deploy.sh
-    git show "$tag:$policy" \
-      | ssh {{node}} "cat > /usr/local/sbin/mica-deploy.new \
-          && chown root:root /usr/local/sbin/mica-deploy.new \
-          && chmod 0755 /usr/local/sbin/mica-deploy.new \
-          && bash -n /usr/local/sbin/mica-deploy.new \
-          && mv /usr/local/sbin/mica-deploy.new /usr/local/sbin/mica-deploy \
-          && sha256sum /usr/local/sbin/mica-deploy"
-    echo "==> pulling + recreating api + web"
-    ssh {{node}} "cd {{node_dir}} && docker compose pull api web && docker compose up -d --no-deps api web"
-    # The backup sidecar (mica-cli: exports the workspace + external rustic
-    # snapshots it) is keyed to the SAME MICA_VERSION, so a version roll must
-    # move it too or it drifts. It lives behind the `backup` compose profile;
-    # only refresh it where it is ALREADY present (ps -aq returns a container),
-    # so a deploy never switches backup ON on a node that runs without it.
-    echo "==> refreshing backup sidecar (only if this node runs it)"
-    ssh {{node}} "cd {{node_dir}} \
-      && if [ -n \"\$(docker compose --profile backup ps -aq backup 2>/dev/null)\" ]; then \
-           docker compose --profile backup pull backup \
-           && docker compose --profile backup up -d --no-deps backup \
-           && echo 'backup refreshed'; \
-         else echo 'backup profile not active on this node — skipped'; fi"
-    # Go-template braces vs just: four open-braces escape a literal two, but a
-    # closing pair is ALREADY literal outside an interpolation — writing four
-    # closers emitted two extra, so the format returned "healthy}}" and the
-    # compare never matched. It cried "NOT healthy" over a healthy deploy.
-    echo "==> waiting for api health"
-    ssh {{node}} 'for i in $(seq 1 60); do s=$(docker inspect --format "{{{{.State.Health.Status}}" mica-api-1 2>/dev/null || true); [ "$s" = healthy ] && { echo "api healthy"; exit 0; }; sleep 4; done; echo "api NOT healthy (last state: ${s:-unknown})"; exit 1'
-    just verify-prod {{version}}
-    echo "==> prod now on $tag from the registry in {{node_dir}}/.env"
-
+    NODE='{{node}}' NODE_DIR='{{node_dir}}' bash scripts/deploy-prod.sh "{{version}}"
 # The api must report the version we just rolled to, and the live bundle must
 # not be a cached/stale artifact. Checking only for HTTP 200 would miss both.
 [doc("Prove prod really serves <version>, e.g. `just verify-prod 0.5.1`")]
 verify-prod version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    got=$(curl -fsS {{site}}/api/ready)
-    echo "$got"
-    echo "$got" | grep -q '"version":"{{version}}"' \
-      || { echo "VERSION MISMATCH: prod is not {{version}}"; exit 1; }
-    echo "mcp:   $(curl -s -o /dev/null -w '%{http_code}' {{site}}/mcp)"
-    echo "index: $(curl -s -o /dev/null -w '%{http_code}' {{site}}/)"
-    echo "bundle: $(curl -fsS {{site}}/main.dart.js | md5sum | cut -c1-12)…"
-
+    SITE='{{site}}' bash scripts/verify-prod.sh "{{version}}"
 # `gzip -t` proves an archive is not truncated; it proves nothing about whether
 # `psql < dump` yields a working database. S5 (migration 0016) made that gap
 # load-bearing — it dropped three tables, so for anything predating it the dump is
@@ -390,13 +270,7 @@ verify-prod version:
 # directory here sidesteps it and shortens the call.
 [doc("Prove a restore point really restores, e.g. `just restore-drill pre-0.13.4-….sql.gz`")]
 restore-drill dump:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Ship the repo's copy each run, same as deploy-prod does with node-deploy-policy.sh:
-    # a drill script that has drifted from the repo is one more thing to distrust.
-    cat deploy/restore-drill.sh | ssh {{node}} "cat > /tmp/mica-restore-drill.sh"
-    ssh {{node}} "bash /tmp/mica-restore-drill.sh /data/mica/$(basename '{{dump}}')"
-
+    NODE='{{node}}' bash scripts/restore-drill.sh "{{dump}}"
 [doc("List the restore points on the node, newest last")]
 restore-points:
     ssh {{node}} "ls -lah /data/mica/*.sql.gz 2>/dev/null | tail -20 || echo '(none)'"
@@ -413,14 +287,18 @@ restore-points:
 # confirmation, and a browser harness has no inbox.
 [doc("Run the web end-to-end assertions against the dev stack (needs `just dev`)")]
 web-e2e email="e2e@mica.test" password="e2epassword123":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd e2e
-    # `npm ci` wants a lockfile; install is fine for one pinned dependency.
-    [ -d node_modules ] || npm install --no-audit --no-fund
-    # From CN this download is blocked; the script falls back to system Chrome, so
-    # a failure here is not fatal.
-    npx playwright install chromium \
-      || echo "note: bundled Chromium unavailable — the script will use system Chrome"
-    node web_e2e.mjs --base http://127.0.0.1:8090 \
-                     --email '{{email}}' --password '{{password}}'
+     bash scripts/web-e2e.sh "{{email}}" "{{password}}"
+# ── Release gate ──────────────────────────────────────────────────────────────
+#
+# Everything docs/release.md says to check, as a command that REFUSES instead of
+# a list somebody has to remember. The rule that forced this: the Postgres-backed
+# tests SKIP when DATABASE_URL is unset, and a skipped test reports as passed —
+# so "I ran the tests" and "the tests ran" were different facts, and only a human
+# remembering the difference stood between them. A gate nobody can forget beats a
+# note in a document every time.
+[doc("Everything that must be true before tagging. Refuses; does not warn.")]
+release-check:
+    bash scripts/release-check.sh
+[doc("Bump the three version numbers + Cargo.lock. Does NOT tag — run release-check first.")]
+release-bump version:
+     bash scripts/release-bump.sh "{{version}}"
