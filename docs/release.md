@@ -299,8 +299,31 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 |---|---|
 | `ACR_USERNAME` / `ACR_PASSWORD` | 推阿里云 ACR(用 ACR 的**镜像仓库登录密码**或只授 ACR 权限的 RAM 子账号,**别用账号级 AK/SK**) |
 | `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 推 Docker Hub(Personal access token,Read & Write) |
-| `DEPLOY_SSH_KEY` | 部署用私钥。**2026-08-25 起是一把有 shell 的 root key**,不再是钉死在一条命令后面的受限 key —— 取舍见上面「CI 拿的是 root key」 |
+| `DEPLOY_SSH_KEY` | 部署用私钥,**2026-08-25 起是有 shell 的 root key**(取舍见上面「CI 拿的是 root key」)。本机对应文件 `~/.ssh/mica-deploy-ci`,节点上是 root 的 `authorized_keys` 里注释为 `github-actions-deploy-mica` 那一行 |
 | `DEPLOY_KNOWN_HOSTS` | 节点主机公钥,**钉死**而不是运行时 `ssh-keyscan`(当场扫等于信任任何应答的人,那不叫验证) |
+
+**轮换 / 重建这把 key**(节点侧 + 仓库侧):
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/mica-deploy-ci -N "" -C github-actions-deploy-mica
+# 注意是 "restrict 空格 ssh-ed25519",不是逗号 —— 见下面那条
+printf 'restrict %s\n' "$(cat ~/.ssh/mica-deploy-ci.pub)" \
+  | ssh root@mica.cloudcele.com 'sed -i "/github-actions-deploy-mica/d" ~/.ssh/authorized_keys; cat >> ~/.ssh/authorized_keys'
+gh secret set DEPLOY_SSH_KEY --repo weironz/mica < ~/.ssh/mica-deploy-ci   # 从文件读,不进 history
+```
+
+这把 key 带 **`restrict`** 选项:能以 root 执行命令,但**拿不到 PTY、开不了端口转发**
+(实测:`tty` 报 `PTY allocation request failed`;`-R` 报 `remote port forwarding
+failed`)。这是拆掉 `command=` 栅栏之后还能白拿的一片 —— 它挡不住「以 root 跑任意命令」,
+但挡住了把这条连接当跳板往内网转发(比如把 postgres 的 5432 转出去)。Ansible 不 `become`
+时不需要 PTY,实测带 `restrict` 跑完整个 playbook 与不带完全一致。
+
+⚠️ **`authorized_keys` 的选项和 key 之间是空格,选项彼此之间才是逗号。** 写成
+`restrict,ssh-ed25519 AAAA…` 的话,sshd 会把 `ssh-ed25519` 当成第二个**选项名**,
+不认识 → **整行作废**,认证失败且默认日志级别下**不给任何理由**。装完一定要用
+`ssh -F NUL -i <key> -o IdentitiesOnly=yes` 真连一次验证 ——
+注意 `IdentitiesOnly=yes` **仍然允许默认身份文件**(`~/.ssh/id_*`),所以不加
+`-F NUL`(或 `-F /dev/null`)的话,顶上来的是你本机原来那把 key,测了等于没测。
 
 设置方式(值不会留在 shell history):
 ```bash
