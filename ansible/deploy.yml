@@ -52,6 +52,7 @@
     compose_src: ""
     compose_dst: "{{ mica_dir }}/docker-compose.yaml"
     env_file: "{{ mica_dir }}/.env"
+    secrets_file: "{{ mica_dir }}/.env.secrets"
     # Started first and waited for. A migration that runs against a database
     # still coming up fails in a way that looks like a code bug — and api mounts
     # rustfs as its object store, so that is a data service by the same argument.
@@ -119,18 +120,77 @@
           the compose at this tag declares no non-data, non-profile service —
           nothing would serve traffic. Declared: {{ compose_services.keys() | list }}
 
-    - name: The node's .env must already exist
+    # ── The two halves of the environment ────────────────────────────────────
+    # .env         — non-secret config, RENDERED from host_vars every deploy
+    # .env.secrets — credentials, written once by a human, never touched here
+    #
+    # Splitting them is what makes rendering safe. While they shared one file,
+    # the only thing this playbook could do was a surgical `lineinfile` on
+    # MICA_VERSION, so 21 config values lived exclusively on the node with no
+    # source of truth and no way to detect a hand-edit — exactly the disease
+    # compose was cured of.
+    - name: The credentials file must already exist
       ansible.builtin.stat:
-        path: "{{ env_file }}"
-      register: env_stat
+        path: "{{ secrets_file }}"
+      register: secrets_stat
 
     - name: Refuse to invent one
       ansible.builtin.assert:
-        that: env_stat.stat.exists
+        that: secrets_stat.stat.exists
         fail_msg: >-
-          {{ env_file }} is missing. It holds this instance's secrets and is
-          created ONCE by a human during provisioning — a deploy that wrote a
+          {{ secrets_file }} is missing. It holds this instance's credentials and
+          is created ONCE by a human during provisioning — a deploy that wrote a
           fresh one would silently rotate every credential and orphan the data.
+          On a node that predates the split, create it from the old single .env:
+          grep -E '^(JWT_SECRET|POSTGRES_PASSWORD|S3_ACCESS_KEY|...)=' .env > .env.secrets
+
+    # Enforced, not remembered. Nothing stops someone pasting a password into
+    # host_vars — where it would be committed to a public repo — except a check
+    # that refuses to deploy when they do.
+    - name: No credential may be defined in host_vars
+      ansible.builtin.assert:
+        that: mica_env.keys() | select('search', '(?i)secret|password|token|access_key') | list | length == 0
+        fail_msg: >-
+          {{ mica_env.keys() | select('search', '(?i)secret|password|token|access_key') | list }}
+          look like credentials. host_vars is a file in a PUBLIC repo; put these
+          in {{ secrets_file }} on the node instead.
+      delegate_to: localhost
+
+    # Which keys the node has today, by NAME only — the values are never read.
+    # Guards the one way this change can quietly break production: a key that
+    # exists on the node but is missing from host_vars simply disappears, and
+    # compose then falls back to its own default without saying anything. For a
+    # quota or a feature flag that is a silent behaviour change, not an outage,
+    # so nothing would catch it.
+    - name: Which keys does the credentials file provide?
+      ansible.builtin.shell:
+        cmd: "grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' {{ secrets_file }} | tr -d '=' | sort -u"
+      register: secrets_keys
+      changed_when: false
+      check_mode: false
+
+    - name: Which keys does the node have today?
+      ansible.builtin.shell:
+        cmd: >-
+          cat {{ env_file }} {{ secrets_file }}
+          | grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' | tr -d '=' | sort -u
+      register: keys_before
+      changed_when: false
+      check_mode: false
+
+    - name: Nothing the node has may be dropped
+      ansible.builtin.assert:
+        that: keys_before.stdout_lines | reject('in', rendered_keys) | list | length == 0
+        fail_msg: >-
+          these keys exist on the node but nothing would render them —
+          {{ keys_before.stdout_lines | reject('in', rendered_keys) | list }}.
+          Add them to host_vars (config) or {{ secrets_file }} (credentials).
+          Deploying now would delete them and let compose silently substitute
+          its own defaults.
+      vars:
+        rendered_keys: >-
+          {{ (mica_env.keys() | list) + ['MICA_VERSION']
+             + (secrets_keys.stdout_lines | default([])) }}
 
     # ── Ship the compose from the tag ────────────────────────────────────────
     # The node's file is docker-compose.yaml (not .yml): keep that name, or
@@ -174,17 +234,26 @@
           {{ env_file }} has no MICA_VERSION line, so a failed deploy would have
           nothing to restore. Refusing before anything is changed.
 
-    # WITH the v prefix: compose uses this value directly as the image tag
-    # (`mica-api:${MICA_VERSION}`) and the published tags carry the v. Writing
-    # the bare number makes compose pull a tag that does not exist — caught by
-    # `--check --diff` before it ever ran, which is the entire point of having a
-    # rehearsal that talks to the real node.
-    - name: Set MICA_VERSION
-      ansible.builtin.lineinfile:
-        path: "{{ env_file }}"
-        regexp: "^MICA_VERSION="
-        line: "MICA_VERSION=v{{ version }}"
+    # MICA_VERSION carries the v prefix: compose uses the value directly as the
+    # image tag (`mica-api:${MICA_VERSION}`) and the published tags have it.
+    # Writing the bare number makes compose pull a tag that does not exist —
+    # caught by `--check --diff` before it ever ran, which is the entire point of
+    # a rehearsal that talks to the real node.
+    - name: Render .env
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ env_file }}"
+        mode: "0640"
         backup: true
+      vars:
+        mica_version: "v{{ version }}"
+      register: env_render
+
+    - name: Install the ./dc wrapper
+      ansible.builtin.template:
+        src: dc.j2
+        dest: "{{ mica_dir }}/dc"
+        mode: "0755"
 
     # ── Roll ─────────────────────────────────────────────────────────────────
     # Wrapped so a failure puts .env back. The compose file is deliberately NOT
@@ -205,6 +274,11 @@
         - name: Pull the images for this version
           community.docker.docker_compose_v2_pull:
             project_src: "{{ mica_dir }}"
+            # BOTH files, in this order — same as ./dc. Handing over only .env
+            # does not fail: the credentials resolve to empty strings and the
+            # containers come up unauthenticated, which is the quiet kind of
+            # broken.
+            env_files: ["{{ env_file }}", "{{ secrets_file }}"]
             services: "{{ app_services }}"
             policy: always
 
@@ -219,12 +293,42 @@
         # Bouncing the data plane is a real operation with real downtime. It
         # should be something somebody decides to do, never a side effect of
         # shipping a new api build.
+        # no_log, and then reduced to three scalars before anything loops over
+        # it. docker_container_info returns the whole inspect payload, and that
+        # includes `Config.Env` — the container's LIVE CREDENTIALS. Ansible
+        # attaches the loop item to every per-item result, so a later task
+        # looping over these results prints those credentials at normal
+        # verbosity, with no --diff and no -v needed.
+        #
+        # That is not hypothetical. It happened here on 2026-08-25: three Deploy
+        # runs published POSTGRES_PASSWORD, RUSTFS_ACCESS_KEY and
+        # RUSTFS_SECRET_KEY into the Actions log of a PUBLIC repository. The
+        # values were rotated and the runs deleted, but "deleted" is not
+        # "unseen".
+        #
+        # no_log alone would only hide the display. Reducing the data is what
+        # actually fixes it: after this, the secrets are not in a variable that
+        # any later task could print by accident.
         - name: Look at the data services
           community.docker.docker_container_info:
             name: "mica-{{ item }}-1"
           loop: "{{ data_services }}"
-          register: data_info
+          register: data_info_raw
           check_mode: false
+          no_log: true
+
+        - name: Keep only what the checks actually need
+          ansible.builtin.set_fact:
+            data_state: >-
+              {{ (data_state | default([])) + [{
+                   'name': item.item,
+                   'running': (item.container.State.Running | default(false)),
+                   'health': (item.container.State.Health.Status | default('none'))
+                 }] }}
+          loop: "{{ data_info_raw.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          no_log: true
 
         # Still the "migrations must not race a starting database" guarantee,
         # arrived at by refusing rather than by restarting.
@@ -235,18 +339,14 @@
             # Written the other way round first, which would have refused the
             # deploy on exactly the fresh-node case the next task exists for.
             that:
-              - >-
-                not (item.container.State.Running | default(false))
-                or (item.container.State.Health.Status | default('healthy')) == 'healthy'
+              - not item.running or item.health in ['healthy', 'none']
             fail_msg: >-
-              mica-{{ item.item }}-1 is
-              {{ item.container.State.Status | default('missing') }}
-              ({{ item.container.State.Health.Status | default('no healthcheck') }}).
+              mica-{{ item.name }}-1 is running but {{ item.health }}.
               Deploying api on top of a sick data plane turns an infrastructure
               problem into what looks like a bad release. Fix it first.
-          loop: "{{ data_info.results }}"
+          loop: "{{ data_state }}"
           loop_control:
-            label: "{{ item.item }}"
+            label: "{{ item.name }}"
 
         # Only when one is genuinely absent or stopped — a fresh node, or after a
         # reboot that did not bring everything back. Then starting it IS the
@@ -254,14 +354,19 @@
         - name: Start a data service that is not running at all
           community.docker.docker_compose_v2:
             project_src: "{{ mica_dir }}"
-            services: "{{ [item.item] }}"
+            # BOTH files, in this order — same as ./dc. Handing over only .env
+            # does not fail: the credentials resolve to empty strings and the
+            # containers come up unauthenticated, which is the quiet kind of
+            # broken.
+            env_files: ["{{ env_file }}", "{{ secrets_file }}"]
+            services: "{{ [item.name] }}"
             state: present
             wait: true
             wait_timeout: 240
-          loop: "{{ data_info.results }}"
+          loop: "{{ data_state }}"
           loop_control:
-            label: "{{ item.item }}"
-          when: not (item.container.State.Running | default(false))
+            label: "{{ item.name }}"
+          when: not item.running
 
         # `dependencies: false` is --no-deps: the data services are already up
         # and waited for above. Without it compose is free to restart them as
@@ -273,6 +378,11 @@
         - name: Start the application services and wait for them
           community.docker.docker_compose_v2:
             project_src: "{{ mica_dir }}"
+            # BOTH files, in this order — same as ./dc. Handing over only .env
+            # does not fail: the credentials resolve to empty strings and the
+            # containers come up unauthenticated, which is the quiet kind of
+            # broken.
+            env_files: ["{{ env_file }}", "{{ secrets_file }}"]
             services: "{{ app_services }}"
             state: present
             dependencies: false
@@ -289,36 +399,66 @@
         # Container name rather than `compose ps`: compose names them
         # <project>-<service>-1 and the project is the directory, mica. The same
         # convention was already load-bearing in the script this replaces.
+        # Same no_log + reduce as the data services above, and for the same
+        # reason: this inspect payload carries the backup sidecar's Config.Env,
+        # which holds the OSS keys and MICA_BACKUP_PASSWORD.
         - name: Is the backup sidecar present on this node?
           community.docker.docker_container_info:
             name: "mica-{{ item }}-1"
           loop: "{{ profile_services }}"
-          register: sidecars
+          register: sidecars_raw
           check_mode: false
+          no_log: true
+
+        - name: Keep only which of them exist
+          ansible.builtin.set_fact:
+            sidecars_present: >-
+              {{ (sidecars_present | default([]))
+                 + ([item.item] if (item.exists | default(false)) else []) }}
+          loop: "{{ sidecars_raw.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          no_log: true
 
         - name: Refresh the profile-gated sidecars that are present
           community.docker.docker_compose_v2:
             project_src: "{{ mica_dir }}"
-            profiles: "{{ [item.item] }}"
-            services: "{{ [item.item] }}"
+            # BOTH files, in this order — same as ./dc. Handing over only .env
+            # does not fail: the credentials resolve to empty strings and the
+            # containers come up unauthenticated, which is the quiet kind of
+            # broken.
+            env_files: ["{{ env_file }}", "{{ secrets_file }}"]
+            profiles: "{{ [item] }}"
+            services: "{{ [item] }}"
             state: present
             pull: always
             dependencies: false
-          loop: "{{ sidecars.results }}"
-          loop_control:
-            label: "{{ item.item }}"
-          when: item.exists | default(false)
+          loop: "{{ sidecars_present | default([]) }}"
       rescue:
-        - name: Put MICA_VERSION back
-          ansible.builtin.lineinfile:
-            path: "{{ env_file }}"
-            regexp: "^MICA_VERSION="
-            line: "MICA_VERSION={{ previous_version }}"
-          when: previous_version | length > 0
+        # Restore the BACKUP, rather than patching MICA_VERSION back or
+        # re-rendering with the old version. Both of those reconstruct a state
+        # that never existed — this release's config wearing the previous
+        # release's version number — and nothing downstream would find that
+        # odd. The backup is the actual previous state, byte for byte.
+        #
+        # `backup_file` is only set when the render changed something; if it did
+        # not, .env is already what it was and there is nothing to undo.
+        - name: Put .env back exactly as it was
+          ansible.builtin.copy:
+            src: "{{ env_render.backup_file }}"
+            dest: "{{ env_file }}"
+            remote_src: true
+            mode: "0640"
+          when: env_render.backup_file is defined
 
         - name: Best-effort restart on the previous version
           community.docker.docker_compose_v2:
             project_src: "{{ mica_dir }}"
+            # BOTH files, in this order — same as ./dc. Handing over only .env
+            # does not fail: the credentials resolve to empty strings and the
+            # containers come up unauthenticated, which is the quiet kind of
+            # broken.
+            env_files: ["{{ env_file }}", "{{ secrets_file }}"]
             state: present
             dependencies: false
           failed_when: false

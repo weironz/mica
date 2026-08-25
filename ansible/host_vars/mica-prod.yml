@@ -1,0 +1,55 @@
+# The production node's NON-SECRET configuration — the source of truth for it.
+#
+# Until 2026-08-25 these 21 values existed only inside /data/mica/.env on the
+# node. Nothing in the repo said what they were, nothing could tell you whether
+# one had been hand-edited, and a rebuilt node would have had to be
+# reconstructed from memory. That is the same disease docker-compose.yaml had;
+# compose got cured (it is shipped from the tag every deploy) and this did not.
+#
+# ansible/deploy.yml renders /data/mica/.env from these on EVERY deploy, so a
+# hand-edit on the node survives until the next deploy and is then reverted.
+# Change things HERE.
+#
+# Every value is quoted on purpose. Unquoted `false` is a YAML boolean and Jinja
+# renders it `False`; unquoted `3` is an int. Both would reach the node in a
+# different spelling than they have today, and "it is probably equivalent" is
+# how a config change ships without anybody deciding to make it.
+#
+# CREDENTIALS DO NOT BELONG HERE. They live in /data/mica/.env.secrets on the
+# node, are created once by a human, and are never read or written by ansible —
+# not even to copy them. deploy.yml refuses if it finds a credential-shaped key
+# in this file, because "the secrets are in the other file" has to be enforced
+# rather than remembered.
+mica_env:
+  DOMAIN: "mica.cloudcele.com"
+  S3_DOMAIN: "s3.mica.cloudcele.com"
+  MICA_REGISTRY: "registry.cn-shenzhen.aliyuncs.com/willspace"
+
+  POSTGRES_USER: "mica"
+  POSTGRES_DB: "mica"
+
+  S3_BUCKET: "mica"
+  S3_REGION: "us-east-1"
+
+  # Backup: the rustic repo and the OSS bucket behind it. Credentials for both
+  # are in .env.secrets (MICA_BACKUP_TOKEN / MICA_BACKUP_PASSWORD / OSS_*).
+  MICA_BACKUP_REPO: "opendal:s3:/mica"
+  OSS_BUCKET: "mica-backup-cloudcele"
+  OSS_BLOB_BUCKET: "mica-backup-cloudcele"
+  OSS_ENDPOINT: "https://oss-cn-shenzhen.aliyuncs.com"
+  OSS_REGION: "oss-cn-shenzhen"
+  OSS_ROOT: "mica"
+  BACKUP_HOUR: "3"
+
+  MICA_MAIL_BACKEND: "directmail"
+  MICA_MAIL_FROM: "noreply@mail.cloudcele.com"
+  MICA_MAIL_FROM_NAME: "Mica"
+  MICA_MAIL_REGION: "cn-hangzhou"
+  MICA_MAIL_ENDPOINT: "https://dm.aliyuncs.com/"
+
+  MICA_APP_BASE_URL: "https://mica.cloudcele.com"
+  # Only an explicit true/1/yes/on opens registration; anything else, a typo
+  # included, keeps it shut. Opening it also makes registration return 204
+  # rather than a session — the account must verify its email before it can
+  # log in.
+  MICA_REGISTRATION_ENABLED: "false"
