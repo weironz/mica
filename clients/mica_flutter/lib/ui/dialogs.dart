@@ -3488,25 +3488,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     if (load == null) return const [];
     if (_importHistory == null && !_importHistoryLoading) {
       _importHistoryLoading = true;
-      load()
-          .then((entries) {
-            if (!mounted) return;
-            setState(() {
-              _importHistory = entries;
-              _importHistoryLoading = false;
-            });
-          })
-          .catchError((Object _) {
-            // A history that cannot be read is not worth an error banner over
-            // an import button that still works. It shows as empty.
-            if (mounted) {
-              setState(() {
-                _importHistory = const [];
-                _importHistoryLoading = false;
-              });
-            }
-            return <ImportHistoryEntry>[];
-          });
+      unawaited(_loadImportHistory(load));
     }
     final entries = _importHistory;
     if (entries == null || entries.isEmpty) return const [];
@@ -3516,6 +3498,41 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       const SizedBox(height: 10),
       for (final e in entries.take(8)) _importHistoryRow(context, e),
     ];
+  }
+
+  /// Fire-and-forget: the section renders immediately and fills in when the
+  /// round trip lands.
+  ///
+  /// try/catch rather than `.catchError`, which is what this was. `catchError`
+  /// takes an untyped `Function`, so nothing checked that the handler returned
+  /// the right thing — and it did not: it returned `<ImportHistoryEntry>[]` to
+  /// a `Future<Null>`. On the ERROR path, the path whose entire job is to fail
+  /// quietly, that throws a TypeError as an unhandled async error. The failure
+  /// mode was the exact opposite of the intent written beside it.
+  ///
+  /// The analyzer did say so (`invalid_return_type_for_catch_error`), for long
+  /// enough that nobody remembers. That is the argument for warnings being
+  /// fatal in the release gate, not the argument for reading them more
+  /// carefully — see scripts/release-check.sh.
+  Future<void> _loadImportHistory(
+    Future<List<ImportHistoryEntry>> Function() load,
+  ) async {
+    try {
+      final entries = await load();
+      if (!mounted) return;
+      setState(() {
+        _importHistory = entries;
+        _importHistoryLoading = false;
+      });
+    } catch (_) {
+      // A history that cannot be read is not worth an error banner over an
+      // import button that still works. It shows as empty.
+      if (!mounted) return;
+      setState(() {
+        _importHistory = const [];
+        _importHistoryLoading = false;
+      });
+    }
   }
 
   Widget _importHistoryRow(BuildContext context, ImportHistoryEntry entry) {

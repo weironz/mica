@@ -36,14 +36,25 @@ echo "==> version: $pub (three places agree)"
 DATABASE_URL=postgres://mica:mica@127.0.0.1:5432/mica cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 #    The Flutter half is spelled EXACTLY as ci.yml spells it, flags included.
-#    It was `analyze lib` with no flags, which is stricter than CI — and this
-#    package carries 86 long-standing `info` lints plus 2 warnings, so
-#    `flutter analyze` exits 1 and the gate could NEVER pass. A gate that always
-#    refuses does not stop bad releases; it gets bypassed, and then nothing is
-#    checked at all. Being stricter than CI is only worth it if the stricter bar
-#    is actually met today, and it is not.
+#    It was `analyze lib` with no flags, which is stricter than CI — and with
+#    ~130 long-standing `info` lints in the package, `flutter analyze` exits 1
+#    and the gate could NEVER pass. A gate that always refuses does not stop bad
+#    releases; it gets bypassed, and then nothing is checked at all.
+#
+#    `--no-fatal-warnings` is NOT here, and that is the deliberate half.
+#    Warnings are fatal in both this gate and CI as of 2026-08-25, because an
+#    `invalid_return_type_for_catch_error` warning sat unread long enough to
+#    ship a real defect: a `.catchError` handler returning the wrong type, so
+#    the error path — whose entire job was to fail quietly — threw a TypeError
+#    instead. Two warnings existed when that was found; both are gone, and the
+#    bar is met today, which is the only condition under which raising it is
+#    honest. The one genuine false positive is suppressed at its own line
+#    (`// ignore:` in main.dart, where the analyzer and the CFE disagree).
+#
+#    Infos stay non-fatal: ~130 of them, long-standing, style-level. Making them
+#    fatal would be a repo-wide sweep nobody asked for.
 (cd clients/mica_flutter \
-  && "${FLUTTER:-flutter}" analyze --no-fatal-infos --no-fatal-warnings \
+  && "${FLUTTER:-flutter}" analyze --no-fatal-infos \
   && "${FLUTTER:-flutter}" test)
 
 # 4. Cargo.lock must already carry the version, or the release commit ships a

@@ -19,7 +19,6 @@
 // it holds whatever the scroll offset happens to be.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/editor/table.dart';

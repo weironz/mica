@@ -31,7 +31,7 @@ import 'package:mica_flutter/editor/markdown.dart';
   expect(specs.length, 1, reason: 'one block for: $md');
   final spec = specs.single;
   final marks = (spec.data['marks'] as List?) ?? const [];
-  return (text: spec.text ?? '', marks: marks.cast<Map<String, dynamic>>());
+  return (text: spec.text, marks: marks.cast<Map<String, dynamic>>());
 }
 
 void main() {

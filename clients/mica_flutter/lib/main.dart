@@ -4399,6 +4399,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // local captured by this closure, so the CFE refuses to promote it from
       // the null check outside — even though the analyzer accepts it. Only a
       // real `flutter build` reports the difference; analyze and test do not.
+      //
+      // Hence the ignore: the analyzer calls this `!` unnecessary and it is
+      // wrong — removing it breaks `flutter build` while analyze and test stay
+      // green. Suppressed HERE, at the one site it is false, so that the
+      // release gate can treat warnings as fatal everywhere else (an
+      // `invalid_return_type_for_catch_error` warning sat unread long enough to
+      // ship a crash on an error path — scripts/release-check.sh).
+      // ignore: unnecessary_non_null_assertion
       final workspaces = await _api.listWorkspaces(session!.accessToken);
       if (!mounted) return;
       migrated = true;

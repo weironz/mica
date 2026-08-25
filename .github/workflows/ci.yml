@@ -189,9 +189,18 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      # Only fail on real errors — the tree still carries pre-existing info/
-      # warning lints that a separate cleanup pass will address.
-      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      # Warnings ARE fatal as of 2026-08-25. This comment used to say a separate
+      # cleanup pass would address the pre-existing info/warning lints; what
+      # actually happened is that an `invalid_return_type_for_catch_error`
+      # warning sat unread until it shipped a defect — a `.catchError` handler
+      # returning the wrong type, so the error path threw a TypeError instead of
+      # failing quietly. There were exactly two warnings when that was found.
+      # Both are gone, so the bar is met today; a raised bar that is already met
+      # costs nothing, and it cannot be quietly re-lowered later.
+      #
+      # Infos stay non-fatal (~130, style-level). scripts/release-check.sh runs
+      # this identically — that "identically" is load-bearing, see its comments.
+      - run: flutter analyze --no-fatal-infos
       - name: Dart unit tests
         run: flutter test test
       # dart2js resolves the WEB variant of every conditional import; analyze
