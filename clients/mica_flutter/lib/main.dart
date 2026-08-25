@@ -67,6 +67,7 @@ import 'updater.dart';
 import 'window_setup.dart';
 import 'upload/zip_writer.dart';
 import 'api/client.dart';
+import 'perf/switch_trace.dart';
 import 'api/models.dart';
 import 'api/profile_watch.dart';
 import 'api/session_refresher.dart';
@@ -189,6 +190,10 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      // Attribute HTTP timings to whichever workspace switch is in flight. Null
+      // unless tracing is asked for, and the client skips its timing wrapper
+      // entirely when it is null.
+      apiRequestObserver = SwitchTrace.observer();
       // Framework errors (build/layout/paint/gesture): log then keep the default
       // console dump so nothing that worked before is lost.
       final priorOnError = FlutterError.onError;
@@ -1130,11 +1135,33 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
 
     try {
-      // Renew first if the token is about to lapse. Proactive rather than
-      // retry-on-401 on purpose: [action] is not generally idempotent (it may
-      // create a document), so replaying one after a refresh could duplicate
-      // work. Renewing beforehand means it never gets refused in the first place.
-      await _ensureFreshSession();
+      // Renew ahead of expiry — but do not put that round trip in front of the
+      // user. Proactive rather than retry-on-401 on purpose: [action] is not
+      // generally idempotent (it may create a document), so replaying one after
+      // a refresh could duplicate work.
+      //
+      // This used to be `await`ed as the FIRST thing here, which meant a whole
+      // /auth/refresh sat in front of every action — including the setState
+      // that paints a workspace switch, so once per token lifetime the sidebar
+      // could not even highlight until the network came back. The renewal
+      // window is five minutes wide (SessionRefresher.lead), so the token in
+      // hand is still good: let the action go now and let the renewal ride
+      // alongside it. Only a token that is ALREADY dead has to be replaced
+      // first, because the action would just be refused.
+      //
+      // Not fire-and-forget-and-swallow: _ensureFreshSession handles its own
+      // failures (401 ends the session, anything else keeps it).
+      final expiry = _session?.expiresAt;
+      final expired =
+          expiry != null &&
+          !expiry.isAfter(
+            DateTime.now().toUtc().add(const Duration(seconds: 30)),
+          );
+      if (expired) {
+        await _ensureFreshSession();
+      } else {
+        unawaited(_ensureFreshSession());
+      }
       await action();
       _reconcileSync();
       // Unawaited: the action is done and the user is waiting on nothing here.
@@ -1888,6 +1915,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// blank the very tab the user just clicked.
   Future<void> _selectWorkspace(Workspace workspace, {bool keepOpenPage = false}) {
     savePref('lastWorkspaceId', workspace.id);
+    final trace = SwitchTrace.begin(
+      workspace.id,
+      cached: (_viewsByWorkspace[workspace.id] ?? const []).isNotEmpty,
+    );
     return _run(() async {
       setState(() {
         _selectedWorkspace = workspace;
@@ -1902,6 +1933,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           _selectedMarkdown = null;
         }
       });
+      trace.mark('shell');
       // P3e: offline workspace switching. Already in degraded (offline) nav →
       // read the mirror directly, no per-switch network timeout. Otherwise try
       // the server; fall back to the mirror ONLY on connectivity failures —
@@ -1928,6 +1960,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         rethrow;
       } catch (_) {
         await _openWorkspaceFromMirror(workspace);
+      } finally {
+        trace.end();
       }
     });
   }
@@ -4740,7 +4774,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String url,
   ) async {
     try {
-      final resp = await http.get(Uri.parse(url));
+      final resp = await sharedHttpClient.get(Uri.parse(url));
       if (resp.statusCode != 200) return null;
       final id = _local.putBlob(resp.bodyBytes);
       if (id.isEmpty) return null;
@@ -4757,7 +4791,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<Uint8List?> _localLoadImageBytes(String key) async {
     if (key.startsWith('http://') || key.startsWith('https://')) {
       try {
-        final resp = await http.get(Uri.parse(key));
+        final resp = await sharedHttpClient.get(Uri.parse(key));
         return resp.statusCode == 200 ? resp.bodyBytes : null;
       } catch (_) {
         return null;
@@ -5096,7 +5130,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // External markdown URLs: fetch straight through (not content-addressable).
     if (key.startsWith('http://') || key.startsWith('https://')) {
       try {
-        final resp = await http.get(Uri.parse(key));
+        final resp = await sharedHttpClient.get(Uri.parse(key));
         return resp.statusCode == 200 ? resp.bodyBytes : null;
       } catch (_) {
         return null;
@@ -5119,7 +5153,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ]);
       final url = urls[key];
       if (url == null) return null;
-      final resp = await http.get(Uri.parse(url));
+      final resp = await sharedHttpClient.get(Uri.parse(url));
       if (resp.statusCode != 200) return null;
       if (!kIsWeb) _local.putBlobAs(key, resp.bodyBytes);
       return resp.bodyBytes;
@@ -5460,6 +5494,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
 
     final views = await _api.listViews(session.accessToken, workspace.id);
+    SwitchTrace.current?.mark('tree');
     // Reopen the page last viewed IN THIS workspace (AppFlowy remembers the last
     // view per-workspace). On a restore or a workspace switch `_selectedView` is
     // null, so fall back to the per-workspace saved id; a deleted/absent id just
@@ -5508,12 +5543,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       guessed?.ignore();
     }
 
+    SwitchTrace.current?.mark('body');
+    // Two clicks in quick succession run two of these. The tree is keyed by
+    // workspace so a late arrival is harmless there, but the SELECTION is one
+    // slot: without this the slower load lands last and opens the workspace the
+    // user already switched away from. Nothing guards the entry point — there
+    // is no busy latch on the workspace rows — so it has to be caught here.
+    final stillCurrent = _selectedWorkspace?.id == workspace.id;
     setState(() {
       _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
-      _selectedView = viewToOpen;
-      _selectedBootstrap = bootstrap;
-      _selectedMarkdown = null;
-      if (bootstrapError != null) _message = bootstrapError;
+      if (stillCurrent) {
+        _selectedView = viewToOpen;
+        _selectedBootstrap = bootstrap;
+        _selectedMarkdown = null;
+        if (bootstrapError != null) _message = bootstrapError;
+      }
     });
     _cacheCloudPageTree();
   }

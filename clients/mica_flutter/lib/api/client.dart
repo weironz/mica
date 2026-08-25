@@ -24,6 +24,59 @@ String apiOrigin(Uri base) {
       : '${base.scheme}://${base.host}:${base.port}';
 }
 
+/// One long-lived HTTP client for the whole process — every request in the app
+/// goes through this, never through `http.get`/`http.post` and friends.
+///
+/// Those top-level helpers build a Client per call and close it in a `finally`
+/// (package:http `http.dart` `_withClient`), so on desktop EVERY request paid a
+/// fresh TCP + TLS handshake. Measured against the production node: the same
+/// `bootstrap` request took 118ms on a cold connection and 49ms on a warm one —
+/// that ~70ms gap was handshake, and it was more than half the cost of switching
+/// workspaces. dart:io keeps connections alive per client (`persistentConnection`
+/// defaults to true, 15s idle timeout), so sharing ONE client is the whole fix.
+///
+/// Deliberately never closed: it lives as long as the process does. On web this
+/// is a BrowserClient and the browser owns the connection pool regardless, so
+/// the change is a no-op there — which is also why desktop and web timings must
+/// not be quoted as one number.
+final http.Client sharedHttpClient = _TimedClient(http.Client());
+
+/// Called after every HTTP request with how long it took to get RESPONSE
+/// HEADERS back — connect + TLS + server + first byte, but not body transfer.
+///
+/// That split is the point: the whole reason this exists is that "the switch
+/// takes 170ms" was a number nobody could break down, so every proposal to make
+/// it faster was a guess. A warm connection shows up here as the same request
+/// costing ~70ms less than its first run.
+///
+/// Null in production unless something sets it — see `traceSwitches` in main.
+void Function(String method, String path, Duration headers)? apiRequestObserver;
+
+/// Times every request without any call site knowing. Wrapping the Client
+/// rather than the 14 call sites means uploads, downloads and anything added
+/// later are covered by construction.
+class _TimedClient extends http.BaseClient {
+  _TimedClient(this._inner);
+
+  final http.Client _inner;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final observer = apiRequestObserver;
+    if (observer == null) return _inner.send(request);
+    final watch = Stopwatch()..start();
+    try {
+      return await _inner.send(request);
+    } finally {
+      watch.stop();
+      observer(request.method, request.url.path, watch.elapsed);
+    }
+  }
+
+  @override
+  void close() => _inner.close();
+}
+
 class ApiClient {
   ApiClient() : baseUri = _resolveBaseUri();
 
@@ -803,7 +856,7 @@ class ApiClient {
     Uint8List bytes,
     String mimeType,
   ) async {
-    final response = await http.put(
+    final response = await sharedHttpClient.put(
       _apiUri('/api/auth/me/avatar'),
       headers: {'content-type': mimeType, 'authorization': 'Bearer $token'},
       body: bytes,
@@ -814,7 +867,7 @@ class ApiClient {
 
   /// Remove the profile picture, going back to the initial-letter circle.
   Future<void> removeAvatar(String token) async {
-    final response = await http.delete(
+    final response = await sharedHttpClient.delete(
       _apiUri('/api/auth/me/avatar'),
       headers: {'authorization': 'Bearer $token'},
     );
@@ -836,7 +889,7 @@ class ApiClient {
   /// Gated by the current password server-side; throws [ApiException] on a wrong
   /// password (401) or when content in others' workspaces blocks it (409).
   Future<void> deleteAccount(String token, String password) async {
-    final response = await http.delete(
+    final response = await sharedHttpClient.delete(
       _apiUri('/api/auth/me'),
       headers: {
         'authorization': 'Bearer $token',
@@ -999,7 +1052,7 @@ class ApiClient {
     final objectKey = presign['object_key'] as String;
     final uploadUrl = presign['upload_url'] as String;
 
-    final put = await http.put(
+    final put = await sharedHttpClient.put(
       Uri.parse(uploadUrl),
       headers: {'content-type': mimeType},
       body: bytes,
@@ -1024,7 +1077,7 @@ class ApiClient {
     String workspaceId,
     String documentId,
   ) async {
-    final response = await http.get(
+    final response = await sharedHttpClient.get(
       baseUri.replace(
         path: '/api/workspaces/$workspaceId/documents/$documentId/export.zip',
       ),
@@ -1046,7 +1099,7 @@ class ApiClient {
     String documentId, {
     int? width,
   }) async {
-    final response = await http.get(
+    final response = await sharedHttpClient.get(
       baseUri.replace(
         path: '/api/workspaces/$workspaceId/documents/$documentId/export/html',
         queryParameters: width == null ? null : {'width': '$width'},
@@ -1066,7 +1119,7 @@ class ApiClient {
     String workspaceId,
     String viewId,
   ) async {
-    final response = await http.get(
+    final response = await sharedHttpClient.get(
       baseUri.replace(
         path: '/api/workspaces/$workspaceId/views/$viewId/export.zip',
       ),
@@ -1080,7 +1133,7 @@ class ApiClient {
 
   /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
   Future<Uint8List> exportWorkspaceZip(String token, String workspaceId) async {
-    final response = await http.get(
+    final response = await sharedHttpClient.get(
       baseUri.replace(path: '/api/workspaces/$workspaceId/export.zip'),
       headers: {'authorization': 'Bearer $token'},
     );
@@ -1094,7 +1147,7 @@ class ApiClient {
   /// `<name>/` subdir plus a top-level `workspaces.json` manifest, in switcher
   /// (position) order. See `export_all_workspaces_zip` on the server.
   Future<Uint8List> exportAllWorkspacesZip(String token) async {
-    final response = await http.get(
+    final response = await sharedHttpClient.get(
       baseUri.replace(path: '/api/workspaces/export.zip'),
       headers: {'authorization': 'Bearer $token'},
     );
@@ -1151,7 +1204,7 @@ class ApiClient {
     String? container,
     bool reHostImages = true,
   }) async {
-    final response = await http.post(
+    final response = await sharedHttpClient.post(
       baseUri.replace(
         path: '/api/workspaces/import',
         queryParameters: {
@@ -1225,7 +1278,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> _get(String path, String token) async {
-    final response = await http.get(
+    final response = await sharedHttpClient.get(
       _apiUri(path),
       headers: {'authorization': 'Bearer $token'},
     );
@@ -1237,7 +1290,7 @@ class ApiClient {
     Map<String, dynamic> body, {
     String? token,
   }) async {
-    final response = await http.post(
+    final response = await sharedHttpClient.post(
       _apiUri(path),
       headers: _headers(token),
       body: jsonEncode(body),
@@ -1250,7 +1303,7 @@ class ApiClient {
     Map<String, dynamic> body, {
     required String token,
   }) async {
-    final response = await http.patch(
+    final response = await sharedHttpClient.patch(
       _apiUri(path),
       headers: _headers(token),
       body: jsonEncode(body),
@@ -1259,7 +1312,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> _delete(String path, String token) async {
-    final response = await http.delete(
+    final response = await sharedHttpClient.delete(
       _apiUri(path),
       headers: {'authorization': 'Bearer $token'},
     );
