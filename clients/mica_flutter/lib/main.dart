@@ -5694,7 +5694,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         if (bootstrapError != null) _message = bootstrapError;
       }
     });
-    _cacheCloudPageTree();
+    SwitchTrace.current?.mark('paint');
+    // A 304 means the mirror ALREADY holds this tree — there is nothing to
+    // write, and writing it anyway is the whole cost. Measured on a real
+    // account: 2.1s per warm switch, against 130–320ms for everything the user
+    // waits on. (Narrowing it to one workspace was not enough on its own: the
+    // store's purge step still scans every view of the origin, and that scan is
+    // most of the cost. Not doing it at all is both faster and more obviously
+    // correct.)
+    if (answer.views != null) {
+      _cacheCloudPageTree(onlyWorkspaceId: workspace.id);
+    }
+    SwitchTrace.current?.mark('mirror-write');
   }
 
   /// Mirror the cloud page tree (workspace list + per-workspace views) into the
@@ -5703,7 +5714,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// switching servers doesn't cross over. P4-2: on web the mirror is
   /// localStorage-backed (LocalOffline web variant). The cloud is authoritative
   /// — this is a clean replace after each successful online load.
-  void _cacheCloudPageTree() {
+  /// Write the page-tree mirror. [onlyWorkspaceId] limits it to the workspace
+  /// whose tree actually just changed.
+  ///
+  /// It used to write EVERY workspace held in memory, every time. That was
+  /// nearly free while memory only held the two or three workspaces visited in
+  /// this session — and stopped being free the moment the mirror was preheated
+  /// at startup, because memory then held all of them. Measured on a real
+  /// account (35 workspaces) right after that change: a warm switch spent
+  /// **2.1 seconds** here, against 130–320ms for everything the user actually
+  /// waits on.
+  ///
+  /// Safe to narrow because `mirrorCloudPageTree` replaces per workspace: the
+  /// ones not named here keep their rows.
+  void _cacheCloudPageTree({String? onlyWorkspaceId}) {
     final origin = _api.baseUri.toString();
     final workspaces = <WorkspaceData>[
       for (final (i, w) in _workspaces.indexed)
@@ -5717,6 +5741,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     ];
     final views = <ViewData>[
       for (final e in _viewsByWorkspace.entries)
+        if (onlyWorkspaceId == null || e.key == onlyWorkspaceId)
         for (final v in e.value)
           (
             id: v.id,
