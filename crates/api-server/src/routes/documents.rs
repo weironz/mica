@@ -219,7 +219,7 @@ pub async fn list_views(
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
   Query(query): Query<ListViewsQuery>,
-) -> ApiResult<Json<ViewListResponse>> {
+) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
@@ -236,7 +236,89 @@ pub async fn list_views(
 
   let views = fetch_views_filtered(&state.db, workspace_id, &query).await?;
 
-  Ok(Json(ViewListResponse { views }))
+  // Conditional GET. The page tree is the biggest thing a client fetches and
+  // the thing it fetches most often: every workspace switch asks for it again,
+  // and it is usually byte-identical to what the client already mirrored.
+  // Measured on a 3700-page workspace: 1.61 MB, 250ms end to end, of which the
+  // database is 26ms — the rest is serialising and shipping a tree nobody
+  // changed.
+  //
+  // The rows are still read (that is the cheap part) and hashed; what a match
+  // skips is the serialisation and the transfer.
+  //
+  // The tag is derived from the ROWS THEMSELVES, deliberately, rather than from
+  // `max(updated_at)`: nothing maintains that column but hand-written UPDATEs
+  // — there is no trigger — so one path forgetting it would freeze every client
+  // on a stale tree. Staleness is far worse than slowness here, and a content
+  // hash cannot go stale.
+  let etag = views_etag(&views, &query);
+  if headers
+    .get(header::IF_NONE_MATCH)
+    .and_then(|v| v.to_str().ok())
+    .is_some_and(|v| etag_matches(v, &etag))
+  {
+    return Ok(
+      (axum::http::StatusCode::NOT_MODIFIED, [(header::ETAG, etag)], ()).into_response(),
+    );
+  }
+
+  Ok(([(header::ETAG, etag)], Json(ViewListResponse { views })).into_response())
+}
+
+/// A strong validator for a view listing: the hash of everything the response
+/// would contain, plus the query shape that produced it.
+///
+/// Every serialised field goes in, including ones the app ignores. A tag that
+/// covered only what one client reads would answer 304 to a client that reads
+/// more — the header is a promise about the BODY, not about the caller.
+fn views_etag(views: &[View], query: &ListViewsQuery) -> String {
+  use sha2::{Digest, Sha256};
+  let mut hasher = Sha256::new();
+  // The query shape is part of the identity: one workspace answers different
+  // bodies for different depth/limit/offset/with_stats.
+  hasher.update(
+    format!(
+      "q:{:?}:{:?}:{:?}:{:?}:{}\n",
+      query.parent_view_id, query.depth, query.limit, query.offset, query.with_stats
+    )
+    .as_bytes(),
+  );
+  for v in views {
+    hasher.update(
+      format!(
+        "{}\u{1}{}\u{1}{:?}\u{1}{}\u{1}{}\u{1}{}\u{1}{:?}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{:?}\n",
+        v.id,
+        v.workspace_id,
+        v.parent_view_id,
+        v.object_id,
+        v.object_type,
+        v.name,
+        v.icon,
+        v.position,
+        v.is_deleted,
+        v.created_by,
+        v.created_at.to_rfc3339(),
+        v.updated_at.to_rfc3339(),
+        v.state_bytes,
+      )
+      .as_bytes(),
+    );
+  }
+  format!("\"{:x}\"", hasher.finalize())
+}
+
+/// Whether an `If-None-Match` header matches [etag].
+///
+/// Handles the list form (`"a", "b"`), `*`, and the `W/` weak prefix a proxy
+/// may add on the way through — the comparison that matters is the opaque
+/// value, and refusing a tag because something upstream marked it weak would
+/// silently disable the whole mechanism.
+fn etag_matches(header_value: &str, etag: &str) -> bool {
+  let want = etag.trim_start_matches("W/").trim();
+  header_value.split(',').any(|candidate| {
+    let candidate = candidate.trim();
+    candidate == "*" || candidate.trim_start_matches("W/").trim() == want
+  })
 }
 
 #[derive(Debug, Deserialize)]
@@ -4745,6 +4827,88 @@ mod tests {
     let mut request = upd(MarkdownUpdateMode::InsertAt, "x");
     request.anchor = Some("ghost".into());
     assert!(markdown_update_ops(&current, &request, Uuid::new_v4()).is_err());
+  }
+
+  fn a_view(name: &str) -> View {
+    let stamp = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+      .unwrap()
+      .with_timezone(&chrono::Utc);
+    View {
+      id: Uuid::nil(),
+      workspace_id: Uuid::nil(),
+      parent_view_id: None,
+      object_id: Uuid::nil(),
+      object_type: "document".into(),
+      name: name.into(),
+      icon: None,
+      position: "a0".into(),
+      is_deleted: false,
+      created_by: Uuid::nil(),
+      created_at: stamp,
+      updated_at: stamp,
+      state_bytes: None,
+    }
+  }
+
+  fn a_query() -> ListViewsQuery {
+    ListViewsQuery {
+      parent_view_id: None,
+      depth: None,
+      limit: None,
+      offset: None,
+      with_stats: false,
+    }
+  }
+
+  /// The failure mode this guards is not "slow" — it is a client frozen on a
+  /// tree that no longer exists, with no way to notice. Every way the listing
+  /// can differ has to move the tag.
+  #[test]
+  fn the_view_etag_moves_whenever_the_listing_would() {
+    let base = vec![a_view("Alpha"), a_view("Beta")];
+    let tag = views_etag(&base, &a_query());
+
+    // Same input, same tag — otherwise nothing is ever a hit.
+    assert_eq!(views_etag(&base, &a_query()), tag);
+
+    // A rename.
+    let renamed = vec![a_view("Alpha"), a_view("Beta renamed")];
+    assert_ne!(views_etag(&renamed, &a_query()), tag);
+
+    // A deletion.
+    assert_ne!(views_etag(&base[..1], &a_query()), tag);
+
+    // Reordering: two trees with the same rows in a different order render
+    // differently, so they are not the same response.
+    let swapped = vec![a_view("Beta"), a_view("Alpha")];
+    assert_ne!(views_etag(&swapped, &a_query()), tag);
+
+    // A field the app never reads still changes the BODY, and the header is a
+    // promise about the body — not about one caller's use of it.
+    let mut touched = vec![a_view("Alpha"), a_view("Beta")];
+    touched[1].updated_at += chrono::Duration::seconds(1);
+    assert_ne!(views_etag(&touched, &a_query()), tag);
+
+    // The query shape is part of the identity: the same workspace answers a
+    // different body for a different depth.
+    let mut deeper = a_query();
+    deeper.depth = Some(1);
+    assert_ne!(views_etag(&base, &deeper), tag);
+  }
+
+  #[test]
+  fn if_none_match_is_compared_the_way_the_header_is_written() {
+    let tag = "\"abc123\"";
+    assert!(etag_matches("\"abc123\"", tag));
+    assert!(etag_matches("*", tag), "the wildcard matches anything we have");
+    // A list, as a client with several cached copies would send.
+    assert!(etag_matches("\"other\", \"abc123\"", tag));
+    // A proxy may mark it weak on the way through. Refusing that would silently
+    // turn every conditional request back into a full transfer — the mechanism
+    // would look present and do nothing.
+    assert!(etag_matches("W/\"abc123\"", tag));
+    assert!(!etag_matches("\"abc124\"", tag));
+    assert!(!etag_matches("", tag));
   }
 
   #[test]

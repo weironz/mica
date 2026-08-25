@@ -5602,8 +5602,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
     }
 
-    final views = await _api.listViews(session.accessToken, workspace.id);
-    SwitchTrace.current?.mark('tree');
+    // Ask conditionally, but only while actually holding a tree to fall back
+    // on: a 304 answered to a client with nothing would leave the sidebar
+    // empty. The tag is stored beside the tree it describes, so a mirror
+    // preheated from disk and its tag stay in step across restarts.
+    final held = _viewsByWorkspace[workspace.id];
+    final answer = await _api.listViewsIfChanged(
+      session.accessToken,
+      workspace.id,
+      etag: (held == null || held.isEmpty)
+          ? null
+          : loadPref('viewsEtag:${workspace.id}'),
+    );
+    final views = answer.views ?? held ?? const <DocumentView>[];
+    if (answer.views != null && (answer.etag ?? '').isNotEmpty) {
+      savePref('viewsEtag:${workspace.id}', answer.etag!);
+    }
+    SwitchTrace.current?.mark(answer.views == null ? 'tree(304)' : 'tree');
     // Reopen the page last viewed IN THIS workspace (AppFlowy remembers the last
     // view per-workspace). On a restore or a workspace switch `_selectedView` is
     // null, so fall back to the per-workspace saved id; a deleted/absent id just

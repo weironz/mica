@@ -328,6 +328,44 @@ class ApiClient {
         .toList();
   }
 
+  /// The page tree, or `views: null` when the server says what you already hold
+  /// is still current.
+  ///
+  /// The tree is the biggest thing this client fetches and the thing it fetches
+  /// most often — every workspace switch asks again, and it is usually
+  /// unchanged. A 3700-page workspace measured 1.61 MB; answering that with a
+  /// conditional request turns it into an empty 304.
+  ///
+  /// [etag] must be the tag that came back WITH the tree currently held. Pass
+  /// null when holding nothing: a 304 would then leave the caller with no tree
+  /// and nothing to fall back on.
+  Future<({List<DocumentView>? views, String? etag})> listViewsIfChanged(
+    String token,
+    String workspaceId, {
+    String? etag,
+  }) async {
+    final response = await sharedHttpClient.get(
+      _apiUri('/api/workspaces/$workspaceId/views'),
+      headers: {
+        'authorization': 'Bearer $token',
+        if (etag != null && etag.isNotEmpty) 'if-none-match': etag,
+      },
+    );
+    if (response.statusCode == 304) {
+      return (views: null, etag: etag);
+    }
+    final decoded = _decode(response);
+    final items = decoded['views'] as List<dynamic>;
+    return (
+      views: items
+          .map((item) => DocumentView.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      // Absent when something in front strips it; the caller then simply stops
+      // asking conditionally, which is the old behaviour rather than a fault.
+      etag: response.headers['etag'],
+    );
+  }
+
   Future<DocumentCreateResult> createDocument(
     String token,
     String workspaceId,
