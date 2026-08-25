@@ -24,6 +24,35 @@ String apiOrigin(Uri base) {
       : '${base.scheme}://${base.host}:${base.port}';
 }
 
+/// Which base url the client should actually use, given a build-time pin and
+/// whatever origin was saved in prefs.
+///
+/// Two rules, both learned the hard way:
+///
+///  * **Blank is absent, not empty.** `Uri.tryParse('')` SUCCEEDS — it answers
+///    a valid Uri whose host is `''` — so a blank saved origin used to replace
+///    the client's default with a url that points nowhere. Everything that then
+///    asked the base url a question got a nonsense answer; the visible symptom
+///    was dev auto-login silently switching itself off on a fresh profile,
+///    because its "is this a local backend" test reads the host.
+///  * **A build-time pin outranks the saved pref.** `MICA_API_BASE_URL` is only
+///    ever passed deliberately (a dev run, CI); the shipped app does not set
+///    it. Without this rule a development build inherits whichever server the
+///    installed copy was last pointed at — which is how `flutter run` came up
+///    signed in to PRODUCTION, one keystroke from writing test data into real
+///    notes.
+///
+/// Returns null when neither source names a usable server, meaning "keep the
+/// default you already have".
+Uri? resolveApiBase({required String pinned, required String saved}) {
+  final chosen = pinned.isNotEmpty ? pinned : saved;
+  if (chosen.isEmpty) return null;
+  final uri = Uri.tryParse(chosen);
+  // hasAuthority, not `!= null`: a bare word like "localhost" parses fine as a
+  // relative reference with no host at all.
+  return (uri != null && uri.hasAuthority) ? uri : null;
+}
+
 /// One long-lived HTTP client for the whole process — every request in the app
 /// goes through this, never through `http.get`/`http.post` and friends.
 ///

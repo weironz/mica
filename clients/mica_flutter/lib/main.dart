@@ -756,7 +756,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     _cloudOrigin = cloudOrigin;
     _servers = _loadServers(cloudOrigin);
-    final base = Uri.tryParse(_cloudOrigin);
+    // A blank origin means "no cloud server configured yet", NOT "point the
+    // client at nothing". `Uri.tryParse('')` succeeds — it returns a perfectly
+    // valid Uri with an empty host — so this used to overwrite the client's own
+    // default with it, and everything that asks the base url a question got a
+    // nonsense answer. `_isLocalBackend()` in particular went false on a fresh
+    // profile, which silently disabled dev auto-login. Same shape as the
+    // deployment bug where `${VAR:-}` made an unset variable arrive as `""` and
+    // `env::var` answered `Ok("")` instead of `Err`: blank must mean absent.
+    //
+    // A build-time `MICA_API_BASE_URL` outranks the saved pref. It is only ever
+    // passed deliberately (a dev run, CI) — the shipped app does not set it —
+    // and without this a dev build inherits whichever server the installed copy
+    // was last pointed at. That is how `flutter run` came up signed in to
+    // PRODUCTION, one keystroke away from writing test data into real notes.
+    const pinned = String.fromEnvironment('MICA_API_BASE_URL');
+    final base = resolveApiBase(pinned: pinned, saved: _cloudOrigin);
     if (base != null) {
       _api.baseUri = base;
     }
@@ -820,6 +835,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (mounted && _session == null && _message != null) {
       setState(() => _message = null);
     }
+    if (mounted && _session != null) _adoptSignedInOrigin();
+  }
+
+  /// Record the server we just signed in to as the configured cloud origin.
+  ///
+  /// Signing in and being ABLE TO REACH what you signed in to are two different
+  /// things here: the world switcher lists configured servers, so a session
+  /// against an origin that was never written to `cloudOrigin` is an orphan —
+  /// the account exists, the token works, and the cloud world simply cannot be
+  /// opened. That is what dev auto-login did on a fresh profile: it logged in
+  /// successfully and left the user staring at "add a server".
+  ///
+  /// Only fills a BLANK origin. Someone who has chosen a server keeps it.
+  void _adoptSignedInOrigin() {
+    if (_cloudOrigin.isNotEmpty) return;
+    final origin = apiOrigin(_api.baseUri);
+    if (origin.isEmpty) return;
+    savePref('cloudOrigin', origin);
+    setState(() {
+      _cloudOrigin = origin;
+      _servers = _loadServers(origin);
+    });
+    _saveServers();
   }
 
   /// Persist the access token + user so a restart (desktop) or browser refresh

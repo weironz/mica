@@ -134,4 +134,71 @@ void main() {
         reason: 'B content stays in B');
     a2.dispose();
   });
+
+  /// The workspace-switch shape of the same red line, and the harder half: the
+  /// edit is NEVER drained before the switch.
+  ///
+  /// Switching workspaces now paints the body from the on-device replica and
+  /// hands the document to its CRDT session, while the REST bootstrap for the
+  /// same document is in flight. That REST snapshot is the yrs base MATERIALISED
+  /// into plain JSON — no CRDT metadata, so it can only replace, never merge.
+  /// Let it land on a body carrying an undrained edit and the editor reconciles
+  /// the new block away; the next keystroke then diffs against the replaced text
+  /// and pushes a DELETE of what the user just wrote, which `room.broadcast`
+  /// never echoes back.
+  ///
+  /// Both halves are asserted, and the second is the one that would go
+  /// unnoticed: the text is still there AND the server has it. A test that only
+  /// looked at the client would pass while the server held a tombstone.
+  test('an UNDRAINED edit survives a workspace switch, on both sides',
+      () async {
+    final token = await login();
+    final wsA = ((await postJson(
+        '/api/workspaces', token, {'name': 'redline-a'}))['workspace']
+        as Map)['id'] as String;
+    final wsB = ((await postJson(
+        '/api/workspaces', token, {'name': 'redline-b'}))['workspace']
+        as Map)['id'] as String;
+    final docA = ((await postJson(
+            '/api/workspaces/$wsA/documents', token, {'name': 'A'}))['document']
+        as Map)['id'] as String;
+    final docB = ((await postJson(
+            '/api/workspaces/$wsB/documents', token, {'name': 'B'}))['document']
+        as Map)['id'] as String;
+
+    const marker = 'redline-undrained-9f3a';
+    final device = BigInt.from(0xB0DE);
+
+    // Type, and switch away IMMEDIATELY — no drainOutbox. This is the user
+    // clicking another workspace inside the editor's debounce window, which is
+    // exactly when the body is most fragile.
+    final a1 = await openReady(token, wsA, docA, device);
+    a1.applyLocalOps([insertParagraph(a1.rootBlockId, 'pR', marker)]);
+    a1.dispose();
+
+    // The other workspace opens its own document — a real switch, not a reopen.
+    final b1 = await openReady(token, wsB, docB, device);
+    b1.applyLocalOps(
+        [insertParagraph(b1.rootBlockId, 'pB2', 'other workspace')]);
+    expect(await b1.drainOutbox(), isTrue);
+    b1.dispose();
+
+    // Switch back. The undrained edit must be recovered and re-pushed.
+    final a2 = await openReady(token, wsA, docA, device);
+    expect(await waitForText(a2, marker), isTrue,
+        reason: 'the undrained edit was lost by switching workspaces');
+    a2.dispose();
+
+    // The half a client-only assertion would miss: the SERVER has it, and was
+    // not told to delete it. Read through the same REST bootstrap the switch
+    // path fetches — if a snapshot had replaced the body and a diff had pushed
+    // the removal, this is where the text would be gone.
+    final boot = await http.get(
+      Uri.parse('$_base/api/workspaces/$wsA/documents/$docA/bootstrap'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    expect(boot.statusCode, 200, reason: boot.body);
+    expect(boot.body.contains(marker), isTrue,
+        reason: 'the server does not have the text the client is showing');
+  });
 }
