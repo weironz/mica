@@ -1946,12 +1946,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       });
       trace.mark('shell');
       // …and the BODY from the on-device replica, so the switch lands on the
-      // page rather than dropping to the home pane for a round trip. Local
-      // read, no network. Also hands the document to its CRDT session, which
-      // from here owns the body and merges the server's state into it.
+      // page rather than dropping to the home pane for a round trip. Also hands
+      // the document to its CRDT session, which from here owns the body and
+      // merges the server's state into it.
+      //
+      // NOT awaited. "It is only a local read" turned out to be worth 836ms on
+      // a large document — decoding a mirrored doc is real work, and awaiting
+      // it here put that in FRONT of the page-tree request, making a warm
+      // switch slower than a cold one (1054ms vs 109ms, measured). It races the
+      // network instead: whichever body arrives first is shown, and
+      // `_seedBodyFromMirror` stands down if the fresher one won.
       if (remembered != null) {
-        await _seedBodyFromMirror(remembered);
-        trace.mark('mirror');
+        unawaited(
+          _seedBodyFromMirror(remembered).then((_) => trace.mark('mirror')),
+        );
       }
       // P3e: offline workspace switching. Already in degraded (offline) nav →
       // read the mirror directly, no per-switch network timeout. Otherwise try
@@ -5507,6 +5515,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final boot = await _offlineCloudBootstrap(view);
     // The user may have clicked another workspace while the mirror was read.
     if (boot == null || !mounted || _selectedView?.id != view.id) return;
+    // The network may have won the race. Its snapshot is fresher than the
+    // mirror by definition, so the mirror stands down rather than replacing a
+    // body that is already correct — and rather than handing the CRDT session a
+    // second, older starting point.
+    if (_selectedBootstrap?.document.id == view.objectId) return;
     setState(() => _selectedBootstrap = boot);
     // Ownership of the body transfers here: _reconcileSync opens the yrs
     // session for this document, and everything the server says afterwards
