@@ -1,19 +1,31 @@
 #!/bin/sh
 {{ ansible_managed | comment }}
 #
-# Credentials live in .env.secrets, and `docker compose` only auto-reads .env —
-# so a bare `docker compose ps` on this node reports JWT_SECRET and friends as
-# missing. Use this wrapper instead:
+# ALWAYS USE THIS INSTEAD OF BARE `docker compose` IN THIS DIRECTORY.
 #
 #     cd {{ mica_dir }} && ./dc ps
 #     ./dc logs -f api
 #     ./dc up -d --no-deps api
 #
-# That split is deliberate: .env is RENDERED from the repo on every deploy, and
-# that is only safe because the credentials sit in a file ansible never touches.
-# The cost is this wrapper. It is a fair trade but a real cost — the failure
-# mode is a confusing "variable is not set" on an otherwise correct command,
-# which is why this is a comment here rather than a line in a document.
+# Credentials live in .env.secrets, and `docker compose` only auto-reads .env.
+# It does NOT complain about that — measured, not assumed. Mica's compose spells
+# the credentials `${VAR}` and not `${VAR:?}`, so a missing one resolves to an
+# EMPTY STRING and the command succeeds:
+#
+#     docker compose up -d api     # api comes back with an empty JWT_SECRET
+#                                  # (the server mints a new one -> every
+#                                  # session is logged out) and an empty
+#                                  # database password (-> it cannot connect)
+#
+# Making them `${VAR:?}` would fix that, and is deliberately not done: those
+# defaults exist so a self-hoster can start the stack with no credentials at
+# all, which was decided on purpose (docs/deploy.md). Reversing it here would
+# move the cost onto everyone else to protect one operator on one node.
+#
+# So the guard is this wrapper plus this comment. That is a real, remaining
+# sharp edge, and it is the price of .env being rendered from the repo every
+# deploy — which is only safe because the credentials are in a file ansible
+# never touches.
 #
 # Emergency version change (only if GitHub is down): edit MICA_VERSION in .env,
 # then `./dc up -d --no-deps api web`. That edit, like any other edit to .env,
