@@ -35,12 +35,24 @@ jobs:
       url: https://mica.cloudcele.com
 
     steps:
-      # At the tag, and with history: the playbook and the compose it ships must
-      # both be the ones this version was released with, and deploy-prod.sh
-      # reads the compose out of the tag with `git show`.
+      # The DEFAULT BRANCH, deliberately — not `ref: v${{ inputs.version }}`.
+      #
+      # The deploy machinery and the application version are independent
+      # timelines. Checking out the tag was the first draft here, and it means
+      # every version published BEFORE this machinery existed becomes
+      # undeployable: v0.13.27 has no ansible/ and no scripts/deploy-prod.sh, so
+      # the job dies before it starts. Rolling back to an older release is
+      # exactly when you least want the deploy path to be missing.
+      #
+      # The compose still comes from the tag — scripts/deploy-prod.sh fetches it
+      # and reads it with `git show v<version>:deploy/docker-compose.yml`. So
+      # "which compose" follows the release while "how to deploy" follows main,
+      # which is the split that was wanted all along.
+      #
+      # fetch-depth: 0 because that `git show` needs the tag's tree.
       - uses: actions/checkout@v5
         with:
-          ref: v${{ inputs.version }}
+          fetch-depth: 0
 
       - name: Reject anything that is not X.Y.Z
         run: |
