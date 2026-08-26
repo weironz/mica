@@ -2941,7 +2941,7 @@ mod handshake_tests {
     let tools = router.list_all();
     assert_eq!(
       tools.len(),
-      32,
+      34,
       "every tool must be listed — if you added one, bump this AND add it to the \
        get_info instructions, or it ships discoverable-but-unused"
     );
