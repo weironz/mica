@@ -7329,6 +7329,26 @@ double dropIndicatorInset(int depth) => 2 + depth * 16;
 /// while re-parenting a drop.
 const kTreeIndentUnit = 16.0;
 
+/// What the tree's drop indicator is currently saying.
+enum DropIndicatorState {
+  /// No drag is over this slot.
+  idle,
+
+  /// The drop would be taken.
+  allowed,
+
+  /// The drop is REFUSED, and the mark is drawn anyway, in the warning colour.
+  ///
+  /// Atlassian's tree calls this `instruction-blocked` and renders the
+  /// instruction you were ASKING for rather than nothing; AFFiNE keeps that.
+  /// Drawing nothing is the worse answer twice over: an indicator that vanishes
+  /// reads as "the app stopped noticing me", and it withholds the one thing
+  /// worth saying — that this particular place is the problem. A folder cannot
+  /// be dropped inside its own subtree, and until now the only feedback for
+  /// trying was silence.
+  blocked,
+}
+
 /// The tree's drop indicator: a hollow terminal dot with a line leaving its
 /// centre, drawn at the level the drop would land at.
 ///
@@ -7338,18 +7358,21 @@ const kTreeIndentUnit = 16.0;
 /// dot is what you aim with — the line alone says "something lands here", the
 /// dot says WHICH LEVEL it lands at.
 class _DropIndicator extends StatelessWidget {
-  const _DropIndicator({required this.inset, required this.visible});
+  const _DropIndicator({required this.inset, required this.state});
 
   final double inset;
-  final bool visible;
+  final DropIndicatorState state;
 
   static const _terminal = 8.0;
 
   @override
   Widget build(BuildContext context) {
-    final color = visible
-        ? MicaTheme.of(context).accent.primary
-        : Colors.transparent;
+    final tokens = MicaTheme.of(context);
+    final color = switch (state) {
+      DropIndicatorState.idle => Colors.transparent,
+      DropIndicatorState.allowed => tokens.accent.primary,
+      DropIndicatorState.blocked => tokens.status.warning,
+    };
     return Padding(
       padding: EdgeInsets.only(left: inset, right: 4),
       child: SizedBox(
@@ -9296,7 +9319,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             padding: const EdgeInsets.only(top: 6),
             child: _DropIndicator(
               inset: dropIndicatorInset(0),
-              visible: candidate.isNotEmpty,
+              // This zone accepts everything, so `blocked` cannot arise here —
+              // still routed through the same enum rather than a bool, so there
+              // is one vocabulary for "what is the indicator saying".
+              state: candidate.isNotEmpty
+                  ? DropIndicatorState.allowed
+                  : DropIndicatorState.idle,
             ),
           ),
         );
@@ -9487,21 +9515,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _handleDrop(details.data, resolved, mode);
       },
       builder: (context, candidate, rejected) {
-        final active = candidate.isNotEmpty;
+        // `rejected` is how a DragTarget says "something is over me and I
+        // refused it" — the case that used to draw nothing at all.
+        final state = candidate.isNotEmpty
+            ? DropIndicatorState.allowed
+            : rejected.isNotEmpty
+            ? DropIndicatorState.blocked
+            : DropIndicatorState.idle;
         if (mode == _DropMode.into) {
-          // Nesting: highlight the whole target row.
+          // Nesting: highlight the whole target row. Warning-coloured when the
+          // nest is refused — dropping a folder inside its own subtree is the
+          // one people actually try, and it is exactly where silence was worst.
+          final tokens = MicaTheme.of(context);
+          final edge = switch (state) {
+            DropIndicatorState.idle => Colors.transparent,
+            DropIndicatorState.allowed => tokens.accent.primary,
+            DropIndicatorState.blocked => tokens.status.warning,
+          };
           return Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: active
-                    ? MicaTheme.of(context).accent.primary
-                    : Colors.transparent,
-                width: 2,
-              ),
-              color: active
-                  ? MicaTheme.of(context).accent.primary.withValues(alpha: 0.08)
-                  : Colors.transparent,
+              border: Border.all(color: edge, width: 2),
+              color: edge == Colors.transparent
+                  ? Colors.transparent
+                  : edge.withValues(alpha: 0.08),
             ),
           );
         }
@@ -9514,13 +9551,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         // dragging under the last row of a subtree, moving the pointer left
         // steps the dot out one level at a time, and where it lands is where
         // the row lands.
+        //
+        // When blocked, the mark is drawn at the level you were ASKING for, in
+        // the warning colour — the desired instruction, not nothing.
         return Align(
           alignment: mode == _DropMode.before
               ? Alignment.topLeft
               : Alignment.bottomLeft,
           child: _DropIndicator(
-            inset: dropIndicatorInset(active ? _dropLevel ?? depth : depth),
-            visible: active,
+            inset: dropIndicatorInset(
+              state == DropIndicatorState.idle ? depth : _dropLevel ?? depth,
+            ),
+            state: state,
           ),
         );
       },
