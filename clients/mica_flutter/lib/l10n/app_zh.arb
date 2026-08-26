@@ -128,6 +128,15 @@
   "workspaceRowImportFromZip": "从 ZIP 导入(Mica 导出)",
   "workspaceRowImportFromNotion": "从 Notion 导入(Markdown 和 CSV ZIP)",
   "workspaceRowImportWorkspace": "导入工作区",
+  "workspaceFilterHint": "在 {count} 个工作区里筛选",
+  "@workspaceFilterHint": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workspaceFilterNoMatch": "没有匹配的工作区",
   "workspaceRowSelectWorkspace": "选择工作区",
   "workspaceRowSignInCloud": "登录云端…",
   "workspaceRowExportZip": "导出(ZIP)",

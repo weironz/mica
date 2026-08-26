@@ -94,9 +94,30 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
   /// a row could be picked up but not carried anywhere the list had to move to.
   final ScrollController _wsScroll = ScrollController();
 
+  /// Above this many workspaces the menu grows a filter field. Below it, a
+  /// search box for a handful of rows is chrome that costs a glance and saves
+  /// nothing.
+  static const _wsFilterThreshold = 8;
+
+  final TextEditingController _wsFilter = TextEditingController();
+  String _wsQuery = '';
+
+  /// Case-insensitive substring on the name. Deliberately not fuzzy: workspace
+  /// names here are short and typed from memory, and fuzzy matching mostly
+  /// surprises you with a hit you cannot explain.
+  List<WorkspaceEntry> _filtered(List<WorkspaceEntry> world) {
+    final q = _wsQuery.trim().toLowerCase();
+    if (q.isEmpty) return world;
+    return [
+      for (final e in world)
+        if (e.workspace.name.toLowerCase().contains(q)) e,
+    ];
+  }
+
   @override
   void dispose() {
     _wsScroll.dispose();
+    _wsFilter.dispose();
     super.dispose();
   }
 
@@ -119,8 +140,29 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
       for (final e in widget.entries)
         if (e.isLocal) e,
     ];
+    final world = widget.activeIsLocal ? locals : cloud;
+    // Type-to-filter, but only once the list is long enough to be worth
+    // scrolling. Capping the list's height stops it covering the sidebar; it
+    // does not stop 35 workspaces from being 35 workspaces, and five visible
+    // rows out of 35 is six screens of scrolling to reach one you can name.
+    //
+    // The threshold means someone with three workspaces never sees a search box
+    // for three things — the affordance appears exactly when it starts paying.
+    final filterable = world.length > _wsFilterThreshold;
+    final shown = filterable ? _filtered(world) : world;
     return MenuAnchor(
       controller: _menu,
+      // Reopening should not still be filtered by what you typed last time: the
+      // menu would open showing a subset with no visible reason, which reads as
+      // "my workspaces are gone".
+      onClose: () {
+        if (_wsQuery.isNotEmpty) {
+          setState(() {
+            _wsQuery = '';
+            _wsFilter.clear();
+          });
+        }
+      },
       style: const MenuStyle(
         minimumSize: WidgetStatePropertyAll(Size(300, 0)),
         padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
@@ -135,8 +177,10 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             widget.cloudEmail == null &&
             widget.onSignIn != null)
           _signInRow()
-        else
-          _worldList(widget.activeIsLocal ? locals : cloud),
+        else ...[
+          if (filterable) _wsFilterField(world.length),
+          if (shown.isEmpty) _wsNoMatch() else _worldList(shown),
+        ],
         const Divider(height: 8),
         _createRow(),
         // The whole submenu goes, not just its children: a parent left behind
@@ -274,6 +318,55 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             shrinkWrap: true,
             padding: EdgeInsets.zero,
             children: [for (final e in world) _row(e, world)],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The filter field, pinned above the list so it does not scroll away.
+  Widget _wsFilterField(int total) {
+    final tokens = MicaTheme.of(context);
+    return SizedBox(
+      width: 320,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+        child: TextField(
+          controller: _wsFilter,
+          autofocus: true,
+          style: const TextStyle(fontSize: 13),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: context.l10n.workspaceFilterHint(total),
+            prefixIcon: Icon(Icons.search, size: 16, color: tokens.text.faint),
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 30,
+              minHeight: 0,
+            ),
+            border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: 8,
+            ),
+          ),
+          onChanged: (v) => setState(() => _wsQuery = v),
+        ),
+      ),
+    );
+  }
+
+  /// Nothing matched. Says so rather than showing an empty box, which reads as
+  /// a broken menu — the same rule the sidebar's empty states follow.
+  Widget _wsNoMatch() {
+    return SizedBox(
+      width: 320,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        child: Text(
+          context.l10n.workspaceFilterNoMatch,
+          style: TextStyle(
+            fontSize: 12,
+            color: MicaTheme.of(context).text.faint,
           ),
         ),
       ),

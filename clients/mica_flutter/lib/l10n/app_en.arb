@@ -167,6 +167,15 @@
   "workspaceRowImportFromZip": "From ZIP (Mica export)",
   "workspaceRowImportFromNotion": "From Notion (Markdown & CSV ZIP)",
   "workspaceRowImportWorkspace": "Import workspace",
+  "workspaceFilterHint": "Filter {count} workspaces",
+  "@workspaceFilterHint": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workspaceFilterNoMatch": "No workspace matches",
   "workspaceRowSelectWorkspace": "Select workspace",
   "workspaceRowSignInCloud": "Sign in to cloud…",
   "workspaceRowExportZip": "Export (ZIP)",
