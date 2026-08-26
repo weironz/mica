@@ -297,14 +297,31 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
 
   /// The connected world's workspaces, in a scrollable this widget owns.
   ///
-  /// `SizedBox(width: 320)` is load-bearing, not decoration: a menu sizes
-  /// itself to its children's INTRINSIC width, and a `ListView` has none — the
-  /// rows themselves are all 320 wide, so stating it here keeps the menu the
-  /// width it has always been instead of collapsing or asserting.
+  /// `SingleChildScrollView` + `Column`, NOT a `ListView`. A menu measures its
+  /// children's INTRINSIC size to lay its panel out, and a `ListView` is a lazy
+  /// viewport that cannot answer that — it throws `RenderShrinkWrappingViewport
+  /// does not support returning intrinsic dimensions`, and then the menu never
+  /// appears at all.
   ///
-  /// `shrinkWrap` + a max height, so three workspaces render as three rows and
-  /// thirty scroll. The cap is what makes the create/import rows below reachable
-  /// without scrolling past every workspace to find them.
+  /// That is what 31b8f92 shipped, and what `just app` reported as a console
+  /// flood of `RenderBox was not laid out: RenderTapRegion…`. It survived a
+  /// browser check because Flutter web does not build the semantics tree until
+  /// something asks for it, while desktop always does.
+  /// `workspace_switcher_menu_test` pins the shape with `ensureSemantics()`, so
+  /// a browser pass can no longer stand in for a desktop one.
+  ///
+  /// `SingleChildScrollView` forwards intrinsics to its child, so the cap below
+  /// becomes a real, answerable height. Building every row eagerly is fine
+  /// here: a workspace list is tens of rows, not the thousands the page tree
+  /// holds.
+  ///
+  /// `SizedBox(width: 320)` stays for the reason it arrived — the width has to
+  /// come from somewhere, and the rows are all 320. That part of the old
+  /// comment was right; it just named the wrong axis as the dangerous one.
+  ///
+  /// The cap keeps the create/import rows below reachable without scrolling
+  /// past every workspace, and on a 35-workspace account stops the menu
+  /// covering the whole sidebar.
   Widget _worldList(List<WorkspaceEntry> world) {
     return SizedBox(
       width: 320,
@@ -313,11 +330,12 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
         child: DragAutoScrollRegion(
           enabled: _dragging,
           controller: _wsScroll,
-          child: ListView(
+          child: SingleChildScrollView(
             controller: _wsScroll,
-            shrinkWrap: true,
-            padding: EdgeInsets.zero,
-            children: [for (final e in world) _row(e, world)],
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [for (final e in world) _row(e, world)],
+            ),
           ),
         ),
       ),
