@@ -46,8 +46,20 @@ dest="$dir/mica-cli"
 
 echo "Installing mica-cli ${version} -> ${dest}"
 mkdir -p "$dir"
-curl -fSL "$url" -o "$dest"
-chmod +x "$dest"
+# Download BESIDE the target, then rename into place — never straight onto
+# "$dest". `curl -o` truncates the file in place, and Linux refuses that for a
+# binary something is currently executing: "Text file busy" (ETXTBSY). Anyone
+# actually using this has an MCP client holding mica-cli open, which is the
+# normal state — so "re-run to update" broke for exactly the people it mattered
+# to. Measured in a container: the in-place write fails, the rename succeeds and
+# the already-running process keeps its inode.
+#
+# install.ps1 fixed the same bug for Windows long before this; the POSIX half
+# never got the same treatment. Same fix, same reason, one platform late.
+tmp="$dest.new.$$"
+curl -fSL "$url" -o "$tmp"
+chmod +x "$tmp"
+mv -f "$tmp" "$dest"
 
 case ":$PATH:" in
   *":$dir:"*) : ;;
