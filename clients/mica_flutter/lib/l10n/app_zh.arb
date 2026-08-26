@@ -136,7 +136,6 @@
       }
     }
   },
-  "treeDropToRoot": "放这里移到最外层",
   "workspaceFilterNoMatch": "没有匹配的工作区",
   "workspaceRowSelectWorkspace": "选择工作区",
   "workspaceRowSignInCloud": "登录云端…",

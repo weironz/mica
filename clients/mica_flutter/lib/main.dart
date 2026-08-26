@@ -7325,6 +7325,96 @@ WorldCardMode worldCardMode({
 /// two pixels off, which nobody would report and everybody would misread.
 double dropIndicatorInset(int depth) => 2 + depth * 16;
 
+/// Per-level indent of the sidebar tree, and the width of one horizontal step
+/// while re-parenting a drop.
+const kTreeIndentUnit = 16.0;
+
+/// The tree's drop indicator: a hollow terminal dot with a line leaving its
+/// centre, drawn at the level the drop would land at.
+///
+/// Copied in geometry from AFFiNE's sidebar, which takes it from Atlassian's
+/// pragmatic-drag-and-drop: an 8px circle, transparent inside, 2px border, and
+/// a 2px line starting at the circle's centre so the two read as one mark. The
+/// dot is what you aim with — the line alone says "something lands here", the
+/// dot says WHICH LEVEL it lands at.
+class _DropIndicator extends StatelessWidget {
+  const _DropIndicator({required this.inset, required this.visible});
+
+  final double inset;
+  final bool visible;
+
+  static const _terminal = 8.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = visible
+        ? MicaTheme.of(context).accent.primary
+        : Colors.transparent;
+    return Padding(
+      padding: EdgeInsets.only(left: inset, right: 4),
+      child: SizedBox(
+        height: _terminal,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: _terminal,
+              height: _terminal,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: color, width: 2),
+                ),
+              ),
+            ),
+            // Starts under the dot's centre, so there is no gap between them.
+            Expanded(
+              child: Transform.translate(
+                offset: const Offset(-_terminal / 2, 0),
+                child: Container(height: 2, color: color),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The level a drop below [rowDepth] lands at, given how far right the pointer
+/// is. This is the "drag left to pop out a level" of AFFiNE's tree, which is
+/// Atlassian pragmatic-drag-and-drop's `reparent` instruction.
+///
+/// The range is not free. Levels run from [rowDepth] (stay a sibling of the row
+/// you are under) down to:
+///
+///  * the depth of the NEXT visible row, when there is one. You cannot pop out
+///    past it: the gap you are pointing at is between this row and that one, and
+///    a level shallower than the next row would put the drop somewhere that gap
+///    does not touch. When the next row is DEEPER — the row is an expanded
+///    folder and the gap is between it and its own first child — the range
+///    collapses to a single level and there is nothing to pick.
+///  * 0 (the workspace root) when this is the last row in the tree.
+///
+/// Every level in that range is a legal parent by construction: the ancestors of
+/// a row are folders, and folders are the only thing allowed to hold children.
+/// So the indicator can never stop somewhere the drop would be refused, which is
+/// the failure mode a free-floating depth picker has.
+int reparentLevelFor({
+  required double pointerX,
+  required int rowDepth,
+  required int? nextRowDepth,
+  double indentUnit = kTreeIndentUnit,
+  double baseInset = 2,
+}) {
+  final minLevel = nextRowDepth == null
+      ? 0
+      : math.min(nextRowDepth, rowDepth);
+  if (minLevel >= rowDepth) return rowDepth;
+  final raw = ((pointerX - baseInset) / indentUnit).round();
+  return raw.clamp(minLevel, rowDepth);
+}
+
 /// The workspace root's children after [dragged] is dropped on the root zone:
 /// every current root-level view except [dragged], in position order, with
 /// [dragged] appended.
@@ -9058,6 +9148,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         if (mounted) _flushPendingReveal();
       });
     }
+    // Once, not once per row: each row needs to know its NEIGHBOUR's depth, and
+    // rebuilding the whole flattened tree inside the map would make drawing the
+    // sidebar quadratic — on the 3700-page workspace that is not a nicety.
+    final treeRows = _visibleDocumentTree();
     // reach this. Opaque so the empty space below the last row is hittable.
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -9072,7 +9166,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         slivers: [
         SliverList(
         delegate: SliverChildListDelegate(
-        _visibleDocumentTree().map((item) {
+        treeRows.indexed.map((entry) {
+          final (index, item) = entry;
+          // The NEXT row's depth bounds how far left an `after` drop under this
+          // row may pop out; null means "this is the last row", which is what
+          // lets the last row reach the workspace root.
+          final nextDepth = index + 1 < treeRows.length
+              ? treeRows[index + 1].depth
+              : null;
           final row = DocumentListItem(
             key: ValueKey(item.view.id),
             view: item.view,
@@ -9130,7 +9231,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               child: row,
             );
           }
-          return _draggableTreeRow(item.view, item.depth, row);
+          return _draggableTreeRow(item.view, item.depth, nextDepth, row);
         }).toList(),
         ),
         ),
@@ -9184,41 +9285,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       onAcceptWithDetails: (details) =>
           widget.onReorderViews(null, rootDropOrder(widget.views, details.data)),
       builder: (context, candidate, rejected) {
-        final tokens = MicaTheme.of(context);
-        final active = candidate.isNotEmpty;
-        // Drawn for the WHOLE drag, not only while hovered. A target you can
-        // only see once you have already hit it is not discoverable — the
-        // complaint was 「别人怎么知道拖到哪里才会是根级」. Muted while the drag
-        // is merely in progress, accented the moment it would take the drop.
-        //
-        // Labelled for the same reason. The line alone says "something lands
-        // here"; it does not say the thing that is hard to guess, which is that
-        // this whole empty area means the workspace root.
+        // No label any more. A caption explaining that this area means "root"
+        // was a way of describing the model instead of making it operable —
+        // and it only ever spoke about ONE level. Now the same dot that walks
+        // out to level 0 under the last row does the explaining, and this zone
+        // is just the rest of that gesture's surface.
         return Align(
           alignment: Alignment.topLeft,
           child: Padding(
-            padding: EdgeInsets.only(
-              top: 6,
-              left: dropIndicatorInset(0),
-              right: 4,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  height: 2,
-                  color: active ? tokens.accent.primary : tokens.border.normal,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  context.l10n.treeDropToRoot,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: active ? tokens.accent.primary : tokens.text.faint,
-                  ),
-                ),
-              ],
+            padding: const EdgeInsets.only(top: 6),
+            child: _DropIndicator(
+              inset: dropIndicatorInset(0),
+              visible: candidate.isNotEmpty,
             ),
           ),
         );
@@ -9249,7 +9327,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// touch slop, while a motionless click still opens the page. (Long-press
   /// felt broken with a mouse: moving during the 500ms hold cancels it.)
   /// The top/bottom half of each sibling row is a drop slot (before/after).
-  Widget _draggableTreeRow(DocumentView view, int depth, Widget row) {
+  Widget _draggableTreeRow(
+    DocumentView view,
+    int depth,
+    int? nextDepth,
+    Widget row,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Draggable<DocumentView>(
@@ -9308,9 +9391,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       flex: 4,
                       child: _dropSlot(view, _DropMode.into, depth),
                     ),
+                    // `nextDepth` is what bounds how far left this drop may
+                    // pop out — see [reparentLevelFor].
                     Expanded(
                       flex: 3,
-                      child: _dropSlot(view, _DropMode.after, depth),
+                      child: _dropSlot(
+                        view,
+                        _DropMode.after,
+                        depth,
+                        nextDepth: nextDepth,
+                      ),
                     ),
                   ],
                 ),
@@ -9327,8 +9417,38 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     setState(() => _draggingTree = false);
   }
 
-  Widget _dropSlot(DocumentView target, _DropMode mode, int depth) {
-    return DragTarget<DocumentView>(
+  /// The level the active `after` drop would land at, or null when the pointer
+  /// is not over a zone that can re-parent. Tracked in state because the
+  /// indicator has to redraw as the pointer moves sideways.
+  int? _dropLevel;
+
+  /// Resolve a level back to the row the drop is really "after": level L means
+  /// "become the next sibling of my ancestor at depth L", which is precisely
+  /// what the existing `after` drop already does — only the target changes.
+  /// That is why picking a level needed no new drop machinery.
+  DocumentView _ancestorAtLevel(DocumentView row, int depth, int level) {
+    final byId = {for (final v in widget.views) v.id: v};
+    var cursor = row;
+    for (var d = depth; d > level; d--) {
+      final parent = byId[cursor.parentViewId];
+      if (parent == null) return cursor;
+      cursor = parent;
+    }
+    return cursor;
+  }
+
+  Widget _dropSlot(
+    DocumentView target,
+    _DropMode mode,
+    int depth, {
+    int? nextDepth,
+  }) {
+    // A Builder so `onMove` can measure against THIS SLOT's box. Using the
+    // State's own `context` measured against the whole pane instead, which put
+    // every pointer position past the last level and pinned the indicator at
+    // the row's own depth — the level never moved, in either direction.
+    return Builder(
+      builder: (slotContext) => DragTarget<DocumentView>(
       // The whole zone must be droppable; DragTarget defaults to deferToChild,
       // which would limit the hit area to the thin indicator. These overlays
       // only exist during a drag, so opaque is safe (no taps to intercept).
@@ -9336,7 +9456,36 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       onWillAcceptWithDetails: (details) =>
           !_isSelfOrDescendant(target.id, details.data.id) &&
           _parentAllowsChildren(_dropParentId(target, mode)),
-      onAcceptWithDetails: (details) => _handleDrop(details.data, target, mode),
+      // Only `after` re-parents, and only sideways. `details.offset` IS the
+      // pointer here because the Draggable uses `pointerDragAnchorStrategy`;
+      // with the default strategy it would be the feedback's top-left corner
+      // and every level would read one chip-width to the right.
+      onMove: mode != _DropMode.after
+          ? null
+          : (details) {
+              final box = slotContext.findRenderObject() as RenderBox?;
+              if (box == null || !box.hasSize) return;
+              final local = box.globalToLocal(details.offset);
+              final level = reparentLevelFor(
+                pointerX: local.dx,
+                rowDepth: depth,
+                nextRowDepth: nextDepth,
+              );
+              if (level != _dropLevel) setState(() => _dropLevel = level);
+            },
+      onLeave: (_) {
+        if (_dropLevel != null) setState(() => _dropLevel = null);
+      },
+      onAcceptWithDetails: (details) {
+        // A level is just a different target for the SAME `after` drop:
+        // "sibling of my ancestor at depth L".
+        final level = mode == _DropMode.after ? _dropLevel : null;
+        final resolved = level == null || level >= depth
+            ? target
+            : _ancestorAtLevel(target, depth, level);
+        setState(() => _dropLevel = null);
+        _handleDrop(details.data, resolved, mode);
+      },
       builder: (context, candidate, rejected) {
         final active = candidate.isNotEmpty;
         if (mode == _DropMode.into) {
@@ -9356,23 +9505,26 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
           );
         }
-        // Indented to the depth this drop lands at. Without it, "after the last
-        // nested row" and "at the workspace root" drew the same full-width
-        // line, so the only way to tell them apart was to already know where
-        // the pointer had to be.
+        // Indented to the level this drop lands at, with a terminal dot at the
+        // head — AFFiNE's tree indicator, which is Atlassian's
+        // pragmatic-drag-and-drop shape: an 8px hollow circle, and a 2px line
+        // leaving its centre.
+        //
+        // The dot is not decoration. It is the thing you aim with: while
+        // dragging under the last row of a subtree, moving the pointer left
+        // steps the dot out one level at a time, and where it lands is where
+        // the row lands.
         return Align(
           alignment: mode == _DropMode.before
               ? Alignment.topLeft
               : Alignment.bottomLeft,
-          child: Container(
-            height: 2,
-            margin: EdgeInsets.only(left: dropIndicatorInset(depth), right: 4),
-            color: active
-                ? MicaTheme.of(context).accent.primary
-                : Colors.transparent,
+          child: _DropIndicator(
+            inset: dropIndicatorInset(active ? _dropLevel ?? depth : depth),
+            visible: active,
           ),
         );
       },
+      ),
     );
   }
 

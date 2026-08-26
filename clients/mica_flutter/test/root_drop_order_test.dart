@@ -81,4 +81,63 @@ void main() {
       expect(order.map((e) => e.id), ['a', 'moving']);
     });
   });
+
+  /// AFFiNE's tree lets you drag LEFT under the last row of a subtree to pop the
+  /// drop out one level at a time — Atlassian pragmatic-drag-and-drop's
+  /// `reparent`. This is the arithmetic behind the dot's position.
+  group('reparentLevelFor', () {
+    test('under the last row of the tree, dragging left reaches the root', () {
+      // A row at depth 3 with nothing after it: every level 0..3 is reachable.
+      int at(double x) =>
+          reparentLevelFor(pointerX: x, rowDepth: 3, nextRowDepth: null);
+      expect(at(2 + 3 * 16), 3, reason: 'stay a sibling of the row above');
+      expect(at(2 + 2 * 16), 2);
+      expect(at(2 + 1 * 16), 1);
+      expect(at(2), 0, reason: 'all the way out is the workspace root');
+    });
+
+    test('cannot pop out past the next row', () {
+      // …because the gap being pointed at is between this row and that one.
+      int at(double x) =>
+          reparentLevelFor(pointerX: x, rowDepth: 3, nextRowDepth: 2);
+      expect(at(2 + 3 * 16), 3);
+      expect(at(2 + 2 * 16), 2);
+      expect(at(2), 2, reason: 'clamped at the next row"s depth, not 0');
+      expect(at(-200), 2, reason: 'dragging far left cannot escape the clamp');
+    });
+
+    test('an expanded folder offers no choice at all', () {
+      // The next row is its own first child, so the gap is inside the folder
+      // and there is exactly one level it can mean.
+      for (final x in [-100.0, 0.0, 50.0, 500.0]) {
+        expect(
+          reparentLevelFor(pointerX: x, rowDepth: 1, nextRowDepth: 2),
+          1,
+          reason: 'x=$x must not move the level',
+        );
+      }
+    });
+
+    test('dragging right past the row"s own level does not nest deeper', () {
+      // Going deeper is what the `into` zone is for; this gesture only pops out.
+      expect(
+        reparentLevelFor(pointerX: 999, rowDepth: 2, nextRowDepth: null),
+        2,
+      );
+    });
+
+    test('the level snaps to the nearest step, not the one it passed', () {
+      // Half a step right of level 1 rounds up to 2, so the dot never lags the
+      // pointer by a whole indent.
+      expect(
+        reparentLevelFor(pointerX: 2 + 1.6 * 16, rowDepth: 3, nextRowDepth: null),
+        2,
+      );
+      expect(
+        reparentLevelFor(pointerX: 2 + 1.4 * 16, rowDepth: 3, nextRowDepth: null),
+        1,
+      );
+    });
+  });
+
 }

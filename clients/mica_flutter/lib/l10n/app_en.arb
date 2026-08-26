@@ -175,7 +175,6 @@
       }
     }
   },
-  "treeDropToRoot": "Drop here for the top level",
   "workspaceFilterNoMatch": "No workspace matches",
   "workspaceRowSelectWorkspace": "Select workspace",
   "workspaceRowSignInCloud": "Sign in to cloud…",
