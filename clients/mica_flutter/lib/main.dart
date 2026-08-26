@@ -7312,8 +7312,18 @@ WorldCardMode worldCardMode({
   return activeOrigin == cloudOrigin ? WorldCardMode.back : WorldCardMode.enter;
 }
 
-/// Left inset of a drop indicator for a row at [depth], matching the indent
-/// `DocumentListItem` gives its own content (`2 + depth * 16`).
+/// Width of the tree row's expand-toggle column. Always present, even on a page
+/// that has no toggle, so every icon in the tree shares one column — which is
+/// what makes the icon's left edge the thing the eye reads a level from.
+const kTreeExpandColumnWidth = 18.0;
+
+/// Left inset of a drop indicator for a row at [depth].
+///
+/// `2 + depth * 16` is where `DocumentListItem` starts its CONTENT, and the
+/// first thing in that content is the expand column — so a dot drawn there sits
+/// a whole column left of the icons, which is the gap reported as 「这个圆点与
+/// 要对齐的层级图标左侧有点远」. Adding the column lines the dot up with the
+/// icon edge, and the icon edge is what you compare levels by.
 ///
 /// The indicator used to be a full-width line at every depth, which made the
 /// two states either side of the tree's last row — "inside that last folder"
@@ -7323,7 +7333,8 @@ WorldCardMode worldCardMode({
 ///
 /// Top-level and pure so the arithmetic is pinned; getting it wrong is a line
 /// two pixels off, which nobody would report and everybody would misread.
-double dropIndicatorInset(int depth) => 2 + depth * 16;
+double dropIndicatorInset(int depth) =>
+    2 + depth * kTreeIndentUnit + kTreeExpandColumnWidth;
 
 /// Per-level indent of the sidebar tree, and the width of one horizontal step
 /// while re-parenting a drop.
@@ -7428,7 +7439,11 @@ int reparentLevelFor({
   required int rowDepth,
   required int? nextRowDepth,
   double indentUnit = kTreeIndentUnit,
-  double baseInset = 2,
+  // The SAME origin the dot is drawn from. Left at the content start (2) while
+  // the dot moved right by the expand column, the level would flip a whole
+  // column before the dot reached the next position — the mark would lag the
+  // gesture, which is the one thing an aiming affordance must not do.
+  double baseInset = 2 + kTreeExpandColumnWidth,
 }) {
   final minLevel = nextRowDepth == null
       ? 0

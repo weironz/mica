@@ -60,13 +60,26 @@ void main() {
       // The point of indenting the indicator is that "inside the last folder"
       // and "at the root" stop looking identical. That only works if the root
       // zone's line sits exactly where a top-level row's would.
-      expect(dropIndicatorInset(0), 2);
-      expect(dropIndicatorInset(1), 18);
-      expect(dropIndicatorInset(2), 34);
+      // DocumentListItem lays a row out as:
+      //   2 + depth*16   content start
+      //   + 18           the always-present expand column
+      //   = the icon's left edge
+      // The dot has to land on that last number, because the icon edge is what
+      // the eye compares levels by. Spelled out rather than asserted as a
+      // literal, so this fails loudly if the row's own layout moves.
+      double iconLeftEdge(int depth) =>
+          2 + depth * kTreeIndentUnit + kTreeExpandColumnWidth;
+      for (final depth in [0, 1, 2, 5]) {
+        expect(
+          dropIndicatorInset(depth),
+          iconLeftEdge(depth),
+          reason: 'the dot must sit on the icon edge at depth $depth',
+        );
+      }
       expect(
         dropIndicatorInset(1) - dropIndicatorInset(0),
-        16,
-        reason: 'one step must equal DocumentListItem\'s per-depth indent',
+        kTreeIndentUnit,
+        reason: 'one step must equal the tree\'s per-depth indent',
       );
     });
 
@@ -86,23 +99,39 @@ void main() {
   /// drop out one level at a time — Atlassian pragmatic-drag-and-drop's
   /// `reparent`. This is the arithmetic behind the dot's position.
   group('reparentLevelFor', () {
+    // Pointing AT where a level's dot is drawn must select that level. Written
+    // as `dropIndicatorInset(n)` rather than as the arithmetic, because the two
+    // have to move together: when the dot shifted right by the expand column
+    // and the aiming origin did not, the level flipped a whole column before
+    // the dot got there.
     test('under the last row of the tree, dragging left reaches the root', () {
-      // A row at depth 3 with nothing after it: every level 0..3 is reachable.
       int at(double x) =>
           reparentLevelFor(pointerX: x, rowDepth: 3, nextRowDepth: null);
-      expect(at(2 + 3 * 16), 3, reason: 'stay a sibling of the row above');
-      expect(at(2 + 2 * 16), 2);
-      expect(at(2 + 1 * 16), 1);
-      expect(at(2), 0, reason: 'all the way out is the workspace root');
+      expect(
+        at(dropIndicatorInset(3)),
+        3,
+        reason: 'stay a sibling of the row above',
+      );
+      expect(at(dropIndicatorInset(2)), 2);
+      expect(at(dropIndicatorInset(1)), 1);
+      expect(
+        at(dropIndicatorInset(0)),
+        0,
+        reason: 'all the way out is the workspace root',
+      );
     });
 
     test('cannot pop out past the next row', () {
       // …because the gap being pointed at is between this row and that one.
       int at(double x) =>
           reparentLevelFor(pointerX: x, rowDepth: 3, nextRowDepth: 2);
-      expect(at(2 + 3 * 16), 3);
-      expect(at(2 + 2 * 16), 2);
-      expect(at(2), 2, reason: 'clamped at the next row"s depth, not 0');
+      expect(at(dropIndicatorInset(3)), 3);
+      expect(at(dropIndicatorInset(2)), 2);
+      expect(
+        at(dropIndicatorInset(0)),
+        2,
+        reason: 'clamped at the next row"s depth, not 0',
+      );
       expect(at(-200), 2, reason: 'dragging far left cannot escape the clamp');
     });
 
@@ -127,16 +156,12 @@ void main() {
     });
 
     test('the level snaps to the nearest step, not the one it passed', () {
-      // Half a step right of level 1 rounds up to 2, so the dot never lags the
-      // pointer by a whole indent.
-      expect(
-        reparentLevelFor(pointerX: 2 + 1.6 * 16, rowDepth: 3, nextRowDepth: null),
-        2,
-      );
-      expect(
-        reparentLevelFor(pointerX: 2 + 1.4 * 16, rowDepth: 3, nextRowDepth: null),
-        1,
-      );
+      // Past the midpoint between two dots it takes the further one, so the
+      // mark never lags the pointer by a whole indent.
+      int at(double x) =>
+          reparentLevelFor(pointerX: x, rowDepth: 3, nextRowDepth: null);
+      expect(at(dropIndicatorInset(1) + 0.6 * kTreeIndentUnit), 2);
+      expect(at(dropIndicatorInset(1) + 0.4 * kTreeIndentUnit), 1);
     });
   });
 
