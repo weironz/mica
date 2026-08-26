@@ -118,9 +118,13 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 ## 发版(权威文档 `docs/release.md`)
 
 `just release X.Y.Z`(bump → 门禁 → commit → tag)→ 推 tag → CI 产出全部 7 个产物 →
-手动触发 `Deploy` workflow 上线。`just deploy-prod X.Y.Z` 是**兜底**(GitHub 挂了才用;
-和 CI 跑的是同一个 `ansible/deploy.yml`)。加 `--check --diff` 对真节点先彩排,不改任何东西。
+手动触发 `Deploy` workflow 上线。**手动那几下的完整清单在 `docs/release.md` 顶部**。
+彩排:`gh workflow run Deploy -f version=X.Y.Z -f check=true`,对真节点跑一遍不改任何东西。
 `just --list` 看全部 recipe。
+
+⚠️ **`just deploy-prod`(兜底)在本机跑不了**(2026-08-26 实测):ansible 不支持 Windows 作
+控制端,`pipx install ansible-core` 装得上、一跑就 `WinError 87`。所以「GitHub 挂了怎么办」
+**今天没有答案** —— 要这条路得先装真的 WSL 发行版(系统级改动,由用户决定)。
 
 **节奏(用户定,长期有效)**:
 
@@ -162,10 +166,13 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 节点 `mica.cloudcele.com`(阿里云),key 认证免密。容器名 **`mica-postgres-1`**(不是 `mica-postgres`,
 那是本地 dev 栈的)。详见 `docs/deploy.md` / `docs/release.md`。
 
-- ⚠️ **`deploy-prod` 不做迁移前备份**。backup sidecar 是周期性导出器、且在 api 起来之后才刷,
-  当不了回滚点。**带数据改动的迁移必须自己先落还原点**:
-  `docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-<x>-<ts>.sql.gz`,
-  再 `gzip -t` 验完整性 + `zcat | grep -c "^COPY public.<表>"` 确认目标表在内。
+- ~~⚠️ **`deploy-prod` 不做迁移前备份**~~ —— **2026-08-26 起 playbook 自己做**:比一次
+  `git diff v<节点当前版本>..v<新版本> -- migrations/`,**有新迁移才**落
+  `/data/mica/pre-<版本>-<ts>.sql.gz`,问不出答案时按「有」处理。校验不能只用 `gzip -t`
+  (**实测**:失败的 dump 会留下一个合法的空 gzip,截断的也照过),判据是 pg_dump 结尾标记 +
+  `COPY public.document_yrs_base` 同时在内;`pg_dump | gzip` 那条管线**必须** `set -o pipefail`
+  (不带的话 dump 失败仍返回 0,实测)。任何一步不过就删半成品并**中止部署**。
+  backup sidecar 仍然当不了回滚点(周期导出器,api 起来之后才刷)。
 - **分层生效**:服务端改动随 api 部署即生效;**MCP 代理层的改动在 `mica-cli` 二进制里**,用户不把
   MCP 指向新版并重连就还是旧行为。排查"我明明改了怎么没生效"先分清这层。
 - **迁移是 `sqlx::migrate!` 编译期嵌入的**:新增迁移文件不触发 `mica-infra` 重编 →

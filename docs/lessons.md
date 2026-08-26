@@ -781,3 +781,62 @@ bash -n <<<'<该步骤 run 的内容>'
 - 规则：**发现自己在给某条规则加提醒时，先问它能不能变成一道拒绝。** 提醒的失败率是
   人的记忆力，拒绝的失败率是零；而且写拒绝会逼你把规则说清楚，说清楚的过程本身就能
   暴露这条规则是不是真的成立。
+
+
+### 门禁写在作者手上的状态,而不是调用方会造出的状态
+
+同一天,同一个脚本(`scripts/release-check.sh`),第二次撞上「这道门永远过不去」。
+
+- 第一次:`flutter analyze` 不带 flag,而这个包有约 130 条 `info` —— 它永远退出 1。
+- 第二次:第 4 条断言 `git diff --quiet Cargo.lock`(「lock 未被修改」)。而
+  `release.sh` 的**第 1 步**就是 `release-bump.sh`,它最后一行 `cargo check` 存在的
+  唯一目的就是刷新 lock;提交是第 3 步。**门禁挡住的正是它自己要求创建的状态。**
+
+两次形状完全一样:**断言写的是作者当时手上的状态**(干净工作树、只跑 `analyze` 那一下),
+**不是调用方会造出的状态**。而且两次都"验证过" —— 单独跑 `just release-check` 都过,
+只在它本来要服务的那条流程里失败。
+
+`just release` 是 2026-08-25 加的,到 2026-08-26 真发一版才第一次跑通 —— 也就是说
+这条流程从加进来到被真正使用之间,一次都没有端到端跑过。
+
+规则:**一道门禁必须从调用它的入口跑一遍**,不能只单独跑。「它自己能过」和「流程能过」
+是两个事实,中间隔着的正是这道门存在的理由。
+
+### 「装上了」不等于「能用」:Windows 上的 ansible
+
+`scripts/deploy-prod.sh` 检查 `command -v ansible-playbook`,通过就往下走。在 Windows 上
+`pipx install ansible-core` **会成功**,`ansible-playbook.exe` 也确实在 PATH 上 ——
+然后一运行就死在 ansible 自己的启动里:
+
+    File ".../ansible/cli/__init__.py", line 46, in check_blocking_io
+    OSError: [WinError 87] 参数错误。
+
+ansible 不支持 Windows 作控制端。于是这个检查的效果是**把一句能读的拒绝,换成一段
+深处的 traceback**。改成 `ansible-playbook --version` —— 检查能力,不检查文件在不在。
+
+比这更该记的是**它掩盖了什么**:`just deploy-prod` 是「GitHub 挂了」时的兜底,而它在
+主力机上从来就跑不了。这条路径在 2026-08-25 的改造里被反复讨论、被写进三份文档、
+被称为「和 CI 走同一条路径」—— **没有人在这台机器上真的跑过它一次**。
+上一轮教训是「兜底路径变成主路径,而它没人设计过」;这一轮是**兜底路径压根不存在,
+而三份文档都说它存在**。同一种病,换了个形状。
+
+### `gzip -t` 证明不了那是个备份
+
+迁移前还原点那段,第一版校验写的是 `gzip -t`。实测(2026-08-26,本地 dev 库):
+
+- `pg_dump -d 不存在的库 | gzip > f` —— 失败的 dump 留下一个**完全合法的空 gzip**,
+  `gzip -t` **通过**。
+- 把真 dump 截掉一半再压 —— `gzip -t` 也**通过**。
+
+`gzip -t` 校验的是压缩容器,不是内容。判据换成「pg_dump 的结尾标记 **且**
+`COPY public.document_yrs_base` 同时在内」,上面两种都被拒。
+
+同一段里另外两个实测出来的坑:
+
+- **`pg_dump | gzip` 不带 `set -o pipefail` 时,dump 失败整条管线返回 `0`**
+  (实测 `rc=0` vs 带 pipefail 的 `rc=1`)。所以那个 `-o pipefail` 是承重的,不是风格。
+- **`zcat f | grep -q ...` 在 pipefail 下返回 141**:`grep -q` 命中就退出,`zcat` 吃到
+  SIGPIPE,而 pipefail 把它读成失败。所以校验用一趟 `awk` 读到底,不用 `grep -q`。
+
+规则:**写「验证」的时候,先构造一个应该被拒的样本喂给它。** 如果构造不出来,
+这个验证多半什么都没验。

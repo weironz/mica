@@ -5,18 +5,66 @@
 推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow,
 生产滚到那个版本。两步,没有第三步。
 
-`just deploy-prod X.Y.Z` **保留**为兜底(GitHub 挂了的时候用),和 CI 走**同一条**路径
-—— 两边都是 `ansible/deploy.yml`,CI 那一步字面上就是在跑 `bash scripts/deploy-prod.sh`。
-「compose 改了必须走兜底」这条**已经不成立**(2026-08-25,见下节)。
+## 你要按的那几下
 
-先彩排再上线,这一步是免费的:
+整个流程里手动的部分只有这些。照抄即可,`X.Y.Z` 换成版本号(补丁位递增;minor 由用户拍板)。
 
 ```bash
-just deploy-prod 0.13.27 --check --diff
+# 1. bump → 门禁 → commit → tag。一条命令，门禁夹在中间，跳不过去。它不推送。
+#    要本地 Postgres 起着（just dev），否则当场拒绝——理由见步骤 3。
+just release X.Y.Z
+
+# 2. 推送。发布列车从这一下开始，CI 产出全部 7 个产物（约 10–15 分钟）。
+git push origin main vX.Y.Z
+
+# 3. 等 CI 绿，并确认 4 个 asset 都挂上了（草稿 release 在最后一步才翻成正式版）
+gh run watch --repo weironz/mica
+gh release view vX.Y.Z --repo weironz/mica
+
+# 4. 彩排。对真节点跑一遍整个 playbook，不改任何东西，逐行 diff 出要做的改动。
+#    docker 那几步是 community.docker 原生模块，所以彩排跑的是同一段代码，不是跳过。
+gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z -f check=true
+
+# 5. 上线。没有审批门——触发本身就是那个决定。
+gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 ```
 
-它对**真节点**跑一遍整个 playbook 但不改任何东西,把要做的改动逐行 diff 出来。
-docker 那几步是 `community.docker` 原生模块,所以彩排跑的是同一段代码,不是跳过。
+`verify-prod`(断言 `/api/health` 报的就是这个版本)**已内置在 workflow 里**,不用单独跑。
+
+### 机器替你把关的(以前靠记性,现在会拒绝)
+
+| 关的什么 | 在哪 | 何时加的 |
+|---|---|---|
+| 三处版本号一致 + `Cargo.lock` 跟上 | `scripts/release-check.sh` | 2026-08-25 |
+| DB 集成测试**真的跑了**(本地 Postgres 没起就拒绝发版) | 同上 | 2026-08-25 |
+| `cargo test` / `clippy -D warnings` / `flutter analyze` + `test` | 同上 | 2026-08-25 |
+| **tag 必须与它所在那棵树的版本号一致** | `.github/workflows/release.yml` | 2026-08-26 |
+| **带迁移的发布,上线前自动落 `pg_dump` 还原点** | `ansible/deploy.yml` | 2026-08-26 |
+| 部署失败自动复原 `MICA_VERSION` | 同上 | 2026-08-25 |
+
+### 只有三件事机器做不了
+
+1. **发不发、发哪一位** —— 用户决策。
+2. **同步 `docs/roadmap.md`**(步骤 5)。`just release` 结尾会提醒,但**故意不做成门禁**:
+   不是每版都关条目,老响的警报会被无视。漏了的代价是文档变旧,不伤数据。
+3. **冒烟测这一版真正改了什么**(步骤 11)。`verify-prod` 只断言版本号 ——
+   **版本号证明不了功能**。
+
+> ⚠️ **`just deploy-prod` 在 Windows 主力机上跑不了**(2026-08-26 实测)。`pipx install
+> ansible-core` 会装成功、`ansible-playbook.exe` 也在 PATH 上,但一运行就死在 ansible 自己的
+> 启动里:`check_blocking_io` → `OSError: [WinError 87]`。**ansible 不支持 Windows 作控制端。**
+> 所以本机唯一能用的部署路径就是上面的 `gh workflow run Deploy`。
+> `scripts/deploy-prod.sh` 现在**运行** ansible 而不是检查文件在不在,会带着这段话拒绝
+> —— 以前 `command -v` 通过、然后崩在深处,那种检查等于没检查。
+> 想找回这条兜底,得装一个真的 WSL 发行版(`wsl --install -d Ubuntu`);
+> Docker Desktop 自带的 `docker-desktop` 那个不算。**这是系统级改动,由用户决定。**
+>
+> 于是「GitHub 挂了怎么办」今天**没有答案**。这正是本次改造本该治好的病(兜底路径没人走过),
+> 换了个形状复发了一次 —— 记在这里,而不是等下次真需要它的时候才发现。
+
+`just deploy-prod X.Y.Z` 和 CI 走**同一条**路径 —— 两边都是 `ansible/deploy.yml`,CI 那一步
+字面上就是在跑 `bash scripts/deploy-prod.sh`。「compose 改了必须走兜底」这条**已经不成立**
+(2026-08-25,见下节)。
 
 | 产物 | 谁构建 | 去哪 |
 |---|---|---|
@@ -210,11 +258,28 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
    > ```bash
    > gh release edit vX.Y.Z --draft=false --latest
    > ```
-8. **带数据改动就先落还原点**(`deploy-prod` 自己不做备份,理由见「生产运维要点」):
+8. ~~**带数据改动就先落还原点**~~ —— **2026-08-26 起 playbook 自己做,这一步不用你记了。**
+
+   它拿节点 `.env` 里的 `MICA_VERSION`(当前上线的版本)和要发的 tag 比一次
+   `git diff --name-only v<prev>..v<new> -- migrations/`:**有新迁移才**落
+   `/data/mica/pre-<version>-<时间戳>.sql.gz`,没有就跳过并说明。**问不出答案时**
+   (tag 不在这份 checkout 里、浅克隆)按**有**处理 —— 猜错一次的代价是一点节点 IO,
+   猜错另一次的代价是数据库。
+
+   为什么非做不可:迁移是 `sqlx::migrate!` **编译期**嵌进 api 二进制的,启动即执行 ——
+   **部署那个镜像就是执行它的迁移**,中间没有可以停下来的一步。而 backup sidecar 是周期
+   导出器、且在 api 起来之后才刷,当不了回滚点。
+
+   校验不是只看 `gzip -t`(**实测**:失败的 dump 会留下一个完全合法的、空的 gzip,
+   `gzip -t` 照过;截断的也照过)。判据是 **pg_dump 的结尾标记 + `COPY public.document_yrs_base`
+   同时在内**,一趟 awk 扫完。另外 `pg_dump | gzip` 那条管线**必须** `set -o pipefail`
+   —— 不带的话 dump 失败整条管线仍然返回 0(实测 `rc=0`)。任何一步不过就删掉半成品并
+   **中止部署**:没有还原点就不迁移,这才是这一步的意义。
+
+   手动落一次(比如你想在无迁移的发布上也留个点):
    ```bash
    ssh root@mica.cloudcele.com \
      'docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > /data/mica/pre-X.Y.Z-$(date +%Y%m%d-%H%M%S).sql.gz'
-   # 验完整性:gzip -t <file>,再 zcat <file> | grep -c "^COPY public.documents " 确认目标表在内
    ```
 9. **部署**。两条路**跑的是同一个 playbook**(`ansible/deploy.yml`):
 
@@ -259,15 +324,20 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
   可选,所以几乎没人跑
 - `just docker-build` / `docker-push` —— **CI 挂掉时的兜底**,正常发版用不到
 
-**部署要 Ansible**(2026-08-25 起,只有 `just deploy-prod` 这一条路用得到):
+**部署不需要本地装任何东西** —— 走 `gh workflow run Deploy`,ansible 装在 CI 的 runner 上。
+
+只有 `just deploy-prod` 这条兜底用得到本地 ansible,而**它在这台 Windows 机器上装不成能用的**
+(见上面那条 ⚠️:装得上、跑不了,`WinError 87`)。真要这条路,得在一个 POSIX 环境里:
 
 ```bash
-pipx install ansible-core
+pipx install ansible-core                                       # 在 WSL / Linux / macOS 里
 ansible-galaxy collection install -r ansible/requirements.yml   # community.docker
 ```
 
-`deploy-prod` 两样缺一就**拒绝并打出安装命令**,不会跑到一半才发现。**节点侧零新增
-依赖** —— `docker_compose_v2` 直接驱动 docker CLI,不需要 Python docker SDK。
+`deploy-prod` 两样缺一就**拒绝并说清楚**,不会跑到一半才发现 —— 而且第一样检查的是
+**能不能运行**,不是文件在不在(2026-08-26 改;此前 Windows 上那个检查会通过,然后崩在
+ansible 自己的启动里)。**节点侧零新增依赖** —— `docker_compose_v2` 直接驱动 docker CLI,
+不需要 Python docker SDK。
 
 前置:
 ```bash

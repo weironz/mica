@@ -20,8 +20,32 @@ tag="v$version"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
   || { echo "REFUSED: want X.Y.Z with no leading v (got: $version)" >&2; exit 1; }
 
-command -v ansible-playbook >/dev/null \
-  || { echo "REFUSED: ansible-playbook not found. pipx install ansible-core" >&2; exit 1; }
+# Runs it, rather than checking that the file exists. On Windows `pipx install
+# ansible-core` succeeds and puts ansible-playbook.exe on PATH, so `command -v`
+# passes — and then the real invocation dies inside ansible's own startup with
+#
+#   File ".../ansible/cli/__init__.py", line 46, in check_blocking_io
+#   OSError: [WinError 87] 参数错误。
+#
+# Ansible needs a POSIX controller and does not support Windows as one. Measured
+# on this repo's own dev machine on 2026-08-26, following this repo's own
+# install instructions. Existence was never the question; being able to run was.
+ansible-playbook --version >/dev/null 2>&1 || {
+  cat >&2 <<'EOF'
+REFUSED: ansible-playbook is not usable here.
+
+  Not installed?   pipx install ansible-core
+  On Windows?      it installs and then cannot run — ansible has no Windows
+                   controller support. Use the Deploy workflow instead:
+
+                       gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
+
+                   To have this local fallback at all you need a POSIX shell
+                   with ansible: a real WSL distro (`wsl --install -d Ubuntu`)
+                   — Docker Desktop's own docker-desktop VM is not one.
+EOF
+  exit 1
+}
 
 # Refuse rather than auto-install: a deploy is the wrong moment to pull a fresh
 # collection off the internet and find out it changed.

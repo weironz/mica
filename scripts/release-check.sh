@@ -22,13 +22,13 @@ docker exec mica-postgres pg_isready -U mica -d mica >/dev/null 2>&1 \
   || fail "dev Postgres is down, so the DB-backed tests would SKIP and still report passed. Run 'just dev' first."
 echo "==> DB-backed tests: ON"
 
-# 2. The three version numbers must already agree.
-pub=$(grep -m1 '^version:' clients/mica_flutter/pubspec.yaml | tr -d ' ' | cut -d: -f2)
-dart=$(grep -m1 'kAppVersion' clients/mica_flutter/lib/main.dart | sed "s/.*'\(.*\)'.*/\1/")
-rust=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-[ "$pub" = "$dart" ] && [ "$dart" = "$rust" ] \
-  || fail "version numbers disagree: pubspec=$pub kAppVersion=$dart Cargo=$rust"
-echo "==> version: $pub (three places agree)"
+# 2. The three version numbers must already agree. The reading lives in
+#    scripts/manifest-version.sh because release.yml needs the same answer to
+#    check the TAG against them, and two copies of three greps is the drift this
+#    repo keeps paying for. It prints its own REFUSED and exits non-zero, which
+#    `set -e` turns into ours.
+version=$(bash scripts/manifest-version.sh)
+echo "==> version: $version (three places agree)"
 
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that
@@ -75,8 +75,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 #    has to be tried through `just release`, not only on its own.
 lock=$(grep -A1 -E '^name = "mica-(api-server|cli)"$' Cargo.lock \
   | grep -E '^version = ' | sed 's/.*"\(.*\)"/\1/' | sort -u)
-[ "$lock" = "$rust" ] \
-  || fail "Cargo.lock says '$lock' for the workspace binaries, Cargo.toml says '$rust' — run 'cargo check' and include the lock in the release commit"
+[ "$lock" = "$version" ] \
+  || fail "Cargo.lock says '$lock' for the workspace binaries, Cargo.toml says '$version' — run 'cargo check' and include the lock in the release commit"
 echo "==> Cargo.lock: $lock"
 
-printf '\n  release-check passed for %s\n' "$pub"
+printf '\n  release-check passed for %s\n' "$version"

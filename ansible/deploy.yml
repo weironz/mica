@@ -192,22 +192,18 @@
           {{ (mica_env.keys() | list) + ['MICA_VERSION']
              + (secrets_keys.stdout_lines | default([])) }}
 
-    # ── Ship the compose from the tag ────────────────────────────────────────
-    # The node's file is docker-compose.yaml (not .yml): keep that name, or
-    # compose finds two files and picks the other one.
-    - name: Install docker-compose.yaml from the tag
-      ansible.builtin.copy:
-        src: "{{ compose_src }}"
-        dest: "{{ compose_dst }}"
-        mode: "0644"
-        backup: true
-      register: compose_copy
-
-    # ── Point .env at the version ────────────────────────────────────────────
+    # ── What is live right now ───────────────────────────────────────────────
     # Remember what it was FIRST. A deploy that fails half way leaves .env naming
     # a version whose containers never came up, and the next restart — a reboot,
     # an OOM kill — brings the node back on that. The node script this replaces
     # restored it on ANY non-zero exit, and that is worth keeping.
+    #
+    # Read here, ahead of the first write, for two reasons. The header of this
+    # file promises every assertion runs before the compose or .env is touched,
+    # and for "there must be a version to fall back to" that was not true: it sat
+    # after the compose copy, so it could refuse a deploy having already replaced
+    # the node's compose. And the restore point below needs to know which version
+    # is live in order to ask whether this release adds migrations.
     - name: Read the version currently deployed
       ansible.builtin.slurp:
         src: "{{ env_file }}"
@@ -234,6 +230,107 @@
           {{ env_file }} has no MICA_VERSION line, so a failed deploy would have
           nothing to restore. Refusing before anything is changed.
 
+    # ── A restore point, when this release adds migrations ───────────────────
+    # Migrations ride the api image: sqlx::migrate! embeds migrations/*.sql at
+    # COMPILE time and run_migrations applies them at startup. So deploying an
+    # api build IS applying its migrations, with no separate step to pause at.
+    #
+    # Nothing here backed that up. The backup sidecar is a periodic exporter and
+    # only runs once api is already up, so it is not a point you can roll back
+    # to. Until now the pre-migration dump was step 8 of docs/release.md — a
+    # thing a person had to remember, about the one class of change that cannot
+    # be undone by redeploying the previous version.
+    #
+    # A rule that lives only in a document is not a rule here: two gates in this
+    # repo were found unpassable the first time they were really used, and both
+    # had a document saying they worked.
+    - name: Does this release add migrations?
+      ansible.builtin.command:
+        cmd: git diff --name-only {{ previous_version }}..v{{ version }} -- migrations/
+        chdir: "{{ playbook_dir }}/.."
+      delegate_to: localhost
+      register: migration_diff
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Decide whether a restore point is needed
+      ansible.builtin.set_fact:
+        migration_files: "{{ migration_diff.stdout_lines | default([]) }}"
+        # A non-zero rc means the question could not be ANSWERED — a tag missing
+        # from this checkout, a shallow clone, a previous_version that was never
+        # published. Treating that as "no migrations" would skip the backup in
+        # precisely the case where least is known, so unknown counts as yes. The
+        # cost of a wrong yes is some node IO; of a wrong no, the database.
+        needs_restore_point: >-
+          {{ migration_diff.rc != 0
+             or (migration_diff.stdout_lines | default([]) | length) > 0 }}
+
+    - name: Say what that means
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('migrations added by this release: ' ~ (migration_files | join(', ')))
+             if migration_files | length > 0
+             else (('cannot tell whether ' ~ previous_version ~ '..v' ~ version
+                    ~ ' adds migrations (' ~ (migration_diff.stderr | default('') | trim)
+                    ~ ') — taking a restore point anyway')
+                   if needs_restore_point | bool
+                   else ('no migrations between ' ~ previous_version ~ ' and v' ~ version
+                         ~ ' — no restore point needed')) }}
+
+    # Deliberately NOT check_mode: false — a rehearsal must not write a 100 MB
+    # file to the node. It is skipped there, and the debug above is what a
+    # rehearsal reports instead.
+    - name: Take a restore point before the migrations run
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          f={{ mica_dir }}/pre-{{ version }}-$(date +%Y%m%d-%H%M%S).sql.gz
+          # `set -o pipefail` (in -euo above) is load-bearing, not style: without
+          # it a pg_dump that dies still leaves a perfectly well-formed gzip of
+          # nothing, and `gzip -t` PASSES on that. The check would confirm a
+          # backup that contains no backup.
+          docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > "$f" \
+            || { rm -f "$f"; exit 1; }
+          gzip -t "$f" || { rm -f "$f"; exit 1; }
+          # Structure, not just "is it a valid gzip". The trailer proves pg_dump
+          # reached the end rather than being cut off; the COPY line proves the
+          # table every document's content lives in is actually inside. One awk
+          # pass and not `zcat | grep -q`, because grep -q exits early, zcat
+          # takes SIGPIPE, and under pipefail that reads as failure.
+          zcat "$f" | awk '
+            /^COPY public\.document_yrs_base/       { t = 1 }
+            /PostgreSQL database dump complete/     { d = 1 }
+            END { exit !(t && d) }' || { rm -f "$f"; exit 1; }
+          echo "$f"
+      register: restore_point
+      when: needs_restore_point | bool
+      # Every failure path above removes the partial file first, so a full disk
+      # or a stopped postgres leaves nothing behind — and stops the deploy here,
+      # before a single byte of the node's config has been touched. Refusing to
+      # migrate without a restore point is the whole point of the task.
+
+    - name: Where the restore point is
+      ansible.builtin.debug:
+        msg: "restore point: {{ restore_point.stdout | default('(rehearsal — not taken)') | trim }}"
+      when: needs_restore_point | bool
+
+    # ── Ship the compose from the tag ────────────────────────────────────────
+    # The FIRST write of the run. Everything above only reads and refuses, so up
+    # to this line a failure leaves the node exactly as it was found.
+    #
+    # The node's file is docker-compose.yaml (not .yml): keep that name, or
+    # compose finds two files and picks the other one.
+    - name: Install docker-compose.yaml from the tag
+      ansible.builtin.copy:
+        src: "{{ compose_src }}"
+        dest: "{{ compose_dst }}"
+        mode: "0644"
+        backup: true
+      register: compose_copy
+
+    # ── Point .env at the version ────────────────────────────────────────────
     # MICA_VERSION carries the v prefix: compose uses the value directly as the
     # image tag (`mica-api:${MICA_VERSION}`) and the published tags have it.
     # Writing the bare number makes compose pull a tag that does not exist —

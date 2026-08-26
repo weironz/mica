@@ -9,10 +9,19 @@ name: Release
 # Pushed to the container registries (`images` job):
 #   * mica-api / mica-web / mica-cli, tagged with the IMMUTABLE version.
 #
-# Deploying is deliberately NOT here: rolling prod is a human step
-# (`just deploy-prod X.Y.Z`). Letting CI deploy would mean putting a prod root
-# SSH key in GitHub secrets — a repo/Actions compromise would become a prod
-# compromise. CI only ever holds registry-push credentials. See docs/release.md.
+# Deploying is not here, but the reason changed and this comment used to state
+# the old one as if it still held: "letting CI deploy would mean putting a prod
+# root SSH key in GitHub secrets… CI only ever holds registry-push credentials."
+# Both halves stopped being true on 2026-08-25. There IS a Deploy workflow, and
+# it holds exactly that key. The trade is argued in docs/cd-plan.md §4.1 and
+# docs/release.md; the short version is that the fence closed one door in a room
+# with another one open — the same CI could already publish a malicious image
+# that prod would pull.
+#
+# What survives is the SEPARATION, and for a different reason: building is a
+# consequence of tagging, while deploying is a decision. Deploy is
+# workflow_dispatch-only, so "which version is live" is never a side effect of
+# pushing a tag.
 
 on:
   push:
@@ -66,6 +75,40 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      # The tag is not evidence of anything. Every job below reads the version
+      # from the tag NAME alone, so `git tag v0.13.29 && git push` — without
+      # `just release`, which is what bumps — builds an installer FILE named
+      # 0.13.29 around a binary whose kAppVersion is still 0.13.28. The in-app
+      # updater compares exactly that number, so the update either never offers
+      # itself or offers itself forever.
+      #
+      # Asymmetry worth naming: `verify-prod` already catches the server half at
+      # deploy time (it asserts /api/health reports the version being deployed).
+      # The desktop half had no such check anywhere — and desktop is the half
+      # that auto-updates.
+      #
+      # Asserted on the dispatch path too, not only on tag pushes. A manual run
+      # builds from the default branch, so a version input that disagrees with
+      # that tree mislabels the artifact in exactly the same way — including on
+      # a publish=false dry run, whose entire output is that artifact.
+      - uses: actions/checkout@v5
+
+      - name: The version must match the tree it is built from
+        shell: bash
+        # Through env, not ${{ }} inside the script body: the value comes from a
+        # tag name or a dispatch input, and interpolating either straight into
+        # shell is a script-injection seam for no benefit.
+        env:
+          WANT: ${{ steps.ver.outputs.version }}
+        run: |
+          got=$(bash scripts/manifest-version.sh)
+          [ "$got" = "$WANT" ] || {
+            echo "::error::asked for $WANT, but this tree says $got." \
+                 "Was it tagged by hand instead of with 'just release $WANT'?"
+            exit 1
+          }
+          echo "==> $WANT matches pubspec / kAppVersion / Cargo.toml"
 
       - name: Create the draft release
         if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
