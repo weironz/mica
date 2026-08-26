@@ -1261,9 +1261,106 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   /// Open an existing page, by id, in a new tab. The `+` menu's picker.
-  void _openViewByIdInNewTab(String viewId) {
+  ///
+  /// [workspaceId] is where the page actually lives. When that is somewhere
+  /// else, the tab opens in the BACKGROUND and the shell stays put — see
+  /// [_openElsewhereInBackgroundTab].
+  void _openViewByIdInNewTab(String viewId, String? workspaceId) {
+    // The same question `_selectTab` asks of a tab it is activating: would this
+    // require a workspace switch? Reused rather than re-compared, so "belongs
+    // somewhere else" has one definition — including its null rule, where a
+    // missing workspace means "here" and must not be read as "unknown".
+    final elsewhere = workspaceToSwitchTo(
+      tabWorkspaceId: workspaceId,
+      currentWorkspaceId: _selectedWorkspace?.id,
+    );
+    if (elsewhere != null) {
+      unawaited(_openElsewhereInBackgroundTab(viewId, elsewhere));
+      return;
+    }
     _pushTab();
     unawaited(_openViewById(viewId));
+  }
+
+  /// Queue a page from ANOTHER workspace into a background tab, without moving
+  /// the shell.
+  ///
+  /// The point of the whole thing: the `+` picker searches every workspace, so
+  /// "open this in a tab" should not have to mean "and take me there". The tab
+  /// carries its own [DocTab.workspaceId], and `_selectTab` already switches the
+  /// shell when you click it — this only had to stop forcing that switch up
+  /// front.
+  ///
+  /// The bootstrap is fetched HERE rather than on activation, and that is not an
+  /// optimisation: `_selectTab` is explicit that "the editor reads the active
+  /// tab's bootstrap, which is already in memory — switching never refetches".
+  /// A tab parked with a view and no bootstrap would render as permanently
+  /// loading, and clicking it would switch workspace to show nothing.
+  ///
+  /// Nothing is revealed in the sidebar. `_revealInTree` on an id that is not in
+  /// the current tree PARKS the request until that workspace's tree loads, so
+  /// revealing here would make the sidebar jump at some unrelated later moment.
+  Future<void> _openElsewhereInBackgroundTab(
+    String viewId,
+    String workspaceId,
+  ) async {
+    final session = _session;
+    if (session == null) return;
+
+    // The tree of a workspace this device has never opened is not in memory —
+    // `_viewsByWorkspace` fills per workspace as you visit them. Fetching it is
+    // one request, and it is the tree the tab needs anyway the moment you click
+    // it.
+    var view = _viewsByWorkspace[workspaceId]
+        ?.where((v) => v.id == viewId)
+        .firstOrNull;
+    if (view == null) {
+      try {
+        final answer = await _api.listViewsIfChanged(
+          session.accessToken,
+          workspaceId,
+        );
+        final views = answer.views;
+        if (views != null && mounted) {
+          setState(() {
+            _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
+          });
+          view = views.where((v) => v.id == viewId).firstOrNull;
+        }
+      } on ApiException catch (error) {
+        if (mounted) setState(() => _message = error.message);
+        return;
+      }
+    }
+    if (view == null || !mounted) return;
+
+    // A folder has no document, so there is nothing to put in a tab. Fall back
+    // to switch-and-reveal, which is what a folder hit means.
+    if (view.isFolder) {
+      await _openSearchHit(viewId, workspaceId);
+      return;
+    }
+
+    final tab = DocTab(view: view)..workspaceId = workspaceId;
+    setState(() => _tabs.add(tab));
+    try {
+      final bootstrap = await _api.bootstrapDocument(
+        session.accessToken,
+        workspaceId,
+        view.objectId,
+      );
+      if (!mounted) return;
+      setState(() => tab.bootstrap = bootstrap);
+    } on ApiException catch (error) {
+      // Drop the tab rather than leave one that can never load: a tab stuck
+      // showing a spinner is a worse answer than the error, because it looks
+      // like it is still working.
+      if (!mounted) return;
+      setState(() {
+        _tabs.remove(tab);
+        _message = error.message;
+      });
+    }
   }
 
   /// Create a page and open it in a new tab. The `+` menu's first entry.
@@ -7963,7 +8060,12 @@ class WorkspaceView extends StatefulWidget {
   final void Function(DocumentView view)? onOpenInNewTab;
 
   /// Same, by id — the tab strip's `+` picks through search, which yields ids.
-  final void Function(String viewId)? onOpenInNewTabById;
+  ///
+  /// [workspaceId] is where the hit lives, and null means "the one we are in".
+  /// Without it a hit from another workspace could only be resolved against the
+  /// CURRENT workspace's tree, where it does not exist — which is why the `+`
+  /// used to hand those to the switch-and-open path instead of opening a tab.
+  final void Function(String viewId, String? workspaceId)? onOpenInNewTabById;
 
   /// Create a page and open it in a new tab. Null hides the `+` entirely, which
   /// is what the local world gets.
@@ -10137,10 +10239,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           untitledLabel: context.l10n.untitledPage,
           onNewTab: widget.onNewTabPage == null ? null : _showNewTabMenu,
           newTabTooltip: context.l10n.tabNewTooltip,
+          foreignWorkspaceName: _foreignWorkspaceName,
         ),
         Expanded(child: body),
       ],
     );
+  }
+
+  /// The workspace name to show on a tab that does not belong to the workspace
+  /// on screen — null for every ordinary tab.
+  ///
+  /// Named rather than merely marked: "this tab is from somewhere else" leaves
+  /// you having to click it to find out where, and clicking is the thing that
+  /// moves you.
+  String? _foreignWorkspaceName(DocTab tab) {
+    final id = tab.workspaceId;
+    if (id == null || id == widget.selectedWorkspace?.id) return null;
+    for (final w in widget.workspaces) {
+      if (w.id == id) return w.name;
+    }
+    // Stamped with a workspace this account can no longer see. Say nothing
+    // rather than invent a name — the tab is already in the state
+    // `_workspaceForTab` refuses to sync.
+    return null;
   }
 
   /// The tab strip's `+`: create a page, or pick an existing one — both into a
@@ -11918,16 +12039,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               },
         onOpen: (viewId, workspaceId) {
           Navigator.of(context).pop();
-          // A hit from another workspace has to go through the host's
-          // switch-then-open path; the in-new-tab and in-place callbacks both
-          // resolve the view out of the CURRENT workspace's tree.
           final elsewhere =
               workspaceId != null &&
               workspaceId != widget.selectedWorkspace?.id;
+          // Asked for in a TAB, and it lives somewhere else: hand the workspace
+          // over with the id and stay where we are. The tab carries that
+          // workspace and `_selectTab` switches only when it is clicked, so the
+          // `+` can queue a page from elsewhere without moving you off what you
+          // are doing. This used to fall into the branch below, which switched
+          // immediately and opened in place — the tab was never created.
+          if (elsewhere && inNewTab && openInNewTab != null) {
+            openInNewTab(viewId, workspaceId);
+            // Deliberately no reveal: the id is not in the tree we are showing,
+            // and `_revealInTree` would park the request until that workspace's
+            // tree eventually loads — jumping the sidebar at some unrelated
+            // later moment.
+            return;
+          }
+          // Anything else from another workspace still goes through the host's
+          // switch-then-open path; the in-place callback resolves the view out
+          // of the CURRENT workspace's tree.
           if (elsewhere) {
             widget.onOpenSearchHit?.call(viewId, workspaceId);
           } else if (inNewTab && openInNewTab != null) {
-            openInNewTab(viewId);
+            openInNewTab(viewId, null);
           } else {
             widget.onOpenSearchResult(viewId);
           }

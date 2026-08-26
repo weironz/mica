@@ -40,6 +40,7 @@ class DocTabStrip extends StatelessWidget {
     required this.untitledLabel,
     this.onNewTab,
     this.newTabTooltip,
+    this.foreignWorkspaceName,
   });
 
   final List<DocTab> tabs;
@@ -58,6 +59,16 @@ class DocTabStrip extends StatelessWidget {
   /// `l10n.untitledPage`, passed in rather than read here so this file stays
   /// free of the localization import and can be widget-tested on its own.
   final String untitledLabel;
+
+  /// The name of the workspace a tab belongs to, when that is NOT the one on
+  /// screen. Null for a tab from here, and null overall disables the hint.
+  ///
+  /// Clicking such a tab takes the whole shell to its workspace — the sidebar,
+  /// the breadcrumb and every create action follow it. That is the right
+  /// behaviour and it is also a surprise, because nothing about the tab says so
+  /// beforehand. The host computes the name; this widget only decides that a
+  /// tab which will move you should say where to.
+  final String? Function(DocTab tab)? foreignWorkspaceName;
 
   @override
   Widget build(BuildContext context) {
@@ -100,17 +111,20 @@ class DocTabStrip extends StatelessWidget {
           children: [
             const SizedBox(width: 4),
             for (var i = 0; i < tabs.length; i++)
-              _Tab(
-                // The tab's own title, NOT the active document's — every tab
-                // renders its own `view`, which is what makes the strip
-                // readable while a background tab is still loading.
-                label: _labelFor(tabs[i]),
-                active: i == activeIndex,
-                onTap: () => onSelect(i),
-                // No close button on the only tab: the host refuses to close
-                // the last one (`_tabs` is invariant-non-empty), so drawing an
-                // X there is an affordance that does nothing when clicked.
-                onClose: tabs.length < 2 ? null : () => onClose(i),
+              _withHint(
+                foreignWorkspaceName?.call(tabs[i]),
+                _Tab(
+                  // The tab's own title, NOT the active document's — every tab
+                  // renders its own `view`, which is what makes the strip
+                  // readable while a background tab is still loading.
+                  label: _labelFor(tabs[i]),
+                  active: i == activeIndex,
+                  onTap: () => onSelect(i),
+                  // No close button on the only tab: the host refuses to close
+                  // the last one (`_tabs` is invariant-non-empty), so drawing a
+                  // X there is an affordance that does nothing when clicked.
+                  onClose: tabs.length < 2 ? null : () => onClose(i),
+                ),
               ),
             if (onNewTab != null)
               _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
@@ -118,6 +132,16 @@ class DocTabStrip extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Wrap a tab in a tooltip naming its workspace, and only then.
+  ///
+  /// Not a tooltip on every tab: the label is already the page name, so one
+  /// would just repeat what is on screen — and a tooltip that says nothing new
+  /// teaches people to ignore the ones that do.
+  Widget _withHint(String? workspaceName, Widget tab) {
+    if (workspaceName == null || workspaceName.isEmpty) return tab;
+    return Tooltip(message: workspaceName, child: tab);
   }
 
   String _labelFor(DocTab tab) {

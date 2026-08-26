@@ -199,6 +199,53 @@ void main() {
       expect(find.byIcon(Icons.add), findsOneWidget);
     });
 
+    testWidgets('a tab from another workspace says which one', (tester) async {
+      // Clicking such a tab takes the whole shell to that workspace — sidebar,
+      // breadcrumb and every create action follow it. That is correct and it is
+      // also a surprise, so the tab has to say where it will take you BEFORE
+      // you click. Naming it, not just marking it: "somewhere else" leaves you
+      // clicking to find out where, and clicking is the thing that moves you.
+      final here = DocTab(view: _view('a', 'Alpha'));
+      final elsewhere = DocTab(view: _view('b', 'Beta'))..workspaceId = 'ws-2';
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [here, elsewhere],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+            foreignWorkspaceName: (t) =>
+                t.workspaceId == 'ws-2' ? '另一个工作区' : null,
+          ),
+        ),
+      );
+      final tips = tester.widgetList<Tooltip>(find.byType(Tooltip)).toList();
+      expect(
+        tips.map((t) => t.message).toList(),
+        ['另一个工作区'],
+        reason: 'exactly one tab is hinted, and it is the foreign one',
+      );
+    });
+
+    testWidgets('an ordinary tab is not wrapped in a tooltip', (tester) async {
+      // A tooltip repeating the label teaches people to ignore the ones that
+      // carry real information — which here is the only case that matters.
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [DocTab(view: _view('a', 'Alpha'))],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+            foreignWorkspaceName: (_) => null,
+          ),
+        ),
+      );
+      expect(find.byType(Tooltip), findsNothing);
+    });
+
     testWidgets('the only tab has no close button', (tester) async {
       // The host refuses to close the last tab, so an X there would be an
       // affordance that does nothing.
