@@ -7312,6 +7312,30 @@ WorldCardMode worldCardMode({
   return activeOrigin == cloudOrigin ? WorldCardMode.back : WorldCardMode.enter;
 }
 
+/// The workspace root's children after [dragged] is dropped on the root zone:
+/// every current root-level view except [dragged], in position order, with
+/// [dragged] appended.
+///
+/// Top-level and pure for the same reason as [treeRevealOffset]: the sidebar
+/// tree lives inside a widget with 97 required parameters, so the ordering can
+/// only be tested if it is not inside it. And the ordering is the part worth
+/// testing — dropping the row is visible, dropping it in the wrong PLACE is a
+/// silent reorder of somebody's sidebar.
+///
+/// [dragged] is filtered out before it is appended, so re-dropping a row that
+/// is already at the root moves it to the end instead of listing it twice.
+List<DocumentView> rootDropOrder(
+  List<DocumentView> views,
+  DocumentView dragged,
+) {
+  final roots =
+      views
+          .where((v) => v.parentViewId == null && v.id != dragged.id)
+          .toList()
+        ..sort((a, b) => a.position.compareTo(b.position));
+  return [...roots, dragged];
+}
+
 /// Scroll offset that centres row [index] of the sidebar tree in the viewport.
 ///
 /// Top-level and pure because getting it wrong is invisible: the first attempt
@@ -9030,9 +9054,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       child: DragAutoScrollRegion(
         enabled: _draggingTree,
         controller: _treeScroll,
-        child: ListView(
+        child: CustomScrollView(
         controller: _treeScroll,
-        children: _visibleDocumentTree().map((item) {
+        slivers: [
+        SliverList(
+        delegate: SliverChildListDelegate(
+        _visibleDocumentTree().map((item) {
           final row = DocumentListItem(
             key: ValueKey(item.view.id),
             view: item.view,
@@ -9093,7 +9120,72 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           return _draggableTreeRow(item.view, row);
         }).toList(),
         ),
+        ),
+        // The root drop zone. Every other drop target takes its parent from the
+        // ROW it sits on (`before`/`after` mean "sibling of that row"), so when
+        // the bottom of the tree is a nested row there was no way to say "below
+        // all of this, at the workspace root" — reported as 「放在整个页面树最底
+        // 部，让他与根路径齐平，似乎做不到」.
+        //
+        // The blank area under the tree already MEANS root: tapping it releases
+        // the located node, and the New buttons then create at the root.
+        // Accepting a drop there says the same thing with a drag, so there is
+        // nothing new to learn.
+        //
+        // `SliverFillRemaining(hasScrollBody: false)` and not a trailing box of
+        // some chosen height: it takes the LEFTOVER viewport when the tree is
+        // short — which is the whole blank area the user was aiming at — and
+        // only its own height when the tree overflows, so it adds no phantom
+        // scroll extent to a long tree. The first attempt was a 40px box and
+        // the drop silently did nothing, because the pointer was below it in
+        // blank space that still belonged to no one.
+        if (_draggingTree)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: _rootDropZone(),
+          ),
+        ],
+        ),
       ),
+    );
+  }
+
+  /// "Move to the workspace root, at the end." Exists only during a drag.
+  ///
+  /// Deliberately NOT the full depth picker (drag left/right to choose the
+  /// nesting level, the way Notion does). That is the general answer, and it is
+  /// a rework rather than an addition: depth here is derived from which row's
+  /// DragTarget the pointer is over, and a DragTarget cannot see the pointer's
+  /// x — it would take one overlay tracking the pointer and computing (index,
+  /// depth) itself. It would also have to respect this tree's invariant that
+  /// only a folder may hold children, so the indicator must snap to the LEGAL
+  /// depths rather than to every depth, or it draws a line you cannot drop on.
+  /// Worth doing if picking a MIDDLE level turns out to be wanted too; the
+  /// case actually reported is the root.
+  Widget _rootDropZone() {
+    return DragTarget<DocumentView>(
+      hitTestBehavior: HitTestBehavior.opaque,
+      // A row already at the root, dropped here, is a reorder to the end —
+      // a legitimate thing to want, so it is accepted rather than refused.
+      onWillAcceptWithDetails: (_) => true,
+      onAcceptWithDetails: (details) =>
+          widget.onReorderViews(null, rootDropOrder(widget.views, details.data)),
+      builder: (context, candidate, rejected) {
+        final active = candidate.isNotEmpty;
+        // The line sits at the TOP of the zone, at root indentation: it marks
+        // where the row will land (right under the last root row), not where
+        // the pointer happens to be.
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Container(
+            height: 2,
+            margin: const EdgeInsets.only(top: 6, left: 12, right: 12),
+            color: active
+                ? MicaTheme.of(context).accent.primary
+                : Colors.transparent,
+          ),
+        );
+      },
     );
   }
 
