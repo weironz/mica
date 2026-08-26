@@ -14,6 +14,7 @@
 mod backup;
 mod client;
 mod config;
+mod update;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -46,6 +47,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+  /// Replace this binary with the latest published release.
+  ///
+  /// The installer line still works and still does the same thing; this exists
+  /// because keeping THIS binary current is not optional the way it looks. The
+  /// MCP proxy layer ships inside it, so a server-side change can be live while
+  /// your agent still gets the old behaviour — and the fix is a one-liner you
+  /// have to go and find.
+  Update(UpdateArgs),
   /// Authentication (login / whoami / logout).
   #[command(subcommand)]
   Auth(AuthCmd),
@@ -188,6 +197,27 @@ struct LoginArgs {
 enum WsCmd {
   /// List your workspaces.
   List,
+}
+
+#[derive(Args)]
+struct UpdateArgs {
+  /// Report what is available and change nothing.
+  #[arg(long)]
+  check: bool,
+  /// Install this version instead of the latest (with or without the `v`).
+  ///
+  /// Going BACKWARDS past the release that introduced this command leaves you
+  /// with a binary that has no `update` — recover with the installer line from
+  /// the README. Measured, not guessed: 0.13.27 refuses the subcommand.
+  ///
+  /// Named `--to`, not `--version`: clap already owns `--version` on every
+  /// command, and shadowing it would make `mica-cli update --version` print the
+  /// version and exit instead of doing what it plainly reads as.
+  #[arg(long, value_name = "X.Y.Z")]
+  to: Option<String>,
+  /// Re-install even when the target version is the one already running.
+  #[arg(long)]
+  force: bool,
 }
 
 #[derive(Args)]
@@ -362,7 +392,14 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-  let mut cfg = config::load()?;
+  // `update` needs no server, no token and no config file, so a config that
+  // cannot be parsed must not be the thing that stops you installing a fixed
+  // binary. Every other command genuinely needs the file and still refuses.
+  let mut cfg = if matches!(cli.command, Command::Update(_)) {
+    Config::default()
+  } else {
+    config::load()?
+  };
   match &cli.command {
     Command::Auth(AuthCmd::Login(args)) => cmd_login(&cli, &mut cfg, args),
     Command::Auth(AuthCmd::Whoami) => cmd_whoami(&cli, &cfg),
@@ -384,7 +421,24 @@ fn run(cli: Cli) -> Result<()> {
     Command::Backup(BackupCmd::Daemon) => cmd_backup_daemon(&cli, &cfg),
     Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
     Command::RehostImages(args) => cmd_rehost_images(&cli, &cfg, args),
+    Command::Update(args) => cmd_update(&cli, args),
   }
+}
+
+/// Self-update. Takes no server and no token: it talks to the GitHub release,
+/// not to a Mica instance, so it works before `auth login` and on a machine
+/// whose server is down — which is exactly when you may need a newer CLI.
+fn cmd_update(cli: &Cli, args: &UpdateArgs) -> Result<()> {
+  let outcome = update::run(cli.json, args.to.clone(), args.check, args.force)?;
+  if cli.json {
+    print_json(&serde_json::json!({
+      "from": outcome.from,
+      "to": outcome.to,
+      "replaced": outcome.replaced,
+      "path": outcome.path,
+    }))?;
+  }
+  Ok(())
 }
 
 /// Sweep documents and pull every external image link into Mica storage, using

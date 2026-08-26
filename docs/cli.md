@@ -9,8 +9,31 @@ dedicated tool (restic/rustic/rclone/borg) at it (see [`backup.md`](backup.md)).
 
 ## Install
 
-**Quick install (recommended).** One line, and re-running it updates to the
-latest release — the fast way to keep current.
+**Already installed? Update in place:**
+
+```bash
+mica-cli update           # to the latest release
+mica-cli update --check   # just say what's available, change nothing
+mica-cli update --to 0.13.28
+```
+
+It talks to the GitHub release, not to a Mica server, so it works before
+`auth login` and while your server is down — which is when you may most need a
+newer CLI. It downloads beside the current binary, **runs `--version` on the
+download before installing it** (a truncated file or the wrong architecture
+fails there, while the real binary is still in place), then swaps it in.
+
+Windows note, and the reason this is not a plain overwrite: Windows refuses to
+overwrite a **running** image but will happily rename it — and anyone using the
+MCP server has one running. So the old binary is moved aside under a unique
+name and swept on the next run. **A running MCP client keeps the old binary
+until it restarts**, so restart the client to pick the new one up.
+
+> `--to` a release older than the one that added this command leaves you with a
+> binary that has no `update`. Recover with the installer line below.
+
+**First install (or recovery).** One line, and re-running it also updates to the
+latest release.
 
 Windows (PowerShell):
 
