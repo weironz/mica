@@ -7312,6 +7312,19 @@ WorldCardMode worldCardMode({
   return activeOrigin == cloudOrigin ? WorldCardMode.back : WorldCardMode.enter;
 }
 
+/// Left inset of a drop indicator for a row at [depth], matching the indent
+/// `DocumentListItem` gives its own content (`2 + depth * 16`).
+///
+/// The indicator used to be a full-width line at every depth, which made the
+/// two states either side of the tree's last row — "inside that last folder"
+/// and "at the workspace root" — draw IDENTICALLY. You could only tell them
+/// apart by where the pointer was, which is what "稍微靠上一点，就会出现进最后
+/// 一个子目录的情况" is: not a hit-target problem, a feedback problem.
+///
+/// Top-level and pure so the arithmetic is pinned; getting it wrong is a line
+/// two pixels off, which nobody would report and everybody would misread.
+double dropIndicatorInset(int depth) => 2 + depth * 16;
+
 /// The workspace root's children after [dragged] is dropped on the root zone:
 /// every current root-level view except [dragged], in position order, with
 /// [dragged] appended.
@@ -9117,7 +9130,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               child: row,
             );
           }
-          return _draggableTreeRow(item.view, row);
+          return _draggableTreeRow(item.view, item.depth, row);
         }).toList(),
         ),
         ),
@@ -9171,18 +9184,42 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       onAcceptWithDetails: (details) =>
           widget.onReorderViews(null, rootDropOrder(widget.views, details.data)),
       builder: (context, candidate, rejected) {
+        final tokens = MicaTheme.of(context);
         final active = candidate.isNotEmpty;
-        // The line sits at the TOP of the zone, at root indentation: it marks
-        // where the row will land (right under the last root row), not where
-        // the pointer happens to be.
+        // Drawn for the WHOLE drag, not only while hovered. A target you can
+        // only see once you have already hit it is not discoverable — the
+        // complaint was 「别人怎么知道拖到哪里才会是根级」. Muted while the drag
+        // is merely in progress, accented the moment it would take the drop.
+        //
+        // Labelled for the same reason. The line alone says "something lands
+        // here"; it does not say the thing that is hard to guess, which is that
+        // this whole empty area means the workspace root.
         return Align(
           alignment: Alignment.topLeft,
-          child: Container(
-            height: 2,
-            margin: const EdgeInsets.only(top: 6, left: 12, right: 12),
-            color: active
-                ? MicaTheme.of(context).accent.primary
-                : Colors.transparent,
+          child: Padding(
+            padding: EdgeInsets.only(
+              top: 6,
+              left: dropIndicatorInset(0),
+              right: 4,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  height: 2,
+                  color: active ? tokens.accent.primary : tokens.border.normal,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  context.l10n.treeDropToRoot,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: active ? tokens.accent.primary : tokens.text.faint,
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -9212,7 +9249,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// touch slop, while a motionless click still opens the page. (Long-press
   /// felt broken with a mouse: moving during the 500ms hold cancels it.)
   /// The top/bottom half of each sibling row is a drop slot (before/after).
-  Widget _draggableTreeRow(DocumentView view, Widget row) {
+  Widget _draggableTreeRow(DocumentView view, int depth, Widget row) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Draggable<DocumentView>(
@@ -9260,9 +9297,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               Positioned.fill(
                 child: Column(
                   children: [
-                    Expanded(flex: 3, child: _dropSlot(view, _DropMode.before)),
-                    Expanded(flex: 4, child: _dropSlot(view, _DropMode.into)),
-                    Expanded(flex: 3, child: _dropSlot(view, _DropMode.after)),
+                    // The indicator is drawn at the depth the row would LAND
+                    // at, which for before/after is this row's own depth (they
+                    // mean "become its sibling").
+                    Expanded(
+                      flex: 3,
+                      child: _dropSlot(view, _DropMode.before, depth),
+                    ),
+                    Expanded(
+                      flex: 4,
+                      child: _dropSlot(view, _DropMode.into, depth),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: _dropSlot(view, _DropMode.after, depth),
+                    ),
                   ],
                 ),
               ),
@@ -9278,7 +9327,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     setState(() => _draggingTree = false);
   }
 
-  Widget _dropSlot(DocumentView target, _DropMode mode) {
+  Widget _dropSlot(DocumentView target, _DropMode mode, int depth) {
     return DragTarget<DocumentView>(
       // The whole zone must be droppable; DragTarget defaults to deferToChild,
       // which would limit the hit area to the thin indicator. These overlays
@@ -9307,12 +9356,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
           );
         }
+        // Indented to the depth this drop lands at. Without it, "after the last
+        // nested row" and "at the workspace root" drew the same full-width
+        // line, so the only way to tell them apart was to already know where
+        // the pointer had to be.
         return Align(
           alignment: mode == _DropMode.before
-              ? Alignment.topCenter
-              : Alignment.bottomCenter,
+              ? Alignment.topLeft
+              : Alignment.bottomLeft,
           child: Container(
             height: 2,
+            margin: EdgeInsets.only(left: dropIndicatorInset(depth), right: 4),
             color: active
                 ? MicaTheme.of(context).accent.primary
                 : Colors.transparent,

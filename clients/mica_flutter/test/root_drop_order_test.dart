@@ -56,6 +56,20 @@ void main() {
       expect(order.length, views.length, reason: 'a is listed once, not twice');
     });
 
+    test('the root indicator and a depth-0 row line up', () {
+      // The point of indenting the indicator is that "inside the last folder"
+      // and "at the root" stop looking identical. That only works if the root
+      // zone's line sits exactly where a top-level row's would.
+      expect(dropIndicatorInset(0), 2);
+      expect(dropIndicatorInset(1), 18);
+      expect(dropIndicatorInset(2), 34);
+      expect(
+        dropIndicatorInset(1) - dropIndicatorInset(0),
+        16,
+        reason: 'one step must equal DocumentListItem\'s per-depth indent',
+      );
+    });
+
     test('children of other parents stay out of the root list', () {
       final views = [
         v('a', position: '01'),
