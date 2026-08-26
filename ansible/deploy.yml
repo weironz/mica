@@ -313,7 +313,16 @@
 
     - name: Where the restore point is
       ansible.builtin.debug:
-        msg: "restore point: {{ restore_point.stdout | default('(rehearsal — not taken)') | trim }}"
+        # Branch on `skipped` rather than leaning on a default for the missing
+        # stdout: a skipped task DOES register a result, and `.stdout | default()`
+        # on it produced the empty string instead of the fallback — so the first
+        # rehearsal announced `restore point: ` with nothing after it, which
+        # reads as "took one and lost the path". A dry run that describes itself
+        # as having done the thing is worse than one that says nothing.
+        msg: >-
+          {{ 'rehearsal — a restore point WOULD be taken here, nothing was written'
+             if (restore_point.skipped | default(false))
+             else ('restore point: ' ~ (restore_point.stdout | default('') | trim)) }}
       when: needs_restore_point | bool
 
     # ── Ship the compose from the tag ────────────────────────────────────────
