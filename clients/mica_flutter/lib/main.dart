@@ -8239,9 +8239,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitle.text = isUntitledPageName(name) ? '' : name;
     final workspace = widget.selectedWorkspace;
     if (workspace != null) _rename.text = workspace.name;
-    // Restore this workspace's remembered expand state (tree opens collapsed by
-    // default; reveal the initially-selected page's ancestors so it shows).
-    _loadExpanded();
+    // The tree opens collapsed; only the open page's ancestors are revealed.
     final sel = widget.selectedBootstrap?.view.id;
     if (sel != null) _revealAncestors(sel);
     // Restore a manually-set sidebar width; otherwise fit to the first tree.
@@ -8314,7 +8312,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         selected != null && selected.id != oldWidget.selectedWorkspace?.id;
     if (wsChanged) {
       _rename.text = selected.name;
-      _loadExpanded(); // restore this workspace's remembered expand state
+      // Enter a workspace collapsed. Expansion is not carried across a switch:
+      // it only ever grew (nothing removed an entry but a manual collapse or a
+      // deleted node), so a workspace you had used for a while came back with
+      // most of its folders open and a screen-long tree.
+      //
+      // The page that opens is still remembered, so its ancestors are revealed
+      // here — without that the highlighted row does not exist in the tree and
+      // "where am I" has no answer. The reveal below covers the usual case
+      // (bootstrap/views arrive with or after the switch); this one covers a
+      // switch seen AFTER them, where nothing else would fire again. Both are
+      // no-ops when the id is not in `views`.
+      _expandedViewIds.clear();
+      final open = widget.selectedBootstrap?.view.id;
+      if (open != null) _revealAncestors(open);
     }
     // Re-fit the sidebar to content when the tree could have changed shape:
     // switched workspace, added/removed a page, or renamed the open page.
@@ -8358,15 +8369,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       });
     }
     // Reveal the opened page in the sidebar: expand its ancestor chain so a
-    // nested selection isn't hidden under collapsed parents (and the expansion
-    // is remembered). Also fire when the view set first populates — on a cold
-    // start the selection can be set before widget.views arrives, so the
-    // initState reveal would have walked an empty tree.
+    // nested selection isn't hidden under collapsed parents. Also fire when the
+    // view set first populates — on a cold start the selection can be set
+    // before widget.views arrives, so the initState reveal would have walked an
+    // empty tree.
     final viewsChanged = widget.views.length != oldWidget.views.length;
-    if ((idChanged || viewsChanged) &&
-        bootstrap != null &&
-        _revealAncestors(bootstrap.view.id)) {
-      _saveExpanded();
+    if ((idChanged || viewsChanged) && bootstrap != null) {
+      _revealAncestors(bootstrap.view.id);
     }
   }
 
@@ -9706,7 +9715,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       if (!_expandedViewIds.add(view.id)) {
         _expandedViewIds.remove(view.id);
       }
-      _saveExpanded();
     });
   }
 
@@ -9881,65 +9889,22 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _expandedViewIds.add(cursor);
         cursor = byId[cursor]?.parentViewId;
       }
-      _saveExpanded();
     });
-  }
-
-  /// Pref key for the active workspace's expanded set. Per-workspace so each
-  /// remembers its own shape (node ids are only unique within a workspace).
-  String? get _expandedPrefKey {
-    final wsId = widget.selectedWorkspace?.id;
-    return wsId == null ? null : 'sidebar.expandedIds.$wsId';
-  }
-
-  /// Load the persisted expanded set for the active workspace. Absent/garbage →
-  /// empty (all collapsed). No stale filter here — [widget.views] may not be
-  /// loaded yet on first build, and stale ids are harmless (a deleted node never
-  /// renders); pruning happens on save when the tree is populated.
-  void _loadExpanded() {
-    _expandedViewIds.clear();
-    final key = _expandedPrefKey;
-    if (key == null) return;
-    final raw = loadPref(key);
-    if (raw == null || raw.isEmpty) return;
-    try {
-      _expandedViewIds.addAll((jsonDecode(raw) as List).cast<String>());
-    } catch (_) {
-      // corrupt value → treat as none expanded
-    }
-  }
-
-  void _saveExpanded() {
-    final key = _expandedPrefKey;
-    if (key == null) return;
-    // Prune ids of deleted nodes now that the tree is loaded, so the blob can't
-    // grow forever (mirrors AppFlowy's remove-on-collapse without a delete hook).
-    if (widget.views.isNotEmpty) {
-      final live = {for (final v in widget.views) v.id};
-      _expandedViewIds.removeWhere((id) => !live.contains(id));
-    }
-    savePref(key, jsonEncode(_expandedViewIds.toList()));
   }
 
   /// Expand every ANCESTOR of [id] so a (possibly nested) node is revealed in
   /// the sidebar — used on navigate/create so the active/new page is never
   /// hidden under a collapsed parent (AppFlowy/Notion "reveal current page").
-  /// The node itself is not expanded (that would show ITS children). Returns
-  /// whether anything changed.
-  bool _revealAncestors(String id) {
-    var changed = false;
-    for (final a in ancestorIds(widget.views, id)) {
-      if (_expandedViewIds.add(a)) changed = true;
-    }
-    return changed;
+  /// The node itself is not expanded (that would show ITS children).
+  void _revealAncestors(String id) {
+    _expandedViewIds.addAll(ancestorIds(widget.views, id));
   }
 
   /// Expand [id] itself (so a freshly-created/dropped child under it is visible)
-  /// plus its ancestor chain, and persist. Call inside setState.
+  /// plus its ancestor chain. Call inside setState.
   void _expandForChildOf(String id) {
     _expandedViewIds.add(id);
     _revealAncestors(id);
-    _saveExpanded();
   }
 
   void _schedulePageTitleSave() {
@@ -11330,13 +11295,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (!matchesEditRole(widget.selectedWorkspace?.role)) return;
     final view = _locatedView();
     if (view == null) return;
-    // The located row can sit inside a collapsed parent — switching workspaces
-    // re-opens its doc but restores the remembered (possibly all-collapsed)
-    // expand state. Reveal it so the row being renamed is actually on screen
-    // behind the dialog.
-    setState(() {
-      if (_revealAncestors(view.id)) _saveExpanded();
-    });
+    // The located row can sit inside a collapsed parent — a folder located
+    // earlier stays located after its parent is collapsed. Reveal it so the row
+    // being renamed is actually on screen behind the dialog.
+    setState(() => _revealAncestors(view.id));
     _promptRenameView(view);
   }
 
