@@ -1991,6 +1991,17 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
     final full = chain.reversed.toList(); // root … current
 
     return Row(
+      // Shrink-wrap. The caller caps this with a maxWidth, and a cap is not a
+      // demand: a two-crumb path inside a 767px budget must occupy the width of
+      // two crumbs, not 767. Left at the default (max) the whole budget was
+      // swallowed, so the header's other tenant — the format bar — was squeezed
+      // to its floor on a wide window while the path held three times what it
+      // needed.
+      //
+      // The `Flexible` below already shrink-wrapped the CONTENT, which is why
+      // the copy button hugged the last crumb and the wasted width stayed
+      // invisible. The Row around it did not.
+      mainAxisSize: MainAxisSize.min,
       children: [
         // The path measures itself against the width it actually got. It used
         // to scroll horizontally inside a fixed budget instead, which failed

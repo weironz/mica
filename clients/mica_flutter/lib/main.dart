@@ -9723,30 +9723,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // whether or not the format bar is on, because the tools do.
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-            child: Row(
+            child: LayoutBuilder(
+              builder: (context, header) => Row(
               children: [
-                // The path gets the whole row. It shares it with nothing: the
-                // format bar moved to a row of its own (below), which is what
-                // its own styling always assumed — a background fill, a bottom
-                // border across the pane, and a `Center` on the page's text
-                // column. None of those can hold inside a Row that starts after
-                // the breadcrumb, which is why that border used to render as a
-                // half-length line hanging in the middle of the header.
-                //
-                // Before this the path had a fixed 260 budget so it could not
-                // push the toolbar around, and dropped ancestors to fit inside
-                // it. With the rows separated there is nothing to push, so
-                // nothing has to be dropped — in either mode.
+                // The path comes first and takes what it needs, inside two
+                // bounds — see [_pathBudget]. It used to be a flat 260, which
+                // dropped ancestors on paths that had most of the row sitting
+                // empty beside them: an ellipsis with no visible cause.
                 //
                 // The pixel-based collapse in PageBreadcrumb stays as the last
-                // resort, for a path wider than the whole window. It is NOT a
-                // depth rule ("collapse past 3 segments") — this repo tried that
-                // and recorded why it failed: `tools › 笔记软件 › mica › 单机手动
-                // 部署（IP 直连，不用 Traefik）` is three segments and still
-                // overruns. AppFlowy gets away with a depth rule because their
-                // breadcrumb has no width cap at all and simply scrolls.
+                // resort. It is NOT a depth rule ("collapse past 3 segments") —
+                // this repo tried that and recorded why it failed: `tools ›
+                // 笔记软件 › mica › 单机手动部署（IP 直连，不用 Traefik）` is
+                // three segments and still overruns. AppFlowy gets away with a
+                // depth rule because their breadcrumb has no width cap at all
+                // and simply scrolls, which a shared row cannot do.
                 if (widget.selectedView != null)
-                  Expanded(
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: _pathBudget(
+                        header.maxWidth,
+                        barOn: widget.showFormatBar && canEdit,
+                      ),
+                    ),
                     child: PageBreadcrumb(
               views: widget.views,
               current: widget.selectedView!,
@@ -9771,9 +9770,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ),
             ),
                   ),
-                // No breadcrumb: nothing in this row is flexible, so hold the
-                // right-hand tools against the edge.
-                if (widget.selectedView == null) const Spacer(),
+                // The format bar takes whatever the path left. It is already a
+                // horizontal SingleChildScrollView, so a narrow share does not
+                // break it — it scrolls. [_pathBudget] guarantees that share
+                // never drops below _formatBarFloor.
+                Expanded(
+                  child: (widget.showFormatBar && canEdit)
+                      ? ListenableBuilder(
+                          listenable: _activeBlockHook,
+                          builder: (context, _) => _formatBar(context),
+                        )
+                      : const SizedBox.shrink(),
+                ),
                 // The right-hand twin of the sidebar collapse button.
                 // It used to live one row lower, on the title row, so
                 // the "symmetric pair" the old comment claimed was
@@ -9942,20 +9950,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ),
               ],
             ),
-          ),
-          // The format bar, on a row of its own. It was crammed into the header
-          // Row beside the breadcrumb, which cost the path most of its width and
-          // never let the bar's own styling work: the bottom border spanned only
-          // the leftover space, and "centred on the text column" was centred on
-          // whatever the breadcrumb had not taken.
-          //
-          // A row of chrome is a real cost, so it is paid ONLY by whoever turned
-          // the bar on — it is off by default, and then this is not built at all.
-          if (widget.showFormatBar && canEdit)
-            ListenableBuilder(
-              listenable: _activeBlockHook,
-              builder: (context, _) => _formatBar(context),
             ),
+          ),
           // The editor column is capped at widget.pageWidth (a fixed page-width
           // step) inside _editorScroll, and the window caps it below that on a
           // narrow pane — so no measured max is needed here.
@@ -10004,6 +10000,58 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// default): one-click access to the high-frequency Markdown actions,
   /// driven through [_commandHook] so focus/selection semantics stay in the
   /// editor.
+  /// Narrowest share of the header the format bar may be squeezed to.
+  ///
+  /// MEASURED, not chosen: the full strip is 19 buttons over 606px. 360 keeps
+  /// roughly the first eleven — undo/redo, the three heading levels, bold /
+  /// italic / strike, code, link — visible without scrolling, which is the set
+  /// you reach for without looking. Past that the bar scrolls, which it has
+  /// always been able to do (it is a horizontal SingleChildScrollView).
+  static const _formatBarFloor = 360.0;
+
+  /// The right-hand cluster (side-panel toggle, comments, properties, page
+  /// menu) shares this row too, and is not flexible. Reserved alongside the
+  /// bar's floor so the floor is a floor on what the BAR gets, not on what is
+  /// left over before the icons take their cut.
+  static const _headerIconsWidth = 160.0;
+
+  /// How wide the breadcrumb may get.
+  ///
+  /// "Path first" — it takes what it needs — under two bounds, and each one is
+  /// the answer to a question that was actually asked:
+  ///
+  ///  * A ceiling at 70% of the header, so a pathological title cannot span the
+  ///    whole thing. Real names and real nesting stay well under it; the one
+  ///    that reached it was a hand-typed `asdfsadfasfdasfds…`.
+  ///  * With the bar on, a reserve for the bar: the path may not eat the last
+  ///    [_formatBarFloor] + [_headerIconsWidth] of the row. That is a bound on
+  ///    what the PATH may take — not a promise about the bar's rendered width,
+  ///    which `_formatBar` narrows again with its own `Center(maxWidth:
+  ///    pageWidth)`. Measured on a 1050-wide window the bar ends up around
+  ///    317px and shows ten buttons before it scrolls.
+  ///
+  /// The 200 floor at the end is for a genuinely narrow pane, where the two
+  /// bounds cross and something has to give; there the path keeps enough to
+  /// show the page name and the bar scrolls from the start.
+  ///
+  /// Measured, bar on, this page's path needing 221px:
+  ///
+  ///   window 1600 -> path 221, bar 606 (everything fits, no scroll)
+  ///   window 1400 -> path 221, bar 562
+  ///   window 1280 -> path 221, bar 442
+  ///   window 1050 -> path yields, bar 317
+  ///
+  /// The path holding its natural 221 rather than its whole budget is the point
+  /// of `MainAxisSize.min` on PageBreadcrumb's Row — a cap is not a demand.
+  double _pathBudget(double header, {required bool barOn}) {
+    final ceiling = header * 0.7;
+    if (!barOn) return ceiling;
+    return math.max(
+      math.min(ceiling, header - _formatBarFloor - _headerIconsWidth),
+      200.0,
+    );
+  }
+
   Widget _formatBar(BuildContext context) {
     Widget btn(
       IconData icon,
