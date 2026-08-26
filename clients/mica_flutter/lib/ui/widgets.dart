@@ -87,6 +87,19 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
   /// slots so they never intercept taps when not reordering.
   bool _dragging = false;
 
+  /// The workspace list scrolls on its own rather than letting the menu scroll
+  /// it, for one reason: auto-scroll during a reorder drag needs a controller,
+  /// and `MenuAnchor` builds its scrollable internally where nothing can reach
+  /// it. With 30-odd workspaces that made reordering impossible past the fold —
+  /// a row could be picked up but not carried anywhere the list had to move to.
+  final ScrollController _wsScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _wsScroll.dispose();
+    super.dispose();
+  }
+
   WorkspaceEntry? get _selectedEntry {
     final ref = widget.selectedRef;
     if (ref == null) return null;
@@ -123,8 +136,7 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
             widget.onSignIn != null)
           _signInRow()
         else
-          for (final e in (widget.activeIsLocal ? locals : cloud))
-            _row(e, widget.activeIsLocal ? locals : cloud),
+          _worldList(widget.activeIsLocal ? locals : cloud),
         const Divider(height: 8),
         _createRow(),
         // The whole submenu goes, not just its children: a parent left behind
@@ -236,6 +248,35 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
           ),
         );
       },
+    );
+  }
+
+  /// The connected world's workspaces, in a scrollable this widget owns.
+  ///
+  /// `SizedBox(width: 320)` is load-bearing, not decoration: a menu sizes
+  /// itself to its children's INTRINSIC width, and a `ListView` has none — the
+  /// rows themselves are all 320 wide, so stating it here keeps the menu the
+  /// width it has always been instead of collapsing or asserting.
+  ///
+  /// `shrinkWrap` + a max height, so three workspaces render as three rows and
+  /// thirty scroll. The cap is what makes the create/import rows below reachable
+  /// without scrolling past every workspace to find them.
+  Widget _worldList(List<WorkspaceEntry> world) {
+    return SizedBox(
+      width: 320,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 320),
+        child: DragAutoScrollRegion(
+          enabled: _dragging,
+          controller: _wsScroll,
+          child: ListView(
+            controller: _wsScroll,
+            shrinkWrap: true,
+            padding: EdgeInsets.zero,
+            children: [for (final e in world) _row(e, world)],
+          ),
+        ),
+      ),
     );
   }
 

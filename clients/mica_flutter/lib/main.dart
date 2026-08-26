@@ -10933,7 +10933,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// into inline-rename so the user just types the name — no naming dialog.
   Future<void> _createThenRename(Future<String?> Function() create) async {
     final id = await create();
-    if (id != null && mounted) setState(() => _renamingViewId = id);
+    if (id == null || !mounted) return;
+    setState(() => _renamingViewId = id);
+    // Scroll the new row into view. Without this, creating inside a folder that
+    // already holds many pages left the row below the fold: the rename box had
+    // focus and swallowed the typing, but nothing on screen moved, so the page
+    // read as "not created" until you scrolled down looking for it.
+    //
+    // `_revealInTree` rather than a direct scroll, because the row does not
+    // exist yet at this moment — the tree only gains it on a later rebuild.
+    // That machinery already retries per frame until the row is laid out, which
+    // is exactly the shape of this problem.
+    _revealInTree(id);
   }
 
   DocumentView? _viewById(String? id) {
