@@ -9725,31 +9725,28 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
             child: Row(
               children: [
-                // How much room the path gets depends on whether the FORMAT BAR
-                // is there to protect — not on the path.
+                // The path gets the whole row. It shares it with nothing: the
+                // format bar moved to a row of its own (below), which is what
+                // its own styling always assumed — a background fill, a bottom
+                // border across the pane, and a `Center` on the page's text
+                // column. None of those can hold inside a Row that starts after
+                // the breadcrumb, which is why that border used to render as a
+                // half-length line hanging in the middle of the header.
                 //
-                // The fixed 260 budget was right for the reason it gave: the
-                // format bar is centred on the page's text column, so letting
-                // the path push it would slide the toolbar left and right as you
-                // moved between a shallow page and a deep one. A toolbar that
-                // changes position per page is worse than a shortened path.
+                // Before this the path had a fixed 260 budget so it could not
+                // push the toolbar around, and dropped ancestors to fit inside
+                // it. With the rows separated there is nothing to push, so
+                // nothing has to be dropped — in either mode.
                 //
-                // But the format bar is OFF by default, and then that budget was
-                // starving the path to protect something that was not there: the
-                // `…` appeared with most of the row sitting empty beside it.
-                // That is the ugly part — not the ellipsis, but an ellipsis with
-                // no cause the eye can see.
-                //
-                // NOT a depth rule ("collapse past 3 segments"), which is what
-                // AppFlowy does. This repo tried that and recorded why it failed:
-                // `tools › 笔记软件 › mica › 单机手动部署（IP 直连，不用 Traefik）`
-                // is three segments and still overruns. It works for AppFlowy
-                // because their breadcrumb has no width cap at all and simply
-                // scrolls — the rule does not port to a shared row. The pixel
-                // rule in PageBreadcrumb stays; it was never wrong, only starved.
+                // The pixel-based collapse in PageBreadcrumb stays as the last
+                // resort, for a path wider than the whole window. It is NOT a
+                // depth rule ("collapse past 3 segments") — this repo tried that
+                // and recorded why it failed: `tools › 笔记软件 › mica › 单机手动
+                // 部署（IP 直连，不用 Traefik）` is three segments and still
+                // overruns. AppFlowy gets away with a depth rule because their
+                // breadcrumb has no width cap at all and simply scrolls.
                 if (widget.selectedView != null)
-                  _breadcrumbSlot(
-                    fixed: widget.showFormatBar && canEdit,
+                  Expanded(
                     child: PageBreadcrumb(
               views: widget.views,
               current: widget.selectedView!,
@@ -9774,21 +9771,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ),
             ),
                   ),
-                // The format bar claims the row only when it is actually on.
-                // `Expanded(SizedBox.shrink())` still soaks every free pixel, so
-                // the old unconditional Expanded is the other half of why the
-                // path stayed boxed in with nothing beside it.
-                if (widget.showFormatBar && canEdit)
-                  Expanded(
-                    child: ListenableBuilder(
-                      listenable: _activeBlockHook,
-                      builder: (context, _) => _formatBar(context),
-                    ),
-                  )
-                else if (widget.selectedView == null)
-                  // No breadcrumb and no bar: nothing in the row is flexible,
-                  // so hold the right-hand tools against the edge.
-                  const Spacer(),
+                // No breadcrumb: nothing in this row is flexible, so hold the
+                // right-hand tools against the edge.
+                if (widget.selectedView == null) const Spacer(),
                 // The right-hand twin of the sidebar collapse button.
                 // It used to live one row lower, on the title row, so
                 // the "symmetric pair" the old comment claimed was
@@ -9958,6 +9943,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               ],
             ),
           ),
+          // The format bar, on a row of its own. It was crammed into the header
+          // Row beside the breadcrumb, which cost the path most of its width and
+          // never let the bar's own styling work: the bottom border spanned only
+          // the leftover space, and "centred on the text column" was centred on
+          // whatever the breadcrumb had not taken.
+          //
+          // A row of chrome is a real cost, so it is paid ONLY by whoever turned
+          // the bar on — it is off by default, and then this is not built at all.
+          if (widget.showFormatBar && canEdit)
+            ListenableBuilder(
+              listenable: _activeBlockHook,
+              builder: (context, _) => _formatBar(context),
+            ),
           // The editor column is capped at widget.pageWidth (a fixed page-width
           // step) inside _editorScroll, and the window caps it below that on a
           // narrow pane — so no measured max is needed here.
@@ -10006,18 +10004,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// default): one-click access to the high-frequency Markdown actions,
   /// driven through [_commandHook] so focus/selection semantics stay in the
   /// editor.
-  /// The breadcrumb's slot in the top row — see the comment at the call site.
-  ///
-  /// [fixed] is "the format bar is on and must not be pushed around". Off, the
-  /// path is `Expanded` and gets the whole row, which is what makes the `…`
-  /// stop appearing for paths that had plenty of room all along.
-  Widget _breadcrumbSlot({required bool fixed, required Widget child}) => fixed
-      ? ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 260),
-          child: child,
-        )
-      : Expanded(child: child);
-
   Widget _formatBar(BuildContext context) {
     Widget btn(
       IconData icon,
