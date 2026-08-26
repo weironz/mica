@@ -84,6 +84,8 @@ class ImportJobStatus {
     this.error,
     this.skipped = const [],
     this.skippedTotal = 0,
+    this.imageFailures = const [],
+    this.imageFailuresTotal = 0,
   });
 
   factory ImportJobStatus.fromJson(Map<String, dynamic> json) {
@@ -95,6 +97,16 @@ class ImportJobStatus {
       error: json['error'] as String?,
       skipped: (json['skipped'] as List<dynamic>?)?.cast<String>() ?? const [],
       skippedTotal: (json['skipped_total'] as num?)?.toInt() ?? 0,
+      // Absent on a server older than migration 0024 — an empty list, which
+      // reads as "nothing recorded", not "nothing failed". Those are genuinely
+      // different and only the server can tell them apart.
+      imageFailures:
+          (json['image_failures'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(ImportImageFailure.fromJson)
+              .toList() ??
+          const [],
+      imageFailuresTotal: (json['image_failures_total'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -115,6 +127,70 @@ class ImportJobStatus {
 
   /// How many were skipped in total, which can exceed `skipped.length`.
   final int skippedTotal;
+
+  /// Images the server was asked to bring into Mica and could not — those
+  /// blocks are still links to somebody else's server. Capped;
+  /// [imageFailuresTotal] is the real count.
+  final List<ImportImageFailure> imageFailures;
+
+  /// How many images were left as links in total.
+  final int imageFailuresTotal;
+}
+
+/// One image an import left pointing outside Mica.
+///
+/// This is the record that was missing when a whole AppFlowy export came in
+/// with its images still borrowed: the server could not reach that host (it
+/// blocks datacenter IPs), the blocks kept their links, the import reported
+/// success, and the source workspace was deleted a few minutes later. The list
+/// exists so that never happens silently again — and so the client can retry
+/// each one over ITS network, which usually can reach the host the server
+/// could not.
+class ImportImageFailure {
+  const ImportImageFailure({
+    required this.url,
+    required this.page,
+    required this.documentId,
+    required this.blockId,
+    required this.reason,
+    required this.attempted,
+  });
+
+  factory ImportImageFailure.fromJson(Map<String, dynamic> json) {
+    return ImportImageFailure(
+      url: json['url'] as String? ?? '',
+      page: json['page'] as String? ?? '',
+      documentId: json['document_id'] as String? ?? '',
+      blockId: json['block_id'] as String? ?? '',
+      reason: json['reason'] as String? ?? '',
+      // Defaults TRUE: an old or partial record claiming "never attempted"
+      // would send the reader looking for a network problem that may not exist.
+      attempted: json['attempted'] as bool? ?? true,
+    );
+  }
+
+  final String url;
+
+  /// The page it sits on — a list of bare urls is not something anyone can act
+  /// on.
+  final String page;
+
+  /// The document + block to patch. Exactly what `rehost-image` takes.
+  final String documentId;
+  final String blockId;
+
+  final String reason;
+
+  /// False when the server's circuit breaker refused it WITHOUT a request,
+  /// because that host had already timed out repeatedly. Worth distinguishing:
+  /// it means the link was never actually tested, so a retry from here is more
+  /// likely to work, not less.
+  final bool attempted;
+
+  /// True when this block still needs fixing — the id pair is what a retry
+  /// posts to, and a record missing either cannot be retried at all.
+  bool get isRetryable =>
+      documentId.isNotEmpty && blockId.isNotEmpty && url.startsWith('http');
 }
 
 class UploadedFile {

@@ -415,15 +415,25 @@
   "importHistoryProgress": "{label} — {done} of {total} pages",
   "@importHistoryProgress": {
     "placeholders": {
-      "label": { "type": "String" },
-      "done": { "type": "int" },
-      "total": { "type": "int" }
+      "label": {
+        "type": "String"
+      },
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "importInterruptedHelp": "The server restarted mid-import. The pages already imported are still there; run the import again to bring in the rest.",
   "importSkippedCount": "{count} archive entries no page referenced",
   "@importSkippedCount": {
-    "placeholders": { "count": { "type": "int" } }
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "settingsData": "Data",
   "settingsShortcuts": "Shortcuts",
@@ -439,7 +449,11 @@
   "aiKeyConfigured": "API key configured",
   "aiKeyConfiguredHint": "API key configured (ends {tail})",
   "@aiKeyConfiguredHint": {
-    "placeholders": { "tail": { "type": "String" } }
+    "placeholders": {
+      "tail": {
+        "type": "String"
+      }
+    }
   },
   "aiKeyMissing": "No API key set",
   "aiProvidersHeading": "Providers",
@@ -455,7 +469,11 @@
   "aiProviderNameInvalid": "Give it a name: start with a lower-case letter or digit, then letters, digits, - _ or .",
   "aiProviderNameTaken": "{name} is already configured — pick it in the list to edit it.",
   "@aiProviderNameTaken": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "aiProviderBaseUrlRequired": "An API base URL is required.",
   "aiProtocol": "Protocol",
@@ -465,7 +483,11 @@
   "aiDeleteProviderTitle": "Remove this provider?",
   "aiDeleteProviderBody": "{name}'s endpoint, API key and model are deleted from the server. If it is the one in use, this instance is left with no provider until you pick another.",
   "@aiDeleteProviderBody": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "aiModelMissing": "No model chosen — AI stays off until one is set. Fetch the list on the right.",
   "aiFetchModels": "Fetch the provider's model list",
@@ -1389,5 +1411,28 @@
         "type": "int"
       }
     }
-  }
+  },
+  "importImagesStillLinkedTitle": "{count} images are still links, not copies",
+  "@importImagesStillLinkedTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "importImagesStillLinkedBody": "Neither this server nor this device could fetch these images, so the pages still point at the original site. If that source goes away, the images go with it — do not delete or unshare it until these are saved.",
+  "importImageFailureWhere": "On {pages} — {reason}",
+  "@importImageFailureWhere": {
+    "placeholders": {
+      "pages": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "importImageNeverAttempted": "never tried: the host had already timed out repeatedly",
+  "importImagesRetry": "Try again from this device",
+  "importImagesAllRecovered": "All images are saved into Mica now."
 }

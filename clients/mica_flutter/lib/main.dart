@@ -21,6 +21,7 @@ import 'local/local_offline.dart';
 import 'editor/word_count.dart';
 import 'web/yjs_probe.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
+import 'editor/file_names.dart' show fileNameFromUrl;
 import 'editor/model.dart' show headingButtonTarget, kMonoFont;
 import 'editor/version_diff.dart';
 import 'editor/editor.dart';
@@ -2316,6 +2317,182 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
+  /// Second attempt at every image the server could not bring in — fetched from
+  /// THIS machine, immediately, as part of the import.
+  ///
+  /// Not left to `mica-cli rehost-images` afterwards. "I'll re-host them later"
+  /// is exactly the plan that lost a whole AppFlowy export's images: the server
+  /// cannot reach AppFlowy (it blocks datacenter IPs), so every image stayed a
+  /// link while the import reported success — and the source workspace was
+  /// deleted a few minutes later, because why keep it once the content is in.
+  /// By the time "later" came there was nothing left to fetch. The moment this
+  /// is guaranteed to work is the one right after the import, and that is the
+  /// only moment worth spending.
+  ///
+  /// Returns what is STILL a link, which is what the user has to be told about.
+  ///
+  /// ON WEB THIS IS WEAKER THAN ON DESKTOP, and measured, not assumed: the
+  /// fetch is a browser fetch, so a source that sends no
+  /// `Access-Control-Allow-Origin` blocks it — verified against a local host
+  /// the server could not reach, where the browser failed with
+  /// `blocked by CORS policy` until the fixture sent the header. Desktop has no
+  /// such limit. So the desktop app is the one that can actually rescue an
+  /// export from a host that fences out servers, and the web app may still have
+  /// to report images it can see but not read.
+  Future<List<ImportImageFailure>> _rehostImportFailures(
+    List<ImportImageFailure> failures,
+    String? workspaceId,
+  ) async {
+    final session = _session;
+    if (session == null || workspaceId == null) return failures;
+    final remaining = <ImportImageFailure>[];
+    // Fetched once per URL, posted once per BLOCK: the same link on twenty
+    // pages is twenty blocks to repoint, but only one download. A url that
+    // could not be fetched is remembered as null so the next of its twenty
+    // occurrences does not pay for the timeout again.
+    final fetched = <String, Uint8List?>{};
+    for (final failure in failures) {
+      if (!failure.isRetryable) {
+        remaining.add(failure);
+        continue;
+      }
+      if (!fetched.containsKey(failure.url)) {
+        fetched[failure.url] = await _loadEditorImageBytes(failure.url);
+      }
+      final bytes = fetched[failure.url];
+      if (bytes == null || bytes.isEmpty) {
+        remaining.add(failure);
+        continue;
+      }
+      try {
+        await _api.rehostImage(
+          session.accessToken,
+          workspaceId,
+          failure.documentId,
+          blockId: failure.blockId,
+          fileName: fileNameFromUrl(failure.url),
+          bytes: bytes,
+        );
+      } catch (_) {
+        // Store/patch refused it. Still a link, so still reported — swallowing
+        // this would put it back in the class of failure this whole feature
+        // exists to end.
+        remaining.add(failure);
+      }
+    }
+    return remaining;
+  }
+
+  /// The images that are still links after both attempts.
+  ///
+  /// A dialog, not a snackbar: the decision it informs is "can I delete the
+  /// thing I exported from now", and a line that fades after four seconds is
+  /// not where that belongs.
+  void _showImportImageFailures(
+    ImportJobStatus job,
+    List<ImportImageFailure> remaining,
+  ) {
+    final l10n = context.l10n;
+    // Grouped by url — one dead link on forty pages is one problem, and a
+    // forty-row list of the same address reads as forty.
+    final byUrl = <String, List<ImportImageFailure>>{};
+    for (final f in remaining) {
+      byUrl.putIfAbsent(f.url, () => []).add(f);
+    }
+    final hidden = job.imageFailuresTotal - job.imageFailures.length;
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        final theme = MicaTheme.of(context);
+        return AlertDialog(
+          title: Text(l10n.importImagesStillLinkedTitle(remaining.length)),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.importImagesStillLinkedBody,
+                  style: const TextStyle(fontSize: 12.5, height: 1.6),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final entry in byUrl.entries)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                entry.key,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: kMonoFont,
+                                ),
+                              ),
+                              Text(
+                                l10n.importImageFailureWhere(
+                                  entry.value.map((f) => f.page).join('、'),
+                                  entry.value.first.attempted
+                                      ? entry.value.first.reason
+                                      : l10n.importImageNeverAttempted,
+                                ),
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  height: 1.5,
+                                  color: theme.text.faint,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (hidden > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      l10n.importSkippedTruncated(hidden),
+                      style: TextStyle(fontSize: 12, color: theme.text.faint),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                final left = await _rehostImportFailures(
+                  remaining,
+                  job.workspaceId,
+                );
+                if (!mounted) return;
+                if (left.isEmpty) {
+                  ScaffoldMessenger.maybeOf(this.context)?.showSnackBar(
+                    SnackBar(content: Text(l10n.importImagesAllRecovered)),
+                  );
+                } else {
+                  _showImportImageFailures(job, left);
+                }
+              },
+              child: Text(l10n.importImagesRetry),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(l10n.commonClose),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   /// Counts for the whole-account export, shown under the export row.
   Future<({int workspaces, int pages, int imageBytes})>
   _exportAllStats() async {
@@ -3284,11 +3461,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           break;
         }
       }
+      // Second pass at the images the server could not fetch, over THIS
+      // machine's network, before anything is called done. Runs inside the try
+      // so the progress row stays up — `finally` is what clears it — rather
+      // than the app looking finished while it is still pulling images in.
+      var stillLinked = job.imageFailures;
+      if (_reHostImages && stillLinked.isNotEmpty) {
+        stillLinked = await _rehostImportFailures(stillLinked, targetId);
+      }
       // The local import path has always confirmed itself with a snackbar; the
       // cloud path said nothing at all, so a successful import was
       // indistinguishable from one that quietly did nothing.
       if (mounted && job.done > 0) {
         final skipped = job.skippedTotal;
+        // Anything still borrowed outranks the success line: the next thing the
+        // user does after importing an export is delete what they exported.
+        if (stillLinked.isNotEmpty) {
+          _showImportImageFailures(job, stillLinked);
+        }
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
             content: Text(

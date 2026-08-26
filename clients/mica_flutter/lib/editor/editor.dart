@@ -1669,7 +1669,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // bytes are unreadable here too and the block stays on its url.
       final bytes = await load(url);
       if (bytes == null || bytes.isEmpty || !mounted) return false;
-      final name = _imageNameFromUrl(url);
+      final name = fileNameFromUrl(url);
       final result = await upload(bytes, name, _mimeFromName(name));
       if (result == null || !mounted) return false;
       _primeImage(result.fileId, bytes);
@@ -1684,21 +1684,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
   }
 
-  /// A filename for an image url: its last path segment (query stripped), or a
-  /// generic fallback when the url carries no usable name.
-  static String _imageNameFromUrl(String url) {
-    final path = Uri.tryParse(url)?.path ?? '';
-    final seg = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
-    final name = Uri.decodeComponent(seg);
-    if (hasUsableFileExt(name)) return name;
-    // No USABLE extension — an AppFlowy blob url ends in `<base64>=.`, which
-    // contains a dot but no extension, and taking it verbatim uploaded an
-    // extension-less file whose name displayed as `0QYX…X2M.`. Keep the stem so
-    // the name still says something, and give it one; the server re-derives the
-    // real type from the bytes.
-    final stem = name.replaceAll(RegExp(r'\.+$'), '');
-    return stem.isEmpty ? 'image.png' : '$stem.png';
-  }
 
   // ---------------------------------------------------------------------------
   // Caret blink

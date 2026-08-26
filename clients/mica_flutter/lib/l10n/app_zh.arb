@@ -312,7 +312,11 @@
   "aiProviderNameInvalid": "请填名称:以小写字母或数字开头,其余可用字母、数字和 - _ .",
   "aiProviderNameTaken": "{name} 已经配置过了 —— 在左边列表里选中它即可修改。",
   "@aiProviderNameTaken": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "aiProviderBaseUrlRequired": "必须填写 API 基础 URL。",
   "aiProtocol": "协议",
@@ -322,7 +326,11 @@
   "aiDeleteProviderTitle": "删除这家服务商?",
   "aiDeleteProviderBody": "{name} 的地址、API 密钥和模型将从服务端删除。如果删的正是在用的那家,本实例会变成「未配置」,直到你另选一家。",
   "@aiDeleteProviderBody": {
-    "placeholders": { "name": { "type": "String" } }
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "aiModelMissing": "还没有选模型 —— 选定之前 AI 不会生效。点右侧按钮拉取列表。",
   "aiFetchModels": "获取服务商的模型列表",
@@ -767,5 +775,28 @@
         "type": "int"
       }
     }
-  }
+  },
+  "importImagesStillLinkedTitle": "{count} 张图片仍是外链，不是副本",
+  "@importImagesStillLinkedTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "importImagesStillLinkedBody": "这台服务器和本机都没能取到这些图片，页面仍然指向原站点。源一旦消失，图片也随之消失——在它们转存成功之前，不要删除或取消共享那个源。",
+  "importImageFailureWhere": "在 {pages} —— {reason}",
+  "@importImageFailureWhere": {
+    "placeholders": {
+      "pages": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "importImageNeverAttempted": "从未尝试：该站点此前已多次超时",
+  "importImagesRetry": "用本机再试一次",
+  "importImagesAllRecovered": "所有图片都已转存进 Mica。"
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mica_infra::{AiConfig, AppConfig, Environment, Mailer, S3Config};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -63,6 +63,32 @@ pub struct ImportJob {
   #[serde(default)]
   pub skipped_total: usize,
 
+  /// External images `rehost_external` promised to bring in and did not — they
+  /// are still links pointing at somebody else's server.
+  ///
+  /// This exists because the failure was SILENT: a re-host that failed logged a
+  /// warning server-side, left the block on its original url, and the import
+  /// reported plain success. The user then did the reasonable thing — deleted
+  /// the AppFlowy workspace they had just exported — and the links died with
+  /// it. Nothing had told them the images were still borrowed.
+  ///
+  /// That is not a rare network hiccup. A server-side fetch fails SYSTEMATICALLY
+  /// for the hosts people import from: AppFlowy blocks datacenter IPs, and a
+  /// CN-hosted server has no route to medium/imgur. So for a whole class of
+  /// archives, "re-host external images" quietly did nothing at all.
+  ///
+  /// Recorded per OCCURRENCE (page + block), not per url: the same link on
+  /// twenty pages is twenty blocks still pointing outward, and a retry has to
+  /// fix each one. `document_id` + `block_id` are exactly what the
+  /// `rehost-image` endpoint takes, so the list is directly actionable.
+  #[serde(default)]
+  pub image_failures: Vec<ImageFailure>,
+
+  /// How many failed in total. [`image_failures`] is capped like [`skipped`],
+  /// so a pathological archive still reports an honest count.
+  #[serde(default)]
+  pub image_failures_total: usize,
+
   /// Someone asked this import to stop.
   ///
   /// The loop checks it at each PAGE boundary rather than being aborted outright:
@@ -78,6 +104,31 @@ pub struct ImportJob {
   /// workspace, which the user can drop in one action.
   #[serde(default)]
   pub cancel_requested: bool,
+}
+
+/// One image the import was asked to bring in and left as a link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageFailure {
+  /// The link the block still points at. Also the thing to fetch on a retry.
+  pub url: String,
+  /// The page it sits on — a list of urls with no page names is a list nobody
+  /// can act on.
+  pub page: String,
+  /// Where to patch it. `POST /workspaces/{ws}/documents/{document_id}
+  /// /rehost-image?block_id=…` takes this pair, which is why they are stored
+  /// rather than re-derived by walking every document later.
+  pub document_id: Uuid,
+  pub block_id: String,
+  /// Why it did not land, in the words the fetch itself used.
+  pub reason: String,
+  /// False when the circuit breaker refused it WITHOUT a request, because its
+  /// host had already timed out repeatedly.
+  ///
+  /// Called out separately because it is the most invisible kind: nothing
+  /// failed, it simply never happened, and a per-request error log has no line
+  /// to write. Before this, those were a single aggregate `refused` count in a
+  /// server log the user never sees.
+  pub attempted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -202,9 +253,15 @@ pub mod import_store {
   /// between polls.
   pub async fn update(db: &PgPool, id: Uuid, job: &ImportJob) {
     let skipped = serde_json::to_value(&job.skipped).unwrap_or_else(|_| serde_json::json!([]));
+    // Same fallback as `skipped`: a serialisation failure must degrade to an
+    // empty list, never stop the progress write. Losing the list is bad; losing
+    // the row that says an import is running is worse.
+    let image_failures =
+      serde_json::to_value(&job.image_failures).unwrap_or_else(|_| serde_json::json!([]));
     let result = sqlx::query(
       "UPDATE import_jobs SET status = $2, total = $3, done = $4, error = $5, \
          skipped = $6, skipped_total = $7, workspace_id = COALESCE($8, workspace_id), \
+         image_failures = $9, image_failures_total = $10, \
          updated_at = now() \
        WHERE id = $1",
     )
@@ -216,6 +273,8 @@ pub mod import_store {
     .bind(skipped)
     .bind(job.skipped_total as i32)
     .bind(job.workspace_id)
+    .bind(image_failures)
+    .bind(job.image_failures_total as i32)
     .execute(db)
     .await;
     if let Err(error) = result {
@@ -225,8 +284,22 @@ pub mod import_store {
 
   /// One stored job, for a poll that outlived the process that started it.
   pub async fn get(db: &PgPool, id: Uuid, user_id: Uuid) -> Option<ImportJob> {
-    let row = sqlx::query_as::<_, (String, i32, i32, Option<Uuid>, Option<String>, serde_json::Value, i32)>(
-      "SELECT status, total, done, workspace_id, error, skipped, skipped_total \
+    let row = sqlx::query_as::<
+      _,
+      (
+        String,
+        i32,
+        i32,
+        Option<Uuid>,
+        Option<String>,
+        serde_json::Value,
+        i32,
+        serde_json::Value,
+        i32,
+      ),
+    >(
+      "SELECT status, total, done, workspace_id, error, skipped, skipped_total, \
+              image_failures, image_failures_total \
        FROM import_jobs WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
@@ -243,6 +316,8 @@ pub mod import_store {
       error: row.4,
       skipped: serde_json::from_value(row.5).unwrap_or_default(),
       skipped_total: row.6.max(0) as usize,
+      image_failures: serde_json::from_value(row.7).unwrap_or_default(),
+      image_failures_total: row.8.max(0) as usize,
       cancel_requested: false,
     })
   }
@@ -260,10 +335,13 @@ pub mod import_store {
         Option<String>,
         serde_json::Value,
         i32,
+        serde_json::Value,
+        i32,
         chrono::DateTime<chrono::Utc>,
       ),
     >(
-      "SELECT id, status, total, done, workspace_id, error, skipped, skipped_total, created_at \
+      "SELECT id, status, total, done, workspace_id, error, skipped, skipped_total, \
+              image_failures, image_failures_total, created_at \
        FROM import_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
     )
     .bind(user_id)
@@ -284,9 +362,11 @@ pub mod import_store {
             error: r.5,
             skipped: serde_json::from_value(r.6).unwrap_or_default(),
             skipped_total: r.7.max(0) as usize,
+            image_failures: serde_json::from_value(r.8).unwrap_or_default(),
+            image_failures_total: r.9.max(0) as usize,
             cancel_requested: false,
           },
-          r.8.to_rfc3339(),
+          r.10.to_rfc3339(),
         ))
       })
       .collect()

@@ -111,6 +111,21 @@ const REHOST_CONCURRENCY: usize = 4;
 ///   ~65 MiB, nowhere near this. It closes a separate hole found while looking.
 const MAX_ARCHIVE_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 
+/// How many entries a job's `skipped` / `image_failures` lists carry.
+///
+/// These ride a polling endpoint, and a pathological archive (a node_modules
+/// dump; a wiki whose every image points at one dead host) would otherwise ship
+/// thousands of entries on every poll. The paired `_total` stays exact, so a
+/// truncated list never understates the damage — showing 50 when 4000 were lost
+/// would be worse than showing none.
+const MAX_LISTED: usize = 50;
+
+/// The head of [`MAX_LISTED`], cloned. Failures are already in page order, which
+/// is the order the user will work through them in.
+fn capped(failures: &[mica_app_core::ImageFailure]) -> Vec<mica_app_core::ImageFailure> {
+  failures.iter().take(MAX_LISTED).cloned().collect()
+}
+
 #[derive(Default)]
 struct HostBreaker {
   timeouts: std::collections::HashMap<String, u32>,
@@ -164,6 +179,8 @@ mod tests {
       error: None,
       skipped: Vec::new(),
       skipped_total: 0,
+      image_failures: Vec::new(),
+      image_failures_total: 0,
       cancel_requested: false,
     }
   }
@@ -275,6 +292,62 @@ mod tests {
     assert_eq!(skipped.len(), MAX_LISTED);
     assert_eq!(total, 4000, "the reported total is the real one");
     assert_eq!(skipped[0], "junk/0000.bin", "truncation keeps the head, sorted");
+  }
+
+  fn failure(url: &str) -> mica_app_core::ImageFailure {
+    mica_app_core::ImageFailure {
+      url: url.to_string(),
+      page: "Some page".to_string(),
+      document_id: Uuid::nil(),
+      block_id: "block_1".to_string(),
+      reason: "connection timed out".to_string(),
+      attempted: true,
+    }
+  }
+
+  /// Same bargain as `skipped`: cap what rides the polling endpoint, keep the
+  /// count exact. A wiki whose every image points at one dead host produces one
+  /// failure per occurrence, so this list is the one most likely to be enormous.
+  #[test]
+  fn the_failure_list_is_capped_while_the_count_stays_true() {
+    let all: Vec<_> = (0..4000)
+      .map(|i| failure(&format!("https://dead.example/{i}.png")))
+      .collect();
+    let listed = capped(&all);
+
+    assert_eq!(listed.len(), MAX_LISTED);
+    assert_eq!(all.len(), 4000, "the total the job reports is the real one");
+    assert_eq!(
+      listed[0].url, "https://dead.example/0.png",
+      "the head is kept, so the list matches the order pages were imported in"
+    );
+  }
+
+  /// Under the cap, nothing is dropped — the common case is a handful.
+  #[test]
+  fn a_short_failure_list_is_passed_through_whole() {
+    let all = vec![failure("https://a.example/1.png"), failure("https://b/2.png")];
+    assert_eq!(capped(&all), all);
+  }
+
+  /// The list is stored as jsonb and read back on the next poll, so a field that
+  /// does not survive the round trip is a field the UI silently never sees.
+  /// `attempted` in particular decides which of two different sentences the user
+  /// is shown.
+  #[test]
+  fn a_failure_survives_the_json_round_trip() {
+    let mut refused = failure("https://slow.example/x.png");
+    refused.attempted = false;
+    refused.reason = "host had already timed out repeatedly".to_string();
+
+    let text = serde_json::to_string(&refused).unwrap();
+    let back: mica_app_core::ImageFailure = serde_json::from_str(&text).unwrap();
+
+    assert_eq!(back, refused);
+    assert!(
+      !back.attempted,
+      "an unattempted refusal must not come back looking like a failed fetch"
+    );
   }
 
   /// An archive whose assets were all used reports nothing — not an empty-ish
@@ -448,6 +521,8 @@ pub async fn start_import(
       error: None,
       skipped: Vec::new(),
       skipped_total: 0,
+      image_failures: Vec::new(),
+      image_failures_total: 0,
       cancel_requested: false,
     },
   );
@@ -689,6 +764,18 @@ async fn run_import(
   // across pages is fetched once.
   let mut rehosted: std::collections::HashMap<String, (String, String)> =
     std::collections::HashMap::new();
+  // The other half of that memo: urls this import has already established it
+  // cannot bring in, as (reason, was it actually attempted).
+  //
+  // Needed for two things. It stops the page loop re-fetching a url the
+  // pre-scan already failed on — a dead host linked from forty pages cost forty
+  // more timeouts, in series, after the concurrent pass had already settled the
+  // question. And it carries the reason to the failure record, so the list the
+  // user sees says *why* rather than just *which*.
+  let mut unfetched: std::collections::HashMap<String, (String, bool)> =
+    std::collections::HashMap::new();
+  // Every block left pointing at somebody else's server, with enough to fix it.
+  let mut image_failures: Vec<mica_app_core::ImageFailure> = Vec::new();
   let client = reqwest::Client::new();
 
   // Fetch every external image BEFORE walking the pages, several at a time.
@@ -743,6 +830,21 @@ async fn run_import(
       // The breaker is consulted between chunks, so a dead host costs at most
       // one chunk of timeouts rather than one per image.
       let live: Vec<&String> = chunk.iter().filter(|u| !breaker.is_open(u)).collect();
+      for url in chunk.iter().filter(|u| breaker.is_open(u)) {
+        // Refused WITHOUT a request. Recorded with the same weight as a failed
+        // fetch, because to the document there is no difference: the block is
+        // still a link. This was the most invisible of the three outcomes —
+        // nothing errored, it simply never happened, and it left only an
+        // aggregate count in a log the user never reads.
+        unfetched.insert(
+          url.clone(),
+          (
+            "host had already timed out repeatedly, so this one was skipped without a request"
+              .to_string(),
+            false,
+          ),
+        );
+      }
       refused += chunk.len() - live.len();
       let results = futures_util::future::join_all(live.into_iter().map(|url| async move {
         (
@@ -760,6 +862,7 @@ async fn run_import(
             let reason = error.to_string();
             breaker.record(&url, &reason);
             tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
+            unfetched.insert(url, (reason, true));
           }
         }
       }
@@ -815,6 +918,9 @@ async fn run_import(
     let root_block_id = format!("block_{}", Uuid::new_v4().simple());
     let mut payload = import_markdown(&page.markdown, &root_block_id);
     let from = page.archive_path.as_deref().unwrap_or("");
+    // Failures for THIS page, held until insert_page hands back the document id
+    // they have to be addressed to. (url, block_id, reason, attempted)
+    let mut page_failures: Vec<(String, String, String, bool)> = Vec::new();
 
     for block in &mut payload.blocks {
       // Image refs that resolve inside the archive: upload once, rewire to
@@ -846,6 +952,12 @@ async fn run_import(
           // per-image re-host remains the fallback for those.
           let entry = match rehosted.get(&url) {
             Some(hit) => Some(hit.clone()),
+            // Already established as unreachable by the concurrent pre-scan.
+            // Do NOT try again: the pre-scan covers every external url in the
+            // archive, so reaching here means the answer is known, and a dead
+            // host linked from forty pages used to cost forty more timeouts in
+            // series after the question was already settled.
+            None if unfetched.contains_key(&url) => None,
             None => match fetch_and_store_image_url(state, workspace_id, user_id, &url).await {
               Ok(record) => {
                 let value = (record.id.to_string(), record.original_name.clone());
@@ -853,13 +965,24 @@ async fn run_import(
                 Some(value)
               }
               Err(error) => {
-                tracing::warn!(%url, %error, "import: external image re-host failed; keeping link");
+                let reason = error.to_string();
+                tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
+                unfetched.insert(url.clone(), (reason, true));
                 None
               }
             },
           };
-          if let Some(entry) = entry {
-            block.data = json!({"file_id": entry.0, "name": entry.1});
+          match entry {
+            Some(entry) => block.data = json!({"file_id": entry.0, "name": entry.1}),
+            // Left as a link, and now said out loud. `document_id` is stamped
+            // after insert_page below — the page does not exist yet.
+            None => {
+              let (reason, attempted) = unfetched
+                .get(&url)
+                .cloned()
+                .unwrap_or_else(|| ("could not be fetched".to_string(), true));
+              page_failures.push((url.clone(), block.id.clone(), reason, attempted));
+            }
           }
         }
       }
@@ -882,7 +1005,7 @@ async fn run_import(
       }
     }
 
-    insert_page(
+    let document_id = insert_page(
       state,
       workspace_id,
       user_id,
@@ -894,10 +1017,26 @@ async fn run_import(
     )
     .await?;
 
+    for (url, block_id, reason, attempted) in page_failures {
+      image_failures.push(mica_app_core::ImageFailure {
+        url,
+        page: page.title.clone(),
+        document_id,
+        block_id,
+        reason,
+        attempted,
+      });
+    }
+
     {
       let mut jobs = state.import_jobs.write().await;
       if let Some(job) = jobs.get_mut(&job_id) {
         job.done = idx + 1;
+        // Published as the import runs, not only at the end: a long archive
+        // against a dead host should show the damage accumulating rather than
+        // look clean until the last page lands.
+        job.image_failures_total = image_failures.len();
+        job.image_failures = capped(&image_failures);
       }
     }
     persist_progress(state, job_id, idx + 1).await;
@@ -922,7 +1061,6 @@ async fn run_import(
     // node_modules dump) would otherwise ship thousands of paths on every poll.
     // The client shows a count, so a truncated list still tells the truth about
     // how many — see `skipped_total`.
-    const MAX_LISTED: usize = 50;
     let mut jobs = state.import_jobs.write().await;
     if let Some(job) = jobs.get_mut(&job_id) {
       job.skipped_total = skipped.len();
@@ -1007,7 +1145,10 @@ async fn insert_page(
   title: &str,
   root_block_id: &str,
   payload: &mica_app_core::documents::DocumentSnapshotPayload,
-) -> ApiResult<()> {
+  // Returns the DOCUMENT id, not the view id. They are different ids, and the
+  // one the `rehost-image` endpoint takes — the one an image failure has to be
+  // addressed to — is this one.
+) -> ApiResult<Uuid> {
   let mut tx = state.db.begin().await?;
   let document = sqlx::query_as::<_, DocumentRecord>(
     r#"
@@ -1052,7 +1193,7 @@ async fn insert_page(
   .await?;
 
   tx.commit().await?;
-  Ok(())
+  Ok(document.id)
 }
 
 

@@ -1313,6 +1313,38 @@ class ApiClient {
     return ImportJobStatus.fromJson(r);
   }
 
+  /// Store [bytes] in Mica and repoint one image block at the new file.
+  ///
+  /// THIS side fetches the image; the server only stores it. That split is the
+  /// whole point: a CN-hosted server has no route to medium/imgur and AppFlowy
+  /// blocks datacenter IPs outright, so the import's own server-side re-host
+  /// fails systematically for exactly the archives people import — while this
+  /// machine, which just downloaded that export, reaches the host fine.
+  ///
+  /// One targeted `UpdateBlock`, not a document rewrite, so it is safe on a
+  /// page nobody has open. Same endpoint `mica-cli rehost-images` sweeps with.
+  Future<void> rehostImage(
+    String token,
+    String workspaceId,
+    String documentId, {
+    required String blockId,
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final response = await sharedHttpClient.post(
+      baseUri.replace(
+        path: '/api/workspaces/$workspaceId/documents/$documentId/rehost-image',
+        queryParameters: {'block_id': blockId, 'file_name': fileName},
+      ),
+      headers: {
+        'content-type': 'application/octet-stream',
+        'authorization': 'Bearer $token',
+      },
+      body: bytes,
+    );
+    _decode(response); // throws ApiException on a non-2xx
+  }
+
   /// This account's recent imports, newest first.
   ///
   /// Reads the SERVER's record, not a client-side log: an import that a deploy
