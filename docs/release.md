@@ -50,17 +50,13 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 3. **冒烟测这一版真正改了什么**(步骤 11)。`verify-prod` 只断言版本号 ——
    **版本号证明不了功能**。
 
-> ⚠️ **`just deploy-prod` 在 Windows 主力机上跑不了**(2026-08-26 实测)。`pipx install
-> ansible-core` 会装成功、`ansible-playbook.exe` 也在 PATH 上,但一运行就死在 ansible 自己的
-> 启动里:`check_blocking_io` → `OSError: [WinError 87]`。**ansible 不支持 Windows 作控制端。**
-> 所以本机唯一能用的部署路径就是上面的 `gh workflow run Deploy`。
-> `scripts/deploy-prod.sh` 现在**运行** ansible 而不是检查文件在不在,会带着这段话拒绝
-> —— 以前 `command -v` 通过、然后崩在深处,那种检查等于没检查。
-> 想找回这条兜底,得装一个真的 WSL 发行版(`wsl --install -d Ubuntu`);
-> Docker Desktop 自带的 `docker-desktop` 那个不算。**这是系统级改动,由用户决定。**
+> **上面这 5 步不需要本地装任何东西** —— 全部是 `git` 和 `gh`,ansible 跑在 CI 的 runner 上。
 >
-> 于是「GitHub 挂了怎么办」今天**没有答案**。这正是本次改造本该治好的病(兜底路径没人走过),
-> 换了个形状复发了一次 —— 记在这里,而不是等下次真需要它的时候才发现。
+> **兜底 `just deploy-prod` 只在 Linux 上跑**:ansible 不支持 Windows 作控制端
+> (`pipx install ansible-core` 装得上,一运行就 `OSError: [WinError 87]`)。Linux / macOS /
+> 任意 WSL 发行版都可以;Docker Desktop 自带的 `docker-desktop` 不是发行版,不算。
+> `scripts/deploy-prod.sh` 检查的是 ansible **能不能运行**,不是文件在不在 —— 后者在 Windows
+> 上会通过,然后崩在 ansible 自己的启动里。
 
 `just deploy-prod X.Y.Z` 和 CI 走**同一条**路径 —— 两边都是 `ansible/deploy.yml`,CI 那一步
 字面上就是在跑 `bash scripts/deploy-prod.sh`。「compose 改了必须走兜底」这条**已经不成立**
@@ -326,18 +322,17 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
 
 **部署不需要本地装任何东西** —— 走 `gh workflow run Deploy`,ansible 装在 CI 的 runner 上。
 
-只有 `just deploy-prod` 这条兜底用得到本地 ansible,而**它在这台 Windows 机器上装不成能用的**
-(见上面那条 ⚠️:装得上、跑不了,`WinError 87`)。真要这条路,得在一个 POSIX 环境里:
+只有兜底 `just deploy-prod` 用得到本地 ansible,而 **ansible 只支持 Linux/macOS 作控制端**
+(Windows 上装得上、跑不了)。所以这条路要在 Linux、macOS 或任意 WSL 发行版里跑:
 
 ```bash
-pipx install ansible-core                                       # 在 WSL / Linux / macOS 里
+pipx install ansible-core
 ansible-galaxy collection install -r ansible/requirements.yml   # community.docker
 ```
 
 `deploy-prod` 两样缺一就**拒绝并说清楚**,不会跑到一半才发现 —— 而且第一样检查的是
-**能不能运行**,不是文件在不在(2026-08-26 改;此前 Windows 上那个检查会通过,然后崩在
-ansible 自己的启动里)。**节点侧零新增依赖** —— `docker_compose_v2` 直接驱动 docker CLI,
-不需要 Python docker SDK。
+**能不能运行**,不是文件在不在。**节点侧零新增依赖** —— `docker_compose_v2` 直接驱动
+docker CLI,不需要 Python docker SDK。
 
 前置:
 ```bash

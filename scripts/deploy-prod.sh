@@ -23,26 +23,18 @@ tag="v$version"
 # Runs it, rather than checking that the file exists. On Windows `pipx install
 # ansible-core` succeeds and puts ansible-playbook.exe on PATH, so `command -v`
 # passes — and then the real invocation dies inside ansible's own startup with
-#
-#   File ".../ansible/cli/__init__.py", line 46, in check_blocking_io
-#   OSError: [WinError 87] 参数错误。
-#
-# Ansible needs a POSIX controller and does not support Windows as one. Measured
-# on this repo's own dev machine on 2026-08-26, following this repo's own
-# install instructions. Existence was never the question; being able to run was.
+# `check_blocking_io` → `OSError: [WinError 87]`. Ansible supports Linux/macOS
+# controllers only. Existence was never the question; being able to run was.
 ansible-playbook --version >/dev/null 2>&1 || {
   cat >&2 <<'EOF'
 REFUSED: ansible-playbook is not usable here.
 
-  Not installed?   pipx install ansible-core
-  On Windows?      it installs and then cannot run — ansible has no Windows
-                   controller support. Use the Deploy workflow instead:
+  This script runs on a Linux or macOS controller (a WSL distro counts).
+  Install it there:  pipx install ansible-core
 
-                       gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
+  From Windows, deploy through CI instead — it needs nothing installed locally:
 
-                   To have this local fallback at all you need a POSIX shell
-                   with ansible: a real WSL distro (`wsl --install -d Ubuntu`)
-                   — Docker Desktop's own docker-desktop VM is not one.
+      gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 EOF
   exit 1
 }

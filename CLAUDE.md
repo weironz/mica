@@ -122,9 +122,9 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 彩排:`gh workflow run Deploy -f version=X.Y.Z -f check=true`,对真节点跑一遍不改任何东西。
 `just --list` 看全部 recipe。
 
-⚠️ **`just deploy-prod`(兜底)在本机跑不了**(2026-08-26 实测):ansible 不支持 Windows 作
-控制端,`pipx install ansible-core` 装得上、一跑就 `WinError 87`。所以「GitHub 挂了怎么办」
-**今天没有答案** —— 要这条路得先装真的 WSL 发行版(系统级改动,由用户决定)。
+**上面这条链不需要本地装东西**(只用 `git` / `gh`,ansible 跑在 CI runner 上)。
+兜底 `just deploy-prod` **只在 Linux/macOS 上跑** —— ansible 不支持 Windows 作控制端
+(装得上、一跑就 `WinError 87`);要用就在 Linux / macOS / 任意 WSL 发行版里跑。
 
 **节奏(用户定,长期有效)**:
 
