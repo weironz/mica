@@ -57,9 +57,26 @@ cargo clippy --workspace --all-targets -- -D warnings
   && "${FLUTTER:-flutter}" analyze --no-fatal-infos \
   && "${FLUTTER:-flutter}" test)
 
-# 4. Cargo.lock must already carry the version, or the release commit ships a
-#    lock that disagrees with its own manifest.
-git diff --quiet Cargo.lock \
-  || fail "Cargo.lock is dirty — run 'cargo check' and include it in the release commit"
+# 4. Cargo.lock must carry the version, or the release commit ships a lock that
+#    disagrees with its own manifest.
+#
+#    This used to be `git diff --quiet Cargo.lock`, which is a different claim —
+#    "the lock is UNMODIFIED" — and it made `just release` impossible to pass.
+#    Step 1 of that flow is release-bump.sh, whose last line is `cargo check`
+#    precisely to refresh the lock; step 3 is the commit. So at this point the
+#    lock is dirty BY DESIGN, and the gate refused the exact state it exists to
+#    require. It passed standalone (clean tree) and failed only in the flow it
+#    was written for, which is why it shipped.
+#
+#    Second time this script has carried a gate that could never pass — the
+#    other was `flutter analyze` with no flags, in a package with ~130 infos.
+#    Same shape both times: the check was written against the state the author
+#    had in front of them, not the state the caller creates. Anything added here
+#    has to be tried through `just release`, not only on its own.
+lock=$(grep -A1 -E '^name = "mica-(api-server|cli)"$' Cargo.lock \
+  | grep -E '^version = ' | sed 's/.*"\(.*\)"/\1/' | sort -u)
+[ "$lock" = "$rust" ] \
+  || fail "Cargo.lock says '$lock' for the workspace binaries, Cargo.toml says '$rust' — run 'cargo check' and include the lock in the release commit"
+echo "==> Cargo.lock: $lock"
 
 printf '\n  release-check passed for %s\n' "$pub"
