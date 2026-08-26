@@ -208,6 +208,13 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/views/batch-move",
       post(documents::batch_move_views),
     )
+    // POST, and under /views rather than /trash — matching its siblings above.
+    // A body of ids is what makes it a batch, and DELETE-with-a-body is the
+    // shape proxies and HTTP clients are least reliable about.
+    .route(
+      "/workspaces/{workspace_id}/views/batch-purge",
+      post(documents::batch_purge_views),
+    )
     .route(
       "/workspaces/{workspace_id}/documents/batch-read",
       post(documents::batch_read_documents),

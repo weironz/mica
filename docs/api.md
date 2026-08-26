@@ -44,11 +44,12 @@ is not that: these take a list and send one request.
 | POST | `/workspaces/{ws}/views/batch-trash` | Soft-delete many views, each with its subtree |
 | POST | `/workspaces/{ws}/views/batch-restore` | Bring many back out of the bin |
 | POST | `/workspaces/{ws}/views/batch-move` | Re-parent many under one folder, in order |
+| POST | `/workspaces/{ws}/views/batch-purge` | **Permanently** delete many views **already in the bin** |
 | POST | `/workspaces/{ws}/documents/batch-read` | Read many pages' Markdown in one round trip |
 | POST | `/workspaces/{ws}/views/reorder` | Set the full child order under one parent |
 
 Body is `{"view_ids": [...]}` (`document_ids` for the read, plus
-`parent_view_id` for the move). Trash / restore / move answer:
+`parent_view_id` for the move). Trash / restore / move / purge answer:
 
 ```json
 { "affected": 320, "skipped": ["<uuid>"] }
@@ -61,6 +62,13 @@ read your own request size back as the result.
 
 `batch-read` answers `{"documents": [{document_id, markdown | error}]}` — a page
 that cannot be read reports inline instead of failing the whole survey.
+
+⚠️ **`batch-purge` acts only on views that are ALREADY trashed**, and that is a
+deliberate difference from the single `DELETE /trash/{view_id}`, which has no
+such filter and will permanently erase a live page. Batching *that* would let
+one request destroy hundreds of pages nobody had deleted, with no recoverable
+step anywhere. An id that is not in the bin comes back in `skipped` and is left
+untouched — so a real cleanup is always trash first, then purge.
 
 ## Page tree
 

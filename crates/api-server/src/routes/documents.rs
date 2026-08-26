@@ -1571,6 +1571,93 @@ pub async fn batch_restore_views(
   }))
 }
 
+/// `POST /api/workspaces/{workspace_id}/views/batch-purge`
+///
+/// PERMANENTLY delete many trashed pages (each with its subtree) in ONE
+/// statement — the middle rung that was missing between [purge_view] (one at a
+/// time) and [purge_workspace_trash] (all or nothing). Clearing 200 specific
+/// items meant 200 round trips, which is exactly the loop the batch endpoints
+/// exist to remove.
+///
+/// **Only touches views that are ALREADY in the recycle bin**, and that is a
+/// deliberate difference from [purge_view], which has no such filter and will
+/// permanently destroy a LIVE page. Reproducing that here would mean one call
+/// could erase 300 pages that were never deleted, with no recoverable step
+/// anywhere — a new capability, not a batching of an old one. Anything not
+/// trashed comes back in `skipped`, so the caller is told what did not happen
+/// rather than quietly getting less than it asked for.
+///
+/// Same cascade as [purge_view_subtree]: the documents behind those views go
+/// too, taking their yrs base, snapshots, versions and public share tokens with
+/// them. Blobs are left to `blob_gc` — they are content-addressed and may still
+/// be referenced by a page that is staying.
+pub async fn batch_purge_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<BatchViewsRequest>,
+) -> ApiResult<Json<BatchViewsResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  check_batch_ids(&payload.view_ids)?;
+
+  let touched = purge_views_batch(&state.db, workspace_id, &payload.view_ids).await?;
+
+  Ok(Json(BatchViewsResponse {
+    affected: touched.len(),
+    skipped: skipped_ids(&payload.view_ids, &touched),
+  }))
+}
+
+/// Permanently delete the trashed views named by [view_ids], each with its
+/// subtree, and the documents they back. Returns every view id that went.
+///
+/// Split out of the handler for the same reason [empty_workspace_trash] is: the
+/// handler needs auth headers a DB-level test cannot construct, and an
+/// irreversible statement is the last one that should go untested.
+async fn purge_views_batch(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_ids: &[Uuid],
+) -> ApiResult<Vec<Uuid>> {
+  // `purged_docs` is never read by the final SELECT, and that is fine: a
+  // data-modifying CTE runs exactly once whether or not anything references it.
+  //
+  // `is_deleted = true` is on the SEED only. The recursive arm must not repeat
+  // it: trashing a folder cascades the flag to its subtree, so the descendants
+  // are already marked — but if a future change stops cascading, filtering here
+  // too would silently start leaving children behind instead of failing loudly.
+  let touched = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, object_id, object_type FROM views
+        WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = true
+        UNION ALL
+        SELECT v.id, v.object_id, v.object_type
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      ),
+      deleted_views AS (
+        DELETE FROM views
+        WHERE id IN (SELECT id FROM subtree) AND workspace_id = $2
+        RETURNING id, object_id, object_type
+      ),
+      purged_docs AS (
+        DELETE FROM documents
+        WHERE id IN (
+          SELECT object_id FROM deleted_views WHERE object_type::text = 'document'
+        )
+        RETURNING id
+      )
+      SELECT id FROM deleted_views
+    "#,
+  )
+  .bind(view_ids)
+  .bind(workspace_id)
+  .fetch_all(db)
+  .await?;
+  Ok(touched)
+}
+
 /// `POST /api/workspaces/{workspace_id}/views/batch-move`
 ///
 /// Re-parent many views at once. Unlike trash/restore this cannot be one
@@ -6237,6 +6324,86 @@ mod tests {
         0,
         "public share token left behind after purge"
       );
+    }
+
+    /// The bulk purge must refuse to touch a page that was never trashed.
+    ///
+    /// This is where it deliberately differs from `purge_view`, which has no
+    /// such filter and WILL permanently erase a live page. Batching that
+    /// behaviour would turn one call into "destroy 300 pages nobody deleted,
+    /// with no recoverable step" — a new capability, not a faster old one. So
+    /// the untrashed id has to survive, and come back as skipped.
+    #[tokio::test]
+    async fn a_bulk_purge_leaves_pages_that_are_not_in_the_bin() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (trashed, _) = seed_document(&db, ws, user, "已删", serde_json::json!([])).await;
+      let (live, live_doc) = seed_document(&db, ws, user, "还在用", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(trashed)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let touched = purge_views_batch(&db, ws, &[trashed, live]).await.unwrap();
+
+      assert_eq!(touched, vec![trashed], "only the trashed one went");
+      assert_eq!(
+        skipped_ids(&[trashed, live], &touched),
+        vec![live],
+        "the live page is reported as skipped, not silently ignored"
+      );
+      let live_views: i64 = sqlx::query_scalar("SELECT count(*) FROM views WHERE id=$1")
+        .bind(live)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      let live_docs: i64 = sqlx::query_scalar("SELECT count(*) FROM documents WHERE id=$1")
+        .bind(live_doc)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert_eq!((live_views, live_docs), (1, 1), "a live page survived intact");
+    }
+
+    /// A trashed FOLDER carries its children, and the children's documents go
+    /// with them — the same cascade `purge_view_subtree` guarantees for one id.
+    /// Seeded from a set instead, which is the only part that is new, and the
+    /// part that would silently strand documents if the recursive arm were
+    /// written wrong.
+    #[tokio::test]
+    async fn a_bulk_purge_takes_the_whole_subtree_and_its_documents() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id, workspace_id, object_id, object_type, name, position, created_by, \
+         is_deleted) VALUES($1,$2,$1,'folder','容器','a',$3,true)",
+      )
+      .bind(folder)
+      .bind(ws)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+      let (child, child_doc) = seed_document(&db, ws, user, "子页", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET parent_view_id = $1, is_deleted = true WHERE id = $2")
+        .bind(folder)
+        .bind(child)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let touched = purge_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      assert!(touched.contains(&folder));
+      assert!(touched.contains(&child), "the child went with its folder");
+      let doc_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM documents WHERE id=$1")
+        .bind(child_doc)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert_eq!(doc_rows, 0, "the child's document was stranded");
     }
   }
 

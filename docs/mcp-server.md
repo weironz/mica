@@ -57,7 +57,33 @@ Write:
   (needs `find`/`replace`). `destructiveHint`.
 - `mica_move_document(workspace_id, view_id, parent_view_id?)`.
 - `mica_trash_view(workspace_id, view_id, confirm)` — soft delete (recycle bin);
-  requires `confirm: true`. `destructiveHint`. Permanent purge is **not** exposed.
+  requires `confirm: true`. `destructiveHint`.
+
+### 删除这条链(每一档都要 `confirm: true`)
+
+~~「Permanent purge is **not** exposed」~~ —— 这句在这里挂了很久,而 `mica_purge_view`
+和 `mica_empty_trash` 早就存在了。**否定式声明只会静默变假**:代码删个函数会编译报错,
+文档说「没有」而实际有了,什么都不会响。
+
+| 想做什么 | 工具 | 可恢复? |
+| --- | --- | --- |
+| 删一个 / 一批页面 | `mica_trash_view` / `mica_trash_views` | ✅ 进回收站 |
+| 撤销 | `mica_restore_view` / `mica_restore_views` | — |
+| 永久删一个 | `mica_purge_view` | ❌ |
+| **永久删一批** | **`mica_purge_views`** | ❌ |
+| 清空回收站 | `mica_empty_trash` | ❌ |
+| **删掉整个工作区** | **`mica_delete_workspace`** | ❌ **没有工作区回收站** |
+
+两条值得单独记住的边界:
+
+- **`mica_purge_views` 只作用于已经在回收站里的条目**,没进回收站的原样返回在 `skipped`
+  里。这是和单个 `mica_purge_view` **有意的不同** —— 后者不做这道过滤,能把一个活着的
+  页面直接永久删掉。把那个行为批量化,等于让一次调用能抹掉几百个从没被删过的页面,
+  中间没有任何可恢复的一步:那是**新增了一种能力**,不是把旧能力做快。
+- **`mica_delete_workspace` 要 `confirm: true` 外加 `expect_name`** 与工作区当前名字
+  完全一致,对不上就拒绝且不动任何东西。这不是仪式:它是这里唯一会摧毁「从未被删过的
+  内容」的工具,而一个手里攥着三十个工作区 UUID 的 agent,写错一位就没有回收站可捞。
+  id 用眼睛核不了,名字才是用户真正说出口的那个东西。
 
 Note the two id kinds: reads/writes use a page's **`document_id`** (its
 `object_id`, from `mica_list_pages`); move/trash use its **`view_id`**.

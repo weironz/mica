@@ -642,6 +642,23 @@ struct BatchViewsArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeleteWorkspaceArgs {
+  workspace_id: String,
+  /// The workspace's exact name, as `mica_list_workspaces` reports it.
+  ///
+  /// Not redundant with `workspace_id`, and not ceremony. This is the only tool
+  /// here that destroys content nobody deleted first — there is no workspace
+  /// recycle bin — and an agent holding thirty workspace UUIDs is one
+  /// transposition away from erasing the wrong one. An id is unverifiable by
+  /// eye; the name is the thing the user actually said. A mismatch is refused
+  /// with both names shown.
+  expect_name: String,
+  /// Must be true to proceed.
+  #[serde(default)]
+  confirm: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ListPagesArgs {
   workspace_id: String,
   /// List only what is under this VIEW id. Omit to start at the top level.
@@ -2089,6 +2106,116 @@ impl MicaMcp {
   }
 
   #[tool(
+    description = "PERMANENTLY delete MANY pages/folders from the recycle bin in one call — the \
+                   rung between mica_purge_view (one) and mica_empty_trash (everything). Not \
+                   recoverable. Requires confirm=true.\n\
+                   ONLY acts on pages already IN the recycle bin: trash them first (\
+                   mica_trash_views), then purge. Ids that are not trashed come back in \
+                   `skipped` and are left alone — this tool cannot destroy a live page, on \
+                   purpose. `affected` counts what actually went, subtrees included.",
+    annotations(title = "Purge pages (bulk)", read_only_hint = false, destructive_hint = true)
+  )]
+  async fn mica_purge_views(
+    &self,
+    Parameters(BatchViewsArgs {
+      workspace_id,
+      view_ids,
+      confirm,
+    }): Parameters<BatchViewsArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    if !confirm {
+      return Err(McpError::invalid_params(
+        format!(
+          "refusing to permanently delete {} view(s) without confirm=true — this cannot be undone",
+          view_ids.len()
+        ),
+        None,
+      ));
+    }
+    tool_result(
+      self
+        .post(
+          &format!("/api/workspaces/{workspace_id}/views/batch-purge"),
+          json!({ "view_ids": view_ids }),
+        )
+        .await,
+    )
+  }
+
+  #[tool(
+    description = "PERMANENTLY delete a whole workspace — every page, folder, version, comment, \
+                   share link and uploaded file in it. There is NO workspace recycle bin: this \
+                   is the one call here that destroys content which was never deleted first, and \
+                   nothing survives it. Owner only.\n\
+                   Requires confirm=true AND expect_name set to the workspace's exact current \
+                   name; a mismatch is refused without touching anything. To remove PAGES rather \
+                   than the workspace, use mica_trash_views.",
+    annotations(
+      title = "Delete workspace",
+      read_only_hint = false,
+      destructive_hint = true,
+      idempotent_hint = false
+    )
+  )]
+  async fn mica_delete_workspace(
+    &self,
+    Parameters(DeleteWorkspaceArgs {
+      workspace_id,
+      expect_name,
+      confirm,
+    }): Parameters<DeleteWorkspaceArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    if let Err(error) = self.ensure_writable() {
+      return Ok(tool_error(error));
+    }
+    if !confirm {
+      return Err(McpError::invalid_params(
+        "refusing to delete a workspace without confirm=true — this cannot be undone".to_string(),
+        None,
+      ));
+    }
+    // Read the name back and compare BEFORE deleting anything. The check is
+    // worth a round trip precisely because the alternative is unrecoverable:
+    // there is no bin to fish it out of afterwards.
+    let listed = match self.get("/api/workspaces").await {
+      Ok(value) => value,
+      Err(error) => return Ok(tool_error(error)),
+    };
+    let actual = listed
+      .get("workspaces")
+      .and_then(Value::as_array)
+      .into_iter()
+      .flatten()
+      .find(|w| w.get("id").and_then(Value::as_str) == Some(workspace_id.as_str()))
+      .and_then(|w| w.get("name").and_then(Value::as_str))
+      .map(str::to_string);
+    // Refusals come back as tool errors, not protocol errors: the model can act
+    // on both of these (list the workspaces, fix the name) and `tool_result`'s
+    // note says that is exactly the split.
+    let Some(actual) = actual else {
+      return Ok(tool_error(McpError::invalid_params(
+        format!("no workspace {workspace_id} is visible to this token — nothing was deleted"),
+        None,
+      )));
+    };
+    if actual != expect_name {
+      return Ok(tool_error(McpError::invalid_params(
+        format!(
+          "refusing to delete: workspace {workspace_id} is named {actual:?}, not \
+           {expect_name:?}. Nothing was deleted. Check mica_list_workspaces — this guard exists \
+           because the wrong id here cannot be undone."
+        ),
+        None,
+      )));
+    }
+    let deleted = self.delete(&format!("/api/workspaces/{workspace_id}")).await;
+    action_ack(deleted, "deleted", &workspace_id)
+  }
+
+  #[tool(
     description = "Publish a document to a PUBLIC read-only web link and return the URL. Anyone \
                    with the link can read it (no login); re-sharing returns the same link. Use \
                    mica_unshare to turn it off.",
@@ -2242,8 +2369,17 @@ impl ServerHandler for MicaMcp {
          already gone; do not read the count you sent as the count that happened.\n\
          \n\
          The recycle bin: mica_list_trash to see it, mica_restore_views to undo in bulk, and — \
-         PERMANENT, not recoverable — mica_purge_view for one subtree or mica_empty_trash for \
-         all of it. Trashing is safe and reversible; purging is neither.\n\
+         PERMANENT, not recoverable — mica_purge_view (one subtree), mica_purge_views (many, the \
+         batch form) or mica_empty_trash (all of it). Trashing is safe and reversible; purging is \
+         neither. The purge tools act ONLY on pages already in the bin, so the sequence for a \
+         real cleanup is always trash first, then purge; ids that were never trashed come back in \
+         `skipped` rather than being destroyed.\n\
+         \n\
+         DELETING A WHOLE WORKSPACE is a different act, not a bigger cleanup: mica_delete_workspace \
+         destroys every page, version, comment, share link and file in it, there is no workspace \
+         recycle bin, and nothing survives it. It needs confirm=true AND expect_name matching the \
+         workspace's exact current name — a guard that exists because the wrong id here cannot be \
+         undone. If what you actually want is to empty a workspace, that is mica_trash_views.\n\
          \n\
          Write acks return `seq` and `last_block_id` (the new end anchor) — chain further edits \
          from those instead of re-reading. For safe concurrent editing, pass the outline/ack \
