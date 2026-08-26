@@ -67,6 +67,8 @@ hit-testing, and the editor's latency-critical paths.
 
 - **Folders and pages** — drag to reorder or reparent; workspace order is per user.
 - **Real-time collaboration** — collaborator presence, live cursors.
+- **Members and roles** — invite by email as admin, editor, commenter or viewer. Cloud workspaces only: a local one has no members to have.
+- **Comments** — threads anchored to a selection, with replies and resolve. A thread whose text was deleted is kept and marked rather than dropped.
 - **Offline-tolerant** — edits queue and reconcile on reconnect; images inserted offline upload when the network returns.
 - **Version history** — automatic snapshots plus named checkpoints, with a read-only preview and block-level diff.
 - **Public links** — share a document read-only.
