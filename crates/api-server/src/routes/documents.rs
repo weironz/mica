@@ -4015,8 +4015,20 @@ pub async fn batch_transfer_views(
   Json(request): Json<BatchTransferRequest>,
 ) -> ApiResult<Json<TransferResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
+  // Same ceiling as the other batch routes, and for the same reason — except
+  // here it also bounds how long ONE transaction holds its locks.
+  //
+  // Deliberately NOT `check_batch_ids`: that rejects a repeated id, and a repeat
+  // here is a click that landed twice on a selection, which `independent_roots`
+  // already collapses along with the nesting case it cannot be separated from.
   if request.view_ids.is_empty() {
     return Err(ApiError::BadRequest("view_ids must not be empty".to_string()));
+  }
+  if request.view_ids.len() > MAX_BATCH_VIEWS {
+    return Err(ApiError::BadRequest(format!(
+      "at most {MAX_BATCH_VIEWS} view_ids per request, got {}",
+      request.view_ids.len()
+    )));
   }
   transfer_roots(
     &state,

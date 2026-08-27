@@ -4502,13 +4502,17 @@ class _ShareDialogState extends State<_ShareDialog> {
 /// real transfer and pops with the report + destination name for the caller to
 /// refresh + snackbar.
 ///
-/// v1 has no destination-folder picker: everything lands at the destination
-/// ROOT (`parent_view_id: null`). See [_WorkspaceShellState._openTransfer].
+/// The destination can be a FOLDER in the target workspace, not only its root:
+/// picking a workspace loads its folders and offers them as a second dropdown.
+/// Landing everything at the root was the v1 behaviour and is still the default
+/// choice, so the extra control costs nothing to ignore.
 class _TransferDialog extends StatefulWidget {
   const _TransferDialog({
     required this.copy,
     required this.destinations,
     required this.onTransfer,
+    required this.onLoadFolders,
+    this.itemCount = 1,
   });
 
   /// true = copy (source kept); false = move (source soft-deleted after copy).
@@ -4517,14 +4521,29 @@ class _TransferDialog extends StatefulWidget {
   /// Cloud workspaces the subtree can go to — the source is already excluded.
   final List<({String id, String name})> destinations;
 
+  /// How many roots are being transferred. Only affects wording; the caller has
+  /// already bound the actual ids into [onTransfer].
+  final int itemCount;
+
   /// Runs one transfer against the picked destination. [dryRun] true = preview
-  /// (no mutation); false = commit. Source workspace + view + move/copy are
+  /// (no mutation); false = commit. Source workspace + views + move/copy are
   /// bound by the caller.
   final Future<TransferReport> Function({
     required String destWorkspaceId,
+    required String? parentViewId,
     required bool dryRun,
   })
   onTransfer;
+
+  /// Folders of [destWorkspaceId], flattened depth-first for a dropdown.
+  ///
+  /// Loaded per destination rather than up front: there can be many workspaces
+  /// and the user picks one, so fetching every tree to populate a control they
+  /// may never open would be the expensive half of this dialog.
+  final Future<List<({String id, String name, int depth})>> Function(
+    String destWorkspaceId,
+  )
+  onLoadFolders;
 
   @override
   State<_TransferDialog> createState() => _TransferDialogState();
@@ -4536,6 +4555,12 @@ class _TransferDialogState extends State<_TransferDialog> {
   bool _loadingPreview = false;
   bool _submitting = false;
   String? _error;
+
+  /// Folders of the picked destination; null = not loaded (or still loading).
+  List<({String id, String name, int depth})>? _folders;
+
+  /// Chosen destination folder; null = the destination's root.
+  String? _parentViewId;
 
   ({String id, String name})? get _dest {
     final id = _destId;
@@ -4549,17 +4574,48 @@ class _TransferDialogState extends State<_TransferDialog> {
       _destId = id;
       _preview = null;
       _error = null;
+      _folders = null;
+      // A folder id belongs to the workspace it came from; carrying it across
+      // would send the server a parent it will (correctly) refuse.
+      _parentViewId = null;
       _loadingPreview = true;
     });
+    // Folders are a convenience — failing to list them must not block the
+    // transfer, which works perfectly well into the root.
+    widget.onLoadFolders(id).then((folders) {
+      if (!mounted || _destId != id) return;
+      setState(() => _folders = folders);
+    }, onError: (_) {});
+    await _runPreview(id, null);
+  }
+
+  Future<void> _selectParent(String? parentViewId) async {
+    final id = _destId;
+    if (id == null || parentViewId == _parentViewId) return;
+    setState(() {
+      _parentViewId = parentViewId;
+      _preview = null;
+      _error = null;
+      _loadingPreview = true;
+    });
+    await _runPreview(id, parentViewId);
+  }
+
+  Future<void> _runPreview(String destId, String? parentViewId) async {
     try {
-      final report = await widget.onTransfer(destWorkspaceId: id, dryRun: true);
-      if (!mounted || _destId != id) return; // superseded by a newer pick
+      final report = await widget.onTransfer(
+        destWorkspaceId: destId,
+        parentViewId: parentViewId,
+        dryRun: true,
+      );
+      // Superseded by a newer pick — of EITHER control.
+      if (!mounted || _destId != destId || _parentViewId != parentViewId) return;
       setState(() {
         _preview = report;
         _loadingPreview = false;
       });
     } catch (error) {
-      if (!mounted || _destId != id) return;
+      if (!mounted || _destId != destId || _parentViewId != parentViewId) return;
       setState(() {
         _error = context.l10n.transferFailed(error.toString());
         _loadingPreview = false;
@@ -4577,6 +4633,7 @@ class _TransferDialogState extends State<_TransferDialog> {
     try {
       final report = await widget.onTransfer(
         destWorkspaceId: dest.id,
+        parentViewId: _parentViewId,
         dryRun: false,
       );
       if (!mounted) return;
@@ -4626,6 +4683,39 @@ class _TransferDialogState extends State<_TransferDialog> {
                         .toList(),
                     onChanged: _submitting ? null : _selectDest,
                   ),
+                  // Second control: WHERE in that workspace. Only once a
+                  // destination is picked and its folders arrived — an empty
+                  // dropdown offering nothing but "root" is a control that
+                  // says less than the label above it already does.
+                  if (_folders != null && _folders!.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String?>(
+                      initialValue: _parentViewId,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: l10n.transferPickFolder,
+                        border: const OutlineInputBorder(),
+                      ),
+                      items: [
+                        DropdownMenuItem<String?>(
+                          child: Text(l10n.transferDestinationRoot),
+                        ),
+                        for (final f in _folders!)
+                          DropdownMenuItem<String?>(
+                            value: f.id,
+                            child: Text(
+                              // Indented with spaces rather than nested widgets:
+                              // a DropdownMenuItem renders in two places (list
+                              // and closed field) and padding in the second one
+                              // pushes the selected name off-centre.
+                              '${'　' * f.depth}${f.name}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: _submitting ? null : _selectParent,
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   if (_loadingPreview)
                     const Padding(

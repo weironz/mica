@@ -115,22 +115,176 @@ void main() {
     });
   });
 
-  group('rightClickActsOnSelection', () {
-    test('a right-click inside a multi-selection acts on all of it', () {
-      expect(rightClickActsOnSelection({'a', 'b'}, 'a'), isTrue);
+  group('flattenedFolderOptions', () {
+    FolderCandidate f(
+      String id, {
+      String? parent,
+      String position = '01',
+      bool folder = true,
+    }) => (
+      id: id,
+      parentId: parent,
+      name: id,
+      position: position,
+      isFolder: folder,
+    );
+
+    test('folders come out depth-first, with their depth', () {
+      final options = flattenedFolderOptions([
+        f('B', position: '02'),
+        f('A', position: '01'),
+        f('A2', parent: 'A', position: '01'),
+        f('A2a', parent: 'A2', position: '01'),
+      ]);
+      expect(options.map((o) => '${o.id}@${o.depth}'), [
+        'A@0',
+        'A2@1',
+        'A2a@2',
+        'B@0',
+      ]);
     });
 
-    test('a right-click OUTSIDE the selection acts on that row alone', () {
+    test('pages are not offered as destinations', () {
+      // Only a folder may hold children — the tree's central invariant, and the
+      // server enforces it. Listing a page here builds a dropdown whose entries
+      // are guaranteed to 400.
+      final options = flattenedFolderOptions([
+        f('F'),
+        f('page', parent: 'F', folder: false),
+      ]);
+      expect(options.map((o) => o.id), ['F']);
+    });
+
+    test('children follow position, not the order the server listed them', () {
+      final options = flattenedFolderOptions([
+        f('second', parent: null, position: '02'),
+        f('first', parent: null, position: '01'),
+      ]);
+      expect(options.map((o) => o.id), ['first', 'second']);
+    });
+
+    test('a folder whose parent is missing is dropped, not promoted', () {
+      // A partially-loaded tree. Promoting it would show a nested folder at
+      // depth 0, and the indentation is the only thing distinguishing two
+      // folders that share a name.
+      final options = flattenedFolderOptions([f('orphan', parent: 'gone')]);
+      expect(options, isEmpty);
+    });
+
+    test('a folder listed twice is offered once', () {
+      // The walk descends from the root, so a parent CYCLE is simply
+      // unreachable and needs no guard. What the guard is actually for is a
+      // duplicated row in the response — which would otherwise put the same
+      // folder in the dropdown twice, and its whole subtree with it.
+      final options = flattenedFolderOptions([
+        f('dup'),
+        f('dup'),
+        f('inside', parent: 'dup'),
+      ]);
+      expect(options.map((o) => o.id), ['dup', 'inside']);
+    });
+  });
+
+  group('actsOnSelection', () {
+    test('a gesture inside a multi-selection acts on all of it', () {
+      expect(actsOnSelection({'a', 'b'}, 'a'), isTrue);
+    });
+
+    test('a gesture OUTSIDE the selection acts on that row alone', () {
       // Every file manager behaves this way, and the alternative is a context
       // menu that deletes rows the user scrolled away from and forgot about.
-      expect(rightClickActsOnSelection({'a', 'b'}, 'c'), isFalse);
+      expect(actsOnSelection({'a', 'b'}, 'c'), isFalse);
     });
 
     test('a single selected row is not a batch', () {
       // One row is the ordinary case; a batch menu there would only rename what
       // already works, and its wording ("delete 1 page?") reads as a bug.
-      expect(rightClickActsOnSelection({'a'}, 'a'), isFalse);
-      expect(rightClickActsOnSelection(<String>{}, 'a'), isFalse);
+      expect(actsOnSelection({'a'}, 'a'), isFalse);
+      expect(actsOnSelection(<String>{}, 'a'), isFalse);
+    });
+  });
+
+  group('independentSelection', () {
+    // a, F(f1, f2 — f2 holds deep), b
+    const parents = <String, String?>{
+      'a': null,
+      'F': null,
+      'f1': 'F',
+      'f2': 'F',
+      'deep': 'f2',
+      'b': null,
+    };
+    String? parentOf(String id) => parents[id];
+
+    test('a child of a selected folder is dropped', () {
+      // Otherwise a drag re-parents the child alongside its own folder, i.e.
+      // pulls it OUT of the folder it was just moved with.
+      expect(independentSelection(['F', 'f1'], parentOf), ['F']);
+    });
+
+    test('a grandchild is dropped too', () {
+      expect(independentSelection(['F', 'deep'], parentOf), ['F']);
+    });
+
+    test('siblings under an UNSELECTED folder are all kept', () {
+      // The common case: Ctrl-clicking two pages inside the same folder. The
+      // folder is not selected, so neither of them is riding along inside
+      // anything, and dropping one would silently move less than was asked.
+      expect(independentSelection(['f1', 'f2'], parentOf), ['f1', 'f2']);
+    });
+
+    test('order is preserved, and repeats collapse', () {
+      expect(independentSelection(['b', 'a', 'b'], parentOf), ['b', 'a']);
+    });
+
+    test('an id the tree does not know is treated as a root', () {
+      expect(independentSelection(['ghost'], parentOf), ['ghost']);
+    });
+
+    test('a parent cycle terminates instead of hanging the drag', () {
+      // Not reachable through a legal tree, but reachable through a stale
+      // client snapshot mid-move — and a spin here freezes the whole app.
+      String? cyclic(String id) => id == 'x' ? 'y' : 'x';
+      expect(independentSelection(['x'], cyclic), ['x']);
+    });
+  });
+
+  group('siblingOrderAfterDrop', () {
+    List<String>? drop(List<String> dragged, String target, {required bool before}) =>
+        siblingOrderAfterDrop(
+          siblings: ['p', 'q', 'r', 's'],
+          dragged: dragged,
+          targetId: target,
+          before: before,
+        );
+
+    test('a block lands together, in its own order', () {
+      expect(drop(['p', 'r'], 'q', before: false), ['q', 'p', 'r', 's']);
+    });
+
+    test('before and after differ by exactly one slot', () {
+      expect(drop(['s'], 'q', before: true), ['p', 's', 'q', 'r']);
+      expect(drop(['s'], 'q', before: false), ['p', 'q', 's', 'r']);
+    });
+
+    test('rows are removed BEFORE the target index is read', () {
+      // The bug this exists to prevent: with 'p' dragged from above 'r', taking
+      // r's index first (2) and removing after leaves the block one slot late.
+      expect(drop(['p'], 'r', before: true), ['q', 'p', 'r', 's']);
+    });
+
+    test('dropping onto a row that is itself being dragged does nothing', () {
+      expect(drop(['p', 'q'], 'q', before: true), isNull);
+    });
+
+    test('a target that is no longer a sibling does nothing', () {
+      // The tree changed under the drag — another device moved the row, or a
+      // refresh landed. Guessing an index here silently reorders the wrong pair.
+      expect(drop(['p'], 'gone', before: true), isNull);
+    });
+
+    test('a single-row drag behaves exactly as it did before', () {
+      expect(drop(['r'], 'p', before: true), ['r', 'p', 'q', 's']);
     });
   });
 }
