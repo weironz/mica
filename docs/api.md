@@ -322,6 +322,11 @@ rows — this client, another device, MCP, the CLI. It is a bell, not data: on
 hearing it, re-ask `GET /views` with your held ETag and let the 304 decide
 whether anything you can see actually moved. Fed by a Postgres trigger
 (migration 0025), so no mutation path can forget to ring it.
+
+Verified end to end on 2026-08-28, both halves: a raw WS client received one
+frame per REST create/trash/purge, and the user watched the Flutter sidebar
+grow and shrink on its own — create over REST, no refresh pressed — on a real
+desktop build against the dev stack.
 | GET | `/s/{token}` | **public** — a shared page, rendered server-side |
 | GET | `/health` | **public** — reports the running version |
 | GET | `/ready` | **public** — readiness |
