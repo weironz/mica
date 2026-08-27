@@ -34,6 +34,22 @@ PATCH /api/workspaces/{workspace_id}/documents/{document_id}/markdown
 
 `GET .../export/markdown` is the same handler under the older name, still valid.
 
+**The GET does NOT include the page's title by default, and that is deliberate.**
+It is the read half of a read/PATCH pair: a title in the response would be
+written back as a real heading by the next read-modify-write, and compound on
+every round trip. Ask for it only when producing a copy for a HUMAN to keep —
+`?title=true` puts `# {name}` at the top, after any front matter:
+
+```
+GET /api/workspaces/{ws}/documents/{id}/markdown?title=true
+```
+
+Spell it `true`/`false`, not `1`/`0` — anything else is a 400. The name comes
+from the document itself (`root.data['title']`) when it carries one, and from
+the view's name otherwise; `docs/page-title-plan.md` has the why. The workspace
+and whole-account exports below always include it — those only ever produce
+files, never a body to write back.
+
 ## Bulk operations
 
 The per-item routes are fine for one thing at a time. Reorganising a workspace
