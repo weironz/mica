@@ -1504,30 +1504,52 @@ pub async fn batch_trash_views(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   check_batch_ids(&payload.view_ids)?;
 
-  let touched = sqlx::query_scalar::<_, Uuid>(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
-        UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      UPDATE views
-      SET is_deleted = true, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
-        AND workspace_id = $2
-        AND is_deleted = false
-      RETURNING id
-    "#,
-  )
-  .bind(&payload.view_ids)
-  .bind(workspace_id)
-  .fetch_all(&state.db)
-  .await?;
+  let touched = trash_views_batch(&state.db, workspace_id, &payload.view_ids).await?;
 
   Ok(Json(BatchViewsResponse {
     affected: touched.len(),
     skipped: skipped_ids(&payload.view_ids, &touched),
   }))
+}
+
+/// Soft-delete [view_ids] and everything under them. Returns the ids it changed.
+///
+/// Split out of the handler for the same reason [purge_views_batch] is: the
+/// handler needs auth headers a DB-level test cannot construct. Until 2026-08-27
+/// this statement lived inline and had no test at all — the guarantee was "the
+/// SQL parses and the route table has no conflict", not "300 ids in, the right
+/// rows out".
+///
+/// `is_deleted = false` is in the WHERE, not the seed: a row already in the bin
+/// must not be re-stamped (that would move its `updated_at` and make it look
+/// freshly deleted) and must come back in `skipped` so the caller is told it did
+/// less than it asked.
+async fn trash_views_batch(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_ids: &[Uuid],
+) -> ApiResult<Vec<Uuid>> {
+  Ok(
+    sqlx::query_scalar::<_, Uuid>(
+      r#"
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+          UNION ALL
+          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        )
+        UPDATE views
+        SET is_deleted = true, updated_at = now()
+        WHERE id IN (SELECT id FROM subtree)
+          AND workspace_id = $2
+          AND is_deleted = false
+        RETURNING id
+      "#,
+    )
+    .bind(view_ids)
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await?,
+  )
 }
 
 /// `POST /api/workspaces/{workspace_id}/views/batch-restore`
@@ -1545,30 +1567,45 @@ pub async fn batch_restore_views(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   check_batch_ids(&payload.view_ids)?;
 
-  let touched = sqlx::query_scalar::<_, Uuid>(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
-        UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      UPDATE views
-      SET is_deleted = false, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
-        AND workspace_id = $2
-        AND is_deleted = true
-      RETURNING id
-    "#,
-  )
-  .bind(&payload.view_ids)
-  .bind(workspace_id)
-  .fetch_all(&state.db)
-  .await?;
+  let touched = restore_views_batch(&state.db, workspace_id, &payload.view_ids).await?;
 
   Ok(Json(BatchViewsResponse {
     affected: touched.len(),
     skipped: skipped_ids(&payload.view_ids, &touched),
   }))
+}
+
+/// Bring [view_ids] and their trashed subtrees back. Returns the ids it changed.
+///
+/// The exact mirror of [trash_views_batch] — same CTE, the two `is_deleted`
+/// booleans flipped. Extracted for the same reason, and tested beside it so the
+/// pair cannot drift apart silently.
+async fn restore_views_batch(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_ids: &[Uuid],
+) -> ApiResult<Vec<Uuid>> {
+  Ok(
+    sqlx::query_scalar::<_, Uuid>(
+      r#"
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+          UNION ALL
+          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        )
+        UPDATE views
+        SET is_deleted = false, updated_at = now()
+        WHERE id IN (SELECT id FROM subtree)
+          AND workspace_id = $2
+          AND is_deleted = true
+        RETURNING id
+      "#,
+    )
+    .bind(view_ids)
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await?,
+  )
 }
 
 /// `POST /api/workspaces/{workspace_id}/views/batch-purge`
@@ -1683,8 +1720,44 @@ pub async fn batch_move_views(
     }
   }
 
-  let mut tx = state.db.begin().await?;
-  for (i, id) in payload.view_ids.iter().enumerate() {
+  move_views_tx(
+    &state.db,
+    workspace_id,
+    &payload.view_ids,
+    payload.parent_view_id,
+  )
+  .await?;
+
+  Ok(Json(BatchViewsResponse {
+    affected: payload.view_ids.len(),
+    skipped: Vec::new(),
+  }))
+}
+
+/// Re-parent [view_ids] under [parent_view_id], in the order given, in ONE
+/// transaction.
+///
+/// Positions are `(index + 1) * 10`, so the caller's order IS the sibling order
+/// at the destination.
+///
+/// A view that no longer matches (deleted, or moved to another workspace, under
+/// us) makes the WHOLE move fail with [ApiError::Conflict] — the `?` returns
+/// before `commit`, so the transaction is dropped and every earlier row in this
+/// batch rolls back. That is the difference from trash/restore, which report
+/// what they missed in `skipped`: a half-applied reorganisation has no honest
+/// way to be reported, because the ids the caller sent no longer describe the
+/// tree it is looking at.
+///
+/// Split out of the handler so a DB test can reach it — the handler needs auth
+/// headers a database-level test cannot construct.
+async fn move_views_tx(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_ids: &[Uuid],
+  parent_view_id: Option<Uuid>,
+) -> ApiResult<()> {
+  let mut tx = db.begin().await?;
+  for (i, id) in view_ids.iter().enumerate() {
     let position = format!("{:010}", (i + 1) * 10);
     let affected = sqlx::query(
       r#"
@@ -1693,7 +1766,7 @@ pub async fn batch_move_views(
         WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
       "#,
     )
-    .bind(payload.parent_view_id)
+    .bind(parent_view_id)
     .bind(&position)
     .bind(id)
     .bind(workspace_id)
@@ -1707,11 +1780,7 @@ pub async fn batch_move_views(
     }
   }
   tx.commit().await?;
-
-  Ok(Json(BatchViewsResponse {
-    affected: payload.view_ids.len(),
-    skipped: Vec::new(),
-  }))
+  Ok(())
 }
 
 pub async fn bootstrap_document(
@@ -6582,6 +6651,234 @@ mod tests {
         .await
         .unwrap();
       assert_eq!((live_views, live_docs), (1, 1), "a live page survived intact");
+    }
+
+    // ── batch-trash / batch-restore / batch-move ─────────────────────────
+    //
+    // Until 2026-08-27 these three had NO database test — the guarantee was
+    // "the SQL parses, the types line up, the route table has no conflict",
+    // which is not "300 ids in, the right rows out". `batch-purge` got real
+    // tests when it landed (above) and `batch-transfer` when it landed; these
+    // are the same shape, applied to the three that were left behind.
+
+    /// A folder + a page, where the page lives inside the folder.
+    async fn seed_folder_with_page(db: &PgPool) -> (Uuid, Uuid, Uuid, Uuid) {
+      let (ws, user) = seed_workspace(db).await;
+      let folder = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id, workspace_id, object_id, object_type, name, position, created_by) \
+         VALUES($1,$2,$1,'folder','容器','a',$3)",
+      )
+      .bind(folder)
+      .bind(ws)
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+      let (page, doc) = seed_document(db, ws, user, "里面的页", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(folder)
+        .bind(page)
+        .execute(db)
+        .await
+        .unwrap();
+      (ws, folder, page, doc)
+    }
+
+    /// The user `seed_workspace` created it under — `seed_document` needs one,
+    /// and the tests below get the workspace back from a helper that has
+    /// already consumed it.
+    async fn ws_owner(db: &PgPool, ws: Uuid) -> Uuid {
+      sqlx::query_scalar::<_, Uuid>("SELECT owner_id FROM workspaces WHERE id = $1")
+        .bind(ws)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    async fn is_deleted(db: &PgPool, id: Uuid) -> bool {
+      sqlx::query_scalar::<_, bool>("SELECT is_deleted FROM views WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    /// Trashing a folder must take its children with it.
+    ///
+    /// The cascade is the whole reason this is a recursive CTE rather than a
+    /// flat `WHERE id = ANY(...)`. Break the recursive arm and the folder
+    /// disappears from the sidebar while its pages stay live and unreachable —
+    /// which looks exactly like a successful delete.
+    #[tokio::test]
+    async fn a_bulk_trash_takes_the_folders_children_with_it() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, page, _) = seed_folder_with_page(&db).await;
+
+      let touched = trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      assert!(touched.contains(&folder));
+      assert!(touched.contains(&page), "the child went too: {touched:?}");
+      assert!(is_deleted(&db, page).await);
+    }
+
+    /// An id already in the bin comes back in `skipped`, and is NOT re-stamped.
+    ///
+    /// Re-stamping would move its `updated_at`, so a page trashed last week
+    /// would surface at the top of the recycle bin as if it had just been
+    /// deleted — a lie no error would ever report.
+    #[tokio::test]
+    async fn a_bulk_trash_skips_what_is_already_in_the_bin() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (already, _) = seed_document(&db, ws, user, "早就删了", serde_json::json!([])).await;
+      let (live, _) = seed_document(&db, ws, user, "还在", serde_json::json!([])).await;
+      trash_views_batch(&db, ws, &[already]).await.unwrap();
+      let stamp: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM views WHERE id = $1")
+          .bind(already)
+          .fetch_one(&db)
+          .await
+          .unwrap();
+
+      let touched = trash_views_batch(&db, ws, &[already, live]).await.unwrap();
+
+      assert_eq!(touched, vec![live], "only the live one changed");
+      assert_eq!(skipped_ids(&[already, live], &touched), vec![already]);
+      let after: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM views WHERE id = $1")
+          .bind(already)
+          .fetch_one(&db)
+          .await
+          .unwrap();
+      assert_eq!(stamp, after, "an already-trashed row must not be re-stamped");
+    }
+
+    /// Another workspace's id must not be touched, even by an editor of this one.
+    ///
+    /// ⚠️ The scoping is DOUBLE — `workspace_id = $2` sits both in the CTE seed
+    /// and in the UPDATE's WHERE — so this test only goes red when BOTH are
+    /// removed. Measured, not assumed: dropping either one on its own still
+    /// passes. That is fine (belt and braces on a statement that can silently
+    /// cross a tenant boundary is worth having), but do not read this test as
+    /// proof that either guard alone is load-bearing.
+    #[tokio::test]
+    async fn a_bulk_trash_cannot_reach_into_another_workspace() {
+      let Some(db) = pool().await else { return };
+      let (ws, _) = seed_workspace(&db).await;
+      let (other_ws, other_user) = seed_workspace(&db).await;
+      let (foreign, _) =
+        seed_document(&db, other_ws, other_user, "别处的", serde_json::json!([])).await;
+
+      let touched = trash_views_batch(&db, ws, &[foreign]).await.unwrap();
+
+      assert!(touched.is_empty(), "{touched:?}");
+      assert!(!is_deleted(&db, foreign).await, "the foreign page is untouched");
+    }
+
+    /// Restore is trash's exact mirror, including the cascade.
+    ///
+    /// Tested as a ROUND TRIP rather than against a hand-trashed row: the pair
+    /// only has to agree with each other, and a test that seeds the "deleted"
+    /// state by hand would pass even if the two CTEs drifted apart.
+    #[tokio::test]
+    async fn a_bulk_restore_undoes_a_bulk_trash_exactly() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, page, _) = seed_folder_with_page(&db).await;
+      let trashed = trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let restored = restore_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let mut a = trashed.clone();
+      let mut b = restored.clone();
+      a.sort();
+      b.sort();
+      assert_eq!(a, b, "restore brought back exactly what trash took");
+      assert!(!is_deleted(&db, folder).await);
+      assert!(!is_deleted(&db, page).await);
+    }
+
+    /// Restoring something that was never deleted changes nothing.
+    #[tokio::test]
+    async fn a_bulk_restore_skips_what_is_already_live() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (live, _) = seed_document(&db, ws, user, "还在", serde_json::json!([])).await;
+
+      let touched = restore_views_batch(&db, ws, &[live]).await.unwrap();
+
+      assert!(touched.is_empty());
+      assert_eq!(skipped_ids(&[live], &touched), vec![live]);
+    }
+
+    /// The caller's id order becomes the sibling order at the destination.
+    ///
+    /// Positions are `(i+1)*10` as TEXT, so they must also sort correctly as
+    /// text — `10, 20, 30` does, `10, 100, 20` would not. The zero-padding is
+    /// what makes that true, and nothing else asserts it.
+    #[tokio::test]
+    async fn a_bulk_move_lands_the_views_in_the_order_given() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, _, _) = seed_folder_with_page(&db).await;
+      let mut ids = Vec::new();
+      for name in ["丙", "甲", "乙"] {
+        let (id, _) = seed_document(&db, ws, ws_owner(&db, ws).await, name, serde_json::json!([]))
+          .await;
+        ids.push(id);
+      }
+
+      move_views_tx(&db, ws, &ids, Some(folder)).await.unwrap();
+
+      let ordered: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM views WHERE parent_view_id = $1 ORDER BY position",
+      )
+      .bind(folder)
+      .fetch_all(&db)
+      .await
+      .unwrap();
+      // Only the ids this call moved. The folder already held 「里面的页」 at
+      // position '0' (what `seed_document` writes), which sorts BEFORE every
+      // zero-padded number — a batch move renumbers what it was given and
+      // leaves the other siblings alone, so where that one lands is not this
+      // test's business.
+      let moved: Vec<Uuid> = ordered.into_iter().filter(|id| ids.contains(id)).collect();
+      assert_eq!(moved, ids, "sibling order follows the request");
+    }
+
+    /// A view that vanished under us rolls the WHOLE batch back.
+    ///
+    /// This is the one behaviour that separates move from trash/restore, and the
+    /// one that is invisible when it breaks: without the transaction the first
+    /// two ids would already be re-parented, the caller would see an error, and
+    /// the tree would be in a state nobody asked for and no response describes.
+    #[tokio::test]
+    async fn a_bulk_move_rolls_back_entirely_when_one_view_is_gone() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, _, _) = seed_folder_with_page(&db).await;
+      let owner = ws_owner(&db, ws).await;
+      let (first, _) = seed_document(&db, ws, owner, "先搬的", serde_json::json!([])).await;
+      let (vanished, _) = seed_document(&db, ws, owner, "中途没了", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(vanished)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let err = move_views_tx(&db, ws, &[first, vanished], Some(folder))
+        .await
+        .unwrap_err();
+
+      assert!(matches!(err, ApiError::Conflict(_)), "{err:?}");
+      let parent: Option<Uuid> =
+        sqlx::query_scalar("SELECT parent_view_id FROM views WHERE id = $1")
+          .bind(first)
+          .fetch_one(&db)
+          .await
+          .unwrap();
+      assert_eq!(
+        parent, None,
+        "the first view must NOT have been left re-parented"
+      );
     }
 
     /// Selecting a folder AND a page inside it must not transfer that page
