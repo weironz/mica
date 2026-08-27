@@ -9684,7 +9684,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 ? ({required extendRange}) =>
                       _handleSelectClick(item.view, extendRange: extendRange)
                 : null,
-            onPlainTap: _clearTreeSelection,
+            onPlainTap: () => _anchorTreeSelection(item.view),
             batchActions: canEdit && _selection.actsOnWholeSelection(item.view.id)
                 ? () => _batchMenuItems(item.view)
                 : null,
@@ -10021,10 +10021,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     });
   }
 
-  /// Drop the selection. Called by every ordinary click and by Esc.
+  /// An unmodified click landed on [view]: drop the selection, but leave the
+  /// row as the anchor a following Shift-click measures from.
   ///
-  /// A no-op when there is nothing selected, so it can sit in the hot path of
+  /// A no-op when it is already the state, so it can sit in the hot path of
   /// every row tap without causing a rebuild per click.
+  void _anchorTreeSelection(DocumentView view) {
+    if (_selection.anchorOn(view.id)) setState(() {});
+  }
+
+  /// Drop the selection AND the anchor — for a click that hit no row (the blank
+  /// area below the tree), or after a drop relocated the rows.
   void _clearTreeSelection() {
     if (_selection.clear()) setState(() {});
   }

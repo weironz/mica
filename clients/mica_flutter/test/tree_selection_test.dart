@@ -171,6 +171,41 @@ void main() {
       expect(s.ids, {'a', 'f1'});
     });
 
+    // The ordinary gesture, and the one that shipped broken: click a row, then
+    // Shift-click another. Every test above starts with a Ctrl-click, which is
+    // the UNUSUAL way to begin a range — so all of them passed while the common
+    // path selected exactly one row.
+    test('a plain click sets the anchor, so Shift after it makes a range', () {
+      final s = TreeSelection();
+      s.anchorOn('a');
+      s.click('c', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'a', 'b', 'c'});
+    });
+
+    test('a plain click drops whatever was selected', () {
+      final s = ctrlClick(TreeSelection(), ['a', 'b']);
+      expect(s.anchorOn('F'), isTrue);
+      expect(s.ids, isEmpty);
+    });
+
+    test('re-clicking the row that is already the anchor changes nothing', () {
+      // Every row tap goes through this, so it must not force a rebuild per
+      // click on a tree that can be thousands of rows.
+      final s = TreeSelection();
+      expect(s.anchorOn('a'), isTrue);
+      expect(s.anchorOn('a'), isFalse);
+    });
+
+    test('clicking the blank area forgets the anchor too', () {
+      // clear() is for a click that hit NO row; a following Shift-click then
+      // has nothing to measure from, which is correct — there is no "from".
+      final s = TreeSelection();
+      s.anchorOn('a');
+      s.clear();
+      s.click('c', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'c'});
+    });
+
     test('Shift with no anchor yet is just a toggle', () {
       final s = TreeSelection();
       s.click('b', extendRange: true, visibleRows: rows());

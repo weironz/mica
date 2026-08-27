@@ -133,8 +133,31 @@ class TreeSelection {
     _anchorId = id;
   }
 
-  /// Forget everything. Returns whether anything actually changed, so the caller
-  /// can skip a rebuild on the (very common) already-empty case.
+  /// An UNMODIFIED click landed on [id]: drop the selection, but remember the
+  /// row as the anchor a following Shift-click measures from.
+  ///
+  /// The anchor half is the whole point, and leaving it out is what made Shift
+  /// look broken: [clear] forgets the anchor, so after a plain click a
+  /// Shift-click had nothing to measure from and degraded to a toggle. That is
+  /// the ordinary gesture — click a row, Shift-click another — and it selected
+  /// exactly one row. Explorer and Finder both set the anchor on a plain click;
+  /// Ctrl-clicking first, which is what this used to require, is the unusual
+  /// way to start a range.
+  ///
+  /// Returns whether anything changed.
+  bool anchorOn(String id) {
+    if (_ids.isEmpty && _anchorId == id) return false;
+    _ids.clear();
+    _anchorId = id;
+    return true;
+  }
+
+  /// Forget everything, the anchor included — for a click that landed on no row
+  /// at all (the blank area below the tree), or after a drop moved the rows
+  /// somewhere else.
+  ///
+  /// Returns whether anything actually changed, so the caller can skip a
+  /// rebuild on the (very common) already-empty case.
   bool clear() {
     if (_ids.isEmpty && _anchorId == null) return false;
     _ids.clear();
