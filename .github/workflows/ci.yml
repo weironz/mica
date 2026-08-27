@@ -81,7 +81,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: workspace
-      # rust-toolchain.toml pins `stable` (+ rustfmt, clippy); rustup honors it.
+      # rust-toolchain.toml pins an EXACT version (+ rustfmt, clippy); rustup
+      # honors it, so the `@stable` above only guarantees that rustup exists.
+      # 〔This said "pins `stable`" until 2026-08-27 — stale since the commit
+      # that replaced the channel with a number. Believing it is what let the
+      # release workflow's `targets:` add a std slice to the wrong toolchain;
+      # see the `cli` job in release.yml.〕
       # sqlx uses the runtime query API (not compile-time macros), so the
       # workspace builds without a live database.
       - name: Build workspace

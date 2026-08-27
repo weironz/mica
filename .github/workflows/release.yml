@@ -352,6 +352,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # `targets:` above adds the std slice to the toolchain THIS ACTION
+      # installs (`stable`). Since 2026-08-27 the repo pins Rust in
+      # `rust-toolchain.toml`, and cargo honours that pin — so the musl leg ran
+      # on the pinned toolchain, which had no musl std, and died with
+      #   error[E0463]: can't find crate for `core`
+      # `rustup target add` reads the override file for this directory, so it
+      # adds the target to the toolchain that actually does the building.
+      #
+      # This broke in the SAME release that introduced the pin (v0.13.30) and 29
+      # green CI runs never saw it, because this job exists only in the release
+      # workflow. Release-only legs are unexercised until you release; the dry
+      # run for that is `gh workflow run Release -f version=X.Y.Z` (publish
+      # defaults to false — builds everything, publishes nothing).
+      - if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
         with:
           # One shared cache across the matrix would collide (different OSes);
