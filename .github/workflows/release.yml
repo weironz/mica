@@ -136,6 +136,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version-file: .fvmrc
           cache: true
 
       - name: Resolve version
@@ -482,6 +483,7 @@ jobs:
         if: ${{ matrix.flutter }}
         with:
           channel: stable
+          flutter-version-file: .fvmrc
           cache: true
 
       - name: Build + stage the web bundle

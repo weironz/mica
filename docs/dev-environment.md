@@ -99,9 +99,36 @@ for /f "delims=" %%i in ('gh auth token') do set "GITHUB_PERSONAL_ACCESS_TOKEN=%
 > 那是同一个坏掉的远端 OAuth 入口,和上面这个用户级 `github` 是两条独立配置。要么在
 > `/plugin` 里禁掉它,要么忽略这行噪音。
 
+## 工具链版本:钉死的,不是「最新」
+
+两个文件说了算,CI 和本机读的是同一个号:
+
+| 钉在哪 | 管什么 | 谁读它 |
+| --- | --- | --- |
+| `.fvmrc` | Flutter(Dart 随它一起) | 六个 `subosito/flutter-action` step 的 `flutter-version-file` |
+| `rust-toolchain.toml` | Rust | rustup(仓库内每次 `cargo`/`rustc` 自动生效) |
+| `deploy/Dockerfile.api`·`.cli`·`docker-compose.yml` 的 `rust:<版本>-slim-bookworm` | **出厂镜像**的 Rust | 三处必须与上一行同号 |
+
+**`just release` 会拒绝**本机 Flutter ≠ `.fvmrc`、本机 rustc ≠ `rust-toolchain.toml`、
+或三个镜像与钉子不同号。所以这不是「记得对齐」,是过不去。
+
+**升级的做法**(一次提交,不是某天自己发生):
+
+```bash
+flutter upgrade                    # 或 checkout 指定版本
+# 改 .fvmrc / rust-toolchain.toml / 三个 rust:<版本> 标签，改成同一个号
+just release-check                 # 它会指出还有哪一处没跟上
+```
+
+> **为什么钉**:此前全都是 `channel: stable`,也就是「构建那天 rustup / flutter-action
+> 解析出什么就是什么」。于是 CI 一个版本、笔记本另一个、出厂镜像第三个,而且没有任何记录。
+> Flutter 3.47 就是这样**在没人拍板的情况下把 Windows 默认渲染器换成 Impeller 并发给了
+> 用户**(0.13.29 就是这么构建的),而本机还停在 3.44 —— 于是 `just app` 调的是一个我们
+> 根本不发布的引擎。代价照实说:钉死之后**升级要人主动做**,不会自己跟上游。
+
 ## Windows 桌面构建前置
 
-- **Flutter SDK**(本机 `C:\flutter`,已入 PATH)、**VS Build Tools + Desktop C++ workload + Win10 SDK**(`flutter build windows` 需要)。
+- **Flutter SDK**(本机 `C:\flutter`,已入 PATH;版本由 `.fvmrc` 钉死,见上)、**VS Build Tools + Desktop C++ workload + Win10 SDK**(`flutter build windows` 需要)。
 - **开发者模式(Developer Mode)**:一旦项目含**任何原生插件**(如 `window_manager`),Flutter 在 Windows 上用符号链接管理插件,需开开发者模式,否则 `pub get`/构建报 `Building with plugins requires symlink support`。开法:`start ms-settings:developers` → 打开「开发人员模式」(普通用户即可,无需重启)。M1 无插件时不需要,M2 起需要。
 
   ⚠️ **别用 PowerShell 的 `New-Item -ItemType SymbolicLink` 验证是否生效**:Windows PowerShell 5.1 建符号链接时不传 `SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE`,即使开发者模式已开也会报 `Administrator privilege required`,是**假阴性**。用 `cmd /c mklink /D <链接> <目标>` 验证才准(Flutter 走的也是带该标志的 Win32 API)。真正的开关状态查注册表:`HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock` 的 `AllowDevelopmentWithoutDevLicense` == 1。

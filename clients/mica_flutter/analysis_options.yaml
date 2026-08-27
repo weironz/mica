@@ -9,6 +9,13 @@ analyzer:
     - rust_builder/**
     # Generated FFI bindings.
     - lib/src/rust/**
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   rules:

@@ -244,6 +244,18 @@
   两者都能保住 —— 但那要重写这些条如何跟随画布(`777c07c` / `9c367b2` 正是为了让它们跟随),
   所以单独算一件事。**未拍板**。(M)
 
+  **2026-08-27:Flutter 3.47 把这条从「官方有个说法」变成了官方推荐** ——
+  [#188894](https://github.com/flutter/flutter/pull/188894)「Recommend
+  `OverlayPortal.overlayChildLayoutBuilder` over Target-Follower」。路径确定了,
+  代价没变(重写四个浮层的跟随方式),所以**仍然未拍板**,只是不再需要赌它是不是正解。
+
+  ⚠️ **同版另一条 tooltip 修复不解锁这件事,别混**:
+  [#188476](https://github.com/flutter/flutter/pull/188476)
+  「keep tooltip position rect alive - fix use after free」修的是**引擎里** Windows
+  tooltip 定位矩形的 UAF;我们绕的是**框架层**布局期断言(follower 那时还没有 paint
+  transform)。两个不同的 bug,升到 3.47 之后 `TooltipVisibility(visible: false)`
+  仍然是必需的。
+
 ## 性能
 
 - 🆕 **搜索正文靠 `ILIKE` 全表扫,没有文本索引**(2026-08-12 重新记入)——

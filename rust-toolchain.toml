@@ -1,4 +1,19 @@
+# The Rust this repo is built with — everywhere, including the shipped images.
+#
+# `channel = "stable"` before, which is not a version: it is "whatever rustup
+# resolves the day you build". That made three different Rusts normal — a laptop
+# on one, CI on another, and `deploy/Dockerfile.*` pinned to a third — and none
+# of them recorded a decision. A compiler that ships to production should be
+# something somebody chose.
+#
+# Bumping is a commit: change this line AND the `rust:<version>-slim-bookworm`
+# tags in deploy/Dockerfile.api / .cli and docker-compose.yml, so the three stay
+# one number. `scripts/release-check.sh` refuses when they disagree.
+#
+# rustup reads this for every cargo/rustc invocation inside the repo, so CI's
+# `dtolnay/rust-toolchain@stable` step only guarantees rustup exists — this file
+# decides what actually runs.
 [toolchain]
-channel = "stable"
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]
 

@@ -36,6 +36,7 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | 关的什么 | 在哪 | 何时加的 |
 |---|---|---|
 | 三处版本号一致 + `Cargo.lock` 跟上 | `scripts/release-check.sh` | 2026-08-25 |
+| **本机 Flutter == `.fvmrc`;本机 Rust == `rust-toolchain.toml`;三个镜像同号** | 同上 | 2026-08-27 |
 | DB 集成测试**真的跑了**(本地 Postgres 没起就拒绝发版) | 同上 | 2026-08-25 |
 | `cargo test` / `clippy -D warnings` / `flutter analyze` + `test` | 同上 | 2026-08-25 |
 | **tag 必须与它所在那棵树的版本号一致** | `.github/workflows/release.yml` | 2026-08-26 |

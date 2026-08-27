@@ -171,9 +171,25 @@ the editor is busy replacing.
 Inline math (`$…$`, a `math` mark over N source characters) typesets in-line
 without touching Decision 1's load-bearing wall, via a fold: every atom-marked
 run becomes **one U+FFFC placeholder** in its node's TextPainter
-(`TextPainter.setPlaceholderDimensions` — probed on desktop Skia and verified on
-CanvasKit with real rendering), and the typeset raster is drawn into the
-placeholder's box. This holds unconditionally — a formula is never entered.
+(`TextPainter.setPlaceholderDimensions` — probed on desktop **Skia** and
+verified on CanvasKit with real rendering), and the typeset raster is drawn into
+the placeholder's box. This holds unconditionally — a formula is never entered.
+
+> ⚠️ **That "desktop Skia" is now a claim about a renderer we no longer ship.**
+> Flutter 3.47 made **Impeller** the default on Windows
+> ([#188140](https://github.com/flutter/flutter/pull/188140)), and 3.47.1 is the
+> pinned toolchain (`.fvmrc`), so every desktop build from 0.13.29 on is
+> Impeller. The behaviour almost certainly did not change — placeholder metrics
+> are a framework-side `TextPainter` concern, above the raster backend — but the
+> EVIDENCE behind this sentence was gathered somewhere we do not build any more,
+> and an unverified claim that reads as verified is what this file exists to
+> prevent. Re-probe on Impeller before leaning on it again.
+>
+> The one place in this renderer worth an actual eyeball is the math hover
+> card's shadow (`render.dart`, `MaskFilter.blur`): it is the ONLY exotic canvas
+> op in the whole editor — no `saveLayer`, no `drawVertices`, no
+> `BackdropFilter`, no `ImageFilter` — and mask blur is where Impeller and Skia
+> have historically differed most.
 
 A typeset formula is an **atom** (AppFlowy / AFFiNE / Notion all landed here):
 

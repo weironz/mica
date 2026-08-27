@@ -30,6 +30,36 @@ echo "==> DB-backed tests: ON"
 version=$(bash scripts/manifest-version.sh)
 echo "==> version: $version (three places agree)"
 
+# 2b. The TOOLCHAINS must be the pinned ones, on this machine too.
+#
+#     Everything used to float on "stable": CI resolved one Flutter, the laptop
+#     had another, and the shipped Docker image a third Rust — with no record of
+#     any of it. That is how Flutter 3.47 turned Windows over to Impeller and
+#     shipped a new renderer to users without anyone deciding, while this machine
+#     stayed on 3.44 and debugged a different engine than the one it releases.
+#
+#     Checked HERE because CI cannot see a laptop. The pins themselves live in
+#     .fvmrc (read by every flutter-action step) and rust-toolchain.toml (read by
+#     rustup); this only asserts the machine agrees with them.
+want_flutter=$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)
+[ -n "$want_flutter" ] || fail ".fvmrc has no \"flutter\" version — that file is the pin CI reads"
+have_flutter=$("${FLUTTER:-flutter}" --version | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | head -1)
+[ "$have_flutter" = "$want_flutter" ] || fail \
+  "local Flutter is $have_flutter, the pin is $want_flutter (.fvmrc) — CI builds what you are about to ship with the PIN, so testing on anything else tests a different engine. Run 'flutter upgrade', or check out $want_flutter."
+echo "==> Flutter: $have_flutter (matches .fvmrc)"
+
+want_rust=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+have_rust=$(rustc --version | awk '{print $2}')
+[ "$have_rust" = "$want_rust" ] || fail \
+  "local rustc is $have_rust, rust-toolchain.toml pins $want_rust — rustup honours that file automatically, so this usually means the pin was just changed and the toolchain is not installed: rustup toolchain install $want_rust"
+#     And the images that actually ship must be built with that same Rust. Three
+#     files, one number: drift here is invisible until a release.
+for f in deploy/Dockerfile.api deploy/Dockerfile.cli docker-compose.yml; do
+  grep -q "rust:${want_rust%.*}-slim-bookworm" "$f" || fail \
+    "$f does not build on rust:${want_rust%.*}-slim-bookworm, but rust-toolchain.toml pins $want_rust. Bump them together."
+done
+echo "==> Rust: $have_rust (toolchain + all three images agree)"
+
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that
 #    fails CI — both have turned a pipeline red here before.

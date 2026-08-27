@@ -61,7 +61,7 @@ services:
   # volumes, so a rebuild is an ordinary incremental cargo build that survives
   # restarts: ~5 s for a one-line change, vs minutes for an image rebuild.
   api:
-    image: rust:1.97-slim-bookworm
+    image: rust:1.98-slim-bookworm
     container_name: mica-api
     working_dir: /src
     command: cargo run -p mica-api-server

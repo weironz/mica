@@ -145,9 +145,19 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 ## 开发机与工具链(Windows 主力机)
 
 - 仓库在 `C:\data\codes\mica-will-laptop`(2026-07-20 起)。旧文档里的 `D:/codes/mica` 一律按本路径理解。
-- Flutter stable 在 `C:\flutter`(已进 PATH);VS **Build Tools** + Windows SDK 已装,
+- Flutter 在 `C:\flutter`(已进 PATH);VS **Build Tools** + Windows SDK 已装,
   `flutter build windows` 可用(不需要 VS Community)。Flutter app 在 `clients/mica_flutter/`,
   仓库根是 Rust workspace。
+- **工具链版本是钉死的,两个文件说了算**(2026-08-27 起):`.fvmrc` = Flutter(Dart 随它),
+  `rust-toolchain.toml` = Rust;`deploy/Dockerfile.api|.cli` 与 `docker-compose.yml` 里的
+  `rust:<版本>-slim-bookworm` 必须是同一个号。**`just release` 会拒绝**本机版本或镜像与
+  钉子不符。升级 = 改这几个文件的一次提交,不是「某天 CI 自己用上了」。
+  〔之前全是 `channel: stable`:CI 解析出一个、笔记本是另一个、出厂镜像第三个。
+  Flutter 3.47 就是这样**在没人拍板的情况下把 Windows 换成 Impeller 并发给了用户**,
+  而本机还停在 3.44,调的是一个我们根本不发布的引擎。〕
+- **Windows 桌面出厂即 Impeller**(Flutter 3.47 起默认)。编辑器自绘唯一的非常规画布操作
+  是 `render.dart` 里数学卡片阴影的 `MaskFilter.blur` —— 渲染有疑先看它,详见
+  `docs/render-architecture.md`。
 - **国内网络必须走镜像**:已设 `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` +
   `PUB_HOSTED_URL=https://pub.flutter-io.cn`,否则 `flutter pub get` 会卡住。
 - **`just` 的 shebang recipe 绕过 `set windows-shell`**(里面用 `cygpath`):跑之前

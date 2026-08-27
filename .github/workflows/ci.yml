@@ -187,6 +187,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version-file: .fvmrc
           cache: true
       - run: flutter pub get
       # Warnings ARE fatal as of 2026-08-25. This comment used to say a separate
@@ -281,6 +282,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version-file: .fvmrc
           cache: true
       # Same flags as the release build. A bundle built differently from the one we
       # ship would make the CDN and caching assertions meaningless.

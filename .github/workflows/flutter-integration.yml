@@ -70,6 +70,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version-file: .fvmrc
           cache: true
 
       # The long pole is `flutter test -d windows` compiling the Rust FFI crate
@@ -174,6 +175,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version-file: .fvmrc
           cache: true
       - uses: Swatinem/rust-cache@v2
         with:
