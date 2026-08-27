@@ -123,6 +123,166 @@ pub async fn document_socket(
   }))
 }
 
+/// `GET /ws/workspaces/{workspace_id}/views` — "the sidebar tree changed" pings.
+///
+/// One socket per open sidebar. The only thing it ever carries downstream is
+/// `{"type":"views_changed"}`, emitted whenever any writer touches this
+/// workspace's `views` rows (a Postgres trigger, migration 0025, forwarded by
+/// [`views_change_listener`]) — including writers that are not this client:
+/// MCP, the CLI, another device. The client answers with its existing
+/// ETag-guarded tree refetch, so a ping that changed nothing it can see costs
+/// one 304.
+///
+/// Same auth as [`document_socket`], minus the protocol-version gate: that gate
+/// exists for the SYNC protocol's envelope negotiation, and this socket has no
+/// envelopes to negotiate — its one message kind is its whole contract.
+pub async fn views_socket(
+  State(state): State<AppState>,
+  Path(workspace_id): Path<Uuid>,
+  Query(query): Query<ConnectQuery>,
+  headers: HeaderMap,
+  upgrade: WebSocketUpgrade,
+) -> ApiResult<Response> {
+  let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
+  let (user_id, token_exp) = session_from_token(&state, &token)?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+
+  Ok(
+    upgrade
+      .on_upgrade(move |socket| run_views_connection(socket, state, workspace_id, token_exp)),
+  )
+}
+
+async fn run_views_connection(
+  mut socket: WebSocket,
+  state: AppState,
+  workspace_id: Uuid,
+  token_exp: u64,
+) {
+  let connection_id = Uuid::new_v4();
+  let room = state.views_hub.join(workspace_id);
+  let mut events = room.subscribe();
+
+  // Same deadline rule as the document socket: the socket outlives the token
+  // check that let it in, so it carries the token's own expiry. Without it a
+  // revoked member would keep learning that a workspace they lost is changing.
+  let expiry = tokio::time::sleep(
+    time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO),
+  );
+  tokio::pin!(expiry);
+
+  loop {
+    tokio::select! {
+      () = &mut expiry => {
+        let _ = socket
+          .send(Message::Close(Some(CloseFrame {
+            code: WS_CLOSE_TOKEN_EXPIRED,
+            reason: "token expired".into(),
+          })))
+          .await;
+        break;
+      }
+      incoming = socket.recv() => {
+        match incoming {
+          Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+          // Downstream-only: nothing a client says here means anything.
+          Some(Ok(_)) => {}
+        }
+      }
+      broadcast = events.recv() => {
+        match broadcast {
+          Ok(message) => {
+            // The origin filter is moot in practice — the listener broadcasts
+            // as nil, never as a connection id — and that is deliberate: even
+            // the connection whose OWN action caused the ping wants its tree
+            // refreshed (its REST reply carried the page, not the tree).
+            if message.origin != connection_id
+              && socket.send(Message::Text(message.text.to_string().into())).await.is_err()
+            {
+              break;
+            }
+          }
+          // Lagged is fine HERE, unlike on the sync socket: this message is a
+          // bell, not state — one bell after N missed bells rings just as
+          // well, and the refetch it triggers reads the current tree anyway.
+          Err(RecvError::Lagged(_)) => {
+            if socket
+              .send(Message::Text(VIEWS_CHANGED_EVENT.to_string().into()))
+              .await
+              .is_err()
+            {
+              break;
+            }
+          }
+          Err(RecvError::Closed) => break,
+        }
+      }
+    }
+  }
+}
+
+/// The one message [`views_socket`] ever sends.
+pub const VIEWS_CHANGED_EVENT: &str = r#"{"type":"views_changed"}"#;
+
+/// Forward Postgres `views` change notifications (migration 0025) to the
+/// per-workspace rooms. Spawned once at startup; runs for the life of the
+/// process.
+///
+/// LISTEN/NOTIFY rather than a broadcast call in every mutating route: the
+/// mutation surface is a dozen routes and growing, and one forgotten site is a
+/// silently stale tree — the N-places problem `docs/lessons.md` #2 exists to
+/// warn about. The trigger sees every writer of the table, this task is the
+/// single bridge, and the rooms only fan out.
+///
+/// Notifications carry no queue: whatever fired while the listener's connection
+/// was down is gone. So after every (re)connect it pings all ACTIVE rooms once
+/// — each client's ETag refetch turns a false alarm into a 304, which is what
+/// makes over-notifying safe and under-notifying the only real failure here.
+pub async fn views_change_listener(state: AppState) {
+  loop {
+    let mut listener = match sqlx::postgres::PgListener::connect_with(&state.db).await {
+      Ok(listener) => listener,
+      Err(error) => {
+        tracing::warn!(%error, "views-change listener: connect failed; retrying");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        continue;
+      }
+    };
+    if let Err(error) = listener.listen("mica_views_changed").await {
+      tracing::warn!(%error, "views-change listener: LISTEN failed; retrying");
+      tokio::time::sleep(Duration::from_secs(5)).await;
+      continue;
+    }
+
+    for workspace_id in state.views_hub.active_ids() {
+      state
+        .views_hub
+        .broadcast_if_active(workspace_id, Uuid::nil(), Arc::from(VIEWS_CHANGED_EVENT));
+    }
+
+    loop {
+      match listener.recv().await {
+        Ok(notification) => {
+          let Ok(workspace_id) = notification.payload().parse::<Uuid>() else {
+            tracing::warn!(
+              payload = notification.payload(),
+              "views-change listener: non-uuid payload"
+            );
+            continue;
+          };
+          state
+            .views_hub
+            .broadcast_if_active(workspace_id, Uuid::nil(), Arc::from(VIEWS_CHANGED_EVENT));
+        }
+        Err(error) => {
+          tracing::warn!(%error, "views-change listener: connection lost; reconnecting");
+          break;
+        }
+      }
+    }
+  }
+}
+
 /// Close code for "the token this socket was opened with has expired".
 ///
 /// 4401 rather than 1008 (policy violation): 4000–4999 is the application's own

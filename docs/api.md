@@ -313,7 +313,15 @@ A read-scoped PAT is enough for every GET here, including a full export.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/ws/workspaces/{ws}/documents/{doc}` | **WebSocket** — the document room; auth by query token |
+| GET | `/ws/workspaces/{ws}/views` | **WebSocket** — "the sidebar tree changed" pings; same auth |
 | GET | `/ws/ai` | **WebSocket** — streaming AI |
+
+The views socket is downstream-only and carries exactly one message,
+`{"type":"views_changed"}`, whenever ANY writer touches that workspace's view
+rows — this client, another device, MCP, the CLI. It is a bell, not data: on
+hearing it, re-ask `GET /views` with your held ETag and let the 304 decide
+whether anything you can see actually moved. Fed by a Postgres trigger
+(migration 0025), so no mutation path can forget to ring it.
 | GET | `/s/{token}` | **public** — a shared page, rendered server-side |
 | GET | `/health` | **public** — reports the running version |
 | GET | `/ready` | **public** — readiness |

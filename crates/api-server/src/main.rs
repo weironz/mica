@@ -134,6 +134,10 @@ async fn main() -> anyhow::Result<()> {
     info!(provider = %stored.provider.as_str(), model = %stored.model, "loaded saved AI settings");
     *state.ai.write().await = Some(stored);
   }
+  // Live sidebar trees: bridge Postgres `views` change NOTIFYs (migration 0025)
+  // to the per-workspace WS rooms. Backgrounded for the life of the process; it
+  // reconnects on its own and re-pings active rooms after a gap.
+  tokio::spawn(routes::ws::views_change_listener(state.clone()));
   // Reclaim blobs no page points at any more. Backgrounded and best-effort: a
   // GC that stops is a disk-space problem, never a reason to fail a request.
   // No-op when object storage is not configured — nothing to reclaim.

@@ -20,6 +20,13 @@ pub struct AppState {
   pub config: Arc<AppConfig>,
   pub db: PgPool,
   pub hub: DocumentHub,
+  /// Rooms for `/ws/workspaces/{id}/views` — one per WORKSPACE, keyed by its
+  /// id, carrying "the view tree changed" pings from the Postgres NOTIFY
+  /// listener (migration 0025) to every client showing that sidebar. The same
+  /// `DocumentHub` machinery as [`Self::hub`], deliberately a separate
+  /// instance: one map keyed by two kinds of id would work only until it
+  /// didn't, and nothing would say which kind a given entry was.
+  pub views_hub: DocumentHub,
   /// Object-store config for file uploads; `None` disables the file endpoints.
   pub storage: Option<Arc<S3Config>>,
   /// AI provider config, mutable at runtime via the settings endpoint. `None`
@@ -206,6 +213,7 @@ impl AppState {
       config: Arc::new(config),
       db,
       hub: DocumentHub::new(),
+      views_hub: DocumentHub::new(),
       storage: S3Config::from_env().map(Arc::new),
       ai: Arc::new(RwLock::new(AiConfig::from_env())),
       import_jobs: Arc::new(RwLock::new(HashMap::new())),

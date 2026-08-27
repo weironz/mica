@@ -28,6 +28,11 @@ pub fn ws_router() -> Router<AppState> {
       "/ws/workspaces/{workspace_id}/documents/{document_id}",
       get(ws::document_socket),
     )
+    .route(
+      // "The sidebar tree changed" pings — see ws::views_socket.
+      "/ws/workspaces/{workspace_id}/views",
+      get(ws::views_socket),
+    )
     .route("/ws/ai", get(ai_ws::ai_socket))
 }
 

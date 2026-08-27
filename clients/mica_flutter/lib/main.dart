@@ -75,6 +75,7 @@ import 'perf/switch_trace.dart';
 import 'api/models.dart';
 import 'api/profile_watch.dart';
 import 'api/session_refresher.dart';
+import 'api/views_events.dart';
 import 'api/sync_client.dart';
 
 // The API/data layer lives in lib/api/*.dart; re-export it so existing
@@ -1465,7 +1466,75 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Open, switch, or close the document WebSocket so it always tracks the
   /// currently selected document.
+  // The tree-change socket for the workspace whose SIDEBAR is showing, plus
+  // which workspace that is — so reconcile can tell "same one" from "moved".
+  ViewsEventsChannel? _viewsEvents;
+  String? _viewsEventsWorkspaceId;
+
+  /// Keep the tree-change socket pointed at the sidebar's workspace.
+  ///
+  /// Separate from the document socket reconcile below on purpose: that one
+  /// keys off the OPEN DOCUMENT and bails when there is none, but an empty
+  /// workspace still has a tree that MCP can grow into — the exact case this
+  /// feature is for.
+  void _reconcileViewsEvents() {
+    final session = _session;
+    final workspaceId = _activeIsLocal ? null : _selectedWorkspace?.id;
+    if (session == null || workspaceId == null) {
+      _viewsEvents?.dispose();
+      _viewsEvents = null;
+      _viewsEventsWorkspaceId = null;
+      return;
+    }
+    if (_viewsEventsWorkspaceId == workspaceId) return;
+    _viewsEvents?.dispose();
+    _viewsEventsWorkspaceId = workspaceId;
+    _viewsEvents = ViewsEventsChannel(
+      uri: () async {
+        await _ensureFreshSession();
+        return viewsSocketUri(
+          _api.baseUri,
+          workspaceId,
+          _session?.accessToken ?? session.accessToken,
+        );
+      },
+      onChanged: () => unawaited(_refreshTreeFromServer(workspaceId)),
+    )..connect();
+  }
+
+  /// Re-ask for [workspaceId]'s tree because the server said it changed.
+  ///
+  /// The ETag turns a ping about something this client already knows (its own
+  /// action's refetch, a rename it just made) into a 304. Errors are swallowed:
+  /// this runs off a background bell, there is nothing for a user to act on,
+  /// and the next bell — or the manual refresh button, which stays — retries.
+  Future<void> _refreshTreeFromServer(String workspaceId) async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final held = _viewsByWorkspace[workspaceId];
+      final answer = await _api.listViewsIfChanged(
+        session.accessToken,
+        workspaceId,
+        etag: (held == null || held.isEmpty)
+            ? null
+            : loadPref('viewsEtag:$workspaceId'),
+      );
+      final views = answer.views;
+      if (views == null || !mounted) return; // 304 — already current.
+      if ((answer.etag ?? '').isNotEmpty) {
+        savePref('viewsEtag:$workspaceId', answer.etag!);
+      }
+      setState(() {
+        _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
+      });
+    } on ApiException {
+      // Transient; the next change notification retries the fetch.
+    }
+  }
+
   void _reconcileSync() {
+    _reconcileViewsEvents();
     final session = _session;
     // The socket belongs to the DOCUMENT, so it takes the workspace from the
     // tab holding it — not from `_selectedWorkspace`. Those differ for a moment
@@ -1885,6 +1954,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   @override
   void dispose() {
     _closeAllDocumentSync();
+    _viewsEvents?.dispose();
     super.dispose();
   }
 
@@ -2156,6 +2226,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _offlineNav = true;
     });
     if (bootstrap != null) _reconcileSync();
+    // An EMPTY workspace never reaches _reconcileSync (nothing to open), but
+    // its sidebar still wants tree-change pings — MCP growing a first page
+    // into an empty workspace is this feature's founding case. Idempotent when
+    // the line above already ran.
+    _reconcileViewsEvents();
   }
 
   /// Returns the new view's id (null on failure) so the caller can drop it into
@@ -5903,6 +5978,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// cloud servers (which deliberately keeps the old origin's creds, P3c-2).
   void _disconnectCloudSession() {
     _closeAllDocumentSync();
+    // The tree-change socket is a cloud thing too; without this it would keep
+    // reconnecting with a token that logout just revoked.
+    _viewsEvents?.dispose();
+    _viewsEvents = null;
+    _viewsEventsWorkspaceId = null;
     setState(() {
       _session = null;
       _workspaces = const [];
@@ -6209,6 +6289,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _offlineNav = true;
     });
     if (bootstrap != null) _reconcileSync();
+    // An EMPTY workspace never reaches _reconcileSync (nothing to open), but
+    // its sidebar still wants tree-change pings — MCP growing a first page
+    // into an empty workspace is this feature's founding case. Idempotent when
+    // the line above already ran.
+    _reconcileViewsEvents();
     return true;
   }
 

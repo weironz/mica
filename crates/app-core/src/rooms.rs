@@ -111,6 +111,24 @@ impl DocumentHub {
     room
   }
 
+  /// The ids whose rooms currently have live connections.
+  ///
+  /// For the views-change listener's reconnect path: notifications that fired
+  /// while its Postgres connection was down are gone, so on reconnect it pings
+  /// every ACTIVE room once and lets each client's ETag refetch decide whether
+  /// anything actually moved. Without this, a listener outage would leave every
+  /// open sidebar quietly stale until the next unrelated change.
+  pub fn active_ids(&self) -> Vec<Uuid> {
+    self
+      .rooms
+      .lock()
+      .expect("document hub mutex poisoned")
+      .iter()
+      .filter(|(_, room)| room.strong_count() > 0)
+      .map(|(id, _)| *id)
+      .collect()
+  }
+
   /// Broadcast to a room only if it currently has live connections. Used by
   /// REST writes so changes reach anyone editing over WebSocket, without
   /// spinning up a room that nobody is watching.
@@ -158,6 +176,23 @@ mod tests {
     // next join allocates a fresh room.
     let reached = hub.broadcast_if_active(document_id, Uuid::nil(), Arc::from("{}"));
     assert_eq!(reached, 0);
+  }
+
+  /// The views-change listener's reconnect path pings whatever this returns —
+  /// listing a dead room is a harmless extra 304, but MISSING a live one means
+  /// a sidebar that stays stale after a listener outage.
+  #[test]
+  fn active_ids_sees_live_rooms_and_not_released_ones() {
+    let hub = DocumentHub::new();
+    let live = Uuid::from_u128(1);
+    let released = Uuid::from_u128(2);
+
+    let _held = hub.join(live);
+    drop(hub.join(released));
+
+    let active = hub.active_ids();
+    assert!(active.contains(&live));
+    assert!(!active.contains(&released));
   }
 
   #[test]
