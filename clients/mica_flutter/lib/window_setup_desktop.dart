@@ -119,6 +119,8 @@ Future<void> initDesktopWindow() async {
     } else if (pos != null) {
       await windowManager.center();
     }
+    await windowManager.show();
+    await windowManager.focus();
     // Restore the last window STATE, the way AppFlowy does: a maximized close
     // reopens maximized; a floating close reopens at the saved rect (set above,
     // so it's also the un-maximize/restore-down target). The one addition over a
@@ -126,14 +128,25 @@ Future<void> initDesktopWindow() async {
     // floating geometry (first run) — the app is a full-window editor and users
     // expect "正常应该全屏", not a medium default window.
     //
-    // Before show(), not after: the Windows side posts SC_MAXIMIZE rather than
-    // resizing inline, so showing first means showing the small window and
-    // then watching it snap.
+    // AFTER show(), and that order IS the fix (2026-08-28, user-reported "为什么
+    // 初次启动窗口很窄"). It used to run BEFORE, reasoned as: the Windows side
+    // posts SC_MAXIMIZE rather than resizing inline, so showing first means
+    // showing a small window and then watching it snap. That reasoning was about
+    // FLICKER, and nobody measured whether the maximize survived — it did not.
+    // The plugin (0.5.2, `windows/window_manager.cpp`):
+    //
+    //   Maximize() → PostMessage(WM_SYSCOMMAND, SC_MAXIMIZE)  — queued
+    //   Show()     → ShowWindowAsync(hwnd, SW_SHOW)           — queued after it
+    //
+    // SW_SHOW displays the window in its NORMAL show state, so a maximize
+    // queued ahead of it is undone by it. Measured on a real build: the pref
+    // said `windowMaximized=true` and the relaunched window came up floating.
+    // So this branch had NEVER worked — including the first-run default, which
+    // means "opens full-window on a new machine" was equally untrue. One line
+    // held both halves of the intent, and both were dead.
     if (saved.maximized || saved.size == null) {
       await windowManager.maximize();
     }
-    await windowManager.show();
-    await windowManager.focus();
   });
 
   // Take over the X button. Without this the window is destroyed before any of

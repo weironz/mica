@@ -675,6 +675,30 @@ bash -n <<<'<该步骤 run 的内容>'
 - 一并的教训:文案要说清**动作**,不只是数字。镜像里没有图片时「已释放 0 B」读起来像什么
   都没干,而页面确实清了 → 「已清理云端镜像,释放 {size}」。
 
+### `flutter run` 和用户装的正式版**共用一份 prefs**,dev 调试会改坏它
+
+2026-08-28:为了验证一个窗口 bug,我用
+`flutter run --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8080` 跑 dev 版。
+它启动时把 `cloudOrigin` / `activeOrigin` / `servers` **写成了本地地址** —— 而
+`%APPDATA%/mica/prefs.json` 是**和已安装的正式版同一个文件**。用户下次打开正式版,
+它拿着真实云账号的身份去问本地服务器要工作区,侧栏弹出红色 **not found**。
+用户以为自己的应用坏了,实际是我的调试留下的。
+
+`main.dart` 里那段注释**已经预见了一半**:「a dev build inherits whichever server the
+installed copy … one keystroke away from writing test data into real notes」——所以
+`MICA_API_BASE_URL` 才优先于存档值。**防住了读的方向,没防住写回去**:pinned 值照样被
+持久化,污染是反方向发生的。
+
+**规矩**:在用户真实机器上 `flutter run`,**给它一个隔离的配置目录**,别写共用的那份 ——
+
+```powershell
+$env:APPDATA = "<scratch>"; flutter run -d windows
+```
+
+桌面端 `configDir()` 读的就是 `APPDATA`(Windows)/`HOME`(mac、Linux),换掉即可完全隔离:
+dev 版拿到干净的 prefs(自己登录本地栈),用户的会话、服务器、窗口几何一律不动。
+**代价是零**,不这么做的代价是用户以为自己的数据出了问题。
+
 ### 只改了一个平台变体,分析器不会告诉你另一个断了
 
 - 2026-08-02:给本地世界加了 `exportDocMarkdownText`,只写进 `local_offline_io.dart`。
