@@ -3835,6 +3835,22 @@ pub struct TransferRequest {
   /// Report what WOULD happen (counts + dangling links) without mutating anything.
   #[serde(default)]
   dry_run: bool,
+  /// The OTHER roots going to the same destination in this batch.
+  ///
+  /// Affects the dangling-link report and nothing else — this call still moves
+  /// only `view_id`'s subtree. Without it a multi-select transfer reports links
+  /// BETWEEN the selected pages as dangling: each request knows only its own
+  /// subtree, so a link from page 1 to page 2 looks like a link leaving the
+  /// workspace even though page 2 lands in the destination moments later. The
+  /// report would name breakage that never happens, and a warning that cries
+  /// wolf gets clicked through.
+  ///
+  /// Ids the caller cannot see (deleted, or in another workspace) contribute
+  /// nothing. This only ever WIDENS what counts as "staying together", so being
+  /// wrong about one costs a dangling link reported that should not have been —
+  /// which is exactly the status quo, not a new failure.
+  #[serde(default)]
+  also_moving: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3864,6 +3880,48 @@ struct TransferRow {
   object_type: String,
   name: String,
   position: String,
+}
+
+/// Every live view id under [roots], roots included, within [workspace_id].
+///
+/// Used for `TransferRequest::also_moving`: the caller names the other roots of
+/// its batch, and a link into any of them is a link that follows rather than a
+/// link that breaks.
+///
+/// Split out of the handler so a DB test can reach it — the handler needs auth
+/// headers, which a database-level test has no way to construct. Same reason
+/// `empty_workspace_trash` and `purge_views_batch` live outside theirs.
+///
+/// Scoped to the workspace and to live rows on purpose: an id the caller cannot
+/// actually move (deleted, or somebody else's) must not silently count as
+/// "coming with us", or the report would go quiet about a link that really does
+/// break.
+async fn subtree_ids_of_roots(
+  db: &PgPool,
+  workspace_id: Uuid,
+  roots: &[Uuid],
+) -> ApiResult<Vec<Uuid>> {
+  if roots.is_empty() {
+    return Ok(Vec::new());
+  }
+  Ok(
+    sqlx::query_scalar::<_, Uuid>(
+      r#"
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM views
+          WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+          UNION ALL
+          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+          WHERE v.is_deleted = false
+        )
+        SELECT id FROM subtree
+      "#,
+    )
+    .bind(roots)
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await?,
+  )
 }
 
 /// `POST /api/workspaces/{workspace_id}/views/{view_id}/transfer`
@@ -3914,6 +3972,19 @@ pub async fn transfer_view(
   }
   let subtree_view_ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
 
+  // Everything the caller says is going to the same place, for the dangling
+  // check only. This call still moves `subtree` and nothing else — widening the
+  // MOVE to these ids would make one request silently do N transfers, which is
+  // not what a caller asking "what breaks?" is asking for.
+  //
+  // Honest limit worth stating: a batch is still N sequential requests, so a
+  // failure part-way leaves the earlier ones moved. `also_moving` makes the
+  // REPORT right; it does not make the batch atomic.
+  let mut moving_view_ids = subtree_view_ids.clone();
+  moving_view_ids.extend(
+    subtree_ids_of_roots(&state.db, src_workspace_id, &request.also_moving).await?,
+  );
+
   // 2. Pre-scan documents: referenced file_ids + cross-workspace dangling links.
   let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
     std::collections::HashMap::new();
@@ -3941,7 +4012,9 @@ pub async fn transfer_view(
       }
       for target in page_link_targets(&block.data) {
         if let Ok(tid) = Uuid::parse_str(&target) {
-          if !subtree_view_ids.contains(&tid) {
+          // `moving_view_ids`, not `subtree_view_ids`: a link into another root
+          // of the same batch is not breakage, it is a link that follows.
+          if !moving_view_ids.contains(&tid) {
             dangling_links.push(DanglingLink {
               document: row.name.clone(),
               target_view_id: tid,
@@ -6364,6 +6437,78 @@ mod tests {
         .await
         .unwrap();
       assert_eq!((live_views, live_docs), (1, 1), "a live page survived intact");
+    }
+
+    /// `also_moving` has to expand to SUBTREES, not just the ids handed over.
+    ///
+    /// The case this protects: a multi-select transfer where one selected item
+    /// is a folder, and another selected page links to a page INSIDE it. If the
+    /// expansion stopped at the folder's own id, that link would still be
+    /// reported as breaking — which is the false alarm the whole field exists to
+    /// remove, only harder to spot because it looks like it worked.
+    #[tokio::test]
+    async fn also_moving_expands_to_whole_subtrees() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id, workspace_id, object_id, object_type, name, position, created_by) \
+         VALUES($1,$2,$1,'folder','容器','a',$3)",
+      )
+      .bind(folder)
+      .bind(ws)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+      let (child, _) = seed_document(&db, ws, user, "子页", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(folder)
+        .bind(child)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let ids = subtree_ids_of_roots(&db, ws, &[folder]).await.unwrap();
+
+      assert!(ids.contains(&folder), "the root itself is part of the move");
+      assert!(
+        ids.contains(&child),
+        "a page inside a selected folder moves with it, so a link to it does not break"
+      );
+    }
+
+    /// An id the caller cannot actually move must NOT count as coming along.
+    ///
+    /// Counting it would silence a dangling-link warning about a link that
+    /// really does break — the one direction this field must never fail in.
+    #[tokio::test]
+    async fn also_moving_ignores_deleted_and_foreign_ids() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (other_ws, other_user) = seed_workspace(&db).await;
+      let (trashed, _) = seed_document(&db, ws, user, "已删", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(trashed)
+        .execute(&db)
+        .await
+        .unwrap();
+      let (foreign, _) =
+        seed_document(&db, other_ws, other_user, "别处的", serde_json::json!([])).await;
+
+      let ids = subtree_ids_of_roots(&db, ws, &[trashed, foreign])
+        .await
+        .unwrap();
+
+      assert!(ids.is_empty(), "neither is movable, so neither counts: {ids:?}");
+    }
+
+    /// Nothing asked for, nothing queried.
+    #[tokio::test]
+    async fn no_batch_means_no_extra_ids() {
+      let Some(db) = pool().await else { return };
+      let (ws, _) = seed_workspace(&db).await;
+      assert!(subtree_ids_of_roots(&db, ws, &[]).await.unwrap().is_empty());
     }
 
     /// A trashed FOLDER carries its children, and the children's documents go
