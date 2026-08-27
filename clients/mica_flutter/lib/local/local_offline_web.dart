@@ -70,6 +70,9 @@ class LocalOffline implements LocalOfflineApi {
   /// compile did, which is exactly what that CI job exists for.
   String? exportDocMarkdownText(String docId, String title) => null;
 
+  /// No local store on web — the cloud path writes the title server-side.
+  void setDocTitle(String docId, String title) {}
+
   /// Web has no local folders — folder ZIP export is cloud-side there.
   Uint8List? exportFolderZip(String workspaceId, String folderId) => null;
 

@@ -330,6 +330,28 @@ class LocalOffline implements LocalOfflineApi {
     return (rootBlockId: doc.rootBlockId(), blocks: blocks);
   }
 
+  /// Write a page's title into its LOCAL document, so the offline world keeps
+  /// the same authority as the cloud: the name lives in the document and
+  /// everything that reads the document sees it.
+  ///
+  /// The cloud does this inside `PATCH /views/{id}` (server-side); offline there
+  /// is no server, so the rename path calls this directly. A no-op — and no
+  /// write — when the title already matches, because a yrs map insert is an
+  /// operation either way and renaming to the same name should not grow the
+  /// document.
+  ///
+  /// Silent when the store is closed or the document is missing: the caller has
+  /// already renamed the view row, which is what the user asked for.
+  void setDocTitle(String docId, String title) {
+    final store = _store;
+    if (store == null) return;
+    if (_active?.docId == docId) _active!.flush(); // don't race pending edits
+    final doc = store.loadDoc(docId: docId);
+    if (doc == null) return;
+    if (!doc.setTitle(title: title)) return;
+    store.saveDoc(docId: docId, doc: doc);
+  }
+
   /// Permanently remove a local view and its document.
   void purgeView(String viewId, String objectId) {
     _store?.purgeView(origin: 'local', id: viewId);

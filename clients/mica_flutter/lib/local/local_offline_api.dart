@@ -212,6 +212,10 @@ abstract interface class LocalOfflineApi {
   /// Distinct from [exportDocMarkdown], which switches to a ZIP once the page
   /// has images: a clipboard cannot carry an assets folder.
   String? exportDocMarkdownText(String docId, String title);
+
+  /// Write a page's title into its local document — the offline counterpart of
+  /// what the server does inside PATCH /views/{id}. See the io implementation.
+  void setDocTitle(String docId, String title);
   Uint8List? exportFolderZip(String workspaceId, String folderId);
   Future<Uint8List?> htmlToPdf(String html);
 }

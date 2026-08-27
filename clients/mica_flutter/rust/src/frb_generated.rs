@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
   default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -786573278;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1959896556;
 
 // Section: executor
 
@@ -837,6 +837,53 @@ fn wire__crate__api__document__MicaDocument_set_block_data_json_impl(
             api_data_json,
           );
         })?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__api__document__MicaDocument_set_title_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "MicaDocument_set_title",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_that = <RustOpaqueMoi<
+        flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>,
+      >>::sse_decode(&mut deserializer);
+      let api_title = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let mut api_that_guard = None;
+        let decode_indices_ =
+          flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+            flutter_rust_bridge::for_generated::LockableOrderInfo::new(&api_that, 0, false),
+          ]);
+        for i in decode_indices_ {
+          match i {
+            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+            _ => unreachable!(),
+          }
+        }
+        let api_that_guard = api_that_guard.unwrap();
+        let output_ok = Result::<_, ()>::Ok(crate::api::document::MicaDocument::set_title(
+          &*api_that_guard,
+          api_title,
+        ))?;
         Ok(output_ok)
       })())
     },
@@ -4228,20 +4275,20 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
   // Codec=Pde (Serialization + dispatch), see doc to use other codecs
   match func_id {
-    30 => wire__crate__api__store__MicaStore_backfill_search_index_impl(
+    31 => wire__crate__api__store__MicaStore_backfill_search_index_impl(
       port,
       ptr,
       rust_vec_len,
       data_len,
     ),
-    31 => {
+    32 => {
       wire__crate__api__store__MicaStore_backlinks_local_impl(port, ptr, rust_vec_len, data_len)
     }
-    44 => wire__crate__api__store__MicaStore_graph_local_impl(port, ptr, rust_vec_len, data_len),
-    64 => wire__crate__api__store__MicaStore_search_local_impl(port, ptr, rust_vec_len, data_len),
-    74 => wire__crate__api__pdf__export_pdf_impl(port, ptr, rust_vec_len, data_len),
-    76 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-    77 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
+    45 => wire__crate__api__store__MicaStore_graph_local_impl(port, ptr, rust_vec_len, data_len),
+    65 => wire__crate__api__store__MicaStore_search_local_impl(port, ptr, rust_vec_len, data_len),
+    75 => wire__crate__api__pdf__export_pdf_impl(port, ptr, rust_vec_len, data_len),
+    77 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+    78 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -4294,66 +4341,67 @@ fn pde_ffi_dispatcher_sync_impl(
     18 => {
       wire__crate__api__document__MicaDocument_set_block_data_json_impl(ptr, rust_vec_len, data_len)
     }
-    19 => wire__crate__api__document__MicaDocument_split_block_impl(ptr, rust_vec_len, data_len),
-    20 => wire__crate__api__document__MicaDocument_state_vector_impl(ptr, rust_vec_len, data_len),
-    21 => wire__crate__api__document__MicaDocument_text_delete_impl(ptr, rust_vec_len, data_len),
-    22 => wire__crate__api__document__MicaDocument_text_format_impl(ptr, rust_vec_len, data_len),
-    23 => wire__crate__api__document__MicaDocument_text_insert_impl(ptr, rust_vec_len, data_len),
-    24 => wire__crate__api__document__MicaDocument_to_blocks_json_impl(ptr, rust_vec_len, data_len),
-    25 => wire__crate__api__document__MicaDocument_update_block_impl(ptr, rust_vec_len, data_len),
-    26 => {
+    19 => wire__crate__api__document__MicaDocument_set_title_impl(ptr, rust_vec_len, data_len),
+    20 => wire__crate__api__document__MicaDocument_split_block_impl(ptr, rust_vec_len, data_len),
+    21 => wire__crate__api__document__MicaDocument_state_vector_impl(ptr, rust_vec_len, data_len),
+    22 => wire__crate__api__document__MicaDocument_text_delete_impl(ptr, rust_vec_len, data_len),
+    23 => wire__crate__api__document__MicaDocument_text_format_impl(ptr, rust_vec_len, data_len),
+    24 => wire__crate__api__document__MicaDocument_text_insert_impl(ptr, rust_vec_len, data_len),
+    25 => wire__crate__api__document__MicaDocument_to_blocks_json_impl(ptr, rust_vec_len, data_len),
+    26 => wire__crate__api__document__MicaDocument_update_block_impl(ptr, rust_vec_len, data_len),
+    27 => {
       wire__crate__api__document__MicaDocument_update_block_kind_impl(ptr, rust_vec_len, data_len)
     }
-    27 => wire__crate__api__store__MicaStore_append_remote_update_impl(ptr, rust_vec_len, data_len),
-    28 => {
+    28 => wire__crate__api__store__MicaStore_append_remote_update_impl(ptr, rust_vec_len, data_len),
+    29 => {
       wire__crate__api__store__MicaStore_append_remote_updates_impl(ptr, rust_vec_len, data_len)
     }
-    29 => wire__crate__api__store__MicaStore_append_update_impl(ptr, rust_vec_len, data_len),
-    32 => wire__crate__api__store__MicaStore_checkpoint_doc_impl(ptr, rust_vec_len, data_len),
-    33 => wire__crate__api__store__MicaStore_client_id_impl(ptr, rust_vec_len, data_len),
-    34 => wire__crate__api__store__MicaStore_clone_view_impl(ptr, rust_vec_len, data_len),
-    35 => wire__crate__api__store__MicaStore_compact_local_impl(ptr, rust_vec_len, data_len),
-    36 => wire__crate__api__store__MicaStore_create_local_version_impl(ptr, rust_vec_len, data_len),
-    37 => wire__crate__api__store__MicaStore_create_view_impl(ptr, rust_vec_len, data_len),
-    38 => wire__crate__api__store__MicaStore_create_workspace_impl(ptr, rust_vec_len, data_len),
-    39 => wire__crate__api__store__MicaStore_delete_doc_impl(ptr, rust_vec_len, data_len),
-    40 => wire__crate__api__store__MicaStore_delete_workspace_impl(ptr, rust_vec_len, data_len),
-    41 => {
+    30 => wire__crate__api__store__MicaStore_append_update_impl(ptr, rust_vec_len, data_len),
+    33 => wire__crate__api__store__MicaStore_checkpoint_doc_impl(ptr, rust_vec_len, data_len),
+    34 => wire__crate__api__store__MicaStore_client_id_impl(ptr, rust_vec_len, data_len),
+    35 => wire__crate__api__store__MicaStore_clone_view_impl(ptr, rust_vec_len, data_len),
+    36 => wire__crate__api__store__MicaStore_compact_local_impl(ptr, rust_vec_len, data_len),
+    37 => wire__crate__api__store__MicaStore_create_local_version_impl(ptr, rust_vec_len, data_len),
+    38 => wire__crate__api__store__MicaStore_create_view_impl(ptr, rust_vec_len, data_len),
+    39 => wire__crate__api__store__MicaStore_create_workspace_impl(ptr, rust_vec_len, data_len),
+    40 => wire__crate__api__store__MicaStore_delete_doc_impl(ptr, rust_vec_len, data_len),
+    41 => wire__crate__api__store__MicaStore_delete_workspace_impl(ptr, rust_vec_len, data_len),
+    42 => {
       wire__crate__api__store__MicaStore_delete_workspace_cascade_impl(ptr, rust_vec_len, data_len)
     }
-    42 => wire__crate__api__store__MicaStore_device_id_impl(ptr, rust_vec_len, data_len),
-    43 => wire__crate__api__store__MicaStore_export_folder_zip_impl(ptr, rust_vec_len, data_len),
-    45 => wire__crate__api__store__MicaStore_list_docs_impl(ptr, rust_vec_len, data_len),
-    46 => wire__crate__api__store__MicaStore_list_local_versions_impl(ptr, rust_vec_len, data_len),
-    47 => wire__crate__api__store__MicaStore_list_views_impl(ptr, rust_vec_len, data_len),
-    48 => wire__crate__api__store__MicaStore_list_workspaces_impl(ptr, rust_vec_len, data_len),
-    49 => wire__crate__api__store__MicaStore_load_doc_impl(ptr, rust_vec_len, data_len),
-    50 => wire__crate__api__store__MicaStore_local_version_doc_impl(ptr, rust_vec_len, data_len),
-    51 => wire__crate__api__store__MicaStore_log_sizes_impl(ptr, rust_vec_len, data_len),
-    52 => wire__crate__api__store__MicaStore_open_impl(ptr, rust_vec_len, data_len),
-    53 => wire__crate__api__store__MicaStore_purge_view_impl(ptr, rust_vec_len, data_len),
-    54 => wire__crate__api__store__MicaStore_purge_view_subtree_impl(ptr, rust_vec_len, data_len),
-    55 => wire__crate__api__store__MicaStore_rename_workspace_impl(ptr, rust_vec_len, data_len),
-    56 => wire__crate__api__store__MicaStore_reorder_views_impl(ptr, rust_vec_len, data_len),
-    57 => wire__crate__api__store__MicaStore_reorder_workspaces_impl(ptr, rust_vec_len, data_len),
-    58 => {
+    43 => wire__crate__api__store__MicaStore_device_id_impl(ptr, rust_vec_len, data_len),
+    44 => wire__crate__api__store__MicaStore_export_folder_zip_impl(ptr, rust_vec_len, data_len),
+    46 => wire__crate__api__store__MicaStore_list_docs_impl(ptr, rust_vec_len, data_len),
+    47 => wire__crate__api__store__MicaStore_list_local_versions_impl(ptr, rust_vec_len, data_len),
+    48 => wire__crate__api__store__MicaStore_list_views_impl(ptr, rust_vec_len, data_len),
+    49 => wire__crate__api__store__MicaStore_list_workspaces_impl(ptr, rust_vec_len, data_len),
+    50 => wire__crate__api__store__MicaStore_load_doc_impl(ptr, rust_vec_len, data_len),
+    51 => wire__crate__api__store__MicaStore_local_version_doc_impl(ptr, rust_vec_len, data_len),
+    52 => wire__crate__api__store__MicaStore_log_sizes_impl(ptr, rust_vec_len, data_len),
+    53 => wire__crate__api__store__MicaStore_open_impl(ptr, rust_vec_len, data_len),
+    54 => wire__crate__api__store__MicaStore_purge_view_impl(ptr, rust_vec_len, data_len),
+    55 => wire__crate__api__store__MicaStore_purge_view_subtree_impl(ptr, rust_vec_len, data_len),
+    56 => wire__crate__api__store__MicaStore_rename_workspace_impl(ptr, rust_vec_len, data_len),
+    57 => wire__crate__api__store__MicaStore_reorder_views_impl(ptr, rust_vec_len, data_len),
+    58 => wire__crate__api__store__MicaStore_reorder_workspaces_impl(ptr, rust_vec_len, data_len),
+    59 => {
       wire__crate__api__store__MicaStore_restore_local_version_impl(ptr, rust_vec_len, data_len)
     }
-    59 => wire__crate__api__store__MicaStore_restore_view_subtree_impl(ptr, rust_vec_len, data_len),
-    60 => wire__crate__api__store__MicaStore_rollback_doc_impl(ptr, rust_vec_len, data_len),
-    61 => wire__crate__api__store__MicaStore_save_doc_impl(ptr, rust_vec_len, data_len),
-    62 => wire__crate__api__store__MicaStore_save_view_impl(ptr, rust_vec_len, data_len),
-    63 => wire__crate__api__store__MicaStore_save_workspace_impl(ptr, rust_vec_len, data_len),
-    65 => wire__crate__api__store__MicaStore_set_sync_cursor_impl(ptr, rust_vec_len, data_len),
-    66 => wire__crate__api__store__MicaStore_squash_impl(ptr, rust_vec_len, data_len),
-    67 => wire__crate__api__store__MicaStore_sync_cursor_impl(ptr, rust_vec_len, data_len),
-    68 => wire__crate__api__store__MicaStore_trash_view_subtree_impl(ptr, rust_vec_len, data_len),
-    69 => wire__crate__api__store__MicaStore_trim_updates_through_impl(ptr, rust_vec_len, data_len),
-    70 => wire__crate__api__store__MicaStore_updates_after_impl(ptr, rust_vec_len, data_len),
-    71 => wire__crate__api__simple__add_impl(ptr, rust_vec_len, data_len),
-    72 => wire__crate__api__zip__build_store_zip_impl(ptr, rust_vec_len, data_len),
-    73 => wire__crate__api__simple__core_version_impl(ptr, rust_vec_len, data_len),
-    75 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+    60 => wire__crate__api__store__MicaStore_restore_view_subtree_impl(ptr, rust_vec_len, data_len),
+    61 => wire__crate__api__store__MicaStore_rollback_doc_impl(ptr, rust_vec_len, data_len),
+    62 => wire__crate__api__store__MicaStore_save_doc_impl(ptr, rust_vec_len, data_len),
+    63 => wire__crate__api__store__MicaStore_save_view_impl(ptr, rust_vec_len, data_len),
+    64 => wire__crate__api__store__MicaStore_save_workspace_impl(ptr, rust_vec_len, data_len),
+    66 => wire__crate__api__store__MicaStore_set_sync_cursor_impl(ptr, rust_vec_len, data_len),
+    67 => wire__crate__api__store__MicaStore_squash_impl(ptr, rust_vec_len, data_len),
+    68 => wire__crate__api__store__MicaStore_sync_cursor_impl(ptr, rust_vec_len, data_len),
+    69 => wire__crate__api__store__MicaStore_trash_view_subtree_impl(ptr, rust_vec_len, data_len),
+    70 => wire__crate__api__store__MicaStore_trim_updates_through_impl(ptr, rust_vec_len, data_len),
+    71 => wire__crate__api__store__MicaStore_updates_after_impl(ptr, rust_vec_len, data_len),
+    72 => wire__crate__api__simple__add_impl(ptr, rust_vec_len, data_len),
+    73 => wire__crate__api__zip__build_store_zip_impl(ptr, rust_vec_len, data_len),
+    74 => wire__crate__api__simple__core_version_impl(ptr, rust_vec_len, data_len),
+    76 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }

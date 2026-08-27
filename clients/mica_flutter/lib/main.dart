@@ -5238,6 +5238,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   Future<void> _localRenameView(DocumentView view, String name) async {
     final title = name.trim().isEmpty ? 'Untitled' : name.trim();
+    // The name belongs to the DOCUMENT (root block `title`); the view row is the
+    // projection. The cloud does this inside `PATCH /views/{id}` server-side —
+    // offline there is no server, so the rename writes both here.
+    //
+    // Documents only: a folder has no document to carry a title (plan §5.2).
+    if (view.objectType == 'document') {
+      _local.setDocTitle(view.objectId, title);
+    }
     _local.saveView((
       id: view.id,
       workspaceId: _workspaceIdOfView(view.id),

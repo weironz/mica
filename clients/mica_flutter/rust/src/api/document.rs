@@ -302,6 +302,49 @@ impl MicaDocument {
         mica_markdown::export_markdown(&self.snapshot()).unwrap_or_default()
     }
 
+    /// Write the page's title into the document's root block.
+    ///
+    /// The LOCAL counterpart of the server's `sync::set_document_title`, and it
+    /// goes through the same narrow primitive for the same reason: rebuilding
+    /// the blocks (`set_blocks`) would give every block a brand-new text object
+    /// and invalidate every comment anchor on the page. See
+    /// `docs/page-title-plan.md` §5.1.
+    ///
+    /// Returns false when nothing changed — the title already said this, or the
+    /// document has no root — so the caller can skip persisting. Comparing first
+    /// matters: a yrs map insert is an operation whether or not the value moved,
+    /// so writing unconditionally would grow the document on every rename to the
+    /// same name.
+    #[frb(sync)]
+    pub fn set_title(&self, title: String) -> bool {
+        let title = title.trim();
+        // ONE lock for the whole read-compare-write. `doc()` is a MutexGuard, so
+        // taking it twice in one expression would deadlock this thread against
+        // itself — `snapshot()` takes it too, which is why the comparison reads
+        // the blocks through the guard already in hand instead of calling it.
+        let mut doc = self.doc();
+        let root = doc.root_block_id();
+        if root.is_empty() {
+            return false;
+        }
+        let current = doc
+            .to_blocks()
+            .into_iter()
+            .find(|b| b.id == root)
+            .and_then(|b| {
+                b.data
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            });
+        if current.as_deref() == Some(title) {
+            return false;
+        }
+        doc.set_block_prop(&root, "title", &serde_json::json!(title))
+    }
+
     /// Like [`Self::export_markdown`], with `# <title>` leading the text (after
     /// any front matter).
     ///

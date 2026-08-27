@@ -146,6 +146,21 @@ abstract class MicaDocument implements RustOpaqueInterface {
 
   void setBlockDataJson({required String id, required String dataJson});
 
+  /// Write the page's title into the document's root block.
+  ///
+  /// The LOCAL counterpart of the server's `sync::set_document_title`, and it
+  /// goes through the same narrow primitive for the same reason: rebuilding
+  /// the blocks (`set_blocks`) would give every block a brand-new text object
+  /// and invalidate every comment anchor on the page. See
+  /// `docs/page-title-plan.md` §5.1.
+  ///
+  /// Returns false when nothing changed — the title already said this, or the
+  /// document has no root — so the caller can skip persisting. Comparing first
+  /// matters: a yrs map insert is an operation whether or not the value moved,
+  /// so writing unconditionally would grow the document on every rename to the
+  /// same name.
+  bool setTitle({required String title});
+
   void splitBlock({
     required String id,
     required int at,
