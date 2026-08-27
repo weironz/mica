@@ -77,4 +77,15 @@ jobs:
       # The whole point. With this off, release.yml creates no draft, attaches
       # no asset, publishes no release and pushes no image — it only builds.
       publish: false
+    # A called workflow cannot be granted MORE than the calling job has, and
+    # release.yml declares `contents: write` at its top level (it attaches
+    # release assets on the real path). Leaving this off failed the whole run at
+    # startup — no jobs, no log, just "likely a workflow file issue".
+    #
+    # Write is never exercised on a dry run: every step that touches a release is
+    # gated on `startsWith(github.ref, 'refs/tags/v') || inputs.publish`, both
+    # false here. This grants the permission so the CALL is legal, not so
+    # anything uses it.
+    permissions:
+      contents: write
     secrets: inherit
