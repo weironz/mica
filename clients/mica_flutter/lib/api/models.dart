@@ -923,6 +923,24 @@ class DocumentBootstrap {
     return fm is String ? fm : '';
   }
 
+  /// The page's title as the DOCUMENT states it, falling back to the view's
+  /// name — the same rule the server applies (`mica_markdown::document_title`,
+  /// then `views.name`). See `docs/page-title-plan.md`.
+  ///
+  /// The fallback is not a safety net, it is the ordinary case: there is no
+  /// backfill migration, so a page carries a title in its document only once
+  /// somebody has renamed it since P2. Both halves have to keep working.
+  ///
+  /// Reading it from HERE rather than from `view.name` alone is what lets a
+  /// rename made on another device appear: the yrs update arrives on the sync
+  /// channel and lands in this snapshot, whereas `view.name` is a Postgres
+  /// column this client only re-reads when it refetches the tree.
+  String get pageTitle {
+    final title = rootData['title'];
+    if (title is String && title.trim().isNotEmpty) return title.trim();
+    return view.name;
+  }
+
   List<DocumentBlock> get childBlocks {
     final root = _blocksById[document.rootBlockId];
     if (root == null) {

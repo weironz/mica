@@ -2800,7 +2800,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     final markdown = _local.exportDocMarkdownText(
       bootstrap.document.id,
-      bootstrap.view.name,
+      bootstrap.pageTitle,
     );
     if (markdown == null) {
       throw ApiException(context.l10n.exportEmptyContent);
@@ -8658,7 +8658,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // name (and workspace rename field) instead of an empty "Untitled" hint —
     // didUpdateWidget only fires on later changes, so without this the title
     // looks blank until the next page switch.
-    final name = widget.selectedBootstrap?.view.name ?? '';
+    // pageTitle, like didUpdateWidget below — the document is the authority.
+    final name = widget.selectedBootstrap?.pageTitle ?? '';
     // Show the placeholder (not solid text) for an untitled page.
     _pageTitle.text = isUntitledPageName(name) ? '' : name;
     final workspace = widget.selectedWorkspace;
@@ -8767,14 +8768,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // New page open → reseed the outline from its snapshot immediately (the new
     // editor's live publish is one frame away; this avoids a stale-headings flash).
     if (idChanged) _seedOutline();
+    // `pageTitle`, not `view.name`: the document is the authority and the column
+    // is its projection, so a rename made on ANOTHER device reaches this client
+    // as a yrs update long before it would refetch the tree.
+    //
+    // The COMPARISON has to move with the display. Showing `pageTitle` while
+    // still comparing `view.name` would leave the field stale in exactly the
+    // case this fixes — the document changed and the column had not caught up.
     if (idChanged ||
-        bootstrap?.view.name != oldWidget.selectedBootstrap?.view.name) {
+        bootstrap?.pageTitle != oldWidget.selectedBootstrap?.pageTitle) {
       // Skip the no-op echo of our own rename: assigning .text resets the
       // selection, which the web engine renders as select-all — one
       // backspace in the title would select the whole name after the
       // debounced save round-tripped. An untitled page renders empty so its
       // placeholder shows instead of solid text.
-      final name = bootstrap?.view.name ?? '';
+      final name = bootstrap?.pageTitle ?? '';
       final display = isUntitledPageName(name) ? '' : name;
       if (_pageTitle.text != display) _pageTitle.text = display;
     }
@@ -8785,7 +8793,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         widget.showPageTitle &&
         bootstrap != null &&
         bootstrap.view.objectType == 'document' &&
-        isUntitledPageName(bootstrap.view.name)) {
+        isUntitledPageName(bootstrap.pageTitle)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _pageTitleFocus.requestFocus();
@@ -8949,7 +8957,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// page menu) scrolls away with the content, so a hamburger parked there
   /// would strand you in a document with no route back to the tree.
   Widget _narrowTopBar(BuildContext context) {
-    final title = widget.selectedBootstrap?.view.name ?? 'Mica';
+    final title = widget.selectedBootstrap?.pageTitle ?? 'Mica';
     return Material(
       color: MicaTheme.of(context).surface.base,
       child: SizedBox(
@@ -10609,7 +10617,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _pageTitleSaveTimer = Timer(const Duration(milliseconds: 700), () {
       final bootstrap = widget.selectedBootstrap;
       if (bootstrap == null) return;
-      final title = renamedTo(_pageTitle.text, bootstrap.view.name);
+      // Compared against the SAME value the field is showing. Against
+      // iew.name instead, a rename that arrived from another device would
+      // look like the user had just typed one, and this would push it back.
+      final title = renamedTo(_pageTitle.text, bootstrap.pageTitle);
       if (title == null) return;
 
       widget.onRenameView(bootstrap.view, title);
