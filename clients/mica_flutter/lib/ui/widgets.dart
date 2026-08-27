@@ -1485,24 +1485,19 @@ class _DocumentListItemState extends State<DocumentListItem> {
           onTap: w.isRenaming
               ? null
               : () {
-                  final keys = HardwareKeyboard.instance.logicalKeysPressed;
-                  bool held(LogicalKeyboardKey a, LogicalKeyboardKey b) =>
-                      keys.contains(a) || keys.contains(b);
+                  // `isShiftPressed` and friends, NOT a hand-rolled check for
+                  // shiftLeft/shiftRight in `logicalKeysPressed`. The hand-rolled
+                  // version worked on Windows and was DEAD ON WEB — Shift was
+                  // never seen, so a Shift-click fell through to "open the page",
+                  // wiping the selection instead of extending it. These getters
+                  // resolve the left/right synonyms the platforms disagree about,
+                  // which is why the other ten call sites in this repo (all in
+                  // editor.dart) use them.
+                  final hw = HardwareKeyboard.instance;
                   final intent = treeClickIntent(
                     // Cmd on macOS is the same gesture; harmless elsewhere.
-                    ctrl:
-                        held(
-                          LogicalKeyboardKey.controlLeft,
-                          LogicalKeyboardKey.controlRight,
-                        ) ||
-                        held(
-                          LogicalKeyboardKey.metaLeft,
-                          LogicalKeyboardKey.metaRight,
-                        ),
-                    shift: held(
-                      LogicalKeyboardKey.shiftLeft,
-                      LogicalKeyboardKey.shiftRight,
-                    ),
+                    ctrl: hw.isControlPressed || hw.isMetaPressed,
+                    shift: hw.isShiftPressed,
                   );
                   if (intent != TreeClickIntent.open &&
                       w.onSelectClick != null) {
