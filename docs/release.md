@@ -21,12 +21,14 @@ git push origin main vX.Y.Z
 gh run watch --repo weironz/mica
 gh release view vX.Y.Z --repo weironz/mica
 
-# 4. 彩排。对真节点跑一遍整个 playbook，不改任何东西，逐行 diff 出要做的改动。
-#    docker 那几步是 community.docker 原生模块，所以彩排跑的是同一段代码，不是跳过。
-gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z -f check=true
-
-# 5. 上线。没有审批门——触发本身就是那个决定。
+# 4. 上线。彩排已经固化在 workflow 里（2026-08-27）：这一次触发会先对真节点跑一遍
+#    --check --diff（不改任何东西，逐行 diff 出要做的改动），过了才真上。
+#    没有审批门——触发本身就是那个决定。
 gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
+
+# 只想彩排、不想上线时才加 check=true。它现在的意思是「彩排完就停」，
+# 不再是「用彩排代替上线」。
+# gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z -f check=true
 ```
 
 `verify-prod`(断言 `/api/health` 报的就是这个版本)**已内置在 workflow 里**,不用单独跑。
@@ -281,7 +283,9 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
 9. **部署**。两条路**跑的是同一个 playbook**(`ansible/deploy.yml`):
 
    ```bash
-   # 常规:触发即部署(没有审批门 —— 触发本身就是那个决定)
+   # 常规:触发即部署(没有审批门 —— 触发本身就是那个决定)。
+   # 2026-08-27 起这一次触发会**先彩排再上线**:同一个 playbook 先跑一遍
+   # `--check --diff`,过了才真上。加 -f check=true 则彩排完就停。
    gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 
    # 兜底(GitHub 挂了)。CI 那一步字面上就是在跑这个脚本

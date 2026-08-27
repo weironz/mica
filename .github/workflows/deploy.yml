@@ -9,7 +9,9 @@ on:
         description: 'Version WITHOUT the leading v, e.g. 0.13.27'
         required: true
       check:
-        description: 'Rehearse only (--check --diff) — changes nothing'
+        # A normal run rehearses too, then deploys — see the rehearsal step.
+        # This makes it STOP after the rehearsal.
+        description: 'Rehearse only — stop after --check --diff, change nothing'
         type: boolean
         default: false
 
@@ -64,7 +66,7 @@ jobs:
           pipx install --include-deps ansible-core
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Deploy
+      - name: Set up the deploy key
         env:
           # A key with a SHELL on the node, as root. That is a deliberate
           # loosening: the old key was pinned to /usr/local/sbin/mica-deploy via
@@ -89,6 +91,29 @@ jobs:
           # whatever answers, which is not verification.
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
+      # ALWAYS, not just when `check` is on (2026-08-27).
+      #
+      # `check` used to be the whole rehearsal: `docs/release.md` step 4 told you
+      # to dispatch once with it and again without, and nothing enforced the
+      # first one. A step you can forget is not a gate — it is a habit with good
+      # documentation, and the release it protects is exactly the moment people
+      # are in a hurry.
+      #
+      # It costs ~35 s of playbook against the node and buys the failures worth
+      # catching before anything moves: host unreachable, a data service not
+      # healthy, the pre-migration restore point unwritable. `check` now means
+      # "rehearse ONLY" rather than "rehearse INSTEAD".
+      #
+      # `--check --diff` is not a skip: the docker steps are community.docker
+      # native modules, so check mode runs that same code. And "changed" in the
+      # output is the POINT, not a failure — it is the diff of what the real run
+      # will do. Only an error stops the job.
+      - name: Rehearse against the node — changes nothing
+        run: bash scripts/deploy-prod.sh '${{ inputs.version }}' --check --diff
+
+      - name: Deploy
+        if: ${{ !inputs.check }}
+        run: |
           # What this replaces, and why it had to go:
           #
           #   CI used to send the sha256 of docker-compose.yml AT THE TAG, and
@@ -102,7 +127,7 @@ jobs:
           #   The playbook ships the file from the tag instead. Drift cannot
           #   exist, because the node's compose is by construction the one this
           #   version was released with. There is nothing left to compare.
-          bash scripts/deploy-prod.sh '${{ inputs.version }}' ${{ inputs.check && '--check --diff' || '' }}
+          bash scripts/deploy-prod.sh '${{ inputs.version }}'
 
       # deploy-prod.sh already runs verify-prod on success. Nothing more to
       # assert after a rehearsal: prod still reports the PREVIOUS version, and a
