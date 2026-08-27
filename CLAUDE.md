@@ -119,7 +119,9 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 
 `just release X.Y.Z`(bump → 门禁 → commit → tag)→ 推 tag → CI 产出全部 7 个产物 →
 手动触发 `Deploy` workflow 上线。**手动那几下的完整清单在 `docs/release.md` 顶部**。
-彩排:`gh workflow run Deploy -f version=X.Y.Z -f check=true`,对真节点跑一遍不改任何东西。
+**彩排已固化在 workflow 里**(2026-08-27):上线那一次触发会**先对真节点跑一遍
+`--check --diff`,过了才真上**。`-f check=true` 现在的意思是「彩排完就停」,
+不再是「用彩排代替上线」。
 `just --list` 看全部 recipe。
 
 **上面这条链不需要本地装东西**(只用 `git` / `gh`,ansible 跑在 CI runner 上)。

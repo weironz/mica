@@ -1,0 +1,80 @@
+name: Release dry-run
+
+# Build every release artifact WITHOUT publishing anything, whenever one of the
+# files that can break the release train changes.
+#
+# Why this exists, in one incident: 2026-08-27, the commit that pinned Rust in
+# `rust-toolchain.toml` also broke the `cli` job's musl leg — `targets:` added
+# the std slice to the toolchain the action installs, while cargo obeyed the
+# pin. 29 green CI runs went by. It surfaced at release time, on a tag, which is
+# the worst moment to learn it: the tag is already public, and a rerun uses the
+# workflow file AT THAT TAG, so the fix cannot be re-run into place.
+#
+# The cause is structural, not a one-off: `windows`, `cli`, `images` and
+# `publish` exist ONLY in release.yml, so an ordinary push never executes a line
+# of them. The dry run has always been available by hand
+# (`gh workflow run Release -f version=X.Y.Z`, publish defaults to false) — this
+# just stops it depending on somebody remembering.
+#
+# Scoped to the files that have actually broken it, not to everything: at ~12
+# minutes a run, firing on every push would have meant 29 pointless runs in a
+# day like that one. Ordinary source changes are already covered — CI builds the
+# same crates, and the release jobs only repackage them.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-dryrun.yml'
+      # The toolchain pins. Both can break a release leg while CI stays green.
+      - 'rust-toolchain.toml'
+      - '.fvmrc'
+      # What the images job builds from.
+      - 'deploy/Dockerfile.api'
+      - 'deploy/Dockerfile.cli'
+      - 'deploy/Dockerfile.web'
+  workflow_dispatch:
+
+# A second push while one is running supersedes it: the newest tree is the only
+# answer anybody wants, and each run is ~12 minutes across three OSes.
+concurrency:
+  group: release-dryrun-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The version has to come from the tree, because release.yml asserts that the
+  # version it is handed matches the tree it builds from. That assertion is
+  # load-bearing here too — it is the same check that catches a bare `git tag`
+  # without `just release`.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The root Cargo.toml's [workspace.package] version — the same number
+          # `scripts/release-check.sh` keeps in step with pubspec.yaml and
+          # kAppVersion, so any of the three would do.
+          v=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "could not read an X.Y.Z version out of Cargo.toml (got '$v')"
+            exit 1
+          }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "::notice::dry-running the release train for $v — nothing will be published"
+
+  # Reused, NOT reimplemented. A second copy of the build steps could pass while
+  # the real ones were broken, which is the exact failure this exists to catch.
+  build:
+    needs: version
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      # The whole point. With this off, release.yml creates no draft, attaches
+      # no asset, publishes no release and pushes no image — it only builds.
+      publish: false
+    secrets: inherit

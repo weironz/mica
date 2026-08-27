@@ -36,6 +36,20 @@ on:
         description: 'Publish the installer to a GitHub release (off = dry-run: build + package + upload artifact only)'
         type: boolean
         default: false
+  # Callable, so `release-dryrun.yml` can exercise these legs WITHOUT a tag.
+  # Every job below exists ONLY in this workflow, so nothing on an ordinary push
+  # ever runs them — which is how the pinned toolchain broke the musl leg on
+  # 2026-08-27 and survived 29 green CI runs before anyone found out, at release
+  # time. A plain `push:` trigger cannot do this: one `push:` block cannot carry
+  # both `tags:` (unfiltered) and `branches:` + `paths:`.
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -68,8 +82,13 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            v="${{ github.event.inputs.version }}"
+          # "An explicit version was given" — true for workflow_dispatch AND
+          # workflow_call, empty for a tag push, which reads it off the tag name.
+          # Keyed on the INPUT rather than on `event_name` so a third caller
+          # cannot silently fall through to `GITHUB_REF_NAME` and build a
+          # release named after a branch.
+          if [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
           else
             v="${GITHUB_REF_NAME#v}"
           fi
@@ -111,7 +130,7 @@ jobs:
           echo "==> $WANT matches pubspec / kAppVersion / Cargo.toml"
 
       - name: Create the draft release
-        if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
@@ -143,8 +162,13 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            v="${{ github.event.inputs.version }}"
+          # "An explicit version was given" — true for workflow_dispatch AND
+          # workflow_call, empty for a tag push, which reads it off the tag name.
+          # Keyed on the INPUT rather than on `event_name` so a third caller
+          # cannot silently fall through to `GITHUB_REF_NAME` and build a
+          # release named after a branch.
+          if [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
           else
             v="${GITHUB_REF_NAME#v}"
           fi
@@ -280,7 +304,7 @@ jobs:
       - name: Publish installer to release
         # Tag pushes always publish; manual runs only when publish=true (else
         # it's a dry-run that just builds + uploads the artifact above).
-        if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
@@ -341,8 +365,13 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            v="${{ github.event.inputs.version }}"
+          # "An explicit version was given" — true for workflow_dispatch AND
+          # workflow_call, empty for a tag push, which reads it off the tag name.
+          # Keyed on the INPUT rather than on `event_name` so a third caller
+          # cannot silently fall through to `GITHUB_REF_NAME` and build a
+          # release named after a branch.
+          if [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
           else
             v="${GITHUB_REF_NAME#v}"
           fi
@@ -447,7 +476,7 @@ jobs:
         # when publish=true (else dry-run = build + artifact only). The draft
         # release already exists (the `draft` job created it) — this only attaches
         # a file, and `draft: true` keeps it unpublished until `publish` runs.
-        if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
@@ -488,8 +517,13 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            v="${{ github.event.inputs.version }}"
+          # "An explicit version was given" — true for workflow_dispatch AND
+          # workflow_call, empty for a tag push, which reads it off the tag name.
+          # Keyed on the INPUT rather than on `event_name` so a third caller
+          # cannot silently fall through to `GITHUB_REF_NAME` and build a
+          # release named after a branch.
+          if [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
           else
             v="${GITHUB_REF_NAME#v}"
           fi
@@ -521,7 +555,11 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
+      # Gated with the push below: a dry run has nothing to authenticate FOR, and
+      # a login that fails for want of a secret would turn the dry run red for a
+      # reason that has nothing to do with what it is checking.
       - name: Login to Aliyun ACR
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: docker/login-action@v4
         with:
           registry: registry.cn-shenzhen.aliyuncs.com
@@ -529,6 +567,7 @@ jobs:
           password: ${{ secrets.ACR_PASSWORD }}
 
       - name: Login to Docker Hub
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -539,7 +578,13 @@ jobs:
         with:
           context: .
           file: ${{ matrix.file }}
-          push: true
+          # Was an unconditional `true`, and that was a real hole: the registry
+          # tags are IMMUTABLE by policy (`docs/release.md`), but a dry run —
+          # `publish=false`, whose whole promise is "build everything, publish
+          # nothing" — pushed anyway, overwriting the images of whatever version
+          # the tree happened to say. Building still happens on a dry run; only
+          # the push is withheld, which is the half that matters.
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
           # Buildx defaults attach an OCI attestation manifest, turning the
           # image into a multi-manifest index that some registries / a plain
           # `docker save | docker load` cannot resolve.
@@ -566,7 +611,7 @@ jobs:
   #   gh release edit vX.Y.Z --draft=false --latest
   publish:
     needs: [draft, windows, cli]
-    if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
     runs-on: ubuntu-latest
     steps:
       - name: Publish the release
