@@ -1135,7 +1135,6 @@ async fn insert_folder(
   Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 /// The document seed for one planned page: its Markdown parsed into blocks,
 /// with the page's own name on the root block.
 ///
@@ -1162,6 +1161,7 @@ fn page_seed(
   payload
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_page(
   state: &AppState,
   workspace_id: Uuid,
