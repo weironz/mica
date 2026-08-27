@@ -46,9 +46,14 @@ GET /api/workspaces/{ws}/documents/{id}/markdown?title=true
 
 Spell it `true`/`false`, not `1`/`0` — anything else is a 400. The name comes
 from the document itself (`root.data['title']`) when it carries one, and from
-the view's name otherwise; `docs/page-title-plan.md` has the why. The workspace
-and whole-account exports below always include it — those only ever produce
-files, never a body to write back.
+the view's name otherwise; `docs/page-title-plan.md` has the why.
+
+The workspace and whole-account exports below always carry each page's name —
+they only ever produce a file, never a body to write back. But note what they
+carry it AS: a **tree heading** whose level follows the page's depth, because
+those endpoints flatten a whole workspace into one document. That heading is
+structure, not the page's title line, and a page whose body already opens with
+its own heading will show both.
 
 ## Bulk operations
 

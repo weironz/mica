@@ -166,6 +166,14 @@ orphan 而不是瞎猜(`anchor_state` 的契约 —— 错锚比没锚更糟)。
   复制页面内容 / 大纲。`root.data['title']` 此时还没有任何写入者,一律回落到 `views.name`
   —— **P1 单独上线就修好了 §1 那张表的大部分**,而且不动权威归属。
   ✅ **2026-08-27 完成**(`fe181a0` + `34637fc`)。Ctrl+C 整页**拍板不做**,理由见 §3.1。
+  ⚠️ **P1 漏了一个出口,v0.13.30 上线后的冒烟测才抓到**:`GET /workspaces/{ws}/export/markdown`
+  与 `GET /export/markdown`(把整个工作区拍平成一篇文档的那两条;MCP `mica_export_workspace`
+  走的就是它)里的 `workspace_markdown` 一直直接读 `view.name`。原因是**§1 那张出口表里
+  根本没有它** —— 那张表是按「用户点哪个菜单」列的,而这两条只有 API / MCP 到得了。
+  已改成同一条回落规则。**今天没有用户可见差异**(P2 之后列是同事务写的投影,两者恒等),
+  但它读的是影子而不是权威:投影哪天不一致,应该暴露成投影的 bug,而不是在这里悄悄变成答案。
+  〔教训:出口清单按**入口**列,就会漏掉没有 UI 的出口。〕
+
   本地(离线)模式的单页导出/复制**也已做完**:`MicaDocument::export_markdown_titled`
   (给 FFI 加参数并重新生成桥接,`flutter_rust_bridge_codegen 2.12.0`,与 pubspec/生成文件同号),
   `local_offline_io.dart` 的「导出为 .md」与「复制页面内容」两处都走它。

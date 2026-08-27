@@ -3248,12 +3248,28 @@ async fn workspace_markdown(
       continue;
     }
     let level = (base_level + depth).min(6);
+    let payload = store::current_payload(db, view.object_id).await?;
+    // The DOCUMENT's own title wins over the `views.name` column — the rule every
+    // other outlet uses (`docs/page-title-plan.md` §4.1). P1 converted the
+    // single-page and ZIP exports and missed this one: it was not in the plan's
+    // list of outlets, and a v0.13.30 smoke test through MCP
+    // (`mica_export_workspace` calls this) is what turned it up.
+    //
+    // No user-visible difference TODAY — since P2 the column is a projection
+    // written in the same transaction, so the two always agree. The point is to
+    // read the authority rather than its shadow: if the projection ever starts
+    // disagreeing, that should surface as a bug in the projection instead of
+    // quietly becoming the answer here.
+    let title = payload
+      .as_ref()
+      .and_then(mica_markdown::document_title)
+      .unwrap_or(view.name.as_str());
     out.push_str(&"#".repeat(level));
     out.push(' ');
-    out.push_str(&view.name);
+    out.push_str(title);
     out.push_str("\n\n");
 
-    if let Some(payload) = store::current_payload(db, view.object_id).await? {
+    if let Some(payload) = payload {
       let assets = blob_asset_map(&payload.blocks, workspace_id);
       // Propagate a page's export failure instead of swallowing it (the old
       // `if let Ok(..)` with no else). This export is a backup/migration; a page
