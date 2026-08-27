@@ -167,8 +167,24 @@ orphan 而不是瞎猜(`anchor_state` 的契约 —— 错锚比没锚更糟)。
   ✅ **2026-08-27 完成**(`fe181a0` + `34637fc`)。Ctrl+C 整页**拍板不做**,理由见 §3.1。
   本地(离线)模式的单页导出/复制**还没做**,它要给 FFI 加参数并重新生成桥接
   (工具链在本机是齐的:`flutter_rust_bridge_codegen 2.12.0`,与 pubspec/生成文件同号)。
-- **P2 —— 写侧改向。** 编辑器标题字段写 `root.data['title']`(经 5.1 的新原语);
-  `views.name` 变成投影,在文档写入处共写。F2 / MCP `mica_rename` 改走同一条路。
+- **P2 —— 写侧改向。** ✅ **2026-08-27 服务端部分完成。**
+  - `MicaDoc::set_block_prop`(§5.1 的窄原语)+ 两条锚点验收测试。
+  - `sync::set_document_title` —— 载入 base → 比对 → 写 root 的 `title` → `push_update`。
+    **先比对再写**:yrs 的 map insert 无论值变没变都是一次操作,不比对的话「改名成同名」
+    会白花一次版本快照 + 全员广播(实测,`setting_the_same_title_twice_is_a_no_op`
+    在加比对之前是红的)。
+  - **`views.name` 成为投影**,在 `push_update` 里与 `content_text` / `link_targets`
+    同事务共写。只对**有标题**的文档生效,`None` 时一行不写(§4.1 不回填的直接后果);
+    `name <> $1` 让正文敲一个字的热路径只花一次比较。
+  - `PATCH /views/{id}`(F2、编辑器标题字段、MCP `mica_rename` 都汇到它)在写完列之后
+    再写文档,并按版本还原同样的形状广播给打开着的编辑器。**列仍然先写且照写** ——
+    文件夹没有文档,没标题的存量页也要照常改名。文档写入失败只记 warn 不返回错误:
+    用户要的改名已经发生了,把标题同步的小差错报成 500 是把成功报成失败。
+  - 4 条真库测试(`sync_pg.rs`),验过有牙:拆掉投影那条 UPDATE,两条当场变红。
+
+  **还没做**:客户端仍然只发 `PATCH /views/{id}`(这已经够了,因为服务端会写文档);
+  但**编辑器里改标题时不会实时经 CRDT 同步给其他人**,要等那次 PATCH 落地后广播。
+  另外本地(离线)模式的改名没有走这条路 —— 它没有服务端。
 - **P3 —— 导入与 round-trip。** 导入时把 manifest/文件名的标题写进 root;导出侧
   `with_page_title` 与导入侧 `strip_leading_h1` 配对,export→import 字节稳定(CLAUDE.md #4)。
 

@@ -769,6 +769,160 @@ async fn writes_maintain_link_targets_in_both_directions() {
     cleanup(&db, ws, user).await;
 }
 
+// ── views.name as a projection of the document's title ──────────────────────
+//
+// The third instance of the pattern content_text and link_targets follow. Two
+// things make it different and worth its own tests: the other two write a column
+// beside the base in the same statement, this one writes a DIFFERENT TABLE; and
+// it must be a complete no-op for the many documents that carry no title at all
+// (there is no backfill migration — `docs/page-title-plan.md` §4.1).
+
+/// Give a seeded document a `views` row, which `seed_doc` does not — the tests
+/// that came before this one only ever looked at `document_yrs_base`, so the
+/// fixture never needed a view. The projection writes `views.name`, so these do.
+async fn seed_view_for(db: &PgPool, ws: Uuid, doc: Uuid, user: Uuid, name: &str) -> Uuid {
+    let view = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by)
+         VALUES($1,$2,$3,'document',$4,'0',$5)",
+    )
+    .bind(view)
+    .bind(ws)
+    .bind(doc)
+    .bind(name)
+    .bind(user)
+    .execute(db)
+    .await
+    .unwrap();
+    view
+}
+
+async fn stored_view_name(db: &PgPool, doc: Uuid) -> String {
+    sqlx::query_scalar("SELECT name FROM views WHERE object_id = $1")
+        .bind(doc)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+/// Writing a title into the document renames the page. This IS the authority
+/// transfer: afterwards the document is where the name comes from.
+#[tokio::test]
+async fn a_title_written_into_the_document_moves_the_view_name() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping a_title_written_into_the_document_moves_the_view_name: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    seed_view_for(&db, ws, doc, user, "原来的名字").await;
+    let before = stored_view_name(&db, doc).await;
+    assert_ne!(before, "新标题", "the fixture must not already be named this");
+
+    let (_, update) = sync::set_document_title(&db, ws, doc, user, "新标题", &tuning())
+        .await
+        .unwrap();
+
+    assert!(!update.is_empty(), "a real title change produces an update");
+    assert_eq!(stored_view_name(&db, doc).await, "新标题");
+
+    cleanup(&db, ws, user).await;
+}
+
+/// An ORDINARY body edit must not touch the name.
+///
+/// The one that would bite silently: `push_update` runs on every keystroke, so a
+/// projection that fired unconditionally would rewrite every page's name on
+/// every edit — to nothing, for the majority of pages that have no title.
+#[tokio::test]
+async fn an_ordinary_edit_leaves_an_untitled_pages_name_alone() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping an_ordinary_edit_leaves_an_untitled_pages_name_alone: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    seed_view_for(&db, ws, doc, user, "不该被改的名字").await;
+    let before = stored_view_name(&db, doc).await;
+    assert!(!before.is_empty(), "fixture has a name to protect");
+
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    editing.text_insert("a", 5, " 又写了几个字");
+    let update = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
+
+    assert_eq!(
+        stored_view_name(&db, doc).await,
+        before,
+        "a body edit on a page with no document title must not rename it"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
+/// Once a page HAS a title, ordinary edits keep the name pinned to it — so a
+/// rename written straight to the column gets re-derived away on the next push.
+/// That is exactly why `update_view` must also write the document.
+#[tokio::test]
+async fn a_body_edit_re_derives_the_name_from_the_documents_title() {
+    let Some(db) = pool().await else {
+        eprintln!(
+            "skipping a_body_edit_re_derives_the_name_from_the_documents_title: no DATABASE_URL"
+        );
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    seed_view_for(&db, ws, doc, user, "起初的名字").await;
+    sync::set_document_title(&db, ws, doc, user, "文档说了算", &tuning())
+        .await
+        .unwrap();
+
+    // Somebody writes the column directly, the way a pre-P2 rename would.
+    sqlx::query("UPDATE views SET name = '绕过文档改的名' WHERE object_id = $1")
+        .bind(doc)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let base = sync::document_base(&db, doc).await.unwrap().unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    editing.text_insert("a", 0, "编辑正文。");
+    let update = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &update, &tuning()).await.unwrap();
+
+    assert_eq!(
+        stored_view_name(&db, doc).await,
+        "文档说了算",
+        "the column is a projection: a write that bypassed the document loses"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
+/// Renaming to the name it already has must not spend a push — no version
+/// snapshot, no wake-up for every open editor.
+#[tokio::test]
+async fn setting_the_same_title_twice_is_a_no_op() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping setting_the_same_title_twice_is_a_no_op: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    seed_view_for(&db, ws, doc, user, "起初的名字").await;
+    sync::set_document_title(&db, ws, doc, user, "同一个名字", &tuning())
+        .await
+        .unwrap();
+
+    let (_, second) = sync::set_document_title(&db, ws, doc, user, "同一个名字", &tuning())
+        .await
+        .unwrap();
+
+    assert!(second.is_empty(), "the second write produced no update");
+
+    cleanup(&db, ws, user).await;
+}
+
 /// The collaborative push path keeps content_text in lockstep with the base, and
 /// the derived text is exactly a pure projection of the stored base — including
 /// CJK, so a 3-char and a 2-char substring both live in the column an `ILIKE`

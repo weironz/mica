@@ -1095,6 +1095,58 @@ pub async fn update_view(
   .await?
   .ok_or(ApiError::NotFound)?;
 
+  // A page's name now lives IN its document (root block `title`), with
+  // `views.name` as the projection — so a rename has to reach the document, or
+  // the next push would re-derive the OLD title over the column and silently
+  // undo the rename. See `docs/page-title-plan.md`.
+  //
+  // The column is still written above and first: this endpoint must keep working
+  // for folders (no document at all) and for the many pages that have no title
+  // yet (there is no backfill). The document write is what makes the rename
+  // stick for pages that DO carry one, and what makes open editors converge.
+  //
+  // Failure here is logged, not returned: the user asked to rename a page and
+  // the rename happened. Turning a title-sync hiccup into a 500 would report a
+  // rename that actually succeeded as a failure.
+  if view.object_type == "document" {
+    match mica_app_core::sync::set_document_title(
+      &state.db,
+      workspace_id,
+      view.object_id,
+      user_id,
+      &view.name,
+      &state.config.sync_tuning,
+    )
+    .await
+    {
+      // Fan it out to open editors on the same yrs channel a live edit uses —
+      // nil origin so every socket receives it. Same shape as a version restore
+      // (`history.rs`), because it is the same kind of event: a server-side
+      // change to a document somebody may have open.
+      Ok((rid, update)) if !update.is_empty() => {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&update);
+        let event = serde_json::json!({
+          "type": "sync.update",
+          "document_id": view.object_id,
+          "rid": rid,
+          "actor_id": user_id,
+          "update": encoded,
+        });
+        state.hub.broadcast_if_active(
+          view.object_id,
+          Uuid::nil(),
+          std::sync::Arc::from(event.to_string()),
+        );
+      }
+      Ok(_) => {}
+      Err(error) => tracing::warn!(
+        view_id = %view.id, document_id = %view.object_id, %error,
+        "rename: could not write the title into the document"
+      ),
+    }
+  }
+
   Ok(Json(ViewResponse { view }))
 }
 

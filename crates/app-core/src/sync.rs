@@ -112,6 +112,34 @@ pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
 /// example) derive `content_text` through the SAME function the write paths use.
 /// A second implementation there would be a second source of truth for a column
 /// whose whole contract is "pure derivation of `state`".
+/// The document's own title, if it carries one — the source `views.name` is a
+/// projection of.
+///
+/// A thin wrapper over `mica_markdown::document_title` so this file has ONE
+/// producer of the projection, the way `content_text_from_doc` is the only
+/// producer of `content_text`. Blank counts as absent: emptying the title falls
+/// back to whatever the name column already holds rather than blanking a page's
+/// name in the sidebar.
+fn title_from_doc(doc: &MicaDoc) -> Option<String> {
+    // Only the ROOT block is needed, and reading just it keeps this off the
+    // "flatten the whole document" cost that `content_text_from_doc` pays — this
+    // runs on every push, including a single keystroke.
+    let root_id = doc.root_block_id();
+    let root = doc.to_blocks().into_iter().find(|b| b.id == root_id)?;
+    let payload = mica_markdown::DocumentSnapshotPayload {
+        schema_version: 1,
+        root_block_id: root_id,
+        blocks: vec![mica_markdown::Block {
+            id: root.id,
+            kind: root.kind,
+            text: root.text,
+            data: root.data,
+            children: root.children,
+        }],
+    };
+    mica_markdown::document_title(&payload).map(str::to_string)
+}
+
 pub fn content_text_from_doc(doc: &MicaDoc) -> String {
     let blocks = doc.to_blocks();
     let mut text = blocks
@@ -510,6 +538,30 @@ pub async fn push_update(
     .execute(&mut *tx)
     .await?;
 
+    // `views.name` is a PROJECTION of the document's own title, derived from the
+    // same folded `doc` and written in the same transaction — the third instance
+    // of the pattern `content_text` and `link_targets` already follow, and for
+    // the same reason: a second STORED copy of one fact drifts, a derived one
+    // cannot (red line #1). See `docs/page-title-plan.md`.
+    //
+    // Only for documents that HAVE a title. There is no backfill, so most pages
+    // carry none and keep answering from the name column exactly as before —
+    // a `None` here must therefore leave the column alone, never blank it.
+    // Folders never reach this code at all (they have no document).
+    //
+    // `name <> $1` keeps this a no-op on the overwhelmingly common push (a
+    // keystroke in the body), so the hot path costs one comparison, not a write.
+    if let Some(title) = title_from_doc(&doc) {
+        sqlx::query(
+            "UPDATE views SET name = $1, updated_at = now()
+             WHERE object_id = $2 AND name <> $1",
+        )
+        .bind(&title)
+        .bind(document_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     // Version history (docs/version-history-plan.md): archive the just-folded
     // full state as an AUTO snapshot — but only if none was taken in the last
     // VERSION_AUTO_INTERVAL, so a burst of edits converges to one version per
@@ -553,6 +605,60 @@ pub async fn push_update(
 
     tx.commit().await?;
     Ok(rid)
+}
+
+/// Write a page's title INTO its document (the root block's `title` prop) and
+/// push it like any other edit, so every open editor converges and
+/// [`push_update`] re-derives `views.name` from it.
+///
+/// Returns the assigned `rid` plus the update bytes to broadcast, or
+/// `(current_rid, empty)` when the title already matches — renaming a page to
+/// the name it already has must not spend a version snapshot or wake every
+/// connected client.
+///
+/// **Uses [`MicaDoc::set_block_prop`], NOT `set_blocks`**, and that is the whole
+/// point: the wide rewrite would invalidate every comment anchor on the page and
+/// force each one through quote-based re-anchoring — best-effort by design, so
+/// an ambiguous quote is left orphaned. A rename must not roll that dice. The
+/// two acceptance tests are in `comments.rs`; the reasoning is
+/// `docs/page-title-plan.md` §5.1.
+pub async fn set_document_title(
+    db: &PgPool,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    actor_id: Uuid,
+    title: &str,
+    tuning: &SyncTuning,
+) -> ApiResult<(i64, Vec<u8>)> {
+    let base = bootstrap_base(db, document_id).await?;
+    let mut doc = guarded_from_update(&base.state)
+        .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
+    let root_id = doc.root_block_id();
+    if root_id.is_empty() {
+        // A document with no root is not one we can title. Bail rather than
+        // inventing a block — the caller still updated `views.name` directly.
+        return Ok((base.base_rid, Vec::new()));
+    }
+
+    // Compare BEFORE writing. A yrs map insert is an operation whether or not
+    // the value changed, so writing unconditionally would produce a non-empty
+    // diff every time — and renaming a page to the name it already has would
+    // spend a version snapshot and wake every open editor. Measured: the
+    // `setting_the_same_title_twice_is_a_no_op` test failed until this existed.
+    if title_from_doc(&doc).as_deref() == Some(title) {
+        return Ok((base.base_rid, Vec::new()));
+    }
+
+    let sv = doc.state_vector();
+    doc.set_block_prop(&root_id, "title", &serde_json::json!(title));
+    let update = doc
+        .encode_diff(&sv)
+        .map_err(|e| ApiError::Internal(format!("title diff: {e}")))?;
+    if update.is_empty() {
+        return Ok((base.base_rid, Vec::new()));
+    }
+    let rid = push_update(db, workspace_id, document_id, actor_id, &update, tuning).await?;
+    Ok((rid, update))
 }
 
 /// Restore a document to a stored version's content, CRDT-safely. Re-applying
