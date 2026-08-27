@@ -414,6 +414,18 @@
   之后有效 —— 而那是开始一段范围最不常见的方式。我那 13 条测试**每一条都以 Ctrl 点击开头**,
   于是最常用的路径一次都没走过。
 
+  **web 端验收(2026-08-27,用户手动)**:Ctrl 多选、Shift 范围选、右键批量菜单、多行拖拽,
+  四项全过。桌面端由我实测(截图在那次会话里)。两端都验过,这条整体闭环。
+
+  ⚠️ **但它没有 web 端的自动化回归测试,而且短期内做不出来** —— Playwright(CDP 合成事件)
+  送不进 Flutter web 的「修饰键 + 点击」,详见 `lessons.md`「自动化测试也会造假阴性」。
+  我在这上面白烧了五次 web 构建去追一个不存在的 bug,最后是用户用真键盘推翻的。
+  逻辑层由 `tree_selection_test.dart`(纯函数 + `TreeSelection`)和
+  `document_list_item_test.dart`(行的手势上报)守着,**两端共用同一份**;web 上没被守住的
+  只有「浏览器把修饰键交给 Flutter」这一段管道。要让它可自动化测,得给多选加一条不依赖
+  修饰键的入口(如行首复选框,AFFiNE 就是这么做的)—— 那是产品决定,不是测试决定,
+  所以**没有为此留待办**。
+
 - 🟡 **评论**(2026-07-26:**服务端 + 渲染 + API 三层已闭环,剩面板 UI**)—— 锚点=yrs sticky index 存独立表(`comment_threads`/`comments`,migration 0014),**正文 Markdown 一字不动 → round-trip 红线零改动、评论永不进导出**。已落地:锚点原语 `sticky_for_range`/`resolve_range`(2672201,8 单测)+ store 层与 5 个端点(354f946,gated on `commenter`——能评论但不能改正文)+ **Postgres 集成测试 8 项 CI 真跑**(736639c,含"锚点经 push_update 落库后仍随文字位移")+ 客户端 API 层(af03743,6 单测)+ **渲染期高亮**(08f221d,**纯 paint、绝不 relayout**,5 widget 测证明 caret 几何不变)。**Phase 1 已闭环**(f3bf181):评论面板(`ui/comment_panel.dart`,9 widget 测)+ 右键「添加评论」(offset 用 UTF-16、只看 `onAddComment` 不看 `canEdit`,故 commenter 能评论不能改正文)+ main.dart 接线(`onReady` 拉取 → 过滤 `isHighlightable` → `commentHighlights`;变更后重拉,服务端是锚点/orphan 唯一真相源;拉取失败只是没评论、文档照常打开)。**残留仅观感**:Dialog 形态/面板宽度/图标位置/高亮浓度/跨块高亮 需 `just app` 或发版后真机看一眼(清单见 `docs/comments-plan.md`「待真机确认」)。**实测修正了设计假设**:yrs 保留 tombstone,删掉锚定文字后锚点**仍能解析、只是塌缩成零长** → orphan 判定必须"解不出 **或** 塌缩"两者同等对待(只信 None 会漏掉最常见的删除情形)。**建议(suggest mode)**仍有意另立项(正文内 overlay,与评论不共用存储)。(残留 M)`[需后端]`
   **2026-08-03 整条关闭**:残留的「仅观感」五条真机清单跑完(`cdf4aec`),两条结论与原文相反——
   跨块高亮**横跨所有块都画了**(原文写「只画起始块」),跨块评论也能正常创建;我第一次测出的
@@ -536,6 +548,30 @@
 - ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
 
 ## 开发者体验 / CI / Markdown
+
+- 🟡 **批量端点的端到端行为测试。** 0.13.19 的保证是"SQL 对真库有效 + 类型正确 + 路由表
+  无冲突",**不是**"320 个 id 进去真的删对了"。~~需要建工作区/页面的完整 fixture。~~
+  **2026-08-26:fixture 不用再建了** —— `batch-purge` 落地时用 `seed_workspace` +
+  `seed_document` 写了两条真库测试(未进回收站的页面必须存活并出现在 `skipped`;文件夹的
+  子页面和它们的 `documents` 必须一起走),并**验过它们有牙**(去掉 `is_deleted` 过滤当场
+  变红)。剩下的是把同一套照搬到 `batch-trash` / `batch-restore` / `batch-move` 三个上,
+  它们至今仍只有"SQL 跑得通"级别的保证。(S)
+  **2026-08-27 更新**:`batch-transfer` 落地时按同一套写了 4 条真库测试
+  (`ancestor_pairs_of_roots` 走到祖父级、不可搬运的根不产生 pair、与 `independent_roots`
+  合起来只搬文件夹),也**验过有牙**(砍掉递归臂当场变红)。
+  ~~仍然没覆盖的是 `batch-trash` / `batch-restore` / `batch-move` 那三个。~~
+  ✅ **2026-08-27 整条关闭**:三个都补上了(7 条真库测试,api-server 192 → 199)。为此把
+  三段语句从 handler 里抽出来(`trash_views_batch` / `restore_views_batch` /
+  `move_views_tx`),理由和当初抽 `purge_views_batch` 一样 —— handler 要 auth header,
+  DB 测试造不出来。覆盖的是能**静默**出错的性质:文件夹的子级跟着走;已在回收站的 id
+  不被重盖 `updated_at`(否则上周删的页会浮到回收站顶部,像刚删的);restore 与 trash
+  作为**一次往返**互为镜像(而不是拿手工置位的"已删"状态去测,那样两条 CTE 各自漂移也照过);
+  批量 move 的**位置零填充**让文本序等于数字序;以及 move 中途有 view 消失时**整批回滚**。
+  四处破坏各验过一次。〔两条只有做这件事才会知道的事实,都写进了测试注释:
+  ① workspace 作用域是**双保险**(CTE 种子 + UPDATE 各一道),所以那条测试只有两道都拆掉
+  才会红 —— 拆一道仍然过,别把它读成"任一道是承重的";② 我第一次破坏放错了位置,
+  拆的是 UPDATE 那道,测试照过 —— 和上一轮 widget 测试同一个错。〕
+
 
 - ~~**自研 parser vs 采用 comrak(读侧)未决**~~ ✅ **已拍板:继续自研**(2026-08-04,用户决定)——
   出处是 `editor-engine.md` Milestone 8 的决策点,判据写的是「等自研的曲线走平再决定」。
