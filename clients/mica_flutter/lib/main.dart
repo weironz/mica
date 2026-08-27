@@ -2671,6 +2671,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       session.accessToken,
       workspace.id,
       bootstrap.document.id,
+      withTitle: true,
     );
     if (_markdownReferencesLocalAssets(markdown)) {
       final bytes = await _api.exportDocumentZip(
@@ -2777,10 +2778,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
+    // The clipboard has no file name to carry the page's name, so the title
+    // has to be in the text or it is simply lost on paste.
     return _api.exportMarkdown(
       session.accessToken,
       workspace.id,
       bootstrap.document.id,
+      withTitle: true,
     );
   }
 
@@ -11466,22 +11470,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     outlineHook: _outlineHook,
                     findHook: _findHook,
                     activeBlockHook: _activeBlockHook,
-                    onExitTop: () {
-                      if (!widget.showPageTitle) return;
-                      _pageTitleFocus.requestFocus();
-                      // The web TextField select-alls when focused
-                      // programmatically; that happens in the focus
-                      // microtask, so queue ours right behind it — the
-                      // caret is collapsed before the next frame paints
-                      // (a post-frame callback here flashed the
-                      // selection for one frame).
-                      Future.microtask(() {
-                        if (!mounted) return;
-                        _pageTitle.selection = TextSelection.collapsed(
-                          offset: _pageTitle.text.length,
-                        );
-                      });
-                    },
+                    onExitTop: _focusPageTitle,
                     appearance: _editorAppearance,
                     onOpenPage: _openPageLink,
                     pageLinks: () => [
@@ -11536,6 +11525,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
+  /// The outline row that stands for the page title. Not a block id — the title
+  /// is not a block — so it is a sentinel no document can produce.
+  static const String _outlineTitleId = ' outline-page-title';
+
+  /// Put the caret at the end of the page-title field.
+  ///
+  /// Two callers: pressing Up on the document's first line (`onExitTop`), and
+  /// tapping the title row in the outline. Shared rather than duplicated because
+  /// of the web quirk below, which took a wrong attempt to find.
+  void _focusPageTitle() {
+    if (!widget.showPageTitle) return;
+    _pageTitleFocus.requestFocus();
+    // The web TextField select-alls when focused programmatically; that happens
+    // in the focus microtask, so queue ours right behind it — the caret is
+    // collapsed before the next frame paints (a post-frame callback here
+    // flashed the selection for one frame).
+    Future.microtask(() {
+      if (!mounted) return;
+      _pageTitle.selection = TextSelection.collapsed(
+        offset: _pageTitle.text.length,
+      );
+    });
+  }
+
   /// Tappable outline entries for the current page's headings (no section
   /// header). Tapping scrolls the editor to that heading. Fed the LIVE heading
   /// list from [_outlineHook] (republished by the editor on every edit), so it
@@ -11544,11 +11557,33 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     BuildContext context,
     List<OutlineEntry> headings,
   ) {
+    // The page's own title leads its table of contents.
+    //
+    // It used to be missing entirely, which reads as a bug once you notice it:
+    // a document's outline that never mentions the document. The title is not a
+    // heading BLOCK — it lives outside the editor's document (see
+    // `docs/page-title-plan.md`) — so the editor's live heading feed cannot
+    // carry it. It is prepended here, where the page is known.
+    //
+    // Level 1 on purpose: every heading the author writes then indents under it,
+    // which is what "this is the root of the page" should look like. An empty or
+    // still-untitled name contributes nothing rather than a blank row.
+    final title = widget.selectedView?.name.trim() ?? '';
+    final entries = <OutlineEntry>[
+      if (title.isNotEmpty && !isUntitledPageName(title))
+        OutlineEntry(id: _outlineTitleId, text: title, level: 1),
+      ...headings,
+    ];
     return [
-      for (final h in headings)
+      for (final h in entries)
         if (h.text.trim().isNotEmpty)
           InkWell(
-            onTap: () => _scrollHook.scrollToBlock(h.id),
+            // The title row has no block to scroll to — it is not in the
+            // document — so it puts the caret in the title field instead, which
+            // is both "go to the top" and "here is where you rename it".
+            onTap: () => h.id == _outlineTitleId
+                ? _focusPageTitle()
+                : _scrollHook.scrollToBlock(h.id),
             borderRadius: BorderRadius.circular(6),
             child: Padding(
               padding: EdgeInsets.only(

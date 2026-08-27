@@ -11,8 +11,9 @@ use chrono::{DateTime, Utc};
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentOperation, DocumentSnapshotPayload, export_html, export_html_document,
+    DocumentOperation, DocumentSnapshotPayload, document_title, export_html, export_html_document,
     export_markdown_with_assets, import_markdown, import_markdown_fragment, set_image_srcs,
+    with_page_title,
   },
   store::{self, DocumentRecord},
 };
@@ -1856,10 +1857,28 @@ pub async fn apply_document_update(
   }))
 }
 
+/// Whether this read should have the page's title welded onto the front.
+///
+/// **Off by default, and that default is load-bearing.** This handler is the GET
+/// half of a GET/PATCH pair on the same path (`routes/mod.rs`), and it is what
+/// MCP `mica_read_document` calls. A title returned here by default would come
+/// straight back on the next `replace_all` as a real heading in the body, and
+/// the one after that would add another — compounding once per round trip.
+///
+/// So the caller says which it wants. `?title=1` is for the two places that are
+/// producing a page for a HUMAN to keep — "export as .md" and "copy page
+/// content" — where the name is otherwise lost the moment the text leaves Mica.
+#[derive(Debug, Deserialize)]
+pub struct MarkdownExportParams {
+  #[serde(default)]
+  title: bool,
+}
+
 pub async fn export_document_markdown(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path((workspace_id, document_id)): Path<(Uuid, Uuid)>,
+  Query(params): Query<MarkdownExportParams>,
 ) -> ApiResult<Json<MarkdownExportResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
@@ -1871,6 +1890,18 @@ pub async fn export_document_markdown(
   let assets = blob_asset_map(&payload.blocks, workspace_id);
   let markdown = export_markdown_with_assets(&payload, &assets)
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+
+  let markdown = if params.title {
+    let view_name = fetch_document_view(&state.db, workspace_id, document_id)
+      .await?
+      .map(|view| view.name);
+    let title = document_title(&payload)
+      .or(view_name.as_deref())
+      .unwrap_or_default();
+    with_page_title(&markdown, title)
+  } else {
+    markdown
+  };
 
   Ok(Json(MarkdownExportResponse { markdown }))
 }
@@ -2514,24 +2545,32 @@ pub async fn export_document_zip(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-  // The page's name rides on the FILE NAME — it is nowhere in the text (the body
-  // is exported verbatim), so hardcoding `document.md` silently threw the name
-  // away: you got a zip of "document.md" whichever page you exported, and an
-  // import could only ever call it "document".
-  let base = fetch_document_view(&state.db, workspace_id, document_id)
+  // The page's name names the FILE, and since 2026-08-27 also leads the TEXT
+  // (`docs/page-title-plan.md`). Hardcoding `document.md` had silently thrown
+  // the name away: you got a zip of "document.md" whichever page you exported,
+  // and an import could only ever call it "document".
+  let view_name = fetch_document_view(&state.db, workspace_id, document_id)
     .await?
-    .map(|view| safe_segment(&view.name))
+    .map(|view| view.name);
+  let base = view_name
+    .as_deref()
+    .map(safe_segment)
     .unwrap_or_else(|| "document".to_string());
 
   let mut entries = Vec::new();
   let assets = collect_assets(&state, workspace_id, &payload.blocks, &mut entries).await?;
-  let markdown = export_markdown_with_assets(&payload, &assets)
+  let body = export_markdown_with_assets(&payload, &assets)
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+  // Same rule as the tree export: the document's own title when it has one, the
+  // view name otherwise, placed after any front matter.
+  let title = document_title(&payload)
+    .or(view_name.as_deref())
+    .unwrap_or_default();
   entries.insert(
     0,
     ZipEntry {
       name: format!("{base}.md"),
-      data: markdown.into_bytes(),
+      data: with_page_title(&body, title).into_bytes(),
     },
   );
 

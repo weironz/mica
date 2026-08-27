@@ -1156,13 +1156,27 @@ class ApiClient {
     return DocumentUpdateResult.fromJson(response);
   }
 
+  /// A page as Markdown. [withTitle] welds `# <page name>` onto the front
+  /// (after any front matter), which is what the two paths producing text for a
+  /// HUMAN to keep — "export as .md" and "copy page content" — want: outside
+  /// Mica the name is otherwise lost, since only the file name carries it.
+  ///
+  /// Off by default because this endpoint is also the GET half of a GET/PATCH
+  /// pair and is what MCP reads; a title there would be written back into the
+  /// body by the next read-modify-write and compound on each round trip. The
+  /// server-side rationale is on `MarkdownExportParams`.
   Future<String> exportMarkdown(
     String token,
     String workspaceId,
-    String documentId,
-  ) async {
+    String documentId, {
+    bool withTitle = false,
+  }) async {
     final response = await _get(
-      '/api/workspaces/$workspaceId/documents/$documentId/export/markdown',
+      // `title=true`, not `title=1` — the server parses it as a serde bool,
+      // which rejects `1` with a 400. Measured, not assumed: the first version
+      // of this sent `1` and every export and copy failed.
+      '/api/workspaces/$workspaceId/documents/$documentId/export/markdown'
+      '${withTitle ? '?title=true' : ''}',
       token,
     );
     return response['markdown'] as String;
