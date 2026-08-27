@@ -468,20 +468,16 @@ class ApiClient {
     return DocumentView.fromJson(response['view'] as Map<String, dynamic>);
   }
 
-  Future<DocumentView> moveView(
-    String token,
-    String workspaceId,
-    String viewId, {
-    required String? parentViewId,
-    required String position,
-  }) async {
-    final response = await _post(
-      '/api/workspaces/$workspaceId/views/$viewId/move',
-      {'parent_view_id': parentViewId, 'position': position},
-      token: token,
-    );
-    return DocumentView.fromJson(response['view'] as Map<String, dynamic>);
-  }
+  // `moveView` lived here — one view at a time, `POST .../views/{id}/move`. Its
+  // last caller was the per-sibling reorder loop, which is now a single
+  // `/views/reorder`. Removed rather than kept "in case": an unused wrapper over
+  // a live endpoint is the kind of thing a future reorder reaches for by
+  // accident, which is exactly the loop that made creating a page in a large
+  // folder slow.
+  //
+  // The ENDPOINT stays and is still used — by the MCP server, which is Rust and
+  // calls it directly (`mcp-server/src/lib.rs`). Nothing about this deletion
+  // touches it.
 
   Future<List<DocumentView>> deleteView(
     String token,
