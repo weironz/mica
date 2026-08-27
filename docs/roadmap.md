@@ -77,11 +77,6 @@
 - 🟡 **导入完成发邮件。** 扒过的四家(Notion / AppFlowy / Slack / GitHub)全都有,而且是
   "人已经关掉应用"这个场景**唯一**被共同验证过的手段,没有替代品。仓库里有 `mail.rs`,
   不是从零开始。
-- 🟡 **web/桌面端批量移动(多选)。** 服务端 `batch-move` 已在 0.13.19 落地,CLI 和 MCP 都能
-  用了,**客户端一行没接**。真正的工作量不是调接口,是多选交互:选中集合与"当前打开页"
-  两个概念要共存、进入多选的手势在 web 和桌面不一样(同一套代码两端跑)、现有 `Draggable`
-  携带的是单个 view 要改成携带集合。**动手前先扒 AppFlowy / AFFiNE**(同为页树 + 两端同构),
-  重点看有没有谁**刻意不做**多选。建议先用 CLI 跑一轮真实的批量整理,再据此定 UI。
 - 🟡 **批量端点的端到端行为测试。** 0.13.19 的保证是"SQL 对真库有效 + 类型正确 + 路由表
   无冲突",**不是**"320 个 id 进去真的删对了"。~~需要建工作区/页面的完整 fixture。~~
   **2026-08-26:fixture 不用再建了** —— `batch-purge` 落地时用 `seed_workspace` +
@@ -89,6 +84,10 @@
   子页面和它们的 `documents` 必须一起走),并**验过它们有牙**(去掉 `is_deleted` 过滤当场
   变红)。剩下的是把同一套照搬到 `batch-trash` / `batch-restore` / `batch-move` 三个上,
   它们至今仍只有"SQL 跑得通"级别的保证。(S)
+  **2026-08-27 更新**:`batch-transfer` 落地时按同一套写了 4 条真库测试
+  (`ancestor_pairs_of_roots` 走到祖父级、不可搬运的根不产生 pair、与 `independent_roots`
+  合起来只搬文件夹),也**验过有牙**(砍掉递归臂当场变红)。仍然没覆盖的是
+  `batch-trash` / `batch-restore` / `batch-move` 那三个。
 - 🆕 **MCP 的删除面还剩三处没接**(2026-08-26 盘点,服务端路由都已存在)——
   ① 评论:`DELETE .../comments/{id}` 有,MCP 连读都没有;② 移除成员:`remove_member` 有;
   ③ 删文件:`DELETE .../files/{id}` 有,不过**影响最小** —— `blob_gc` 是周期 mark-and-sweep,

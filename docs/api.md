@@ -45,6 +45,7 @@ is not that: these take a list and send one request.
 | POST | `/workspaces/{ws}/views/batch-restore` | Bring many back out of the bin |
 | POST | `/workspaces/{ws}/views/batch-move` | Re-parent many under one folder, in order |
 | POST | `/workspaces/{ws}/views/batch-purge` | **Permanently** delete many views **already in the bin** |
+| POST | `/workspaces/{ws}/views/batch-transfer` | Move/copy many views into **another workspace**, one transaction |
 | POST | `/workspaces/{ws}/documents/batch-read` | Read many pages' Markdown in one round trip |
 | POST | `/workspaces/{ws}/views/reorder` | Set the full child order under one parent |
 
@@ -69,6 +70,29 @@ such filter and will permanently erase a live page. Batching *that* would let
 one request destroy hundreds of pages nobody had deleted, with no recoverable
 step anywhere. An id that is not in the bin comes back in `skipped` and is left
 untouched — so a real cleanup is always trash first, then purge.
+
+`batch-transfer` takes `{"view_ids": [...], "dest_workspace_id", "parent_view_id",
+"remove_source", "dry_run"}` and answers like the single transfer, plus
+`new_root_view_ids` (every root's new id, in the order sent; `new_root_view_id`
+stays as the first one). It is not a loop over the single route:
+
+- **All the destination trees and all the source soft-deletes are ONE
+  transaction.** N sequential transfers leave half a selection moved when one
+  fails, with nothing recording where it stopped. The blob copies still run
+  before that transaction (content-addressed, so the PUT is idempotent), so a
+  failure can leave orphan bytes in the destination for its GC — exactly the
+  guarantee the single transfer has always had, no weaker and no stronger.
+- **A root nested inside another root is dropped, not refused.** Selecting a
+  folder and a page inside it is ordinary with Ctrl-click; transferring both
+  would put two copies in the destination, and on a move the second copy's
+  source was already soft-deleted by the first.
+- **A root that is deleted, foreign, or made up fails the whole batch** with
+  404. Delivering N-1 of N is the kind of success nobody checks.
+- Duplicate ids collapse rather than erroring (unlike the other batch routes) —
+  a repeat comes from the same selection that produces the nesting case, and the
+  two cannot be told apart.
+
+The single `/{view_id}/transfer` remains, and the MCP server uses it.
 
 ## Page tree
 
