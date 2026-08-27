@@ -3837,6 +3837,37 @@ pub struct TransferRequest {
   dry_run: bool,
 }
 
+/// `POST /api/workspaces/{workspace_id}/views/batch-transfer` — same operation,
+/// N roots, ONE transaction.
+///
+/// This exists because the alternative was N sequential single-view transfers,
+/// and that is not the same operation performed more times: a failure part-way
+/// through leaves some of the selection moved and the rest not, with no record
+/// of where it stopped. Moving five pages is one thing the user asked for, so it
+/// either happens or it does not (user, 2026-08-27).
+#[derive(Debug, Deserialize)]
+pub struct BatchTransferRequest {
+  dest_workspace_id: Uuid,
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  #[serde(default)]
+  remove_source: bool,
+  #[serde(default)]
+  dry_run: bool,
+  /// The selected roots, in the order the caller selected them. A root nested
+  /// inside another is dropped rather than refused (see [`independent_roots`]).
+  view_ids: Vec<Uuid>,
+}
+
+/// What both transfer routes reduce to: N roots going to one destination.
+struct TransferPlan {
+  roots: Vec<Uuid>,
+  dest_workspace_id: Uuid,
+  parent_view_id: Option<Uuid>,
+  remove_source: bool,
+  dry_run: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DanglingLink {
   /// Name of the moved document whose link now dangles.
@@ -3847,7 +3878,11 @@ pub struct DanglingLink {
 
 #[derive(Debug, Serialize)]
 pub struct TransferResponse {
+  /// The first root's new id. Kept for the single-view route, whose callers
+  /// (Dart client, CLI, MCP) read exactly this field.
   new_root_view_id: Option<Uuid>,
+  /// Every root's new id, in the order the roots were given. Empty on a dry run.
+  new_root_view_ids: Vec<Uuid>,
   documents: usize,
   folders: usize,
   images: usize,
@@ -3866,6 +3901,88 @@ struct TransferRow {
   position: String,
 }
 
+/// The roots of a batch transfer, with anything already inside another root
+/// dropped.
+///
+/// A multi-select can hold a folder AND a page inside it — nothing stops the
+/// user selecting both, and from the sidebar it looks entirely reasonable.
+/// Transferring both would copy that page TWICE: once as part of the folder's
+/// subtree, once on its own. The destination would show two of it, and on a move
+/// the second copy's source is already soft-deleted by the first.
+///
+/// [ancestor_pairs] is `(root, one of its ancestors)`, so a root is redundant
+/// exactly when one of its ancestors is also being transferred. Kept as pairs
+/// rather than a map so the rule is a list operation and the test can state the
+/// tree literally.
+///
+/// Input order is preserved: it is the order the user selected in, and the
+/// destination's sibling order follows it.
+fn independent_roots(roots: &[Uuid], ancestor_pairs: &[(Uuid, Uuid)]) -> Vec<Uuid> {
+  let wanted: std::collections::HashSet<Uuid> = roots.iter().copied().collect();
+  let mut kept = Vec::new();
+  let mut seen = std::collections::HashSet::new();
+  for &root in roots {
+    // The same id twice is not an error worth refusing over — it is a click
+    // that landed twice — but it must not become two copies either.
+    if !seen.insert(root) {
+      continue;
+    }
+    let nested = ancestor_pairs
+      .iter()
+      .any(|&(child, ancestor)| child == root && wanted.contains(&ancestor));
+    if !nested {
+      kept.push(root);
+    }
+  }
+  kept
+}
+
+/// `(root, ancestor)` for every live ancestor of every root, within
+/// [workspace_id] — the input [`independent_roots`] needs.
+///
+/// Walks UP rather than down: a batch's roots are few and shallow, while their
+/// subtrees can be the whole workspace. Enumerating downward to answer "is one
+/// of these inside another" would read every page to decide something about a
+/// handful of them.
+///
+/// Split out of the handler so a DB test can reach it — the handler needs auth
+/// headers, which a database-level test has no way to construct. Same reason
+/// `empty_workspace_trash` and `purge_views_batch` live outside theirs.
+///
+/// Scoped to live rows in this workspace: an id the caller cannot actually
+/// transfer contributes no pairs, is therefore kept as "independent", and is
+/// then rejected by the caller's membership check with a real error — rather
+/// than quietly disqualifying one of its siblings.
+async fn ancestor_pairs_of_roots(
+  db: &PgPool,
+  workspace_id: Uuid,
+  roots: &[Uuid],
+) -> ApiResult<Vec<(Uuid, Uuid)>> {
+  if roots.is_empty() {
+    return Ok(Vec::new());
+  }
+  Ok(
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+      r#"
+        WITH RECURSIVE up AS (
+          SELECT id AS root, parent_view_id AS ancestor
+          FROM views
+          WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+          UNION ALL
+          SELECT u.root, v.parent_view_id
+          FROM up u JOIN views v ON v.id = u.ancestor
+          WHERE v.is_deleted = false
+        )
+        SELECT root, ancestor FROM up WHERE ancestor IS NOT NULL
+      "#,
+    )
+    .bind(roots)
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await?,
+  )
+}
+
 /// `POST /api/workspaces/{workspace_id}/views/{view_id}/transfer`
 pub async fn transfer_view(
   State(state): State<AppState>,
@@ -3874,6 +3991,79 @@ pub async fn transfer_view(
   Json(request): Json<TransferRequest>,
 ) -> ApiResult<Json<TransferResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
+  transfer_roots(
+    &state,
+    user_id,
+    src_workspace_id,
+    TransferPlan {
+      roots: vec![view_id],
+      dest_workspace_id: request.dest_workspace_id,
+      parent_view_id: request.parent_view_id,
+      remove_source: request.remove_source,
+      dry_run: request.dry_run,
+    },
+  )
+  .await
+  .map(Json)
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-transfer`
+pub async fn batch_transfer_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(src_workspace_id): Path<Uuid>,
+  Json(request): Json<BatchTransferRequest>,
+) -> ApiResult<Json<TransferResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  // Same ceiling as the other batch routes, and for the same reason — except
+  // here it also bounds how long ONE transaction holds its locks.
+  //
+  // Deliberately NOT `check_batch_ids`: that rejects a repeated id, and a repeat
+  // here is a click that landed twice on a selection, which `independent_roots`
+  // already collapses along with the nesting case it cannot be separated from.
+  if request.view_ids.is_empty() {
+    return Err(ApiError::BadRequest("view_ids must not be empty".to_string()));
+  }
+  if request.view_ids.len() > MAX_BATCH_VIEWS {
+    return Err(ApiError::BadRequest(format!(
+      "at most {MAX_BATCH_VIEWS} view_ids per request, got {}",
+      request.view_ids.len()
+    )));
+  }
+  transfer_roots(
+    &state,
+    user_id,
+    src_workspace_id,
+    TransferPlan {
+      roots: request.view_ids,
+      dest_workspace_id: request.dest_workspace_id,
+      parent_view_id: request.parent_view_id,
+      remove_source: request.remove_source,
+      dry_run: request.dry_run,
+    },
+  )
+  .await
+  .map(Json)
+}
+
+/// Copy N subtrees into another workspace, optionally soft-deleting the sources.
+///
+/// One root or twenty is the same code path — the phases below were already a
+/// loop over rows, and `topo_order_subtree` already anchors every row whose
+/// parent is outside the set, so a forest needs no special case.
+///
+/// What "atomic" does and does not mean here, stated plainly because the gap is
+/// real: phase 4 is ONE transaction, so the destination tree and the source
+/// soft-delete either both land or neither does — no half-moved selection. The
+/// blob copies in phase 3 are deliberately outside it (see the phase comment),
+/// so a failure after them can leave orphan BYTES in the destination, which its
+/// GC reclaims. That is the same guarantee a single transfer has always had.
+async fn transfer_roots(
+  state: &AppState,
+  user_id: Uuid,
+  src_workspace_id: Uuid,
+  request: TransferPlan,
+) -> ApiResult<TransferResponse> {
   let dest_workspace_id = request.dest_workspace_id;
   if dest_workspace_id == src_workspace_id {
     return Err(ApiError::BadRequest(
@@ -3883,20 +4073,27 @@ pub async fn transfer_view(
   // Editor in BOTH: to remove from the source and to create in the destination.
   ensure_workspace_editor(&state.db, src_workspace_id, user_id).await?;
   ensure_workspace_editor(&state.db, dest_workspace_id, user_id).await?;
-  ensure_view_in_workspace(&state.db, src_workspace_id, view_id).await?;
 
   // A destination parent, if given, must be a live folder in the destination.
   if let Some(parent) = request.parent_view_id {
     ensure_parent_accepts_children(&state.db, dest_workspace_id, parent).await?;
   }
 
-  // 1. Enumerate the subtree (live rows only).
+  // 0. Drop roots that sit inside another root, BEFORE enumerating anything —
+  //    otherwise the `= ANY` walk below visits the overlap twice and the
+  //    destination gets two copies of it.
+  let ancestor_pairs = ancestor_pairs_of_roots(&state.db, src_workspace_id, &request.roots).await?;
+  let roots = independent_roots(&request.roots, &ancestor_pairs);
+  let root_ids: std::collections::HashSet<Uuid> = roots.iter().copied().collect();
+
+  // 1. Enumerate the subtrees (live rows only). Disjoint by construction after
+  //    step 0, so no row can appear twice.
   let subtree = sqlx::query_as::<_, TransferRow>(
     r#"
       WITH RECURSIVE subtree AS (
         SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
         FROM views
-        WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+        WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
         UNION ALL
         SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
@@ -3905,14 +4102,26 @@ pub async fn transfer_view(
       SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
     "#,
   )
-  .bind(view_id)
+  .bind(&roots)
   .bind(src_workspace_id)
   .fetch_all(&state.db)
   .await?;
-  if subtree.is_empty() {
+  let subtree_view_ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
+
+  // A root that produced no row is deleted, or in another workspace, or made up.
+  // Refuse the whole batch rather than transferring the rest: the caller asked
+  // for these N, and silently delivering N-1 is the kind of success nobody
+  // checks. This also replaces the single route's `ensure_view_in_workspace`.
+  if let Some(&missing) = roots.iter().find(|r| !subtree_view_ids.contains(r)) {
+    tracing::debug!(%missing, "transfer: root not live in the source workspace");
     return Err(ApiError::NotFound);
   }
-  let subtree_view_ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
+
+  // The whole batch counts as "staying together" for the dangling-link report:
+  // a link from one selected page to another is not breakage, it is a link that
+  // follows. Before the batch endpoint existed this had to be declared by the
+  // caller (`also_moving`), because each request knew only its own subtree.
+  let moving_view_ids = &subtree_view_ids;
 
   // 2. Pre-scan documents: referenced file_ids + cross-workspace dangling links.
   let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
@@ -3941,7 +4150,9 @@ pub async fn transfer_view(
       }
       for target in page_link_targets(&block.data) {
         if let Ok(tid) = Uuid::parse_str(&target) {
-          if !subtree_view_ids.contains(&tid) {
+          // `moving_view_ids`, not `subtree_view_ids`: a link into another root
+          // of the same batch is not breakage, it is a link that follows.
+          if !moving_view_ids.contains(&tid) {
             dangling_links.push(DanglingLink {
               document: row.name.clone(),
               target_view_id: tid,
@@ -3955,15 +4166,16 @@ pub async fn transfer_view(
   let images = referenced_files.len();
 
   if request.dry_run {
-    return Ok(Json(TransferResponse {
+    return Ok(TransferResponse {
       new_root_view_id: None,
+      new_root_view_ids: Vec::new(),
       documents,
       folders,
       images,
       dangling_links,
       removed_source: false,
       dry_run: true,
-    }));
+    });
   }
 
   // 3. Copy blobs into the destination BEFORE the transaction: content-addressed
@@ -4035,7 +4247,9 @@ pub async fn transfer_view(
   let mut tx = state.db.begin().await?;
   for row in &ordered {
     let new_view_id = view_map[&row.id];
-    let dest_parent = if row.id == view_id {
+    // Every root lands directly under the chosen destination parent; everything
+    // below follows its own (already remapped) parent.
+    let dest_parent = if root_ids.contains(&row.id) {
       request.parent_view_id
     } else {
       row.parent_view_id.and_then(|p| view_map.get(&p).copied())
@@ -4108,10 +4322,12 @@ pub async fn transfer_view(
   }
 
   if request.remove_source {
+    // Inside the SAME transaction as the destination tree above: that is what
+    // makes a move a move rather than a copy followed by a hopeful delete.
     sqlx::query(
       r#"
         WITH RECURSIVE subtree AS (
-          SELECT id FROM views WHERE id = $1 AND workspace_id = $2
+          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
           UNION ALL
           SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
         )
@@ -4119,7 +4335,7 @@ pub async fn transfer_view(
         WHERE id IN (SELECT id FROM subtree)
       "#,
     )
-    .bind(view_id)
+    .bind(&roots)
     .bind(src_workspace_id)
     .execute(&mut *tx)
     .await?;
@@ -4127,15 +4343,17 @@ pub async fn transfer_view(
 
   tx.commit().await?;
 
-  Ok(Json(TransferResponse {
-    new_root_view_id: Some(view_map[&view_id]),
+  let new_root_view_ids: Vec<Uuid> = roots.iter().map(|r| view_map[r]).collect();
+  Ok(TransferResponse {
+    new_root_view_id: new_root_view_ids.first().copied(),
+    new_root_view_ids,
     documents,
     folders,
     images,
     dangling_links,
     removed_source: request.remove_source,
     dry_run: false,
-  }))
+  })
 }
 
 // ── Clone (duplicate a view within the same workspace) ───────────────────────
@@ -6364,6 +6582,171 @@ mod tests {
         .await
         .unwrap();
       assert_eq!((live_views, live_docs), (1, 1), "a live page survived intact");
+    }
+
+    /// Selecting a folder AND a page inside it must not transfer that page
+    /// twice.
+    ///
+    /// Nothing stops the selection holding both, and from the sidebar it looks
+    /// perfectly reasonable. Without this the destination gets two copies —
+    /// and on a MOVE the second copy's source was already soft-deleted by the
+    /// first, so the failure is not symmetric: one of the two is a copy of
+    /// something that no longer exists.
+    #[test]
+    fn a_root_inside_another_root_is_dropped() {
+      let folder = Uuid::new_v4();
+      let inside = Uuid::new_v4();
+      let elsewhere = Uuid::new_v4();
+      // `inside` hangs off `folder`; `elsewhere` is unrelated.
+      let pairs = [(inside, folder)];
+
+      assert_eq!(
+        independent_roots(&[folder, inside, elsewhere], &pairs),
+        vec![folder, elsewhere],
+      );
+    }
+
+    /// Order is the user's selection order, and the destination's sibling order
+    /// follows it — so the filter must not reshuffle what it keeps.
+    #[test]
+    fn the_kept_roots_stay_in_the_order_they_were_given() {
+      let a = Uuid::new_v4();
+      let b = Uuid::new_v4();
+      let c = Uuid::new_v4();
+      assert_eq!(independent_roots(&[c, a, b], &[]), vec![c, a, b]);
+    }
+
+    /// A deeper nesting still counts: the ancestor does not have to be the
+    /// direct parent.
+    #[test]
+    fn a_grandchild_is_dropped_too() {
+      let top = Uuid::new_v4();
+      let mid = Uuid::new_v4();
+      let leaf = Uuid::new_v4();
+      let pairs = [(mid, top), (leaf, mid), (leaf, top)];
+      assert_eq!(independent_roots(&[top, leaf], &pairs), vec![top]);
+    }
+
+    /// An ancestor that is NOT part of this batch does not disqualify anything.
+    #[test]
+    fn an_ancestor_nobody_selected_is_irrelevant() {
+      let unselected_parent = Uuid::new_v4();
+      let page = Uuid::new_v4();
+      assert_eq!(
+        independent_roots(&[page], &[(page, unselected_parent)]),
+        vec![page],
+      );
+    }
+
+    /// The same id twice is a double click, not an error — but it must not
+    /// become two copies.
+    #[test]
+    fn a_duplicate_id_is_collapsed_rather_than_refused() {
+      let a = Uuid::new_v4();
+      assert_eq!(independent_roots(&[a, a], &[]), vec![a]);
+    }
+
+    /// Seed `外层 / 内层 / 页` and hand back the three ids, top-down.
+    async fn seed_nested_folders(db: &PgPool) -> (Uuid, Uuid, Uuid, Uuid) {
+      let (ws, user) = seed_workspace(db).await;
+      let outer = Uuid::new_v4();
+      let inner = Uuid::new_v4();
+      for (id, parent, name) in [(outer, None, "外层"), (inner, Some(outer), "内层")] {
+        sqlx::query(
+          "INSERT INTO views(id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by) \
+           VALUES($1,$2,$3,$1,'folder',$4,'a',$5)",
+        )
+        .bind(id)
+        .bind(ws)
+        .bind(parent)
+        .bind(name)
+        .bind(user)
+        .execute(db)
+        .await
+        .unwrap();
+      }
+      let (page, _) = seed_document(db, ws, user, "页", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(inner)
+        .bind(page)
+        .execute(db)
+        .await
+        .unwrap();
+      (ws, outer, inner, page)
+    }
+
+    /// The walk must reach past the DIRECT parent, all the way up.
+    ///
+    /// This is what makes `independent_roots` able to see that a page selected
+    /// two levels down is already inside a selected folder. Stopping at the
+    /// direct parent would look right in the common case and transfer the deep
+    /// one twice.
+    #[tokio::test]
+    async fn ancestor_pairs_walk_the_whole_way_up() {
+      let Some(db) = pool().await else { return };
+      let (ws, outer, inner, page) = seed_nested_folders(&db).await;
+
+      let pairs = ancestor_pairs_of_roots(&db, ws, &[page]).await.unwrap();
+
+      assert!(pairs.contains(&(page, inner)), "direct parent: {pairs:?}");
+      assert!(
+        pairs.contains(&(page, outer)),
+        "the grandparent is the one a shallow walk would miss: {pairs:?}"
+      );
+    }
+
+    /// The two halves together, which is the only combination that ships.
+    #[tokio::test]
+    async fn selecting_a_folder_and_a_page_deep_inside_it_transfers_the_folder_only() {
+      let Some(db) = pool().await else { return };
+      let (ws, outer, _inner, page) = seed_nested_folders(&db).await;
+
+      let pairs = ancestor_pairs_of_roots(&db, ws, &[outer, page]).await.unwrap();
+
+      assert_eq!(
+        independent_roots(&[outer, page], &pairs),
+        vec![outer],
+        "the page rides along inside the folder; transferring it too would duplicate it"
+      );
+    }
+
+    /// An id the caller cannot actually transfer contributes no pairs.
+    ///
+    /// It must not be silently dropped here — it is kept as a root and then
+    /// rejected by the handler's membership check, so the caller gets a 404
+    /// instead of a batch that quietly did less than it was asked.
+    #[tokio::test]
+    async fn an_untransferable_root_yields_no_pairs() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (other_ws, other_user) = seed_workspace(&db).await;
+      let (trashed, _) = seed_document(&db, ws, user, "已删", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(trashed)
+        .execute(&db)
+        .await
+        .unwrap();
+      let (foreign, _) =
+        seed_document(&db, other_ws, other_user, "别处的", serde_json::json!([])).await;
+
+      let pairs = ancestor_pairs_of_roots(&db, ws, &[trashed, foreign])
+        .await
+        .unwrap();
+
+      assert!(pairs.is_empty(), "{pairs:?}");
+      assert_eq!(
+        independent_roots(&[trashed, foreign], &pairs),
+        vec![trashed, foreign],
+        "kept, so the handler can refuse them by name rather than skipping them"
+      );
+    }
+
+    /// Nothing asked for, nothing queried.
+    #[tokio::test]
+    async fn no_roots_means_no_query() {
+      let Some(db) = pool().await else { return };
+      let (ws, _) = seed_workspace(&db).await;
+      assert!(ancestor_pairs_of_roots(&db, ws, &[]).await.unwrap().is_empty());
     }
 
     /// A trashed FOLDER carries its children, and the children's documents go

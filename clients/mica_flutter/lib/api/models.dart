@@ -772,6 +772,7 @@ class DocVersion {
 class TransferReport {
   const TransferReport({
     required this.newRootViewId,
+    required this.newRootViewIds,
     required this.documents,
     required this.folders,
     required this.images,
@@ -790,6 +791,9 @@ class TransferReport {
         .toList();
     return TransferReport(
       newRootViewId: json['new_root_view_id'] as String?,
+      newRootViewIds: (json['new_root_view_ids'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
       documents: (json['documents'] as num?)?.toInt() ?? 0,
       folders: (json['folders'] as num?)?.toInt() ?? 0,
       images: (json['images'] as num?)?.toInt() ?? 0,
@@ -799,7 +803,14 @@ class TransferReport {
     );
   }
 
+  /// The first root's new id. For a single transfer this is THE result; for a
+  /// batch it is just the first, and [newRootViewIds] is what the caller wants.
   final String? newRootViewId;
+
+  /// Every root's new id, in the order they were sent. Empty on a dry run —
+  /// nothing was created, so there is nothing to point at.
+  final List<String> newRootViewIds;
+
   final int documents;
   final int folders;
   final int images;

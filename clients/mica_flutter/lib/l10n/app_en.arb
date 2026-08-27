@@ -65,6 +65,56 @@
   "sidebarMoreActions": "More actions",
   "rowSetIcon": "Set icon",
   "rowOpenInNewTab": "Open in new tab",
+  "batchDelete": "Delete {count} items",
+  "@batchDelete": {
+    "description": "Sidebar context menu on a Ctrl/Shift multi-selection. Never shown for one item — a single row keeps its own menu — so there is no =1 case to write.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "batchTransferMove": "Move {count} items to workspace…",
+  "@batchTransferMove": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "batchTransferCopy": "Copy {count} items to workspace…",
+  "@batchTransferCopy": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "batchDeleteConfirm": "Move {count} items to the recycle bin? Folders take their contents with them.",
+  "@batchDeleteConfirm": {
+    "description": "Confirmation body for a batch delete. Names the folder cascade because the count says 'items', and a folder holding fifty pages counts as one of them.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "shortcutsTreeToggleSelect": "Sidebar: add a row to the selection, or take it out",
+  "shortcutsTreeRangeSelect": "Sidebar: select a run of rows under the same parent",
+  "transferPickFolder": "Folder (optional)",
+  "@transferPickFolder": {
+    "description": "Second dropdown in the transfer dialog: where inside the chosen workspace. Marked optional because the root is a perfectly good answer and is the default."
+  },
+  "transferDestinationRoot": "Workspace root",
+  "batchDragLabel": "{count} items",
+  "@batchDragLabel": {
+    "description": "Caption on the merged drag chip while dragging a multi-selection, shown under the top row's name.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "searchRecentLabel": "Recently edited",
   "searchAllWorkspaces": "Search all workspaces (slower)",
   "searchAllUnsupportedTitle": "This server has no cross-workspace search yet",

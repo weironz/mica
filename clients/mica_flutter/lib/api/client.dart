@@ -653,6 +653,64 @@ class ApiClient {
     return TransferReport.fromJson(response);
   }
 
+  /// Move/copy a whole SELECTION into another workspace in one transaction.
+  ///
+  /// Not a loop over [transferView]: N sequential transfers leave a half-moved
+  /// selection when one of them fails, and nothing records where it stopped.
+  /// The server takes the set and either lands all of it or none of it.
+  ///
+  /// A root nested inside another selected root is dropped server-side rather
+  /// than refused — selecting a folder and a page inside it is an ordinary
+  /// thing to do with Ctrl-click, and transferring both would duplicate it.
+  Future<TransferReport> batchTransferViews({
+    required String token,
+    required String workspaceId,
+    required List<String> viewIds,
+    required String destWorkspaceId,
+    String? parentViewId,
+    required bool removeSource,
+    required bool dryRun,
+  }) async {
+    final response = await _post(
+      '/api/workspaces/$workspaceId/views/batch-transfer',
+      {
+        'view_ids': viewIds,
+        'dest_workspace_id': destWorkspaceId,
+        'parent_view_id': parentViewId,
+        'remove_source': removeSource,
+        'dry_run': dryRun,
+      },
+      token: token,
+    );
+    return TransferReport.fromJson(response);
+  }
+
+  /// Trash a selection (each id with its subtree) in ONE statement.
+  ///
+  /// [affected] counts every row touched — descendants included — so it is
+  /// normally larger than `viewIds.length`. [skipped] lists ids the statement
+  /// did not reach (already trashed, or gone). Reporting the requested count as
+  /// the result would let a partial batch read as a full one.
+  ///
+  /// Unlike [deleteView] this does NOT return the new tree: the caller already
+  /// knows which ids it asked to remove, and refetching the whole tree to learn
+  /// what it just did is the round trip the batch endpoint exists to avoid.
+  Future<({int affected, List<String> skipped})> batchTrashViews({
+    required String token,
+    required String workspaceId,
+    required List<String> viewIds,
+  }) async {
+    final response = await _post('/api/workspaces/$workspaceId/views/batch-trash', {
+      'view_ids': viewIds,
+    }, token: token);
+    return (
+      affected: (response['affected'] as num?)?.toInt() ?? 0,
+      skipped: (response['skipped'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+    );
+  }
+
   /// Duplicate [viewId] within its own workspace. [name] is the caller's
   /// locale-aware copy name (e.g. "X 副本"); the server dedupes it against
   /// siblings. [parentViewId] null = beside the original (its own parent).

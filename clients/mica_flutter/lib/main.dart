@@ -47,6 +47,7 @@ import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/page_tree_state.dart';
+import 'ui/tree_selection.dart';
 import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
@@ -3974,6 +3975,45 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Trash a selection (cloud) in ONE request, then reload the tree.
+  ///
+  /// Reloads rather than reading a tree back from the response: `batch-trash`
+  /// reports what it TOUCHED (ids + a count), which is the honest thing for it
+  /// to report and not a page tree. One extra GET for an operation the user
+  /// invoked deliberately is a fair trade for not inventing a second shape of
+  /// truth about the tree.
+  Future<void> _deleteViews(List<String> viewIds) {
+    return _run(() async {
+      final session = _requireSession();
+      final workspace = _requireWorkspace();
+      final result = await _api.batchTrashViews(
+        token: session.accessToken,
+        workspaceId: workspace.id,
+        viewIds: viewIds,
+      );
+      await _loadSelectedWorkspaceViews();
+      if (!mounted) return;
+      setState(() {
+        // The open page may have been anywhere inside a trashed subtree, so the
+        // reloaded tree — not the requested ids — decides whether it survived.
+        final open = _selectedView?.id;
+        final stillThere = (_viewsByWorkspace[workspace.id] ?? const [])
+            .any((v) => v.id == open);
+        if (open != null && !stillThere) {
+          _selectedView = null;
+          _selectedBootstrap = null;
+          _selectedMarkdown = null;
+        }
+      });
+      // `skipped` is the server saying it did LESS than asked (already trashed,
+      // or gone). Silent here on purpose: both causes mean the row is already
+      // where the user wanted it, and the reloaded tree shows exactly that.
+      if (result.skipped.isNotEmpty) {
+        debugPrint('batch-trash skipped ${result.skipped.length} ids');
+      }
+    });
+  }
+
   /// Duplicate [view] in place (cloud). The server copies the subtree, shares
   /// blobs, and dedupes the name; we just reload the tree to show the copy.
   Future<void> _cloneView(DocumentView view) {
@@ -5246,6 +5286,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// Trash a selection (local). The Rust store has no batch primitive and needs
+  /// none — this is an in-process call per root, not a round trip per root.
+  Future<void> _localDeleteViews(List<String> viewIds) async {
+    final trashed = <String>{};
+    for (final id in viewIds) {
+      trashed.addAll(_local.trashViewSubtree(id));
+    }
+    if (!mounted) return;
+    setState(() {
+      _reloadLocalViews();
+      if (_localSelectedView != null &&
+          trashed.contains(_localSelectedView!.id)) {
+        _localSelectedView = null;
+        _localBootstrap = null;
+      }
+    });
+  }
+
   /// Duplicate [view] in place (local). Reuses the store's loadDoc→saveDoc copy
   /// primitive; blobs stay shared in the on-device CAS.
   Future<void> _localCloneView(DocumentView view) async {
@@ -5617,9 +5675,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   ///
   /// The dialog runs its own dry-run preview and the final transfer; it pops
   /// with the report + chosen destination name so we can refresh + confirm.
-  Future<void> _openTransfer(DocumentView view, bool copy) async {
+  Future<void> _openTransfer(List<DocumentView> views, bool copy) async {
     final source = _selectedWorkspace;
-    if (source == null || _session == null) return;
+    if (source == null || _session == null || views.isEmpty) return;
     // Destinations: every cloud workspace except the source (you can't transfer
     // a page into the workspace it already lives in).
     final destinations = _workspaces
@@ -5631,16 +5689,40 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       builder: (context) => _TransferDialog(
         copy: copy,
         destinations: destinations,
-        // The dialog supplies (destWorkspaceId, dryRun); we bind source + view
-        // + move/copy here. v1 always targets the destination ROOT
-        // (parentViewId: null) — no destination-folder picker yet.
-        onTransfer: ({required destWorkspaceId, required dryRun}) =>
-            _api.transferView(
+        itemCount: views.length,
+        // Folders of whichever destination the dialog is showing, flattened
+        // depth-first so the dropdown reads like the sidebar does.
+        onLoadFolders: (destWorkspaceId) async => flattenedFolderOptions([
+          for (final v in await _api.listViews(
+            _requireSession().accessToken,
+            destWorkspaceId,
+          ))
+            (
+              id: v.id,
+              parentId: v.parentViewId,
+              name: v.name,
+              position: v.position,
+              isFolder: v.objectType == 'folder',
+            ),
+        ]),
+        // The dialog supplies (destWorkspaceId, parentViewId, dryRun); we bind
+        // source + the selected roots + move/copy here.
+        //
+        // Always the BATCH endpoint, even for one row: it is the same server
+        // core, and keeping a second client path for the single case is how the
+        // two drift until only one of them has the fix. One row is a batch of
+        // one, and the server's own single route stays for the MCP server.
+        onTransfer:
+            ({
+              required destWorkspaceId,
+              required parentViewId,
+              required dryRun,
+            }) => _api.batchTransferViews(
               token: _requireSession().accessToken,
               workspaceId: source.id,
-              viewId: view.id,
+              viewIds: [for (final v in views) v.id],
               destWorkspaceId: destWorkspaceId,
-              parentViewId: null,
+              parentViewId: parentViewId,
               removeSource: !copy,
               dryRun: dryRun,
             ),
@@ -6830,6 +6912,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               ),
             ),
       onDeleteView: local ? _localDeleteView : _deleteView,
+      onDeleteViews: local ? _localDeleteViews : _deleteViews,
       onCloneView: local ? _localCloneView : _cloneView,
       onUpdateRootBlockText: local
           ? _localUpdateRootBlockText
@@ -7770,14 +7853,13 @@ int reparentLevelFor({
 /// is already at the root moves it to the end instead of listing it twice.
 List<DocumentView> rootDropOrder(
   List<DocumentView> views,
-  DocumentView dragged,
+  List<DocumentView> dragged,
 ) {
+  final moving = {for (final d in dragged) d.id};
   final roots =
-      views
-          .where((v) => v.parentViewId == null && v.id != dragged.id)
-          .toList()
+      views.where((v) => v.parentViewId == null && !moving.contains(v.id)).toList()
         ..sort((a, b) => a.position.compareTo(b.position));
-  return [...roots, dragged];
+  return [...roots, ...dragged];
 }
 
 /// Scroll offset that centres row [index] of the sidebar tree in the viewport.
@@ -7876,6 +7958,7 @@ class WorkspaceView extends StatefulWidget {
     this.overviewPane,
     this.onOpenHome,
     required this.onDeleteView,
+    required this.onDeleteViews,
     required this.onCloneView,
     required this.onUpdateRootBlockText,
     required this.onAddBlock,
@@ -8161,6 +8244,11 @@ class WorkspaceView extends StatefulWidget {
   final VoidCallback? onOpenHome;
   final Future<void> Function(DocumentView view) onDeleteView;
 
+  /// Trash a whole selection. Separate from [onDeleteView] because the cloud
+  /// path is ONE request rather than N, and because the per-view callback
+  /// returns the refreshed tree while this one refreshes it itself.
+  final Future<void> Function(List<String> viewIds) onDeleteViews;
+
   /// Duplicate a view's subtree in place (cloud or local). Always provided —
   /// clone works in both, unlike onTransfer.
   final Future<void> Function(DocumentView view) onCloneView;
@@ -8346,7 +8434,7 @@ class WorkspaceView extends StatefulWidget {
   /// Move (`copy: false`) or copy (`copy: true`) a sidebar row's subtree into
   /// another cloud workspace. Null for local workspaces — they have no
   /// cross-workspace transfer, so the row menu drops both entries.
-  final Future<void> Function(DocumentView view, bool copy)? onTransfer;
+  final Future<void> Function(List<DocumentView> views, bool copy)? onTransfer;
 
   /// Upload a LOCAL workspace row to the cloud (P3f §6.1). Null on web, which
   /// hides the row action.
@@ -8470,6 +8558,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // row tap / opened doc turns this back off. Distinct from `_focusedNavId ==
   // null`, which merely falls back to the open doc.
   bool _rootFocused = false;
+  // Ctrl/Shift multi-selection. EMPTY is the ordinary state — this is a second,
+  // explicit notion of "chosen", deliberately separate from `_focusedNavId`
+  // (which is "where new pages get created" and is never empty for long).
+  // Conflating them would make every ordinary click a one-item batch.
+  //
+  // A single id in here still is not a batch: the batch menu and the multi-drag
+  // both go through `actsOnWholeSelection`, which requires two or more.
+  //
+  // A [TreeSelection] rather than a raw Set here, so the accumulation rules sit
+  // somewhere a test can reach — see its doc comment for what went wrong when
+  // they lived inline in this State.
+  final TreeSelection _selection = TreeSelection();
   // True only while a page is being dragged in the tree. The drop zones overlay
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
@@ -8480,6 +8580,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // owns its own controller; the key gets its viewport RenderBox to measure how
   // close the pointer is to an edge.
   final ScrollController _treeScroll = ScrollController();
+
   // Pointer is over the navigation sidebar — reveals the tree's expand
   // toggles (AppFlowy-style: they live in their own slim column, opacity 0
   // at rest so the page icons keep one aligned column).
@@ -8878,6 +8979,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
       const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
+      // NO Esc binding for the sidebar selection, deliberately — see the note
+      // on the tree's build method. Three ways to bind it were tried and all
+      // three were dead on arrival for the same reason.
       // Ctrl/Cmd+F → in-page find within the open document; Ctrl/Cmd+Shift+F →
       // the workspace-wide search (what plain Ctrl+F used to do).
       const SingleActivator(LogicalKeyboardKey.keyF, control: true):
@@ -9510,10 +9614,46 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // reach this. Opaque so the empty space below the last row is hittable.
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _focusRoot,
+      onTap: () {
+        _clearTreeSelection();
+        _focusRoot();
+      },
+      // There is NO Esc-clears-the-selection shortcut, and that is a decision
+      // rather than an omission. Three bindings were built and all three were
+      // dead — measured in the running app, not guessed:
+      //
+      //   1. A local `Shortcuts`/`Actions` pair here. Flutter dispatches keys
+      //      from the FOCUSED node upward, and the sidebar had no focus.
+      //   2. Same, plus a FocusNode requested on the selecting click. A probe
+      //      on that node logged ZERO key events — not even the Ctrl of the
+      //      click that had just focused it.
+      //   3. `_appShortcuts` (where Ctrl+N lives and works). A probe inside the
+      //      binding never fired either.
+      //
+      // What (2) did reveal: 400ms after the click `primaryFocus` really was
+      // the sidebar, but by the time Esc was pressed focus had returned to the
+      // page route's own scope — an ANCESTOR of this whole shell. Dispatch from
+      // there goes straight up to WidgetsApp and never descends, so no shortcut
+      // registered anywhere inside the shell can see the key. Making Esc work
+      // means a global `HardwareKeyboard` handler, which fires while a dialog
+      // or an inline rename owns Esc too — worth doing only if asked for.
+      //
+      // The selection is dropped by clicking any row, or the blank area below
+      // the tree. Both are verified; a documented key that does nothing is
+      // worse than no key at all.
+      child: _buildTreeList(treeRows, canEdit, activeId),
+    );
+  }
+
+  Widget _buildTreeList(
+    List<({DocumentView view, int depth, bool hasChildren})> treeRows,
+    bool canEdit,
+    String? activeId,
+  ) {
+    return
       // The auto-scroll region wraps the list EXACTLY, so its box is the
       // viewport the edge zones are measured against.
-      child: DragAutoScrollRegion(
+      DragAutoScrollRegion(
         enabled: _draggingTree,
         controller: _treeScroll,
         child: CustomScrollView(
@@ -9537,6 +9677,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             revealToggle: _navHovered,
             isCollapsed: !_expandedViewIds.contains(item.view.id),
             isSelected: item.view.id == activeId,
+            isMultiSelected: _selection.contains(item.view.id),
+            // Read-only trees get no selection: nothing in the batch menu is
+            // something a viewer could do.
+            onSelectClick: canEdit
+                ? ({required extendRange}) =>
+                      _handleSelectClick(item.view, extendRange: extendRange)
+                : null,
+            onPlainTap: _clearTreeSelection,
+            batchActions: canEdit && _selection.actsOnWholeSelection(item.view.id)
+                ? () => _batchMenuItems(item.view)
+                : null,
             canEdit: canEdit,
             isRenaming: item.view.id == _renamingViewId,
             onToggle: () => _toggleViewExpand(item.view),
@@ -9560,10 +9711,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             // folders alike; the folder carries its subtree server-side.
             onTransferMove: widget.onTransfer == null
                 ? null
-                : () => widget.onTransfer!(item.view, false),
+                : () => widget.onTransfer!([item.view], false),
             onTransferCopy: widget.onTransfer == null
                 ? null
-                : () => widget.onTransfer!(item.view, true),
+                : () => widget.onTransfer!([item.view], true),
             onClone: () => widget.onCloneView(item.view),
             onRename: () => _promptRenameView(item.view),
             onSetIcon: widget.onSetViewIcon == null
@@ -9586,7 +9737,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               child: row,
             );
           }
-          return _draggableTreeRow(item.view, item.depth, nextDepth, row);
+          // `childWhenDragging` only fades the row under the pointer. The rest
+          // of the selection is travelling too, so it fades with it — otherwise
+          // four rows sit there looking like they stayed behind.
+          final travelling =
+              _draggingTree &&
+              _selection.contains(item.view.id) &&
+              _selection.length > 1;
+          return _draggableTreeRow(
+            item.view,
+            item.depth,
+            nextDepth,
+            travelling ? Opacity(opacity: 0.4, child: row) : row,
+          );
         }).toList(),
         ),
         ),
@@ -9615,8 +9778,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           ),
         ],
         ),
-      ),
-    );
+      );
   }
 
   /// "Move to the workspace root, at the end." Exists only during a drag.
@@ -9632,13 +9794,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Worth doing if picking a MIDDLE level turns out to be wanted too; the
   /// case actually reported is the root.
   Widget _rootDropZone() {
-    return DragTarget<DocumentView>(
+    return DragTarget<List<DocumentView>>(
       hitTestBehavior: HitTestBehavior.opaque,
       // A row already at the root, dropped here, is a reorder to the end —
       // a legitimate thing to want, so it is accepted rather than refused.
       onWillAcceptWithDetails: (_) => true,
-      onAcceptWithDetails: (details) =>
-          widget.onReorderViews(null, rootDropOrder(widget.views, details.data)),
+      onAcceptWithDetails: (details) {
+        _clearTreeSelection();
+        widget.onReorderViews(null, rootDropOrder(widget.views, details.data));
+      },
       builder: (context, candidate, rejected) {
         // No label any more. A caption explaining that this area means "root"
         // was a way of describing the model instead of making it operable —
@@ -9695,8 +9859,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Draggable<DocumentView>(
-        data: view,
+      child: Draggable<List<DocumentView>>(
+        // Grabbing a row inside a multi-selection drags the whole selection —
+        // the same rule the context menu uses, so what you get is what the
+        // highlight already showed you.
+        data: _rowsActedOnBy(view.id),
         dragAnchorStrategy: pointerDragAnchorStrategy,
         // No onDragUpdate: it is mounted-guarded, and auto-scrolling this very
         // list unmounts the row being dragged. DragAutoScrollRegion reads the
@@ -9705,32 +9872,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onDragEnd: (_) => _endTreeDrag(),
         onDraggableCanceled: (_, _) => _endTreeDrag(),
         onDragCompleted: _endTreeDrag,
-        feedback: Material(
-          elevation: 6,
-          borderRadius: BorderRadius.circular(6),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            constraints: const BoxConstraints(maxWidth: 260),
-            decoration: BoxDecoration(
-              color: MicaTheme.of(context).surface.overlay,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.description_outlined,
-                  size: 18,
-                  color: MicaTheme.of(context).accent.primary,
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(view.name, overflow: TextOverflow.ellipsis),
-                ),
-              ],
-            ),
-          ),
-        ),
+        feedback: _dragFeedback(_rowsActedOnBy(view.id)),
         childWhenDragging: Opacity(opacity: 0.4, child: row),
         child: Stack(
           children: [
@@ -9771,10 +9913,205 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
+  /// The chip that follows the pointer during a tree drag.
+  ///
+  /// One row: name and icon, as it always was. Several: the SAME chip with two
+  /// stacked cards peeking out behind it and a count underneath — a deck, not a
+  /// list. The alternative (render all N rows) was rejected on sight: five rows
+  /// is a panel that covers the drop indicator you are aiming with, and the
+  /// indicator is the only thing telling you where the drop lands.
+  ///
+  /// The count is what makes the deck honest, because the cards behind are a
+  /// fixed two whether you grabbed three rows or thirty.
+  Widget _dragFeedback(List<DocumentView> rows) {
+    final tokens = MicaTheme.of(context);
+    final lead = rows.isEmpty ? null : rows.first;
+    Widget card({double inset = 0, double opacity = 1, Widget? child}) =>
+        Padding(
+          padding: EdgeInsets.only(left: inset, top: inset),
+          child: Opacity(
+            opacity: opacity,
+            child: Material(
+              elevation: 6,
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                constraints: const BoxConstraints(maxWidth: 260, minWidth: 120),
+                decoration: BoxDecoration(
+                  color: tokens.surface.overlay,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: child ?? const SizedBox(height: 20),
+              ),
+            ),
+          ),
+        );
+
+    final top = card(
+      inset: rows.length > 1 ? 8 : 0,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            lead != null && lead.objectType == 'folder'
+                ? Icons.folder_outlined
+                : Icons.description_outlined,
+            size: 18,
+            color: tokens.accent.primary,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(lead?.name ?? '', overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
+    );
+    if (rows.length <= 1) return top;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Stack(
+          children: [
+            // Back to front, so the named card ends up on top.
+            card(opacity: 0.45),
+            card(inset: 4, opacity: 0.7),
+            top,
+          ],
+        ),
+        const SizedBox(height: 6),
+        Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: Text(
+              context.l10n.batchDragLabel(rows.length),
+              style: TextStyle(fontSize: 12, color: tokens.text.muted),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Ends the drag. The auto-scroll stops with it: `DragAutoScrollRegion` is
   /// driven by `_draggingTree`, so clearing the flag is what turns it off.
   void _endTreeDrag() {
     setState(() => _draggingTree = false);
+  }
+
+  // ── Ctrl/Shift multi-selection ─────────────────────────────────────────────
+
+  /// A Ctrl (toggle) or Shift (extend) click landed on [view].
+  void _handleSelectClick(DocumentView view, {required bool extendRange}) {
+    setState(() {
+      _selection.click(
+        view.id,
+        extendRange: extendRange,
+        // The tree AS DISPLAYED: a Shift range is only meaningful over rows the
+        // user can see. A collapsed folder's children are simply absent.
+        visibleRows: [
+          for (final row in _visibleDocumentTree())
+            (id: row.view.id, parentId: row.view.parentViewId),
+        ],
+      );
+    });
+  }
+
+  /// Drop the selection. Called by every ordinary click and by Esc.
+  ///
+  /// A no-op when there is nothing selected, so it can sit in the hot path of
+  /// every row tap without causing a rebuild per click.
+  void _clearTreeSelection() {
+    if (_selection.clear()) setState(() {});
+  }
+
+  /// The rows a gesture on [id] acts on: the whole selection when [id] is part
+  /// of a multi-selection, otherwise just [id]. Nested rows are dropped — see
+  /// [independentSelection].
+  ///
+  /// Returned in TREE order, not selection order, so a batch lands at the
+  /// destination looking the way it looked in the sidebar. (Selection order is
+  /// whatever sequence the user happened to Ctrl-click in, which nobody
+  /// remembers by the time they see the result.)
+  List<DocumentView> _rowsActedOnBy(String id) {
+    final byId = {for (final v in widget.views) v.id: v};
+    if (!_selection.actsOnWholeSelection(id)) {
+      final one = byId[id];
+      return one == null ? const [] : [one];
+    }
+    final inTreeOrder = [
+      for (final row in _visibleDocumentTree())
+        if (_selection.contains(row.view.id)) row.view.id,
+    ];
+    final kept = independentSelection(
+      inTreeOrder,
+      (child) => byId[child]?.parentViewId,
+    );
+    return [for (final k in kept) ?byId[k]];
+  }
+
+  /// The context menu shown when a right-click lands inside a multi-selection.
+  ///
+  /// Counts come from [_rowsActedOnBy], not from `_selection.length`:
+  /// selecting a folder and a page inside it is two highlighted rows but ONE
+  /// thing to move, and a menu that says 3 while doing 2 is the kind of lie
+  /// that only shows up after the deed.
+  List<PopupMenuEntry<VoidCallback>> _batchMenuItems(DocumentView row) {
+    final rows = _rowsActedOnBy(row.id);
+    final l10n = context.l10n;
+    final transfer = widget.onTransfer;
+    return [
+      if (transfer != null) ...[
+        PopupMenuItem<VoidCallback>(
+          value: () => transfer(rows, false),
+          child: _MenuRow(
+            icon: Icons.drive_file_move_outlined,
+            label: l10n.batchTransferMove(rows.length),
+          ),
+        ),
+        PopupMenuItem<VoidCallback>(
+          value: () => transfer(rows, true),
+          child: _MenuRow(
+            icon: Icons.copy_all_outlined,
+            label: l10n.batchTransferCopy(rows.length),
+          ),
+        ),
+        const PopupMenuDivider(),
+      ],
+      PopupMenuItem<VoidCallback>(
+        value: () => _deleteSelection(rows),
+        child: _MenuRow(
+          icon: Icons.delete_outline,
+          label: l10n.batchDelete(rows.length),
+          danger: true,
+        ),
+      ),
+    ];
+  }
+
+  /// Trash a whole selection after confirming, in ONE request.
+  ///
+  /// Confirmed even though the destination is the recycle bin: a per-row delete
+  /// is one row you are looking at, while this one can carry folders whose
+  /// contents are off screen — the count in the prompt is the only place those
+  /// are ever mentioned.
+  Future<void> _deleteSelection(List<DocumentView> rows) async {
+    if (rows.isEmpty) return;
+    final l10n = context.l10n;
+    final ok = await showDestructiveConfirm(
+      context,
+      title: l10n.batchDelete(rows.length),
+      body: l10n.batchDeleteConfirm(rows.length),
+      confirmLabel: l10n.batchDelete(rows.length),
+      cancelLabel: l10n.commonCancel,
+    );
+    if (!ok || !mounted) return;
+    _clearTreeSelection();
+    await widget.onDeleteViews([for (final r in rows) r.id]);
   }
 
   /// The level the active `after` drop would land at, or null when the pointer
@@ -9808,13 +10145,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // every pointer position past the last level and pinned the indicator at
     // the row's own depth — the level never moved, in either direction.
     return Builder(
-      builder: (slotContext) => DragTarget<DocumentView>(
+      builder: (slotContext) => DragTarget<List<DocumentView>>(
       // The whole zone must be droppable; DragTarget defaults to deferToChild,
       // which would limit the hit area to the thin indicator. These overlays
       // only exist during a drag, so opaque is safe (no taps to intercept).
       hitTestBehavior: HitTestBehavior.opaque,
+      // Refused if the target sits inside ANY of the dragged rows: dropping a
+      // batch into one of its own folders is the same impossibility as with
+      // one row, and only needs to be true of one of them to be true.
       onWillAcceptWithDetails: (details) =>
-          !_isSelfOrDescendant(target.id, details.data.id) &&
+          !details.data.any((d) => _isSelfOrDescendant(target.id, d.id)) &&
           _parentAllowsChildren(_dropParentId(target, mode)),
       // Only `after` re-parents, and only sideways. `details.offset` IS the
       // pointer here because the Draggable uses `pointerDragAnchorStrategy`;
@@ -9845,6 +10185,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             : _ancestorAtLevel(target, depth, level);
         setState(() => _dropLevel = null);
         _handleDrop(details.data, resolved, mode);
+        // The rows have landed somewhere new; keeping them highlighted would
+        // leave a selection describing where they used to be.
+        _clearTreeSelection();
       },
       builder: (context, candidate, rejected) {
         // `rejected` is how a DragTarget says "something is over me and I
@@ -9930,14 +10273,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   bool _parentAllowsChildren(String? parentId) =>
       canNestUnder(widget.views, parentId);
 
-  void _handleDrop(DocumentView dragged, DocumentView target, _DropMode mode) {
+  void _handleDrop(
+    List<DocumentView> dragged,
+    DocumentView target,
+    _DropMode mode,
+  ) {
+    if (dragged.isEmpty) return;
+    final moving = {for (final d in dragged) d.id};
     if (mode == _DropMode.into) {
       final children =
           widget.views
-              .where((v) => v.parentViewId == target.id && v.id != dragged.id)
+              .where((v) => v.parentViewId == target.id && !moving.contains(v.id))
               .toList()
             ..sort((a, b) => a.position.compareTo(b.position));
-      children.add(dragged);
+      children.addAll(dragged);
       setState(() => _expandForChildOf(target.id)); // reveal the drop target
       widget.onReorderViews(target.id, children);
       return;
@@ -9945,19 +10294,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
     final parentId = target.parentViewId;
     final siblings =
-        widget.views
-            .where((v) => v.parentViewId == parentId && v.id != dragged.id)
-            .toList()
+        widget.views.where((v) => v.parentViewId == parentId).toList()
           ..sort((a, b) => a.position.compareTo(b.position));
-    final targetIndex = siblings.indexWhere((v) => v.id == target.id);
-    if (targetIndex < 0) {
-      return;
-    }
-    siblings.insert(
-      mode == _DropMode.before ? targetIndex : targetIndex + 1,
-      dragged,
+    // The ordering itself is a tested pure function: getting "remove first,
+    // then read the index" the wrong way round puts a block one slot off,
+    // which is invisible for one row and obvious for five.
+    final order = siblingOrderAfterDrop(
+      siblings: [for (final s in siblings) s.id],
+      dragged: [for (final d in dragged) d.id],
+      targetId: target.id,
+      before: mode == _DropMode.before,
     );
-    widget.onReorderViews(parentId, siblings);
+    if (order == null) return;
+    final byId = {
+      for (final v in widget.views) v.id: v,
+      for (final d in dragged) d.id: d,
+    };
+    widget.onReorderViews(parentId, [for (final id in order) ?byId[id]]);
   }
 
   List<({DocumentView view, int depth, bool hasChildren})>
@@ -10024,6 +10377,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _expandedViewIds.remove(view.id);
       }
     });
+    _pruneSelectionToVisible();
+  }
+
+  /// Drop selected rows that are no longer on screen.
+  ///
+  /// Collapsing a folder hides its children, and a selection is only honest
+  /// while you can see what is in it: without this, "删除 5 项" would delete
+  /// three, because everything downstream reads the VISIBLE tree. Keeping the
+  /// hidden ones instead is worse — that is a batch acting on rows the user
+  /// folded away and stopped thinking about.
+  void _pruneSelectionToVisible() {
+    if (_selection.isEmpty) return;
+    final visible = {for (final row in _visibleDocumentTree()) row.view.id};
+    if (_selection.retainVisible(visible)) setState(() {});
   }
 
   /// `workspace/folder/.../page` for the open page — GitHub's "copy path", for

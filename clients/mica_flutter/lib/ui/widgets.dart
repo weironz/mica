@@ -1050,6 +1050,10 @@ class DocumentListItem extends StatefulWidget {
     required this.revealToggle,
     required this.isCollapsed,
     required this.isSelected,
+    this.isMultiSelected = false,
+    this.onSelectClick,
+    this.onPlainTap,
+    this.batchActions,
     required this.canEdit,
     required this.isRenaming,
     required this.onToggle,
@@ -1079,6 +1083,36 @@ class DocumentListItem extends StatefulWidget {
   final bool revealToggle;
   final bool isCollapsed;
   final bool isSelected;
+
+  /// This row is part of a Ctrl/Shift multi-selection.
+  ///
+  /// Drawn differently from [isSelected], which means "the located node" — the
+  /// one that decides where a new page gets created. They can be true at once
+  /// and they mean different things, so one highlight for both would make a
+  /// batch of five look like a batch of six.
+  final bool isMultiSelected;
+
+  /// A Ctrl/Shift-modified click landed on this row. [extendRange] is true for
+  /// Shift (select up to here) and false for Ctrl (toggle just this one).
+  ///
+  /// Null in a read-only tree, where a selection could not be acted on anyway.
+  final void Function({required bool extendRange})? onSelectClick;
+
+  /// An UNMODIFIED click landed on the row body — the tree drops its selection.
+  ///
+  /// Deliberately not fired by the expand chevron, which is its own control:
+  /// opening a folder to reach the rows you want to add is the most obvious way
+  /// to build a selection, and wiping it there would make that impossible.
+  final VoidCallback? onPlainTap;
+
+  /// Menu entries replacing the per-row ones when a right-click lands INSIDE a
+  /// multi-selection, already labelled with their count ("删除 3 项").
+  ///
+  /// Passed in rather than assembled here: which rows are selected, and what a
+  /// batch of them can do, is the tree's business — this widget only knows about
+  /// one row. Null (the normal case) leaves the per-row menu exactly as it was.
+  final List<PopupMenuEntry<VoidCallback>> Function()? batchActions;
+
   final bool canEdit;
 
   /// This row's name is in inline-edit mode: render a focused TextField instead
@@ -1238,6 +1272,22 @@ class _DocumentListItemState extends State<DocumentListItem> {
   }
 
   Future<void> _showMenuAt(RelativeRect position) async {
+    // A right-click inside a multi-selection is about the selection, so the
+    // per-row entries are replaced wholesale rather than appended to. Mixing
+    // them would put "重命名" (this row) next to "删除 5 项" (all of them) with
+    // nothing to say which is which.
+    final batch = widget.batchActions?.call();
+    if (batch != null && batch.isNotEmpty) {
+      // Each entry carries its own action: this widget knows about one row, so
+      // it has nothing useful to say about what "删除 5 项" should do.
+      final chosen = await showMenu<VoidCallback>(
+        context: context,
+        position: position,
+        items: batch,
+      );
+      chosen?.call();
+      return;
+    }
     final selected = await showMenu<String>(
       context: context,
       position: position,
@@ -1411,16 +1461,59 @@ class _DocumentListItemState extends State<DocumentListItem> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: Material(
-        color: w.isSelected
+        color: (w.isSelected || w.isMultiSelected)
             ? MicaTheme.of(context).accent.wash
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
+        // Multi-selected rows carry an outline on top of the wash. The wash
+        // alone would make "located" and "selected" identical, and the count in
+        // the batch menu would then be the only way to know what you grabbed.
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: w.isMultiSelected
+              ? BorderSide(color: MicaTheme.of(context).accent.primary)
+              : BorderSide.none,
+        ),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           // A folder has no content to open — clicking it expands/collapses in
           // place (file-manager style). Documents open in the editor. While
           // renaming, taps stay inside the inline field (click-away commits).
-          onTap: w.isRenaming ? null : (w._isFolder ? w.onToggle : w.onPressed),
+          //
+          // Ctrl/Shift come first and apply to folders too: a batch of pages
+          // and folders is an ordinary thing to want, and a folder that toggled
+          // open on Ctrl-click could never join one.
+          onTap: w.isRenaming
+              ? null
+              : () {
+                  final keys = HardwareKeyboard.instance.logicalKeysPressed;
+                  bool held(LogicalKeyboardKey a, LogicalKeyboardKey b) =>
+                      keys.contains(a) || keys.contains(b);
+                  final intent = treeClickIntent(
+                    // Cmd on macOS is the same gesture; harmless elsewhere.
+                    ctrl:
+                        held(
+                          LogicalKeyboardKey.controlLeft,
+                          LogicalKeyboardKey.controlRight,
+                        ) ||
+                        held(
+                          LogicalKeyboardKey.metaLeft,
+                          LogicalKeyboardKey.metaRight,
+                        ),
+                    shift: held(
+                      LogicalKeyboardKey.shiftLeft,
+                      LogicalKeyboardKey.shiftRight,
+                    ),
+                  );
+                  if (intent != TreeClickIntent.open &&
+                      w.onSelectClick != null) {
+                    w.onSelectClick!(
+                      extendRange: intent == TreeClickIntent.extendSelection,
+                    );
+                    return;
+                  }
+                  w.onPlainTap?.call();
+                  w._isFolder ? w.onToggle() : w.onPressed();
+                },
           // A viewer gets the menu too when it has something for them: every
           // other entry is an edit, but "open in new tab" is a read. Gating the
           // whole menu on canEdit hid the one entry a viewer can actually use.

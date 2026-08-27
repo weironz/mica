@@ -29,7 +29,7 @@ void main() {
         v('b', position: '02'),
         v('deep', parent: 'b', position: '01'),
       ];
-      final order = rootDropOrder(views, views.last);
+      final order = rootDropOrder(views, [views.last]);
       expect(order.map((e) => e.id), ['a', 'b', 'deep']);
     });
 
@@ -41,8 +41,28 @@ void main() {
         v('first', position: '01'),
         v('deep', parent: 'first', position: '01'),
       ];
-      final order = rootDropOrder(views, views[3]);
+      final order = rootDropOrder(views, [views[3]]);
       expect(order.map((e) => e.id), ['first', 'second', 'third', 'deep']);
+    });
+
+    test('a multi-selection lands at the end together, in its own order', () {
+      // Dropping a Ctrl-selected batch on the blank area below the tree. Each
+      // dragged row has to be excluded from the roots it is being appended to,
+      // or the ones already at the root appear twice — once in place and once
+      // at the end — and the reorder call then names one id twice.
+      final views = [
+        v('a', position: '01'),
+        v('b', position: '02'),
+        v('c', position: '03'),
+        v('deep', parent: 'b', position: '01'),
+      ];
+      final order = rootDropOrder(views, [views[2], views[3]]);
+      expect(order.map((e) => e.id), ['a', 'b', 'c', 'deep']);
+      expect(
+        order.map((e) => e.id).toSet().length,
+        order.length,
+        reason: 'c was already a root; it must be listed once',
+      );
     });
 
     test('a row already at the root moves to the end, not duplicated', () {
@@ -51,7 +71,7 @@ void main() {
         v('b', position: '02'),
         v('c', position: '03'),
       ];
-      final order = rootDropOrder(views, views.first);
+      final order = rootDropOrder(views, [views.first]);
       expect(order.map((e) => e.id), ['b', 'c', 'a']);
       expect(order.length, views.length, reason: 'a is listed once, not twice');
     });
@@ -90,7 +110,7 @@ void main() {
         v('y', parent: 'a', position: '02'),
         v('moving', parent: 'a', position: '03'),
       ];
-      final order = rootDropOrder(views, views.last);
+      final order = rootDropOrder(views, [views.last]);
       expect(order.map((e) => e.id), ['a', 'moving']);
     });
   });
