@@ -439,4 +439,58 @@ void main() {
       expect(drop(['r'], 'p', before: true), ['r', 'p', 'q', 's']);
     });
   });
+
+  // The guards for the GLOBAL Esc handler. The handler itself cannot be reached
+  // by a widget test — its whole reason to exist is that key dispatch never
+  // enters the shell (see the function's doc) — so what is pinned here is the
+  // decision: when Esc may clear, and when something else owns the key.
+  group('escClearsTreeSelection', () {
+    test('clears when a selection exists and nothing else owns Esc', () {
+      expect(
+        escClearsTreeSelection(
+          hasSelection: true,
+          routeIsCurrent: true,
+          renamingInline: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('no selection: nothing to clear, the key is not ours', () {
+      expect(
+        escClearsTreeSelection(
+          hasSelection: false,
+          routeIsCurrent: true,
+          renamingInline: false,
+        ),
+        isFalse,
+      );
+    });
+
+    // A dialog or menu is on top: Esc there means "close this", and a selection
+    // silently dropping behind it is a change the user cannot see happening.
+    test('a dialog on top owns Esc', () {
+      expect(
+        escClearsTreeSelection(
+          hasSelection: true,
+          routeIsCurrent: false,
+          renamingInline: false,
+        ),
+        isFalse,
+      );
+    });
+
+    // The inline-rename field cancels on Esc; one keypress must not both cancel
+    // the rename and empty the selection.
+    test('an inline rename owns Esc', () {
+      expect(
+        escClearsTreeSelection(
+          hasSelection: true,
+          routeIsCurrent: true,
+          renamingInline: true,
+        ),
+        isFalse,
+      );
+    });
+  });
 }

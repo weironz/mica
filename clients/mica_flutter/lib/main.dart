@@ -8681,6 +8681,40 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // Expose this editor's debounce flush to the app-exit path so quitting right
     // after typing commits the last <=400ms instead of dropping it.
     _activeEditorFlush = _boundExitFlush;
+    // GLOBAL, not a Shortcuts binding — see _escKeyEvent for why nothing
+    // focus-based can ever see this key.
+    HardwareKeyboard.instance.addHandler(_escKeyEvent);
+  }
+
+  /// Esc clears the sidebar multi-selection.
+  ///
+  /// Registered on [HardwareKeyboard] because no focus-based binding can see
+  /// the key: three were built and all three were dead, measured in the running
+  /// app (the probe story lives in `docs/shortcuts.md`). Focus sits on the page
+  /// route's own scope — an ancestor of this whole shell — and Flutter
+  /// dispatches keys from the focused node UPWARD, so `Shortcuts` anywhere
+  /// inside the shell is never on the path. Hardware handlers run regardless of
+  /// focus, which is the property everything else lacked.
+  ///
+  /// ALWAYS returns false: this observes, exactly like the pointer [Listener]
+  /// in [build]. Consuming would steal Esc from whoever holds it below (find
+  /// bar, slash menu); the guards for the two owners where even observing
+  /// would be wrong (dialog on top, inline rename) live in
+  /// [escClearsTreeSelection], where a test can reach them.
+  bool _escKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    if (!mounted) return false;
+    if (escClearsTreeSelection(
+      hasSelection: !_selection.isEmpty,
+      routeIsCurrent: ModalRoute.of(context)?.isCurrent ?? true,
+      renamingInline: _renamingViewId != null,
+    )) {
+      _clearTreeSelection();
+    }
+    return false;
   }
 
   /// Seed the live outline from the current page's bootstrap snapshot so the
@@ -8813,6 +8847,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_escKeyEvent);
     _rename.dispose();
     _memberEmail.dispose();
     _pageTitle.dispose();
@@ -8840,9 +8875,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // host — and a desktop window dragged narrow crosses it just like a phone.
     return CallbackShortcuts(
       bindings: _appShortcuts(),
-      // Clicking OUTSIDE the sidebar releases the located row — the other half
-      // of the rule whose first half is the blank-space tap inside it. Moving
-      // the mouse away is not enough: you have to act somewhere else.
+      // Clicking OUTSIDE the sidebar releases the located row AND the
+      // multi-selection — the other half of the rule whose first half is the
+      // blank-space tap inside it. Moving the mouse away is not enough: you
+      // have to act somewhere else. (The selection half was missing at first
+      // and user-reported, 2026-08-27: Ctrl-click a few rows, click into the
+      // editor, and the rows stayed lit — a selection that survives your
+      // leaving is a batch waiting to act on rows you stopped thinking about.
+      // Explorer, the feature's stated reference, drops its selection on any
+      // outside click.)
       //
       // A Listener, not a GestureDetector: this must not enter the gesture
       // arena at all. Competing there would put it up against every tap in the
@@ -8850,13 +8891,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // either one would change behaviour that has nothing to do with the
       // sidebar. onPointerDown only observes.
       //
+      // Dialogs and context menus live in the app Overlay, which is not inside
+      // this subtree — their clicks never reach this Listener, so an open batch
+      // menu keeps its selection while you pick from it.
+      //
       // `_navHovered` is the test for "inside", reusing the MouseRegion that is
       // already tracking exactly that rather than measuring the pane's rect a
       // second time and letting the two disagree.
       child: Listener(
         behavior: HitTestBehavior.translucent,
         onPointerDown: (_) {
-          if (!_navHovered) _focusRoot();
+          if (_navHovered) return;
+          _focusRoot();
+          _clearTreeSelection();
         },
         child: LayoutBuilder(
           builder: (context, c) => c.maxWidth < kNarrowShellWidth
@@ -9641,29 +9688,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _clearTreeSelection();
         _focusRoot();
       },
-      // There is NO Esc-clears-the-selection shortcut, and that is a decision
-      // rather than an omission. Three bindings were built and all three were
-      // dead — measured in the running app, not guessed:
-      //
-      //   1. A local `Shortcuts`/`Actions` pair here. Flutter dispatches keys
-      //      from the FOCUSED node upward, and the sidebar had no focus.
-      //   2. Same, plus a FocusNode requested on the selecting click. A probe
-      //      on that node logged ZERO key events — not even the Ctrl of the
-      //      click that had just focused it.
-      //   3. `_appShortcuts` (where Ctrl+N lives and works). A probe inside the
-      //      binding never fired either.
-      //
-      // What (2) did reveal: 400ms after the click `primaryFocus` really was
-      // the sidebar, but by the time Esc was pressed focus had returned to the
-      // page route's own scope — an ANCESTOR of this whole shell. Dispatch from
-      // there goes straight up to WidgetsApp and never descends, so no shortcut
-      // registered anywhere inside the shell can see the key. Making Esc work
-      // means a global `HardwareKeyboard` handler, which fires while a dialog
-      // or an inline rename owns Esc too — worth doing only if asked for.
-      //
-      // The selection is dropped by clicking any row, or the blank area below
-      // the tree. Both are verified; a documented key that does nothing is
-      // worse than no key at all.
+      // Esc ALSO clears the selection — via [_escKeyEvent], a global
+      // HardwareKeyboard handler, NOT any binding here. Three focus-based
+      // bindings were built first and all three were dead (a local
+      // `Shortcuts`/`Actions` pair, the same plus a requested FocusNode, and
+      // `_appShortcuts` where Ctrl+N works); the probe story is in
+      // `docs/shortcuts.md`. Short version: when Esc arrives, focus sits on the
+      // page route's own scope — an ANCESTOR of this shell — and key dispatch
+      // walks from the focused node UPWARD, so nothing registered in here is
+      // ever on the path. The feature shipped without Esc for that reason
+      // (a documented key that does nothing is worse than no key), until the
+      // user asked for it (2026-08-27) — which is what the global handler's
+      // dialog/rename caveats were traded against.
       child: _buildTreeList(treeRows, canEdit, activeId),
     );
   }

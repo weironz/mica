@@ -33,6 +33,7 @@
   "batchDeleteConfirm": "把 {count} 项移到回收站？文件夹会连同里面的内容一起。",
   "shortcutsTreeToggleSelect": "侧栏：把这一行加进多选／取出",
   "shortcutsTreeRangeSelect": "侧栏：选中同一父级下的一段连续行",
+  "shortcutsTreeClearSelect": "侧栏：清空多选（点侧栏外任意处同样清空）",
   "transferPickFolder": "文件夹（可选）",
   "transferDestinationRoot": "工作区根目录",
   "batchDragLabel": "{count} 项",

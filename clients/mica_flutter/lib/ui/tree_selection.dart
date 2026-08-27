@@ -182,6 +182,38 @@ class TreeSelection {
   }
 }
 
+/// Whether an Escape press should clear the sidebar's multi-selection.
+///
+/// This feeds a GLOBAL key handler (`HardwareKeyboard.addHandler` in the
+/// shell), because no focus-based binding can see the key at all: three were
+/// built and all three were dead, measured in the running app. When Esc is
+/// pressed, focus sits on the page route's own scope — an ANCESTOR of the whole
+/// shell — and Flutter dispatches keys from the focused node UPWARD, so nothing
+/// registered inside the shell is on the path. (`docs/shortcuts.md` carries the
+/// probe results; the feature shipped without Esc for exactly this reason,
+/// until the user asked for it on 2026-08-27.)
+///
+/// The two guards name the moments when something else legitimately owns Esc:
+///
+///  * [routeIsCurrent] — false while a dialog or menu is on top. Esc there
+///    means "close this", and a selection silently dropping behind a dialog is
+///    a change the user cannot see happening.
+///  * [renamingInline] — the sidebar's inline-rename field cancels on Esc, and
+///    one keypress should not both cancel a rename and empty the selection.
+///
+/// There is deliberately no "the editor holds Esc" guard, because the caller
+/// never CONSUMES the event — it observes and returns false, the same
+/// philosophy as the shell's pointer Listener. The editor's own Esc consumers
+/// (find bar, slash menu) still receive the key; at worst both act, and both
+/// are dismissals.
+bool escClearsTreeSelection({
+  required bool hasSelection,
+  required bool routeIsCurrent,
+  required bool renamingInline,
+}) {
+  return hasSelection && routeIsCurrent && !renamingInline;
+}
+
 /// One row of a tree, reduced to what [flattenedFolderOptions] needs.
 typedef FolderCandidate = ({
   String id,
