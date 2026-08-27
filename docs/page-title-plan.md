@@ -1,7 +1,8 @@
 # 页面标题:从「视图属性」改成「文档的一部分」
 
-> 状态:**P1 基本完成**(读侧统一),P2/P3 未开始。2026-08-27 用户提出,同日成稿并实施。
-> P1 里还差一块,在 §5.4 写明:本地离线模式的单页导出/复制。
+> 状态:**P1 / P2 / P3 全部完成**(2026-08-27 用户提出,同日成稿并实施)。
+> 三处「评估后不做」也一并记在文里:Ctrl+C 整页(§3.1)、编辑器标题走实时 CRDT(§5.4)、
+> 让 MCP 读取带标题(§5.4)—— 每条都写了**为什么不做**,而不是只留一句「不做」。
 > 这份文档的作用是让每一条代价在动手**之前**就有具体答案 —— 上一件同量级的事
 > (侧栏多选)没这么做,做到一半冒出三个意外,其中一个改了实现方式。
 
@@ -165,8 +166,9 @@ orphan 而不是瞎猜(`anchor_state` 的契约 —— 错锚比没锚更糟)。
   复制页面内容 / 大纲。`root.data['title']` 此时还没有任何写入者,一律回落到 `views.name`
   —— **P1 单独上线就修好了 §1 那张表的大部分**,而且不动权威归属。
   ✅ **2026-08-27 完成**(`fe181a0` + `34637fc`)。Ctrl+C 整页**拍板不做**,理由见 §3.1。
-  本地(离线)模式的单页导出/复制**还没做**,它要给 FFI 加参数并重新生成桥接
-  (工具链在本机是齐的:`flutter_rust_bridge_codegen 2.12.0`,与 pubspec/生成文件同号)。
+  本地(离线)模式的单页导出/复制**也已做完**:`MicaDocument::export_markdown_titled`
+  (给 FFI 加参数并重新生成桥接,`flutter_rust_bridge_codegen 2.12.0`,与 pubspec/生成文件同号),
+  `local_offline_io.dart` 的「导出为 .md」与「复制页面内容」两处都走它。
 - **P2 —— 写侧改向。** ✅ **2026-08-27 服务端部分完成。**
   - `MicaDoc::set_block_prop`(§5.1 的窄原语)+ 两条锚点验收测试。
   - `sync::set_document_title` —— 载入 base → 比对 → 写 root 的 `title` → `push_update`。
@@ -217,13 +219,40 @@ orphan 而不是瞎猜(`anchor_state` 的契约 —— 错锚比没锚更糟)。
 
 6 条测试(`page_title_fallback_test.dart`),验过有牙:把 `pageTitle` 退回成只读
 `view.name`,3 条当场变红。
-- **P3 —— 导入与 round-trip。** 导入时把 manifest/文件名的标题写进 root;导出侧
-  `with_page_title` 与导入侧 `strip_leading_h1` 配对,export→import 字节稳定(CLAUDE.md #4)。
+- **P3 —— 导入与 round-trip。** ✅ **2026-08-27 完成。**
+  - `mica_markdown::set_document_title(&mut payload, title)` —— `document_title` 的写侧对偶,
+    也是**唯一一个 payload 级写入者**。其它写入者改的是**已经存在**的文档,必须走窄原语
+    (§5.1);这里文档还没生成,标题**随种子一起落**,一次 update 都不花。
+    §5.3 当初否掉的是「导入完再补几百次文档写入」,不是「导入的页不该有标题」——
+    折进种子正好同时满足这两条。
+  - 云端导入(`api-server` 的 `page_seed`)与**本地 vault 导入**(`doc.setTitle`,走同一个
+    窄原语)都改了。之所以把种子构造提成 `page_seed` 这个函数,是为了让测试打的是**生产代码**
+    而不是测试自己的驱动 —— 这个坑本会话踩过一次(`lessons.md`)。
+  - **测试**:markdown crate 5 条(写→读闭环 / 不碰 front matter / `data` 为 null 也能写 /
+    空标题不写 / trim);`page_seed` 4 条;`interchange` 2 条 **export→import→export 字节相等**
+    (含「正文自带另一个一级标题」那种)。有牙的判据是 `a_nameless_entry_stores_no_title`:
+    同一个 `import_markdown`,不写标题时读回就是 `None`,所以标题只可能来自新加的那次写入。
+  - **实测**(自动化测试之外,本会话四次被真机推翻过结论):对本地栈真发了一次导入,
+    `root.data.title` = 「季度回顾」、正文 0 个 heading 块、`?title=true` 导出正好一个
+    `# 季度回顾`;再**直接改库**把 `views.name` 改成别的字符串,导出仍然是「季度回顾」——
+    标题确实来自文档而不是那一列。本地 vault 导入由 `vault_import_test.dart`
+    (真 FFI + 真 SQLite,`-d windows`)覆盖。
 
-**MCP 读取仍然不带标题**,而且这不是遗漏:`GET .../export/markdown` 与 `PATCH` 共用一个
-handler,读带上标题的话,agent 的「读 → 改 → 整篇替换」会把它写成正文里真实的 heading,
-**每往返一轮多一层**。P3 若要让 MCP 读带标题,必须同时让 PATCH 对称剥离,并配一条
-「读→写→读 三次不变」的测试。
+##### 「让 MCP 读取带上标题」—— **评估后不做**
+
+原本记为 P3 的一个待定项。查清之后否掉,三条理由,任何一条单独都够:
+
+- `GET .../export/markdown` 与 `PATCH` **共用一个 handler**。读带标题的话,agent 的
+  「读 → 改 → 整篇替换」会把它写成正文里真实的 heading,**每往返一轮多一层**。要修就得让
+  PATCH 对称剥离 —— 而剥离是会吃掉别人内容的操作。
+- `mica_read_document` 的 `offset`/`limit` 是**行窗口**,`section` 是标题名。在最前面插一行,
+  会让 agent 依 `mica_get_outline` 算出的偏移**整体错位**,读和写从此对不上第一行。
+  这条比上一条更隐蔽:它不报错,只是读错地方。
+- **agent 本来就拿得到页名**:`mica_search` / `mica_list_pages` / 每个 hit 都带 `name`。
+  所以这不是「丢了标题」,是「标题不在正文里」——而那正是 §3 拍板的结果。
+
+反过来,**MCP 的导出是带标题的**:`mica_export_workspace` 走的是工作区 ZIP 那条(§5 的
+`export_tree`),P1 之后每个 `.md` 第一行就是 `# <标题>`。
 
 ## 6. 顺带:两处过期文档必须一起修
 
@@ -236,6 +265,10 @@ handler,读带上标题的话,agent 的「读 → 改 → 整篇替换」会把�
   "our own export writes the name into the file name, **never into the text**")。
 
 一个文件里两句话互相矛盾、其中一句还进了另一份文档,是这次多花了几个来回的直接原因。
+
+**P3 又揪出第三处**:`docs/export-import.md` 的导入第 4 条整段还写着旧规则(「导出不写
+`# {name}`,导入也不采」),而 P1 已经把它反过来了 —— 同一份文档的第 67 行当时改了、
+第 130 行没改。**改一条规则时,要搜的是这条规则的每一处表述,不是改掉最先看到的那处。**
 
 ## 7. 这份方案推翻了什么
 

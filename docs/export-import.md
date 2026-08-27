@@ -127,21 +127,32 @@ and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
    this server can't reach (CN routing to medium/imgur/…) just keeps its link,
    and the client's per-image re-host stays the fallback for those. Dedup by url
    within one import, so a link shared across pages is fetched once.
-4. **Takes the body verbatim.** A page's name is a property of the page, not a
-   line inside it: the name travels in the file name (and the manifest `title`),
-   never welded into the text. So the export writes no `# {name}` and the import
-   harvests none — what you wrote is what comes back, both directions.
+4. **Restores the title, and takes the body verbatim.** A page's name is still a
+   property of the page rather than a line inside it — it just travels *inside
+   the document* now (`root.data['title']`), not only in the `views.name` column
+   beside it. So on import the name goes onto the document's root block
+   (`mica_markdown::set_document_title`, folded into the seed, so a 400-page
+   archive still costs zero extra document writes), and the `# {name}` our own
+   export wrote into the text comes back off.
 
-   The editor already renders the name as the page title, so a body that ALSO
-   opened with its own heading showed the title twice on screen and doubled it
-   again in every export. That is what this rule removes.
+   〔**This reverses the rule that used to be documented here** — "the export
+   writes no `# {name}` and the import harvests none". Since 2026-08-27 the
+   export DOES write it: the name was the one thing a page lost the moment its
+   text left Mica. `docs/page-title-plan.md` has the argument, §7 the list of
+   what it overturns.〕
 
-   **Notion archives are the one exception**, and it is not ours to fix: Notion
-   puts the title in the file name *and* repeats it as the body's first `# H1`
-   (hence the "remove duplicate title" step in every third-party Notion
-   importer). Importing that verbatim would show it twice, so it is stripped —
-   only for Notion, and only on an exact match with the name, so a heading that
-   merely happens to lead the page survives.
+   The pairing is what matters: `with_page_title` on the way out and
+   `strip_leading_h1` on the way in remove exactly each other, so
+   export→import→export is byte-stable (CLAUDE.md #4) and a cycle never stacks a
+   second heading. `a_mica_export_survives_import_and_re_export_byte_for_byte`
+   (`interchange/src/import.rs`) is the test that walks all of it.
+
+   Stripping happens for **our own archives** (manifest `generator: mica`) and
+   for **Notion archives** — Notion puts the title in the file name *and* repeats
+   it as the body's first `# H1` (hence the "remove duplicate title" step in
+   every third-party Notion importer). A foreign archive is NOT stripped: its
+   leading heading is the author's content. The match is exact against the name
+   in both cases, so a heading that merely happens to lead the page survives.
 
 ### Archive normalization (`normalize.rs`)
 

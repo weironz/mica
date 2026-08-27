@@ -861,6 +861,81 @@ mod tests {
     assert_no_page_under_page(&plan);
   }
 
+  /// The export/import pair, closed end to end and byte for byte.
+  ///
+  /// Export writes `# {title}` into the text (`mica_markdown::with_page_title`);
+  /// import takes exactly that line back off (`strip_leading_h1`) and the caller
+  /// puts the title on the document's root instead
+  /// (`mica_markdown::set_document_title`, done in `api-server`'s importer).
+  /// Each half is pinned on its own above; what this pins is that the two
+  /// COMPOSE — a page exported, imported and exported again produces the same
+  /// bytes, with one `# 季度回顾` and not two, and not zero.
+  ///
+  /// This is the loop CLAUDE.md #4 calls an invariant, and it is the only test
+  /// that walks all of it: half the rule lives in `mica_markdown` and half here,
+  /// so either half can be changed alone without any other test noticing.
+  #[test]
+  fn a_mica_export_survives_import_and_re_export_byte_for_byte() {
+    let title = "季度回顾";
+    // Exactly what the exporter puts in the archive: the rendered body with the
+    // title line welded on top, and the file named after the title (our export
+    // writes the name into the file name — that is where import reads it back).
+    let source = mica_markdown::import_markdown("第一段。\n\n## 小节\n\n第二段。", "root");
+    let exported = mica_markdown::with_page_title(
+      &mica_markdown::export_markdown(&source).expect("export"),
+      title,
+    );
+    assert!(exported.starts_with("# 季度回顾\n\n"), "precondition: {exported:?}");
+
+    let raw = vec![
+      e("manifest.json", &manifest(&[("季度回顾.md", title, "document")])),
+      e("季度回顾.md", &exported),
+    ];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let page = find(&plan, title);
+    assert!(!page.markdown.starts_with('#'), "the title line came off");
+
+    // What the importer then builds and stores.
+    let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
+    assert!(mica_markdown::set_document_title(&mut reimported, &page.title));
+
+    // And what exporting THAT produces.
+    let re_exported = mica_markdown::with_page_title(
+      &mica_markdown::export_markdown(&reimported).expect("re-export"),
+      mica_markdown::document_title(&reimported).expect("title travelled in the document"),
+    );
+    assert_eq!(re_exported, exported, "export → import → export is not stable");
+  }
+
+  /// The same loop for a page whose body genuinely opens with a heading of its
+  /// own. `strip_leading_h1` matches exactly, so that heading is content and
+  /// must survive — and the title still has to come back exactly once, above it.
+  #[test]
+  fn a_body_that_opens_with_its_own_heading_round_trips_too() {
+    let title = "周报";
+    let source = mica_markdown::import_markdown("# 另一个标题\n\n正文。", "root");
+    let exported = mica_markdown::with_page_title(
+      &mica_markdown::export_markdown(&source).expect("export"),
+      title,
+    );
+
+    let raw = vec![
+      e("manifest.json", &manifest(&[("周报.md", title, "document")])),
+      e("周报.md", &exported),
+    ];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let page = find(&plan, title);
+    assert!(page.markdown.trim_start().starts_with("# 另一个标题"), "content kept");
+
+    let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
+    mica_markdown::set_document_title(&mut reimported, &page.title);
+    let re_exported = mica_markdown::with_page_title(
+      &mica_markdown::export_markdown(&reimported).expect("re-export"),
+      mica_markdown::document_title(&reimported).expect("title"),
+    );
+    assert_eq!(re_exported, exported);
+  }
+
   // A parent page with subpages but NO body of its own is just a folder — don't
   // leave a stray empty page behind (Notion's "index" pages are usually empty).
   #[test]

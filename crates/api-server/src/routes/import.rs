@@ -916,7 +916,7 @@ async fn run_import(
       continue;
     }
     let root_block_id = format!("block_{}", Uuid::new_v4().simple());
-    let mut payload = import_markdown(&page.markdown, &root_block_id);
+    let mut payload = page_seed(&page.markdown, &page.title, &root_block_id);
     let from = page.archive_path.as_deref().unwrap_or("");
     // Failures for THIS page, held until insert_page hands back the document id
     // they have to be addressed to. (url, block_id, reason, attempted)
@@ -1136,6 +1136,32 @@ async fn insert_folder(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The document seed for one planned page: its Markdown parsed into blocks,
+/// with the page's own name on the root block.
+///
+/// The name goes INTO the document, not only into the `views.name` column beside
+/// it, so an imported page knows what it is called by exactly the same rule as a
+/// page created here and renamed — `docs/page-title-plan.md`. Folded into the
+/// seed rather than written afterwards: it rides along in the initial state and
+/// costs no update at all, which is what makes it compatible with §5.3's
+/// "importing 400 pages must not mean 400 document writes".
+///
+/// A nameless entry gets no title and keeps falling back to the column, where
+/// `insert_page` puts "Untitled" — a literal "Untitled" stored as the document's
+/// own title would export as `# Untitled`.
+///
+/// Extracted so the rule is testable: `run_import` builds a page's payload here
+/// and nowhere else, and the image rewiring downstream only edits blocks.
+fn page_seed(
+  markdown: &str,
+  title: &str,
+  root_block_id: &str,
+) -> mica_app_core::documents::DocumentSnapshotPayload {
+  let mut payload = import_markdown(markdown, root_block_id);
+  mica_markdown::set_document_title(&mut payload, title);
+  payload
+}
+
 async fn insert_page(
   state: &AppState,
   workspace_id: Uuid,
@@ -1196,6 +1222,53 @@ async fn insert_page(
   Ok(document.id)
 }
 
+
+#[cfg(test)]
+mod page_seed_tests {
+  use super::page_seed;
+
+  /// An imported page carries its name inside the document, the same way a
+  /// renamed one does. Before this, every imported page depended on the
+  /// `views.name` fallback, and a Mica archive re-exported from a fresh import
+  /// got its title back from the column rather than from the document.
+  #[test]
+  fn an_imported_page_carries_its_name_in_the_document() {
+    let seed = page_seed("正文。", "季度回顾", "root");
+    assert_eq!(mica_markdown::document_title(&seed), Some("季度回顾"));
+  }
+
+  /// A nameless archive entry must NOT store a title. `insert_page` puts the
+  /// literal "Untitled" in the column for these; storing that as the document's
+  /// own title would make it export as `# Untitled` on a page nobody named.
+  #[test]
+  fn a_nameless_entry_stores_no_title_and_keeps_falling_back() {
+    assert_eq!(mica_markdown::document_title(&page_seed("正文。", "", "root")), None);
+    assert_eq!(mica_markdown::document_title(&page_seed("正文。", "  ", "root")), None);
+  }
+
+  /// The title lives on the root block beside `front_matter`, and a page's front
+  /// matter comes from the file it was imported from — losing it here would
+  /// silently drop every page property in the archive.
+  #[test]
+  fn front_matter_from_the_file_survives_the_title() {
+    let seed = page_seed("---\ntags: [a]\n---\n\n正文。", "名字", "root");
+    assert_eq!(mica_markdown::document_title(&seed), Some("名字"));
+    let root = seed.blocks.iter().find(|b| b.id == "root").expect("root");
+    assert_eq!(root.data.get("front_matter").and_then(|v| v.as_str()), Some("tags: [a]"));
+  }
+
+  /// The body is untouched: the title is metadata on the root, never a block.
+  /// (Import already stripped a duplicated `# name` upstream, in `plan_import`.)
+  #[test]
+  fn the_title_does_not_become_a_block_in_the_body() {
+    let seed = page_seed("正文。", "季度回顾", "root");
+    assert!(
+      !seed.blocks.iter().any(|b| b.text.contains("季度回顾")),
+      "the title must not appear as content: {:?}",
+      seed.blocks.iter().map(|b| &b.text).collect::<Vec<_>>()
+    );
+  }
+}
 
 #[cfg(test)]
 mod import_job_persistence_tests {

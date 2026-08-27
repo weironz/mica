@@ -64,6 +64,33 @@ void main() {
       reason: 'paragraph text imported clean',
     );
 
+    // The file name travels INSIDE the document, not only in the view row
+    // beside it (`docs/page-title-plan.md` P3) — so a vault page exported or
+    // copied out of Mica keeps its name, and reads it by the same rule as a
+    // renamed page. The cloud importer does the same thing through
+    // `mica_markdown::set_document_title`; this is the local half.
+    final root = doc.blocks.firstWhere((b) => b['id'] == doc.rootBlockId);
+    expect(
+      (root['data'] as Map?)?['title'],
+      'welcome',
+      reason: 'the vault file name is on the document root',
+    );
+    // And it is metadata, not content: exactly one block carries a title, and
+    // it is the root. (`# Welcome` above is the author's own heading — the
+    // vault importer strips nothing, and `with_page_title` skips a body that
+    // already leads with the same line.)
+    expect(
+      doc.blocks.where((b) => (b['data'] as Map?)?['title'] != null).length,
+      1,
+      reason: 'the title is metadata on the root, not a block in the body',
+    );
+
+    // A nested file gets its own name, not its folder's.
+    final nested = local.openDoc(todo.objectId)!;
+    final nestedRoot =
+        nested.blocks.firstWhere((b) => b['id'] == nested.rootBlockId);
+    expect((nestedRoot['data'] as Map?)?['title'], 'todo');
+
     try {
       dir.deleteSync(recursive: true);
     } catch (_) {

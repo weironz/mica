@@ -110,6 +110,43 @@ pub fn document_title(snapshot: &DocumentSnapshotPayload) -> Option<&str> {
     .filter(|title| !title.is_empty())
 }
 
+/// Put the page's title on the root block of a payload that is about to BECOME
+/// a document.
+///
+/// The write counterpart of [`document_title`], and deliberately the only one at
+/// the payload level. Every other writer edits a document that already exists
+/// and must go through the narrow yrs primitive (`MicaDoc::set_block_prop`), or
+/// it invalidates every comment anchor on the page — `docs/page-title-plan.md`
+/// §5.1. Here there is no document yet and no anchor to lose: the title rides
+/// along in the seed and costs no update at all. That is what makes importing an
+/// archive compatible with §5.3 ("400 pages must not mean 400 document writes")
+/// while still leaving every imported page carrying its own name.
+///
+/// Blank is ignored rather than stored, matching [`document_title`], which reads
+/// blank back as absent — storing one would add a key that answers nothing.
+///
+/// Returns whether the title was written.
+pub fn set_document_title(snapshot: &mut DocumentSnapshotPayload, title: &str) -> bool {
+  let title = title.trim();
+  if title.is_empty() {
+    return false;
+  }
+  let Some(index) = block_index(snapshot, &snapshot.root_block_id) else {
+    return false;
+  };
+  let data = &mut snapshot.blocks[index].data;
+  // `data` defaults to null and is omitted when empty, and front matter lives in
+  // this same map — so this has to extend whatever is there, not replace it.
+  if !data.is_object() {
+    *data = Value::Object(serde_json::Map::new());
+  }
+  data
+    .as_object_mut()
+    .expect("just made an object")
+    .insert("title".to_string(), Value::String(title.to_string()));
+  true
+}
+
 /// Put `# {title}` into an exported page's TEXT, after any front matter.
 ///
 /// Only for exports that produce a FILE the user takes away. Deliberately NOT
@@ -6015,7 +6052,7 @@ pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_
 
 #[cfg(test)]
 mod page_title_tests {
-  use super::{DocumentSnapshotPayload, document_title, with_page_title};
+  use super::{DocumentSnapshotPayload, document_title, set_document_title, with_page_title};
 
   fn doc(root_data: serde_json::Value) -> DocumentSnapshotPayload {
     serde_json::from_value(serde_json::json!({
@@ -6043,6 +6080,56 @@ mod page_title_tests {
       document_title(&doc(serde_json::json!({"title": "我的页"}))),
       Some("我的页")
     );
+  }
+
+  /// The pair has to be closed: what the setter writes is what the getter reads.
+  /// Import is the only caller, and it has no other way to check its own work.
+  #[test]
+  fn what_the_setter_writes_the_getter_reads_back() {
+    let mut page = doc(serde_json::json!({}));
+    assert!(set_document_title(&mut page, "季度回顾"));
+    assert_eq!(document_title(&page), Some("季度回顾"));
+  }
+
+  /// Front matter lives in the SAME map on the SAME block. An import that
+  /// clobbered it would silently drop every page property in the archive.
+  #[test]
+  fn writing_a_title_leaves_front_matter_alone() {
+    let mut page = doc(serde_json::json!({"front_matter": "tags: [a]"}));
+    assert!(set_document_title(&mut page, "名字"));
+    assert_eq!(document_title(&page), Some("名字"));
+    assert_eq!(
+      page.blocks[0].data.get("front_matter").and_then(|v| v.as_str()),
+      Some("tags: [a]")
+    );
+  }
+
+  /// `data` defaults to null (it is skipped when serialising), so the common
+  /// case for a freshly parsed root block is not an object at all.
+  #[test]
+  fn a_root_block_with_no_data_at_all_still_takes_a_title() {
+    let mut page = doc(serde_json::json!(null));
+    assert!(page.blocks[0].data.is_null(), "precondition");
+    assert!(set_document_title(&mut page, "名字"));
+    assert_eq!(document_title(&page), Some("名字"));
+  }
+
+  /// An archive entry with no usable name must leave the document titleless so
+  /// it falls back to the view's column, rather than storing a key that reads
+  /// back as nothing. Mirrors `a_blank_title_counts_as_absent` on the read side.
+  #[test]
+  fn a_blank_title_is_not_written_at_all() {
+    let mut page = doc(serde_json::json!({}));
+    assert!(!set_document_title(&mut page, "   "));
+    assert!(page.blocks[0].data.get("title").is_none());
+    assert_eq!(document_title(&page), None);
+  }
+
+  #[test]
+  fn surrounding_whitespace_is_trimmed_on_the_way_in() {
+    let mut page = doc(serde_json::json!({}));
+    assert!(set_document_title(&mut page, "  有空格  "));
+    assert_eq!(page.blocks[0].data.get("title").and_then(|v| v.as_str()), Some("有空格"));
   }
 
   /// A blank title must fall back, not render as an empty heading.

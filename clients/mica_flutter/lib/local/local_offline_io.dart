@@ -660,18 +660,22 @@ class LocalOffline implements LocalOfflineApi {
         final text = utf8.decode(e.bytes, allowMalformed: true);
         final docId = _id('doc');
         final viewId = _id('view');
-        store.saveDoc(
-          docId: docId,
-          // Resolution happens in Rust, against the same `resolve_ref` the
-          // server import uses — relative paths, `..`, percent-encoding and the
-          // unique-basename fallback all behave identically on both sides
-          // rather than being reimplemented here and drifting.
-          doc: MicaDocument.fromMarkdownWithAssets(
-            markdown: text,
-            fromPath: path,
-            assetIds: assetIds,
-          ),
+        // Resolution happens in Rust, against the same `resolve_ref` the
+        // server import uses — relative paths, `..`, percent-encoding and the
+        // unique-basename fallback all behave identically on both sides
+        // rather than being reimplemented here and drifting.
+        final doc = MicaDocument.fromMarkdownWithAssets(
+          markdown: text,
+          fromPath: path,
+          assetIds: assetIds,
         );
+        // The file name goes INTO the document, not only into the view row
+        // beside it, so a vault page knows its own name by the same rule as a
+        // renamed one (`docs/page-title-plan.md`; the cloud importer does this
+        // through `mica_markdown::set_document_title`). Before the first save,
+        // so it rides in the initial state instead of costing a second write.
+        if (fileName.isNotEmpty) doc.setTitle(title: fileName);
+        store.saveDoc(docId: docId, doc: doc);
         saveView((
           id: viewId,
           workspaceId: workspaceId,
