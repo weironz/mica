@@ -1203,6 +1203,35 @@ class _SettingsDialog extends StatefulWidget {
   State<_SettingsDialog> createState() => _SettingsDialogState();
 }
 
+/// The editor's font-size setting, in the unit people actually think in.
+///
+/// The control used to be a free 85%–140% slider: dragging landed on values
+/// like 113%, a number nobody chooses on purpose, cannot reproduce on another
+/// machine, and cannot name when reporting a bug. Every reference that offers
+/// a size at all offers DISCRETE WHOLE UNITS — Obsidian and Typora take a px
+/// number, browsers zoom in fixed detents; none of them hand out a continuous
+/// percentage (user asked for detents/size on 2026-08-28).
+///
+/// Storage is untouched: the pref stays `fontScale` (px / [kFontBasePx]), so
+/// every stored value keeps working and the render pipeline does not change.
+/// Only the CONTROL snaps — an old 113% shows as its nearest whole px and
+/// snaps the first time the slider moves.
+const double kFontBasePx = 16;
+
+/// 13px is genuinely small and 22px genuinely large at the editor's metrics;
+/// the old bounds (85%–140% = 13.6–22.4px) round to the same span.
+const int kFontPxMin = 13;
+const int kFontPxMax = 22;
+
+/// The scale a whole-px choice stores. Inverse of [fontPxFromScale].
+double fontScaleFromPx(int px) =>
+    px.clamp(kFontPxMin, kFontPxMax) / kFontBasePx;
+
+/// The whole px a stored scale displays as. Inverse of [fontScaleFromPx] for
+/// every in-range whole px; an off-detent legacy value rounds to its nearest.
+int fontPxFromScale(double scale) =>
+    (scale * kFontBasePx).round().clamp(kFontPxMin, kFontPxMax);
+
 class _SettingsDialogState extends State<_SettingsDialog> {
   final _baseUrl = TextEditingController();
   final _model = TextEditingController();
@@ -1430,12 +1459,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     required double max,
     required String display,
     required ValueChanged<double> onChanged,
+    int? divisions,
   }) {
     return Row(
       children: [
         SizedBox(width: 90, child: Text(label)),
         Expanded(
-          child: Slider(value: value, min: min, max: max, onChanged: onChanged),
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            onChanged: onChanged,
+          ),
         ),
         SizedBox(
           width: 56,
@@ -2516,12 +2552,15 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _pageWidthRow(context),
     _sliderRow(
       label: context.l10n.settingsFontSize,
-      value: _fontScale,
-      min: 0.85,
-      max: 1.4,
-      display: '${(_fontScale * 100).round()}%',
+      // The slider lives in the px domain — whole-px detents, labelled as a
+      // size. See kFontBasePx above for why this replaced the free % slider.
+      value: fontPxFromScale(_fontScale).toDouble(),
+      min: kFontPxMin.toDouble(),
+      max: kFontPxMax.toDouble(),
+      divisions: kFontPxMax - kFontPxMin,
+      display: '${fontPxFromScale(_fontScale)} px',
       onChanged: (value) {
-        setState(() => _fontScale = value);
+        setState(() => _fontScale = fontScaleFromPx(value.round()));
         _applyAppearance();
       },
     ),

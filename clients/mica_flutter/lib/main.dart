@@ -786,7 +786,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final fontScale = double.tryParse(loadPref('fontScale') ?? '');
     final fontFamily = loadPref('fontFamily');
     _appearance = EditorAppearance(
-      fontScale: (fontScale ?? 1.0).clamp(0.85, 1.4),
+      // Bounds derived from the settings control's px detents (see kFontBasePx
+      // in dialogs.dart) rather than restated as literals here — restated
+      // bounds are how a widened slider and a load-time clamp drift apart.
+      fontScale: (fontScale ?? 1.0).clamp(
+        fontScaleFromPx(kFontPxMin),
+        fontScaleFromPx(kFontPxMax),
+      ),
       fontFamily: (fontFamily == null || fontFamily.isEmpty)
           ? null
           : fontFamily,
