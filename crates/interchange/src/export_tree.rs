@@ -14,7 +14,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use mica_markdown::{DocumentSnapshotPayload, export_markdown_with_assets};
+use mica_markdown::{
+  DocumentSnapshotPayload, document_title, export_markdown_with_assets, with_page_title,
+};
 
 use crate::zip::ZipEntry;
 
@@ -158,11 +160,25 @@ pub fn build_markdown_tree_zip(
       "title": node.name,
       "type": "document",
     }));
-    // The body verbatim — the page NAME rides on the file name + manifest
-    // `title`, never a heading welded onto the text.
+    // The title leads the text, after any front matter.
+    //
+    // This REVERSES a deliberate earlier decision — "the body verbatim; the page
+    // NAME rides on the file name + manifest `title`, never a heading welded
+    // onto the text" — reversed by the user on 2026-08-27, because a file name
+    // only survives as long as the file does: paste the page somewhere, copy it,
+    // read it through MCP, and the name is gone. See `docs/page-title-plan.md`.
+    //
+    // The title comes from the DOCUMENT when it has one and falls back to the
+    // view name otherwise. There is no backfill migration, so today almost every
+    // page takes the fallback — that is the plan, not an unfinished edge.
+    //
+    // Import strips this again when the manifest says `generator: mica`, which
+    // is what keeps export→import stable (CLAUDE.md #4). The two must move
+    // together; changing one alone silently doubles the title per round trip.
+    let title = document_title(&payload).unwrap_or(node.name.as_str());
     entries.push(ZipEntry {
       name: path,
-      data: body.into_bytes(),
+      data: with_page_title(&body, title).into_bytes(),
     });
   }
 

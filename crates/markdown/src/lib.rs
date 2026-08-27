@@ -84,6 +84,32 @@ pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationR
   export_markdown_with_assets(snapshot, &BTreeMap::new())
 }
 
+/// The document's own title, if it carries one.
+///
+/// Lives on the root block's `data`, beside `front_matter` — the one place that
+/// is part of the document but is NOT a body block. That distinction is the
+/// whole point (see `docs/page-title-plan.md`): the title travels with the
+/// document, so every consumer sees it, while the body's first line stays free
+/// to be whatever the author wants.
+///
+/// `None` for a document that predates this — the caller falls back to the
+/// view's `name` column. There is deliberately no backfill migration: rather
+/// than write a CRDT update for every existing page, an old page simply keeps
+/// answering from its name until someone edits its title.
+///
+/// Blank is treated as absent, so an emptied title falls back rather than
+/// rendering as nothing.
+pub fn document_title(snapshot: &DocumentSnapshotPayload) -> Option<&str> {
+  let root = block_index(snapshot, &snapshot.root_block_id)
+    .map(|i| &snapshot.blocks[i])?;
+  root
+    .data
+    .get("title")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|title| !title.is_empty())
+}
+
 /// Put `# {title}` into an exported page's TEXT, after any front matter.
 ///
 /// Only for exports that produce a FILE the user takes away. Deliberately NOT
@@ -5989,7 +6015,58 @@ pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_
 
 #[cfg(test)]
 mod page_title_tests {
-  use super::with_page_title;
+  use super::{DocumentSnapshotPayload, document_title, with_page_title};
+
+  fn doc(root_data: serde_json::Value) -> DocumentSnapshotPayload {
+    serde_json::from_value(serde_json::json!({
+      "schema_version": 1,
+      "root_block_id": "root",
+      "blocks": [
+        {"id": "root", "type": "page", "text": "", "data": root_data, "children": ["b1"]},
+        {"id": "b1", "type": "paragraph", "text": "正文。", "data": {}, "children": []}
+      ]
+    }))
+    .unwrap()
+  }
+
+  #[test]
+  fn a_document_without_a_title_reports_none() {
+    // The state every existing page is in. There is no backfill, so this is not
+    // an edge case — it is the majority, and the caller must fall back to the
+    // view's name rather than show nothing.
+    assert_eq!(document_title(&doc(serde_json::json!({}))), None);
+  }
+
+  #[test]
+  fn the_title_is_read_from_the_root_block() {
+    assert_eq!(
+      document_title(&doc(serde_json::json!({"title": "我的页"}))),
+      Some("我的页")
+    );
+  }
+
+  /// A blank title must fall back, not render as an empty heading.
+  #[test]
+  fn a_blank_title_counts_as_absent() {
+    assert_eq!(document_title(&doc(serde_json::json!({"title": ""}))), None);
+    assert_eq!(
+      document_title(&doc(serde_json::json!({"title": "   "}))),
+      None
+    );
+  }
+
+  /// The title sits BESIDE front matter on the same root block; reading one
+  /// must not disturb or depend on the other.
+  #[test]
+  fn a_title_and_front_matter_coexist_on_the_root_block() {
+    let d = doc(serde_json::json!({"title": "我的页", "front_matter": "tags: [a]"}));
+    assert_eq!(document_title(&d), Some("我的页"));
+    let exported = super::export_markdown(&d).unwrap();
+    assert!(
+      exported.starts_with("---\ntags: [a]\n---"),
+      "front matter still leads the export: {exported:?}"
+    );
+  }
 
   #[test]
   fn the_title_leads_an_ordinary_page() {

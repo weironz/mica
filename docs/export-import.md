@@ -65,10 +65,25 @@ Implemented in `crates/api-server/src/routes/documents.rs`
   sanitized by `safe_file_name` (unicode letters/digits and `-_.` kept,
   other runs collapsed to `_`) and uniqued with `-2`, `-3` suffixes.
 - **Page content** is `# <title>\n\n<body>`; the body comes from
-  `export_markdown_with_assets` (`crates/app-core/src/documents.rs`), which
+  `export_markdown_with_assets` (`crates/markdown/src/lib.rs`), which
   prefers the bundled asset path for an image, then its name, then its URL.
   Images that were never re-hosted (external links) stay standard
   `![alt](https://…)` markdown.
+
+  The title goes AFTER any front matter (`with_page_title`) — a heading above it
+  would turn the opening `---` into a thematic break and the properties into
+  plain text. It is taken from the DOCUMENT (`root.data['title']`) when it has
+  one and from the view name otherwise; see `docs/page-title-plan.md`.
+  Import takes the same line back off when the manifest says
+  `generator: "mica"`, which is what keeps export→import stable.
+
+  > ⚠️ This line was **false** from some unrecorded date until 2026-08-27: the
+  > export wrote the body verbatim and the name lived only in the file name +
+  > `manifest.json`. It misled a reader into planning around a behaviour that
+  > did not exist — together with a matching stale comment in `import.rs` that
+  > contradicted the real rule 100 lines below itself. It is true again as of
+  > the change above. If you are about to trust this paragraph for anything
+  > load-bearing, export a workspace and look; that is what finally settled it.
 - **ZIP writer** (`crates/interchange/src/zip/writer.rs`): STORE-only (markdown and
   already-compressed images don't benefit from deflate), UTF-8 name flag
   (0x0800) set so CJK names survive.

@@ -98,6 +98,19 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   }
 
   let notion = notion_hint || looks_like_notion_export(mds.keys().map(String::as_str));
+  // Our OWN archives now lead each page's text with `# <title>` (2026-08-27, see
+  // `docs/page-title-plan.md`), so importing one has to take that line back off
+  // or every export→import cycle stacks another heading — the round-trip red
+  // line (CLAUDE.md #4).
+  //
+  // Keyed on the manifest's `generator`, not on "there happens to be a
+  // manifest": a hand-built or third-party archive with a manifest is not ours,
+  // and its leading heading is the author's content.
+  let mica_export = manifest
+    .as_deref()
+    .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+    .and_then(|m| m.get("generator").and_then(|g| g.as_str()).map(|g| g == "mica"))
+    .unwrap_or(false);
   let clean = |s: &str| -> String {
     if notion { strip_notion_id(s).to_string() } else { s.to_string() }
   };
@@ -112,7 +125,14 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   // lives only in the manifest `title`. Key by the folder's dir path so the
   // chain walk restores the true name instead of the sanitized path segment
   // (spaces/punctuation collapse to `_` in the path). Documents are unaffected:
-  // their name round-trips through the `# {name}` H1 the export prepends.
+  // their name round-trips through the manifest `title` and the file name.
+  //
+  // 〔This used to read "their name round-trips through the `# {name}` H1 the
+  // export prepends" — false for however long, since the export wrote the body
+  // verbatim, and the rule 100 lines below said exactly that in as many words.
+  // Two contradicting comments in one file cost a reader several wrong turns on
+  // 2026-08-27. The export DOES write that heading again now, but this code path
+  // still reads the manifest, not the text.〕
   let folder_titles: HashMap<String, String> = entries
     .iter()
     .filter(|(_, is_folder, _)| *is_folder)
@@ -216,19 +236,29 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     let fallback = clean(
       base.strip_suffix(".md").or_else(|| base.strip_suffix(".MD")).unwrap_or(base),
     );
-    // The file name IS the page name; the body is the body. Nothing is promoted
-    // out of the text and nothing is stripped from it — a page's name is a
-    // property of the page, not a line inside it, and our own export writes the
-    // name into the file name, never into the text.
+    // The file name IS the page name. A leading `# <that name>` is stripped in
+    // exactly two cases, and left alone in every other:
     //
-    // Notion is the one exception, and it is not ours to fix: a Notion export
-    // puts the title in the file name AND repeats it as the body's first `# H1`
-    // (which is why every third-party Notion importer ships a "remove duplicate
-    // title" step). Importing that verbatim would show the title twice on every
-    // page. So strip it there, and ONLY there — and only when it matches the
-    // name exactly, so a heading that merely happens to lead the page survives.
+    // - **Notion exports**, which put the title in the file name AND repeat it
+    //   as the body's first `# H1` (which is why every third-party Notion
+    //   importer ships a "remove duplicate title" step). Importing that verbatim
+    //   would show the title twice on every page.
+    // - **Our own exports**, since 2026-08-27 — they now write the title into
+    //   the text too (`docs/page-title-plan.md`), so this is the other half of
+    //   that change. Without it every export→import cycle stacks one more
+    //   heading, which is the round-trip red line (CLAUDE.md #4).
+    //   〔This reverses the rule that used to live here: "a page's name is a
+    //   property of the page, not a line inside it, and our own export writes
+    //   the name into the file name, never into the text." The name is still a
+    //   property — it just travels inside the document now, so that every reader
+    //   of the document sees it. See the plan's §7.〕
+    //
+    // A foreign archive (no manifest, or a manifest some other tool wrote) is
+    // NOT stripped: its leading heading is the author's content. And the match
+    // is exact in both cases, so a heading that merely happens to lead the page
+    // survives.
     let title = fallback;
-    let body = if notion {
+    let body = if notion || mica_export {
       strip_leading_h1(markdown, &title)
     } else {
       markdown.clone()
@@ -612,12 +642,56 @@ mod tests {
     assert!(chapter.archive_path.is_none() && chapter.markdown.is_empty());
     let intro = find(&plan, "Intro");
     assert!(!intro.is_folder);
-    // Verbatim: the leading heading is the author's content, not a title to
-    // harvest. The name came from the file name (`Intro.md`), as it should.
-    assert_eq!(intro.markdown.trim(), "# Intro
-
-hello");
+    // The manifest says `generator: mica`, so the leading `# Intro` is the
+    // title OUR export wrote and it comes back off — otherwise every
+    // export→import cycle stacks another one. (Before 2026-08-27 this asserted
+    // the opposite, because our export did not write it; see
+    // `docs/page-title-plan.md` §7.) The name still comes from the file name.
+    assert_eq!(intro.markdown.trim(), "hello");
     assert_eq!(parent_title(&plan, "Intro"), Some("Chapter"));
+  }
+
+  // The stripping above is narrow on purpose. These three pin the edges of it —
+  // each one is a way to silently eat somebody's content.
+
+  // A leading heading that says something ELSE is the author's writing, even in
+  // our own archive. Exact match, nothing looser.
+  #[test]
+  fn a_differently_named_leading_heading_survives_our_own_import() {
+    let raw = vec![
+      e("manifest.json", &manifest(&[("Intro.md", "Intro", "document")])),
+      e("Intro.md", "# 别的标题\n\nhello"),
+    ];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    assert_eq!(find(&plan, "Intro").markdown.trim(), "# 别的标题\n\nhello");
+  }
+
+  // Same text, same name — but nobody said this archive is ours. A hand-built
+  // or third-party zip's first heading is content, and stripping it would be
+  // data loss with no error.
+  #[test]
+  fn a_foreign_archive_keeps_its_leading_heading() {
+    let raw = vec![e("Intro.md", "# Intro\n\nhello")];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    assert_eq!(find(&plan, "Intro").markdown.trim(), "# Intro\n\nhello");
+  }
+
+  // A manifest written by some OTHER tool is not ours either. The flag is the
+  // `generator` field, not the mere presence of a manifest.
+  #[test]
+  fn a_manifest_from_another_generator_does_not_enable_stripping() {
+    let foreign = serde_json::json!({
+      "version": 1,
+      "generator": "someone-else",
+      "pages": [{"path": "Intro.md", "title": "Intro", "type": "document"}],
+    })
+    .to_string();
+    let raw = vec![
+      e("manifest.json", &foreign),
+      e("Intro.md", "# Intro\n\nhello"),
+    ];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    assert_eq!(find(&plan, "Intro").markdown.trim(), "# Intro\n\nhello");
   }
 
   // An EMPTY folder (only in the manifest, no `.md`, no children) survives the
@@ -774,9 +848,10 @@ hello");
     let folder = plan.pages.iter().find(|p| p.title == "Doc" && p.is_folder).expect("folder");
     assert!(folder.parent.is_none() && folder.markdown.is_empty());
     let leaf = plan.pages.iter().find(|p| p.title == "Doc" && !p.is_folder).expect("leaf");
-    assert_eq!(leaf.markdown.trim(), "# Doc
-
-parent body");
+    // `# Doc` is the title our own export wrote (manifest `generator: mica`),
+    // so it is stripped and only the body remains — see
+    // `folder_with_child_imports_as_folder` for why this flipped.
+    assert_eq!(leaf.markdown.trim(), "parent body");
     assert_eq!(leaf.parent.map(|i| &plan.pages[i]).map(|p| p.title.as_str()), Some("Doc"));
     assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
     // The child hangs off the FOLDER, not off the leaf page.
