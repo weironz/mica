@@ -3879,7 +3879,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       row('F2', context.l10n.shortcutsRename),
       row('Ctrl + Click', context.l10n.shortcutsTreeToggleSelect),
       row('Shift + Click', context.l10n.shortcutsTreeRangeSelect),
-      row('Esc', context.l10n.shortcutsTreeClearSelect),
       const SizedBox(height: 8),
       head(context.l10n.shortcutsGroupFormat),
       row('Ctrl + B', context.l10n.shortcutsBold),

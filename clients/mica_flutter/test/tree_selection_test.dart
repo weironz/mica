@@ -115,6 +115,123 @@ void main() {
     });
   });
 
+  // The stateful half — and the one that actually shipped broken.
+  //
+  // Every rule below was already correct and tested as a pure function. The code
+  // that folded clicks INTO the selection lived inline in the shell's State,
+  // written as `_ids..clear()..addAll(selectionAfterToggle(_ids, id))`, where
+  // Dart evaluates the argument after `clear()` has run — so it read an empty
+  // set and every Ctrl-click reset the selection to one row. Nothing caught it
+  // until the assembled app was clicked. It is a class now so these can exist.
+  group('TreeSelection', () {
+    List<SelectableRow> rows() => const [
+          (id: 'a', parentId: null),
+          (id: 'b', parentId: null),
+          (id: 'c', parentId: null),
+          (id: 'F', parentId: null),
+          (id: 'f1', parentId: 'F'),
+        ];
+
+    TreeSelection ctrlClick(TreeSelection s, List<String> ids) {
+      for (final id in ids) {
+        s.click(id, extendRange: false, visibleRows: rows());
+      }
+      return s;
+    }
+
+    test('two Ctrl-clicks leave two rows selected', () {
+      // THE regression. Under the cascade bug this ended at {'b'}.
+      expect(ctrlClick(TreeSelection(), ['a', 'b']).ids, {'a', 'b'});
+    });
+
+    test('five Ctrl-clicks leave five', () {
+      expect(
+        ctrlClick(TreeSelection(), ['a', 'b', 'c', 'F', 'f1']).ids.length,
+        5,
+      );
+    });
+
+    test('Ctrl-clicking a selected row takes it back out', () {
+      expect(ctrlClick(TreeSelection(), ['a', 'b', 'a']).ids, {'b'});
+    });
+
+    test('a Shift range adds to what Ctrl already picked', () {
+      // Explorer's behaviour: Shift after a few Ctrl-clicks is "and also these".
+      final s = ctrlClick(TreeSelection(), ['f1']);
+      s.click('a', extendRange: false, visibleRows: rows()); // anchor at 'a'
+      s.click('c', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'f1', 'a', 'b', 'c'});
+    });
+
+    test('a Shift range with no meaning degrades to a toggle', () {
+      // 'a' (root) to 'f1' (inside F) crosses parents — the case the whole rule
+      // exists to refuse. It must still do SOMETHING sensible with the click.
+      final s = ctrlClick(TreeSelection(), ['a']);
+      s.click('f1', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'a', 'f1'});
+    });
+
+    test('Shift with no anchor yet is just a toggle', () {
+      final s = TreeSelection();
+      s.click('b', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'b'});
+    });
+
+    test('one row is not a batch; two are', () {
+      final s = ctrlClick(TreeSelection(), ['a']);
+      expect(s.actsOnWholeSelection('a'), isFalse);
+      ctrlClick(s, ['b']);
+      expect(s.actsOnWholeSelection('a'), isTrue);
+      expect(
+        s.actsOnWholeSelection('c'),
+        isFalse,
+        reason: 'a gesture on a row OUTSIDE the selection acts on that row',
+      );
+    });
+
+    test('clear reports whether it changed anything', () {
+      final s = TreeSelection();
+      expect(s.clear(), isFalse, reason: 'already empty — no rebuild needed');
+      ctrlClick(s, ['a']);
+      expect(s.clear(), isTrue);
+      expect(s.ids, isEmpty);
+    });
+
+    test('clearing also forgets the anchor', () {
+      // Otherwise the next Shift-click measures from a row nobody remembers
+      // selecting, and silently takes everything in between.
+      final s = ctrlClick(TreeSelection(), ['a']);
+      s.clear();
+      s.click('c', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'c'});
+    });
+
+    test('rows that scrolled or folded out of view are dropped', () {
+      final s = ctrlClick(TreeSelection(), ['a', 'f1']);
+      expect(s.retainVisible({'a', 'b', 'c', 'F'}), isTrue);
+      expect(s.ids, {'a'}, reason: 'F was collapsed; f1 is no longer visible');
+    });
+
+    test('pruning nothing reports no change', () {
+      final s = ctrlClick(TreeSelection(), ['a']);
+      expect(s.retainVisible({'a', 'b', 'c', 'F', 'f1'}), isFalse);
+    });
+
+    test('pruning away the anchor forgets it', () {
+      final s = ctrlClick(TreeSelection(), ['f1']);
+      s.retainVisible({'a', 'b', 'c', 'F'});
+      s.click('c', extendRange: true, visibleRows: rows());
+      expect(s.ids, {'c'}, reason: 'no anchor left, so this is a toggle');
+    });
+
+    test('the exposed set cannot be mutated from outside', () {
+      // It is the thing the whole feature is about; handing out a live handle
+      // to it is how a selection changes without a setState to redraw it.
+      final s = ctrlClick(TreeSelection(), ['a']);
+      expect(() => s.ids.add('b'), throwsUnsupportedError);
+    });
+  });
+
   group('flattenedFolderOptions', () {
     FolderCandidate f(
       String id, {

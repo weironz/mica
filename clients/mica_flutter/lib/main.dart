@@ -7851,15 +7851,6 @@ int reparentLevelFor({
 ///
 /// [dragged] is filtered out before it is appended, so re-dropping a row that
 /// is already at the root moves it to the end instead of listing it twice.
-/// Esc in the sidebar tree: drop the multi-selection.
-///
-/// An Intent rather than a raw key listener so it composes with the rest of the
-/// app's shortcuts — in particular it does not fire while an inline rename field
-/// or a dialog owns the focus, where Esc already means "cancel that".
-class _ClearSelectionIntent extends Intent {
-  const _ClearSelectionIntent();
-}
-
 List<DocumentView> rootDropOrder(
   List<DocumentView> views,
   List<DocumentView> dragged,
@@ -8567,17 +8558,18 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // row tap / opened doc turns this back off. Distinct from `_focusedNavId ==
   // null`, which merely falls back to the open doc.
   bool _rootFocused = false;
-  // Ctrl/Shift multi-selection, as view ids. EMPTY is the ordinary state — this
-  // is a second, explicit notion of "chosen", deliberately separate from
-  // `_focusedNavId` (which is "where new pages get created" and is never empty
-  // for long). Conflating them would make every ordinary click a one-item batch.
+  // Ctrl/Shift multi-selection. EMPTY is the ordinary state — this is a second,
+  // explicit notion of "chosen", deliberately separate from `_focusedNavId`
+  // (which is "where new pages get created" and is never empty for long).
+  // Conflating them would make every ordinary click a one-item batch.
   //
   // A single id in here still is not a batch: the batch menu and the multi-drag
-  // both go through `actsOnSelection`, which requires two or more.
-  final Set<String> _selectedViewIds = {};
-  // Where a Shift range measures from — the last row Ctrl/plain-clicked. Null
-  // means there is nothing to measure from and Shift degrades to a toggle.
-  String? _selectionAnchorId;
+  // both go through `actsOnWholeSelection`, which requires two or more.
+  //
+  // A [TreeSelection] rather than a raw Set here, so the accumulation rules sit
+  // somewhere a test can reach — see its doc comment for what went wrong when
+  // they lived inline in this State.
+  final TreeSelection _selection = TreeSelection();
   // True only while a page is being dragged in the tree. The drop zones overlay
   // each row, so they are mounted only during a drag — otherwise they would
   // intercept ordinary taps on the page rows.
@@ -8588,6 +8580,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // owns its own controller; the key gets its viewport RenderBox to measure how
   // close the pointer is to an edge.
   final ScrollController _treeScroll = ScrollController();
+
   // Pointer is over the navigation sidebar — reveals the tree's expand
   // toggles (AppFlowy-style: they live in their own slim column, opacity 0
   // at rest so the page icons keep one aligned column).
@@ -8986,6 +8979,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     return <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): newPage,
       const SingleActivator(LogicalKeyboardKey.keyN, meta: true): newPage,
+      // NO Esc binding for the sidebar selection, deliberately — see the note
+      // on the tree's build method. Three ways to bind it were tried and all
+      // three were dead on arrival for the same reason.
       // Ctrl/Cmd+F → in-page find within the open document; Ctrl/Cmd+Shift+F →
       // the workspace-wide search (what plain Ctrl+F used to do).
       const SingleActivator(LogicalKeyboardKey.keyF, control: true):
@@ -9622,34 +9618,30 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         _clearTreeSelection();
         _focusRoot();
       },
-      // Esc drops the selection — the one way out that does not also navigate
-      // somewhere. A `Shortcuts`/`Actions` pair rather than a raw key handler
-      // so it does not fire while a rename field or a dialog has the focus.
+      // There is NO Esc-clears-the-selection shortcut, and that is a decision
+      // rather than an omission. Three bindings were built and all three were
+      // dead — measured in the running app, not guessed:
       //
-      // The whole tree, not each row: after Ctrl-clicking five rows the focus
-      // is wherever the last click left it, and an Esc that only worked on the
-      // focused row would work by luck.
-      child: Shortcuts(
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.escape): _ClearSelectionIntent(),
-        },
-        child: Actions(
-          actions: {
-            _ClearSelectionIntent: CallbackAction<_ClearSelectionIntent>(
-              onInvoke: (_) {
-                _clearTreeSelection();
-                return null;
-              },
-            ),
-          },
-          child: Focus(
-            // Not autofocus: stealing focus on every tree rebuild would take
-            // the caret out of the editor.
-            skipTraversal: true,
-            child: _buildTreeList(treeRows, canEdit, activeId),
-          ),
-        ),
-      ),
+      //   1. A local `Shortcuts`/`Actions` pair here. Flutter dispatches keys
+      //      from the FOCUSED node upward, and the sidebar had no focus.
+      //   2. Same, plus a FocusNode requested on the selecting click. A probe
+      //      on that node logged ZERO key events — not even the Ctrl of the
+      //      click that had just focused it.
+      //   3. `_appShortcuts` (where Ctrl+N lives and works). A probe inside the
+      //      binding never fired either.
+      //
+      // What (2) did reveal: 400ms after the click `primaryFocus` really was
+      // the sidebar, but by the time Esc was pressed focus had returned to the
+      // page route's own scope — an ANCESTOR of this whole shell. Dispatch from
+      // there goes straight up to WidgetsApp and never descends, so no shortcut
+      // registered anywhere inside the shell can see the key. Making Esc work
+      // means a global `HardwareKeyboard` handler, which fires while a dialog
+      // or an inline rename owns Esc too — worth doing only if asked for.
+      //
+      // The selection is dropped by clicking any row, or the blank area below
+      // the tree. Both are verified; a documented key that does nothing is
+      // worse than no key at all.
+      child: _buildTreeList(treeRows, canEdit, activeId),
     );
   }
 
@@ -9685,7 +9677,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             revealToggle: _navHovered,
             isCollapsed: !_expandedViewIds.contains(item.view.id),
             isSelected: item.view.id == activeId,
-            isMultiSelected: _selectedViewIds.contains(item.view.id),
+            isMultiSelected: _selection.contains(item.view.id),
             // Read-only trees get no selection: nothing in the batch menu is
             // something a viewer could do.
             onSelectClick: canEdit
@@ -9693,7 +9685,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       _handleSelectClick(item.view, extendRange: extendRange)
                 : null,
             onPlainTap: _clearTreeSelection,
-            batchActions: canEdit && actsOnSelection(_selectedViewIds, item.view.id)
+            batchActions: canEdit && _selection.actsOnWholeSelection(item.view.id)
                 ? () => _batchMenuItems(item.view)
                 : null,
             canEdit: canEdit,
@@ -9750,8 +9742,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // four rows sit there looking like they stayed behind.
           final travelling =
               _draggingTree &&
-              _selectedViewIds.contains(item.view.id) &&
-              _selectedViewIds.length > 1;
+              _selection.contains(item.view.id) &&
+              _selection.length > 1;
           return _draggableTreeRow(
             item.view,
             item.depth,
@@ -10016,29 +10008,16 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// A Ctrl (toggle) or Shift (extend) click landed on [view].
   void _handleSelectClick(DocumentView view, {required bool extendRange}) {
     setState(() {
-      if (extendRange && _selectionAnchorId != null) {
-        final range = shiftRangeSelection(
-          visibleRows: [
-            for (final row in _visibleDocumentTree())
-              (id: row.view.id, parentId: row.view.parentViewId),
-          ],
-          anchorId: _selectionAnchorId!,
-          targetId: view.id,
-        );
-        if (range != null) {
-          // Added to what was there, not replacing it: Shift after a few
-          // Ctrl-clicks is "and also these", which is what Explorer does.
-          _selectedViewIds.addAll(range);
-          return;
-        }
-        // null = the range has no unambiguous meaning (different parents, or an
-        // end that scrolled/collapsed out of view). Fall through to a toggle
-        // rather than guessing — the rule the whole feature is built on.
-      }
-      _selectedViewIds
-        ..clear()
-        ..addAll(selectionAfterToggle(_selectedViewIds, view.id));
-      _selectionAnchorId = view.id;
+      _selection.click(
+        view.id,
+        extendRange: extendRange,
+        // The tree AS DISPLAYED: a Shift range is only meaningful over rows the
+        // user can see. A collapsed folder's children are simply absent.
+        visibleRows: [
+          for (final row in _visibleDocumentTree())
+            (id: row.view.id, parentId: row.view.parentViewId),
+        ],
+      );
     });
   }
 
@@ -10047,11 +10026,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// A no-op when there is nothing selected, so it can sit in the hot path of
   /// every row tap without causing a rebuild per click.
   void _clearTreeSelection() {
-    if (_selectedViewIds.isEmpty && _selectionAnchorId == null) return;
-    setState(() {
-      _selectedViewIds.clear();
-      _selectionAnchorId = null;
-    });
+    if (_selection.clear()) setState(() {});
   }
 
   /// The rows a gesture on [id] acts on: the whole selection when [id] is part
@@ -10064,13 +10039,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// remembers by the time they see the result.)
   List<DocumentView> _rowsActedOnBy(String id) {
     final byId = {for (final v in widget.views) v.id: v};
-    if (!actsOnSelection(_selectedViewIds, id)) {
+    if (!_selection.actsOnWholeSelection(id)) {
       final one = byId[id];
       return one == null ? const [] : [one];
     }
     final inTreeOrder = [
       for (final row in _visibleDocumentTree())
-        if (_selectedViewIds.contains(row.view.id)) row.view.id,
+        if (_selection.contains(row.view.id)) row.view.id,
     ];
     final kept = independentSelection(
       inTreeOrder,
@@ -10081,7 +10056,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// The context menu shown when a right-click lands inside a multi-selection.
   ///
-  /// Counts come from [_rowsActedOnBy], not from `_selectedViewIds.length`:
+  /// Counts come from [_rowsActedOnBy], not from `_selection.length`:
   /// selecting a folder and a page inside it is two highlighted rows but ONE
   /// thing to move, and a menu that says 3 while doing 2 is the kind of lie
   /// that only shows up after the deed.
@@ -10413,13 +10388,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// hidden ones instead is worse — that is a batch acting on rows the user
   /// folded away and stopped thinking about.
   void _pruneSelectionToVisible() {
-    if (_selectedViewIds.isEmpty) return;
+    if (_selection.isEmpty) return;
     final visible = {for (final row in _visibleDocumentTree()) row.view.id};
-    if (_selectedViewIds.every(visible.contains)) return;
-    setState(() {
-      _selectedViewIds.removeWhere((id) => !visible.contains(id));
-      if (!visible.contains(_selectionAnchorId)) _selectionAnchorId = null;
-    });
+    if (_selection.retainVisible(visible)) setState(() {});
   }
 
   /// `workspace/folder/.../page` for the open page — GitHub's "copy path", for

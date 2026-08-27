@@ -69,6 +69,96 @@ Set<String> selectionAfterToggle(Set<String> current, String id) {
   return next;
 }
 
+/// The sidebar's multi-selection: which rows are chosen, and where a Shift
+/// range measures from.
+///
+/// A class rather than a `Set` plus a `String?` in the shell's State, because
+/// the shell is where this feature's one real bug lived and the shell is the one
+/// place a test cannot reach. The rules above were all correct and all tested;
+/// the code that ACCUMULATED into them was written as
+///
+///     _selectedViewIds..clear()..addAll(selectionAfterToggle(_selectedViewIds, id))
+///
+/// where Dart evaluates the argument after `clear()` has already run — so it
+/// read an empty set, and every Ctrl-click reset the selection to a single row.
+/// Nothing but clicking the assembled app could show that. Moving the mutation
+/// here makes "two Ctrl-clicks leave two rows" an assertion instead of a hope.
+///
+/// Holds ids only. It never sees a `DocumentView`, so it stays testable with
+/// string literals and cannot drift into being a second copy of the tree.
+class TreeSelection {
+  final Set<String> _ids = <String>{};
+  String? _anchorId;
+
+  /// The chosen ids. Unordered — callers that need an order impose the tree's.
+  Set<String> get ids => Set.unmodifiable(_ids);
+
+  bool get isEmpty => _ids.isEmpty;
+  int get length => _ids.length;
+  bool contains(String id) => _ids.contains(id);
+
+  /// Whether a gesture on [id] acts on the whole selection — see
+  /// [actsOnSelection], which this defers to so there is one rule.
+  bool actsOnWholeSelection(String id) => actsOnSelection(_ids, id);
+
+  /// Apply a modified click on [id].
+  ///
+  /// [visibleRows] is the tree as displayed, needed only for a Shift range; a
+  /// range with no unambiguous meaning degrades to a toggle rather than
+  /// guessing (see [shiftRangeSelection]).
+  void click(
+    String id, {
+    required bool extendRange,
+    required List<SelectableRow> visibleRows,
+  }) {
+    if (extendRange && _anchorId != null) {
+      final range = shiftRangeSelection(
+        visibleRows: visibleRows,
+        anchorId: _anchorId!,
+        targetId: id,
+      );
+      if (range != null) {
+        // Added to, not replacing: Shift after a few Ctrl-clicks means "and
+        // also these", which is what Explorer does. The anchor stays put, so
+        // Shift-clicking again re-measures from the same place.
+        _ids.addAll(range);
+        return;
+      }
+    }
+    // Computed BEFORE the clear — see this class's doc comment.
+    final next = selectionAfterToggle(_ids, id);
+    _ids
+      ..clear()
+      ..addAll(next);
+    _anchorId = id;
+  }
+
+  /// Forget everything. Returns whether anything actually changed, so the caller
+  /// can skip a rebuild on the (very common) already-empty case.
+  bool clear() {
+    if (_ids.isEmpty && _anchorId == null) return false;
+    _ids.clear();
+    _anchorId = null;
+    return true;
+  }
+
+  /// Drop rows that are no longer on screen. Returns whether anything changed.
+  ///
+  /// Collapsing a folder hides its children, and a selection is only honest
+  /// while you can see what is in it: without this a batch menu offers to delete
+  /// five and deletes three. Keeping the hidden ones instead is worse — that is
+  /// a batch acting on rows the user folded away and stopped thinking about.
+  bool retainVisible(Set<String> visibleIds) {
+    if (_ids.every(visibleIds.contains) &&
+        (_anchorId == null || visibleIds.contains(_anchorId))) {
+      return false;
+    }
+    _ids.removeWhere((id) => !visibleIds.contains(id));
+    if (!visibleIds.contains(_anchorId)) _anchorId = null;
+    return true;
+  }
+}
+
 /// One row of a tree, reduced to what [flattenedFolderOptions] needs.
 typedef FolderCandidate = ({
   String id,

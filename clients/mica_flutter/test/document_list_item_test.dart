@@ -8,6 +8,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart';
+// main.dart imports this but does not re-export it; the multi-select tests
+// below drive the row exactly as the tree does, which means folding each click
+// through the real function rather than a stand-in.
+import 'package:mica_flutter/ui/tree_selection.dart';
 
 DocumentView _view({String name = 'A long page name that would truncate'}) =>
     DocumentView(
@@ -541,5 +545,194 @@ void main() {
     // A folder row has both quick-add affordances: child page + child folder.
     expect(find.byIcon(Icons.add), findsOneWidget);
     expect(find.byIcon(Icons.create_new_folder_outlined), findsOneWidget);
+  });
+
+  // ── Ctrl/Shift multi-selection ───────────────────────────────────────────
+  //
+  // What these cover is the ROW's half: that a modified click is reported as a
+  // selection gesture instead of opening the page, and that a right-click inside
+  // a selection swaps the menu.
+  //
+  // What they deliberately do NOT claim to cover is accumulation across clicks.
+  // That was the bug this feature shipped with, it lived in the shell's State,
+  // and a widget test driving one row can only exercise a stand-in for it — the
+  // first attempt here did exactly that and passed with the bug reintroduced.
+  // The fix was to move the accumulation into `TreeSelection`, where
+  // tree_selection_test.dart tests it directly.
+
+  testWidgets('Ctrl-click reports a toggle, not an open', (tester) async {
+    var opened = false;
+    var toggled = false;
+    bool? sawExtend;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(name: '甲'),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      canEdit: true,
+      isRenaming: false,
+      onSelectClick: ({required extendRange}) {
+        toggled = true;
+        sawExtend = extendRange;
+      },
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () => opened = true,
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onClone: () {},
+      onDelete: () {},
+    )));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.text('甲'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+
+    expect(toggled, isTrue);
+    expect(sawExtend, isFalse, reason: 'Ctrl toggles one row, it is not a range');
+    expect(opened, isFalse, reason: 'Ctrl-click must not open the page');
+  });
+
+  testWidgets('Shift-click asks for a range; a plain click asks for neither',
+      (tester) async {
+    var opened = false;
+    var plainTaps = 0;
+    bool? sawExtend;
+    Widget row() => _host(DocumentListItem(
+          view: _view(name: '甲'),
+          depth: 0,
+          hasChildren: false,
+          revealToggle: false,
+          isCollapsed: false,
+          isSelected: false,
+          canEdit: true,
+          isRenaming: false,
+          onSelectClick: ({required extendRange}) => sawExtend = extendRange,
+          onPlainTap: () => plainTaps++,
+          onRenameSubmit: (_) {},
+          onRenameCancel: () {},
+          onToggle: () {},
+          onPressed: () => opened = true,
+          onCreateChild: () {},
+          onCreateChildFolder: () {},
+          onRename: () {},
+          onClone: () {},
+          onDelete: () {},
+        ));
+
+    await tester.pumpWidget(row());
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.tap(find.text('甲'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+    expect(sawExtend, isTrue);
+    expect(plainTaps, 0, reason: 'a modified click is not a plain one');
+
+    // Unmodified: the row opens, and the tree is told to drop its selection.
+    await tester.tap(find.text('甲'));
+    await tester.pumpAndSettle();
+    expect(opened, isTrue);
+    expect(plainTaps, 1);
+  });
+
+  testWidgets('the row reports every Ctrl-click, so a selection can build up',
+      (tester) async {
+    // The row's contribution only: it must report each modified click rather
+    // than swallowing the second one. Whether the RESULT accumulates is
+    // TreeSelection's job and is tested there — see the note above.
+    var selection = <String>{};
+    Widget rowFor(String id) => _host(DocumentListItem(
+          view: DocumentView(
+            id: id,
+            parentViewId: null,
+            objectId: 'o$id',
+            objectType: 'document',
+            name: id,
+            position: '01',
+          ),
+          depth: 0,
+          hasChildren: false,
+          revealToggle: false,
+          isCollapsed: false,
+          isSelected: false,
+          isMultiSelected: selection.contains(id),
+          canEdit: true,
+          isRenaming: false,
+          onSelectClick: ({required extendRange}) {
+            selection = selectionAfterToggle(selection, id);
+          },
+          onRenameSubmit: (_) {},
+          onRenameCancel: () {},
+          onToggle: () {},
+          onPressed: () {},
+          onCreateChild: () {},
+          onCreateChildFolder: () {},
+          onRename: () {},
+          onClone: () {},
+          onDelete: () {},
+        ));
+
+    for (final id in ['甲', '乙']) {
+      await tester.pumpWidget(rowFor(id));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.tap(find.text(id));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+    }
+
+    expect(selection, {'甲', '乙'});
+  });
+
+  testWidgets('a multi-selected row swaps the whole menu for the batch one',
+      (tester) async {
+    var deleted = false;
+    var batchRan = false;
+    await tester.pumpWidget(_host(DocumentListItem(
+      view: _view(name: '甲'),
+      depth: 0,
+      hasChildren: false,
+      revealToggle: false,
+      isCollapsed: false,
+      isSelected: false,
+      isMultiSelected: true,
+      canEdit: true,
+      isRenaming: false,
+      batchActions: () => [
+        PopupMenuItem<VoidCallback>(
+          value: () => batchRan = true,
+          child: const Text('删除 3 项'),
+        ),
+      ],
+      onRenameSubmit: (_) {},
+      onRenameCancel: () {},
+      onToggle: () {},
+      onPressed: () {},
+      onCreateChild: () {},
+      onCreateChildFolder: () {},
+      onRename: () {},
+      onClone: () {},
+      onDelete: () => deleted = true,
+    )));
+
+    await tester.tap(find.text('甲'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('删除 3 项'), findsOneWidget);
+    expect(
+      find.text('重命名'),
+      findsNothing,
+      reason: 'the per-row entries are replaced, not appended to — otherwise '
+          '"重命名" (this row) sits next to "删除 3 项" (all of them)',
+    );
+
+    await tester.tap(find.text('删除 3 项'));
+    await tester.pumpAndSettle();
+    expect(batchRan, isTrue);
+    expect(deleted, isFalse, reason: 'the batch entry carries its own action');
   });
 }

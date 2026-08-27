@@ -101,7 +101,6 @@
   },
   "shortcutsTreeToggleSelect": "Sidebar: add a row to the selection, or take it out",
   "shortcutsTreeRangeSelect": "Sidebar: select a run of rows under the same parent",
-  "shortcutsTreeClearSelect": "Sidebar: clear the selection",
   "transferPickFolder": "Folder (optional)",
   "@transferPickFolder": {
     "description": "Second dropdown in the transfer dialog: where inside the chosen workspace. Marked optional because the root is a perfectly good answer and is the default."
