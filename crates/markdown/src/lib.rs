@@ -84,6 +84,65 @@ pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationR
   export_markdown_with_assets(snapshot, &BTreeMap::new())
 }
 
+/// Put `# {title}` into an exported page's TEXT, after any front matter.
+///
+/// Only for exports that produce a FILE the user takes away. Deliberately NOT
+/// applied to the read endpoints: `GET .../export/markdown` is the read half of
+/// a read/PATCH pair (and what MCP `mica_read_document` calls), so a title added
+/// there would be written back as a real heading by the next read-modify-write
+/// and compound on every round trip.
+///
+/// Three rules, each of which is wrong to leave out:
+///
+/// 1. **After the front matter, never before.** YAML front matter is only front
+///    matter when it is the first thing in the file; a heading above it turns
+///    the opening `---` into a thematic break and the whole block into text.
+/// 2. **Not added when the body already opens with that exact heading.** Some
+///    people type the title as their first line by hand; welding a second copy
+///    on top is the doubling this feature exists to avoid. Exact match only —
+///    a leading heading that says something else is the author's content.
+/// 3. **Nothing at all for an empty title**, so an untitled page does not export
+///    a bare `# `.
+///
+/// The counterpart is `strip_leading_h1` on import (`mica_interchange`), which
+/// removes exactly what this writes so export→import stays stable
+/// (CLAUDE.md #4). The two must move together.
+pub fn with_page_title(markdown: &str, title: &str) -> String {
+  let title = title.trim();
+  if title.is_empty() {
+    return markdown.to_string();
+  }
+  let heading = format!("# {title}");
+  // Reuses the parser's own front-matter split rather than a second one — an
+  // unterminated `---` is not front matter, and `...` closes a block too. A
+  // private copy of that rule here would be the double-representation this
+  // codebase keeps getting burned by.
+  let (front, body) = split_front_matter(markdown);
+  if leading_heading(body).map(str::trim) == Some(heading.as_str()) {
+    return markdown.to_string();
+  }
+  let body = body.trim_start_matches('\n');
+  // Re-fenced exactly the way `export_markdown_with_assets` emits it, empty
+  // block included (`---\n---`, not `---\n\n---`).
+  let prefix = match front {
+    None => String::new(),
+    Some(inner) if inner.is_empty() => "---\n---\n".to_string(),
+    Some(inner) => format!("---\n{inner}\n---\n"),
+  };
+  if body.is_empty() {
+    return format!("{prefix}{heading}\n");
+  }
+  format!("{prefix}{heading}\n\n{body}")
+}
+
+/// The first non-blank line, if it is an ATX heading; otherwise `None`.
+fn leading_heading(markdown: &str) -> Option<&str> {
+  markdown
+    .lines()
+    .find(|line| !line.trim().is_empty())
+    .filter(|line| line.trim_start().starts_with('#'))
+}
+
 /// Like [export_markdown] but rewrites each image block whose `file_id` is in
 /// [images] to that asset path (e.g. `assets/photo.png`) — used for ZIP export
 /// where image bytes are bundled alongside the Markdown.
@@ -5926,6 +5985,81 @@ pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_
   }
 
   false
+}
+
+#[cfg(test)]
+mod page_title_tests {
+  use super::with_page_title;
+
+  #[test]
+  fn the_title_leads_an_ordinary_page() {
+    assert_eq!(with_page_title("正文。\n", "我的页"), "# 我的页\n\n正文。\n");
+  }
+
+  /// The rule that makes this more than a string concat.
+  ///
+  /// Front matter is only front matter when it is the FIRST thing in the file.
+  /// A heading above it turns the opening `---` into a thematic break, the
+  /// closing one into another, and the properties into visible text — silently,
+  /// in an export the user is keeping as a backup.
+  #[test]
+  fn the_title_goes_after_front_matter_not_before_it() {
+    let md = "---\ntags: [a]\n---\n正文。\n";
+    assert_eq!(
+      with_page_title(md, "我的页"),
+      "---\ntags: [a]\n---\n# 我的页\n\n正文。\n"
+    );
+  }
+
+  /// Someone who already types their own title must not get two.
+  #[test]
+  fn an_identical_leading_heading_is_left_alone() {
+    let md = "# 我的页\n\n正文。\n";
+    assert_eq!(with_page_title(md, "我的页"), md);
+  }
+
+  /// …but a DIFFERENT leading heading is the author's content, not a title.
+  #[test]
+  fn a_different_leading_heading_survives_and_the_title_goes_above_it() {
+    let md = "# 别的标题\n\n正文。\n";
+    assert_eq!(
+      with_page_title(md, "我的页"),
+      "# 我的页\n\n# 别的标题\n\n正文。\n"
+    );
+  }
+
+  /// Level matters: `## 我的页` is not the heading this writes, so it stays and
+  /// the real title is added above it. (This is the shape a user who types
+  /// their own H2 by hand ends up with — deliberate, not an accident.)
+  #[test]
+  fn a_same_named_heading_at_another_level_is_not_treated_as_the_title() {
+    let md = "## 我的页\n\n正文。\n";
+    assert_eq!(
+      with_page_title(md, "我的页"),
+      "# 我的页\n\n## 我的页\n\n正文。\n"
+    );
+  }
+
+  #[test]
+  fn an_empty_page_gets_just_the_heading() {
+    assert_eq!(with_page_title("", "我的页"), "# 我的页\n");
+    assert_eq!(with_page_title("\n\n", "我的页"), "# 我的页\n");
+  }
+
+  /// An untitled page must not export a bare `# `.
+  #[test]
+  fn an_empty_title_changes_nothing() {
+    assert_eq!(with_page_title("正文。\n", ""), "正文。\n");
+    assert_eq!(with_page_title("正文。\n", "   "), "正文。\n");
+  }
+
+  /// An unterminated `---` is not front matter. Swallowing the rest of the page
+  /// looking for a closing fence is how an export loses a body.
+  #[test]
+  fn an_unterminated_fence_is_treated_as_text() {
+    let md = "---\n没有收尾\n";
+    assert_eq!(with_page_title(md, "我的页"), "# 我的页\n\n---\n没有收尾\n");
+  }
 }
 
 #[cfg(test)]
