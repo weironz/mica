@@ -215,6 +215,13 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/views/batch-purge",
       post(documents::batch_purge_views),
     )
+    // Sibling of `/{view_id}/transfer`, with the whole selection in ONE
+    // transaction. Both are the same core; N sequential single transfers were
+    // the alternative, and those leave a half-moved selection on any failure.
+    .route(
+      "/workspaces/{workspace_id}/views/batch-transfer",
+      post(documents::batch_transfer_views),
+    )
     .route(
       "/workspaces/{workspace_id}/documents/batch-read",
       post(documents::batch_read_documents),
