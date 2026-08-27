@@ -2218,7 +2218,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         };
       });
       newId = view.id;
-      _cacheCloudPageTree();
+      // This workspace only. Unqualified, it wrote every workspace the mirror
+      // had preheated into memory — which on a real account is the 2.1 s the
+      // method's own comment measured, paid on every new folder.
+      _cacheCloudPageTree(workspaceId: workspace.id);
     });
     return newId;
   }
@@ -2281,36 +2284,43 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
+      if (orderedSiblings.isEmpty) return;
 
-      final moved = <DocumentView>[];
-      for (var i = 0; i < orderedSiblings.length; i++) {
-        final desired = pad((i + 1) * 10);
-        final view = orderedSiblings[i];
-        if (view.position != desired || view.parentViewId != parentViewId) {
-          moved.add(
-            await _api.moveView(
-              session.accessToken,
-              workspace.id,
-              view.id,
-              parentViewId: parentViewId,
-              position: desired,
-            ),
-          );
-        }
-      }
-      if (moved.isEmpty) {
-        return;
-      }
-      setState(() {
-        final views = [...?_viewsByWorkspace[workspace.id]];
-        for (final m in moved) {
-          final idx = views.indexWhere((v) => v.id == m.id);
-          if (idx >= 0) {
-            views[idx] = m;
-          }
-        }
-        _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
-      });
+      // ONE request for the whole group.
+      //
+      // This was a loop of `moveView`, awaited per sibling. It looked like it
+      // only paid for the rows that actually moved — `if (view.position !=
+      // desired)` — but a view is created with a `Uuid::now_v7()` position, so
+      // that test is TRUE for every sibling that has not been reordered before.
+      // Creating a page or folder beside a located row therefore fired one
+      // round trip per existing child of that folder, in series, with `_run`
+      // holding the whole app busy throughout. That is the lag: it grows with
+      // the size of the folder you are creating in.
+      //
+      // `/views/reorder` exists for exactly this and has since 0.13.19 — its own
+      // comment names the per-view loop as the thing not to do — but no client
+      // code had ever called it. It validates every id before writing and does
+      // the renumber in one transaction, so it also removes the half-renumbered
+      // group a failure used to leave behind.
+      //
+      // Nothing to reconcile afterwards: the optimistic setState above wrote
+      // `pad((i + 1) * 10)`, which is the same value the server assigns
+      // (`format!("{:010}", (i + 1) * 10)`), for the same ids in the same order.
+      // The reply is a count, not views, so there is nothing to correct from
+      // either.
+      //
+      // One field DOES drift until the next tree load: the server bumps
+      // `updated_at` on every reordered row, and the per-view reply used to
+      // carry that back. Left as is on purpose — "recently edited" jumping to
+      // the top because you dragged a row is the questionable behaviour here,
+      // and quietly re-teaching the client to display it is not the place to
+      // decide that.
+      await _api.reorderViews(
+        session.accessToken,
+        workspace.id,
+        parentViewId: parentViewId,
+        orderedViewIds: [for (final v in orderedSiblings) v.id],
+      );
     });
   }
 
@@ -5999,7 +6009,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // most of the cost. Not doing it at all is both faster and more obviously
     // correct.)
     if (answer.views != null) {
-      _cacheCloudPageTree(onlyWorkspaceId: workspace.id);
+      _cacheCloudPageTree(workspaceId: workspace.id);
     }
     SwitchTrace.current?.mark('mirror-write');
   }
@@ -6010,8 +6020,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// switching servers doesn't cross over. P4-2: on web the mirror is
   /// localStorage-backed (LocalOffline web variant). The cloud is authoritative
   /// — this is a clean replace after each successful online load.
-  /// Write the page-tree mirror. [onlyWorkspaceId] limits it to the workspace
-  /// whose tree actually just changed.
+  /// Write the page-tree mirror for the ONE workspace whose tree just changed.
   ///
   /// It used to write EVERY workspace held in memory, every time. That was
   /// nearly free while memory only held the two or three workspaces visited in
@@ -6023,7 +6032,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   ///
   /// Safe to narrow because `mirrorCloudPageTree` replaces per workspace: the
   /// ones not named here keep their rows.
-  void _cacheCloudPageTree({String? onlyWorkspaceId}) {
+  ///
+  /// [workspaceId] is REQUIRED, and that is the fix for this happening twice.
+  /// It was optional, defaulting to "write everything", and the second caller —
+  /// creating a folder — simply did not pass it. So the 2.1 s write came back on
+  /// every new folder, against a mirror that by then held ~13k views. An
+  /// optional parameter whose omission is a performance cliff is a footgun with
+  /// a safety catch; required, the compiler asks the question.
+  void _cacheCloudPageTree({required String workspaceId}) {
     final origin = _api.baseUri.toString();
     final workspaces = <WorkspaceData>[
       for (final (i, w) in _workspaces.indexed)
@@ -6037,7 +6053,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     ];
     final views = <ViewData>[
       for (final e in _viewsByWorkspace.entries)
-        if (onlyWorkspaceId == null || e.key == onlyWorkspaceId)
+        if (e.key == workspaceId)
         for (final v in e.value)
           (
             id: v.id,

@@ -236,6 +236,36 @@ class ApiClient {
     await _delete('/api/workspaces/$workspaceId', token);
   }
 
+  /// Set the complete child order under one parent, in ONE atomic request.
+  ///
+  /// The alternative — what this client did until now — is one `move` per
+  /// sibling, awaited in turn. That is N round trips for a single reorder, and
+  /// every new view is created with a `Uuid::now_v7()` position, so a sibling
+  /// never already matches its evenly-spaced value: EVERY one needs a request,
+  /// not just the row that moved. Creating a page or folder beside a located row
+  /// therefore cost a request per existing child of that folder, in series, with
+  /// the whole app marked busy — which is what "新建子文件夹有卡顿" was.
+  ///
+  /// The server endpoint has said so since 0.13.19, in as many words: "the
+  /// per-view `move` endpoint would take one request per sibling and could
+  /// interleave a failure". It validates every id first and writes in one
+  /// transaction, so a half-renumbered group is not a state this can leave.
+  ///
+  /// [parentViewId] null means the workspace root. [orderedViewIds] must be the
+  /// COMPLETE set of that parent's children — anything left out keeps a stale
+  /// position and interleaves with the reordered ones.
+  Future<void> reorderViews(
+    String token,
+    String workspaceId, {
+    required String? parentViewId,
+    required List<String> orderedViewIds,
+  }) async {
+    await _post('/api/workspaces/$workspaceId/views/reorder', {
+      'parent_view_id': parentViewId,
+      'ordered_view_ids': orderedViewIds,
+    }, token: token);
+  }
+
   /// Persist the user's drag-reordered workspace list (per-user order).
   Future<void> reorderWorkspaces(
     String token,
