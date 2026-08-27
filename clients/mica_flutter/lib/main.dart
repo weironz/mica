@@ -1534,6 +1534,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       setState(() {
         _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
       });
+      // The mirror MUST move with the ETag. The workspace-load path only writes
+      // the mirror on a 200 (`answer.views != null`) and skips it on a 304, and
+      // that skip is safe only because of one invariant: **a saved ETag means
+      // the mirror already holds that tree.** Advancing the ETag here without
+      // rewriting the mirror broke it, and the break is not visible until the
+      // NEXT cold start — preheat the stale mirror, send the newer ETag, get a
+      // 304, and the app opens a page the server no longer has: a red "not
+      // found" on a tree that looks perfectly normal.
+      //
+      // Shipped that way in v0.13.31 and reported the same evening, from a
+      // second machine. Cheap to get right: the write is per-workspace, and it
+      // only runs when the server actually sent a new tree.
+      _cacheCloudPageTree(workspaceId: workspaceId);
     } on ApiException {
       // Transient; the next change notification retries the fetch.
     }
