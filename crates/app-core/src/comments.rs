@@ -427,6 +427,89 @@ mod tests {
     doc.set_blocks("r", &blocks);
   }
 
+  /// **The acceptance test for `set_block_prop`** (`docs/page-title-plan.md`
+  /// §5.1). Once the title lives on the root block, renaming a page has to write
+  /// into the DOCUMENT — and the obvious way to do that, `set_blocks`, silently
+  /// orphans every comment on the page: identical characters, brand-new text
+  /// objects, dead sticky indexes.
+  ///
+  /// So the narrow primitive must leave `text` alone. Proven by contrast: the
+  /// test right below performs the SAME rename through `set_blocks` and asserts
+  /// that every anchor has to be RESCUED (re-anchored by quote, at the cost of
+  /// flattening the document) — which makes "this one is untouched" a measured
+  /// difference rather than a hopeful assertion about code that might be doing
+  /// nothing at all.
+  #[test]
+  fn renaming_through_the_narrow_primitive_keeps_comment_anchors_alive() {
+    let mut doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+
+    // What a rename will do: one key on the root block's props.
+    assert!(doc.set_block_prop("r", "title", &serde_json::json!("新名字")));
+
+    let mut index = None;
+    let state = anchor_state(&doc, &mut index, &row(&anchor, "world", STATUS_OPEN));
+    assert_eq!(
+      state.range.map(|r| (r.start_offset, r.end_offset)),
+      Some((6, 11)),
+      "the anchor still resolves to the same words after a rename"
+    );
+    assert_eq!(state.status, STATUS_OPEN);
+    assert!(state.fresh_anchor.is_none(), "nothing needed re-anchoring");
+
+    // And the title really landed, so this is not passing by doing nothing.
+    let root = doc.to_blocks().into_iter().find(|b| b.id == "r").unwrap();
+    assert_eq!(
+      root.data.get("title").and_then(|t| t.as_str()),
+      Some("新名字")
+    );
+  }
+
+  /// The contrast that gives the test above its teeth — and it is NOT
+  /// "the comment disappears".
+  ///
+  /// Measured, after a first attempt asserted the wrong thing: a `set_blocks`
+  /// rename does kill the sticky index (so the repo's "brand-new text objects"
+  /// note is accurate), but the quote-based re-anchor then rescues it onto the
+  /// same words. So the observable difference is the RESCUE, not the loss:
+  /// every comment on the page has to be re-anchored, which costs a document
+  /// flatten (the quote index) and writes a fresh anchor back.
+  ///
+  /// That is still a good reason to have the narrow primitive, because the
+  /// rescue is best-effort by design: an ambiguous or deleted quote stays
+  /// orphaned rather than guessing (`anchor_state`'s contract — a wrong anchor
+  /// is worse than none). Renaming a page should not roll that dice on every
+  /// thread it has.
+  #[test]
+  fn renaming_through_set_blocks_forces_every_anchor_to_be_rescued() {
+    let mut doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+
+    let mut blocks = doc.to_blocks();
+    let root = blocks.iter_mut().find(|b| b.id == "r").unwrap();
+    root.data = serde_json::json!({"title": "新名字"});
+    doc.set_blocks("r", &blocks);
+
+    let mut index = None;
+    let state = anchor_state(&doc, &mut index, &row(&anchor, "world", STATUS_OPEN));
+    assert!(
+      state.fresh_anchor.is_some(),
+      "the original sticky index must have died and been re-anchored; if it \
+       survived, set_block_prop is buying nothing and §5.1 of the plan is stale"
+    );
+    assert!(
+      index.is_some(),
+      "re-anchoring flattens the document to search for the quote — the cost \
+       the narrow primitive avoids"
+    );
+    // The rescue landed correctly HERE because the quote is unique. It is not
+    // guaranteed to: that is the risk a rename must not take.
+    assert_eq!(
+      state.range.map(|r| (r.start_offset, r.end_offset)),
+      Some((6, 11))
+    );
+  }
+
   #[test]
   fn a_living_anchor_is_reported_as_is_and_costs_no_quote_index() {
     let doc = doc_with("hello world");

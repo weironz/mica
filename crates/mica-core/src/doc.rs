@@ -667,6 +667,47 @@ impl MicaDoc {
         }
     }
 
+    /// Set ONE key on ONE block's `props`, touching nothing else.
+    ///
+    /// The narrow counterpart to [`Self::set_blocks`], and it exists for a
+    /// specific reason: `set_blocks` — which is what every REST/MCP write and
+    /// every version restore goes through — replaces each block's map wholesale,
+    /// so every `text` becomes a BRAND-NEW yrs object. Comment anchors are
+    /// `StickyIndex` values into those text objects, so rebuilding the text
+    /// orphans every anchor on the page while the characters stay identical.
+    /// That is acceptable for a restore, which really is rewriting the document;
+    /// it is not acceptable for "the page was renamed".
+    ///
+    /// This one resolves the EXISTING block map and writes a single entry into
+    /// its `props` map. `text` is never read or written, so the sticky indexes
+    /// keep pointing at the same objects. `props` is already a field-level map
+    /// (one yrs entry per top-level data key), so a concurrent edit to a
+    /// DIFFERENT key converges rather than clobbering — see [`set_props`].
+    ///
+    /// Returns false when the block does not exist; the caller decides whether
+    /// that is an error or a no-op.
+    ///
+    /// What this does NOT give you: two replicas setting the SAME key still
+    /// resolve last-writer-wins on that key's value. It is a map entry, not a
+    /// collaboratively edited text.
+    pub fn set_block_prop(&mut self, block_id: &str, key: &str, value: &Value) -> bool {
+        let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+        let mut txn = self.doc.transact_mut();
+        let Some(bm) = get_block_map(&txn, &blocks_map, block_id) else {
+            return false;
+        };
+        let props: MapRef = match bm.get(&txn, "props") {
+            Some(Out::YMap(m)) => m,
+            _ => bm.insert(&mut txn, "props", MapPrelim::default()),
+        };
+        if value.is_null() {
+            props.remove(&mut txn, key);
+        } else {
+            props.insert(&mut txn, key.to_string(), json_to_any(value));
+        }
+        true
+    }
+
     /// Insert `block` as a child of `parent_id` at `index` (clamped to the end).
     pub fn insert_block(&mut self, parent_id: &str, index: usize, block: &Block) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);

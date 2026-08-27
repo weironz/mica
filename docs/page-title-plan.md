@@ -114,17 +114,38 @@ Mica 已经有这个位置:文档有 root 块(`snapshot.root_block_id`),它**今
 > write** and every version restore does to a document.*
 
 也就是说**今天任何服务端写文档都走 `set_blocks` 全量重建**。侧栏 F2 改名、MCP
-`mica_rename` 如果去写文档,那一页的评论锚点全部变成孤儿。
+`mica_rename` 如果去写文档,那一页的每个评论锚点都要跟着遭殃。
 
 〔我在写这份文档的过程中先猜了一句「定向更新 root 块,正文块不动,应该不受影响」,
-**猜错了**。这条路径今天不存在。〕
+**猜错了**。这条路径当时不存在。〕
 
-**决定:新增一个只写 root 块 `data` 的定向 yrs 写入原语**(`set_root_data(key, value)`),
-不经过 `set_blocks`。
+**决定:新增一个只写某个块 `props` 里单个 key 的定向 yrs 写入原语**
+(`MicaDoc::set_block_prop`),不经过 `set_blocks`。✅ **2026-08-27 已落地。**
 
-**验收测试(必须先写、必须验过有牙)**:一页带评论 → 走新原语改标题 → 锚点仍解析到原
-位置。`comments.rs` 已有 `rewrite()` 与锚点断言,照它的形状写;把新原语换成 `set_blocks`
-应当当场变红。
+#### 实测修正了本节原来的说法
+
+原文写「那一页的评论锚点**全部变成孤儿**」——**说重了**。实测(两条对照测试)结果是:
+
+```
+set_blocks 之后:range=Some((6,11))  fresh_anchor=true  quote_index_built=true
+```
+
+`set_blocks` **确实**把 sticky 锚点打死了(仓库那条 "brand-new text objects" 注释准确),
+但**按引文重锚把它救了回来**,落在同一处词上。所以真实差别不是「评论没了」,而是:
+
+| | sticky 锚点 | 重锚 | 引文索引 |
+| --- | --- | --- | --- |
+| `set_block_prop`(窄) | 原封不动 | 不需要 | 不构建 |
+| `set_blocks`(宽) | **全部失效** | 每条都要 | 每次都要摊平整篇文档 |
+
+**它仍然是要窄原语的充分理由**,因为重锚是**尽力而为**的:引文有歧义或已被删,就保持
+orphan 而不是瞎猜(`anchor_state` 的契约 —— 错锚比没锚更糟)。改一次页名不该对页面上
+每一条评论掷一次骰子。
+
+**验收测试**(`comments.rs`,两条,已验过有牙):
+`renaming_through_the_narrow_primitive_keeps_comment_anchors_alive` +
+`renaming_through_set_blocks_forces_every_anchor_to_be_rescued`。把窄原语换成
+`set_blocks`,第一条当场红在「nothing needed re-anchoring」。
 
 ### 5.2 文件夹没有文档
 
