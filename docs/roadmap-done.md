@@ -444,6 +444,9 @@
   同一条规则,一开始只接了一半。对话框和右键菜单住在 Overlay、点它们不经过这个 Listener,
   所以批量菜单开着时选区不掉。快捷键四处同步照做:设置页快捷键表加 Esc 行(zh/en),
   `shortcuts.md` 的「为什么没有」段反转成「为什么这样做」。
+  **真机验证 2026-08-28 用户做的**(dev 版连本地栈):点编辑器清、Esc 清、批量菜单开着不掉,
+  三项全过。必须真机,因为这个键的历史就是「三种该生效的绑法全是死的」——
+  纯函数测试钉得住守卫,钉不住「handler 真的被调到」。
 
 - 🟡 **评论**(2026-07-26:**服务端 + 渲染 + API 三层已闭环,剩面板 UI**)—— 锚点=yrs sticky index 存独立表(`comment_threads`/`comments`,migration 0014),**正文 Markdown 一字不动 → round-trip 红线零改动、评论永不进导出**。已落地:锚点原语 `sticky_for_range`/`resolve_range`(2672201,8 单测)+ store 层与 5 个端点(354f946,gated on `commenter`——能评论但不能改正文)+ **Postgres 集成测试 8 项 CI 真跑**(736639c,含"锚点经 push_update 落库后仍随文字位移")+ 客户端 API 层(af03743,6 单测)+ **渲染期高亮**(08f221d,**纯 paint、绝不 relayout**,5 widget 测证明 caret 几何不变)。**Phase 1 已闭环**(f3bf181):评论面板(`ui/comment_panel.dart`,9 widget 测)+ 右键「添加评论」(offset 用 UTF-16、只看 `onAddComment` 不看 `canEdit`,故 commenter 能评论不能改正文)+ main.dart 接线(`onReady` 拉取 → 过滤 `isHighlightable` → `commentHighlights`;变更后重拉,服务端是锚点/orphan 唯一真相源;拉取失败只是没评论、文档照常打开)。**残留仅观感**:Dialog 形态/面板宽度/图标位置/高亮浓度/跨块高亮 需 `just app` 或发版后真机看一眼(清单见 `docs/comments-plan.md`「待真机确认」)。**实测修正了设计假设**:yrs 保留 tombstone,删掉锚定文字后锚点**仍能解析、只是塌缩成零长** → orphan 判定必须"解不出 **或** 塌缩"两者同等对待(只信 None 会漏掉最常见的删除情形)。**建议(suggest mode)**仍有意另立项(正文内 overlay,与评论不共用存储)。(残留 M)`[需后端]`
   **2026-08-03 整条关闭**:残留的「仅观感」五条真机清单跑完(`cdf4aec`),两条结论与原文相反——
