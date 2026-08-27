@@ -327,6 +327,12 @@ Verified end to end on 2026-08-28, both halves: a raw WS client received one
 frame per REST create/trash/purge, and the user watched the Flutter sidebar
 grow and shrink on its own — create over REST, no refresh pressed — on a real
 desktop build against the dev stack.
+
+Shipped in v0.13.31. Confirmed present on production by the one probe that
+needs no credentials: this path answers **400** ("not a WebSocket upgrade" —
+the handler is there), where an undeployed path answers 404. The authenticated
+half on production needs a client on 0.13.31 or later; the desktop app only
+gets it after updating.
 | GET | `/s/{token}` | **public** — a shared page, rendered server-side |
 | GET | `/health` | **public** — reports the running version |
 | GET | `/ready` | **public** — readiness |
