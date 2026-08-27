@@ -88,13 +88,19 @@
   (`ancestor_pairs_of_roots` 走到祖父级、不可搬运的根不产生 pair、与 `independent_roots`
   合起来只搬文件夹),也**验过有牙**(砍掉递归臂当场变红)。仍然没覆盖的是
   `batch-trash` / `batch-restore` / `batch-move` 那三个。
-- 🆕 **侧栏多选只在 Windows 桌面实测过,web 端一次没跑**(2026-08-27)——
-  功能本身已闭环(整条见 [`roadmap-done.md`](roadmap-done.md)),**但验证只覆盖了一端**,
-  而 `lessons.md#4` 正是「web 通过 ≠ 桌面通过」。三个具体可疑点,都不是猜的:
-  ① 修饰键读的是 `HardwareKeyboard.instance.logicalKeysPressed`,web 上浏览器可能先吃掉
-  Ctrl-click(Chrome 在链接上是「后台打开」);② `Draggable` 的 HTML5 拖放行为与桌面不同;
-  ③ 合并特效那叠卡片用 `Material` 阴影,web 的 Impeller/CanvasKit 渲染路径不同。
-  **不是"应该没问题"** —— 是**没跑过**。跑一次 `just app chrome` 点一遍即可下结论。(S)
+- 🆕 **侧栏多选:web 上 Ctrl/Shift 已由用户手动确认可用,右键批量菜单与多行拖拽仍未验**
+  (2026-08-27)—— 功能整条见 [`roadmap-done.md`](roadmap-done.md)。
+  **⚠️ 这条剩下的部分不是"抽空跑一下"就能关掉的,因为自动化跑不了**:Playwright(CDP 合成
+  事件)**无法可靠地把修饰键 + 点击送进 Flutter web**。实测过程见 `lessons.md`
+  「自动化测试也会造假阴性」:同一套投递方式下 Ctrl 有时成功有时失败、Shift 一次没成功过,
+  而 DOM 层 `pointerdown` 的 `shiftKey`/`ctrlKey` **两次都是对的** —— 也就是说事件送到了浏览器,
+  没送进 Flutter 的 `HardwareKeyboard`。我为此白烧了五次 web 构建去追一个不存在的 bug,
+  最后是用户用真键盘一句话推翻的。
+  **所以早先那句「web 上 Ctrl 能用(Playwright 验的)」也不算数** —— 那是碰巧,不是证据。
+  剩下两项(右键批量菜单、多行拖拽)都要先有一个多选,因此同样卡在这里。
+  **可走的路**:① 内置浏览器 pane(输入路径可能不同,2026-08-27 试过但 pane 未显示,没验成);
+  ② 请用户在 web 上点两下;③ 给多选加一条不依赖修饰键的入口(如行首复选框,AFFiNE 就是这么做的)
+  —— 那样它才**可自动化测**,但这是产品决定不是测试决定。(S,但被工具挡着)
 - 🆕 **`Esc` 清空多选做不了,未拍板要不要为它上全局键盘处理器**(2026-08-27)——
   三种绑法全写过全实测全是死的(树本地 `Shortcuts`/`Actions`、给树加 `FocusNode`、
   `_appShortcuts`)。**探针给出的根因**:按下 Esc 时焦点在**页面路由自己的 scope** ——
