@@ -968,7 +968,10 @@ class LocalOffline implements LocalOfflineApi {
       assets.add(ZipAsset(fileId: fileId, bytes: bytes));
     }
     if (assets.isEmpty) {
-      final md = doc.exportMarkdown();
+      // Titled: a `.md` you keep otherwise loses the page name — only the file
+      // name carries it, and that survives exactly as long as the file does.
+      // The `.zip` branch below gets the same treatment inside the FFI.
+      final md = doc.exportMarkdownTitled(title: base);
       return (
         bytes: Uint8List.fromList(utf8.encode(md)),
         name: '$base.md',
@@ -990,13 +993,17 @@ class LocalOffline implements LocalOfflineApi {
   /// makes, and the reason this is a separate method instead of a flag.
   ///
   /// Returns null if the store isn't open or the doc isn't in it.
-  String? exportDocMarkdownText(String docId) {
+  ///
+  /// [title] is the page's name and leads the text, because a clipboard has no
+  /// file name to carry it — paste somewhere else and the name is simply gone.
+  /// A document that carries its own title wins over this (handled in Rust).
+  String? exportDocMarkdownText(String docId, String title) {
     final store = _store;
     if (store == null) return null;
     if (_active?.docId == docId) _active!.flush(); // flush pending edits first
     final doc = store.loadDoc(docId: docId);
     if (doc == null) return null;
-    return doc.exportMarkdown();
+    return doc.exportMarkdownTitled(title: title);
   }
 
   /// Export a LOCAL folder's subtree as a Markdown ZIP, through the SAME shared

@@ -68,7 +68,7 @@ class LocalOffline implements LocalOfflineApi {
   /// This stub was missing when the desktop side gained the method, and the
   /// desktop analyzer never noticed — it resolves the io variant. Only the web
   /// compile did, which is exactly what that CI job exists for.
-  String? exportDocMarkdownText(String docId) => null;
+  String? exportDocMarkdownText(String docId, String title) => null;
 
   /// Web has no local folders — folder ZIP export is cloud-side there.
   Uint8List? exportFolderZip(String workspaceId, String folderId) => null;

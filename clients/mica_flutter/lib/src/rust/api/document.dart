@@ -42,6 +42,19 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// local-page md-export gap (previously only HTML/PDF existed locally).
   String exportMarkdown();
 
+  /// Like [`Self::export_markdown`], with `# <title>` leading the text (after
+  /// any front matter).
+  ///
+  /// For the two LOCAL paths that hand a human a copy of the page — "export as
+  /// .md" and "copy page content" — where the page name is otherwise lost the
+  /// moment the text leaves Mica. The cloud does the same thing through
+  /// `?title=true` on its read endpoint; the rule itself lives in one place
+  /// (`mica_markdown::with_page_title`) so the two worlds cannot drift.
+  ///
+  /// [`title`] is the view's name; a document that carries its own title
+  /// (`root.data['title']`) wins over it. See `docs/page-title-plan.md`.
+  String exportMarkdownTitled({required String title});
+
   /// Export this page as a portable ZIP (`<base>.md` + `assets/<name>` image
   /// bytes), byte-compatible with the cloud page ZIP export: same naming +
   /// dedup + Markdown rewrite via `export_markdown_with_assets`. [`assets`]

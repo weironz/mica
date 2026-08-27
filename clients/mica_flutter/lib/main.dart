@@ -2798,7 +2798,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
-    final markdown = _local.exportDocMarkdownText(bootstrap.document.id);
+    final markdown = _local.exportDocMarkdownText(
+      bootstrap.document.id,
+      bootstrap.view.name,
+    );
     if (markdown == null) {
       throw ApiException(context.l10n.exportEmptyContent);
     }

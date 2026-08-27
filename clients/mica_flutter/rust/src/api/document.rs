@@ -302,6 +302,25 @@ impl MicaDocument {
         mica_markdown::export_markdown(&self.snapshot()).unwrap_or_default()
     }
 
+    /// Like [`Self::export_markdown`], with `# <title>` leading the text (after
+    /// any front matter).
+    ///
+    /// For the two LOCAL paths that hand a human a copy of the page — "export as
+    /// .md" and "copy page content" — where the page name is otherwise lost the
+    /// moment the text leaves Mica. The cloud does the same thing through
+    /// `?title=true` on its read endpoint; the rule itself lives in one place
+    /// (`mica_markdown::with_page_title`) so the two worlds cannot drift.
+    ///
+    /// [`title`] is the view's name; a document that carries its own title
+    /// (`root.data['title']`) wins over it. See `docs/page-title-plan.md`.
+    #[frb(sync)]
+    pub fn export_markdown_titled(&self, title: String) -> String {
+        let payload = self.snapshot();
+        let body = mica_markdown::export_markdown(&payload).unwrap_or_default();
+        let title = mica_markdown::document_title(&payload).unwrap_or(title.as_str());
+        mica_markdown::with_page_title(&body, title)
+    }
+
     /// Export this page as a portable ZIP (`<base>.md` + `assets/<name>` image
     /// bytes), byte-compatible with the cloud page ZIP export: same naming +
     /// dedup + Markdown rewrite via `export_markdown_with_assets`. [`assets`]
@@ -342,13 +361,17 @@ impl MicaDocument {
             });
             map.insert(file_id, format!("assets/{asset}"));
         }
-        let markdown =
-            mica_markdown::export_markdown_with_assets(&payload, &map).unwrap_or_default();
+        let body = mica_markdown::export_markdown_with_assets(&payload, &map).unwrap_or_default();
+        // The title leads the text as well as naming the file — the same rule
+        // the cloud ZIP follows (`docs/page-title-plan.md`). `base` is the raw
+        // page name here; only the FILE name gets sanitized, so it doubles as
+        // the title with no extra parameter.
+        let title = mica_markdown::document_title(&payload).unwrap_or(base.as_str());
         entries.insert(
             0,
             mica_interchange::ZipEntry {
                 name: format!("{}.md", safe_base(&base)),
-                data: markdown.into_bytes(),
+                data: mica_markdown::with_page_title(&body, title).into_bytes(),
             },
         );
         mica_interchange::build_zip(&entries)
