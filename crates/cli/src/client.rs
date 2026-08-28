@@ -214,6 +214,17 @@ impl Client {
   pub fn export_workspace_zip(&self, workspace_id: Uuid) -> Result<Vec<u8>> {
     let resp = self
       .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/export.zip"))))
+      // reqwest's BLOCKING client defaults to a 30 s timeout (the async one has
+      // none) — and zipping a large workspace server-side is minutes, not
+      // seconds. Production's biggest workspace (3079 pages) timed out on this
+      // every night, which then failed the whole backup run.
+      //
+      // Generous but not infinite: nothing is waiting on this — it runs once a
+      // day in a daemon — so the only thing a ceiling buys is that a genuinely
+      // wedged request eventually becomes a reported failure instead of a
+      // daemon that never logs again. If an export cannot finish in an hour,
+      // that IS the thing to report.
+      .timeout(std::time::Duration::from_secs(60 * 60))
       .send()?;
     Ok(Self::ok(resp)?.bytes()?.to_vec())
   }

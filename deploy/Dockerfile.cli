@@ -67,17 +67,24 @@ FROM debian:bookworm-slim
 # PGDG signing key at build time. (jq is gone — the export manifest is parsed by
 # serde_json now, and the dead man's switch pings through reqwest; both moved
 # into mica-cli when the backup scripts did.)
-# postgresql-client-16: pg_dump for the off-site DB snapshot (crates/cli/src/backup.rs).
-# It must be v16+ to dump the prod postgres:16 server — a pg_dump older than the
-# server aborts on a version mismatch — so pull it from PGDG rather than
-# bookworm's stock 15.
+# postgresql-client-18: pg_dump for the off-site DB snapshot (crates/cli/src/backup.rs).
+#
+# ⚠️ THIS VERSION IS TIED TO THE SERVER'S. `pg_dump` refuses to dump a server
+# NEWER than itself ("aborting because of server version mismatch"), so this
+# must be >= the `postgres:` tag in deploy/docker-compose.yml. It said 16 while
+# the server went to 18.6 (2026-08-28) and the off-site DB snapshot simply
+# stopped working — silently, because the run was already failing earlier for an
+# unrelated reason. `scripts/release-check.sh` now refuses a release when the two
+# disagree; that gate is the only reason this comment is not the whole defence.
+#
+# Not from bookworm's stock (15) — PGDG has the current majors.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && curl -fsSL -o /usr/share/keyrings/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
  && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && apt-get install -y --no-install-recommends postgresql-client-18 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
 COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic

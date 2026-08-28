@@ -246,7 +246,11 @@ services:
       - api
     environment:
       MICA_SERVER: http://api:8080
-      MICA_TOKEN: ${MICA_BACKUP_TOKEN:-}            # a read-scoped Mica token
+      # MICA_PAT, not MICA_TOKEN: the latter was retired in the CLI on 2026-08-15
+      # and this line was not updated with it, so every backup run since failed
+      # at "not signed in" — into a container log nobody reads — and took the
+      # database dump down with it. 29 days, no off-site DB copy. See dr-plan §8.
+      MICA_PAT: ${MICA_BACKUP_TOKEN:-}                # a read-scoped Mica token
       # rustic repo encryption password — SAVE OFF-HOST (lose it, lose the repo).
       RUSTIC_PASSWORD: ${MICA_BACKUP_PASSWORD:-}
       # pg_dump connection string for the off-site DB snapshot (full-instance DR:

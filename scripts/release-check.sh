@@ -121,4 +121,23 @@ cmp -s clients/mica_flutter/assets/tray_icon.ico \
   || fail "the tray icon and the app icon differ — they are two copies of ONE mark (tray_manager needs a bundled asset, so the file cannot be shared). Regenerate both with scripts/gen-icons.py and commit them together."
 echo "==> icons: tray == app"
 
+# ── pg_dump must not be older than the server it dumps ───────────────────────
+# `pg_dump` REFUSES a server newer than itself. The backup image pins
+# postgresql-client-N; the stack pins postgres:M. N < M means the off-site
+# database snapshot cannot be taken — and it fails inside a daily container,
+# into a log nobody reads.
+#
+# Found 2026-08-29 the hard way: postgres went 16 -> 18.6 on 08-28 and this
+# stayed at 16, so even after fixing the two OTHER reasons backups were broken,
+# pg_dump still aborted. Three same-shaped bugs in one day (MICA_TOKEN in
+# compose, MICA_API_BASE_URL in the CLI, this) is what a gate is for: the
+# Dockerfile comment already stated the invariant, and stating it did nothing.
+client=$(grep -oE 'postgresql-client-[0-9]+' deploy/Dockerfile.cli | head -1 | sed 's/.*-//')
+server=$(grep -oE 'image: postgres:[0-9]+' deploy/docker-compose.yml | head -1 | sed 's/.*://')
+[ -n "$client" ] && [ -n "$server" ] \
+  || fail "could not read the postgres versions (client='$client' server='$server') — this gate must not pass by failing to look"
+[ "$client" -ge "$server" ] \
+  || fail "deploy/Dockerfile.cli installs postgresql-client-$client but the stack runs postgres:$server — pg_dump refuses a newer server, so the off-site DB backup would silently stop. Bump the client."
+echo "==> pg_dump: client $client >= server $server"
+
 printf '\n  release-check passed for %s\n' "$version"

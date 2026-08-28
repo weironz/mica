@@ -33,11 +33,23 @@ use std::process::Command as Proc;
 pub enum Leg {
   Ran,
   Skipped(String),
+  /// The leg was configured and TRIED, and it broke.
+  ///
+  /// Distinct from [`Leg::Skipped`] on purpose: "you did not ask for this" and
+  /// "you asked and I could not" are different facts, and the run's exit code
+  /// only owes you non-zero for the second. Before this existed, a failing leg
+  /// aborted `run_once` with `?` — which sounds strict and is actually the
+  /// worst of both, because the legs AFTER it never ran. See [`run_once`].
+  Failed(String),
 }
 
 impl Leg {
   fn skipped(reason: impl Into<String>) -> Self {
     Leg::Skipped(reason.into())
+  }
+
+  fn failed(reason: impl Into<String>) -> Self {
+    Leg::Failed(reason.into())
   }
 }
 
@@ -83,7 +95,10 @@ impl Report {
       .iter()
       .filter_map(|(name, leg)| match leg {
         Leg::Skipped(why) => Some((*name, why.as_str())),
-        Leg::Ran => None,
+        // Deliberately NOT here: this list feeds "what was not covered, and you
+        // told me so". A FAILED leg is a different sentence and gets its own —
+        // folding it in would let a breakage read as a configuration choice.
+        Leg::Failed(_) | Leg::Ran => None,
       })
       .collect()
   }
@@ -96,6 +111,7 @@ impl Report {
       .map(|(name, leg)| match leg {
         Leg::Ran => format!("  {name}: ran"),
         Leg::Skipped(why) => format!("  {name}: SKIPPED — {why}"),
+        Leg::Failed(why) => format!("  {name}: FAILED — {why}"),
       })
       .collect::<Vec<_>>()
       .join("\n")
@@ -360,11 +376,32 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   }
 
   // 1) Content: every workspace as Markdown + images.
+  //
+  // NOT `?`. A content-export failure used to abort the whole run, and the two
+  // legs below — the database dump and the object bytes — have no dependency on
+  // it whatsoever. Production spent 2026-07-31 .. 08-29 with NO off-site
+  // database copy for exactly that reason: the export could not authenticate
+  // (`MICA_TOKEN` retired in the CLI, never renamed in `deploy/docker-compose.yml`),
+  // and the dump that would still have worked never got the chance. The most
+  // irreplaceable leg was being held hostage by the least.
+  //
+  // Partial success is still not success: a failed leg is recorded and
+  // `run_once` returns Err at the end (see the report check below). What
+  // changed is only that every leg gets to try first — which is the opposite of
+  // the original shell sin, where a missing leg logged a WARN and exited 0.
   log(&format!(
     "export all workspaces → {}",
     settings.export_dir.display()
   ));
-  export(&settings.export_dir)?;
+  let content_failure = match export(&settings.export_dir) {
+    Ok(()) => None,
+    Err(error) => {
+      let reason = format!("{error:#}");
+      log(&format!("content export FAILED — {reason}"));
+      log("continuing to the database and object legs — they do not depend on it");
+      Some(reason)
+    }
+  };
 
   // 2) Database. UNCOMPRESSED on purpose: gzip scrambles content similarity, so
   //    two dumps of a barely-changed database dedup to almost nothing and every
@@ -405,56 +442,69 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
     ),
   }
 
-  // 3) Snapshot each workspace as its own retention lineage: label = the STABLE
-  //    workspace id (a rename never splits history), tag = the readable name.
-  let manifest_path = settings.export_dir.join("manifest.json");
-  let manifest: Manifest = serde_json::from_str(
-    &std::fs::read_to_string(&manifest_path)
-      .with_context(|| format!("reading {}", manifest_path.display()))?,
-  )
-  .context("parsing the export manifest")?;
+  // 3) Snapshot each workspace — ONLY when this run's export produced a
+  //     manifest. A failed export leaves either no manifest or yesterday's, and
+  //     snapshotting against a stale one would re-store yesterday's directories
+  //     under today's date: a backup that looks fresh and is not. That is worse
+  //     than an obviously missing one, so the leg is recorded as failed instead.
+  match &content_failure {
+    Some(reason) => {
+      log("skipping the content snapshot — this run wrote no manifest");
+      report.add("content", Leg::failed(reason.clone()));
+    }
+    None => {
+    // 3) Snapshot each workspace as its own retention lineage: label = the STABLE
+    //    workspace id (a rename never splits history), tag = the readable name.
+    let manifest_path = settings.export_dir.join("manifest.json");
+    let manifest: Manifest = serde_json::from_str(
+      &std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?,
+    )
+    .context("parsing the export manifest")?;
 
-  let mut count = 0usize;
-  let mut missed: Vec<String> = Vec::new();
-  for ws in &manifest.workspaces {
-    let path = settings.export_dir.join(&ws.dir);
-    if !path.is_dir() {
-      // A workspace the export announced but did not write. This used to be a
-      // log line and nothing else: the run still reported success and still
-      // pinged the healthcheck, so a workspace could quietly stop being backed
-      // up while every signal said the backups were fine. Collected here and
-      // turned into a skipped leg below — the whole point of the dead man's
-      // switch is that "less than you think" and "everything" must not look
-      // the same.
-      log(&format!("MISSING {}: {} not written", ws.id, path.display()));
-      missed.push(format!("{} (ws={})", ws.id, ws.name));
-      continue;
+    let mut count = 0usize;
+    let mut missed: Vec<String> = Vec::new();
+    for ws in &manifest.workspaces {
+      let path = settings.export_dir.join(&ws.dir);
+      if !path.is_dir() {
+        // A workspace the export announced but did not write. This used to be a
+        // log line and nothing else: the run still reported success and still
+        // pinged the healthcheck, so a workspace could quietly stop being backed
+        // up while every signal said the backups were fine. Collected here and
+        // turned into a skipped leg below — the whole point of the dead man's
+        // switch is that "less than you think" and "everything" must not look
+        // the same.
+        log(&format!("MISSING {}: {} not written", ws.id, path.display()));
+        missed.push(format!("{} (ws={})", ws.id, ws.name));
+        continue;
+      }
+      log(&format!(
+        "snapshot {} (ws={}) → label={}",
+        ws.dir, ws.name, ws.id
+      ));
+      run_tool(
+        &settings.rustic,
+        &[
+          "backup",
+          &path.to_string_lossy(),
+          "--label",
+          &ws.id,
+          "--tag",
+          &format!("ws={}", ws.name),
+          "--tag",
+          "mica",
+        ],
+        "rustic backup",
+      )?;
+      count += 1;
     }
     log(&format!(
-      "snapshot {} (ws={}) → label={}",
-      ws.dir, ws.name, ws.id
+      "snapshotted {count}/{} workspace(s)",
+      manifest.workspaces.len()
     ));
-    run_tool(
-      &settings.rustic,
-      &[
-        "backup",
-        &path.to_string_lossy(),
-        "--label",
-        &ws.id,
-        "--tag",
-        &format!("ws={}", ws.name),
-        "--tag",
-        "mica",
-      ],
-      "rustic backup",
-    )?;
-    count += 1;
+    report.add("content", coverage_leg(manifest.workspaces.len(), &missed));
+    }
   }
-  log(&format!(
-    "snapshotted {count}/{} workspace(s)",
-    manifest.workspaces.len()
-  ));
-  report.add("content", coverage_leg(manifest.workspaces.len(), &missed));
 
   // 3b) The dump gets its own lineage (stable label `_pgdump`, never a workspace
   //     id) so retention below applies to it on the same policy.
@@ -541,6 +591,23 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
     "rustic forget",
   )?;
 
+  // Every leg got its chance; now the run owes an honest verdict. Partial
+  // success is NOT success — that was the original shell sin (a missing leg
+  // logged a WARN and exited 0, and production went months with no off-site
+  // copy). What changed here is only the ORDER: report first, fail after, so
+  // one broken leg can no longer take the healthy ones down with it.
+  let failed: Vec<String> = report
+    .legs
+    .iter()
+    .filter_map(|(name, leg)| match leg {
+      Leg::Failed(reason) => Some(format!("{name}: {reason}")),
+      _ => None,
+    })
+    .collect();
+  if !failed.is_empty() {
+    bail!("{} leg(s) failed — {}", failed.len(), failed.join(" | "));
+  }
+
   Ok(report)
 }
 
@@ -626,6 +693,33 @@ mod tests {
   /// passed, the healthcheck was pinged, and the only trace was a line in a
   /// container log nobody reads. The reason names the workspace, because
   /// "some workspace is missing" is not something you can act on.
+  #[test]
+  fn a_failed_leg_is_not_a_skipped_one_and_shows_up_in_the_summary() {
+    // 2026-08-29 事故的形状:内容导出失败过去会 `?` 掉整个 run,于是与它毫无
+    // 依赖的 pg_dump 和对象同步一起没跑 —— 生产 29 天没有异地数据库副本。
+    // 现在每条腿都跑,失败被记录,run 最后仍然失败。这条钉住两件事:
+    //   1. FAILED 不能混进 `skipped()` —— 那份清单的语义是「你没让我做」,
+    //      把「我做不到」折进去,故障就读成了配置选择;
+    //   2. summary 必须把它显式说出来。
+    let mut report = Report::default();
+    report.add("content", Leg::failed("operation timed out"));
+    report.add("database", Leg::Ran);
+    report.add("objects", Leg::skipped("credentials unset"));
+
+    let skipped: Vec<_> = report.skipped().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(
+      skipped,
+      vec!["objects"],
+      "只有真正被跳过的才进这份清单: {:?}",
+      report.skipped()
+    );
+
+    let summary = report.summary();
+    assert!(summary.contains("content: FAILED — operation timed out"), "{summary}");
+    assert!(summary.contains("database: ran"), "{summary}");
+    assert!(summary.contains("objects: SKIPPED"), "{summary}");
+  }
+
   #[test]
   fn a_workspace_that_never_reached_the_repo_fails_the_run() {
     // Driven through the real decision, not a hand-written leg: the bug was
