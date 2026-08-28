@@ -33,6 +33,10 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 
 `verify-prod`(断言 `/api/health` 报的就是这个版本)**已内置在 workflow 里**,不用单独跑。
 
+> **改 Postgres / RustFS 的镜像版本不走这条路** —— Postgres 的大版本号是数据目录的
+> 一部分,直接换镜像会 crash-loop 且无人自动修复。见 `docs/upgrade-infra.md`,
+> 那份文档也要求**与应用发版分两次做**。
+
 ### 机器替你把关的(以前靠记性,现在会拒绝)
 
 | 关的什么 | 在哪 | 何时加的 |

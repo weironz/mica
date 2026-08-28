@@ -23,7 +23,12 @@ x-logging: &default-logging
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # MAJOR VERSION IS PART OF THE DATA DIRECTORY. Postgres refuses to start on
+    # a data dir written by a different major ("database files are incompatible
+    # with server") and crash-loops — bumping 16→18 here without the dump/restore
+    # in docs/upgrade-infra.md takes the stack down and NOTHING repairs it
+    # automatically. That runbook is the only supported way to move this number.
+    image: postgres:18.6-alpine
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -42,7 +47,7 @@ services:
       retries: 10
 
   rustfs:
-    image: rustfs/rustfs:1.0.0-beta.6
+    image: rustfs/rustfs:1.0.0-rc.3
     restart: unless-stopped
     logging: *default-logging
     security_opt:
