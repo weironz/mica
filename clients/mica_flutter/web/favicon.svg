@@ -1,16 +1,35 @@
-<!-- The Mica mark: three stacked rhombus "sheets" — mica the layered mineral, and
-     the editor's stacked blocks.
+<!-- The Mica mark: an isometric cube wireframe with graph nodes on its vertices —
+     the knowledge graph held inside a crystal.
 
-     MIRRORS lib/widgets/mica_logo.dart. Keep the two in sync; the geometry below
-     is that painter's formula evaluated for a 32x32 box:
-       cx = w/2 = 16      hw = w*0.44 = 14.08     hh = h*0.20 = 6.4
-       gap = h*0.165 = 5.28                       baseCy = h/2 + gap = 21.28
-       layer i (bottom to top) sits at cy = baseCy - i*gap
-     A duplicate definition is unavoidable here: the tab icon has to exist before
-     Flutter boots, so it cannot come from the painter. -->
+     MIRRORS lib/widgets/mica_logo.dart. A duplicate definition is unavoidable
+     here: the tab icon has to exist before Flutter boots, so it cannot come from
+     the painter (the .ico files CAN and do — see scripts/gen-icons.py).
+
+     Geometry = that painter's formula evaluated for a 32x32 box, big variant:
+       r = 32*0.375 = 12       centre = (16,16)      stroke = 32*0.075 = 2.4
+       node r = 32*0.085 = 2.72                      centre node = x1.15 = 3.128
+       vertices = centre + r*(0,-1) (0.866,-0.5) (0.866,0.5) (0,1) (-0.866,0.5) (-0.866,-0.5)
+       spokes   = centre -> vertices 0, 2, 4 (the three edges facing the viewer)
+     The radius is 0.375 and not the silhouette's 0.5 because the stroke and the
+     node dots stick out past it; getting that wrong clipped the bottom vertex. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <!-- Bottom sheet first, so the upper ones overlap it (same order as the painter). -->
-  <path d="M16 14.88 L30.08 21.28 L16 27.68 L1.92 21.28 Z" fill="#93C5FD"/>
-  <path d="M16 9.6 L30.08 16 L16 22.4 L1.92 16 Z" fill="#3B82F6"/>
-  <path d="M16 4.32 L30.08 10.72 L16 17.12 L1.92 10.72 Z" fill="#1D4ED8"/>
+  <defs>
+    <linearGradient id="m" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#m)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" fill="none">
+    <polygon points="16,4 26.392,10 26.392,22 16,28 5.608,22 5.608,10"/>
+    <path d="M16 16 L16 4 M16 16 L26.392 22 M16 16 L5.608 22"/>
+  </g>
+  <g fill="url(#m)">
+    <circle cx="16" cy="4" r="2.72"/>
+    <circle cx="26.392" cy="10" r="2.72"/>
+    <circle cx="26.392" cy="22" r="2.72"/>
+    <circle cx="16" cy="28" r="2.72"/>
+    <circle cx="5.608" cy="22" r="2.72"/>
+    <circle cx="5.608" cy="10" r="2.72"/>
+    <circle cx="16" cy="16" r="3.128"/>
+  </g>
 </svg>

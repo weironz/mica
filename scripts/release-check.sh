@@ -109,4 +109,16 @@ lock=$(grep -A1 -E '^name = "mica-(api-server|cli)"$' Cargo.lock \
   || fail "Cargo.lock says '$lock' for the workspace binaries, Cargo.toml says '$version' — run 'cargo check' and include the lock in the release commit"
 echo "==> Cargo.lock: $lock"
 
+# ── The Windows icon exists twice, and the copies drifted ────────────────────
+# The taskbar/exe icon is windows/runner/resources/app_icon.ico; the tray icon
+# has to be a bundled Flutter ASSET (tray_manager takes an asset path), so it
+# cannot be the same file on disk. Two copies kept in step by memory is exactly
+# how the tray spent 2026-07-20 .. 2026-08-28 showing the stock FLUTTER logo:
+# the app icon was replaced, the asset copy was not, and nothing said so.
+# Byte-identical is the strongest check available and costs one cmp.
+cmp -s clients/mica_flutter/assets/tray_icon.ico \
+       clients/mica_flutter/windows/runner/resources/app_icon.ico \
+  || fail "the tray icon and the app icon differ — they are two copies of ONE mark (tray_manager needs a bundled asset, so the file cannot be shared). Regenerate both with scripts/gen-icons.py and commit them together."
+echo "==> icons: tray == app"
+
 printf '\n  release-check passed for %s\n' "$version"
