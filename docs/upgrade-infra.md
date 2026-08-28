@@ -104,7 +104,7 @@ zcat /data/mica/pg16-pre18-$TS.sql.gz | awk '
 
 # 2b. RustFS 数据卷 —— rc.3 回滚的唯一保证
 docker compose stop rustfs
-docker run --rm -v mica-prod-rustfs:/data -v /data/mica:/backup alpine \
+docker run --rm -v mica_mica-prod-rustfs:/data -v /data/mica:/backup alpine \
   tar czf /backup/rustfs-pre-rc3-$TS.tar.gz -C /data .
 ls -lh /data/mica/*$TS*
 ```
@@ -118,10 +118,13 @@ ls -lh /data/mica/*$TS*
 
 ```bash
 docker compose down                       # 停全栈(卷不会被删)
-docker volume ls | grep mica-prod         # 记下确切卷名
-docker run --rm -v mica-prod-postgres:/from -v mica-prod-postgres-pg16:/to alpine \
+# 卷名带 compose 项目前缀(`mica_`)。别照抄 compose 文件里 volumes: 段的短名 ——
+# 那是项目内的名字,`docker volume` 认的是带前缀的全名,写错了下面这条 cp 会
+# 建出一个空卷、而你以为备份好了。
+docker volume ls --format '{{.Name}}' | grep mica-prod
+docker run --rm -v mica_mica-prod-postgres:/from -v mica_mica-prod-postgres-pg16:/to alpine \
   sh -c 'cd /from && cp -a . /to'         # 整卷复制一份留底
-docker volume rm mica-prod-postgres       # 只删原卷;副本和 dump 都还在
+docker volume rm mica_mica-prod-postgres       # 只删原卷;副本和 dump 都还在
 ```
 
 > `docker volume rename` 不存在,所以用「复制一份 + 删原卷」达成同样效果。
@@ -180,7 +183,7 @@ docker compose logs --tail=30 rustfs | tail -5
 ### 7. 收尾(观察期过后,别当天做)
 
 ```bash
-docker volume rm mica-prod-postgres-pg16
+docker volume rm mica_mica-prod-postgres-pg16
 rm /data/mica/rustfs-pre-rc3-*.tar.gz            # dump 建议多留一阵
 ```
 
@@ -194,7 +197,7 @@ rm /data/mica/rustfs-pre-rc3-*.tar.gz            # dump 建议多留一阵
 
 ```bash
 docker compose down
-docker run --rm -v mica-prod-postgres-pg16:/from -v mica-prod-postgres:/to alpine \
+docker run --rm -v mica_mica-prod-postgres-pg16:/from -v mica_mica-prod-postgres:/to alpine \
   sh -c 'cd /from && cp -a . /to'
 # 节点上的 docker-compose.yaml 改回 postgres:16-alpine。注意:下一次 deploy 会用
 # tag 里的 compose 覆盖它,所以真要长期回退,仓库里的镜像号也得跟着退。
@@ -208,8 +211,8 @@ docker compose up -d
 
 ```bash
 docker compose stop rustfs
-docker volume rm mica-prod-rustfs && docker volume create mica-prod-rustfs
-docker run --rm -v mica-prod-rustfs:/data -v /data/mica:/backup alpine \
+docker volume rm mica_mica-prod-rustfs && docker volume create mica_mica-prod-rustfs
+docker run --rm -v mica_mica-prod-rustfs:/data -v /data/mica:/backup alpine \
   tar xzf /backup/rustfs-pre-rc3-$TS.tar.gz -C /data
 # 镜像改回 rustfs/rustfs:1.0.0-beta.6,然后 docker compose up -d rustfs
 ```

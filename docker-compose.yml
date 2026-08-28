@@ -10,7 +10,13 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - mica-postgres-data:/var/lib/postgresql/data
+      # PG18+ 的官方镜像换了数据目录约定:数据落在 /var/lib/postgresql/<major>/docker,
+      # 挂载点必须是 /var/lib/postgresql 这一层。仍挂 .../data 的话容器直接报
+      # "in 18+, these Docker images are configured to store database data in a
+      # format which is compatible with pg_ctlcluster" 然后 crash-loop。
+      # (2026-08-28 升级当天在真机上撞到 —— 本地彩排用的是不带卷挂载的 docker run,
+      #  覆盖不到这一条。见 docs/upgrade-infra.md。)
+      - mica-postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mica -d mica"]
       interval: 5s
