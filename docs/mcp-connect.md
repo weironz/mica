@@ -57,6 +57,11 @@ claude mcp add --scope user mica \
 
 所以环境变量总能盖过本机已登录的账号 —— 想让 MCP 用另一个身份连,不必先登出。
 
+这两条链**对所有子命令都一样**。`MICA_API_BASE_URL` 曾经只有 `mcp` 认:照本文档配好
+MCP,再跑 `mica-cli ws list` 就会得到「no server — … set MICA_SERVER」,而那个 URL 明明
+就在环境里(2026-08-28 报告并修复)。这和下面那段 `MICA_TOKEN` 的故事是同一个坑、
+差一个字段 —— 现在两边都各自只有一条链。
+
 令牌变量**只有 `MICA_PAT` 一个**。此前有两个:`mcp` 认 `MICA_PAT`,其余命令只认
 `MICA_TOKEN` —— 照着本文档配好 MCP 的人,一跑 `mica-cli ws list` 就得到「not logged in」,
 提示里还不会告诉他要换个变量名(2026-08-12 统一)。`MICA_TOKEN` 已退休:设了它会得到一条

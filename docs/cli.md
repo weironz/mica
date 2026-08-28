@@ -100,10 +100,18 @@ fully stateless (nothing written to disk):
 
 | Setting | Flag | Env var | Precedence |
 | ------- | ---- | ------- | ---------- |
-| Server URL | `--server` | `MICA_SERVER` | flag/env override the config file |
+| Server URL | `--server` | `MICA_SERVER`, or `MICA_API_BASE_URL` | legacy name first, then flag/env, then the config file |
 | Access token | `--token` | `MICA_PAT` | flag > env > saved token |
 | Login email | `--email` | `MICA_EMAIL` | — |
 | Login password | `--password` | `MICA_PASSWORD` | else read from stdin |
+
+`MICA_API_BASE_URL` is the standalone MCP server's historical name for the same
+setting, and `docs/mcp-connect.md` tells people to set it — so **every** command
+accepts it, at the front of the chain. It used to be read by `mica-cli mcp`
+alone: a Claude config written exactly as documented made `mica-cli ws list`
+answer "no server — … set MICA_SERVER" while the URL sat right there in the
+environment (reported 2026-08-28, fixed the same day). That is the token split
+below, one field over; both are now one chain apiece.
 
 `MICA_PAT` is the only token variable. There used to be two: `mcp` read
 `MICA_PAT`, every other command read only `MICA_TOKEN`, so following the MCP

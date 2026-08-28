@@ -863,11 +863,7 @@ fn url_file_name(url: &str) -> String {
 // ---------------------------------------------------------------- auth
 
 fn cmd_login(cli: &Cli, cfg: &mut Config, args: &LoginArgs) -> Result<()> {
-  let server = cli
-    .server
-    .clone()
-    .or_else(|| cfg.server.clone())
-    .context("no server — pass --server <url> (or MICA_SERVER)")?;
+  let server = resolve_server(cli, cfg).context(no_server_hint())?;
   let email = args
     .email
     .clone()
@@ -1116,13 +1112,7 @@ fn cmd_export(cli: &Cli, cfg: &Config, args: &ExportArgs) -> Result<()> {
 /// Claude Code config keeps working after the binary merge — `mica-cli auth
 /// login` once and `mica-cli mcp` needs zero further configuration.
 fn cmd_mcp(cli: &Cli, cfg: &Config, args: &McpArgs) -> Result<()> {
-  let base = std::env::var("MICA_API_BASE_URL")
-    .ok()
-    .or_else(|| cli.server.clone())
-    .or_else(|| cfg.server.clone())
-    .context(
-      "no server — set MICA_API_BASE_URL / --server / MICA_SERVER, or run `mica-cli auth login`",
-    )?;
+  let base = resolve_server(cli, cfg).context(no_server_hint())?;
   // Same resolver as every other command — see [`pick_token`] for why this is
   // no longer a second, slightly different chain.
   let pat = resolve_token(cli, cfg).with_context(no_token_hint)?;
@@ -1172,6 +1162,58 @@ pub(crate) fn pick_token(
     .map(str::to_string)
 }
 
+/// ONE server chain, for EVERY command — the twin of [`pick_token`], and it
+/// exists because the same split it was written for was still open on this
+/// field.
+///
+/// `MICA_API_BASE_URL` is the standalone MCP server's historical name, and
+/// `docs/mcp-connect.md` still (correctly) tells people to set it. It was read
+/// by `mica-cli mcp` alone: configure MCP exactly as documented, then run any
+/// other command, and you got "no server — … set MICA_SERVER" while staring at
+/// a server URL you had exported yourself. Reported 2026-08-28, as
+/// "MICA_API_BASE_URL 在 0.13.36 上不生效", which was true of every command but
+/// the one the reporter's doc was about.
+///
+/// That is the identical failure `pick_token` was extracted to end on
+/// 2026-08-12 — `mcp` read `MICA_PAT`, everything else read `MICA_TOKEN` — one
+/// field over. Fixing it the same way (one chain, both names, stated once)
+/// rather than deleting the alias: it is in real Claude Desktop configs today,
+/// and a variable that silently stops working is the failure mode both halves
+/// of this are about.
+///
+/// Blank is not a URL, same rule as the token: `MICA_SERVER=` in a unit file
+/// resolves to an empty string, and spending it earns a confusing connection
+/// error rather than the honest "no server".
+pub(crate) fn pick_server(
+  flag_or_env: Option<&str>,
+  legacy_env: Option<&str>,
+  saved: Option<&str>,
+) -> Option<String> {
+  // Legacy name FIRST, matching what `mcp` has always done and what
+  // docs/mcp-connect.md documents as the priority order.
+  [legacy_env, flag_or_env, saved]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+    .map(str::to_string)
+}
+
+fn resolve_server(cli: &Cli, cfg: &Config) -> Option<String> {
+  let legacy = std::env::var("MICA_API_BASE_URL").ok();
+  pick_server(
+    cli.server.as_deref(),
+    legacy.as_deref(),
+    cfg.server.as_deref(),
+  )
+}
+
+/// What to say when no server resolved. Names every accepted spelling, so the
+/// message cannot send someone to look for a variable they already set.
+fn no_server_hint() -> &'static str {
+  "no server — pass --server <url>, set MICA_SERVER (or MICA_API_BASE_URL), or run `mica-cli auth login --server <url>`"
+}
+
 fn resolve_token(cli: &Cli, cfg: &Config) -> Option<String> {
   let pat = std::env::var("MICA_PAT").ok();
   pick_token(cli.token.as_deref(), pat.as_deref(), cfg.token.as_deref())
@@ -1196,11 +1238,7 @@ fn no_token_hint() -> String {
 }
 
 pub(crate) fn authed_client(cli: &Cli, cfg: &Config) -> Result<Client> {
-  let server = cli
-    .server
-    .clone()
-    .or_else(|| cfg.server.clone())
-    .context("no server — run `mica-cli auth login --server <url>` or set MICA_SERVER")?;
+  let server = resolve_server(cli, cfg).context(no_server_hint())?;
   let token = resolve_token(cli, cfg).with_context(no_token_hint)?;
   Client::new(server, Some(token))
 }
@@ -1356,6 +1394,46 @@ fn prune_empty_dirs(dir: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// The SERVER order, pinned for the same reason the token order is — and it
+  /// is the same bug twice: `mcp` read `MICA_API_BASE_URL`, every other command
+  /// read only `MICA_SERVER`, so a Claude config written exactly as
+  /// docs/mcp-connect.md says it should be made `mica-cli ws list` answer
+  /// "no server" (reported 2026-08-28).
+  #[test]
+  fn the_legacy_mcp_variable_is_accepted_by_every_command() {
+    // Legacy name leads — that is the order `mcp` always had and the order the
+    // MCP doc states, so unifying must not quietly reverse it.
+    assert_eq!(
+      pick_server(Some("https://flag"), Some("https://legacy"), Some("https://saved")),
+      Some("https://legacy".to_string())
+    );
+    // With no legacy variable set, --server / MICA_SERVER wins over the saved
+    // login, and the saved login is the floor.
+    assert_eq!(
+      pick_server(Some("https://flag"), None, Some("https://saved")),
+      Some("https://flag".to_string())
+    );
+    assert_eq!(
+      pick_server(None, None, Some("https://saved")),
+      Some("https://saved".to_string())
+    );
+  }
+
+  #[test]
+  fn a_blank_server_does_not_shadow_the_next_source() {
+    // `MICA_SERVER=` in a unit file is an empty string, not "unset": spending
+    // it earns a confusing connection error instead of the honest "no server".
+    assert_eq!(
+      pick_server(Some(""), Some("  "), Some("https://saved")),
+      Some("https://saved".to_string())
+    );
+    assert_eq!(
+      pick_server(Some(" https://trimmed "), None, None),
+      Some("https://trimmed".to_string())
+    );
+    assert_eq!(pick_server(None, None, None), None);
+  }
 
   /// The token order, pinned — it used to be written twice and the two copies
   /// accepted different variable names.
