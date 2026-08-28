@@ -62,6 +62,19 @@
 全程在节点上(`ssh root@mica.cloudcele.com`,`cd /data/mica`)。
 **容器名是 `mica-postgres-1`**(不是 `mica-postgres`,那是本地 dev 栈的)。
 
+> ⚠️ **凡是会起容器的命令,一律用 `./dc`,不要用裸 `docker compose`。**
+> 密码之类的机密在 `.env.secrets` 里,只有 `./dc` 会把它和 `.env` 一起传进去
+> (`--env-file .env --env-file .env.secrets`)。
+>
+> 2026-08-28 升级当天就栽在这:我用裸 `docker compose up -d postgres` 起了新库,
+> `POSTGRES_PASSWORD` 因此取了 compose 里的默认值 `mica`,**initdb 就用这个默认
+> 密码把库建了出来**。当时一切正常 —— api 用的是同一份缺省值,连得上,还跑了
+> 二十多分钟。直到下一次 deploy 重新渲染 `.env`、api 改用 `.env.secrets` 里的
+> 真密码,才 `password authentication failed`,502。
+>
+> **这个坑的危险在于它不会当场报错**,而是把一颗雷埋到下一次部署。
+> 补救不必重建库:`ALTER USER mica WITH PASSWORD ...` 对齐即可(见「回滚」下方)。
+
 ### 0. 预检(不改任何东西)
 
 ```bash
@@ -208,6 +221,23 @@ docker compose up -d
 
 **代价**:旧卷停在步骤 3 那一刻,回滚会丢掉升级之后写入的一切。
 所以第 6 步的冒烟要快 —— 别让用户在一个还没验收的库上工作半天。
+
+### 密码对不上(裸 `docker compose` 起库的后遗症)
+
+不用重建库,把角色密码对齐到 `.env.secrets` 就行。**别把密码回显到终端**:
+
+```bash
+cd /data/mica
+PW=$(grep '^POSTGRES_PASSWORD=' .env.secrets | cut -d= -f2-)
+printf 'ALTER USER mica WITH PASSWORD :%s;
+' "'pw'" > /tmp/pw.sql
+docker exec -i mica-postgres-1 psql -U mica -d mica -v pw="$PW" -f - < /tmp/pw.sql
+rm -f /tmp/pw.sql
+./dc up -d api web
+```
+
+`:'pw'` 是 psql 的变量引用,由 psql 负责转义 —— 直接把密码拼进 SQL 字符串,
+遇到含引号的密码就会碎掉(或更糟,把 SQL 拼歪)。
 
 ### RustFS
 
