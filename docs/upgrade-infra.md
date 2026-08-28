@@ -97,6 +97,47 @@ df -h /data          # dump 约等于库大小,先确认盘装得下
 对照上表核一遍,**行数记下来**(第 5 步要比对)。
 **collation 或扩展与上表不符就停下** —— 那说明这台节点和文档记录的不是同一个东西。
 
+#### 0.1 ⚠️ 还有谁按住了这个版本号(这一步是用一次事故换来的)
+
+**升级 Postgres 不只是换 `image:` 那一行。** 任何**内嵌 PG 客户端**的组件都钉着一个
+版本,而 `pg_dump` **拒绝 dump 比自己新的服务端**("aborting because of server version
+mismatch")。所以升完服务端,客户端旧了就等于那条路径静默死掉。
+
+2026-08-28 升级时漏了这一步:`deploy/Dockerfile.cli` 里是 `postgresql-client-16`,
+服务端上了 18.6,**异地数据库备份从此做不成**。当时没发现,是因为它被另一个故障挡在
+后面(见 `dr-plan.md` 第 8 节),而且那天部署前的备份**成功了** —— 因为那条路径在
+postgres 容器**内部**跑 pg_dump,版本自然匹配,恰好把问题遮住。
+
+升级前逐个核对:
+
+```bash
+# 仓库侧:谁装了 postgresql-client
+grep -rn "postgresql-client" deploy/
+
+# 节点侧:备份容器里的 pg_dump 到底是哪个版本
+docker exec mica-backup-1 pg_dump --version
+```
+
+**判据:客户端主版本号 ≥ 目标服务端主版本号。** 不满足就先改 `Dockerfile.cli`、
+发一版、让新镜像上线,**再**升数据库 —— 顺序反了就会出现一段两者不匹配的窗口。
+
+`scripts/release-check.sh` 现在会在两者不匹配时**拒绝发版**,所以这一步的遗漏只会
+发生在「先升服务端、后发版」的顺序里。门禁挡得住仓库,挡不住你手上的操作顺序。
+
+**升 PG 时要一起改的全部位置**(2026-08-29 数过一遍,别凭印象):
+
+| 位置 | 钉的是什么 |
+| --- | --- |
+| `deploy/docker-compose.yml` | 生产的 `image: postgres:X` |
+| `deploy/docker-compose.single.yml` | 单机版同上 |
+| `docker-compose.yml`(仓库根) | 本地 dev 栈 —— **改了它,本机旧数据卷也要一起处理**,否则下次 `just dev` 直接 crash-loop |
+| `.github/workflows/ci.yml`(两处 service) | CI 的测试库。不改不会立刻坏,但 CI 与生产跑在不同大版本上,等于测试环境不再代表生产 |
+| `deploy/Dockerfile.cli` | `postgresql-client-N` —— **就是被漏掉的那个** |
+
+`ansible/deploy.yml` 里那句 `docker exec mica-postgres-1 pg_dump` 不在此列:它在
+postgres 容器**内部**跑,版本天然匹配。**这正是它当时把问题遮住的原因** —— 部署前
+备份照常成功,而真正断掉的是另一条路径。
+
 ### 1. 停止写入
 
 ```bash
