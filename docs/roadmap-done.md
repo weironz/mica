@@ -568,6 +568,25 @@
 - ~~**本地持久化:云文档已增量,纯本地文档仍全量**~~ ✅ **已做(2026-08-03)** —— 纯本地(离线)文档从「400ms debounce 全量 `saveDoc`」改成 append + 定期折叠,与云端同一套机制(`append_update` / `load_doc` 重放 base+log)。**「接线即可」是错的**:`squash` 刻意保留 `clock > pushed_clock`(那些还欠服务端),`trim_updates_through` 也钳在同一个标记上,而**纯本地文档永远没有服务端、`pushed_clock` 恒为 0** → 两条裁剪路径对它都是空操作,照原计划直接改追加会把「有界的全量写」换成**无界日志 + 每次开文档全量重放**,正是本文件 yrs base 那条踩过的形状。所以补了 Rust 原语 `compact_local`(折叠 + 清空全部日志),**守卫写在 store 里而非调用方**:任何有云同步痕迹的文档(sync cursor 非零、或有 remote log 行)一律拒绝——删掉未推送的 outbox 就是静默的服务端数据丢失(红线#1)。顺带两个非性能收益:① **400ms 窗口消失**,编辑在 `applyOps` 返回时就已落盘(此前崩在窗口内静默丢失);② **`loadDoc` 不再会陈旧**,读之前不必记得先 `flush()`(`local_offline_io.dart` 里有 4 处正是为此而 flush,忘一处就导出比屏幕上更旧的文档)。另注意 `compact_local` 必须走 `capture_auto_version`——本地版本历史原本挂在那个全量 `saveDoc` 上,不接就会静默停摆。(`store.rs` `compact_local`, `local_doc.dart`;Rust 3 测 + 集成测试 3 条)
 - ~~**长文档性能**~~ ✅ **性能线已闭环**(2026-07-23)—— 设计 `docs/editor-virtualization-plan.md`。三刀叠加后每击键 = O(改动块)真推导 + O(N) 平凡重定位:**Phase 1**(da25075)painter 缓存复用,干掉逐帧 dispose+重建全部 TextPainter;**代码高亮记忆化**(7fe1997)未变代码块不再重新分词;**Phase 2**(b750d88)整块 layout 缓存 `_layoutCache`,未变块跳过 marks/span/高亮/rect 全部推导只 `shiftBy` 重定位,dirty 判定用 identity(实证 controller 只重赋值不原地改 text/data)。回归 `test/{painter_cache,code_span_memo,layout_reuse}_test.dart`,全量 728 通过。**残留(L,有意不做)**:真·视口虚拟化(屏外跳过排版)——两条架构约束(performLayout 无滚动偏移、编辑器不自管视口)使其为独立架构项,ROI 仅万级块/超长档,剧本留档待需。
 - ~~**图片纹理缓存无逐出策略**~~ ✅ `_imageCache` 改 LRU(64 上限,每帧 touch 可见图、逐出屏外静态图并 dispose,守 lessons.md §5 dispose 时序,253c53f)。
+- ~~🆕 **搜索正文靠 `ILIKE` 全表扫,没有文本索引**~~ ✅ **FTS M2 已做并核验(v0.13.32,2026-08-28)** —— 正文匹配从
+  `content_text ILIKE` 全表扫改为进程内 `BodyIndex`(`crates/app-core/src/search.rs`,
+  查询时按 `updated_at` 增量刷新,纯子串语义)。**拍板依据**(两份调研,2026-08-28):
+  `pg_trgm` 双重出局——1~2 字查询无 trigram 可提取、退化为全索引扫描(3-gram 模型固有),
+  且 alpine C locale 下 CJK 根本进不了 trigram;`pg_bigm`/PGroonga 能力匹配但要换掉
+  钉死的 `postgres:16-alpine` 镜像;同类(AppFlowy/AFFiNE/Notion/Obsidian)全部只做
+  单 workspace 搜索、无一家在服务端用 PG 全文检索,AFFiNE 自托管默认就是内存索引。
+  **实测**(release,10500 篇 ×2KB 中文,30 工作区,`bench_search_scale` --ignored):
+  跨 30 工作区 14~34ms(旧路径 118~167ms 且随文档数线性),单工作区持平,
+  稳态增量刷新 3~4ms、内存扫描 1~4ms,预热全量加载 220ms。
+  客户端顺势去掉「搜索所有工作区(较慢)」勾选框:当前工作区无结果自动widen到全局
+  (`searchWithFallback`),命中标注所属工作区。
+  **生产核验(2026-08-28,v0.13.32 上线后)**:索引预热 14872 篇;搜「堡垒」结果与升级前
+  **逐条一致**,且排序正是新做的分层(文件夹「堡垒机」→ 页面名「堡垒机简介」→ 正文命中);
+  新建页面写入后正文立即可搜到(增量刷新通)。**内存实测**:正文总量 45 MB,api 进程
+  RSS 143 MB / 3.5 GB 可用 —— 与「预计几十 MB」吻合,常驻代价可接受。
+  **一个当时没想到的代价**:预热在 bind 之前跑,生产 14872 篇要 5.4s(SQL 侧还报了
+  slow-statement 警告),等于每次部署多 5.4s 停机。仍选择留在启动期 ——
+  这是一次性的,挪到首个查询上就变成让某个真实用户等 5.4s。
 
 ## 开发者体验 / CI / Markdown
 

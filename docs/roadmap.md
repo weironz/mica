@@ -255,20 +255,9 @@
 
 ## 性能
 
-- 🟡 **FTS M2 随 v0.13.32 发版(2026-08-28),待生产核验** —— 正文匹配从
-  `content_text ILIKE` 全表扫改为进程内 `BodyIndex`(`crates/app-core/src/search.rs`,
-  查询时按 `updated_at` 增量刷新,纯子串语义)。**拍板依据**(两份调研,2026-08-28):
-  `pg_trgm` 双重出局——1~2 字查询无 trigram 可提取、退化为全索引扫描(3-gram 模型固有),
-  且 alpine C locale 下 CJK 根本进不了 trigram;`pg_bigm`/PGroonga 能力匹配但要换掉
-  钉死的 `postgres:16-alpine` 镜像;同类(AppFlowy/AFFiNE/Notion/Obsidian)全部只做
-  单 workspace 搜索、无一家在服务端用 PG 全文检索,AFFiNE 自托管默认就是内存索引。
-  **实测**(release,10500 篇 ×2KB 中文,30 工作区,`bench_search_scale` --ignored):
-  跨 30 工作区 14~34ms(旧路径 118~167ms 且随文档数线性),单工作区持平,
-  稳态增量刷新 3~4ms、内存扫描 1~4ms,预热全量加载 220ms。
-  客户端顺势去掉「搜索所有工作区(较慢)」勾选框:当前工作区无结果自动widen到全局
-  (`searchWithFallback`),命中标注所属工作区。
-  **发版后核验**:`/api/health` 起来后在大工作区搜 1 字、2 字词,与本地基准同数量级;
-  留意 api 进程 RSS(索引常驻,~文档正文总量,预计几十 MB)。核验过就整条搬去 done。(M)
+- 目前没有已记录的性能待办。上一条(FTS M2 正文搜索)已完成并核验,存档在
+  [`roadmap-done.md`](roadmap-done.md#性能)。**空小节不等于没有瓶颈** ——
+  2026-08-12 就有过一次:整条删掉之后,代码注释还在指向一个不存在的条目。
 
 ## 开发者体验 / CI / Markdown
 

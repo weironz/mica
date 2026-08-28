@@ -66,11 +66,16 @@
 > 密码之类的机密在 `.env.secrets` 里,只有 `./dc` 会把它和 `.env` 一起传进去
 > (`--env-file .env --env-file .env.secrets`)。
 >
-> 2026-08-28 升级当天就栽在这:我用裸 `docker compose up -d postgres` 起了新库,
-> `POSTGRES_PASSWORD` 因此取了 compose 里的默认值 `mica`,**initdb 就用这个默认
-> 密码把库建了出来**。当时一切正常 —— api 用的是同一份缺省值,连得上,还跑了
-> 二十多分钟。直到下一次 deploy 重新渲染 `.env`、api 改用 `.env.secrets` 里的
-> 真密码,才 `password authentication failed`,502。
+> `./dc` 本身只有三行(`exec docker compose --env-file .env --env-file .env.secrets "$@"`),
+> 但它开头那段注释已经把这个坑写清楚了 —— **节点上就有,操作前先读它**。
+>
+> 2026-08-28 升级当天就栽在这:我用裸 `docker compose up -d postgres` 起了新库。
+> compose 里写的是 `${POSTGRES_PASSWORD:-mica}`(**带默认值**,不是 `${VAR:?}`),
+> 所以缺了 secrets 也不报错,而是**静默取默认值 `mica`,initdb 就用它把库建了出来**。
+> 关键在于错得很"一致":api 的 `DATABASE_URL` 读的是同一个 `${POSTGRES_PASSWORD:-mica}`,
+> 于是两边都用 `mica`,连得上、健康、跑了二十多分钟。直到下一次 deploy 用 `./dc`
+> 把 `.env.secrets` 里的真密码传进来,两边才劈叉 —— `password authentication failed`,502,
+> **而且回滚到上一版同样起不来**(库的密码是错的,与版本无关)。
 >
 > **这个坑的危险在于它不会当场报错**,而是把一颗雷埋到下一次部署。
 > 补救不必重建库:`ALTER USER mica WITH PASSWORD ...` 对齐即可(见「回滚」下方)。
