@@ -2874,7 +2874,18 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // Tear the field down FIRST, then dispose its controller/focus after this
       // frame. Disposing them synchronously here races the removed TextField's
       // own teardown (which still reads them) → "used after being disposed".
-      if (entry.mounted) entry.remove();
+      //
+      // UNCONDITIONALLY: `entry.mounted` stays false until the overlay
+      // rebuilds a frame after insert, and a commit CAN land inside that
+      // window (open a cell, then pan/click in the same frame — easy on a
+      // heavy page where a frame runs long). The old `if (entry.mounted)`
+      // guard skipped the remove then nulled `_cellEntry` anyway, leaving a
+      // GHOST entry nothing could ever remove; its focus node was disposed a
+      // frame later, and every Overlay rebuild from then on re-built the
+      // ghost's TextField over a dead FocusNode — the debug red screen
+      // reported 2026-08-28 (37 repeats in one session). `remove()` is legal
+      // from the moment `insert()` ran, which is before commit is reachable.
+      entry.remove();
       if (identical(_cellEntry, entry)) _cellEntry = null;
       _commitCellEditor = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
