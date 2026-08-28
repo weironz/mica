@@ -817,7 +817,10 @@ class TableRenderer extends AtomicBlockRenderer {
           style: TextStyle(
             fontFamily: Icons.add.fontFamily,
             package: Icons.add.fontPackage,
-            fontSize: 14,
+            // Fit the glyph to the strip: the add-row bar is only as tall as
+            // the table's reserved gutter, and a fixed 14 spilled out of the
+            // pill it is supposed to sit in.
+            fontSize: (r.shortestSide - 2).clamp(10.0, 14.0),
             color: plusColor,
           ),
         ),

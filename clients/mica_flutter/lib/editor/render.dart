@@ -315,6 +315,14 @@ class EditorTheme {
     // consecutive headings (title + subtitle stay related).
     if (kind == 'heading') return prevKind == 'heading' ? 20 : 30;
     if (kind == 'code_block' || prevKind == 'code_block') return 16;
+    // A table's box carries blank strips of its own — column handles above,
+    // the add-row bar below — and the ordinary gap used to stack on top of
+    // them, dropping the table into a deeper hole than any other block. Charge
+    // the strip against the gap so the space reads the same as everywhere
+    // else; the strips being equal is what keeps above and below symmetric.
+    if (kind == 'table' || prevKind == 'table') {
+      return (13 - RenderDocument._tTopGutter).clamp(2.0, 13.0);
+    }
     return 13; // paragraph breathing room
   }
 }
@@ -1689,8 +1697,14 @@ class RenderDocument extends RenderBox {
   // sides); handles/add-buttons overlay the edges on hover instead of taking
   // horizontal space. Only vertical space is reserved (top gutter for column
   // handles, bottom bar for add-row).
-  static const double _tTopGutter = 10;
-  static const double _tBottomBar = 16;
+  //
+  // The two are EQUAL on purpose: both strips are blank until hovered, so an
+  // unequal pair reads as a table hanging lower than it sits — reported
+  // 2026-08-28 as "表格上下与正文的距离不对称", the bottom bar being the taller
+  // half. [EditorTheme.gapAbove] charges this strip against the block gap, so
+  // changing it here changes the reserved space, not the visual rhythm.
+  static const double _tTopGutter = 12;
+  static const double _tBottomBar = _tTopGutter;
   static const double _tEdge = 16; // overlay handle thickness
 
   // Vertical box reserved for a divider (horizontal rule centered within it).
@@ -3471,6 +3485,13 @@ class RenderDocument extends RenderBox {
   @visibleForTesting
   (double, double) debugBoxAt(int i) =>
       (_layouts[i].boxTop, _layouts[i].boxHeight);
+
+  /// Node [i]'s table GRID rect (the bordered part), or null when it isn't a
+  /// table. The box is taller than the grid on both sides — reserved strips
+  /// that paint nothing until hovered — so the box alone cannot answer how
+  /// much blank space a reader actually sees around a table.
+  @visibleForTesting
+  Rect? debugTableGridAt(int i) => _layouts[i].tableGridRect;
 
   /// The code block currently showing the "copied" check, or null.
   @visibleForTesting
