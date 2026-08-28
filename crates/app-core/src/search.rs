@@ -157,7 +157,12 @@ impl BodyIndex {
   }
 
   /// How many documents are indexed (startup log line).
-  pub async fn len(&self) -> usize {
+  ///
+  /// Not `len`: clippy rightly wants an `is_empty` beside any public `len`,
+  /// and this type has no meaning for "empty" worth exposing — an index with
+  /// no rows is a database with no documents, which the caller learns from
+  /// this count anyway.
+  pub async fn indexed_documents(&self) -> usize {
     self.inner.read().await.docs.len()
   }
 }
