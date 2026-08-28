@@ -37,6 +37,8 @@
 | PG18 删掉了运行时参数 `lc_collate` | 实测 `SHOW lc_collate` 报错 | 脚本里读它的地方要改;我们没有 |
 | **10019 篇文档的真实库 16.14 → 18.6 还原零错误**,三张表行数逐一相等,`_sqlx_migrations` 停在 26 | 本地用生产量级数据彩排 | 这条路走通过,不是纸上推演 |
 | 应用在 18.6 上**全绿**:api-server 206、app-core 43+11+21、infra 32+1 | 同上,`DATABASE_URL` 指向 18.6 跑 | 证明的是**应用**兼容;上一行证明的是**数据**兼容,两者都要 |
+| ⚠️ **PG18+ 官方镜像换了数据目录约定**:数据落在 `/var/lib/postgresql/<major>/docker`,**卷必须挂在 `/var/lib/postgresql` 这一层**;仍挂 `.../data` 会报 `Error: in 18+, these Docker images are configured to store database data in a format which is compatible with "pg_ctlcluster"` 然后 crash-loop | **升级当天在真机上撞到** | 本地彩排用的是不挂卷的 `docker run`,**覆盖不到这一条**;教训见文末 |
+| 卷名带 compose 项目前缀:`mica_mica-prod-postgres`,不是 compose 文件 `volumes:` 段里的短名 | 同上 | 写错的话备份会建出一个空卷,而你以为备好了 |
 
 ### RustFS(beta.6 → rc.3,跨 9 个版本)
 
@@ -223,9 +225,12 @@ docker run --rm -v mica_mica-prod-rustfs:/data -v /data/mica:/backup alpine \
 
 - **补丁位升级不用走这份文档**(18.6 → 18.7、rc.3 → rc.4):改 compose 走正常 deploy 即可。
   只有**大版本**(PG 18 → 19)才需要整套 dump/restore。
-- **先在本地彩排。** 本地 dev 栈(`docker-compose.yml`)用的是同一组镜像:把生产 dump
+- **先在本地彩排,而且要用与生产相同的挂载方式。** 本地 dev 栈(`docker-compose.yml`)用的是同一组镜像:把生产 dump
   拉下来在本地走一遍步骤 2→5,再让 `DATABASE_URL=...` 指着它跑 `cargo test`。
   2026-08-28 这次就是这么做的,当天问出了两件文档里查不到的事 ——
   18.6 的 initdb 默认 locale、以及 `pg_dump` 的 `\restrict` 指令。
+  **但那次彩排用的是 `docker run` 不挂卷**,于是漏掉了 PG18 换挂载点这件事,
+  真机第一次 `up -d` 直接 crash-loop。**彩排不复现挂载,就等于没覆盖挂载** ——
+  下次照着 compose 起容器,别图省事。
 - **一次只动一个变量。** 这次同时动 PG 和 RustFS,是因为两者都只写在这一个 compose 里、
   且 RustFS 侧已确认磁盘格式未变;如果 RustFS 的格式有变更,应当分两次做。
